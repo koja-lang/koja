@@ -23,6 +23,7 @@
 use expo_ast::ast::{
     Annotation, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File, Function, ImplBlock,
     ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, StructField, TypeExpr,
+    TypeParam,
 };
 use expo_ast::identifier::Identifier;
 use expo_ast::labels::{item_label, item_span};
@@ -357,15 +358,7 @@ fn type_expr_span(type_expr: &TypeExpr) -> Span {
 /// definition in the presence of these gaps so the surrounding
 /// program shape stays accurate.
 fn diagnose_struct_feature_gaps(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
-    if !decl.type_params.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck does not yet support generic structs (`{}` has type parameters)",
-                decl.name,
-            ),
-            decl.span,
-        ));
-    }
+    diagnose_type_param_bounds(&decl.name, &decl.type_params, diagnostics);
     diagnose_struct_annotations(&decl.name, &decl.annotations, diagnostics);
     for field in &decl.fields {
         diagnose_struct_field_gaps(&decl.name, field, diagnostics);
@@ -411,15 +404,7 @@ fn diagnose_struct_field_gaps(
 /// — the decl still registers in the presence of any gap so resolve
 /// sees a populated registry.
 fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) {
-    if !decl.type_params.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck does not yet support generic enums (`{}` has type parameters)",
-                decl.name,
-            ),
-            decl.span,
-        ));
-    }
+    diagnose_type_param_bounds(&decl.name, &decl.type_params, diagnostics);
     for annotation in &decl.annotations {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -432,6 +417,29 @@ fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>
     }
     for variant in &decl.variants {
         diagnose_enum_variant_gaps(&decl.name, variant, diagnostics);
+    }
+}
+
+/// Diagnose every type-param bound on a generic decl. Bounds parse
+/// (`<T: Show>`) but resolve has no infrastructure to enforce them
+/// yet, so we surface a single error per bound and lift / IR proceed
+/// as if the param were unbounded.
+fn diagnose_type_param_bounds(
+    owner_name: &str,
+    type_params: &[TypeParam],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for param in type_params {
+        for bound in &param.bounds {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha typecheck does not yet support type-parameter bounds \
+                     (`{owner_name}<{}: {bound}>`)",
+                    param.name,
+                ),
+                param.span,
+            ));
+        }
     }
 }
 

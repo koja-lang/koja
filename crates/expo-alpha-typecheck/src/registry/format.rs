@@ -148,6 +148,10 @@ fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
             None => format!("<id {id}>"),
         },
         Resolution::Local(local_id) => format!("<local {local_id}>"),
+        Resolution::TypeParam { owner, index } => registry
+            .type_param_name(owner, index)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
         Resolution::Unresolved => "<unresolved>".to_string(),
     };
     if ty.type_args.is_empty() {

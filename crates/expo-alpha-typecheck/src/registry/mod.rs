@@ -28,7 +28,7 @@
 
 use std::collections::HashMap;
 
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
 mod format;
@@ -88,19 +88,26 @@ pub struct FunctionSignature {
 /// Field layout for a user-declared struct. Stamped onto a
 /// [`GlobalKind::Struct`] entry by the `lift_signatures` sub-pass.
 /// Field order matches declaration order — downstream consumers
-/// (IR lower, codegen) index by position.
+/// (IR lower, codegen) index by position. `type_params` is non-empty
+/// for generic structs (`struct Pair<T, U>`); each name is in scope
+/// inside the field types and resolves through
+/// [`expo_ast::identifier::Resolution::TypeParam`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructDefinition {
     pub fields: Vec<ResolvedStructField>,
+    pub type_params: Vec<String>,
 }
 
 /// Variant roster for a user-declared enum. Stamped onto a
 /// [`GlobalKind::Enum`] entry by the `lift_signatures` sub-pass.
 /// Variant order matches declaration order — the IR's discriminant
 /// tag is the variant's position in this vec, and downstream
-/// consumers (IR lower, codegen) index by position.
+/// consumers (IR lower, codegen) index by position. `type_params`
+/// is non-empty for generic enums (`enum Result<T, E>`); each name
+/// is in scope inside variant payload types.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumDefinition {
+    pub type_params: Vec<String>,
     pub variants: Vec<ResolvedEnumVariant>,
 }
 
@@ -160,6 +167,14 @@ impl StructDefinition {
             .find(|(_, field)| field.name == name)
             .map(|(index, field)| (index as u32, field))
     }
+
+    /// Render the name of a type parameter by its anchored index.
+    /// `None` if the index is out of range (compiler bug).
+    pub fn type_param_name(&self, index: TypeParamIndex) -> Option<&str> {
+        self.type_params
+            .get(index.as_u32() as usize)
+            .map(String::as_str)
+    }
 }
 
 impl EnumDefinition {
@@ -175,6 +190,14 @@ impl EnumDefinition {
             .enumerate()
             .find(|(_, variant)| variant.name == name)
             .map(|(index, variant)| (index as u32, variant))
+    }
+
+    /// Render the name of a type parameter by its anchored index.
+    /// `None` if the index is out of range (compiler bug).
+    pub fn type_param_name(&self, index: TypeParamIndex) -> Option<&str> {
+        self.type_params
+            .get(index.as_u32() as usize)
+            .map(String::as_str)
     }
 }
 
@@ -466,6 +489,24 @@ impl GlobalRegistry {
             )
         });
         ResolvedType::leaf(Resolution::Global(id))
+    }
+
+    /// Render the name of a type parameter by its anchored
+    /// `(owner, index)`. Hides the `GlobalKind::{Struct,Enum}` dispatch
+    /// from rendering call sites. `None` when `owner` doesn't resolve
+    /// to a generic struct/enum or `index` is out of range
+    /// (compiler bug).
+    pub fn type_param_name(
+        &self,
+        owner: GlobalRegistryId,
+        index: TypeParamIndex,
+    ) -> Option<&str> {
+        let entry = self.get(owner)?;
+        match &entry.kind {
+            GlobalKind::Enum(Some(definition)) => definition.type_param_name(index),
+            GlobalKind::Struct(Some(definition)) => definition.type_param_name(index),
+            _ => None,
+        }
     }
 
     /// Iterate every entry. `HashMap` iteration is not stable across

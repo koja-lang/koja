@@ -23,12 +23,12 @@
 //! "user-declared" semantics that scripts deliberately don't have).
 
 use expo_alpha_typecheck::CheckedProgram;
-use expo_ast::ast::Diagnostic;
 
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRBasicBlock, IRFunction};
-use crate::lower::{lower_body_to_blocks, lower_package};
+use crate::generics;
+use crate::lower::{LowerOutput, lower_body_to_blocks, lower_package};
 use crate::package::IRPackage;
 use crate::seal;
 use crate::struct_decl::IRStructDecl;
@@ -114,15 +114,20 @@ impl IRScript {
 /// 4. Run `seal::seal_script` on the assembled script. Panics on
 ///    violation per the seal contract.
 pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
-    let mut diagnostics: Vec<Diagnostic> = Vec::new();
+    let mut output = LowerOutput::default();
     let mut packages: Vec<IRPackage> = Vec::with_capacity(checked.packages.len());
     for pkg in &checked.packages {
-        packages.push(lower_package(pkg, &checked.registry, &mut diagnostics));
+        packages.push(lower_package(pkg, &checked.registry, &mut output));
     }
 
     let body = locate_script_body(checked);
 
-    let lowered = lower_body_to_blocks(body, &checked.registry, &mut diagnostics);
+    let lowered = lower_body_to_blocks(body, &checked.registry, &mut output);
+
+    let LowerOutput {
+        diagnostics,
+        instantiations,
+    } = output;
 
     if !diagnostics.is_empty() {
         return Err(LowerError::Diagnostics(diagnostics));
@@ -134,6 +139,8 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
              lower_body_to_blocks contract violation",
         )
     });
+
+    generics::instantiate(instantiations, &checked.registry, &mut packages);
 
     let script = IRScript {
         blocks,

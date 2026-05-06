@@ -1,6 +1,10 @@
 //! Struct lifting: stamp the [`crate::registry::StructDefinition`]
 //! from the AST `StructDecl` and lift inline static / instance method
-//! signatures.
+//! signatures. Generic structs (`struct Pair<T, U>`) collect their
+//! `type_params` here; field types resolve against a scope that maps
+//! each name to a [`expo_ast::identifier::Resolution::TypeParam`].
+//! Inline method bodies see no type-param scope yet (out of scope
+//! until the generic-functions slice).
 
 use expo_ast::ast::{Diagnostic, StructDecl};
 use expo_ast::identifier::Identifier;
@@ -9,7 +13,7 @@ use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField, StructDef
 
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
-use super::types::resolve_type_expr;
+use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_struct(
     decl: &StructDecl,
@@ -53,13 +57,29 @@ fn lift_struct_definition(
         return;
     }
 
+    let type_params: Vec<String> = decl
+        .type_params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect();
+    let scope = (!type_params.is_empty()).then_some(TypeParamScope {
+        owner: id,
+        names: &type_params,
+    });
+
     let mut fields = Vec::with_capacity(decl.fields.len());
     for field in &decl.fields {
-        let ty = resolve_type_expr(&field.type_expr, package, registry, diagnostics);
+        let ty = resolve_type_expr(&field.type_expr, scope, package, registry, diagnostics);
         fields.push(ResolvedStructField {
             name: field.name.clone(),
             ty,
         });
     }
-    registry.set_struct_definition(id, StructDefinition { fields });
+    registry.set_struct_definition(
+        id,
+        StructDefinition {
+            fields,
+            type_params,
+        },
+    );
 }

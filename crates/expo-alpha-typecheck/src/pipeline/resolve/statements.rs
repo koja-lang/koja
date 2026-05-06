@@ -92,6 +92,7 @@ pub(super) fn resolve_assignment(
                 Some(annotation) => {
                     let annotated = resolve_type_expr(
                         annotation,
+                        None,
                         resolver.package,
                         resolver.registry,
                         diagnostics,

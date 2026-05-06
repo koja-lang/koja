@@ -912,6 +912,9 @@ fn expr_header(expr: &Expr) -> String {
         ExprKind::Ident { name, resolution } => match resolution {
             Resolution::Global(id) => format!("Ident {name} -> {id}"),
             Resolution::Local(local_id) => format!("Ident {name} -> local {local_id}"),
+            Resolution::TypeParam { owner, index } => {
+                format!("Ident {name} -> type param of {owner} #{index}")
+            }
             Resolution::Unresolved => format!("Ident {name}"),
         },
         ExprKind::If { .. } => String::from("If"),
@@ -958,6 +961,7 @@ fn format_resolved_type(ty: &ResolvedType) -> String {
     let head = match ty.resolution {
         Resolution::Global(id) => id.to_string(),
         Resolution::Local(local_id) => format!("local {local_id}"),
+        Resolution::TypeParam { owner, index } => format!("typeparam {owner}#{index}"),
         Resolution::Unresolved => String::from("?"),
     };
     if ty.type_args.is_empty() {

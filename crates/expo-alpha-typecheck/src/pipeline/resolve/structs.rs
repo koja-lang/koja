@@ -10,6 +10,7 @@ use expo_ast::ast::{Diagnostic, Expr, FieldInit};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
+use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
 use super::ctx::Resolver;
@@ -70,16 +71,121 @@ pub(super) fn resolve_struct_construction(
     };
 
     let owner = struct_entry.identifier.to_string();
-    validate_named_fields(
+    let type_param_count = definition.type_params.len();
+    if type_param_count == 0 {
+        validate_named_fields(
+            &owner,
+            &definition.fields,
+            fields,
+            span,
+            resolver.registry,
+            diagnostics,
+        );
+        return ResolvedType::leaf(Resolution::Global(struct_id));
+    }
+
+    let subst = infer_struct_type_args(
         &owner,
+        struct_id,
         &definition.fields,
+        &definition.type_params,
         fields,
         span,
         resolver.registry,
         diagnostics,
     );
+    let substituted_fields: Vec<ResolvedStructField> = definition
+        .fields
+        .iter()
+        .map(|field| ResolvedStructField {
+            name: field.name.clone(),
+            ty: substitute_resolved_type(&field.ty, &subst, struct_id),
+        })
+        .collect();
+    validate_named_fields(
+        &owner,
+        &substituted_fields,
+        fields,
+        span,
+        resolver.registry,
+        diagnostics,
+    );
+    let type_args = subst
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
+        .collect();
+    ResolvedType {
+        resolution: Resolution::Global(struct_id),
+        type_args,
+    }
+}
 
-    ResolvedType::leaf(Resolution::Global(struct_id))
+/// Infer concrete `type_args` for a generic struct construction by
+/// unifying each declared field's template type against the resolved
+/// type of its corresponding field-init value. Emits one diagnostic
+/// per [`Conflict`] (T inferred to two distinct types) and one per
+/// Phantom param (no field constrains it). Slots without inference
+/// stay `None` so the caller surfaces an unresolved leaf.
+#[allow(clippy::too_many_arguments)]
+fn infer_struct_type_args(
+    owner_label: &str,
+    struct_id: GlobalRegistryId,
+    declared: &[ResolvedStructField],
+    type_params: &[String],
+    fields: &[FieldInit],
+    span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Option<ResolvedType>> {
+    let mut subst: Vec<Option<ResolvedType>> = vec![None; type_params.len()];
+    for field in fields {
+        let Some((_, declared_field)) = lookup_named_field(declared, &field.name) else {
+            continue;
+        };
+        if !field.value.resolution.is_resolved() {
+            continue;
+        }
+        if let Err(conflict) = unify_resolved_type(
+            &declared_field.ty,
+            &field.value.resolution,
+            struct_id,
+            &mut subst,
+        ) {
+            emit_conflict(owner_label, type_params, conflict, field.span, registry, diagnostics);
+        }
+    }
+    for (index, slot) in subst.iter().enumerate() {
+        if slot.is_none() {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha typecheck cannot infer type parameter `{}` of `{owner_label}` \
+                     from the supplied fields",
+                    type_params[index],
+                ),
+                span,
+            ));
+        }
+    }
+    subst
+}
+
+fn emit_conflict(
+    owner_label: &str,
+    type_params: &[String],
+    conflict: Conflict,
+    span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "type parameter `{}` of `{owner_label}` cannot be both `{}` and `{}`",
+            type_params[conflict.param_index],
+            display_resolution(&conflict.prev, registry),
+            display_resolution(&conflict.actual, registry),
+        ),
+        span,
+    ));
 }
 
 /// Validate a [`FieldInit`] list against a declared

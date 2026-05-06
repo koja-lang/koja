@@ -9,7 +9,7 @@ use expo_ast::ast::{
     AssignTarget, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item, LValue,
     Statement, StringPart,
 };
-use expo_ast::identifier::Resolution;
+use expo_ast::identifier::{Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::program::CheckedProgram;
@@ -151,10 +151,13 @@ fn seal_expr(expr: &Expr) {
     // The callee position of a `Call` is the one carve-out: function
     // names aren't first-class values yet, so the outer callee
     // `Expr.resolution` stays `Unresolved`. Every other position must
-    // carry a fully-resolved type.
+    // carry a fully-resolved type that doesn't leak `TypeParam` —
+    // those are decl-side annotations and have no business on a
+    // construction-site value.
     if !expr.resolution.is_resolved() {
         seal_panic("expression missing resolution", expr.span);
     }
+    seal_no_type_param(&expr.resolution, expr.span);
     match &expr.kind {
         ExprKind::Binary { left, right, .. } => {
             seal_expr(left);
@@ -182,14 +185,20 @@ fn seal_expr(expr: &Expr) {
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver),
         ExprKind::Group { expr: inner } => seal_expr(inner),
         ExprKind::Ident { name, resolution } => {
-            // Both `Resolution::Global` (struct names, callees) and
-            // `Resolution::Local` (param/local references) satisfy seal.
-            // Only `Resolution::Unresolved` is a violation.
-            if matches!(resolution, Resolution::Unresolved) {
-                seal_panic(
+            // `Resolution::Global` (struct names, callees) and
+            // `Resolution::Local` (param/local references) satisfy
+            // seal. `Resolution::Unresolved` and a leaked
+            // `Resolution::TypeParam` are both compiler bugs.
+            match resolution {
+                Resolution::Global(_) | Resolution::Local(_) => {}
+                Resolution::TypeParam { .. } => seal_panic(
+                    &format!("identifier `{name}` resolves to a TypeParam after typecheck"),
+                    expr.span,
+                ),
+                Resolution::Unresolved => seal_panic(
                     &format!("identifier `{name}` has Unresolved resolution after typecheck"),
                     expr.span,
-                );
+                ),
             }
         }
         ExprKind::If {
@@ -269,6 +278,25 @@ fn seal_call_callee(callee: &Expr) {
             &format!("callee `{name}` has Unresolved resolution after typecheck"),
             callee.span,
         );
+    }
+}
+
+/// Walk `ty` and assert no `Resolution::TypeParam` leaf escapes into
+/// runtime-value position. Concrete `type_args` are fine — and
+/// expected for monomorphizable construction sites — so this only
+/// rejects the `TypeParam` head.
+fn seal_no_type_param(ty: &ResolvedType, span: Span) {
+    if let Resolution::TypeParam { owner, index } = ty.resolution {
+        seal_panic(
+            &format!(
+                "ResolvedType leaf carries TypeParam {{ owner: {owner}, index: {index} }} \
+                 outside a generic-decl body",
+            ),
+            span,
+        );
+    }
+    for arg in &ty.type_args {
+        seal_no_type_param(arg, span);
     }
 }
 

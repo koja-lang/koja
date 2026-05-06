@@ -21,7 +21,7 @@ use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
 use crate::local::IRLocalId;
 use crate::types::{IRBinOp, IRType, ValueId};
 
-use super::ctx::{FlowResult, FnLowerCtx};
+use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::ops::bin_op_result_type;
 
@@ -38,11 +38,11 @@ use super::ops::bin_op_result_type;
 pub(crate) fn lower_body_to_blocks(
     body: &[Statement],
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(Vec<IRBasicBlock>, IRType), ()> {
     let mut ctx = FnLowerCtx::new();
     let entry = ctx.fresh_block("entry");
-    let flow = lower_body(body, &mut ctx, entry, registry, diagnostics)?;
+    let flow = lower_body(body, &mut ctx, entry, registry, output)?;
     let return_type = match &flow {
         FlowResult::Open {
             value: Some(id), ..
@@ -70,11 +70,11 @@ pub(super) fn lower_body(
     ctx: &mut FnLowerCtx,
     mut block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     let mut last_value: Option<ValueId> = None;
     for stmt in body {
-        match lower_statement(stmt, ctx, block, registry, diagnostics)? {
+        match lower_statement(stmt, ctx, block, registry, output)? {
             FlowResult::Open { value, block: next } => {
                 last_value = value;
                 block = next;
@@ -93,11 +93,11 @@ fn lower_statement(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     match stmt {
         Statement::Expr(expr) => {
-            let (value, next) = lower_expr(expr, ctx, block, registry, diagnostics)?;
+            let (value, next) = lower_expr(expr, ctx, block, registry, output)?;
             Ok(FlowResult::Open {
                 value: Some(value),
                 block: next,
@@ -106,7 +106,7 @@ fn lower_statement(
         Statement::Return { value, .. } => {
             let return_value = match value.as_ref() {
                 Some(expr) => {
-                    let (id, next) = lower_expr(expr, ctx, block, registry, diagnostics)?;
+                    let (id, next) = lower_expr(expr, ctx, block, registry, output)?;
                     ctx.cfg
                         .set_terminator(next, IRTerminator::Return { value: Some(id) });
                     Some(id)
@@ -117,20 +117,17 @@ fn lower_statement(
                     None
                 }
             };
-            // Suppress the unused-binding warning while keeping the
-            // shape parallel to the `if` / `unless` branches that
-            // care about the returned value.
             let _ = return_value;
             Ok(FlowResult::Closed)
         }
         Statement::Assignment { target, value, .. } => {
-            lower_assignment(target, value, ctx, block, registry, diagnostics)
+            lower_assignment(target, value, ctx, block, registry, output)
         }
         Statement::CompoundAssign {
             target, op, value, ..
-        } => lower_compound_assignment(target, *op, value, ctx, block, registry, diagnostics),
+        } => lower_compound_assignment(target, *op, value, ctx, block, registry, output),
         Statement::Break { span } => {
-            diagnostics.push(Diagnostic::error(
+            output.diagnostics.push(Diagnostic::error(
                 "alpha IR does not yet lower `break` statements",
                 *span,
             ));
@@ -164,12 +161,12 @@ fn lower_assignment(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     let local_id = single_segment_local(target);
     let ir_local = IRLocalId::from_local_id(local_id);
 
-    let (value_id, current) = lower_expr(value, ctx, block, registry, diagnostics)?;
+    let (value_id, current) = lower_expr(value, ctx, block, registry, output)?;
     let value_ty = ctx.type_of(value_id);
 
     if !ctx.local_is_declared(ir_local) {
@@ -209,12 +206,12 @@ fn lower_compound_assignment(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
     let local_id = single_segment_lvalue(target);
     let ir_local = IRLocalId::from_local_id(local_id);
 
-    let (rhs, current) = lower_expr(value, ctx, block, registry, diagnostics)?;
+    let (rhs, current) = lower_expr(value, ctx, block, registry, output)?;
     let ty = ctx.type_of(rhs);
 
     let read_dest = ctx.fresh_value(ty.clone());

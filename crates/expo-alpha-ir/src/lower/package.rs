@@ -12,26 +12,37 @@ use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, Global
 use expo_ast::ast::{
     Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_intrinsic,
 };
-use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
 
 use crate::enum_decl::IREnumDecl;
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
+use crate::generics::Instantiation;
 use crate::local::IRLocalId;
+use crate::mangling::mangled_type_name;
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
 use super::body::{finalize_open_flow, lower_body};
-use super::ctx::FnLowerCtx;
+use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_decl;
 use super::structs::lower_struct_decl;
 
 use std::collections::BTreeMap;
 
+/// Lower one [`CheckedPackage`] into an [`IRPackage`] fragment.
+/// Generic struct / enum decls are skipped here — they live in the
+/// typecheck registry and only become concrete decls when
+/// [`crate::generics::instantiate`] specializes them. Concrete
+/// instantiations encountered while lowering construction sites,
+/// field types, or function signatures append to
+/// `output.instantiations` for the driver to monomorphize;
+/// feature-gap diagnostics push to `output.diagnostics` and the
+/// offending decl is dropped.
 pub(crate) fn lower_package(
     pkg: &CheckedPackage,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> IRPackage {
     let mut enums: BTreeMap<IRSymbol, IREnumDecl> = BTreeMap::new();
     let mut functions: BTreeMap<IRSymbol, IRFunction> = BTreeMap::new();
@@ -40,9 +51,7 @@ pub(crate) fn lower_package(
         for item in &file.items {
             match item {
                 Item::Enum(decl) => {
-                    if let Some(lowered) =
-                        lower_enum_decl(decl, &pkg.package, registry, diagnostics)
-                    {
+                    if let Some(lowered) = lower_enum_decl(decl, &pkg.package, registry, output) {
                         enums.insert(lowered.symbol.clone(), lowered);
                     }
                     for function in &decl.functions {
@@ -50,12 +59,9 @@ pub(crate) fn lower_package(
                             &pkg.package,
                             vec![decl.name.clone(), function.name.clone()],
                         );
-                        if let Some(lowered) = lower_function_with_identifier(
-                            function,
-                            identifier,
-                            registry,
-                            diagnostics,
-                        ) {
+                        if let Some(lowered) =
+                            lower_function_with_identifier(function, identifier, registry, output)
+                        {
                             functions.insert(lowered.symbol.clone(), lowered);
                         }
                     }
@@ -63,15 +69,13 @@ pub(crate) fn lower_package(
                 Item::Function(function) => {
                     let identifier = Identifier::new(&pkg.package, vec![function.name.clone()]);
                     if let Some(lowered) =
-                        lower_function_with_identifier(function, identifier, registry, diagnostics)
+                        lower_function_with_identifier(function, identifier, registry, output)
                     {
                         functions.insert(lowered.symbol.clone(), lowered);
                     }
                 }
                 Item::Struct(decl) => {
-                    if let Some(lowered) =
-                        lower_struct_decl(decl, &pkg.package, registry, diagnostics)
-                    {
+                    if let Some(lowered) = lower_struct_decl(decl, &pkg.package, registry, output) {
                         structs.insert(lowered.symbol.clone(), lowered);
                     }
                     for function in &decl.functions {
@@ -79,24 +83,15 @@ pub(crate) fn lower_package(
                             &pkg.package,
                             vec![decl.name.clone(), function.name.clone()],
                         );
-                        if let Some(lowered) = lower_function_with_identifier(
-                            function,
-                            identifier,
-                            registry,
-                            diagnostics,
-                        ) {
+                        if let Some(lowered) =
+                            lower_function_with_identifier(function, identifier, registry, output)
+                        {
                             functions.insert(lowered.symbol.clone(), lowered);
                         }
                     }
                 }
                 Item::Impl(impl_block) => {
-                    lower_impl(
-                        impl_block,
-                        &pkg.package,
-                        registry,
-                        diagnostics,
-                        &mut functions,
-                    );
+                    lower_impl(impl_block, &pkg.package, registry, output, &mut functions);
                 }
                 _ => {}
             }
@@ -120,7 +115,7 @@ fn lower_impl(
     impl_block: &ImplBlock,
     package: &str,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
 ) {
     let Some(target_name) = impl_target_name(&impl_block.target) else {
@@ -135,7 +130,7 @@ fn lower_impl(
             vec![target_name.to_string(), function.name.clone()],
         );
         if let Some(lowered) =
-            lower_function_with_identifier(function, identifier, registry, diagnostics)
+            lower_function_with_identifier(function, identifier, registry, output)
         {
             functions.insert(lowered.symbol.clone(), lowered);
         }
@@ -158,14 +153,15 @@ pub(super) fn lower_function_with_identifier(
     function: &Function,
     identifier: Identifier,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Option<IRFunction> {
     let signature = function_signature(registry, &identifier)?;
-    let return_type = resolved_type_to_ir_type(&signature.return_type, registry);
+    let return_type =
+        resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
     let intrinsic = is_intrinsic(&function.annotations);
 
     if intrinsic && function.body.is_some() {
-        diagnostics.push(Diagnostic::error(
+        output.diagnostics.push(Diagnostic::error(
             format!("`@intrinsic` and a function body are mutually exclusive (on `{identifier}`)",),
             function.span,
         ));
@@ -175,7 +171,7 @@ pub(super) fn lower_function_with_identifier(
     let mut ctx = FnLowerCtx::new();
 
     if intrinsic {
-        let params = lower_intrinsic_params(function, signature, registry, &mut ctx)?;
+        let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
         return Some(IRFunction {
             blocks: Vec::new(),
             kind: FunctionKind::Intrinsic,
@@ -186,26 +182,17 @@ pub(super) fn lower_function_with_identifier(
     }
 
     let Some(body) = function.body.as_ref() else {
-        diagnostics.push(Diagnostic::error(
+        output.diagnostics.push(Diagnostic::error(
             format!("alpha IR does not yet lower extern fn `{identifier}` (no body to lower)",),
             function.span,
         ));
         return None;
     };
 
-    // Open the entry block before param lowering so promotion has a
-    // target for `LocalDecl` + `LocalWrite`.
     let entry = ctx.fresh_block("entry");
-    let params = lower_params(
-        function,
-        &identifier,
-        signature,
-        registry,
-        diagnostics,
-        &mut ctx,
-    )?;
+    let params = lower_params(function, &identifier, signature, registry, output, &mut ctx)?;
 
-    let flow = lower_body(body, &mut ctx, entry, registry, diagnostics).ok()?;
+    let flow = lower_body(body, &mut ctx, entry, registry, output).ok()?;
     finalize_open_flow(&mut ctx, flow);
 
     let blocks = ctx.into_blocks();
@@ -229,7 +216,7 @@ fn lower_params(
     identifier: &Identifier,
     signature: &FunctionSignature,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
     ctx: &mut FnLowerCtx,
 ) -> Option<Vec<IRFunctionParam>> {
     let mut params = Vec::with_capacity(function.params.len());
@@ -241,7 +228,7 @@ fn lower_params(
             )
         });
         let resolved = &signature.params[index].ty;
-        let ty = resolved_type_to_ir_type(resolved, registry);
+        let ty = resolved_type_to_ir_type(resolved, registry, &mut output.instantiations);
         let id = ctx.fresh_value(ty.clone());
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
@@ -266,7 +253,6 @@ fn lower_params(
             ty,
         });
     }
-    let _ = diagnostics;
     Some(params)
 }
 
@@ -277,6 +263,7 @@ fn lower_intrinsic_params(
     function: &Function,
     signature: &FunctionSignature,
     registry: &GlobalRegistry,
+    output: &mut LowerOutput,
     ctx: &mut FnLowerCtx,
 ) -> Option<Vec<IRFunctionParam>> {
     let mut params = Vec::with_capacity(function.params.len());
@@ -288,7 +275,7 @@ fn lower_intrinsic_params(
             )
         });
         let resolved = &signature.params[index].ty;
-        let ty = resolved_type_to_ir_type(resolved, registry);
+        let ty = resolved_type_to_ir_type(resolved, registry, &mut output.instantiations);
         let id = ctx.fresh_value(ty.clone());
         params.push(IRFunctionParam {
             id,
@@ -326,21 +313,50 @@ pub(super) fn function_signature<'a>(
     }
 }
 
-/// Translate a typecheck [`ResolvedType`] to an [`IRType`]. Stdlib
-/// `Global.{Bool,Float,Int,String,Unit}` map to scalar [`IRType`]s;
-/// user structs map to [`IRType::Struct`]. Width-explicit ints and
-/// polymorphic containers panic as feature gaps.
-pub(super) fn resolved_type_to_ir_type(ty: &ResolvedType, registry: &GlobalRegistry) -> IRType {
-    let Resolution::Global(id) = ty.resolution else {
-        panic!(
-            "alpha IR lower: ResolvedType has Unresolved resolution after typecheck seal — \
-             compiler bug",
-        );
-    };
+/// Translate a typecheck [`ResolvedType`] to a concrete [`IRType`].
+/// Stdlib `Global.{Bool,Float,Int,String,Unit}` map to scalar
+/// [`IRType`]s; user structs / enums map to [`IRType::Struct`] /
+/// [`IRType::Enum`] — with concrete `type_args` folded into the
+/// symbol via [`mangled_type_name`]. Every non-empty-args
+/// translation also pushes an [`Instantiation`] (keyed at the
+/// template's [`GlobalRegistryId`]) for the
+/// [`crate::generics::instantiate`] driver to specialize.
+///
+/// Panics on `Resolution::TypeParam` — by the time IR lowers a
+/// type, every `Param` should have been substituted by the caller
+/// (typecheck for resolved expressions; the monomorphization driver
+/// for generic-decl fields). A `Param` reaching this helper is a
+/// compiler bug.
+pub(crate) fn resolved_type_to_ir_type(
+    ty: &ResolvedType,
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> IRType {
+    match ty.resolution {
+        Resolution::Global(id) => global_to_ir_type(id, &ty.type_args, registry, instantiations),
+        Resolution::TypeParam { .. } | Resolution::Local(_) | Resolution::Unresolved => panic!(
+            "alpha IR lower: resolved_type_to_ir_type received a non-Global resolution \
+             ({:?}) — every Param must be substituted before lowering",
+            ty.resolution,
+        ),
+    }
+}
+
+fn global_to_ir_type(
+    id: GlobalRegistryId,
+    type_args: &[ResolvedType],
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> IRType {
     let entry = registry.get(id).unwrap_or_else(|| {
         panic!("alpha IR lower: ResolvedType id {id} missing from registry — seal violation",)
     });
     if entry.identifier.is_in_package("Global") {
+        assert!(
+            type_args.is_empty(),
+            "alpha IR lower: stdlib primitive `{}` cannot carry type_args",
+            entry.identifier,
+        );
         return match entry.identifier.last() {
             "Bool" => IRType::Bool,
             "Float" => IRType::Float64,
@@ -354,9 +370,21 @@ pub(super) fn resolved_type_to_ir_type(ty: &ResolvedType, registry: &GlobalRegis
             ),
         };
     }
+    let template = IRSymbol::from_identifier(&entry.identifier);
+    let translated: Vec<IRType> = type_args
+        .iter()
+        .map(|arg| resolved_type_to_ir_type(arg, registry, instantiations))
+        .collect();
+    if !translated.is_empty() {
+        instantiations.push(Instantiation {
+            template: id,
+            args: type_args.to_vec(),
+        });
+    }
+    let symbol = mangled_type_name(&template, &translated);
     match &entry.kind {
-        GlobalKind::Enum(_) => IRType::Enum(IRSymbol::from_identifier(&entry.identifier)),
-        GlobalKind::Struct(_) => IRType::Struct(IRSymbol::from_identifier(&entry.identifier)),
+        GlobalKind::Enum(_) => IRType::Enum(symbol),
+        GlobalKind::Struct(_) => IRType::Struct(symbol),
         other => panic!(
             "alpha IR lower: cannot translate `{}` ({}) to IRType yet",
             entry.identifier,

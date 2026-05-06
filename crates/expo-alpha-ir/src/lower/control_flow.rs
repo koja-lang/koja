@@ -7,13 +7,13 @@
 //! lands with the locals slice.
 
 use expo_alpha_typecheck::GlobalRegistry;
-use expo_ast::ast::{Diagnostic, Expr, Statement};
+use expo_ast::ast::{Expr, Statement};
 
 use crate::function::{IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::body::lower_body;
-use super::ctx::{FlowResult, FnLowerCtx};
+use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 
 /// Lower an `if cond do then_body end` (no-else). Adds a then-block
@@ -31,9 +31,9 @@ pub(super) fn lower_if(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let (cond_value, block) = lower_expr(condition, ctx, block, registry, diagnostics)?;
+    let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
     let then_block = ctx.fresh_block("if_then");
     let merge_block = ctx.fresh_block("if_merge");
     ctx.cfg.set_terminator(
@@ -45,14 +45,7 @@ pub(super) fn lower_if(
         },
     );
 
-    lower_arm_into(
-        then_body,
-        ctx,
-        then_block,
-        merge_block,
-        registry,
-        diagnostics,
-    )?;
+    lower_arm_into(then_body, ctx, then_block, merge_block, registry, output)?;
 
     Ok((emit_unit(ctx, merge_block), merge_block))
 }
@@ -66,9 +59,9 @@ pub(super) fn lower_unless(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let (cond_value, block) = lower_expr(condition, ctx, block, registry, diagnostics)?;
+    let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
     let body_block = ctx.fresh_block("unless_body");
     let merge_block = ctx.fresh_block("unless_merge");
     ctx.cfg.set_terminator(
@@ -80,7 +73,7 @@ pub(super) fn lower_unless(
         },
     );
 
-    lower_arm_into(body, ctx, body_block, merge_block, registry, diagnostics)?;
+    lower_arm_into(body, ctx, body_block, merge_block, registry, output)?;
 
     Ok((emit_unit(ctx, merge_block), merge_block))
 }
@@ -95,9 +88,9 @@ fn lower_arm_into(
     arm_block: IRBlockId,
     merge_block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(), ()> {
-    match lower_body(body, ctx, arm_block, registry, diagnostics)? {
+    match lower_body(body, ctx, arm_block, registry, output)? {
         FlowResult::Open { block, .. } => {
             ctx.cfg
                 .set_terminator(block, IRTerminator::Branch(merge_block));

@@ -26,25 +26,27 @@ use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
 use crate::types::{IRType, ValueId};
 
-use super::ctx::FnLowerCtx;
+use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::package::resolved_type_to_ir_type;
 
 /// Lower an `Item::Struct` against the typecheck registry. Returns
-/// `None` if any feature-gap diagnostic surfaced (matches the
-/// per-function fail-fast contract: the offending decl is dropped
-/// from the package). The pre-lifted [`GlobalKind::Struct`] entry on
-/// the registry already carries the canonical field layout — this
-/// helper just stamps the positional indices and translates each
-/// field's [`expo_alpha_typecheck::ResolvedStructField::ty`] into an
+/// `None` for generic decls (they specialize through
+/// [`crate::generics::instantiate`] off the typecheck registry) and
+/// for decls where any feature-gap diagnostic surfaced (the offending
+/// decl is dropped from the package). The pre-lifted
+/// [`GlobalKind::Struct`] entry on the registry already carries the
+/// canonical field layout — this helper just stamps the positional
+/// indices and translates each field's
+/// [`expo_alpha_typecheck::ResolvedStructField::ty`] into an
 /// [`IRType`].
 pub(super) fn lower_struct_decl(
     decl: &StructDecl,
     package: &str,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Option<IRStructDecl> {
-    if has_feature_gap(decl, diagnostics) {
+    if has_feature_gap(decl, &mut output.diagnostics) {
         return None;
     }
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
@@ -55,10 +57,13 @@ pub(super) fn lower_struct_decl(
              lift_signatures invariant violation",
         );
     };
+    if !definition.type_params.is_empty() {
+        return None;
+    }
     let symbol = IRSymbol::from_identifier(&entry.identifier);
     let mut fields = Vec::with_capacity(definition.fields.len());
     for (index, declared) in definition.fields.iter().enumerate() {
-        let ir_type = resolved_type_to_ir_type(&declared.ty, registry);
+        let ir_type = resolved_type_to_ir_type(&declared.ty, registry, &mut output.instantiations);
         fields.push(IRStructField {
             index: index as u32,
             ir_type,
@@ -79,20 +84,13 @@ pub(super) fn lower_struct_construction(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let definition = struct_definition_from_resolution(expr_resolution, registry, "construction");
-    let entry = struct_entry_from_resolution(expr_resolution, registry, "construction");
-    let symbol = IRSymbol::from_identifier(&entry.identifier);
+    let symbol = resolved_struct_symbol(expr_resolution, registry, &mut output.instantiations);
 
-    let (field_inits, current) = canonicalize_struct_inits(
-        &definition.fields,
-        fields,
-        ctx,
-        block,
-        registry,
-        diagnostics,
-    )?;
+    let (field_inits, current) =
+        canonicalize_struct_inits(&definition.fields, fields, ctx, block, registry, output)?;
 
     let dest = ctx.fresh_value(IRType::Struct(symbol.clone()));
     ctx.cfg.append(
@@ -104,6 +102,24 @@ pub(super) fn lower_struct_construction(
         },
     );
     Ok((dest, current))
+}
+
+/// The mangled [`IRSymbol`] for the struct named by `resolution`.
+/// Routes through [`resolved_type_to_ir_type`] so any non-empty
+/// `type_args` are recorded as instantiations and folded into the
+/// returned mangled symbol.
+fn resolved_struct_symbol(
+    resolution: &ResolvedType,
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<crate::generics::Instantiation>,
+) -> IRSymbol {
+    match resolved_type_to_ir_type(resolution, registry, instantiations) {
+        IRType::Struct(symbol) => symbol,
+        other => panic!(
+            "alpha IR lower: struct construction target lowered to `{other:?}`, expected \
+             IRType::Struct — typecheck seal must have caught this",
+        ),
+    }
 }
 
 /// Lower each field-init expression and re-order the results into
@@ -123,12 +139,12 @@ pub(super) fn canonicalize_struct_inits(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(Vec<StructFieldInit>, IRBlockId), ()> {
     let mut current = block;
     let mut values_by_name: BTreeMap<String, ValueId> = BTreeMap::new();
     for field in fields {
-        let (value, next) = lower_expr(&field.value, ctx, current, registry, diagnostics)?;
+        let (value, next) = lower_expr(&field.value, ctx, current, registry, output)?;
         values_by_name.insert(field.name.clone(), value);
         current = next;
     }
@@ -160,10 +176,9 @@ pub(super) fn lower_field_access(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let (base, current) = lower_expr(receiver, ctx, block, registry, diagnostics)?;
-    let entry = struct_entry_from_resolution(&receiver.resolution, registry, "field access");
+    let (base, current) = lower_expr(receiver, ctx, block, registry, output)?;
     let definition =
         struct_definition_from_resolution(&receiver.resolution, registry, "field access");
     let (field_index, _) = definition.lookup_field(field).unwrap_or_else(|| {
@@ -172,8 +187,10 @@ pub(super) fn lower_field_access(
              resolve invariant violation",
         )
     });
-    let field_type = resolved_type_to_ir_type(field_resolution, registry);
-    let struct_symbol = IRSymbol::from_identifier(&entry.identifier);
+    let field_type =
+        resolved_type_to_ir_type(field_resolution, registry, &mut output.instantiations);
+    let struct_symbol =
+        resolved_struct_symbol(&receiver.resolution, registry, &mut output.instantiations);
     let dest = ctx.fresh_value(field_type.clone());
     ctx.cfg.append(
         current,
@@ -222,16 +239,6 @@ fn struct_definition_from_resolution<'a>(
 /// package fragment in that case.
 fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let mut gapped = false;
-    if !decl.type_params.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha IR does not yet lower generic structs (`{}` has type parameters)",
-                decl.name,
-            ),
-            decl.span,
-        ));
-        gapped = true;
-    }
     for annotation in &decl.annotations {
         diagnostics.push(Diagnostic::error(
             format!(

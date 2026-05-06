@@ -321,10 +321,10 @@ fn nested_field_access_resolves_through_inner_struct() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn generic_struct_diagnoses_feature_gap() {
+fn generic_struct_with_bound_diagnoses_bounds_gap() {
     let source = "
-        struct Wrapper<T>
-          value: Int
+        struct Wrapper<T: Show>
+          value: T
         end
         ";
 
@@ -333,8 +333,8 @@ fn generic_struct_diagnoses_feature_gap() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("does not yet support generic structs")),
-        "expected generic-struct gap diagnostic, got {messages:?}",
+            .any(|m| m.contains("does not yet support type-parameter bounds")),
+        "expected type-parameter-bounds gap diagnostic, got {messages:?}",
     );
 }
 
@@ -1050,4 +1050,133 @@ fn impl_on_unknown_type_diagnoses() {
             .any(|m| m.contains("cannot extend unknown type `Vector`")),
         "expected impl-unknown-type diagnostic, got {messages:?}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Generics — definition, lift, construction inference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: U
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let definition = struct_definition(&checked, "Pair");
+    assert_eq!(definition.type_params, vec!["T".to_string(), "U".to_string()]);
+    assert_eq!(definition.fields.len(), 2);
+    assert!(matches!(
+        definition.fields[0].ty.resolution,
+        Resolution::TypeParam { owner, .. } if owner == pair_id,
+    ));
+    assert!(matches!(
+        definition.fields[1].ty.resolution,
+        Resolution::TypeParam { owner, .. } if owner == pair_id,
+    ));
+    assert_ne!(
+        definition.fields[0].ty.resolution,
+        definition.fields[1].ty.resolution,
+        "T and U must mint distinct TypeParam handles",
+    );
+}
+
+#[test]
+fn generic_struct_construction_infers_type_args_from_field_values() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: U
+        end
+
+        fn main
+          Pair{a: 1, b: \"x\"}
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let int = global_leaf(&checked, "Int");
+    let string = global_leaf(&checked, "String");
+    let expr = body_trailing_expr(&checked, "main");
+    assert_eq!(expr.resolution.resolution, Resolution::Global(pair_id));
+    assert_eq!(expr.resolution.type_args, vec![int, string]);
+}
+
+#[test]
+fn generic_struct_construction_with_conflicting_inferences_diagnoses() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: T
+        end
+
+        fn main
+          Pair{a: 1, b: \"x\"}
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("type parameter `T` of `TestApp.Pair` cannot be both")),
+        "expected type-param conflict diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_struct_phantom_type_param_diagnoses() {
+    let source = "
+        struct Phantom<T>
+          marker: Int
+        end
+
+        fn main
+          Phantom{marker: 1}
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot infer type parameter `T`")),
+        "expected Phantom-guard diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_struct_nested_in_generic_struct_resolves_through_typeparam_args() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: U
+        end
+
+        struct Box<V>
+          inner: Pair<V, Int>
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let box_definition = struct_definition(&checked, "Box");
+    let box_id = lookup_struct_id(&checked, PACKAGE, "Box");
+    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let int = global_leaf(&checked, "Int");
+
+    let inner = &box_definition.fields[0].ty;
+    assert_eq!(inner.resolution, Resolution::Global(pair_id));
+    assert_eq!(inner.type_args.len(), 2);
+    assert!(matches!(
+        inner.type_args[0].resolution,
+        Resolution::TypeParam { owner, .. } if owner == box_id,
+    ));
+    assert_eq!(inner.type_args[1], int);
 }

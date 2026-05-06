@@ -46,7 +46,7 @@ pub(super) fn lift_function_with_identifier(
     }
 
     let return_type = match function.return_type.as_ref() {
-        Some(type_expr) => resolve_type_expr(type_expr, package, registry, diagnostics),
+        Some(type_expr) => resolve_type_expr(type_expr, None, package, registry, diagnostics),
         None => registry.primitive("Unit"),
     };
 
@@ -139,7 +139,7 @@ fn lift_param(
                     *span,
                 ));
             }
-            let ty = resolve_type_expr(type_expr, package, registry, diagnostics);
+            let ty = resolve_type_expr(type_expr, None, package, registry, diagnostics);
             ResolvedParam {
                 name: name.clone(),
                 ty,

@@ -43,6 +43,10 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
             None => format!("<id {id}>"),
         },
         Resolution::Local(local_id) => format!("<local {local_id}>"),
+        Resolution::TypeParam { owner, index } => registry
+            .type_param_name(owner, index)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
         Resolution::Unresolved => "<unresolved>".to_string(),
     }
 }

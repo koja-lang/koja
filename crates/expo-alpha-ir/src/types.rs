@@ -109,13 +109,21 @@ pub enum IRUnaryOp {
 /// per-field width / offset thread that lookup directly. Generic
 /// instantiations get a richer key in the follow-up generics slice.
 ///
-/// `Enum(symbol)` names a user-declared (non-generic) enum by the
-/// same mangled [`IRSymbol`] used as the key on
-/// [`crate::IRPackage::enums`]. Variant layout is recovered through
-/// the matching [`crate::IREnumDecl`]; the LLVM backend lays it out
-/// as an outer opaque blob with per-variant complete + payload
-/// structs (see [`crate::IREnumDecl`]'s module-level docs).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// `Enum(symbol)` names a user-declared enum by the same mangled
+/// [`IRSymbol`] used as the key on [`crate::IRPackage::enums`].
+/// Variant layout is recovered through the matching
+/// [`crate::IREnumDecl`]; the LLVM backend lays it out as an outer
+/// opaque blob with per-variant complete + payload structs (see
+/// [`crate::IREnumDecl`]'s module-level docs).
+///
+/// **Concrete-only**: every variant of `IRType` names a fully
+/// monomorphized type. There is no "generic parameter" variant —
+/// generic-decl bodies are never lowered to `IRType`; instead
+/// [`crate::generics::instantiate`] substitutes [`expo_ast::identifier::ResolvedType`]
+/// templates against concrete args from the typecheck registry,
+/// then lowers the substituted shape into concrete `IRType`s. This
+/// is the IR vocabulary backends consume.
+#[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum IRType {
     Bool,
     Enum(IRSymbol),

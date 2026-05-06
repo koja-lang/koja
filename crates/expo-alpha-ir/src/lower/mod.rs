@@ -36,8 +36,9 @@ mod ctx;
 mod enums;
 mod expr;
 mod ops;
-mod package;
+pub(crate) mod package;
 mod structs;
 
 pub(crate) use body::lower_body_to_blocks;
+pub(crate) use ctx::LowerOutput;
 pub(crate) use package::lower_package;

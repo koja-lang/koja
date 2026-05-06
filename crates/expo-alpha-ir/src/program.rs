@@ -22,6 +22,8 @@ use expo_ast::identifier::Identifier;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRFunction, IRSymbol};
+use crate::generics;
+use crate::lower::LowerOutput;
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::{lower, merge, seal};
@@ -100,37 +102,41 @@ impl IRProgram {
 /// Sub-pass order (forced by data dependencies):
 ///
 /// 1. `lower_package` — translate each `CheckedPackage` into an
-///    `IRPackage` fragment. Pushes feature-gap diagnostics into the
-///    shared buffer and omits functions that failed to lower.
+///    `IRPackage` fragment. Generic decls are skipped (they live in
+///    the typecheck registry); concrete instantiations encountered
+///    along the way accumulate into a flat list keyed at the
+///    template's [`expo_ast::identifier::GlobalRegistryId`]. Feature-
+///    gap diagnostics push into the shared buffer and the offending
+///    decl is dropped.
 /// 2. If any diagnostics were recorded, return
 ///    `Err(LowerError::Diagnostics)` immediately. Seal never runs on
 ///    a partial IR — its invariants assume a complete program, and
 ///    violating them panics (northstar: seal failures are compiler
 ///    bugs, not user errors).
-/// 3. `merge` — stitch the per-package fragments into a single
+/// 3. `generics::instantiate` — dedupe the instantiation list and
+///    monomorphize each one off the typecheck registry into the
+///    [`IRPackage`] that owns the template. The instantiation set is
+///    dropped here and never reaches merge / seal / backends.
+/// 4. `merge` — stitch the per-package fragments into a single
 ///    working `IRProgram`.
-/// 4. Entry-point existence check — surfaces `EntryPointNotFound`.
-/// 5. `seal` — assert sealed-IRProgram invariants. Panics on violation.
-///
-/// Future sub-passes (e.g. `closure` for generic-instantiation
-/// discovery, `elaborate` for coercion emission) land between `merge`
-/// and `seal` when the work they do becomes load-bearing. They're not
-/// in the pipeline yet because there's nothing for them to do —
-/// no-op pass-throughs would be dead architecture.
+/// 5. Entry-point existence check — surfaces `EntryPointNotFound`.
+/// 6. `seal` — assert sealed-IRProgram invariants. Panics on violation.
 pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRProgram, LowerError> {
-    let mut diagnostics = Vec::new();
+    let mut output = LowerOutput::default();
     let mut packages = Vec::with_capacity(checked.packages.len());
     for pkg in &checked.packages {
-        packages.push(lower::lower_package(
-            pkg,
-            &checked.registry,
-            &mut diagnostics,
-        ));
+        packages.push(lower::lower_package(pkg, &checked.registry, &mut output));
     }
+    let LowerOutput {
+        diagnostics,
+        instantiations,
+    } = output;
 
     if !diagnostics.is_empty() {
         return Err(LowerError::Diagnostics(diagnostics));
     }
+
+    generics::instantiate(instantiations, &checked.registry, &mut packages);
 
     let entry_symbol = IRSymbol::from_identifier(&entry);
     let program = merge::merge(packages, entry_symbol);

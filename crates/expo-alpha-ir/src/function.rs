@@ -22,9 +22,22 @@ pub struct IRSymbol(String);
 
 impl IRSymbol {
     /// Mint an `IRSymbol` from a declaration's canonical AST
-    /// identifier. Only the alpha lowering pipeline stamps symbols.
+    /// identifier. The only path that introduces a new symbol root —
+    /// every other `IRSymbol` is [`Self::derived`] off one of these.
     pub(crate) fn from_identifier(identifier: &Identifier) -> Self {
         Self(identifier.qualified_name())
+    }
+
+    /// Build a new symbol that extends `self`'s mangled name with
+    /// `suffix`. Reserved for [`crate::mangling`]; the resulting
+    /// symbol is rooted at the same AST identifier as `self`,
+    /// disambiguated by a monomorphization suffix
+    /// (e.g. `_$Int.TestApp.String$`).
+    pub(crate) fn derived(&self, suffix: &str) -> Self {
+        let mut name = String::with_capacity(self.0.len() + suffix.len());
+        name.push_str(&self.0);
+        name.push_str(suffix);
+        Self(name)
     }
 
     /// The mangled symbol name. Backends pass this directly to LLVM

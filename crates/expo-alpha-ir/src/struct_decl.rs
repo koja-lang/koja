@@ -35,7 +35,9 @@ pub struct IRStructField {
 /// A lowered struct declaration. `symbol` is the same package-qualified
 /// mangled name shape an [`crate::IRFunction`] uses; `fields` is the
 /// declaration-order field list. Empty `fields` is legal (matches
-/// `struct Foo / end` shape).
+/// `struct Foo / end` shape). Generic decls never appear here —
+/// [`crate::generics::instantiate`] produces one [`IRStructDecl`]
+/// per discovered instantiation, keyed at its mangled symbol.
 #[derive(Debug, Clone)]
 pub struct IRStructDecl {
     pub fields: Vec<IRStructField>,

@@ -18,7 +18,7 @@ use crate::local::IRLocalId;
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::control_flow::{lower_if, lower_unless};
-use super::ctx::FnLowerCtx;
+use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
 use super::ops::{
     bin_op_result_type, const_value_type, lower_bin_op, lower_literal, lower_unary_op,
@@ -32,13 +32,13 @@ pub(super) fn lower_expr(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     match &expr.kind {
         ExprKind::Binary { op, left, right } => {
-            let (lhs, block) = lower_expr(left, ctx, block, registry, diagnostics)?;
-            let (rhs, block) = lower_expr(right, ctx, block, registry, diagnostics)?;
-            let ir_op = lower_bin_op(*op, expr.span, diagnostics)?;
+            let (lhs, block) = lower_expr(left, ctx, block, registry, output)?;
+            let (rhs, block) = lower_expr(right, ctx, block, registry, output)?;
+            let ir_op = lower_bin_op(*op, expr.span, &mut output.diagnostics)?;
             let result_ty = bin_op_result_type(ir_op, ctx.type_of(lhs));
             let dest = ctx.fresh_value(result_ty);
             ctx.cfg.append(
@@ -53,7 +53,7 @@ pub(super) fn lower_expr(
             Ok((dest, block))
         }
         ExprKind::Call { callee, args } => {
-            lower_call(callee, args, ctx, block, registry, diagnostics)
+            lower_call(callee, args, ctx, block, registry, output)
         }
         ExprKind::EnumConstruction { variant, data, .. } => lower_enum_construction(
             variant,
@@ -62,18 +62,12 @@ pub(super) fn lower_expr(
             ctx,
             block,
             registry,
-            diagnostics,
+            output,
         ),
-        ExprKind::FieldAccess { receiver, field } => lower_field_access(
-            receiver,
-            field,
-            &expr.resolution,
-            ctx,
-            block,
-            registry,
-            diagnostics,
-        ),
-        ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, diagnostics),
+        ExprKind::FieldAccess { receiver, field } => {
+            lower_field_access(receiver, field, &expr.resolution, ctx, block, registry, output)
+        }
+        ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, output),
         ExprKind::Ident { resolution, name } => {
             let Resolution::Local(local_id) = resolution else {
                 panic!(
@@ -87,6 +81,7 @@ pub(super) fn lower_expr(
                 ctx,
                 block,
                 registry,
+                &mut output.instantiations,
             ))
         }
         ExprKind::Self_ { local_id } => {
@@ -102,6 +97,7 @@ pub(super) fn lower_expr(
                 ctx,
                 block,
                 registry,
+                &mut output.instantiations,
             ))
         }
         ExprKind::If {
@@ -110,16 +106,16 @@ pub(super) fn lower_expr(
             else_body,
         } => {
             if else_body.is_some() {
-                diagnostics.push(Diagnostic::error(
+                output.diagnostics.push(Diagnostic::error(
                     "alpha IR does not yet lower `else` branches",
                     expr.span,
                 ));
                 return Err(());
             }
-            lower_if(condition, then_body, ctx, block, registry, diagnostics)
+            lower_if(condition, then_body, ctx, block, registry, output)
         }
         ExprKind::Literal { value } => {
-            let const_value = lower_literal(value, expr.span, diagnostics)?;
+            let const_value = lower_literal(value, expr.span, &mut output.diagnostics)?;
             let ty = const_value_type(&const_value);
             let dest = ctx.fresh_value(ty);
             ctx.cfg.append(
@@ -135,13 +131,15 @@ pub(super) fn lower_expr(
             receiver,
             method,
             args,
-        } => lower_method_call(receiver, method, args, ctx, block, registry, diagnostics),
-        ExprKind::String { parts, .. } => lower_string(parts, expr.span, ctx, block, diagnostics),
+        } => lower_method_call(receiver, method, args, ctx, block, registry, output),
+        ExprKind::String { parts, .. } => {
+            lower_string(parts, expr.span, ctx, block, &mut output.diagnostics)
+        }
         ExprKind::StructConstruction { fields, .. } => {
-            lower_struct_construction(fields, &expr.resolution, ctx, block, registry, diagnostics)
+            lower_struct_construction(fields, &expr.resolution, ctx, block, registry, output)
         }
         ExprKind::Unary { op, operand } => {
-            let (operand, block) = lower_expr(operand, ctx, block, registry, diagnostics)?;
+            let (operand, block) = lower_expr(operand, ctx, block, registry, output)?;
             let ir_op = lower_unary_op(*op);
             let result_ty = unary_op_result_type(ir_op, ctx.type_of(operand));
             let dest = ctx.fresh_value(result_ty);
@@ -156,10 +154,10 @@ pub(super) fn lower_expr(
             Ok((dest, block))
         }
         ExprKind::Unless { condition, body } => {
-            lower_unless(condition, body, ctx, block, registry, diagnostics)
+            lower_unless(condition, body, ctx, block, registry, output)
         }
         other => {
-            diagnostics.push(Diagnostic::error(
+            output.diagnostics.push(Diagnostic::error(
                 format!(
                     "alpha IR does not yet lower this expression kind ({})",
                     expr_kind_label(other),
@@ -180,9 +178,10 @@ fn lower_local_read(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
+    instantiations: &mut Vec<crate::generics::Instantiation>,
 ) -> (ValueId, IRBlockId) {
     let ir_local = IRLocalId::from_local_id(local_id);
-    let ty = resolved_type_to_ir_type(resolution, registry);
+    let ty = resolved_type_to_ir_type(resolution, registry, instantiations);
     let dest = ctx.fresh_value(ty.clone());
     ctx.cfg.append(
         block,
@@ -203,7 +202,7 @@ fn lower_call(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let ExprKind::Ident { resolution, name } = &callee.kind else {
         panic!(
@@ -220,7 +219,7 @@ fn lower_call(
              seal invariant violation",
         )
     });
-    emit_call(entry, args, None, ctx, block, registry, diagnostics)
+    emit_call(entry, args, None, ctx, block, registry, output)
 }
 
 /// Lower `ExprKind::MethodCall`. Static dispatch (`Type.method(...)`)
@@ -235,13 +234,13 @@ fn lower_method_call(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let dispatch = method_dispatch_kind(receiver, registry);
     let (prepend, current_block) = match dispatch {
         Dispatch::Static => (None, block),
         Dispatch::Instance => {
-            let (recv_id, next_block) = lower_expr(receiver, ctx, block, registry, diagnostics)?;
+            let (recv_id, next_block) = lower_expr(receiver, ctx, block, registry, output)?;
             (Some(recv_id), next_block)
         }
     };
@@ -262,15 +261,7 @@ fn lower_method_call(
              seal invariant violation",
         )
     });
-    emit_call(
-        method_entry,
-        args,
-        prepend,
-        ctx,
-        current_block,
-        registry,
-        diagnostics,
-    )
+    emit_call(method_entry, args, prepend, ctx, current_block, registry, output)
 }
 
 /// A bare `Ident` resolving to a struct or enum names the type
@@ -339,7 +330,7 @@ fn emit_call(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let signature = match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig,
@@ -350,7 +341,8 @@ fn emit_call(
             other.label(),
         ),
     };
-    let return_ty = resolved_type_to_ir_type(&signature.return_type, registry);
+    let return_ty =
+        resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
     let callee_symbol = IRSymbol::from_identifier(&entry.identifier);
 
     let mut lowered_args = Vec::with_capacity(args.len() + usize::from(prepend.is_some()));
@@ -359,7 +351,7 @@ fn emit_call(
     }
     let mut current = block;
     for arg in args {
-        let (value, next) = lower_expr(&arg.value, ctx, current, registry, diagnostics)?;
+        let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
         lowered_args.push(value);
         current = next;
     }

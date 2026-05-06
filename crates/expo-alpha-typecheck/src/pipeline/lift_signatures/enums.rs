@@ -20,7 +20,7 @@ use crate::registry::{
 
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
-use super::types::resolve_type_expr;
+use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_enum(
     decl: &EnumDecl,
@@ -64,6 +64,16 @@ fn lift_enum_definition(
         return;
     }
 
+    let type_params: Vec<String> = decl
+        .type_params
+        .iter()
+        .map(|param| param.name.clone())
+        .collect();
+    let scope = (!type_params.is_empty()).then_some(TypeParamScope {
+        owner: id,
+        names: &type_params,
+    });
+
     let mut variants = Vec::with_capacity(decl.variants.len());
     for variant in &decl.variants {
         let data = match &variant.data {
@@ -80,7 +90,13 @@ fn lift_enum_definition(
                 }
                 let mut resolved = Vec::with_capacity(fields.len());
                 for field in fields {
-                    let ty = resolve_type_expr(&field.type_expr, package, registry, diagnostics);
+                    let ty = resolve_type_expr(
+                        &field.type_expr,
+                        scope,
+                        package,
+                        registry,
+                        diagnostics,
+                    );
                     resolved.push(ResolvedStructField {
                         name: field.name.clone(),
                         ty,
@@ -101,7 +117,7 @@ fn lift_enum_definition(
                 }
                 let resolved = types
                     .iter()
-                    .map(|ty| resolve_type_expr(ty, package, registry, diagnostics))
+                    .map(|ty| resolve_type_expr(ty, scope, package, registry, diagnostics))
                     .collect();
                 ResolvedVariantData::Tuple(resolved)
             }
@@ -112,5 +128,11 @@ fn lift_enum_definition(
             name: variant.name.clone(),
         });
     }
-    registry.set_enum_definition(id, EnumDefinition { variants });
+    registry.set_enum_definition(
+        id,
+        EnumDefinition {
+            type_params,
+            variants,
+        },
+    );
 }
