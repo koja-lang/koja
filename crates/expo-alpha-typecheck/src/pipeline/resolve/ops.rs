@@ -11,8 +11,8 @@ use expo_ast::ast::{BinOp, Diagnostic, Expr, Literal, UnaryOp};
 use expo_ast::identifier::ResolvedType;
 use expo_ast::span::Span;
 
-use crate::labels::bin_op_label;
 use crate::registry::GlobalRegistry;
+use expo_ast::labels::bin_op_label;
 
 use super::types::{display_resolution, is_primitive};
 

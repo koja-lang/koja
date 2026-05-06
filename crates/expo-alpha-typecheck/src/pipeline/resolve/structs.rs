@@ -1,18 +1,6 @@
 //! Struct-literal construction and field-access resolution.
-//!
-//! Struct construction (`Type{f: e}`) validates that every declared
-//! field has exactly one init with a matching type and no unknown /
-//! duplicate fields surface; the literal's [`ResolvedType`] is the
-//! struct's leaf type regardless of per-field mismatches so the
-//! surrounding expression keeps a stable shape — individual
-//! diagnostics fire per offending field.
-//!
-//! Field access (`expr.field`) requires the receiver to resolve to a
-//! struct value; the result type is the declared field's type.
-//!
-//! `lookup_struct` is shared with [`super::calls`] for the
-//! `Type.method(...)` static-dispatch carve-out — both helpers need
-//! the same package + Global fallback.
+//! `lookup_struct` is also reused by [`super::calls`] for static
+//! dispatch (`Type.method(...)`).
 
 use expo_ast::ast::{Diagnostic, Expr, FieldInit};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
@@ -24,16 +12,11 @@ use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::types::display_resolution;
 
-/// Resolve a struct literal `Type{f1: e1, f2: e2}`. Validates that
-/// the type path resolves to a registered struct, that every
-/// declared field has exactly one init with a matching type, and
-/// that no unknown fields appear.
-///
-/// Move tracking is deferred: the surface-syntax `move` modifier on
-/// fields is rejected upstream by the parser/AST (no shape exists),
-/// and field reads (resolved separately by [`resolve_field_access`])
-/// don't invalidate the receiver. This matches v1's current
-/// behaviour. Tightening lands with the ownership slice.
+/// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
+/// to a registered struct, every declared field has exactly one init
+/// of the right type, and no unknown fields appear. The literal's
+/// [`ResolvedType`] is always the struct's leaf type regardless of
+/// per-field mismatches so the surrounding expression stays stable.
 pub(super) fn resolve_struct_construction(
     type_path: &[String],
     fields: &mut [FieldInit],
@@ -41,9 +24,8 @@ pub(super) fn resolve_struct_construction(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    // Resolve every field-init expression first regardless of struct
-    // resolution success — nested errors surface and seal_expr has
-    // resolutions to walk on each value.
+    // Resolve every field-init expression up front so seal walks a
+    // populated tree even if the struct itself doesn't resolve.
     for field in fields.iter_mut() {
         resolve_expr(&mut field.value, resolver, diagnostics);
     }
@@ -73,9 +55,6 @@ pub(super) fn resolve_struct_construction(
         return ResolvedType::unresolved();
     };
     let Some(definition) = definition else {
-        // Stdlib stub primitives and other Struct(None) entries are
-        // not user-constructible. Diagnose distinctly so the user
-        // gets a clearer hint than "unknown field".
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot construct primitive type `{}` with struct literal syntax",
@@ -130,8 +109,6 @@ fn validate_struct_fields(
 
         let actual = &field.value.resolution;
         if !actual.is_resolved() {
-            // The init expression already triggered its own
-            // diagnostic; don't pile on with a type mismatch.
             continue;
         }
         if actual != &declared.ty {
@@ -168,8 +145,6 @@ pub(super) fn resolve_field_access(
 ) -> ResolvedType {
     resolve_expr(receiver, resolver, diagnostics);
     let Resolution::Global(struct_id) = receiver.resolution.resolution else {
-        // Receiver resolution failed upstream; stay quiet to avoid
-        // duplicating that diagnostic.
         return ResolvedType::unresolved();
     };
     let Some(entry) = resolver.registry.get(struct_id) else {
@@ -197,11 +172,8 @@ pub(super) fn resolve_field_access(
 }
 
 /// Resolve a single-segment struct path against the in-scope package,
-/// falling back to `Global` for stdlib stubs (`Int`, `Bool`, …).
-/// Multi-segment paths and aliases aren't supported in this slice.
-///
-/// `pub(super)` so [`super::calls`] can reuse the same lookup for
-/// `Type.method(args)` static dispatch.
+/// falling back to `Global` for stdlib stubs. Multi-segment paths
+/// and aliases are feature gaps.
 pub(super) fn lookup_struct<'a>(
     type_path: &[String],
     package: &str,

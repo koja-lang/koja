@@ -1,9 +1,7 @@
-//! Per-function and per-block invariants. Both
-//! [`super::program::seal_program`] and [`super::script::seal_script`]
-//! call into [`seal_package`] / [`seal_block`] — the actual block
-//! validation is identical for fn-shaped and script-shaped IR; the
-//! only difference is what the surrounding seeded-set looks like
-//! (function params seeded for fns, empty for scripts).
+//! Per-function and per-block invariants. [`seal_package`] /
+//! [`seal_block`] are reused for both function- and script-shaped IR;
+//! only the seeded `ValueId` set differs (params for fns, empty for
+//! scripts).
 
 use std::collections::{BTreeSet, HashSet};
 
@@ -50,11 +48,7 @@ fn seal_function(function: &IRFunction) {
         }
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
-    // Parameter `ValueId`s count as definitions for the purposes of
-    // operand references inside the entry block. Seed them once and
-    // pass the seed by reference into every block walk; per-block
-    // defined-set composes onto the seed without mutating it across
-    // blocks (cross-block value flow doesn't appear in this slice).
+    // Param `ValueId`s seed every block's operand-defined set.
     let mut seeded: BTreeSet<ValueId> = BTreeSet::new();
     for (index, param) in function.params.iter().enumerate() {
         require_supported_type(&param.ty, &|| {
@@ -74,20 +68,10 @@ fn seal_function(function: &IRFunction) {
     seal_locals(function, &owner);
 }
 
-/// Per-function local-slot invariants:
-///
-/// - Every [`IRLocalId`] is `LocalDecl`'d exactly once. Two declarations
-///   for the same id would imply two slots claiming the same identity,
-///   which the lower pass should never emit.
-/// - Every `LocalRead` / `LocalWrite` references a previously declared
-///   `IRLocalId`. Block-local flow analysis is a follow-up; today the
-///   lower pass guarantees the `LocalDecl` lands in the entry block
-///   ahead of any read/write, so a function-wide membership check is
-///   tight enough.
-/// - Every parameter's [`crate::IRFunctionParam::local_id`] is among
-///   the declared set; param promotion at function entry must emit
-///   the matching `LocalDecl` so body references work uniformly with
-///   body-declared locals.
+/// Per-function local-slot invariants: each [`IRLocalId`] is
+/// `LocalDecl`'d exactly once, every read/write references a declared
+/// id, and every param's `local_id` lands in the declared set
+/// (param promotion emits the matching `LocalDecl`).
 fn seal_locals(function: &IRFunction, owner: &str) {
     let mut declared: HashSet<IRLocalId> = HashSet::new();
     for block in &function.blocks {
@@ -101,9 +85,8 @@ fn seal_locals(function: &IRFunction, owner: &str) {
             }
         }
     }
-    // Intrinsics carry params for backend signature shape but emit no
-    // body and therefore no `LocalDecl`s. Param promotion is a body
-    // concern; skip the membership check on the empty-blocks shape.
+    // Intrinsics carry params for backend signature shape but emit
+    // no body, so they have no matching `LocalDecl`s to check.
     if function.kind == FunctionKind::Regular {
         for param in &function.params {
             if !declared.contains(&param.local_id) {
@@ -131,8 +114,7 @@ fn seal_locals(function: &IRFunction, owner: &str) {
     }
 }
 
-/// Build the per-function block-id set used to validate every
-/// terminator target. Asserts uniqueness en route.
+/// Block-id set for terminator-target validation. Asserts uniqueness.
 pub(super) fn collect_block_ids(blocks: &[IRBasicBlock], owner: &str) -> HashSet<IRBlockId> {
     let mut ids = HashSet::with_capacity(blocks.len());
     for block in blocks {
@@ -160,10 +142,8 @@ pub(super) fn seal_block(
         if let IRInstruction::Const { value, dest } = inst {
             require_supported_const(value, &|| format!("{owner} const instruction at {dest}"));
         }
-        // Local-slot instructions don't define a `ValueId` and so
-        // don't participate in the per-block defined-set walk; the
-        // slot-identity invariants (one decl per slot, etc.) are
-        // checked function-wide in `seal_locals`.
+        // Local-slot instructions don't define a `ValueId`; their
+        // slot-identity invariants are checked in `seal_locals`.
         if let Some(dest) = inst.dest()
             && !defined.insert(dest)
         {

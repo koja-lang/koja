@@ -12,7 +12,7 @@ use crate::ctx::EmitCtx;
 use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
-use super::{ValueMap, lookup, ops};
+use super::{ValueMap, inkwell_err, lookup, ops};
 
 pub(super) fn emit_instruction<'ctx>(
     ctx: &EmitCtx<'ctx>,
@@ -92,12 +92,9 @@ pub(super) fn emit_instruction<'ctx>(
     }
 }
 
-/// Materialize a `Struct{...}` literal at runtime: hoist a scratch
-/// alloca to the function's entry block, store each field through a
-/// `getelementptr`, then load the populated struct out as the
-/// instruction's SSA value. Mirrors v1 codegen's
-/// `emit_struct_construction` shape so eventual stack-allocation /
-/// return-by-pointer optimizations transplant cleanly.
+/// Materialize a struct literal: hoist a scratch alloca to the
+/// entry block, store each field through a `getelementptr`, then
+/// load the populated struct out as the instruction's SSA value.
 fn emit_struct_init<'ctx>(
     ctx: &EmitCtx<'ctx>,
     struct_type: StructType<'ctx>,
@@ -112,25 +109,24 @@ fn emit_struct_init<'ctx>(
         ctx.builder
             .build_store(field_ptr, field_value)
             .map_err(|e| {
-                LlvmError::Codegen(format!(
-                    "inkwell rejected build_store for `{symbol}` field #{}: {e}",
-                    field.index,
-                ))
+                inkwell_err(
+                    format_args!("build_store for `{symbol}` field #{}", field.index),
+                    e,
+                )
             })?;
     }
     ctx.builder
         .build_load(struct_type, alloca, symbol.mangled())
         .map_err(|e| {
-            LlvmError::Codegen(format!(
-                "inkwell rejected build_load for `{symbol}` after StructInit: {e}",
-            ))
+            inkwell_err(
+                format_args!("build_load for `{symbol}` after StructInit"),
+                e,
+            )
         })
 }
 
-/// Project a single field out of a struct-typed SSA value. Allocates
-/// a scratch slot in the function's entry block, stores the receiver
-/// into it, GEPs the field, and loads. Mirrors v1's
-/// `emit_field_load`.
+/// Project a single field out of a struct-typed SSA value via a
+/// scratch entry-block alloca + GEP + load.
 fn emit_field_get<'ctx>(
     ctx: &EmitCtx<'ctx>,
     struct_type: StructType<'ctx>,
@@ -140,25 +136,27 @@ fn emit_field_get<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let struct_value = base.into_struct_value();
     let alloca = ctx.build_entry_alloca(struct_type, "field_tmp");
-    ctx.builder.build_store(alloca, struct_value).map_err(|e| {
-        LlvmError::Codegen(format!("inkwell rejected build_store for FieldGet: {e}"))
-    })?;
+    ctx.builder
+        .build_store(alloca, struct_value)
+        .map_err(|e| inkwell_err("build_store for FieldGet", e))?;
     let label = format!("field_{field_index}");
     let field_ptr = ctx
         .builder
         .build_struct_gep(struct_type, alloca, field_index, &label)
         .map_err(|e| {
-            LlvmError::Codegen(format!(
-                "inkwell rejected build_struct_gep for FieldGet field #{field_index}: {e}",
-            ))
+            inkwell_err(
+                format_args!("build_struct_gep for FieldGet field #{field_index}"),
+                e,
+            )
         })?;
     let field_llvm_type = ir_basic_type(ctx, field_type)?;
     ctx.builder
         .build_load(field_llvm_type, field_ptr, &label)
         .map_err(|e| {
-            LlvmError::Codegen(format!(
-                "inkwell rejected build_load for FieldGet field #{field_index}: {e}",
-            ))
+            inkwell_err(
+                format_args!("build_load for FieldGet field #{field_index}"),
+                e,
+            )
         })
 }
 
@@ -173,22 +171,16 @@ fn build_field_gep<'ctx>(
     ctx.builder
         .build_struct_gep(struct_type, base_ptr, field_index, &label)
         .map_err(|e| {
-            LlvmError::Codegen(format!(
-                "inkwell rejected build_struct_gep for `{symbol}` field #{field_index}: {e}",
-            ))
+            inkwell_err(
+                format_args!("build_struct_gep for `{symbol}` field #{field_index}"),
+                e,
+            )
         })
 }
 
-/// Emit a call to the helper function registered on `ctx.module`
-/// under the callee's mangled symbol. Returns the call's basic value
-/// for non-`Unit` callees and `None` for `Unit`-returning ones (the
-/// underlying LLVM call returns `void`); the caller skips the value
-/// map insert in that case.
-///
-/// Every non-entry function is declared before any body emission
-/// and the IR seal pass guarantees every `IRInstruction::Call::callee`
-/// resolves to a registered function — so a miss here is a compiler
-/// bug, not a feature gap.
+/// Call the function registered on `ctx.module` under the callee's
+/// mangled symbol. Returns `None` for `Unit`-returning callees (LLVM
+/// `void` calls); the caller skips the value-map insert in that case.
 fn emit_call<'ctx>(
     ctx: &EmitCtx<'ctx>,
     callee: &IRSymbol,
@@ -209,16 +201,12 @@ fn emit_call<'ctx>(
     let call_site = ctx
         .builder
         .build_call(function, &arg_values, "call")
-        .map_err(|e| {
-            LlvmError::Codegen(format!("inkwell rejected build_call for `{mangled}`: {e}"))
-        })?;
+        .map_err(|e| inkwell_err(format_args!("build_call for `{mangled}`"), e))?;
     Ok(call_site.try_as_basic_value().basic())
 }
 
-/// Materialize a `LocalDecl` as an entry-block `alloca`. The slot's
-/// LLVM pointer is stashed on the [`EmitCtx`] keyed by [`IRLocalId`];
-/// `LocalRead` / `LocalWrite` recover it for `load` / `store`.
-/// Mirrors v1 codegen's per-variable `build_alloca` shape.
+/// Materialize a `LocalDecl` as an entry-block `alloca`, stashed on
+/// the [`EmitCtx`] keyed by [`IRLocalId`] for later `load` / `store`.
 fn emit_local_decl<'ctx>(
     ctx: &EmitCtx<'ctx>,
     local: IRLocalId,
@@ -231,10 +219,9 @@ fn emit_local_decl<'ctx>(
     Ok(())
 }
 
-/// Lower a `LocalRead` to an LLVM `load`. The pointer comes from the
-/// per-function slot table (registered by the matching
-/// `LocalDecl`); the load type comes from the IR's static type slot
-/// so opaque pointers don't need a separate type query.
+/// Lower a `LocalRead` to an LLVM `load`. Pointer comes from the
+/// per-function slot table; load type comes from the IR's static
+/// type slot.
 fn emit_local_read<'ctx>(
     ctx: &EmitCtx<'ctx>,
     local: IRLocalId,
@@ -244,12 +231,11 @@ fn emit_local_read<'ctx>(
     let llvm_ty = ir_basic_type(ctx, ty)?;
     ctx.builder
         .build_load(llvm_ty, slot, &local.to_string())
-        .map_err(|e| LlvmError::Codegen(format!("inkwell rejected build_load for `{local}`: {e}",)))
+        .map_err(|e| inkwell_err(format_args!("build_load for `{local}`"), e))
 }
 
-/// Lower a `LocalWrite` to an LLVM `store`. The slot pointer comes
-/// from the per-function slot table; the rhs's `BasicValueEnum`
-/// comes from the SSA value map the caller already resolved.
+/// Lower a `LocalWrite` to an LLVM `store` into the slot table's
+/// pointer for `local`.
 fn emit_local_write<'ctx>(
     ctx: &EmitCtx<'ctx>,
     local: IRLocalId,
@@ -259,9 +245,7 @@ fn emit_local_write<'ctx>(
     ctx.builder
         .build_store(slot, value)
         .map(|_| ())
-        .map_err(|e| {
-            LlvmError::Codegen(format!("inkwell rejected build_store for `{local}`: {e}",))
-        })
+        .map_err(|e| inkwell_err(format_args!("build_store for `{local}`"), e))
 }
 
 fn emit_const<'ctx>(
@@ -275,7 +259,7 @@ fn emit_const<'ctx>(
             .const_int(u64::from(*b), false)
             .into()),
         // `const_float` always takes f64; the f32 type narrows on
-        // its own. Bit-exact since `f32` widens losslessly.
+        // its own (bit-exact since f32 widens losslessly).
         ConstValue::Float32(v) => Ok(ctx.context.f32_type().const_float(f64::from(*v)).into()),
         ConstValue::Float64(v) => Ok(ctx.context.f64_type().const_float(*v).into()),
         ConstValue::Int8(v) => Ok(ctx.context.i8_type().const_int(*v as u64, true).into()),

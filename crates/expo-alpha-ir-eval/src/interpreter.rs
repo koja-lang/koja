@@ -1,27 +1,8 @@
-//! Tree-walking interpreter over a sealed [`IRProgram`] or
-//! [`IRScript`]. The walker is parameterized over a [`CallResolver`]
-//! so both IR shapes share the per-instruction execution / frame
-//! management / terminator dispatch code; only callee and per-id
-//! block lookup differ.
-//!
-//! `Call` instructions chain through [`execute_function`]: evaluate
-//! the args in the current frame, resolve the callee, seed a fresh
-//! frame with param `ValueId`s bound to arg values, recurse. Call
-//! depth is uncapped — pathological recursion propagates as a native
-//! Rust stack overflow.
-//!
-//! Multi-block bodies are driven by [`execute_blocks`]: walk the
-//! current block's instructions, then dispatch on the terminator —
-//! `Return` exits the function with a value, `Branch` and
-//! `CondBranch` move the cursor to the named target block. The frame
-//! is shared across every block in a single function (per
-//! `IRFunction` boundary), mirroring the IR's "value ids are
-//! function-scoped" contract.
-//!
-//! Operator math (`apply_binary_op`, `apply_unary_op`) lives in the
-//! sibling [`crate::ops`] module — pure functions over already-resolved
-//! [`Value`] operands. This file owns the IR walking, frame
-//! management, and resolver wiring; nothing else.
+//! Tree-walking interpreter over a sealed [`IRProgram`] / [`IRScript`].
+//! Parameterized over a [`CallResolver`] so both IR shapes share the
+//! per-instruction execution, frame management, and terminator
+//! dispatch code; only callee lookup differs. Operator math lives in
+//! [`crate::ops`].
 
 use std::collections::BTreeMap;
 
@@ -38,29 +19,23 @@ use crate::value::Value;
 pub struct Interpreter;
 
 impl Interpreter {
-    /// Execute the project-mode entry function and return the value
-    /// it produces (or [`Value::Unit`] if the entry returns nothing).
+    /// Execute the project-mode entry function and return its result.
     pub fn run_program(program: IRProgram) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
         execute_function(entry, Vec::new(), &program)
     }
 
     /// Execute the script-mode implicit body and return its trailing
-    /// value (or [`Value::Unit`] for an empty / non-expression-trailing
-    /// body).
+    /// value.
     pub fn run_script(script: IRScript) -> Result<Value, RuntimeError> {
         let mut frame = Frame::new();
         execute_blocks(&script.blocks, &mut frame, &script)
     }
 }
 
-/// Per-call execution frame. `values` is the SSA `ValueId -> Value`
-/// table the per-instruction handlers thread through; `locals` is
-/// the `IRLocalId -> Value` storage `LocalRead` / `LocalWrite` go
-/// through. Splitting them keeps the two namespaces honest — slot
-/// identity (a `LocalRead` of slot `local_3`) never collides with
-/// SSA identity (a `BinaryOp` defining `v3`), even though both
-/// happen to be tiny `u32` keys today.
+/// Per-call execution frame. SSA values and local-slot storage live
+/// in separate maps so slot identity never collides with SSA
+/// identity even though both keys happen to be `u32`.
 struct Frame {
     values: BTreeMap<ValueId, Value>,
     locals: BTreeMap<IRLocalId, Value>,
@@ -75,11 +50,8 @@ impl Frame {
     }
 }
 
-/// Dereferences a `Call` callee to its target [`IRFunction`] by
-/// mangled symbol. Implemented by both [`IRProgram`] and [`IRScript`]
-/// so one walker drives either; the IR's stable
-/// [`expo_alpha_ir::IRSymbol`] is the only handle the interpreter
-/// needs — no AST [`expo_ast`] types here.
+/// Dereferences a `Call` callee by mangled symbol. Implemented by
+/// both [`IRProgram`] and [`IRScript`] so one walker drives either.
 trait CallResolver {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
 }
@@ -97,15 +69,11 @@ impl CallResolver for IRScript {
 }
 
 /// Run `function` in a fresh frame with `args` positionally bound to
-/// its param `ValueId`s. Multi-block bodies dispatch through
-/// [`execute_blocks`]; `@intrinsic`-tagged functions short-circuit
-/// to the hand-written handler in [`crate::intrinsics`].
-///
-/// Param promotion (the entry block's `LocalDecl` + `LocalWrite` per
-/// param) means the body never reads the raw `param.id` directly —
-/// it reads the `IRLocalId` slot the promotion populates. Seeding
-/// the SSA `values` map is still required so the entry block's
-/// `LocalWrite { value: param.id }` can resolve.
+/// its param `ValueId`s. Param promotion (entry-block `LocalDecl` +
+/// `LocalWrite`) means the body reads from the slot, not the raw
+/// param id; seeding `frame.values` keeps the promotion's
+/// `LocalWrite { value: param.id }` resolvable. `@intrinsic`-tagged
+/// functions route to [`crate::intrinsics`].
 fn execute_function<R: CallResolver>(
     function: &IRFunction,
     args: Vec<Value>,
@@ -130,12 +98,9 @@ fn execute_function<R: CallResolver>(
     execute_blocks(&function.blocks, &mut frame, resolver)
 }
 
-/// Drive a function (or script body) starting at `blocks[0]` until a
-/// `Return` terminator exits with a value. `Branch` / `CondBranch`
-/// move the cursor; the frame stays alive across every block in the
-/// function. Unknown branch targets panic per the seal contract — by
-/// the time the IR reaches an interpreter run those have all been
-/// validated.
+/// Drive a function body starting at `blocks[0]` until a `Return`
+/// exits. The frame is shared across every block; unknown branch
+/// targets panic per the seal contract.
 fn execute_blocks<R: CallResolver>(
     blocks: &[IRBasicBlock],
     frame: &mut Frame,
@@ -235,10 +200,9 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, field);
             Ok(())
         }
-        // Slot identity is established by `LocalWrite`; no map entry
-        // is required up front. The seal pass guarantees a `LocalWrite`
-        // always runs before the matching `LocalRead`, so a missing
-        // slot here would be a compiler bug.
+        // Slot identity comes from `LocalWrite`; `LocalDecl` is a
+        // no-op for the interpreter (the LLVM backend uses it to
+        // emit an entry-block alloca).
         IRInstruction::LocalDecl { .. } => Ok(()),
         IRInstruction::LocalRead { dest, local, .. } => {
             let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
@@ -285,10 +249,9 @@ fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, Runti
         .ok_or(RuntimeError::ValueUndefined { id })
 }
 
-/// Materialize a `ConstValue` as a runtime [`Value`]. `Value::Int`
-/// is a single `i64` slot; `UInt64` is reinterpreted as `i64` (the
-/// seal pass forbids it from flowing through today, but the arm
-/// stays exhaustive).
+/// Materialize a `ConstValue` as a runtime [`Value`]. Every int
+/// width collapses to `Value::Int(i64)` (the seal pass keeps
+/// width-mismatched flows out, but the arms stay exhaustive).
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
         ConstValue::Bool(b) => Value::Bool(*b),

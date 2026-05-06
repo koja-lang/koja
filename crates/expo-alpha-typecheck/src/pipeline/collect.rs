@@ -27,8 +27,8 @@ use expo_ast::ast::{
 use expo_ast::identifier::Identifier;
 use expo_ast::span::Span;
 
-use crate::labels::{item_label, item_span};
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome};
+use expo_ast::labels::{item_label, item_span};
 
 pub(crate) fn collect_file(
     file: &File,

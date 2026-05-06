@@ -11,8 +11,8 @@ use expo_ast::ast::{
 use expo_ast::identifier::Resolution;
 use expo_ast::span::Span;
 
-use crate::labels::expr_kind_label;
 use crate::program::CheckedProgram;
+use expo_ast::labels::expr_kind_label;
 
 /// Asserts the sealed-AST invariants on `program`. Panics on violation.
 pub(crate) fn seal_ast(program: &CheckedProgram) {

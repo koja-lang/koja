@@ -1,30 +1,14 @@
 //! Bare-call (`f(args)`) and method-call (`recv.m(args)`) resolution.
-//!
-//! Bare calls accept only `Ident` callees; the inner
-//! `Ident.resolution` is stamped with the callee's
-//! [`GlobalRegistryId`]; the outer callee `Expr.resolution` stays
-//! `Unresolved` (seal carves this out) because function names aren't
-//! first-class values yet. The call-site `Expr.resolution` takes the
-//! callee's return type.
-//!
-//! Method calls run through a single dispatcher,
-//! [`resolve_method_call`], that classifies the receiver into a
-//! [`MethodReceiver`] (`Static` when the receiver is a bare `Ident`
-//! naming a struct, `Instance` when the receiver is any expression
-//! resolving to a struct value) and then walks a uniform path:
-//! receiver-typestamp → method lookup on `<Type>.<method>` →
-//! dispatch-axis check (`signature.dispatch == expected`) → arg
-//! validation. The `Static` branch validates `args` against
-//! `signature.params`; the `Instance` branch validates against
-//! `signature.params[1..]` (the implicit receiver fills `params[0]`).
-//!
-//! [`GlobalRegistryId`]: expo_ast::identifier::GlobalRegistryId
+//! Both stamp the callee's `GlobalRegistryId` on the AST and validate
+//! arity + per-position types. Method calls classify the receiver into
+//! a [`MethodReceiver`] (`Static` for `Type.m(...)`, `Instance` for
+//! `value.m(...)`) and slice the dispatch / params accordingly.
 
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
-use crate::labels::expr_kind_label;
 use crate::registry::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
@@ -34,22 +18,13 @@ use super::expr::resolve_expr;
 use super::structs::lookup_struct;
 use super::types::display_resolution;
 
-/// Receiver classification for method-call dispatch. Each variant
-/// captures only the `struct_id` so we can re-look-up the
-/// `RegistryEntry` whenever needed without dragging a borrow across
-/// the dispatcher's mutable scope work.
-///
-/// Designed to extend cleanly to enum variants when they land
-/// (`MethodReceiver::EnumVariant { enum_id, variant }`): the
-/// classify → look-up → validate skeleton stays the same; only the
-/// per-variant lookup path differs.
+/// Receiver classification for method-call dispatch. Captures only
+/// the `struct_id` so the dispatcher can re-look-up the
+/// [`RegistryEntry`] without holding a borrow across mutations.
+/// Extends to enum variants by adding new variants here.
 #[derive(Clone, Copy)]
 enum MethodReceiver {
-    /// `Type.method(args)` — receiver is a bare `Ident` naming a
-    /// registered struct.
     Static { struct_id: GlobalRegistryId },
-    /// `value.method(args)` — receiver is any expression whose
-    /// resolved type is a struct.
     Instance { struct_id: GlobalRegistryId },
 }
 
@@ -67,9 +42,8 @@ impl MethodReceiver {
         }
     }
 
-    /// Slice the params the user wrote against. Static dispatch
-    /// hands every param over; instance dispatch absorbs `params[0]`
-    /// into the receiver.
+    /// Params the user wrote against. Instance dispatch absorbs
+    /// `params[0]` (`self`) into the receiver.
     fn explicit_params(self, params: &[ResolvedParam]) -> &[ResolvedParam] {
         match self {
             Self::Static { .. } => params,
@@ -142,9 +116,8 @@ pub(super) fn resolve_call(
     sig.return_type.clone()
 }
 
-/// Resolve a method-style call: classify the receiver, look up the
-/// method, validate dispatch + args. See module docs for the full
-/// algorithm.
+/// Resolve a method-style call: classify the receiver, look up
+/// `<Type>.<method>`, check dispatch matches, then validate args.
 pub(super) fn resolve_method_call(
     receiver: &mut Expr,
     method: &str,
@@ -203,9 +176,8 @@ pub(super) fn resolve_method_call(
     sig.return_type.clone()
 }
 
-/// Inspect the receiver and pick the dispatch path. Stamps the
-/// receiver's resolution as a side effect — both the inner `Ident`
-/// and the outer `Expr` get the struct's id so seal sees a fully
+/// Inspect the receiver and pick the dispatch path. Stamps both the
+/// inner `Ident` and outer `Expr` resolutions so seal sees a fully
 /// populated tree.
 fn classify_receiver(
     receiver: &mut Expr,
@@ -319,9 +291,8 @@ fn dispatch_mismatch_message(
     }
 }
 
-/// Resolve every call/method-call argument expression. Named
-/// arguments diagnose up front so nested resolution still proceeds
-/// (gives `seal_expr` a populated tree to walk).
+/// Resolve every call argument. Named args diagnose up front but
+/// resolution still proceeds so seal walks a populated tree.
 fn resolve_args(args: &mut [Arg], resolver: &mut Resolver<'_>, diagnostics: &mut Vec<Diagnostic>) {
     for arg in args.iter_mut() {
         if let Some(name) = arg.name.as_ref() {
@@ -334,10 +305,8 @@ fn resolve_args(args: &mut [Arg], resolver: &mut Resolver<'_>, diagnostics: &mut
     }
 }
 
-/// Check argument arity + per-position type compatibility against a
-/// list of declared params. Diagnostics use the callee's
-/// fully-qualified [`Identifier`] so the user sees `TestApp.Point.at`
-/// rather than just `at`.
+/// Check arg arity + per-position type compatibility. Diagnostics
+/// use the callee's fully-qualified [`Identifier`].
 fn validate_arg_signature(
     args: &[Arg],
     expected_params: &[ResolvedParam],
@@ -362,8 +331,6 @@ fn validate_arg_signature(
     for (arg, param) in args.iter().zip(expected_params.iter()) {
         let actual = &arg.value.resolution;
         if !actual.is_resolved() {
-            // Arg already triggered its own diagnostic; skip the
-            // follow-up to avoid noise.
             continue;
         }
         if actual != &param.ty {

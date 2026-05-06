@@ -9,7 +9,7 @@
 use expo_ast::ast::{Diagnostic, Expr, ExprKind};
 use expo_ast::identifier::ResolvedType;
 
-use crate::labels::expr_kind_label;
+use expo_ast::labels::expr_kind_label;
 
 use super::calls::{resolve_call, resolve_method_call};
 use super::control_flow::{resolve_if, resolve_unless};

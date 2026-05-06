@@ -1,20 +1,12 @@
-//! Package- and function-shaped lowering entry points. Walks one
-//! sealed [`CheckedPackage`] into an [`IRPackage`] fragment, calling
-//! into [`super::body`] for the per-function body work.
+//! Package- and function-shaped lowering entry points. Walks a
+//! sealed [`CheckedPackage`] into an [`IRPackage`] fragment, delegating
+//! per-function body work to [`super::body`]. Also owns the
+//! [`GlobalRegistry`] adapters ([`function_signature`],
+//! [`resolved_type_to_ir_type`]) so siblings import a stable seam.
 //!
-//! Also owns the [`GlobalRegistry`] adapters every helper needs:
-//! [`lookup_signature`] (registry → lifted [`FunctionSignature`]) and
-//! [`resolved_type_to_ir_type`] (typecheck `ResolvedType` → `IRType`).
-//! Keeping them here lets `body.rs` / `expr.rs` import a stable
-//! seam without re-coding the registry shape.
-//!
-//! Static methods declared inline in `struct ... end` or in
-//! `impl Type ... end` blocks lower through the same
-//! [`lower_function_with_identifier`] helper as top-level functions —
-//! the only difference is the [`Identifier`] (and therefore the
-//! [`IRSymbol`]) the caller picks. Both forms land in the package's
-//! shared `functions: BTreeMap<IRSymbol, IRFunction>` map, so
-//! downstream consumers can't tell which surface form declared them.
+//! Top-level / inline-struct / `impl`-block functions all flow
+//! through [`lower_function_with_identifier`] — only the
+//! [`Identifier`] differs.
 
 use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
 use expo_ast::ast::{
@@ -93,10 +85,9 @@ pub(crate) fn lower_package(
     }
 }
 
-/// Lower every static method declared in an `impl Type ... end`
-/// block. Trait impls, generic targets, and `TypeAlias` members are
-/// already diagnosed by typecheck collect / lift; reaching IR with
-/// any of them would be a seal violation, so we silently skip.
+/// Lower static methods declared in an `impl Type ... end` block.
+/// Trait impls and unsupported targets already errored upstream; IR
+/// silently skips them.
 fn lower_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -133,30 +124,18 @@ fn impl_target_name(target: &TypeExpr) -> Option<&str> {
     }
 }
 
-/// Lower a single [`Function`] under `identifier` (top-level, inline
-/// struct method, or impl-block method — all three flow through
-/// here). Returns `None` if any feature-gap diagnostic surfaced; the
-/// function is omitted from the package in that case.
-///
-/// Three shapes flow through here, distinguished by annotation +
-/// body presence (mutually exclusive at the source level; mixing
-/// markers diagnoses):
-///
-/// - `@intrinsic fn name(...)` (no body) lowers to
-///   [`FunctionKind::Intrinsic`] with empty `blocks`. The backend
-///   looks the body up by mangled symbol in its `intrinsics/`
-///   dispatch table.
-/// - `@extern "C" fn name(...)` (no body) is a planned follow-up;
-///   today it surfaces a feature-gap diagnostic.
-/// - Regular `fn name(...)` (body present) lowers to
-///   [`FunctionKind::Regular`] with at least one basic block.
+/// Lower one [`Function`] under `identifier`. `@intrinsic`-annotated
+/// functions become [`FunctionKind::Intrinsic`] with empty blocks
+/// (backends synthesize bodies from a mangled-symbol table); regular
+/// functions become [`FunctionKind::Regular`] with at least one
+/// basic block. Returns `None` (with a diagnostic) on feature gaps.
 pub(super) fn lower_function_with_identifier(
     function: &Function,
     identifier: Identifier,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<IRFunction> {
-    let signature = lookup_signature(registry, &identifier)?;
+    let signature = function_signature(registry, &identifier)?;
     let return_type = resolved_type_to_ir_type(&signature.return_type, registry);
     let intrinsic = is_intrinsic(&function.annotations);
 
@@ -170,10 +149,6 @@ pub(super) fn lower_function_with_identifier(
 
     let mut ctx = FnLowerCtx::new();
 
-    // Intrinsic bodies are synthesized at emit time — no entry block
-    // and no parameter promotion. Mint the params (still need the
-    // SSA `ValueId`s and `local_id`s for backend signatures) and
-    // exit before opening the entry block.
     if intrinsic {
         let params = lower_intrinsic_params(function, signature, registry, &mut ctx)?;
         return Some(IRFunction {
@@ -193,11 +168,8 @@ pub(super) fn lower_function_with_identifier(
         return None;
     };
 
-    // Open the entry block FIRST so parameter promotion has a target
-    // to append `LocalDecl` + `LocalWrite` into. Body lowering
-    // continues in the same entry block (or forks off it via control
-    // flow); subsequent `LocalDecl`s emitted from nested blocks
-    // append back here through `ctx.entry_block()`.
+    // Open the entry block before param lowering so promotion has a
+    // target for `LocalDecl` + `LocalWrite`.
     let entry = ctx.fresh_block("entry");
     let params = lower_params(
         function,
@@ -221,23 +193,12 @@ pub(super) fn lower_function_with_identifier(
     })
 }
 
-/// Allocate one [`ValueId`] per parameter in declaration order
-/// (regular and `self` alike), paired with its IRType pulled from
-/// the lifted function signature on the registry, and promote each
-/// param into a local-variable slot via a `LocalDecl` + `LocalWrite`
-/// pair appended to the entry block. Pre-allocation ensures every
-/// param id is strictly less than any body-produced id — body
-/// lowering stays naturally topological on the sealed AST.
-///
-/// `self` is treated identically to a regular param at this layer:
-/// it carries the struct's [`IRType`] in the lifted signature, the
-/// AST has stamped a `local_id` on `Param::Self_`, and the body's
-/// `ExprKind::Self_` references resolve through the same `LocalRead`
-/// path body-declared locals use. Returns `None` only when the AST
-/// is missing a `local_id` on a param — that's a typecheck-resolve
-/// invariant violation, not a feature gap.
-///
-/// [`ValueId`]: crate::types::ValueId
+/// Mint a [`ValueId`](crate::types::ValueId) per parameter (in
+/// declaration order, `self` included) and promote each into a local
+/// slot via `LocalDecl` + `LocalWrite` appended to the entry block.
+/// `self` is treated as a regular param here: typecheck stamps
+/// `local_id` on every param shape, and `ExprKind::Self_` references
+/// read through the same `LocalRead` path body locals use.
 fn lower_params(
     function: &Function,
     identifier: &Identifier,
@@ -284,11 +245,9 @@ fn lower_params(
     Some(params)
 }
 
-/// Mint param `IRFunctionParam`s for an `@intrinsic`-tagged function
-/// without opening an entry block or emitting promotion instructions.
-/// Backends look the body up by mangled symbol and synthesize one
-/// from a hand-written emitter — they don't walk the (empty) blocks,
-/// so promotion would be dead vocabulary.
+/// Mint params for an `@intrinsic` function. No entry block, no
+/// promotion: backends synthesize the body and never walk the
+/// (empty) blocks.
 fn lower_intrinsic_params(
     function: &Function,
     signature: &FunctionSignature,
@@ -315,22 +274,19 @@ fn lower_intrinsic_params(
     Some(params)
 }
 
-/// Pluck the AST [`LocalId`] off a param. Resolve stamps every param
-/// — `Some(_)` is the post-typecheck contract; `None` indicates an
-/// upstream invariant violation.
+/// Pluck the AST `LocalId` off a param. Resolve stamps every param,
+/// so `None` is an invariant violation, not a feature gap.
 fn param_local_id(param: &Param) -> Option<LocalId> {
     match param {
         Param::Regular { local_id, .. } | Param::Self_ { local_id, .. } => *local_id,
     }
 }
 
-/// Lookup the lifted [`FunctionSignature`] for `identifier` in the
-/// registry. Returns `None` if the registry doesn't carry an entry —
-/// typecheck collect / lift may have rejected this function (e.g.
-/// `self` receiver, impl on unknown type), in which case IR silently
-/// skips it. A registered entry without a `Some(_)` signature is a
-/// compiler bug, not a feature gap.
-pub(super) fn lookup_signature<'a>(
+/// Lookup the lifted [`FunctionSignature`] for `identifier`.
+/// Returns `None` when collect / lift rejected the function (IR
+/// silently skips); a registered entry without a signature panics
+/// as an invariant violation.
+pub(super) fn function_signature<'a>(
     registry: &'a GlobalRegistry,
     identifier: &Identifier,
 ) -> Option<&'a FunctionSignature> {
@@ -345,14 +301,10 @@ pub(super) fn lookup_signature<'a>(
     }
 }
 
-/// Translate a typecheck-resolved [`ResolvedType`] to an [`IRType`].
-///
-/// Two shapes today: stdlib primitives (`Bool` / `Float` / `Int` /
-/// `String` / `Unit`) under the `Global` package map to their
-/// matching scalar [`IRType`]; user-declared structs (any package)
-/// map to [`IRType::Struct`] keyed by the canonical
-/// [`IRSymbol::from_identifier`] for the entry. Width-explicit ints
-/// and polymorphic containers stay feature gaps.
+/// Translate a typecheck [`ResolvedType`] to an [`IRType`]. Stdlib
+/// `Global.{Bool,Float,Int,String,Unit}` map to scalar [`IRType`]s;
+/// user structs map to [`IRType::Struct`]. Width-explicit ints and
+/// polymorphic containers panic as feature gaps.
 pub(super) fn resolved_type_to_ir_type(ty: &ResolvedType, registry: &GlobalRegistry) -> IRType {
     let Resolution::Global(id) = ty.resolution else {
         panic!(
