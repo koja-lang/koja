@@ -235,6 +235,7 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(decl.symbol.clone(), decl);
         IRPackage {
+            constants: BTreeMap::new(),
             enums,
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),
@@ -275,6 +276,7 @@ mod tests {
         let mut enums = BTreeMap::new();
         enums.insert(symbol("Misnamed"), decl);
         let pkg = IRPackage {
+            constants: BTreeMap::new(),
             enums,
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),

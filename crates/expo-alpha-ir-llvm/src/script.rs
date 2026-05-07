@@ -22,6 +22,9 @@ pub(crate) fn compile_script(
     script: &IRScript,
     app_name: &str,
 ) -> Result<(), LlvmError> {
+    ctx.attach_constant_pool(crate::constant_pool::ConstantPoolSnapshot::from_packages(
+        &script.packages,
+    ));
     for package in &script.packages {
         for decl in package.structs.values() {
             declare_struct_type(ctx, decl);

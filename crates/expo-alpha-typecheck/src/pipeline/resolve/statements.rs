@@ -12,7 +12,10 @@
 //! - First write of a name: optional type annotation must match the
 //!   rhs (or infer from rhs); insert into the scope; stamp the target
 //!   `LValue`'s implied [`Resolution::Local`] via the AST `Expr`
-//!   shape produced for `target` lookup.
+//!   shape produced for `target` lookup. If the bare name matches a
+//!   package-level [`crate::registry::GlobalKind::Constant`] entry,
+//!   assignment is rejected — constants are immutable and cannot share
+//!   an assignment LHS with locals.
 //! - Subsequent write of an existing name: type annotation is a
 //!   feature gap (only legal on first decl); rhs type must equal the
 //!   existing local's type; the existing [`LocalId`] stays put.
@@ -26,10 +29,12 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
 use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, TypeExpr};
+use expo_ast::identifier::Identifier;
 use expo_ast::labels::compound_op_label;
 use expo_ast::span::Span;
 
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
+use crate::registry::GlobalKind;
 
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
@@ -88,6 +93,16 @@ pub(super) fn resolve_assignment(
             existing_id
         }
         None => {
+            if assigns_to_package_constant(&name, resolver) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "cannot assign to `{name}` — package-level constants are immutable and \
+                         cannot be reassigned like a local",
+                    ),
+                    span,
+                ));
+                return;
+            }
             let declared_ty = match type_annotation {
                 Some(annotation) => {
                     let annotated = resolve_type_expr(
@@ -161,10 +176,20 @@ pub(super) fn resolve_compound_assignment(
         .lookup(&name)
         .map(|(id, ty)| (id, ty.clone()))
     else {
-        diagnostics.push(Diagnostic::error(
-            format!("cannot apply `{op_label}=` to undeclared variable `{name}`"),
-            span,
-        ));
+        if assigns_to_package_constant(&name, resolver) {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "cannot apply `{op_label}=` to `{name}` — package-level constants are \
+                     immutable",
+                ),
+                span,
+            ));
+        } else {
+            diagnostics.push(Diagnostic::error(
+                format!("cannot apply `{op_label}=` to undeclared variable `{name}`"),
+                span,
+            ));
+        }
         return;
     };
 
@@ -259,4 +284,15 @@ fn annotation_span(annotation: &TypeExpr) -> Span {
         | TypeExpr::Union { span, .. }
         | TypeExpr::Unit { span } => *span,
     }
+}
+
+/// True when `name` is a package-level constant in the resolver's
+/// package (same namespace as locals for single-segment assignment
+/// targets).
+fn assigns_to_package_constant(name: &str, resolver: &Resolver<'_>) -> bool {
+    let identifier = Identifier::new(resolver.package, vec![name.to_string()]);
+    resolver
+        .registry
+        .lookup(&identifier)
+        .is_some_and(|(_, entry)| matches!(entry.kind, GlobalKind::Constant(_)))
 }

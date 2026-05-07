@@ -83,6 +83,16 @@ impl IRScript {
     pub fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         self.packages.iter().find_map(|pkg| pkg.enums.get(mangled))
     }
+
+    /// Lookup a pooled constant value across every package by its
+    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// the `&IRSymbol` carried on [`crate::IRInstruction::LoadConst`]
+    /// directly through the `IRSymbol: Borrow<str>` impl.
+    pub fn constant_value(&self, mangled: &str) -> Option<&crate::IRConstantValue> {
+        self.packages
+            .iter()
+            .find_map(|pkg| pkg.constants.get(mangled))
+    }
 }
 
 /// Run every sub-pass in the alpha lowering phase against a

@@ -68,6 +68,42 @@ fn doc_string_on_protocol_method_is_accepted() {
     typecheck(&dedent(source));
 }
 
+#[test]
+fn doc_string_on_constant_is_accepted() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        @doc \"The arithmetic origin.\"
+        const ORIGIN = Point{x: 0, y: 0}
+
+        fn main
+          ORIGIN.x
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn doc_false_on_constant_is_accepted() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        @doc false
+        const ORIGIN = Point{x: 0, y: 0}
+
+        fn main
+          ORIGIN.x
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
 // ---------------------------------------------------------------------------
 // Positive — `@doc false` accepted on every relaxed shape
 // ---------------------------------------------------------------------------
@@ -199,6 +235,32 @@ fn non_doc_annotation_on_protocol_method_still_diagnoses() {
     );
 }
 
+#[test]
+fn non_doc_annotation_on_constant_still_diagnoses() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        @derive
+        const ORIGIN = Point{x: 0, y: 0}
+
+        fn main
+          ORIGIN.x
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| { m.contains("annotations on constant items") && m.contains("@derive") }),
+        "expected constant annotation gap to still fire on `@derive`, got {messages:?}",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Mixed — `@doc` paired with another annotation: the other one still fires
 // ---------------------------------------------------------------------------
@@ -223,6 +285,41 @@ fn doc_alongside_unsupported_annotation_only_diagnoses_the_unsupported_one() {
     assert!(
         mentions_derive,
         "expected `@derive` gap diagnostic, got {messages:?}",
+    );
+
+    let mentions_doc = messages.iter().any(|m| m.contains("@doc"));
+    assert!(
+        !mentions_doc,
+        "`@doc` must not raise a feature-gap diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_alongside_unsupported_annotation_on_constant_only_diagnoses_the_unsupported_one() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        @doc \"Origin.\"
+        @derive
+        const ORIGIN = Point{x: 0, y: 0}
+
+        fn main
+          ORIGIN.x
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+
+    let mentions_derive = messages
+        .iter()
+        .any(|m| m.contains("@derive") && m.contains("annotations on constant items"));
+    assert!(
+        mentions_derive,
+        "expected `@derive` gap diagnostic on constants, got {messages:?}",
     );
 
     let mentions_doc = messages.iter().any(|m| m.contains("@doc"));

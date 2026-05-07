@@ -30,9 +30,8 @@ fn stdlib_stubs_land_in_registry_as_structs() {
             panic!("stdlib stub `Global.{name}` missing from registry after check_program")
         });
 
-        assert_eq!(
-            entry.kind,
-            GlobalKind::Struct(None),
+        assert!(
+            matches!(entry.kind, GlobalKind::Struct(None)),
             "Global.{name} registered with wrong kind: {:?}",
             entry.kind,
         );

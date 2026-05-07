@@ -140,6 +140,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::Call { .. }
             | IRInstruction::Const { .. }
             | IRInstruction::EnumConstruct { .. }
+            | IRInstruction::LoadConst { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalRead { .. }
             | IRInstruction::LocalWrite { .. }
@@ -247,6 +248,7 @@ mod tests {
         let mut structs = BTreeMap::new();
         structs.insert(decl.symbol.clone(), decl);
         IRPackage {
+            constants: BTreeMap::new(),
             enums: BTreeMap::new(),
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),
@@ -289,6 +291,7 @@ mod tests {
         let mut structs = BTreeMap::new();
         structs.insert(symbol("Misnamed"), decl);
         let pkg = IRPackage {
+            constants: BTreeMap::new(),
             enums: BTreeMap::new(),
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),

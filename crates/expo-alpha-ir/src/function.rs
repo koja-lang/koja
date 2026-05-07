@@ -197,6 +197,16 @@ pub enum IRInstruction {
     /// param at function entry). LLVM lowers to `store`; produces no
     /// value.
     LocalWrite { local: IRLocalId, value: ValueId },
+    /// `dest = <pool[const_id]>` — load a pooled compound constant.
+    /// `const_id` keys an entry on [`crate::IRPackage::constants`];
+    /// `ty` cached at lower time so backends mint the dest slot
+    /// without a pool lookup. Seal asserts every emitted `LoadConst`
+    /// resolves through some package's pool.
+    LoadConst {
+        const_id: IRSymbol,
+        dest: ValueId,
+        ty: IRType,
+    },
     /// `dest = <ty>{<fields>}`. `fields` are canonicalized to
     /// declaration order with one [`StructFieldInit`] per declared
     /// field. Backends materialize as alloca + per-field store + load.
@@ -224,6 +234,7 @@ impl IRInstruction {
             | IRInstruction::Const { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }
             | IRInstruction::FieldGet { dest, .. }
+            | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
             | IRInstruction::StructInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => Some(*dest),

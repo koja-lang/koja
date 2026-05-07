@@ -142,6 +142,11 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             EnumPayloadInit::Unit => vec![],
         },
         IRInstruction::FieldGet { base, .. } => vec![*base],
+        // `LoadConst` reads from the package constant pool, not a
+        // `ValueId`, so it has no operand to validate here — the
+        // pool entry is checked against the program-level constants
+        // index by `seal_loadconst_pool`.
+        IRInstruction::LoadConst { .. } => vec![],
         // `LocalDecl` declares the slot; nothing in scope yet to read.
         // `LocalRead` reads the slot named by `local`, not a `ValueId`,
         // so the per-block defined-set walk has nothing to validate

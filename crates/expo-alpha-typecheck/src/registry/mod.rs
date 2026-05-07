@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use expo_ast::ast::Expr;
 use expo_ast::identifier::{
     GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -173,6 +174,23 @@ pub struct ResolvedProtocolMethod {
     pub return_type: ResolvedType,
 }
 
+/// Resolved value for a package-level `const NAME = expr`. Stamped
+/// onto a [`GlobalKind::Constant`] entry by the `lift_signatures`
+/// sub-pass after the RHS shape is validated and resolved.
+///
+/// The registry intentionally holds the AST `Expr` rather than a
+/// projected literal payload: lift restricts the surface to literals,
+/// negated numerics, unit enum variants, and structs of literals, but
+/// IR lower wants the original `Expr`'s `resolution` data (struct id,
+/// variant tag) to canonicalize the pool entry. Storing the AST node
+/// keeps that information in one place — registry consumers walk it
+/// the same way they'd walk a literal at the use site.
+#[derive(Clone, Debug)]
+pub struct ConstantDefinition {
+    pub ty: ResolvedType,
+    pub value: Expr,
+}
+
 impl StructDefinition {
     /// Lookup a field by name; returns `Some((index, &field))` for a
     /// match, `None` otherwise. Linear scan — struct field counts
@@ -206,10 +224,12 @@ impl EnumDefinition {
 
 /// What kind of declaration a registry entry points at.
 ///
-/// Every variant carries its lifted payload inline as `Option<_>`:
+/// Most variants carry their lifted payload inline as `Option<_>`:
 /// `None` is the "collected but not yet lifted" state (and the
 /// permanent state for stdlib stub primitives), `Some(_)` the lifted
-/// state reached after `lift_signatures` runs.
+/// state reached after `lift_signatures` runs. [`GlobalKind::Constant`]
+/// boxes its `Some(_)` payload so this enum stays a reasonable size despite
+/// the large [`ConstantDefinition`] (AST-valued) shape.
 ///
 /// Trait `impl P for T` blocks do *not* get their own registry
 /// entry kind. Their methods register on `[target_head, method]`
@@ -218,8 +238,9 @@ impl EnumDefinition {
 /// [`EnumDefinition`] `conformances` field. This keeps the
 /// receiver entry self-contained for IR — see
 /// [`StructDefinition::conformances`] for the full rationale.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum GlobalKind {
+    Constant(Option<Box<ConstantDefinition>>),
     Enum(Option<EnumDefinition>),
     Function(Option<FunctionSignature>),
     Protocol(Option<ProtocolDefinition>),
@@ -229,6 +250,7 @@ pub enum GlobalKind {
 impl GlobalKind {
     pub fn label(&self) -> &'static str {
         match self {
+            GlobalKind::Constant(_) => "constant",
             GlobalKind::Enum(_) => "enum",
             GlobalKind::Function(_) => "function",
             GlobalKind::Protocol(_) => "protocol",
@@ -305,6 +327,14 @@ impl GlobalRegistry {
             );
         }
         reg
+    }
+
+    /// Register a constant in the `Constant(None)` state. The
+    /// resolved type + value [`ConstantDefinition`] is stamped in
+    /// later by [`Self::set_constant_definition`]. Constants don't
+    /// take type parameters, so callers always pass an empty vec.
+    pub fn insert_constant(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
+        self.insert(identifier, GlobalKind::Constant(None), span, Vec::new())
     }
 
     /// Register an enum in the `Enum(None)` state. The resolved
@@ -540,6 +570,40 @@ impl GlobalRegistry {
             },
         );
         InsertOutcome::Fresh(id)
+    }
+
+    /// Stamp a resolved type + RHS onto a constant entry. Panics
+    /// unless the entry's kind is exactly `Constant(None)`.
+    pub fn set_constant_definition(
+        &mut self,
+        id: GlobalRegistryId,
+        definition: ConstantDefinition,
+    ) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!(
+                "set_constant_definition on missing registry id {id} — collect invariant violation"
+            )
+        });
+        match &entry.kind {
+            GlobalKind::Constant(None) => {
+                entry.kind = GlobalKind::Constant(Some(Box::new(definition)));
+            }
+            GlobalKind::Constant(Some(_)) => {
+                panic!(
+                    "set_constant_definition called twice on `{}` — lift_signatures must stamp \
+                     each constant exactly once",
+                    entry.identifier,
+                );
+            }
+            other => {
+                panic!(
+                    "set_constant_definition called on non-constant entry `{}` ({}) — \
+                     only Constant entries carry definitions",
+                    entry.identifier,
+                    other.label(),
+                );
+            }
+        }
     }
 
     /// Stamp a resolved signature onto a function entry. Panics unless

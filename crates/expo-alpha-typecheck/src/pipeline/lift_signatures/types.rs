@@ -120,7 +120,7 @@ fn resolve_self(
             GlobalKind::Struct(_) | GlobalKind::Enum(_) => {
                 return concrete_self_type(owner, registry);
             }
-            GlobalKind::Function(_) => continue,
+            GlobalKind::Constant(_) | GlobalKind::Function(_) => continue,
         }
     }
     diagnostics.push(Diagnostic::error(

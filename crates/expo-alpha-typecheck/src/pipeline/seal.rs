@@ -6,14 +6,14 @@
 //! [`COMPILER-NORTHSTAR.md`]: ../../../design/COMPILER-NORTHSTAR.md
 
 use expo_ast::ast::{
-    AssignTarget, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item, LValue,
-    Statement, StringPart, TypeExpr,
+    AssignTarget, Constant, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item,
+    LValue, Statement, StringPart, TypeExpr,
 };
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::program::CheckedProgram;
-use crate::registry::GlobalRegistry;
+use crate::registry::{GlobalKind, GlobalRegistry};
 use expo_ast::labels::expr_kind_label;
 
 /// Asserts the sealed-AST invariants on `program`. Panics on violation.
@@ -71,6 +71,9 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                     }
                 }
             }
+            Item::Constant(constant) => {
+                seal_constant(constant, package, registry);
+            }
             _ => {}
         }
     }
@@ -102,6 +105,42 @@ fn impl_target_is_generic(target: &TypeExpr, package: &str, registry: &GlobalReg
     registry
         .lookup(&identifier)
         .is_some_and(|(_, entry)| !entry.type_params.is_empty())
+}
+
+/// Assert lift's constants pass produced a stamped
+/// [`crate::registry::ConstantDefinition`], then seal the value
+/// expression like any other resolved expression. The body shape is
+/// already constrained to literals + struct/enum-of-literals, so the
+/// reused `seal_expr` walk is sufficient.
+fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) {
+    let identifier = Identifier::new(package, vec![constant.name.clone()]);
+    let Some((_, entry)) = registry.lookup(&identifier) else {
+        seal_panic(
+            &format!(
+                "constant `{identifier}` missing from registry — collect/lift invariant violation",
+            ),
+            constant.span,
+        );
+    };
+    match &entry.kind {
+        GlobalKind::Constant(Some(_)) => {}
+        GlobalKind::Constant(None) => seal_panic(
+            &format!(
+                "constant `{identifier}` reached seal without a stamped definition — \
+                 lift_signatures::constants invariant violation",
+            ),
+            constant.span,
+        ),
+        other => seal_panic(
+            &format!(
+                "registry entry for `{identifier}` is `{}`, expected `constant` — \
+                 collect/lift invariant violation",
+                other.label(),
+            ),
+            constant.span,
+        ),
+    }
+    seal_expr(&constant.value);
 }
 
 fn seal_function(function: &Function) {

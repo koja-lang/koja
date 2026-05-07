@@ -59,6 +59,11 @@ pub(crate) fn resolve_file(
                     resolve_function(function, &identifier, package, registry, diagnostics);
                 }
             }
+            // Lift's constants pass already resolved each `Constant.value`
+            // (literals + struct/enum-of-literals only — no idents in
+            // scope inside a constant). Walker skips them so seal's
+            // assertions are the next thing they hit.
+            Item::Constant(_) => {}
             Item::Impl(impl_block) => {
                 // Resolve walks the methods on every shape `lift_signatures`
                 // accepts (`impl X` and `impl X<...>`) so every param gets

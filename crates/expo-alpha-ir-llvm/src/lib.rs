@@ -60,6 +60,7 @@
 //! - [`program`] / [`script`] — orchestrators for the two IR shapes.
 //! - [`types`] — `IRType` -> inkwell `IntType` mapping.
 
+mod constant_pool;
 mod ctx;
 mod emit;
 mod error;

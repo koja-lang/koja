@@ -32,6 +32,9 @@ pub(crate) fn compile_program(
     program: &IRProgram,
     app_name: &str,
 ) -> Result<(), LlvmError> {
+    ctx.attach_constant_pool(crate::constant_pool::ConstantPoolSnapshot::from_packages(
+        &program.packages,
+    ));
     for package in &program.packages {
         for decl in package.structs.values() {
             declare_struct_type(ctx, decl);

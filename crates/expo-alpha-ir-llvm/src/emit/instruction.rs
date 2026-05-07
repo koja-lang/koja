@@ -1,9 +1,11 @@
 //! Per-instruction dispatch + the const + call helpers it routes
 //! to. Operator emission lives in the sibling [`super::ops`] module.
 
+use std::collections::BTreeMap;
+
 use expo_alpha_ir::{
-    ConstValue, EnumPayloadInit, IRInstruction, IRLocalId, IRSymbol, IRType, IRVariantTag,
-    StructFieldInit, ValueId,
+    ConstValue, EnumPayloadInit, IRConstantValue, IRInstruction, IRLocalId, IRSymbol, IRType,
+    IRVariantTag, StructFieldInit, ValueId,
 };
 use inkwell::module::Linkage;
 use inkwell::types::StructType;
@@ -42,6 +44,40 @@ pub(super) fn emit_instruction<'ctx>(
         } => {
             let result = emit_enum_construct(ctx, ty, *tag, payload, values)?;
             values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::LoadConst {
+            dest,
+            const_id,
+            ty: _,
+        } => {
+            let llvm_val = {
+                let cache_hit = ctx.load_const_cache.borrow().get(const_id).copied();
+                if let Some(v) = cache_hit {
+                    v
+                } else {
+                    let pool = ctx.constant_pool.borrow();
+                    let pool = pool.as_ref().ok_or_else(|| {
+                        LlvmError::Codegen(
+                            "LoadConst emitted without ConstantPoolSnapshot — compiler bug \
+                             (`attach_constant_pool` must precede codegen)"
+                                .into(),
+                        )
+                    })?;
+                    let entry = pool.get(const_id).ok_or_else(|| {
+                        LlvmError::Codegen(format!(
+                            "LoadConst references missing pooled constant `{const_id}` — IR seal invariant \
+                             violated or pool attachment bug",
+                        ))
+                    })?;
+                    let materialized = emit_ir_constant_aggregate(ctx, entry)?;
+                    ctx.load_const_cache
+                        .borrow_mut()
+                        .insert(const_id.clone(), materialized);
+                    materialized
+                }
+            };
+            values.insert(*dest, llvm_val);
             Ok(())
         }
         IRInstruction::Const { dest, value } => {
@@ -394,6 +430,29 @@ fn emit_local_write<'ctx>(
         .build_store(slot, value)
         .map(|_| ())
         .map_err(|e| inkwell_err(format_args!("build_store for `{local}`"), e))
+}
+
+/// Recursively materialize an [`IRConstantValue`] pool entry into a
+/// const LLVM SSA value (`StructValue`, enum outer aggregate built
+/// the same path as [`emit_enum_construct`], string payload pointer).
+fn emit_ir_constant_aggregate<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    cv: &IRConstantValue,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    match cv {
+        IRConstantValue::Primitive(inner) => emit_const(ctx, inner),
+        IRConstantValue::EnumVariant { tag, ty } => {
+            emit_enum_construct(ctx, ty, *tag, &EnumPayloadInit::Unit, &BTreeMap::new())
+        }
+        IRConstantValue::Struct { fields, ty } => {
+            let struct_type = ctx.layouts.struct_type(ty.mangled());
+            let comps: Vec<BasicValueEnum<'ctx>> = fields
+                .iter()
+                .map(|f| emit_ir_constant_aggregate(ctx, f))
+                .collect::<Result<_, _>>()?;
+            Ok(struct_type.const_named_struct(&comps).into())
+        }
+    }
 }
 
 fn emit_const<'ctx>(

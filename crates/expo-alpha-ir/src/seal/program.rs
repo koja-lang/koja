@@ -24,6 +24,7 @@ pub(crate) fn seal_program(program: &IRProgram) {
     seal_program_calls(program);
     seal_program_struct_ops(program);
     seal_program_enum_ops(program);
+    seal_program_loadconst_pool(program);
 }
 
 /// Cross-package enum check: every `EnumConstruct::ty` must name an
@@ -46,6 +47,30 @@ fn seal_program_struct_ops(program: &IRProgram) {
     let lookup = |mangled: &str| program.struct_decl(mangled);
     for pkg in &program.packages {
         seal_struct_ops(package_instructions(pkg), &lookup);
+    }
+}
+
+/// Cross-package constants check: every `LoadConst::const_id` must
+/// resolve to a registered [`crate::IRConstantValue`] in some
+/// package's pool. Lower mints both the pool entry and the
+/// `LoadConst` referencing it from the same registry-stamped
+/// constant, so a miss here indicates a lowering / merge bug.
+fn seal_program_loadconst_pool(program: &IRProgram) {
+    for pkg in &program.packages {
+        for (owner, function) in &pkg.functions {
+            for block in &function.blocks {
+                for inst in &block.instructions {
+                    if let IRInstruction::LoadConst { const_id, .. } = inst
+                        && program.constant_value(const_id.mangled()).is_none()
+                    {
+                        seal_panic(&format!(
+                            "function `{owner}` loads constant `{const_id}`, but no package \
+                             has a pool entry for that symbol",
+                        ));
+                    }
+                }
+            }
+        }
     }
 }
 

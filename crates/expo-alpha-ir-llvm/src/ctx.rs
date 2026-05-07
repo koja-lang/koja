@@ -20,15 +20,18 @@
 //! borrow inside).
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
+use std::sync::Arc;
 
-use expo_alpha_ir::IRLocalId;
+use expo_alpha_ir::{IRLocalId, IRSymbol};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::BasicType;
+use inkwell::values::BasicValueEnum;
 use inkwell::values::PointerValue;
 
+use crate::constant_pool::ConstantPoolSnapshot;
 use crate::layout::TypeLayouts;
 
 /// Fields are `pub(crate)` so sibling emission modules can borrow
@@ -52,6 +55,14 @@ pub(crate) struct EmitContext<'ctx> {
     /// `load` / `store`. Reset between functions through
     /// [`Self::reset_locals`] — slot identity is per-function.
     local_slots: RefCell<HashMap<IRLocalId, PointerValue<'ctx>>>,
+    /// Merged `IRPackage::constants` from the input program / script.
+    /// Set by [`Self::attach_constant_pool`] before any instruction
+    /// emission; [`IRInstruction::LoadConst`] requires it.
+    pub(crate) constant_pool: RefCell<Option<Arc<ConstantPoolSnapshot>>>,
+    /// One LLVM SSA value per pooled constant [`IRSymbol`] — first
+    /// `LoadConst` materializes (enum / struct aggregate or string
+    /// global); later references reuse the cached handle.
+    pub(crate) load_const_cache: RefCell<BTreeMap<IRSymbol, BasicValueEnum<'ctx>>>,
 }
 
 impl<'ctx> EmitContext<'ctx> {
@@ -71,7 +82,15 @@ impl<'ctx> EmitContext<'ctx> {
             layouts,
             string_counter: Cell::new(0),
             local_slots: RefCell::new(HashMap::new()),
+            constant_pool: RefCell::new(None),
+            load_const_cache: RefCell::new(BTreeMap::new()),
         }
+    }
+
+    /// Wire the flattened constant pool built from input packages.
+    /// Must run before emitting any IR that can contain [`LoadConst`].
+    pub(crate) fn attach_constant_pool(&self, pool: Arc<ConstantPoolSnapshot>) {
+        *self.constant_pool.borrow_mut() = Some(pool);
     }
 
     pub(crate) fn next_string_symbol(&self) -> String {

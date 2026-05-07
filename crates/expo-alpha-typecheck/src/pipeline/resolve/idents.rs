@@ -1,17 +1,22 @@
 //! Bare identifier and `self` resolution.
 
 use expo_ast::ast::Diagnostic;
-use expo_ast::identifier::{LocalId, Resolution, ResolvedType};
+use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 use expo_ast::span::Span;
+
+use crate::registry::GlobalKind;
 
 use super::ctx::Resolver;
 
-/// Resolve a bare identifier expression. Locals are the only
-/// reference shape this slice supports — function and type names
-/// don't yet flow as first-class values, so a miss falls through to
-/// an unknown-identifier diagnostic. (The static-method receiver and
-/// `Type.method(...)` call paths each handle struct-name resolution
-/// directly so they can run without going through this helper.)
+/// Resolve a bare identifier expression. Locals win first; package-
+/// level constants resolve through a global lookup so an
+/// `EARTH_RADIUS` reference at a use site stamps `Resolution::Global`
+/// and returns the constant's stamped type. Functions and type names
+/// don't flow as first-class values, so a non-constant global hit
+/// still falls through to the unknown-identifier diagnostic. (The
+/// static-method receiver and `Type.method(...)` call paths each
+/// handle struct-name resolution directly so they don't go through
+/// this helper.)
 pub(super) fn resolve_ident(
     name: &str,
     resolution: &mut Resolution,
@@ -22,6 +27,13 @@ pub(super) fn resolve_ident(
     if let Some((local_id, ty)) = resolver.scope.lookup(name) {
         *resolution = Resolution::Local(local_id);
         return ty.clone();
+    }
+    let global_id = Identifier::new(resolver.package, vec![name.to_string()]);
+    if let Some((id, entry)) = resolver.registry.lookup(&global_id)
+        && let GlobalKind::Constant(Some(def)) = &entry.kind
+    {
+        *resolution = Resolution::Global(id);
+        return def.ty.clone();
     }
     diagnostics.push(Diagnostic::error(
         format!("unknown identifier `{name}` in this scope"),

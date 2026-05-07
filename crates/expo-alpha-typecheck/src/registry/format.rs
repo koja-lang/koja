@@ -16,8 +16,9 @@ use std::fmt::Write as _;
 use expo_ast::identifier::{Resolution, ResolvedType};
 
 use super::{
-    EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ProtocolDefinition,
-    ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData, StructDefinition,
+    ConstantDefinition, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
+    ProtocolDefinition, ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData,
+    StructDefinition,
 };
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
@@ -41,6 +42,8 @@ pub fn format_registry(registry: &GlobalRegistry) -> String {
 
 fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
     match kind {
+        GlobalKind::Constant(None) => "const <unlifted>".to_string(),
+        GlobalKind::Constant(Some(def)) => format_constant(def, registry),
         GlobalKind::Enum(None) => "enum".to_string(),
         GlobalKind::Enum(Some(def)) => format_enum(def, registry),
         GlobalKind::Function(None) => "fn <unlifted>".to_string(),
@@ -165,6 +168,10 @@ fn format_conformances(
         .collect::<Vec<_>>()
         .join(", ");
     format!(" :[{entries}]")
+}
+
+fn format_constant(def: &ConstantDefinition, registry: &GlobalRegistry) -> String {
+    format!("const: {}", format_resolved(&def.ty, registry))
 }
 
 fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> String {
