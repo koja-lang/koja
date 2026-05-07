@@ -156,9 +156,16 @@ fn impl_target_is_generic(target_name: &str, package: &str, registry: &GlobalReg
         .is_some_and(|(_, entry)| !entry.type_params.is_empty())
 }
 
+/// Bare head identifier from an impl block's target. `pub(crate)` so
+/// [`crate::generics`] reuses the same shape match when building the
+/// AST function index. Mirrors alpha-typecheck's
+/// `lift_signatures::impl_target_name` — both `impl X` and
+/// `impl X<...>` shapes register their methods under `[X, method_name]`.
 pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
     match target {
-        TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } if path.len() == 1 => {
+            Some(path[0].as_str())
+        }
         _ => None,
     }
 }

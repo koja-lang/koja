@@ -30,7 +30,7 @@ mod protocols;
 mod structs;
 mod types;
 
-pub(crate) use types::{TypeParamScope, resolve_type_expr};
+pub(crate) use types::{TypeParamScope, impl_target_name, resolve_type_expr};
 
 use types::resolve_bound_to_id;
 
@@ -231,9 +231,19 @@ fn resolve_protocol_bounds(
     };
     // Protocols register with `["Self", ...declared]`. Slot 0 is
     // unbounded — the user-declared bounds line up at slots 1..N.
+    // Skip any user-declared `Self` so the bounds vec aligns with
+    // the type_params list `register_protocol` built (`Self` is
+    // synthetic and a reserved name; the diagnostic for re-using it
+    // already fired during collect).
+    let user_params: Vec<_> = decl
+        .type_params
+        .iter()
+        .filter(|param| param.name != "Self")
+        .cloned()
+        .collect();
     let mut resolved = vec![Vec::new()];
     resolved.extend(resolve_param_bounds(
-        &decl.type_params,
+        &user_params,
         package,
         registry,
         diagnostics,

@@ -302,7 +302,21 @@ pub(super) fn resolve_field_access(
         ));
         return ResolvedType::unresolved();
     };
-    declared.ty.clone()
+    // Substitute the field's declared type through the receiver's
+    // type-args so `self.item` on `Bag<Int>` types as `Int`, not
+    // `TypeParam(Bag, 0)`. For non-generic structs `type_args` is
+    // empty and substitution is a no-op; for generic-but-aliased
+    // receivers (`self: Bag<TypeParam(Bag, 0)>` inside an inherent
+    // method on `struct Bag<T>`) the field type's `TypeParam`
+    // round-trips back to itself.
+    let subst: Vec<Option<ResolvedType>> = receiver
+        .resolution
+        .type_args
+        .iter()
+        .cloned()
+        .map(Some)
+        .collect();
+    substitute_resolved_type(&declared.ty, &subst, struct_id)
 }
 
 /// Resolve a single-segment type path against the in-scope package,

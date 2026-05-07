@@ -889,6 +889,8 @@ end
 
 The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` annotations are supported on protocol declarations.
 
+`Self` inside a protocol declaration is syntactic sugar for an implicit first type parameter on the protocol — the slot every conforming type fills in via `impl Protocol for ConcreteType`. Methods that mention `Self` in their signature (return type, non-receiver param) treat it as that synthetic param; in an `impl Protocol for ConcreteType` block, the synthetic param resolves to `ConcreteType` and the method's `Self` ends up typed as the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) are appended after the synthetic `Self` slot. The name `Self` is reserved on protocols — it cannot also be declared explicitly.
+
 ### Trait Bounds
 
 Generic type parameters can be constrained to types implementing specific protocols using `:` syntax:
@@ -1244,7 +1246,7 @@ p.first.print()    # 10
 p.second.print()   # hello
 ```
 
-Generic struct literals like `Pair{first: x, second: y}` require a type annotation on the binding — the compiler does not infer generic parameters from field values alone.
+Generic struct literals like `Pair{first: x, second: y}` infer their type parameters from the field values when each field's expected type-param appears in at least one field. A type annotation on the binding (`p: Pair<Int, String> = ...`) is only required when no positional field uniquely binds a parameter — for example, a struct that only mentions some of its parameters in its fields' types.
 
 ### `Range`
 

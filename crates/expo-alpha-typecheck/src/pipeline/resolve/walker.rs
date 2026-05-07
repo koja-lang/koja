@@ -21,9 +21,10 @@
 //! [`Param.local_id`]: expo_ast::ast::Param
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
-use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement, TypeExpr};
+use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement};
 use expo_ast::identifier::Identifier;
 
+use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
@@ -59,6 +60,10 @@ pub(crate) fn resolve_file(
                 }
             }
             Item::Impl(impl_block) => {
+                // Resolve walks the methods on every shape `lift_signatures`
+                // accepts (`impl X` and `impl X<...>`) so every param gets
+                // a `LocalId` stamped. IR lower panics on a missing one
+                // when mono later re-lowers a substituted copy of the body.
                 let Some(target_name) = impl_target_name(&impl_block.target) else {
                     continue;
                 };
@@ -85,13 +90,6 @@ pub(crate) fn resolve_file(
         for stmt in body.iter_mut() {
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
-    }
-}
-
-fn impl_target_name(target: &TypeExpr) -> Option<&str> {
-    match target {
-        TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
-        _ => None,
     }
 }
 

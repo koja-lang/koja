@@ -60,16 +60,23 @@ pub(super) fn lift_impl(
         // Collect already diagnosed; nothing was registered.
         return;
     }
-    // Trait impls: resolve target + protocol heads up front so
-    // method `self` types as the resolved target (e.g. `Bag<Int>`
-    // for `impl P for Bag<Int>`), which is what enables the
-    // call-site domain check on concrete-arg specializations.
-    // Inherent impls have no target override; `self` types via
-    // `concrete_self_type(receiver_id)`.
+    // Resolve the impl target's type expression up front so method
+    // `self` types as the impl's resolved target (e.g. `Bag<Int>`
+    // for `impl Bag<Int>` or `impl P for Bag<Int>`). Concrete-arg
+    // specializations rely on this so the call-site receiver-type
+    // check distinguishes `Bag<Int>` from `Bag<String>`. For
+    // generic targets like `impl Bag<T>` the resolved target is
+    // `Bag<TypeParam(Bag, 0)>`, which is identical to the
+    // `concrete_self_type` shape the receiver fallback would
+    // build — keeping the override always-on simplifies the
+    // method-lift loop without changing behavior for the common
+    // generic-aliased case.
+    let resolved_target = resolve_impl_target(impl_block, &target_identifier, registry);
     let resolved = if impl_block.trait_expr.is_some() {
         resolve_protocol_impl_heads(
             impl_block,
             &target_identifier,
+            &resolved_target,
             package,
             registry,
             diagnostics,
@@ -77,7 +84,7 @@ pub(super) fn lift_impl(
     } else {
         None
     };
-    let self_override: Option<&ResolvedType> = resolved.as_ref().map(|r| &r.target);
+    let self_override = Some(&resolved_target);
     for member in &impl_block.members {
         let ImplMember::Function(function) = member else {
             continue;
@@ -132,9 +139,57 @@ struct ResolvedImplHeads {
     protocol_subst: Vec<Option<ResolvedType>>,
 }
 
+/// Resolve the impl block's target type expression under a scope
+/// rooted at the target struct/enum. `T` in `impl Bag<T>` (or
+/// `impl P for Bag<T>`) resolves to `TypeParam(Bag, 0)`, matching
+/// how an inline method on `struct Bag<T>` would resolve `T`.
+/// Concrete instantiations like `impl Bag<Int>` resolve through
+/// to the global Int id.
+///
+/// Diagnostics from the inner [`resolve_type_expr`] are silenced
+/// here — they fire again as part of normal lift via the same
+/// scope, and we only want one copy on the user's screen.
+fn resolve_impl_target(
+    impl_block: &ImplBlock,
+    target_identifier: &Identifier,
+    registry: &GlobalRegistry,
+) -> ResolvedType {
+    let owners = impl_target_owners(target_identifier, registry);
+    let scope = TypeParamScope::new(&owners);
+    let mut sink = Vec::new();
+    resolve_type_expr(
+        &impl_block.target,
+        scope,
+        target_identifier.package(),
+        registry,
+        &mut sink,
+    )
+}
+
+/// Owners list for any impl-block target scope: a single-entry
+/// stack of the target struct/enum id when it carries type params,
+/// empty otherwise. Shared by [`resolve_impl_target`] and
+/// [`resolve_protocol_impl_heads`].
+fn impl_target_owners(
+    target_identifier: &Identifier,
+    registry: &GlobalRegistry,
+) -> Vec<GlobalRegistryId> {
+    match registry.lookup(target_identifier) {
+        Some((target_id, _))
+            if registry
+                .type_params(target_id)
+                .is_some_and(|p| !p.is_empty()) =>
+        {
+            vec![target_id]
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn resolve_protocol_impl_heads(
     impl_block: &ImplBlock,
     target_identifier: &Identifier,
+    target: &ResolvedType,
     package: &str,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -148,18 +203,9 @@ fn resolve_protocol_impl_heads(
     // method on `struct Bag<T>` would resolve `T`. The impl's free
     // type-params alias the receiver's slots; we don't allocate a
     // separate impl-anchored scope.
-    let owners = match registry.lookup(target_identifier) {
-        Some((target_id, _))
-            if registry
-                .type_params(target_id)
-                .is_some_and(|p| !p.is_empty()) =>
-        {
-            vec![target_id]
-        }
-        _ => Vec::new(),
-    };
+    let owners = impl_target_owners(target_identifier, registry);
     let scope = TypeParamScope::new(&owners);
-    let target = resolve_type_expr(&impl_block.target, scope, package, registry, diagnostics);
+    let target = target.clone();
     let protocol = resolve_type_expr(trait_expr, scope, package, registry, diagnostics);
     let Resolution::Global(protocol_id) = protocol.resolution else {
         diagnostics.push(Diagnostic::error(

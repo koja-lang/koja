@@ -295,7 +295,16 @@ pub(super) fn type_expr_span(type_expr: &TypeExpr) -> Span {
     }
 }
 
-pub(super) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
+/// Bare head identifier for an `impl` block's target type expression.
+/// Returns `Some("Bag")` for both `impl Bag` (`TypeExpr::Named`) and
+/// `impl Bag<T>` / `impl Bag<Int>` (`TypeExpr::Generic`); `None` for
+/// multi-segment paths and non-`Named`/`Generic` shapes. Methods on
+/// the impl block register under this head name — `collect`, `lift`,
+/// and `resolve` all share the same key.
+///
+/// `pub(crate)` so the resolve walker reuses the same shape match
+/// when stamping per-method `LocalId`s.
+pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
     match target {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } if path.len() == 1 => {
             Some(path[0].as_str())
