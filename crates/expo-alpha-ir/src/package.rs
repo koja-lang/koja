@@ -8,6 +8,11 @@ use crate::enum_decl::IREnumDecl;
 use crate::function::{IRFunction, IRSymbol};
 use crate::struct_decl::IRStructDecl;
 
+/// Per-package IR fragment exposed to backends. Holds only
+/// fully-monomorphized concrete decls — generic templates and the
+/// instantiation set are pipeline-internal scratch state owned by
+/// [`crate::generics`] and dropped before the sealed [`IRProgram`]
+/// is returned, so backends never observe a generic template.
 #[derive(Debug, Clone)]
 pub struct IRPackage {
     /// Enum declarations owned by this package, keyed by their

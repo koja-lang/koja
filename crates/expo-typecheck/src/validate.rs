@@ -109,7 +109,7 @@ fn validate_expr(expr: &Expr, ctx: &mut TypeContext) {
             validate_expr(right, ctx);
         }
         ExprKind::BinaryLiteral { segments } => validate_binary_segments(segments, ctx),
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             validate_expr(callee, ctx);
             validate_args(args, ctx);
         }

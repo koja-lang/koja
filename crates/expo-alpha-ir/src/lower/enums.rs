@@ -26,10 +26,11 @@ use crate::enum_decl::{
     EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
 };
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
+use crate::generics::Instantiation;
 use crate::struct_decl::IRStructField;
 use crate::types::{IRType, ValueId};
 
-use super::ctx::FnLowerCtx;
+use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::package::resolved_type_to_ir_type;
 use super::structs::canonicalize_struct_inits;
@@ -40,7 +41,7 @@ use super::structs::canonicalize_struct_inits;
 /// identity object through the bare- vs instance-call dispatch);
 /// keeps `lower_struct_variant` under the clippy arg-count
 /// threshold without bundling the ambient
-/// `(ctx, block, registry, diagnostics)` tuple every other lower
+/// `(ctx, block, registry, output)` tuple every other lower
 /// helper threads explicitly. Private to this module — the IR
 /// vocabulary keeps `tag` and `ty` as separate fields on
 /// [`IRInstruction::EnumConstruct`], and `VariantTarget` is purely
@@ -51,18 +52,19 @@ struct VariantTarget {
 }
 
 /// Lower an `Item::Enum` against the typecheck registry. Returns
-/// `None` if any feature-gap diagnostic surfaced (matches the
-/// per-decl fail-fast contract: the offending decl is dropped from
-/// the package). Tag bounds-check (variant count > 256) surfaces as
-/// a feature-gap diagnostic — the LLVM `i8` tag width caps the
-/// variant count, and widening is a follow-up beyond this slice.
+/// `None` for generic decls (they specialize through
+/// [`crate::generics::instantiate`] off the typecheck registry) and
+/// for decls where any feature-gap diagnostic surfaced. Tag
+/// bounds-check (variant count > 256) surfaces as a feature-gap
+/// diagnostic — the LLVM `i8` tag width caps the variant count, and
+/// widening is a follow-up beyond this slice.
 pub(super) fn lower_enum_decl(
     decl: &EnumDecl,
     package: &str,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Option<IREnumDecl> {
-    if has_feature_gap(decl, diagnostics) {
+    if has_feature_gap(decl, &mut output.diagnostics) {
         return None;
     }
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
@@ -74,7 +76,7 @@ pub(super) fn lower_enum_decl(
         );
     };
     if definition.variants.len() > usize::from(u8::MAX) + 1 {
-        diagnostics.push(Diagnostic::error(
+        output.diagnostics.push(Diagnostic::error(
             format!(
                 "alpha IR does not yet lower enums with more than {} variants \
                  (`{}` declares {})",
@@ -86,12 +88,19 @@ pub(super) fn lower_enum_decl(
         ));
         return None;
     }
+    if !entry.type_params.is_empty() {
+        return None;
+    }
     let symbol = IRSymbol::from_identifier(&entry.identifier);
-    let variants = lower_variants(definition, registry);
+    let variants = lower_variants(definition, registry, &mut output.instantiations);
     Some(IREnumDecl { symbol, variants })
 }
 
-fn lower_variants(definition: &EnumDefinition, registry: &GlobalRegistry) -> Vec<IREnumVariant> {
+fn lower_variants(
+    definition: &EnumDefinition,
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> Vec<IREnumVariant> {
     let mut variants = Vec::with_capacity(definition.variants.len());
     for (index, variant) in definition.variants.iter().enumerate() {
         let payload = match &variant.data {
@@ -100,7 +109,7 @@ fn lower_variants(definition: &EnumDefinition, registry: &GlobalRegistry) -> Vec
                 for (idx, field) in fields.iter().enumerate() {
                     ir_fields.push(IRStructField {
                         index: idx as u32,
-                        ir_type: resolved_type_to_ir_type(&field.ty, registry),
+                        ir_type: resolved_type_to_ir_type(&field.ty, registry, instantiations),
                         name: field.name.clone(),
                     });
                 }
@@ -109,7 +118,7 @@ fn lower_variants(definition: &EnumDefinition, registry: &GlobalRegistry) -> Vec
             ResolvedVariantData::Tuple(types) => {
                 let translated = types
                     .iter()
-                    .map(|ty| resolved_type_to_ir_type(ty, registry))
+                    .map(|ty| resolved_type_to_ir_type(ty, registry, instantiations))
                     .collect();
                 IRVariantPayload::Tuple(translated)
             }
@@ -136,11 +145,11 @@ pub(super) fn lower_enum_construction(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let entry = enum_entry_from_resolution(expr_resolution, registry);
     let definition = enum_definition_from_entry(entry);
-    let symbol = IRSymbol::from_identifier(&entry.identifier);
+    let symbol = resolved_enum_symbol(expr_resolution, registry, &mut output.instantiations);
     let (variant_index, variant) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
         panic!(
             "alpha IR lower: enum `{}` has no variant `{variant_name}` — \
@@ -157,15 +166,33 @@ pub(super) fn lower_enum_construction(
             Ok(lower_unit_variant(target, ctx, block))
         }
         (ResolvedVariantData::Tuple(_), EnumConstructionData::Tuple(exprs)) => {
-            lower_tuple_variant(target, exprs, ctx, block, registry, diagnostics)
+            lower_tuple_variant(target, exprs, ctx, block, registry, output)
         }
         (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(fields)) => {
-            lower_struct_variant(target, declared, fields, ctx, block, registry, diagnostics)
+            lower_struct_variant(target, declared, fields, ctx, block, registry, output)
         }
         (declared, supplied) => panic!(
             "alpha IR lower: enum `{}.{variant_name}` payload shape mismatch \
              (declared {declared:?}, supplied {supplied:?}) — typecheck seal violation",
             entry.identifier,
+        ),
+    }
+}
+
+/// The mangled [`IRSymbol`] for the enum named by `resolution`.
+/// Mirrors [`super::structs`]'s `resolved_struct_symbol` — routes
+/// through [`resolved_type_to_ir_type`] so any non-empty `type_args`
+/// land in `instantiations`.
+fn resolved_enum_symbol(
+    resolution: &ResolvedType,
+    registry: &GlobalRegistry,
+    instantiations: &mut Vec<Instantiation>,
+) -> IRSymbol {
+    match resolved_type_to_ir_type(resolution, registry, instantiations) {
+        IRType::Enum(symbol) => symbol,
+        other => panic!(
+            "alpha IR lower: enum construction target lowered to `{other:?}`, expected \
+             IRType::Enum — typecheck seal must have caught this",
         ),
     }
 }
@@ -195,13 +222,13 @@ fn lower_tuple_variant(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let VariantTarget { symbol, tag } = target;
     let mut current = block;
     let mut values = Vec::with_capacity(exprs.len());
     for expr in exprs {
-        let (value, next) = lower_expr(expr, ctx, current, registry, diagnostics)?;
+        let (value, next) = lower_expr(expr, ctx, current, registry, output)?;
         values.push(value);
         current = next;
     }
@@ -225,11 +252,11 @@ fn lower_struct_variant(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    diagnostics: &mut Vec<Diagnostic>,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
     let VariantTarget { symbol, tag } = target;
     let (canonical, current) =
-        canonicalize_struct_inits(declared, fields, ctx, block, registry, diagnostics)?;
+        canonicalize_struct_inits(declared, fields, ctx, block, registry, output)?;
     let dest = ctx.fresh_value(IRType::Enum(symbol.clone()));
     ctx.cfg.append(
         current,
@@ -268,16 +295,6 @@ fn enum_definition_from_entry(entry: &RegistryEntry) -> &EnumDefinition {
 
 fn has_feature_gap(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let mut gapped = false;
-    if !decl.type_params.is_empty() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha IR does not yet lower generic enums (`{}` has type parameters)",
-                decl.name,
-            ),
-            decl.span,
-        ));
-        gapped = true;
-    }
     for annotation in &decl.annotations {
         diagnostics.push(Diagnostic::error(
             format!(

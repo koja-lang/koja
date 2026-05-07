@@ -227,6 +227,7 @@ fn print_function(span: Span) -> Function {
                 value: format_call,
                 span,
             }],
+            type_args: Vec::new(),
         },
         span,
     );
@@ -286,6 +287,7 @@ fn method_call_no_args(receiver: Expr, method: &str, span: Span) -> Expr {
             receiver: Box::new(receiver),
             method: method.to_string(),
             args: Vec::<Arg>::new(),
+            type_args: Vec::new(),
         },
         span,
     )
@@ -517,6 +519,7 @@ fn interpolation_part(expr: Expr, span: Span) -> StringPart {
             receiver: Box::new(expr),
             method: FORMAT_METHOD.to_string(),
             args: Vec::<Arg>::new(),
+            type_args: Vec::new(),
         },
         span,
     );

@@ -168,36 +168,55 @@ impl fmt::Display for LocalId {
     }
 }
 
+/// Opaque per-decl handle for a type parameter binding (the `T` in
+/// `struct Pair<T, U>`). Mirrors [`LocalId`] / [`GlobalRegistryId`]:
+/// the registry / decl owns the data, callers carry only the handle.
+/// Index into the owning decl's `type_params` Vec.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TypeParamIndex(u32);
+
+impl TypeParamIndex {
+    pub fn new(raw: u32) -> Self {
+        Self(raw)
+    }
+
+    pub fn as_u32(self) -> u32 {
+        self.0
+    }
+}
+
+impl fmt::Display for TypeParamIndex {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Resolution attached to an AST reference site by typecheck.
 ///
-/// `Global` carries a [`GlobalRegistryId`] handle into the typecheck
-/// crate's `GlobalRegistry`; dereferencing to the underlying
-/// [`Identifier`] goes through that registry. Storing a handle (rather
-/// than the full `Identifier`) keeps AST annotations small and lets the
-/// registry stay the single source of truth for what each id names.
-///
-/// `Local` carries a [`LocalId`] handle into the per-function
-/// `LocalScope` typecheck builds when resolving a function body.
-/// Locals never cross function boundaries, so the id is only meaningful
-/// within the enclosing function; downstream consumers (IR lower,
-/// eval, codegen) read it via the function-scoped lookup that produced
-/// it.
-///
-/// `Unresolved` is the in-flight state before resolve runs. The seal
-/// contract asserts every reference site carries `Global(_)` or
-/// `Local(_)` once typecheck completes (subject to the carve-outs in
-/// [`COMPILER-NORTHSTAR.md`]).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+/// `Global` / `Local` carry registry / `LocalScope` handles.
+/// `TypeParam` is the same idea anchored to a generic decl: `owner`
+/// is the [`GlobalRegistryId`] of the enclosing struct/enum, `index`
+/// picks one of its `type_params`. Seal asserts the variant only
+/// appears inside generic-decl bodies. `Unresolved` is the in-flight
+/// state before resolve runs.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum Resolution {
     Global(GlobalRegistryId),
     Local(LocalId),
+    TypeParam {
+        owner: GlobalRegistryId,
+        index: TypeParamIndex,
+    },
     #[default]
     Unresolved,
 }
 
 impl Resolution {
     pub fn is_resolved(&self) -> bool {
-        matches!(self, Resolution::Global(_) | Resolution::Local(_))
+        matches!(
+            self,
+            Resolution::Global(_) | Resolution::Local(_) | Resolution::TypeParam { .. }
+        )
     }
 }
 
@@ -213,7 +232,7 @@ impl Resolution {
 ///
 /// `Default` returns a fully-unresolved leaf so freshly-constructed
 /// `Expr`s carry a safe placeholder until resolve runs.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ResolvedType {
     pub resolution: Resolution,
     pub type_args: Vec<ResolvedType>,

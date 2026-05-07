@@ -183,6 +183,7 @@ fn collect_from_expr(
             receiver,
             method,
             args,
+            ..
         } => {
             collect_from_static_call(receiver, method, args, type_ctx, subst, pending, seen);
         }

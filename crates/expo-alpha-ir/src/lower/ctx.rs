@@ -4,10 +4,16 @@
 //! No language-aware logic lives here — this is the bookkeeping
 //! layer the rest of the [`crate::lower`] modules sit on top of.
 //!
-//! Two types live here together because they're co-evolving and
+//! Three types live here together because they're co-evolving and
 //! never used independently:
 //!
-//! - [`FnLowerCtx`] owns mutable lowering state.
+//! - [`FnLowerCtx`] owns per-function mutable scratch state (the
+//!   CFG, value/block counters, the per-function `local` set).
+//! - [`LowerOutput`] is the per-package write-back bag every helper
+//!   threads through: feature-gap diagnostics flowing back to
+//!   `lower_program` / `lower_script`, plus the discovered
+//!   generic-instantiation set the [`crate::generics`] driver
+//!   consumes after lowering finishes.
 //! - [`FlowResult`] is the return shape every `lower_*` helper
 //!   produces, distinguishing "flow continues at this block with
 //!   this value" from "flow terminated already (e.g. via early
@@ -15,10 +21,31 @@
 
 use std::collections::{BTreeMap, HashSet};
 
+use expo_ast::ast::Diagnostic;
+
 use crate::cfg::CFGBuilder;
 use crate::function::{IRBasicBlock, IRBlockId};
+use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::types::{IRType, ValueId};
+
+/// Per-package write-back bag threaded through every `lower_*`
+/// helper. Bundling these two sinks keeps helper signatures under
+/// the clippy `too_many_arguments` threshold and makes the
+/// "what flows back upward" group explicit. Read-only inputs
+/// (the typecheck registry) stay separate args — they have a
+/// different direction of flow and don't share lifetime scope.
+///
+/// `lower_program` / `lower_script` construct one [`LowerOutput`]
+/// up front, thread `&mut output` through the per-package walks,
+/// then destructure it: `diagnostics` short-circuits with
+/// [`crate::error::LowerError::Diagnostics`] and `instantiations`
+/// feeds [`crate::generics::instantiate`].
+#[derive(Default)]
+pub(crate) struct LowerOutput {
+    pub(crate) diagnostics: Vec<Diagnostic>,
+    pub(crate) instantiations: Vec<Instantiation>,
+}
 
 /// The shape every `lower_*` helper returns. `Open` carries the
 /// trailing value (when the construct produces one) and the block

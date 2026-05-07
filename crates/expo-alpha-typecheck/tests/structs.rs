@@ -321,24 +321,6 @@ fn nested_field_access_resolves_through_inner_struct() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn generic_struct_diagnoses_feature_gap() {
-    let source = "
-        struct Wrapper<T>
-          value: Int
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not yet support generic structs")),
-        "expected generic-struct gap diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
 fn annotated_struct_diagnoses_feature_gap() {
     let source = "
         @derive
@@ -852,7 +834,7 @@ fn instance_method_in_impl_block_lifts_with_dispatch_instance() {
 }
 
 #[test]
-fn static_method_self_return_type_diagnoses_feature_gap() {
+fn static_method_self_return_type_resolves_to_enclosing_struct() {
     let source = "
         struct Point
           x: Int
@@ -863,13 +845,34 @@ fn static_method_self_return_type_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
+    let program = typecheck(&dedent(source));
+    let identifier = Identifier::new("TestApp", vec!["Point".to_string(), "origin".to_string()]);
+    let (_, entry) = program
+        .registry
+        .lookup(&identifier)
+        .expect("Point.origin registered");
+    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+        panic!("Point.origin should have a lifted signature");
+    };
+    let Resolution::Global(point_id) = sig.return_type.resolution else {
+        panic!(
+            "expected `Self` to resolve to Global(Point), got {:?}",
+            sig.return_type
+        );
+    };
+    let point_identifier = Identifier::new("TestApp", vec!["Point".to_string()]);
+    let (expected_id, _) = program
+        .registry
+        .lookup(&point_identifier)
+        .expect("Point registered");
+    assert_eq!(
+        point_id, expected_id,
+        "`Self` must alias the enclosing struct id"
+    );
     assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`Self` type annotations")),
-        "expected Self-return gap diagnostic, got {messages:?}",
+        sig.return_type.type_args.is_empty(),
+        "non-generic Point's `Self` carries no type args, got {:?}",
+        sig.return_type.type_args,
     );
 }
 
@@ -983,7 +986,7 @@ fn instance_method_with_args_validates_explicit_args() {
 }
 
 #[test]
-fn generic_impl_trait_diagnoses_feature_gap() {
+fn impl_with_extra_trait_args_diagnoses_arity() {
     let source = "
         protocol Greeter
           fn greet(self) -> Int
@@ -1005,8 +1008,301 @@ fn generic_impl_trait_diagnoses_feature_gap() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("generic `impl Trait for Type`")),
-        "expected generic trait-impl gap diagnostic, got {messages:?}",
+            .any(|m| m.contains("expects 0 type arguments, got 1")),
+        "expected protocol arity diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_protocol_impl_with_concrete_args_succeeds() {
+    // Names picked to not collide with future stdlib auto-import
+    // (no `Eq`, `Ord`, etc.).
+    let source = "
+        protocol Match<T>
+          fn matches(self, other: T) -> Bool
+        end
+
+        struct User
+          id: Int
+        end
+
+        impl Match<String> for User
+          fn matches(self, other: String) -> Bool
+            true
+          end
+        end
+        ";
+
+    let program = typecheck(&dedent(source));
+    let identifier = Identifier::new("TestApp", vec!["User".to_string(), "matches".to_string()]);
+    let (_, entry) = program
+        .registry
+        .lookup(&identifier)
+        .expect("User.matches registered");
+    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+        panic!("User.matches should have a lifted signature");
+    };
+    let other_ty = &sig.params[1].ty;
+    let Resolution::Global(string_id) = other_ty.resolution else {
+        panic!("expected `other: String`, got {:?}", other_ty);
+    };
+    let (expected_string_id, _) = program
+        .registry
+        .lookup(&Identifier::new("Global", vec!["String".to_string()]))
+        .expect("String registered");
+    assert_eq!(string_id, expected_string_id);
+}
+
+#[test]
+fn generic_protocol_impl_with_wrong_concrete_arg_diagnoses() {
+    let source = "
+        protocol Match<T>
+          fn matches(self, other: T) -> Bool
+        end
+
+        struct User
+          id: Int
+        end
+
+        impl Match<String> for User
+          fn matches(self, other: Int) -> Bool
+            true
+          end
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("does not match protocol")
+                && m.contains("Global.String")
+                && m.contains("Global.Int")),
+        "expected substituted-type mismatch diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_target_impl_anchors_self_at_receiver_id() {
+    // `impl Render for Bag<T>` — the impl block's free type-param
+    // `T` aliases the receiver struct's slot-0 anchor. This pins:
+    //   - `self: Bag<T>` resolves to `Bag<TypeParam(Bag, 0)>`,
+    //     identical to an inline `fn render(self)` on `struct Bag<T>`,
+    //   - methods register at `[Bag, render]` regardless of the
+    //     `<T>` decoration on the target head,
+    //   - call-site inference substitutes via the receiver's
+    //     type-args alone (no separate impl scope).
+    //
+    // Names are picked deliberately to not collide with anything
+    // a future stdlib auto-import would bring in.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<T>
+          fn render(self) -> Int
+            0
+          end
+        end
+        ";
+
+    let program = typecheck(&dedent(source));
+    let method_identifier = Identifier::new(PACKAGE, vec!["Bag".to_string(), "render".to_string()]);
+    let (_, entry) = program
+        .registry
+        .lookup(&method_identifier)
+        .expect("Bag.render registered");
+    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+        panic!("Bag.render should have a lifted signature");
+    };
+    let self_ty = &sig.params[0].ty;
+    let Resolution::Global(_) = self_ty.resolution else {
+        panic!("expected self: Bag<...>, got {:?}", self_ty);
+    };
+    assert_eq!(self_ty.type_args.len(), 1, "Bag has one type-arg slot");
+    let Resolution::TypeParam { owner, .. } = self_ty.type_args[0].resolution else {
+        panic!(
+            "expected self's `T` to be a TypeParam, got {:?}",
+            self_ty.type_args[0]
+        );
+    };
+    let bag_identifier = Identifier::new(PACKAGE, vec!["Bag".to_string()]);
+    let (bag_id, _) = program
+        .registry
+        .lookup(&bag_identifier)
+        .expect("Bag registered");
+    assert_eq!(
+        owner, bag_id,
+        "trait-impl method `T` must alias the struct's slot-0 anchor",
+    );
+}
+
+#[test]
+fn generic_target_impl_method_call_resolves_concrete_receiver() {
+    // Regression guard: calling a trait-impl method on a generic
+    // receiver must dispatch through the impl-anchored `self` type
+    // and produce a fully-resolved call site (no `TypeParam` leaks
+    // through the substituted return type into the AST). Slice 2.8
+    // anchored `T` at the impl entry rather than the receiver
+    // struct, so the inference step has to substitute via the impl
+    // owner — not just the struct owner.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<T>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        fn use_bag()
+          Bag{item: 1}.render()
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn generic_target_impl_method_returning_free_param_substitutes() {
+    // Hard case: the impl method returns the impl's *own* free
+    // type-param `T`. Slice 2.8 anchored `T` at the impl entry, so
+    // the call-site inference step must substitute the impl owner
+    // when computing the return type — otherwise the result leaks a
+    // `TypeParam(impl_id, 0)` into the call site's resolution and
+    // seal panics.
+    let source = "
+        protocol Pick<T>
+          fn pick(self) -> T
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Pick<T> for Bag<T>
+          fn pick(self) -> T
+            self.item
+          end
+        end
+
+        fn use_bag() -> Int
+          Bag{item: 1}.pick()
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn trait_impl_on_concrete_target_args_dispatches_only_for_matching_receiver() {
+    // "Extend"-style domain check: `impl Render for Bag<Int>`
+    // adds `render` to `Bag<Int>` only. Calls on `Bag<Int>` succeed;
+    // calls on `Bag<String>` fail at the receiver-type check rather
+    // than dispatching incorrectly.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<Int>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        fn use_int_bag() -> Int
+          Bag{item: 1}.render()
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn trait_impl_on_concrete_target_args_diagnoses_mismatched_receiver() {
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<Int>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        fn use_string_bag()
+          Bag{item: \"x\"}.render()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("no method `render`") && m.contains("Bag")),
+        "expected 'no method on receiver' diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn general_and_specialized_trait_impls_collide_on_shared_method_name() {
+    // Both impls want `[Bag, render]` — collision detected at
+    // method registration. This is the cornerstone of the
+    // "extend"-style design: any two impl blocks that define the
+    // same method name on the same type head are a hard error,
+    // regardless of whether the targets are general or specialized.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<T>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        impl Render for Bag<Int>
+          fn render(self) -> Int
+            1
+          end
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("already defined") && m.contains("Bag.render")),
+        "expected duplicate-method/impl diagnostic, got {messages:?}",
     );
 }
 
@@ -1050,4 +1346,136 @@ fn impl_on_unknown_type_diagnoses() {
             .any(|m| m.contains("cannot extend unknown type `Vector`")),
         "expected impl-unknown-type diagnostic, got {messages:?}",
     );
+}
+
+// ---------------------------------------------------------------------------
+// Generics — definition, lift, construction inference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: U
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let entry = checked
+        .registry
+        .get(pair_id)
+        .expect("registered Pair entry");
+    assert_eq!(entry.type_params, vec!["T".to_string(), "U".to_string()]);
+    let definition = struct_definition(&checked, "Pair");
+    assert_eq!(definition.fields.len(), 2);
+    assert!(matches!(
+        definition.fields[0].ty.resolution,
+        Resolution::TypeParam { owner, .. } if owner == pair_id,
+    ));
+    assert!(matches!(
+        definition.fields[1].ty.resolution,
+        Resolution::TypeParam { owner, .. } if owner == pair_id,
+    ));
+    assert_ne!(
+        definition.fields[0].ty.resolution, definition.fields[1].ty.resolution,
+        "T and U must mint distinct TypeParam handles",
+    );
+}
+
+#[test]
+fn generic_struct_construction_infers_type_args_from_field_values() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: U
+        end
+
+        fn main
+          Pair{a: 1, b: \"x\"}
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let int = global_leaf(&checked, "Int");
+    let string = global_leaf(&checked, "String");
+    let expr = body_trailing_expr(&checked, "main");
+    assert_eq!(expr.resolution.resolution, Resolution::Global(pair_id));
+    assert_eq!(expr.resolution.type_args, vec![int, string]);
+}
+
+#[test]
+fn generic_struct_construction_with_conflicting_inferences_diagnoses() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: T
+        end
+
+        fn main
+          Pair{a: 1, b: \"x\"}
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("type parameter `T` of `TestApp.Pair` cannot be both")),
+        "expected type-param conflict diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_struct_phantom_type_param_diagnoses() {
+    let source = "
+        struct Phantom<T>
+          marker: Int
+        end
+
+        fn main
+          Phantom{marker: 1}
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot infer type parameter `T`")),
+        "expected Phantom-guard diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_struct_nested_in_generic_struct_resolves_through_typeparam_args() {
+    let source = "
+        struct Pair<T, U>
+          a: T
+          b: U
+        end
+
+        struct Box<V>
+          inner: Pair<V, Int>
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let box_definition = struct_definition(&checked, "Box");
+    let box_id = lookup_struct_id(&checked, PACKAGE, "Box");
+    let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let int = global_leaf(&checked, "Int");
+
+    let inner = &box_definition.fields[0].ty;
+    assert_eq!(inner.resolution, Resolution::Global(pair_id));
+    assert_eq!(inner.type_args.len(), 2);
+    assert!(matches!(
+        inner.type_args[0].resolution,
+        Resolution::TypeParam { owner, .. } if owner == box_id,
+    ));
+    assert_eq!(inner.type_args[1], int);
 }

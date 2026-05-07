@@ -153,6 +153,7 @@ impl Parser {
                 ExprKind::Call {
                     callee: Box::new(callee),
                     args,
+                    type_args: Vec::new(),
                 },
                 self.span_from(start),
             )

@@ -7,8 +7,11 @@
 //! ([`GlobalRegistry::primitive`]) since both `lift_signatures` and
 //! `resolve` produce them.
 
+use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::{Resolution, ResolvedType};
+use expo_ast::span::Span;
 
+use super::ctx::Callee;
 use crate::registry::GlobalRegistry;
 
 /// Does `ty` resolve to the preloaded `Global.<name>` stdlib stub?
@@ -43,6 +46,73 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
             None => format!("<id {id}>"),
         },
         Resolution::Local(local_id) => format!("<local {local_id}>"),
+        Resolution::TypeParam { owner, index } => registry
+            .type_param_name(owner, index)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
         Resolution::Unresolved => "<unresolved>".to_string(),
+    }
+}
+
+/// Walk an inference substitution and emit one diagnostic per
+/// inferred concrete type that fails to satisfy a bound on the
+/// corresponding generic param. Substitution slots that are still
+/// `None` (phantom) are skipped — the caller already emits a
+/// "cannot infer" diagnostic for those. Inferred [`Resolution::TypeParam`]
+/// substitutions (the bounded param being threaded into another
+/// generic call) skip the head check; the bound is enforced where
+/// the outer call's caller resolves.
+///
+/// Wording follows LANGUAGE.md §10's bound-enforcement message
+/// verbatim — keep this surface stable across slices that re-use it.
+pub(super) fn verify_bounds(
+    callee: Callee<'_>,
+    subst: &[Option<ResolvedType>],
+    span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some(bounds) = registry.type_param_bounds(callee.id) else {
+        return;
+    };
+    for (index, slot) in subst.iter().enumerate() {
+        let Some(inferred) = slot else {
+            continue;
+        };
+        let Some(param_bounds) = bounds.get(index) else {
+            continue;
+        };
+        if param_bounds.is_empty() {
+            continue;
+        }
+        let Resolution::Global(target_id) = inferred.resolution else {
+            continue;
+        };
+        for &protocol_id in param_bounds {
+            if registry
+                .lookup_conformance(target_id, protocol_id)
+                .is_some()
+            {
+                continue;
+            }
+            let bound_label = registry
+                .get(protocol_id)
+                .map(|e| e.identifier.last().to_string())
+                .unwrap_or_else(|| format!("<id {protocol_id}>"));
+            let param_name = callee
+                .type_params
+                .get(index)
+                .map(String::as_str)
+                .unwrap_or("?");
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "type `{}` does not implement protocol `{bound_label}` \
+                     (required by type parameter `{param_name}` in `{}`)",
+                    display_resolution(inferred, registry),
+                    callee.label,
+                ),
+                span,
+            ));
+        }
     }
 }

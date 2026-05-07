@@ -108,6 +108,7 @@ impl Parser {
                                             receiver: Box::new(lhs),
                                             method: name,
                                             args,
+                                            type_args: Vec::new(),
                                         },
                                         span,
                                     );
@@ -156,6 +157,7 @@ impl Parser {
                             ExprKind::Call {
                                 callee: Box::new(lhs),
                                 args,
+                                type_args: Vec::new(),
                             },
                             span,
                         );

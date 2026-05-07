@@ -18,15 +18,18 @@
 //! stable.
 
 use expo_ast::ast::{Diagnostic, EnumConstructionData, Expr};
-use expo_ast::identifier::{Resolution, ResolvedType};
+use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-use crate::registry::{GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedVariantData};
+use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
+use crate::registry::{
+    GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
+};
 
-use super::ctx::Resolver;
+use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::structs::{lookup_type, validate_named_fields};
-use super::types::display_resolution;
+use super::types::{display_resolution, verify_bounds};
 
 pub(super) fn resolve_enum_construction(
     type_path: &[String],
@@ -75,6 +78,7 @@ pub(super) fn resolve_enum_construction(
     };
 
     let enum_label = enum_entry.identifier.to_string();
+    let type_params = enum_entry.type_params.clone();
     let Some((_, variant_def)) = definition.lookup_variant(variant) else {
         diagnostics.push(Diagnostic::error(
             format!("`{enum_label}` has no variant `{variant}`"),
@@ -83,16 +87,195 @@ pub(super) fn resolve_enum_construction(
         return ResolvedType::leaf(Resolution::Global(enum_id));
     };
 
-    validate_variant_payload(
-        &enum_label,
+    if type_params.is_empty() {
+        validate_variant_payload(
+            &enum_label,
+            variant_def,
+            data,
+            span,
+            resolver.registry,
+            diagnostics,
+        );
+        return ResolvedType::leaf(Resolution::Global(enum_id));
+    }
+
+    if matches!(variant_def.data, ResolvedVariantData::Unit) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck cannot infer type parameters of `{enum_label}` from \
+                 unit variant `{variant}` (no payload to constrain `{}`)",
+                type_params.join("`, `"),
+            ),
+            span,
+        ));
+        return ResolvedType {
+            resolution: Resolution::Global(enum_id),
+            type_args: vec![ResolvedType::unresolved(); type_params.len()],
+        };
+    }
+
+    let callee = Callee {
+        id: enum_id,
+        label: &enum_label,
+        type_params: &type_params,
+    };
+    let subst = infer_enum_type_args(
+        callee,
         variant_def,
         data,
         span,
         resolver.registry,
         diagnostics,
     );
+    let substituted = substitute_variant(variant_def, &subst, enum_id);
+    validate_variant_payload(
+        &enum_label,
+        &substituted,
+        data,
+        span,
+        resolver.registry,
+        diagnostics,
+    );
+    let type_args = subst
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
+        .collect();
+    ResolvedType {
+        resolution: Resolution::Global(enum_id),
+        type_args,
+    }
+}
 
-    ResolvedType::leaf(Resolution::Global(enum_id))
+/// Infer concrete `type_args` for a generic enum construction by
+/// unifying each declared payload element's template against the
+/// resolved type of the supplied value. Mirrors the struct path:
+/// emits one diagnostic per [`Conflict`] and one per Phantom param.
+/// Shape-mismatched constructions skip inference and let
+/// [`validate_variant_payload`] surface the shape diagnostic.
+fn infer_enum_type_args(
+    callee: Callee<'_>,
+    variant: &ResolvedEnumVariant,
+    data: &EnumConstructionData,
+    span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Option<ResolvedType>> {
+    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
+    match (&variant.data, data) {
+        (ResolvedVariantData::Tuple(declared), EnumConstructionData::Tuple(exprs)) => {
+            for (declared_ty, expr) in declared.iter().zip(exprs.iter()) {
+                if !expr.resolution.is_resolved() {
+                    continue;
+                }
+                if let Err(conflict) =
+                    unify_resolved_type(declared_ty, &expr.resolution, callee.id, &mut subst)
+                {
+                    emit_conflict(
+                        &callee,
+                        &variant.name,
+                        conflict,
+                        expr.span,
+                        registry,
+                        diagnostics,
+                    );
+                }
+            }
+        }
+        (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(inits)) => {
+            for init in inits {
+                let Some(declared_field) = declared.iter().find(|f| f.name == init.name) else {
+                    continue;
+                };
+                if !init.value.resolution.is_resolved() {
+                    continue;
+                }
+                if let Err(conflict) = unify_resolved_type(
+                    &declared_field.ty,
+                    &init.value.resolution,
+                    callee.id,
+                    &mut subst,
+                ) {
+                    emit_conflict(
+                        &callee,
+                        &variant.name,
+                        conflict,
+                        init.span,
+                        registry,
+                        diagnostics,
+                    );
+                }
+            }
+        }
+        _ => {}
+    }
+    for (index, slot) in subst.iter().enumerate() {
+        if slot.is_none() {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha typecheck cannot infer type parameter `{}` of `{}` \
+                     from the supplied `{}` payload",
+                    callee.type_params[index], callee.label, variant.name,
+                ),
+                span,
+            ));
+        }
+    }
+    verify_bounds(callee, &subst, span, registry, diagnostics);
+    subst
+}
+
+fn emit_conflict(
+    callee: &Callee<'_>,
+    variant_name: &str,
+    conflict: Conflict,
+    span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "type parameter `{}` of `{}` cannot be both `{}` and `{}` in `{}`",
+            callee.type_params[conflict.param_index],
+            callee.label,
+            display_resolution(&conflict.prev, registry),
+            display_resolution(&conflict.actual, registry),
+            variant_name,
+        ),
+        span,
+    ));
+}
+
+/// Substitute a populated `subst` into every declared payload type
+/// of `variant`. Used to produce a concrete view of the variant for
+/// [`validate_variant_payload`] so user-facing diagnostics show the
+/// inferred concrete types rather than `T`.
+fn substitute_variant(
+    variant: &ResolvedEnumVariant,
+    subst: &[Option<ResolvedType>],
+    owner: GlobalRegistryId,
+) -> ResolvedEnumVariant {
+    let data = match &variant.data {
+        ResolvedVariantData::Unit => ResolvedVariantData::Unit,
+        ResolvedVariantData::Tuple(types) => ResolvedVariantData::Tuple(
+            types
+                .iter()
+                .map(|ty| substitute_resolved_type(ty, subst, owner))
+                .collect(),
+        ),
+        ResolvedVariantData::Struct(fields) => ResolvedVariantData::Struct(
+            fields
+                .iter()
+                .map(|field| ResolvedStructField {
+                    name: field.name.clone(),
+                    ty: substitute_resolved_type(&field.ty, subst, owner),
+                })
+                .collect(),
+        ),
+    };
+    ResolvedEnumVariant {
+        data,
+        name: variant.name.clone(),
+    }
 }
 
 fn resolve_construction_data(

@@ -662,10 +662,12 @@ fn find_expr_at_inner(expr: &Expr, line: u32, col: u32) -> Option<&Expr> {
     }
 
     let child = match &expr.kind {
-        ExprKind::Call { callee, args } => find_expr_at_inner(callee, line, col).or_else(|| {
-            args.iter()
-                .find_map(|a| find_expr_at_inner(&a.value, line, col))
-        }),
+        ExprKind::Call { callee, args, .. } => {
+            find_expr_at_inner(callee, line, col).or_else(|| {
+                args.iter()
+                    .find_map(|a| find_expr_at_inner(&a.value, line, col))
+            })
+        }
         ExprKind::MethodCall { receiver, args, .. } => find_expr_at_inner(receiver, line, col)
             .or_else(|| {
                 args.iter()
@@ -874,7 +876,7 @@ fn find_call_inner<'a>(expr: &'a Expr, line: u32, col: u32) -> Option<CallSite<'
 
     // Always try children first so we find the innermost call.
     let child = match &expr.kind {
-        ExprKind::Call { callee, args } => find_call_inner(callee, line, col).or_else(|| {
+        ExprKind::Call { callee, args, .. } => find_call_inner(callee, line, col).or_else(|| {
             args.iter()
                 .find_map(|a| find_call_inner(&a.value, line, col))
         }),

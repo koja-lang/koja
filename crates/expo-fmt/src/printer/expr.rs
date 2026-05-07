@@ -59,7 +59,7 @@ impl<'a> Printer<'a> {
                 concat(vec![text("("), self.expr_to_doc(inner), text(")")])
             }
 
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 concat(vec![self.expr_to_doc(callee), self.call_args_to_doc(args)])
             }
 
@@ -72,6 +72,7 @@ impl<'a> Printer<'a> {
                         receiver,
                         method,
                         args,
+                        ..
                     } = &expr.kind
                     else {
                         unreachable!()
@@ -580,6 +581,7 @@ impl<'a> Printer<'a> {
             receiver,
             method,
             args,
+            ..
         } = &current.kind
         {
             calls.push((method.as_str(), args.as_slice()));

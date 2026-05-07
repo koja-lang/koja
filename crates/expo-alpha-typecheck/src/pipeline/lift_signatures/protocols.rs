@@ -1,15 +1,19 @@
 //! Protocol decl lifting: resolve each `ProtocolMethod`'s non-`self`
 //! params + return type into a [`ResolvedProtocolMethod`] and stamp
-//! the [`ProtocolDefinition`] onto the registry entry.
+//! the [`ProtocolDefinition`] onto the registry entry. Method
+//! signatures resolve under a [`TypeParamScope`] rooted at the
+//! protocol id so `Self` (slot 0) and user-declared `<C, M, R>`
+//! params resolve to [`Resolution::TypeParam`] anchored on the
+//! protocol entry.
 
 use expo_ast::ast::{Diagnostic, Param, ProtocolDecl, ProtocolMethod};
-use expo_ast::identifier::Identifier;
+use expo_ast::identifier::{GlobalRegistryId, Identifier};
 
 use crate::registry::{
     Dispatch, GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedParam, ResolvedProtocolMethod,
 };
 
-use super::types::resolve_type_expr;
+use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_protocol(
     decl: &ProtocolDecl,
@@ -32,13 +36,14 @@ pub(super) fn lift_protocol(
     let methods = decl
         .methods
         .iter()
-        .map(|method| lift_protocol_method(method, package, registry, diagnostics))
+        .map(|method| lift_protocol_method(method, id, package, registry, diagnostics))
         .collect();
     registry.set_protocol_definition(id, ProtocolDefinition { methods });
 }
 
 fn lift_protocol_method(
     method: &ProtocolMethod,
+    protocol_id: GlobalRegistryId,
     package: &str,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -47,6 +52,8 @@ fn lift_protocol_method(
         Some(Param::Self_ { .. }) => Dispatch::Instance,
         _ => Dispatch::Static,
     };
+    let owners = [protocol_id];
+    let scope = TypeParamScope::new(&owners);
     let non_self_params = method
         .params
         .iter()
@@ -55,13 +62,13 @@ fn lift_protocol_method(
                 name, type_expr, ..
             } => Some(ResolvedParam {
                 name: name.clone(),
-                ty: resolve_type_expr(type_expr, package, registry, diagnostics),
+                ty: resolve_type_expr(type_expr, scope, package, registry, diagnostics),
             }),
             Param::Self_ { .. } => None,
         })
         .collect();
     let return_type = match method.return_type.as_ref() {
-        Some(type_expr) => resolve_type_expr(type_expr, package, registry, diagnostics),
+        Some(type_expr) => resolve_type_expr(type_expr, scope, package, registry, diagnostics),
         None => registry.primitive("Unit"),
     };
     ResolvedProtocolMethod {

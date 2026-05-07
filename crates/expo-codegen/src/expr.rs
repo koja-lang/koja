@@ -68,6 +68,7 @@ pub fn compile_tail_expr<'ctx>(
         receiver,
         method,
         args,
+        ..
     } = &inner.kind
     {
         return crate::structs::compile_method_call_with_tail(

@@ -100,7 +100,7 @@ where
                 visit_binary_segment(segment, visitor);
             }
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             visit_expr(callee, visitor);
             for arg in args {
                 visit_expr(&arg.value, visitor);

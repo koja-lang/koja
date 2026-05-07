@@ -18,7 +18,7 @@ use expo_alpha_typecheck::{
     ResolvedVariantData,
 };
 use expo_ast::ast::{EnumConstructionData, Expr, ExprKind, Item, Statement};
-use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
 mod common;
@@ -86,6 +86,15 @@ fn variant<'a>(definition: &'a EnumDefinition, name: &str) -> &'a ResolvedEnumVa
         .iter()
         .find(|v| v.name == name)
         .unwrap_or_else(|| panic!("variant `{name}` missing from definition"))
+}
+
+fn lookup_enum_id(checked: &CheckedProgram, name: &str) -> GlobalRegistryId {
+    let ident = Identifier::new(PACKAGE, vec![name.to_string()]);
+    let (id, _) = checked
+        .registry
+        .lookup(&ident)
+        .unwrap_or_else(|| panic!("`{ident}` not found in registry"));
+    id
 }
 
 // ---------------------------------------------------------------------------
@@ -487,25 +496,6 @@ fn unknown_variant_in_construction_diagnoses() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn generic_enum_diagnoses_feature_gap() {
-    let source = "
-        enum Wrapper<T>
-          Some(Int)
-          None
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not yet support generic enums")),
-        "expected generic-enum gap diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
 fn annotated_enum_diagnoses_feature_gap() {
     let source = "
         @derive
@@ -616,4 +606,145 @@ fn impl_block_on_enum_admits_static_methods() {
 
     let trailing = body_trailing_expr(&checked, "main");
     assert_eq!(trailing.resolution, package_leaf(&checked, "Color"));
+}
+
+// ---------------------------------------------------------------------------
+// Generics — definition, lift, construction inference
+// ---------------------------------------------------------------------------
+
+#[test]
+fn generic_enum_lifts_with_type_params_and_typeparam_payload_resolutions() {
+    let source = "
+        enum Result<T, E>
+          Ok(T)
+          Err(E)
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let result_id = lookup_enum_id(&checked, "Result");
+    let entry = checked
+        .registry
+        .get(result_id)
+        .expect("registered Result entry");
+    assert_eq!(entry.type_params, vec!["T".to_string(), "E".to_string()]);
+    let definition = enum_definition(&checked, "Result");
+
+    let ok = variant(definition, "Ok");
+    let ResolvedVariantData::Tuple(ok_payload) = &ok.data else {
+        panic!("expected Ok to be a tuple variant, got {:?}", ok.data);
+    };
+    assert!(matches!(
+        ok_payload[0].resolution,
+        Resolution::TypeParam { owner, .. } if owner == result_id,
+    ));
+}
+
+#[test]
+fn generic_enum_tuple_variant_construction_infers_type_args() {
+    let source = "
+        enum Box<T>
+          Of(T)
+        end
+
+        fn main
+          Box.Of(42)
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let box_id = lookup_enum_id(&checked, "Box");
+    let int = global_leaf(&checked, "Int");
+    let trailing = body_trailing_expr(&checked, "main");
+    assert_eq!(trailing.resolution.resolution, Resolution::Global(box_id));
+    assert_eq!(trailing.resolution.type_args, vec![int]);
+}
+
+#[test]
+fn generic_enum_partial_construction_diagnoses_phantom_for_unbound_param() {
+    let source = "
+        enum Result<T, E>
+          Ok(T)
+          Err(E)
+        end
+
+        fn main
+          Result.Ok(42)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot infer type parameter `E`")),
+        "expected Phantom diagnostic for `E`, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_enum_unit_variant_construction_diagnoses_phantom() {
+    let source = "
+        enum Option<T>
+          Some(T)
+          None
+        end
+
+        fn main
+          Option.None
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot infer type parameters of `TestApp.Option`")),
+        "expected unit-variant Phantom diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_enum_tuple_variant_arity_mismatch_diagnoses() {
+    let source = "
+        enum Box<T>
+          Of(T, T)
+        end
+
+        fn main
+          Box.Of(1)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("expects 2 positional argument") && m.contains("got 1")),
+        "expected arity diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_enum_struct_variant_construction_infers_type_args() {
+    let source = "
+        enum Pair<T, U>
+          Of { a: T, b: U }
+        end
+
+        fn main
+          Pair.Of{a: 1, b: \"x\"}
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let pair_id = lookup_enum_id(&checked, "Pair");
+    let int = global_leaf(&checked, "Int");
+    let string = global_leaf(&checked, "String");
+    let trailing = body_trailing_expr(&checked, "main");
+    assert_eq!(trailing.resolution.resolution, Resolution::Global(pair_id));
+    assert_eq!(trailing.resolution.type_args, vec![int, string]);
 }

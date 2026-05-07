@@ -1,6 +1,12 @@
 //! Struct lifting: stamp the [`crate::registry::StructDefinition`]
 //! from the AST `StructDecl` and lift inline static / instance method
-//! signatures.
+//! signatures. Generic structs (`struct Pair<T, U>`) collect their
+//! `type_params` here; field types resolve against a scope that maps
+//! each name to a [`expo_ast::identifier::Resolution::TypeParam`].
+//! Inline method bodies see no type-param scope yet (out of scope
+//! until the generic-functions slice).
+
+use std::collections::BTreeMap;
 
 use expo_ast::ast::{Diagnostic, StructDecl};
 use expo_ast::identifier::Identifier;
@@ -9,7 +15,7 @@ use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField, StructDef
 
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
-use super::types::resolve_type_expr;
+use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_struct(
     decl: &StructDecl,
@@ -25,7 +31,10 @@ pub(super) fn lift_struct(
         lift_function_with_identifier(
             function,
             method_identifier,
-            SelfContext::Receiver(&struct_identifier),
+            SelfContext::Receiver {
+                receiver: &struct_identifier,
+                self_override: None,
+            },
             package,
             registry,
             diagnostics,
@@ -53,13 +62,28 @@ fn lift_struct_definition(
         return;
     }
 
+    // Param names live on the registry entry (stamped at collect
+    // time); resolve through the chained scope rooted at this id.
+    let owners = if decl.type_params.is_empty() {
+        Vec::new()
+    } else {
+        vec![id]
+    };
+    let scope = TypeParamScope::new(&owners);
+
     let mut fields = Vec::with_capacity(decl.fields.len());
     for field in &decl.fields {
-        let ty = resolve_type_expr(&field.type_expr, package, registry, diagnostics);
+        let ty = resolve_type_expr(&field.type_expr, scope, package, registry, diagnostics);
         fields.push(ResolvedStructField {
             name: field.name.clone(),
             ty,
         });
     }
-    registry.set_struct_definition(id, StructDefinition { fields });
+    registry.set_struct_definition(
+        id,
+        StructDefinition {
+            fields,
+            conformances: BTreeMap::new(),
+        },
+    );
 }

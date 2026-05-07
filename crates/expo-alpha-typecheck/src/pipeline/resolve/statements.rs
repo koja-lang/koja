@@ -29,7 +29,7 @@ use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, TypeExpr
 use expo_ast::labels::compound_op_label;
 use expo_ast::span::Span;
 
-use crate::pipeline::lift_signatures::resolve_type_expr;
+use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
@@ -92,6 +92,7 @@ pub(super) fn resolve_assignment(
                 Some(annotation) => {
                     let annotated = resolve_type_expr(
                         annotation,
+                        TypeParamScope::default(),
                         resolver.package,
                         resolver.registry,
                         diagnostics,

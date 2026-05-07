@@ -81,7 +81,10 @@ impl std::fmt::Display for IRVariantTag {
 /// mangled name shape an [`crate::IRFunction`] uses; `variants` is
 /// the declaration-order variant list. Variant order *is* the tag
 /// — variant `i` has `tag == IRVariantTag(i as u8)` — so seal
-/// asserts dense, declaration-ordered tags.
+/// asserts dense, declaration-ordered tags. Generic decls never
+/// appear here — [`crate::generics::instantiate`] produces one
+/// [`IREnumDecl`] per discovered instantiation, keyed at its
+/// mangled symbol.
 #[derive(Debug, Clone)]
 pub struct IREnumDecl {
     pub symbol: IRSymbol,
