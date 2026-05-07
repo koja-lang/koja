@@ -24,16 +24,36 @@ use super::types::{display_resolution, verify_bounds};
 
 /// Inputs to [`infer_method_call_type_args`] — bundles the two
 /// [`Callee`]s in play (the method and its enclosing type), the
-/// receiver-scope seed (instance dispatch supplies the receiver's
-/// `resolution.type_args`; static dispatch supplies an empty
-/// slice), and the explicit param slice (sig.params minus `self`
-/// for instance dispatch). The substituted-param return still
-/// walks the full `sig.params`.
+/// receiver's full resolved type (instance dispatch carries the
+/// real value; static dispatch supplies an `Unresolved` placeholder
+/// that the inference branch ignores), and the explicit param slice
+/// (sig.params minus `self` for instance dispatch). The
+/// substituted-param return still walks the full `sig.params`.
+///
+/// `impl_owner` is the trait-impl's owning entry when the method
+/// came from `impl P for T` and the impl introduced free type-params.
+/// Slice 2.8 anchored those `T`s at the impl entry rather than the
+/// receiver struct, so any `TypeParam(impl_id, *)` in the method
+/// signature has to substitute through a *separate* scope that
+/// unifies the impl's resolved target against the receiver's
+/// `ResolvedType`. `None` covers inline struct/enum methods and
+/// inherent-impl methods, both of which anchor at the receiver
+/// struct id and substitute through `receiver_subst` alone.
 struct MethodInferenceTarget<'a> {
     receiver: Callee<'a>,
     method: Callee<'a>,
-    receiver_seed: &'a [ResolvedType],
+    receiver_type: &'a ResolvedType,
     explicit_params: &'a [ResolvedParam],
+    impl_owner: Option<ImplOwner<'a>>,
+}
+
+/// Trait-impl substitution scope passed to [`infer_method_call_type_args`].
+/// `target` is the impl's resolved head (e.g. `Bag<TypeParam(impl_id, 0)>`
+/// for `impl Pick<T> for Bag<T>`); the inference unifies it against
+/// the receiver's `ResolvedType` to bind `subst` slot-by-slot.
+struct ImplOwner<'a> {
+    callee: Callee<'a>,
+    target: &'a ResolvedType,
 }
 
 /// Receiver classification for method-call dispatch. `Static` and
@@ -325,7 +345,16 @@ pub(super) fn resolve_method_call(
     let method_identifier = method_entry.identifier.clone();
     let method_type_params = method_entry.type_params.clone();
 
-    if receiver_type_params.is_empty() && method_type_params.is_empty() {
+    // Discover whether `method_id` came from a trait impl with
+    // free type-params. Inline / inherent-impl methods skip this
+    // path; the `Some` arm captures the impl's resolved target so
+    // the inference step can unify it against the receiver and
+    // substitute any `TypeParam(impl_id, *)` leaves out of the
+    // method's signature.
+    let impl_owner_data = trait_impl_owner(method_id, resolver.registry);
+
+    if receiver_type_params.is_empty() && method_type_params.is_empty() && impl_owner_data.is_none()
+    {
         validate_arg_signature(
             args,
             method_receiver.explicit_params(&sig.params),
@@ -337,11 +366,22 @@ pub(super) fn resolve_method_call(
         return sig.return_type.clone();
     }
 
-    let receiver_seed: &[ResolvedType] = match method_receiver {
-        MethodReceiver::Static { .. } => &[],
-        MethodReceiver::Instance { .. } => &receiver.resolution.type_args,
-        MethodReceiver::Bounded { .. } => unreachable!("bounded path returns above"),
-    };
+    // Static dispatch: `receiver.resolution` is the type-name's
+    // resolution (`Global(struct_id)` with empty `type_args`), so
+    // the impl-owner branch's unify naturally short-circuits on
+    // empty args. Instance dispatch: receiver carries the value's
+    // full resolved type. Either way, the same field flows through.
+    let receiver_type = &receiver.resolution;
+    let impl_owner = impl_owner_data
+        .as_ref()
+        .map(|(id, label, type_params, target)| ImplOwner {
+            callee: Callee {
+                id: *id,
+                label,
+                type_params,
+            },
+            target,
+        });
     let target = MethodInferenceTarget {
         receiver: Callee {
             id: struct_id,
@@ -353,8 +393,9 @@ pub(super) fn resolve_method_call(
             label: &method_label,
             type_params: &method_type_params,
         },
-        receiver_seed,
+        receiver_type,
         explicit_params: method_receiver.explicit_params(&sig.params),
+        impl_owner,
     };
     let (substituted_params, substituted_return) = infer_method_call_type_args(
         target,
@@ -365,6 +406,30 @@ pub(super) fn resolve_method_call(
         resolver.registry,
         diagnostics,
     );
+    // "Extend"-style domain check: a method registered at
+    // `[receiver_head, method]` only applies to receivers whose
+    // full `ResolvedType` matches the method's substituted `self`
+    // type. Trait impls on concrete instantiations (e.g.
+    // `impl Show for Bag<Int>`) lift `self` as `Bag<Int>`, so calls
+    // on `Bag<String>` resolve the lookup but fail this check —
+    // matching the design where every impl block adds methods to a
+    // specific domain rather than overriding a more-general one.
+    if matches!(method_receiver, MethodReceiver::Instance { .. })
+        && let Some(self_param) = substituted_params.first()
+        && receiver.resolution.is_resolved()
+        && self_param.ty.is_resolved()
+        && self_param.ty != receiver.resolution
+    {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "no method `{method}` on `{}` (method `{method_label}` is defined for `{}`)",
+                display_resolution(&receiver.resolution, resolver.registry),
+                display_resolution(&self_param.ty, resolver.registry),
+            ),
+            call_span,
+        ));
+        return ResolvedType::unresolved();
+    }
     validate_arg_signature(
         args,
         method_receiver.explicit_params(&substituted_params),
@@ -581,15 +646,44 @@ fn infer_method_call_type_args(
     let MethodInferenceTarget {
         receiver,
         method,
-        receiver_seed,
+        receiver_type,
         explicit_params,
+        impl_owner,
     } = target;
 
     let mut receiver_subst: Vec<Option<ResolvedType>> = vec![None; receiver.type_params.len()];
-    for (slot, arg) in receiver_subst.iter_mut().zip(receiver_seed.iter()) {
+    for (slot, arg) in receiver_subst
+        .iter_mut()
+        .zip(receiver_type.type_args.iter())
+    {
         if arg.resolution.is_resolved() {
             *slot = Some(arg.clone());
         }
+    }
+    // Trait-impl scope: bind the impl's free type-params by
+    // unifying the impl's resolved target against the receiver's
+    // full `ResolvedType`. For `impl Pick<T> for Bag<T>` the target
+    // is `Bag<TypeParam(impl_id, 0)>`; unifying it against
+    // `Bag<Int>` binds `subst[0] = Int` so any
+    // `TypeParam(impl_id, 0)` in the method's params/return
+    // substitutes through. Static dispatch never reaches here (the
+    // bare-call path runs first), and inline / inherent methods
+    // skip with `impl_owner: None`.
+    let mut impl_subst: Vec<Option<ResolvedType>> = impl_owner
+        .as_ref()
+        .map(|owner| vec![None; owner.callee.type_params.len()])
+        .unwrap_or_default();
+    if let Some(owner) = impl_owner.as_ref()
+        && !owner.callee.type_params.is_empty()
+        && receiver_type.resolution.is_resolved()
+        && let Err(conflict) = unify_resolved_type(
+            owner.target,
+            receiver_type,
+            owner.callee.id,
+            &mut impl_subst,
+        )
+    {
+        emit_conflict(&owner.callee, conflict, call_span, registry, diagnostics);
     }
     let mut method_subst: Vec<Option<ResolvedType>> = vec![None; method.type_params.len()];
     for (param, arg) in explicit_params.iter().zip(args.iter()) {
@@ -621,13 +715,20 @@ fn infer_method_call_type_args(
     diagnose_phantom_params(&receiver, &receiver_subst, call_span, diagnostics);
     verify_bounds(method, &method_subst, call_span, registry, diagnostics);
     verify_bounds(receiver, &receiver_subst, call_span, registry, diagnostics);
+    if let Some(owner) = impl_owner.as_ref() {
+        diagnose_phantom_params(&owner.callee, &impl_subst, call_span, diagnostics);
+        verify_bounds(owner.callee, &impl_subst, call_span, registry, diagnostics);
+    }
     let substituted_params: Vec<ResolvedParam> = sig
         .params
         .iter()
         .map(|p| {
             let with_method = substitute_resolved_type(&p.ty, &method_subst, method.id);
-            let with_receiver =
-                substitute_resolved_type(&with_method, &receiver_subst, receiver.id);
+            let with_impl = match impl_owner.as_ref() {
+                Some(owner) => substitute_resolved_type(&with_method, &impl_subst, owner.callee.id),
+                None => with_method,
+            };
+            let with_receiver = substitute_resolved_type(&with_impl, &receiver_subst, receiver.id);
             ResolvedParam {
                 name: p.name.clone(),
                 ty: with_receiver,
@@ -635,8 +736,12 @@ fn infer_method_call_type_args(
         })
         .collect();
     let with_method_return = substitute_resolved_type(&sig.return_type, &method_subst, method.id);
+    let with_impl_return = match impl_owner.as_ref() {
+        Some(owner) => substitute_resolved_type(&with_method_return, &impl_subst, owner.callee.id),
+        None => with_method_return,
+    };
     let substituted_return =
-        substitute_resolved_type(&with_method_return, &receiver_subst, receiver.id);
+        substitute_resolved_type(&with_impl_return, &receiver_subst, receiver.id);
     *out_type_args = method_subst
         .into_iter()
         .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
@@ -823,4 +928,33 @@ fn validate_arg_signature(
             ));
         }
     }
+}
+
+/// Discover whether `method_id` came from a `GlobalKind::ProtocolImpl`
+/// entry with non-empty type-params (i.e. `impl P for T` where `T`
+/// carries free type-params, slice 2.8). Returns the impl's
+/// `(id, label, type_params, target)` so the caller can construct
+/// an [`ImplOwner`] without re-borrowing the registry. Returns
+/// `None` for inline / inherent-impl methods (no impl entry to
+/// anchor at) and for trait impls with no free type-params (e.g.
+/// `impl P for Foo` on a non-generic target — receiver substitution
+/// alone covers it).
+fn trait_impl_owner(
+    method_id: GlobalRegistryId,
+    registry: &GlobalRegistry,
+) -> Option<(GlobalRegistryId, String, Vec<String>, ResolvedType)> {
+    let impl_id = registry.find_protocol_impl_owning(method_id)?;
+    let entry = registry.get(impl_id)?;
+    if entry.type_params.is_empty() {
+        return None;
+    }
+    let GlobalKind::ProtocolImpl(Some(definition)) = &entry.kind else {
+        return None;
+    };
+    Some((
+        impl_id,
+        entry.identifier.to_string(),
+        entry.type_params.clone(),
+        definition.target.clone(),
+    ))
 }

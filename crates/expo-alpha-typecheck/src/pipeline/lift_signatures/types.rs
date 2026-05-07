@@ -19,14 +19,31 @@ use crate::registry::{Dispatch, GlobalKind, GlobalRegistry};
 /// Empty scope (`TypeParamScope::default()`) is the right value
 /// outside any generic-decl body; lookups against it always return
 /// `None` so resolve falls through to global lookup.
+///
+/// `self_type_override` is the trait-impl escape hatch: when a
+/// `SelfContext::Impl` method is being lifted we can't reuse
+/// [`concrete_self_type`] on the impl entry (its `target` isn't
+/// stamped yet, and its anchors live on `impl_id`, not on the
+/// target struct/enum). The lifter passes the resolved target via
+/// this field so [`resolve_self`] returns it verbatim for any
+/// `Self` in the method's signature.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct TypeParamScope<'a> {
     owners: &'a [GlobalRegistryId],
+    self_type_override: Option<&'a ResolvedType>,
 }
 
 impl<'a> TypeParamScope<'a> {
     pub(crate) fn new(owners: &'a [GlobalRegistryId]) -> Self {
-        Self { owners }
+        Self {
+            owners,
+            self_type_override: None,
+        }
+    }
+
+    pub(crate) fn with_self_type(mut self, ty: &'a ResolvedType) -> Self {
+        self.self_type_override = Some(ty);
+        self
     }
 
     pub(crate) fn lookup(
@@ -49,6 +66,10 @@ impl<'a> TypeParamScope<'a> {
     /// enclosing receiver.
     pub(crate) fn self_owner(&self) -> &'a [GlobalRegistryId] {
         self.owners
+    }
+
+    pub(crate) fn self_type_override(&self) -> Option<&'a ResolvedType> {
+        self.self_type_override
     }
 }
 
@@ -106,6 +127,14 @@ fn resolve_self(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    // Trait-impl method lift hands us the resolved target via the
+    // override channel — see [`super::SelfContext::Impl`]. Owner
+    // walk wouldn't find the right anchor here (the impl's
+    // `ProtocolImpl` entry has no `Self` of its own, and the
+    // receiver struct/enum's anchors are the wrong owner).
+    if let Some(self_ty) = scope.self_type_override() {
+        return self_ty.clone();
+    }
     for &owner in scope.self_owner() {
         let Some(entry) = registry.get(owner) else {
             continue;
@@ -297,7 +326,9 @@ pub(super) fn type_expr_span(type_expr: &TypeExpr) -> Span {
 
 pub(super) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
     match target {
-        TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } if path.len() == 1 => {
+            Some(path[0].as_str())
+        }
         _ => None,
     }
 }

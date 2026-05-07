@@ -986,7 +986,7 @@ fn instance_method_with_args_validates_explicit_args() {
 }
 
 #[test]
-fn generic_impl_trait_diagnoses_feature_gap() {
+fn impl_with_extra_trait_args_diagnoses_arity() {
     let source = "
         protocol Greeter
           fn greet(self) -> Int
@@ -1008,8 +1008,300 @@ fn generic_impl_trait_diagnoses_feature_gap() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("generic `impl Trait for Type`")),
-        "expected generic trait-impl gap diagnostic, got {messages:?}",
+            .any(|m| m.contains("expects 0 type arguments, got 1")),
+        "expected protocol arity diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_protocol_impl_with_concrete_args_succeeds() {
+    // Names picked to not collide with future stdlib auto-import
+    // (no `Eq`, `Ord`, etc.).
+    let source = "
+        protocol Match<T>
+          fn matches(self, other: T) -> Bool
+        end
+
+        struct User
+          id: Int
+        end
+
+        impl Match<String> for User
+          fn matches(self, other: String) -> Bool
+            true
+          end
+        end
+        ";
+
+    let program = typecheck(&dedent(source));
+    let identifier = Identifier::new("TestApp", vec!["User".to_string(), "matches".to_string()]);
+    let (_, entry) = program
+        .registry
+        .lookup(&identifier)
+        .expect("User.matches registered");
+    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+        panic!("User.matches should have a lifted signature");
+    };
+    let other_ty = &sig.params[1].ty;
+    let Resolution::Global(string_id) = other_ty.resolution else {
+        panic!("expected `other: String`, got {:?}", other_ty);
+    };
+    let (expected_string_id, _) = program
+        .registry
+        .lookup(&Identifier::new("Global", vec!["String".to_string()]))
+        .expect("String registered");
+    assert_eq!(string_id, expected_string_id);
+}
+
+#[test]
+fn generic_protocol_impl_with_wrong_concrete_arg_diagnoses() {
+    let source = "
+        protocol Match<T>
+          fn matches(self, other: T) -> Bool
+        end
+
+        struct User
+          id: Int
+        end
+
+        impl Match<String> for User
+          fn matches(self, other: Int) -> Bool
+            true
+          end
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("does not match protocol")
+                && m.contains("Global.String")
+                && m.contains("Global.Int")),
+        "expected substituted-type mismatch diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn generic_target_impl_anchors_self_at_impl_id() {
+    // `impl Render for Bag<T>` — the impl block introduces a free
+    // type-param `T` that anchors at the impl entry, *not* at the
+    // struct's slot-0 anchor. This pins:
+    //   - `self: Bag<T>` resolves to `Bag<TypeParam(impl_id, 0)>`,
+    //   - free names propagate to method param/return types,
+    //   - methods register at `[Bag, render]` regardless of the
+    //     `<T>` decoration on the target head.
+    //
+    // Names are picked deliberately to not collide with anything
+    // a future stdlib auto-import would bring in.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<T>
+          fn render(self) -> Int
+            0
+          end
+        end
+        ";
+
+    let program = typecheck(&dedent(source));
+    let method_identifier = Identifier::new(PACKAGE, vec!["Bag".to_string(), "render".to_string()]);
+    let (_, entry) = program
+        .registry
+        .lookup(&method_identifier)
+        .expect("Bag.render registered");
+    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+        panic!("Bag.render should have a lifted signature");
+    };
+    let self_ty = &sig.params[0].ty;
+    let Resolution::Global(_) = self_ty.resolution else {
+        panic!("expected self: Bag<...>, got {:?}", self_ty);
+    };
+    assert_eq!(self_ty.type_args.len(), 1, "Bag has one type-arg slot");
+    let Resolution::TypeParam { owner, .. } = self_ty.type_args[0].resolution else {
+        panic!(
+            "expected self's `T` to be a TypeParam, got {:?}",
+            self_ty.type_args[0]
+        );
+    };
+    let bag_identifier = Identifier::new(PACKAGE, vec!["Bag".to_string()]);
+    let (bag_id, _) = program
+        .registry
+        .lookup(&bag_identifier)
+        .expect("Bag registered");
+    assert_ne!(
+        owner, bag_id,
+        "trait-impl method `T` must not anchor at the struct id; got the struct's own anchor"
+    );
+}
+
+#[test]
+fn generic_target_impl_method_call_resolves_concrete_receiver() {
+    // Regression guard: calling a trait-impl method on a generic
+    // receiver must dispatch through the impl-anchored `self` type
+    // and produce a fully-resolved call site (no `TypeParam` leaks
+    // through the substituted return type into the AST). Slice 2.8
+    // anchored `T` at the impl entry rather than the receiver
+    // struct, so the inference step has to substitute via the impl
+    // owner — not just the struct owner.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<T>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        fn use_bag()
+          Bag{item: 1}.render()
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn generic_target_impl_method_returning_free_param_substitutes() {
+    // Hard case: the impl method returns the impl's *own* free
+    // type-param `T`. Slice 2.8 anchored `T` at the impl entry, so
+    // the call-site inference step must substitute the impl owner
+    // when computing the return type — otherwise the result leaks a
+    // `TypeParam(impl_id, 0)` into the call site's resolution and
+    // seal panics.
+    let source = "
+        protocol Pick<T>
+          fn pick(self) -> T
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Pick<T> for Bag<T>
+          fn pick(self) -> T
+            self.item
+          end
+        end
+
+        fn use_bag() -> Int
+          Bag{item: 1}.pick()
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn trait_impl_on_concrete_target_args_dispatches_only_for_matching_receiver() {
+    // "Extend"-style domain check: `impl Render for Bag<Int>`
+    // adds `render` to `Bag<Int>` only. Calls on `Bag<Int>` succeed;
+    // calls on `Bag<String>` fail at the receiver-type check rather
+    // than dispatching incorrectly.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<Int>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        fn use_int_bag() -> Int
+          Bag{item: 1}.render()
+        end
+        ";
+
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn trait_impl_on_concrete_target_args_diagnoses_mismatched_receiver() {
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<Int>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        fn use_string_bag()
+          Bag{item: \"x\"}.render()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("no method `render`") && m.contains("Bag")),
+        "expected 'no method on receiver' diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn general_and_specialized_trait_impls_collide_on_shared_method_name() {
+    // Both impls want `[Bag, render]` — collision detected at
+    // method registration. This is the cornerstone of the
+    // "extend"-style design: any two impl blocks that define the
+    // same method name on the same type head are a hard error,
+    // regardless of whether the targets are general or specialized.
+    let source = "
+        protocol Render
+          fn render(self) -> Int
+        end
+
+        struct Bag<T>
+          item: T
+        end
+
+        impl Render for Bag<T>
+          fn render(self) -> Int
+            0
+          end
+        end
+
+        impl Render for Bag<Int>
+          fn render(self) -> Int
+            1
+          end
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("already defined") && m.contains("Bag.render")),
+        "expected duplicate-method/impl diagnostic, got {messages:?}",
     );
 }
 

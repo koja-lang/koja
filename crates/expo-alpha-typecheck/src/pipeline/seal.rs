@@ -85,12 +85,15 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
 }
 
 /// True when an `impl` target names a generic struct/enum (e.g.
-/// `impl Pair` for `struct Pair<T, U>`). Methods on a generic target
-/// inherit the type-param scope, so their bodies carry `TypeParam`
+/// `impl Pair` or `impl Show for List<T>`). Methods on a generic
+/// target inherit the type-param scope (struct's slot anchors for
+/// inherent impls, the impl entry's free-name anchors for
+/// `impl Trait for Type<T>`), so their bodies carry `TypeParam`
 /// resolutions and seal must skip them.
 fn impl_target_is_generic(target: &TypeExpr, package: &str, registry: &GlobalRegistry) -> bool {
-    let TypeExpr::Named { path, .. } = target else {
-        return false;
+    let path = match target {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => path,
+        _ => return false,
     };
     if path.len() != 1 {
         return false;

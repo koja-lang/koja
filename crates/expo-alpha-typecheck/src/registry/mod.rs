@@ -465,6 +465,29 @@ impl GlobalRegistry {
         })
     }
 
+    /// Reverse-lookup the [`GlobalKind::ProtocolImpl`] entry whose
+    /// `method_ids` registers `method_id`. Returns `None` for inline
+    /// struct/enum methods and inherent-impl methods (those don't
+    /// pass through a `ProtocolImpl` entry). O(impl-count) like
+    /// [`Self::lookup_protocol_impl`]; the call site already paid
+    /// for a method lookup so adding one more scan is cheap relative
+    /// to overall typecheck cost.
+    pub fn find_protocol_impl_owning(
+        &self,
+        method_id: GlobalRegistryId,
+    ) -> Option<GlobalRegistryId> {
+        self.iter().find_map(|(id, entry)| {
+            let GlobalKind::ProtocolImpl(Some(definition)) = &entry.kind else {
+                return None;
+            };
+            definition
+                .method_ids
+                .values()
+                .any(|&mid| mid == method_id)
+                .then_some(id)
+        })
+    }
+
     /// Stamp a resolved method roster. Panics unless the entry's
     /// kind is exactly `Protocol(None)`.
     pub fn set_protocol_definition(

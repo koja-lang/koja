@@ -18,7 +18,7 @@ use std::collections::HashMap;
 use expo_ast::ast::{
     Diagnostic, EnumDecl, Function, Item, ProtocolDecl, ProtocolMethod, StructDecl,
 };
-use expo_ast::identifier::{GlobalRegistryId, Identifier};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::program::CheckedPackage;
 use crate::registry::GlobalRegistry;
@@ -40,19 +40,23 @@ use types::resolve_bound_to_id;
 /// Local to one `lift_signatures` call.
 pub(super) type ProtocolBodies = HashMap<GlobalRegistryId, HashMap<String, ProtocolMethod>>;
 
-/// Whether a function being lifted may declare a `self` receiver. When
-/// `Receiver(_)`, [`functions::lift_param`] lifts `Param::Self_` to a
-/// real [`crate::registry::ResolvedParam`] typed by the enclosing
-/// type (struct or enum) and marks the signature as
-/// [`crate::registry::Dispatch::Instance`]. The discriminator is
-/// type-agnostic on purpose — `lift_param` only needs the receiver's
-/// `Identifier` to type the implicit `self` parameter; whether the
-/// receiver is a struct or an enum matters only at the call site
-/// during `resolve`.
+/// Whether a function being lifted may declare a `self` receiver
+/// and how to type it. `Receiver(ident)` is the inline-method case
+/// (`fn` declared inside `struct` / `enum` body or an inherent
+/// `impl` block) — `self` types as `concrete_self_type(ident)`.
+/// `Impl { impl_id, target }` is the trait-impl method case
+/// (`impl P for T { fn ... }`) — `self` types as the resolved
+/// target so generic-target impls like `impl Show for List<T>`
+/// see `self: List<TypeParam(impl_id, 0)>` and the protocol-impl
+/// entry's free type-params anchor at `impl_id`.
 #[derive(Clone, Copy)]
 pub(super) enum SelfContext<'a> {
     None,
     Receiver(&'a Identifier),
+    Impl {
+        impl_id: GlobalRegistryId,
+        target: &'a ResolvedType,
+    },
 }
 
 pub(crate) fn lift_signatures(

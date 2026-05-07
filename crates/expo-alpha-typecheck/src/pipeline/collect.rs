@@ -258,15 +258,6 @@ fn register_impl(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_impl_member_feature_gaps(impl_block, diagnostics);
-    if let Some(trait_expr) = &impl_block.trait_expr
-        && simple_named_target(trait_expr).is_none()
-    {
-        diagnostics.push(Diagnostic::error(
-            "alpha typecheck does not yet support generic `impl Trait for Type`".to_string(),
-            type_expr_span(trait_expr),
-        ));
-        return;
-    }
     let Some(target_name) = simple_named_target(&impl_block.target) else {
         diagnostics.push(Diagnostic::error(
             "alpha typecheck does not yet support generic impl targets".to_string(),
@@ -435,11 +426,17 @@ fn register_protocol(
 }
 
 /// Pull the bare type name out of `impl Foo` / `impl Foo<...>` /
-/// `impl Foo.Bar` shapes, returning `None` for anything we don't yet
-/// support (generics, dotted paths, function types, unions, etc.).
+/// `impl Foo.Bar` shapes, returning `None` for anything we don't
+/// support (dotted paths, function types, unions). Both
+/// `Named { path: [Foo] }` and `Generic { path: [Foo], args: [...] }`
+/// resolve to `"Foo"` — the type-args contribute to free-name
+/// extraction (impl `<T>`s) and to method registration is keyed only
+/// at `[Foo, method]` regardless of args.
 fn simple_named_target(target: &TypeExpr) -> Option<&str> {
     match target {
-        TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } if path.len() == 1 => {
+            Some(path[0].as_str())
+        }
         _ => None,
     }
 }

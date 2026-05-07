@@ -46,6 +46,14 @@ pub(super) fn lift_function_with_identifier(
 
     let owners = type_param_owners(id, function, self_context, &identifier, registry);
     let scope = TypeParamScope::new(&owners);
+    // `Self` inside a trait-impl method resolves to the resolved
+    // impl target (with type-params anchored at the impl entry).
+    // Inline + inherent methods don't need an override; their
+    // `Self` resolves via the owner walk.
+    let scope = match self_context {
+        SelfContext::Impl { target, .. } => scope.with_self_type(target),
+        _ => scope,
+    };
 
     let mut params = Vec::with_capacity(function.params.len());
     for param in &function.params {
@@ -81,11 +89,19 @@ pub(super) fn lift_function_with_identifier(
 
 /// Build the chained [`TypeParamScope`] owner stack for a function
 /// being lifted. Innermost first: the function's own id (only when
-/// it declares its own params) over the enclosing receiver's id
+/// it declares its own params) over the enclosing receiver/impl id
 /// (always pushed for method contexts so `Self` resolves through
 /// the scope walker — the type-param name lookup naturally returns
-/// `None` for non-generic receivers). Top-level non-generic fns
+/// `None` for non-generic owners). Top-level non-generic fns
 /// produce an empty stack.
+///
+/// Trait-impl methods (`SelfContext::Impl`) anchor at the impl's
+/// own registry entry rather than the receiver's. Free type-params
+/// on the impl block live there (`impl Show for List<T>` has `T`
+/// at slot 0 of the impl), so `T` inside the method resolves to
+/// `TypeParam(impl_id, 0)` instead of List's slot-0 anchor. This
+/// matches how the impl head was resolved in
+/// [`super::impls::resolve_protocol_impl_heads`].
 fn type_param_owners(
     fn_id: GlobalRegistryId,
     function: &Function,
@@ -97,15 +113,21 @@ fn type_param_owners(
     if !function.type_params.is_empty() {
         owners.push(fn_id);
     }
-    if let SelfContext::Receiver(receiver_identifier) = self_context {
-        let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
-            panic!(
-                "lift_signatures: enclosing receiver `{receiver_identifier}` missing from \
-                 registry while building type-param scope on `{identifier}` — collect \
-                 invariant violation",
-            );
-        };
-        owners.push(receiver_id);
+    match self_context {
+        SelfContext::Receiver(receiver_identifier) => {
+            let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
+                panic!(
+                    "lift_signatures: enclosing receiver `{receiver_identifier}` missing from \
+                     registry while building type-param scope on `{identifier}` — collect \
+                     invariant violation",
+                );
+            };
+            owners.push(receiver_id);
+        }
+        SelfContext::Impl { impl_id, .. } => {
+            owners.push(impl_id);
+        }
+        SelfContext::None => {}
     }
     owners
 }
@@ -121,29 +143,32 @@ fn lift_param(
 ) -> ResolvedParam {
     match param {
         Param::Self_ { span, .. } => {
-            let SelfContext::Receiver(receiver_identifier) = self_context else {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "`self` receiver is only valid inside `struct`, `enum`, or `impl` \
-                         blocks (on `{identifier}`)"
-                    ),
-                    *span,
-                ));
-                return ResolvedParam {
-                    name: "self".to_string(),
-                    ty: ResolvedType::unresolved(),
-                };
-            };
-            let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
-                panic!(
-                    "lift_signatures: enclosing receiver `{receiver_identifier}` missing from \
-                     registry while lifting `self` on `{identifier}` — collect invariant \
-                     violation",
-                );
+            let ty = match self_context {
+                SelfContext::Receiver(receiver_identifier) => {
+                    let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
+                        panic!(
+                            "lift_signatures: enclosing receiver `{receiver_identifier}` \
+                             missing from registry while lifting `self` on `{identifier}` — \
+                             collect invariant violation",
+                        );
+                    };
+                    concrete_self_type(receiver_id, registry)
+                }
+                SelfContext::Impl { target, .. } => target.clone(),
+                SelfContext::None => {
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "`self` receiver is only valid inside `struct`, `enum`, or `impl` \
+                             blocks (on `{identifier}`)"
+                        ),
+                        *span,
+                    ));
+                    ResolvedType::unresolved()
+                }
             };
             ResolvedParam {
                 name: "self".to_string(),
-                ty: concrete_self_type(receiver_id, registry),
+                ty,
             }
         }
         Param::Regular {
