@@ -32,6 +32,7 @@ pub(crate) fn seal_script(script: &IRScript) {
     seal_script_calls(script);
     seal_script_struct_ops(script);
     seal_script_enum_ops(script);
+    seal_script_loadconst_pool(script);
 }
 
 /// Cross-IR struct check for script-shaped output. Mirrors
@@ -55,6 +56,41 @@ fn seal_script_enum_ops(script: &IRScript) {
     seal_enum_ops(script_body_instructions(&script.blocks), &lookup);
     for pkg in &script.packages {
         seal_enum_ops(package_instructions(pkg), &lookup);
+    }
+}
+
+/// Script counterpart of [`super::program::seal_program_loadconst_pool`].
+/// Walks both the inline script body and every package fragment,
+/// asserting each `LoadConst::const_id` resolves through the
+/// assembled constant lookup.
+fn seal_script_loadconst_pool(script: &IRScript) {
+    for block in &script.blocks {
+        for inst in &block.instructions {
+            if let IRInstruction::LoadConst { const_id, .. } = inst
+                && script.constant_value(const_id.mangled()).is_none()
+            {
+                seal_panic(&format!(
+                    "script body loads constant `{const_id}`, but no package has a pool \
+                     entry for that symbol",
+                ));
+            }
+        }
+    }
+    for pkg in &script.packages {
+        for (owner, function) in &pkg.functions {
+            for block in &function.blocks {
+                for inst in &block.instructions {
+                    if let IRInstruction::LoadConst { const_id, .. } = inst
+                        && script.constant_value(const_id.mangled()).is_none()
+                    {
+                        seal_panic(&format!(
+                            "function `{owner}` loads constant `{const_id}`, but no package \
+                             has a pool entry for that symbol",
+                        ));
+                    }
+                }
+            }
+        }
     }
 }
 

@@ -23,6 +23,7 @@ use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 use crate::program::CheckedPackage;
 use crate::registry::GlobalRegistry;
 
+mod constants;
 mod enums;
 mod functions;
 mod impls;
@@ -116,6 +117,23 @@ pub(crate) fn lift_signatures(
                         structs::lift_struct(decl, &pkg.package, registry, diagnostics);
                     }
                     _ => {}
+                }
+            }
+        }
+    }
+    // Pass 1d: constants. Runs after structs / enums lift so the
+    // constant value resolver can look up struct field layouts and
+    // enum variant rosters when validating struct-of-literals and
+    // unit-enum-variant RHSs. Mutable iteration mutates each
+    // `Constant.value` Expr's `resolution` slots as it walks; the
+    // final stamped definition clones the resolved Expr into the
+    // registry so IR lower never has to re-walk file items.
+    for pkg in packages.iter_mut() {
+        let package = pkg.package.clone();
+        for file in &mut pkg.files {
+            for item in &mut file.items {
+                if let Item::Constant(constant) = item {
+                    constants::lift_constant(constant, &package, registry, diagnostics);
                 }
             }
         }

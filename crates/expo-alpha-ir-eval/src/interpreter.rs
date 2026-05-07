@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId, IREnumDecl, IRFunction,
-    IRInstruction, IRLocalId, IRProgram, IRScript, IRSymbol, IRTerminator, IRVariantPayload,
-    IRVariantTag, ValueId,
+    ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId, IRConstantValue,
+    IREnumDecl, IRFunction, IRInstruction, IRLocalId, IRProgram, IRScript, IRSymbol, IRTerminator,
+    IRVariantPayload, IRVariantTag, ValueId,
 };
 
 use crate::error::RuntimeError;
@@ -61,6 +61,7 @@ impl Frame {
 trait CallResolver {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
+    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue>;
 }
 
 impl CallResolver for IRProgram {
@@ -71,6 +72,10 @@ impl CallResolver for IRProgram {
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRProgram::enum_decl(self, mangled)
     }
+
+    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
+        IRProgram::constant_value(self, mangled)
+    }
 }
 
 impl CallResolver for IRScript {
@@ -80,6 +85,10 @@ impl CallResolver for IRScript {
 
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRScript::enum_decl(self, mangled)
+    }
+
+    fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
+        IRScript::constant_value(self, mangled)
     }
 }
 
@@ -190,6 +199,21 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, materialize_const(value));
             Ok(())
         }
+        IRInstruction::LoadConst {
+            dest,
+            const_id,
+            ty: _,
+        } => {
+            let pooled = resolver.constant_value(const_id.mangled()).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: LoadConst `{}` missing from pooled constants — seal invariant violation",
+                    const_id.mangled(),
+                )
+            });
+            let value = materialize_pooled_constant(pooled, resolver)?;
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
         IRInstruction::EnumConstruct {
             dest,
             payload,
@@ -272,6 +296,48 @@ fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, Runti
         .get(&id)
         .cloned()
         .ok_or(RuntimeError::ValueUndefined { id })
+}
+
+fn materialize_pooled_constant<R: CallResolver>(
+    cv: &IRConstantValue,
+    resolver: &R,
+) -> Result<Value, RuntimeError> {
+    match cv {
+        IRConstantValue::Primitive(inner) => Ok(materialize_const(inner)),
+        IRConstantValue::EnumVariant { tag, ty } => {
+            let decl = resolver.enum_decl(ty.mangled()).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: pooled enum `{}` missing from IR — seal invariant violation",
+                    ty.mangled(),
+                )
+            });
+            let variant = decl.variants.get(usize::from(tag.0)).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: pooled EnumVariant `{}` references tag {:?} past {} variants — \
+                         seal invariant violation",
+                    ty.mangled(),
+                    tag,
+                    decl.variants.len(),
+                )
+            });
+            Ok(Value::Enum {
+                name: variant.name.clone(),
+                payload: EnumPayload::Unit,
+                symbol: ty.clone(),
+                tag: *tag,
+            })
+        }
+        IRConstantValue::Struct { fields, ty } => {
+            let mut materialized = Vec::with_capacity(fields.len());
+            for f in fields {
+                materialized.push(materialize_pooled_constant(f, resolver)?);
+            }
+            Ok(Value::Struct {
+                symbol: ty.clone(),
+                fields: materialized,
+            })
+        }
+    }
 }
 
 /// Materialize a [`Value::Enum`] from an `EnumConstruct` payload init.

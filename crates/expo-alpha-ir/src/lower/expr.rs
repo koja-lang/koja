@@ -5,22 +5,24 @@
 //!
 //! [`lower_call`] lives here too because it's the only expression
 //! variant that interacts with the [`GlobalRegistry`] beyond the
-//! type-side adapters in [`super::package`].
+//! registry adapters in [`super::package`] and [`super::constants`].
 
 use expo_alpha_typecheck::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry,
 };
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, StringPart};
-use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
+use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
 use crate::local::IRLocalId;
 use crate::mangling::{mangled_function_name, mangled_type_name};
 use crate::types::{ConstValue, IRType, ValueId};
 
+use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{lower_if, lower_unless};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
@@ -80,22 +82,23 @@ pub(super) fn lower_expr(
             output,
         ),
         ExprKind::Group { expr: inner } => lower_expr(inner, ctx, block, registry, output),
-        ExprKind::Ident { resolution, name } => {
-            let Resolution::Local(local_id) = resolution else {
-                panic!(
-                    "alpha IR lower: bare `Ident` `{name}` reaches lower with non-Local \
-                     resolution {resolution:?} — typecheck seal must have rejected this",
-                );
-            };
-            Ok(lower_local_read(
+        ExprKind::Ident { resolution, name } => match resolution {
+            Resolution::Local(local_id) => Ok(lower_local_read(
                 *local_id,
                 &expr.resolution,
                 ctx,
                 block,
                 registry,
                 &mut output.instantiations,
-            ))
-        }
+            )),
+            Resolution::Global(global_id) => Ok(lower_constant_ident(
+                *global_id, name, expr.span, ctx, block, registry, output,
+            )),
+            other => panic!(
+                "alpha IR lower: bare `Ident` `{name}` reaches lower with non-Local/Global \
+                 resolution {other:?} — typecheck seal must have rejected this",
+            ),
+        },
         ExprKind::Self_ { local_id } => {
             let local_id = local_id.unwrap_or_else(|| {
                 panic!(
@@ -217,6 +220,53 @@ fn lower_local_read(
         },
     );
     (dest, block)
+}
+
+/// Lower a bare ident that resolves to a package-level constant.
+/// Primitives inline as [`IRInstruction::Const`]; compounds emit a
+/// [`IRInstruction::LoadConst`] against the pool entry minted in
+/// [`super::package::lower_package`].
+fn lower_constant_ident(
+    constant_id: GlobalRegistryId,
+    name: &str,
+    span: Span,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> (ValueId, IRBlockId) {
+    let value = constant_value_from_registry(constant_id, registry).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: constant `{name}` (id {constant_id}) reaches lower without a \
+             stamped definition or with an unsupported RHS shape — typecheck seal must \
+             have rejected this",
+        );
+    });
+    let entry = registry.get(constant_id).unwrap_or_else(|| {
+        panic!("alpha IR lower: constant id {constant_id} missing from registry — seal violation",)
+    });
+    let GlobalKind::Constant(Some(def)) = &entry.kind else {
+        panic!(
+            "alpha IR lower: constant id {constant_id} ({name}) registers as {} — seal violation",
+            entry.kind.label(),
+        );
+    };
+    let _ = span;
+    let ty = resolved_type_to_ir_type(&def.ty, registry, &mut output.instantiations);
+    if pools_in_constant_pool(&value) {
+        let const_id = IRSymbol::from_identifier(&entry.identifier);
+        let dest = ctx.fresh_value(ty.clone());
+        ctx.cfg
+            .append(block, IRInstruction::LoadConst { const_id, dest, ty });
+        (dest, block)
+    } else {
+        let IRConstantValue::Primitive(value) = value else {
+            unreachable!("non-pooling IRConstantValue must be Primitive — pool admission rule");
+        };
+        let dest = ctx.fresh_value(const_value_type(&value));
+        ctx.cfg.append(block, IRInstruction::Const { dest, value });
+        (dest, block)
+    }
 }
 
 /// Lower a `ExprKind::Call`. Seal guarantees the callee is a bare

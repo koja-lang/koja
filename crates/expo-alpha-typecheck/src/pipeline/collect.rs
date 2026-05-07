@@ -21,9 +21,9 @@
 //! never see those shapes.
 
 use expo_ast::ast::{
-    Annotation, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File, Function, ImplBlock,
-    ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, StructField, TypeExpr,
-    TypeParam, is_doc_annotation,
+    Annotation, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File, Function,
+    ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, StructField,
+    TypeExpr, TypeParam, is_doc_annotation,
 };
 use expo_ast::identifier::Identifier;
 use expo_ast::labels::{item_label, item_span};
@@ -63,10 +63,13 @@ pub(crate) fn collect_file(
                 register_struct(decl, package, registry, diagnostics);
             }
             Item::Impl(_) => {}
+            Item::Constant(constant) => {
+                register_constant(constant, package, registry, diagnostics);
+            }
             // Other Item variants land as alpha grows. Reject them
             // explicitly so unsupported shapes diagnose instead of
             // round-tripping silently.
-            Item::Alias(_) | Item::Constant(_) | Item::TypeAlias(_) => {
+            Item::Alias(_) | Item::TypeAlias(_) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "alpha typecheck does not yet support `{}` items",
@@ -335,6 +338,56 @@ fn register_protocol(
                 existing.span.start.line
             ),
             decl.span,
+        ));
+    }
+}
+
+/// Register a package-level `const NAME = expr` declaration. Stamps
+/// the constant in the `Constant(None)` state — `lift_signatures`
+/// resolves the optional type annotation + RHS expression and stamps
+/// the [`crate::registry::ConstantDefinition`] later. Constants
+/// occupy the same identifier namespace as functions / structs /
+/// enums / protocols, so collision diagnostics flow through the
+/// shared insert path.
+fn register_constant(
+    constant: &Constant,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnose_constant_annotations(&constant.name, &constant.annotations, diagnostics);
+    let identifier = Identifier::new(package, vec![constant.name.clone()]);
+    if let InsertOutcome::Collision { existing } =
+        registry.insert_constant(identifier, constant.span)
+    {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("`{}` is already defined", existing.identifier),
+            format!(
+                "previous {} definition is at line {}",
+                existing.kind.label(),
+                existing.span.start.line
+            ),
+            constant.span,
+        ));
+    }
+}
+
+fn diagnose_constant_annotations(
+    constant_name: &str,
+    annotations: &[Annotation],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for annotation in annotations {
+        if is_doc_annotation(annotation) {
+            continue;
+        }
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support annotations on constant items \
+                 (`@{}` on `{constant_name}`)",
+                annotation.name,
+            ),
+            annotation.span,
         ));
     }
 }

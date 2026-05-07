@@ -14,6 +14,7 @@ use expo_ast::ast::{
 };
 use expo_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
 
+use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
 use crate::generics::Instantiation;
@@ -24,6 +25,7 @@ use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
 use super::body::{finalize_open_flow, lower_body};
+use super::constants::lower_constant_pool_entry;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_decl;
 use super::structs::lower_struct_decl;
@@ -44,12 +46,20 @@ pub(crate) fn lower_package(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> IRPackage {
+    let mut constants: BTreeMap<IRSymbol, IRConstantValue> = BTreeMap::new();
     let mut enums: BTreeMap<IRSymbol, IREnumDecl> = BTreeMap::new();
     let mut functions: BTreeMap<IRSymbol, IRFunction> = BTreeMap::new();
     let mut structs: BTreeMap<IRSymbol, IRStructDecl> = BTreeMap::new();
     for file in &pkg.files {
         for item in &file.items {
             match item {
+                Item::Constant(constant) => {
+                    if let Some((symbol, value)) =
+                        lower_constant_pool_entry(constant, &pkg.package, registry)
+                    {
+                        constants.insert(symbol, value);
+                    }
+                }
                 Item::Enum(decl) => {
                     if let Some(lowered) = lower_enum_decl(decl, &pkg.package, registry, output) {
                         enums.insert(lowered.symbol.clone(), lowered);
@@ -102,6 +112,7 @@ pub(crate) fn lower_package(
         }
     }
     IRPackage {
+        constants,
         enums,
         functions,
         package: pkg.package.clone(),

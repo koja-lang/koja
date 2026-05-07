@@ -6,6 +6,9 @@
 //!
 //! Layout map:
 //!
+//! - [`constants`] — registry-backed [`crate::constant::IRConstantValue`] lowering and pool
+//!   admission helpers used by [`package`] when filling [`crate::package::IRPackage::constants`]
+//!   and by [`expr`] for `LoadConst` vs inline `Const`.
 //! - [`ctx`] — [`FnLowerCtx`] + [`FlowResult`], the per-function
 //!   accumulator every helper threads through. No language-aware
 //!   logic; just counters, the [`crate::cfg::CFGBuilder`], and the
@@ -31,6 +34,7 @@
 //!   [`lower_struct_construction`], [`lower_field_access`].
 
 mod body;
+mod constants;
 mod control_flow;
 mod ctx;
 mod enums;

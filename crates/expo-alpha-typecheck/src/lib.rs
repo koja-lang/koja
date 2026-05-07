@@ -29,7 +29,8 @@ mod registry;
 pub use error::CheckFailure;
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
-    Dispatch, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, InsertOutcome,
-    ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod,
-    ResolvedStructField, ResolvedVariantData, StructDefinition, format_registry,
+    ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
+    InsertOutcome, ProtocolDefinition, RegistryEntry, ResolvedEnumVariant, ResolvedParam,
+    ResolvedProtocolMethod, ResolvedStructField, ResolvedVariantData, StructDefinition,
+    format_registry,
 };

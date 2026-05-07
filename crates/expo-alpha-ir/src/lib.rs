@@ -29,6 +29,7 @@
 //! …) is fresh and self-contained.
 
 mod cfg;
+mod constant;
 mod enum_decl;
 mod error;
 mod function;
@@ -44,6 +45,7 @@ mod seal;
 mod struct_decl;
 mod types;
 
+pub use constant::IRConstantValue;
 pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 pub use error::LowerError;
 pub use function::{

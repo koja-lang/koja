@@ -19,6 +19,7 @@
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
 
+use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{IRFunction, IRSymbol};
@@ -76,6 +77,16 @@ impl IRProgram {
     /// `IRSymbol: Borrow<str>` impl.
     pub fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         self.packages.iter().find_map(|pkg| pkg.enums.get(mangled))
+    }
+
+    /// Lookup a pooled constant value across every package by its
+    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// the `&IRSymbol` carried on [`crate::IRInstruction::LoadConst`]
+    /// directly through the `IRSymbol: Borrow<str>` impl.
+    pub fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
+        self.packages
+            .iter()
+            .find_map(|pkg| pkg.constants.get(mangled))
     }
 
     /// The function the entry point resolves to. Panics if missing —
