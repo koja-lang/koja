@@ -98,6 +98,19 @@ pub fn is_intrinsic(annotations: &[Annotation]) -> bool {
         .any(|a| a.name == "intrinsic" && a.value.is_none())
 }
 
+/// Returns `true` when `annotation` is a well-formed `@doc` marker
+/// (`@doc "..."`, `@doc false`, or bare `@doc`). Pure metadata for
+/// `expo-doc` / `expo-fmt`; the compiler proper neither honors nor
+/// rejects it. Used by typecheck and IR rejection loops to skip
+/// docstrings while still flagging unrecognized annotations.
+pub fn is_doc_annotation(annotation: &Annotation) -> bool {
+    annotation.name == "doc"
+        && matches!(
+            annotation.value,
+            None | Some(AnnotationValue::String(_) | AnnotationValue::False),
+        )
+}
+
 /// A source comment preserved for formatting and documentation tooling.
 #[derive(Debug, Clone)]
 pub struct Comment {

@@ -19,7 +19,9 @@
 use expo_alpha_typecheck::{
     EnumDefinition, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedVariantData,
 };
-use expo_ast::ast::{Diagnostic, EnumConstructionData, EnumDecl, EnumVariant, Expr, FieldInit};
+use expo_ast::ast::{
+    Diagnostic, EnumConstructionData, EnumDecl, EnumVariant, Expr, FieldInit, is_doc_annotation,
+};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 
 use crate::enum_decl::{
@@ -296,6 +298,9 @@ fn enum_definition_from_entry(entry: &RegistryEntry) -> &EnumDefinition {
 fn has_feature_gap(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let mut gapped = false;
     for annotation in &decl.annotations {
+        if is_doc_annotation(annotation) {
+            continue;
+        }
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha IR does not yet lower annotations on enum items (`@{}` on `{}`)",

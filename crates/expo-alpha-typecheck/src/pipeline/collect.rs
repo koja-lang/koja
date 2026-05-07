@@ -23,7 +23,7 @@
 use expo_ast::ast::{
     Annotation, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File, Function, ImplBlock,
     ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, StructField, TypeExpr,
-    TypeParam,
+    TypeParam, is_doc_annotation,
 };
 use expo_ast::identifier::Identifier;
 use expo_ast::labels::{item_label, item_span};
@@ -394,6 +394,9 @@ fn diagnose_struct_annotations(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for annotation in annotations {
+        if is_doc_annotation(annotation) {
+            continue;
+        }
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not yet support annotations on struct items \
@@ -428,6 +431,9 @@ fn diagnose_struct_field_gaps(
 /// sees a populated registry.
 fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
+        if is_doc_annotation(annotation) {
+            continue;
+        }
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not yet support annotations on enum items \
@@ -485,6 +491,9 @@ fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut V
 /// `["Self", ...user_declared]` type-param stamping.
 fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
+        if is_doc_annotation(annotation) {
+            continue;
+        }
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not yet support annotations on protocols \
@@ -515,6 +524,9 @@ fn diagnose_protocol_method_feature_gaps(
         ));
     }
     for annotation in &method.annotations {
+        if is_doc_annotation(annotation) {
+            continue;
+        }
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not yet support annotations on protocol methods \
