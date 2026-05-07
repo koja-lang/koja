@@ -2,15 +2,16 @@
 //! the optional `link_name` (C symbol override) and `link_lib`
 //! (linker library) parsed at lower time from the AST annotations.
 //!
-//! `IRExternAttrs` is the IR-layer composition of two AST helpers
-//! ([`expo_ast::ast::is_extern_c`] + [`expo_ast::ast::extract_link_attrs`]);
+//! `IRExternAttrs` is the IR-layer composition of two pieces of AST
+//! metadata ([`expo_ast::ast::is_extern_c`] for the ABI marker plus
+//! [`expo_ast::ast::AnnotationKind::Link`] for the linker payload);
 //! the AST keeps both pieces deliberately separate because `@link`
 //! is pure linker metadata (no ABI implication) and `@extern "C"`
 //! is pure ABI metadata (no library name). They only fuse here,
 //! where the IR's [`crate::FunctionKind::Extern`] needs both to
 //! direct the LLVM declare and the program-level link arg list.
 
-use expo_ast::ast::{Annotation, extract_link_attrs};
+use expo_ast::ast::{Annotation, AnnotationKind};
 
 /// Extern function attributes derived from a function's
 /// `@extern "C"` + `@link` annotations.
@@ -36,11 +37,25 @@ impl IRExternAttrs {
     /// Caller is responsible for already having checked
     /// [`expo_ast::ast::is_extern_c`] — this helper just collects
     /// the optional `@link` payload(s).
+    ///
+    /// Multiple `@link` annotations on one function fold with
+    /// last-write-wins for whichever fields each one carries
+    /// (mirrors v1's `expo_codegen::compiler::extract_extern_attrs`).
+    /// Annotations whose `kind()` isn't [`AnnotationKind::Link`] are
+    /// skipped silently — the typecheck layer is responsible for
+    /// rejecting unrecognized annotations.
     pub fn from_annotations(annotations: &[Annotation]) -> Self {
-        let link = extract_link_attrs(annotations);
-        Self {
-            link_name: link.link_name,
-            link_lib: link.link_lib,
+        let mut attrs = Self::default();
+        for a in annotations {
+            if let AnnotationKind::Link { lib, name } = a.kind() {
+                if let Some(l) = lib {
+                    attrs.link_lib = Some(l.to_string());
+                }
+                if let Some(n) = name {
+                    attrs.link_name = Some(n.to_string());
+                }
+            }
         }
+        attrs
     }
 }

@@ -4,7 +4,7 @@
 //! types restricted to the explicit-width numeric primitives,
 //! `Bool`, `Unit`, or `CPtr<T>`. `@link` annotations are pure
 //! linker metadata and pass through silently — the IR layer
-//! consumes them via `extract_link_attrs`.
+//! consumes them via `AnnotationKind::Link`.
 
 use expo_alpha_typecheck::GlobalKind;
 use expo_ast::identifier::Identifier;

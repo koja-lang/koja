@@ -66,7 +66,7 @@ pub enum Visibility {
 // Top level
 
 /// The value attached to an annotation.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AnnotationValue {
     /// A string value: `@doc "text"` or `@doc """text"""`.
     String(String),
@@ -75,6 +75,14 @@ pub enum AnnotationValue {
 }
 
 /// A metadata annotation such as `@doc` or `@extern`.
+///
+/// The struct is the verbatim source-shape (raw `name` + optional
+/// `value`); semantic classification flows through [`Annotation::kind`],
+/// which folds the recognized vocabulary into the structured
+/// [`AnnotationKind`] enum. Tools that only care about source shape
+/// (formatter, doc extractor) keep reading `name`/`value` directly;
+/// anything that wants exhaustive case analysis reaches for
+/// [`Annotation::kind`].
 #[derive(Debug, Clone)]
 pub struct Annotation {
     pub name: String,
@@ -82,88 +90,140 @@ pub struct Annotation {
     pub span: Span,
 }
 
+/// Payload variants for a well-formed `@doc` annotation. Mirrors the
+/// two source shapes that have semantic meaning today; bare `@doc`
+/// (no value) is **not** a `DocAttr` — it falls through to
+/// [`AnnotationKind::Unknown`] because no consumer treats it as
+/// documentation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DocAttr {
+    /// `@doc "text"` — the docstring payload tools render in
+    /// `expo-doc` / LSP hovers.
+    Text(String),
+    /// `@doc false` — explicit "do not document this declaration"
+    /// marker. Used by `expo-doc` to elide the decl from generated
+    /// output.
+    Suppressed,
+}
+
+/// Structured classification of an [`Annotation`], borrowed from the
+/// underlying `name` and `value` fields so call sites pay no
+/// allocation cost for inspecting an annotation's kind.
+///
+/// Every variant matches a single source-shape recognized somewhere
+/// in the compiler. Malformed shapes (e.g. `@extern false`,
+/// `@link 42`, bare `@intrinsic "foo"`) and unrecognized names
+/// (anything not in the known vocabulary) fall through to
+/// [`Self::Unknown`], which preserves the raw `name` and `value`
+/// borrow so downstream tooling can still inspect them.
+///
+/// Adding a new annotation to the language: add a variant here, add
+/// a match arm in [`Annotation::kind`], add a unit test for the
+/// shape and the malformed fall-through cases.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AnnotationKind<'a> {
+    /// `@doc "text"` or `@doc false`. Bare `@doc` is excluded — it
+    /// has no consumer in the codebase and lands in
+    /// [`Self::Unknown`].
+    Doc(DocAttr),
+    /// `@extern "C"` (today's only valid ABI). Future ABIs would
+    /// surface here under different `abi` strings; the typecheck
+    /// layer is responsible for restricting which ABIs are
+    /// admissible.
+    Extern { abi: &'a str },
+    /// `@intrinsic` — compiler-emitted body, no source body, no FFI
+    /// symbol. Carries no payload.
+    Intrinsic,
+    /// `@link "lib"` or `@link "lib:sym"`. `lib` is the bare library
+    /// name (`-l<lib>` at link time); `name` is an optional C symbol
+    /// override taken from the `lib:sym` shape.
+    Link {
+        lib: Option<&'a str>,
+        name: Option<&'a str>,
+    },
+    /// `@test` — driver test-runner marker.
+    Test,
+    /// Anything else — unrecognized name, malformed value shape, or
+    /// any annotation the compiler hasn't been taught about. Carries
+    /// the raw `name` + `value` borrow so unrecognized-annotation
+    /// diagnostics (a future slice) can render the original source.
+    Unknown {
+        name: &'a str,
+        value: Option<&'a AnnotationValue>,
+    },
+}
+
+impl Annotation {
+    /// Classify this annotation against the compiler's known
+    /// vocabulary. Pure function of `self.name` and `self.value`;
+    /// runs in O(1) over a small fixed match. See
+    /// [`AnnotationKind`] for the variant set and the "malformed
+    /// shapes fall through to `Unknown`" contract.
+    pub fn kind(&self) -> AnnotationKind<'_> {
+        match self.name.as_str() {
+            "doc" => match &self.value {
+                Some(AnnotationValue::String(text)) => {
+                    AnnotationKind::Doc(DocAttr::Text(text.clone()))
+                }
+                Some(AnnotationValue::False) => AnnotationKind::Doc(DocAttr::Suppressed),
+                None => AnnotationKind::Unknown {
+                    name: &self.name,
+                    value: self.value.as_ref(),
+                },
+            },
+            "extern" => match &self.value {
+                Some(AnnotationValue::String(abi)) => AnnotationKind::Extern { abi },
+                _ => AnnotationKind::Unknown {
+                    name: &self.name,
+                    value: self.value.as_ref(),
+                },
+            },
+            "intrinsic" if self.value.is_none() => AnnotationKind::Intrinsic,
+            "link" => match &self.value {
+                Some(AnnotationValue::String(payload)) => match payload.split_once(':') {
+                    Some((lib, name)) => AnnotationKind::Link {
+                        lib: Some(lib),
+                        name: Some(name),
+                    },
+                    None => AnnotationKind::Link {
+                        lib: Some(payload.as_str()),
+                        name: None,
+                    },
+                },
+                _ => AnnotationKind::Unknown {
+                    name: &self.name,
+                    value: self.value.as_ref(),
+                },
+            },
+            "test" if self.value.is_none() => AnnotationKind::Test,
+            _ => AnnotationKind::Unknown {
+                name: &self.name,
+                value: self.value.as_ref(),
+            },
+        }
+    }
+}
+
 /// Returns `true` when `annotations` contains an `@extern "C"` marker
-/// (FFI-linked function with no source body).
+/// (FFI-linked function with no source body). Thin wrapper over
+/// [`Annotation::kind`]; kept as a free function because v1
+/// (`expo-typecheck`, `expo-codegen`) binds against this signature
+/// directly.
 pub fn is_extern_c(annotations: &[Annotation]) -> bool {
-    annotations.iter().any(|a| {
-        a.name == "extern" && matches!(&a.value, Some(AnnotationValue::String(s)) if s == "C")
-    })
+    annotations
+        .iter()
+        .any(|a| matches!(a.kind(), AnnotationKind::Extern { abi: "C" }))
 }
 
 /// Returns `true` when `annotations` contains an `@intrinsic` marker
-/// (compiler-emitted body, no source body, no FFI symbol).
+/// (compiler-emitted body, no source body, no FFI symbol). Thin
+/// wrapper over [`Annotation::kind`]; kept as a free function
+/// because v1 (`expo-typecheck`, `expo-codegen`) binds against this
+/// signature directly.
 pub fn is_intrinsic(annotations: &[Annotation]) -> bool {
     annotations
         .iter()
-        .any(|a| a.name == "intrinsic" && a.value.is_none())
-}
-
-/// Parsed payload from `@link "..."` annotations on a function.
-///
-/// `link_lib` is the linker library name passed as `-l<lib>` to the
-/// link step (e.g. `@link "m"` → `-lm`). `link_name` is an optional
-/// override for the C symbol the function should resolve to at link
-/// time, taken from the `lib:sym` shape; without it the function's
-/// bare source name is used.
-///
-/// Both fields default to `None` and may be set independently across
-/// multiple `@link` annotations on the same function. See
-/// [`extract_link_attrs`] for the parsing rules.
-#[derive(Debug, Default, Clone, PartialEq, Eq)]
-pub struct LinkAttrs {
-    pub link_lib: Option<String>,
-    pub link_name: Option<String>,
-}
-
-/// Walk `annotations` collecting every `@link "lib"` / `@link "lib:sym"`
-/// entry into a [`LinkAttrs`].
-///
-/// Parsing rules:
-///
-/// - `@link "openssl"` → `link_lib = Some("openssl")`, `link_name = None`.
-/// - `@link "crypto:SHA256_Init"` → `link_lib = Some("crypto")`,
-///   `link_name = Some("SHA256_Init")` (split on the first `:`).
-/// - Multiple `@link`s on one function: each annotation overwrites the
-///   field(s) it sets, so the **last** `@link` wins for whichever fields
-///   it carries. Mirrors v1's `expo_codegen::compiler::extract_extern_attrs`.
-/// - Annotations with `name != "link"` or non-string values are skipped.
-///
-/// Pure parsing helper — knows nothing about ABI semantics or whether
-/// the host function carries `@extern "C"`. Combining the two pieces
-/// (the extern marker + the link metadata) is the IR layer's job.
-pub fn extract_link_attrs(annotations: &[Annotation]) -> LinkAttrs {
-    let mut attrs = LinkAttrs::default();
-    for annotation in annotations {
-        if annotation.name != "link" {
-            continue;
-        }
-        let Some(AnnotationValue::String(payload)) = &annotation.value else {
-            continue;
-        };
-        match payload.split_once(':') {
-            Some((lib, sym)) => {
-                attrs.link_lib = Some(lib.to_string());
-                attrs.link_name = Some(sym.to_string());
-            }
-            None => {
-                attrs.link_lib = Some(payload.clone());
-            }
-        }
-    }
-    attrs
-}
-
-/// Returns `true` when `annotation` is a well-formed `@doc` marker
-/// (`@doc "..."`, `@doc false`, or bare `@doc`). Pure metadata for
-/// `expo-doc` / `expo-fmt`; the compiler proper neither honors nor
-/// rejects it. Used by typecheck and IR rejection loops to skip
-/// docstrings while still flagging unrecognized annotations.
-pub fn is_doc_annotation(annotation: &Annotation) -> bool {
-    annotation.name == "doc"
-        && matches!(
-            annotation.value,
-            None | Some(AnnotationValue::String(_) | AnnotationValue::False),
-        )
+        .any(|a| matches!(a.kind(), AnnotationKind::Intrinsic))
 }
 
 /// A source comment preserved for formatting and documentation tooling.
@@ -952,4 +1012,167 @@ pub enum Pattern {
     List { elements: Vec<Pattern>, span: Span },
     /// An OR pattern: `1 | 2 | 3`.
     Or { patterns: Vec<Pattern>, span: Span },
+}
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::*;
+
+    fn ann(name: &str, value: Option<AnnotationValue>) -> Annotation {
+        Annotation {
+            name: name.to_string(),
+            value,
+            span: Span::default(),
+        }
+    }
+
+    fn str_value(s: &str) -> Option<AnnotationValue> {
+        Some(AnnotationValue::String(s.to_string()))
+    }
+
+    #[test]
+    fn extern_c_classifies_as_extern_with_abi() {
+        let a = ann("extern", str_value("C"));
+        assert_eq!(a.kind(), AnnotationKind::Extern { abi: "C" });
+    }
+
+    #[test]
+    fn extern_with_other_abi_carries_through_payload() {
+        let a = ann("extern", str_value("rust"));
+        assert_eq!(a.kind(), AnnotationKind::Extern { abi: "rust" });
+    }
+
+    #[test]
+    fn extern_with_false_value_falls_through_to_unknown() {
+        let a = ann("extern", Some(AnnotationValue::False));
+        assert!(matches!(
+            a.kind(),
+            AnnotationKind::Unknown {
+                name: "extern",
+                value: Some(AnnotationValue::False),
+            }
+        ));
+    }
+
+    #[test]
+    fn intrinsic_bare_classifies() {
+        let a = ann("intrinsic", None);
+        assert_eq!(a.kind(), AnnotationKind::Intrinsic);
+    }
+
+    #[test]
+    fn intrinsic_with_value_falls_through_to_unknown() {
+        let a = ann("intrinsic", str_value("foo"));
+        assert!(matches!(
+            a.kind(),
+            AnnotationKind::Unknown {
+                name: "intrinsic",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn link_lib_only_parses_into_lib_field() {
+        let a = ann("link", str_value("m"));
+        assert_eq!(
+            a.kind(),
+            AnnotationKind::Link {
+                lib: Some("m"),
+                name: None,
+            },
+        );
+    }
+
+    #[test]
+    fn link_lib_with_symbol_splits_on_first_colon() {
+        let a = ann("link", str_value("m:cosf"));
+        assert_eq!(
+            a.kind(),
+            AnnotationKind::Link {
+                lib: Some("m"),
+                name: Some("cosf"),
+            },
+        );
+    }
+
+    #[test]
+    fn link_with_false_value_falls_through_to_unknown() {
+        let a = ann("link", Some(AnnotationValue::False));
+        assert!(matches!(
+            a.kind(),
+            AnnotationKind::Unknown { name: "link", .. }
+        ));
+    }
+
+    #[test]
+    fn doc_string_classifies_as_text() {
+        let a = ann("doc", str_value("hello"));
+        assert_eq!(
+            a.kind(),
+            AnnotationKind::Doc(DocAttr::Text("hello".to_string())),
+        );
+    }
+
+    #[test]
+    fn doc_false_classifies_as_suppressed() {
+        let a = ann("doc", Some(AnnotationValue::False));
+        assert_eq!(a.kind(), AnnotationKind::Doc(DocAttr::Suppressed));
+    }
+
+    #[test]
+    fn bare_doc_falls_through_to_unknown() {
+        // Regression test for the deliberate behavior shift away from
+        // the legacy `is_doc_annotation`: bare `@doc` is now treated
+        // as a malformed annotation rather than a meaningless
+        // documentation marker.
+        let a = ann("doc", None);
+        assert!(matches!(
+            a.kind(),
+            AnnotationKind::Unknown {
+                name: "doc",
+                value: None
+            }
+        ));
+    }
+
+    #[test]
+    fn test_marker_classifies() {
+        let a = ann("test", None);
+        assert_eq!(a.kind(), AnnotationKind::Test);
+    }
+
+    #[test]
+    fn test_with_value_falls_through_to_unknown() {
+        let a = ann("test", str_value("x"));
+        assert!(matches!(
+            a.kind(),
+            AnnotationKind::Unknown { name: "test", .. }
+        ));
+    }
+
+    #[test]
+    fn unrecognized_name_classifies_as_unknown() {
+        let a = ann("custom", str_value("payload"));
+        assert!(matches!(
+            a.kind(),
+            AnnotationKind::Unknown { name: "custom", .. }
+        ));
+    }
+
+    #[test]
+    fn is_extern_c_wrapper_matches_kind() {
+        assert!(is_extern_c(&[ann("extern", str_value("C"))]));
+        assert!(!is_extern_c(&[ann("extern", str_value("rust"))]));
+        assert!(!is_extern_c(&[ann("intrinsic", None)]));
+        assert!(!is_extern_c(&[]));
+    }
+
+    #[test]
+    fn is_intrinsic_wrapper_matches_kind() {
+        assert!(is_intrinsic(&[ann("intrinsic", None)]));
+        assert!(!is_intrinsic(&[ann("intrinsic", str_value("foo"))]));
+        assert!(!is_intrinsic(&[ann("extern", str_value("C"))]));
+        assert!(!is_intrinsic(&[]));
+    }
 }

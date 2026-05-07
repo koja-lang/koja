@@ -167,7 +167,8 @@ fn extern_c_with_cptr_param_lowers_pointee_into_irtype_cptr() {
 #[test]
 fn last_link_wins_across_multiple_link_annotations() {
     // `@link "a:foo"` then `@link "b:bar"` — the second should win
-    // for both fields (mirrors v1 + the AST extract_link_attrs spec).
+    // for both fields (mirrors v1 + the AST `AnnotationKind::Link`
+    // walk in `IRExternAttrs::from_annotations`).
     let source = "
         @extern \"C\"
         @link \"a:foo\"

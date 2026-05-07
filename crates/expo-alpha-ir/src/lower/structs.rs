@@ -19,7 +19,7 @@ use std::collections::BTreeMap;
 use expo_alpha_typecheck::{
     GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
 };
-use expo_ast::ast::{Diagnostic, Expr, FieldInit, StructDecl, StructField, is_doc_annotation};
+use expo_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl, StructField};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
@@ -240,7 +240,7 @@ fn struct_definition_from_resolution<'a>(
 fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
     let mut gapped = false;
     for annotation in &decl.annotations {
-        if is_doc_annotation(annotation) {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
