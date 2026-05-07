@@ -93,22 +93,6 @@ fn duplicate_protocol_decl_diagnoses() {
 }
 
 #[test]
-fn generic_protocol_decl_diagnoses_feature_gap() {
-    let source = "
-        protocol Greeter<T>
-          fn greet(self) -> T
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("generic protocols")),
-        "expected generic-protocol gap diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
 fn generic_protocol_method_diagnoses_feature_gap() {
     let source = "
         protocol Greeter
@@ -123,24 +107,6 @@ fn generic_protocol_method_diagnoses_feature_gap() {
             .iter()
             .any(|m| m.contains("generic protocol methods")),
         "expected generic-protocol-method gap diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
-fn self_in_protocol_return_type_diagnoses_feature_gap() {
-    let source = "
-        protocol Cloner
-          fn clone(self) -> Self
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`Self`") && m.contains("return")),
-        "expected Self-in-return gap diagnostic, got {messages:?}",
     );
 }
 

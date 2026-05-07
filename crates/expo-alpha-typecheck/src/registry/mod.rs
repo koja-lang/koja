@@ -26,7 +26,7 @@
 //! [`format`] submodule; it's a separate concern from the data + insert
 //! API (different audience: diagnostic rendering vs pipeline work).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use expo_ast::identifier::{
     GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
@@ -140,6 +140,23 @@ pub struct ProtocolDefinition {
     pub methods: Vec<ResolvedProtocolMethod>,
 }
 
+/// Lifted shape of an `impl P for T` block. Only protocol impls get
+/// a registry entry; inherent `impl T` blocks register their methods
+/// on `[target, method]` directly without anchoring an entry of their
+/// own. `target` is the type the impl extends (`List<T>`, `User`,
+/// `CPtr<UInt8>`); `protocol` is the protocol's full resolved type
+/// (carries `Eq<String>`'s `String` arg). `method_ids` maps each
+/// declared method's surface name to its `[target_name, method_name]`
+/// registry id so IR-side bounded dispatch can route
+/// `Resolution::Global(<protocol_method>)` to the concrete impl
+/// method without a name search.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProtocolImplDefinition {
+    pub target: ResolvedType,
+    pub protocol: ResolvedType,
+    pub method_ids: BTreeMap<String, GlobalRegistryId>,
+}
+
 /// One method on a [`ProtocolDefinition`]. `has_default` flags whether
 /// a default body exists in lift's body sidecar; the body itself is
 /// not stored here (registry holds resolved types only).
@@ -185,16 +202,18 @@ impl EnumDefinition {
 
 /// What kind of declaration a registry entry points at.
 ///
-/// `Enum`, `Function`, `Protocol`, and `Struct` entries carry their
-/// lifted payload inline as `Option<_>`: `None` is the "collected
-/// but not yet lifted" state (and the permanent state for stdlib
-/// stub primitives), `Some(_)` the lifted state reached after
-/// `lift_signatures` runs.
+/// Every variant carries its lifted payload inline as `Option<_>`:
+/// `None` is the "collected but not yet lifted" state (and the
+/// permanent state for stdlib stub primitives), `Some(_)` the lifted
+/// state reached after `lift_signatures` runs. `ProtocolImpl` entries
+/// are synthetic — their `Identifier` carries a `<impl>` first segment
+/// (illegal in source) so they can't collide with user-named decls.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalKind {
     Enum(Option<EnumDefinition>),
     Function(Option<FunctionSignature>),
     Protocol(Option<ProtocolDefinition>),
+    ProtocolImpl(Option<ProtocolImplDefinition>),
     Struct(Option<StructDefinition>),
 }
 
@@ -204,6 +223,7 @@ impl GlobalKind {
             GlobalKind::Enum(_) => "enum",
             GlobalKind::Function(_) => "function",
             GlobalKind::Protocol(_) => "protocol",
+            GlobalKind::ProtocolImpl(_) => "protocol impl",
             GlobalKind::Struct(_) => "struct",
         }
     }
@@ -216,12 +236,20 @@ impl GlobalKind {
 /// AST so [`GlobalRegistry::type_params`] is queryable mid-lift —
 /// before [`StructDefinition`] / [`EnumDefinition`] / signature
 /// payloads are stamped.
+///
+/// `type_param_bounds` is parallel to `type_params` (same length, same
+/// indexing). Each inner `Vec<GlobalRegistryId>` holds the protocol ids
+/// from a `<T: P1 & P2>` bound, in source order. Empty inner vec means
+/// the param is unbounded. Default at collect time is one empty inner
+/// vec per param; lift's bounds-resolve sub-pass replaces it with the
+/// resolved protocol ids via [`GlobalRegistry::set_type_param_bounds`].
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
     pub identifier: Identifier,
     pub kind: GlobalKind,
     pub span: Span,
     pub type_params: Vec<String>,
+    pub type_param_bounds: Vec<Vec<GlobalRegistryId>>,
 }
 
 /// Outcome of an insert attempt. `Collision` carries the existing
@@ -311,6 +339,28 @@ impl GlobalRegistry {
         self.insert(identifier, GlobalKind::Protocol(None), span, type_params)
     }
 
+    /// Register a protocol impl in the `ProtocolImpl(None)` state.
+    /// The lifted `target` / `protocol` / method roster is stamped
+    /// later by [`Self::set_protocol_impl_definition`]. `type_params`
+    /// carries the free type names that appear in `target ∪
+    /// trait_expr` (e.g. `T` in `impl Show for List<T>`); they own
+    /// the impl's [`Resolution::TypeParam`] anchors. Inherent
+    /// `impl T` blocks register their methods on `[target, method]`
+    /// directly and do *not* get a [`GlobalKind::ProtocolImpl`] entry.
+    pub fn insert_protocol_impl(
+        &mut self,
+        identifier: Identifier,
+        span: Span,
+        type_params: Vec<String>,
+    ) -> InsertOutcome<'_> {
+        self.insert(
+            identifier,
+            GlobalKind::ProtocolImpl(None),
+            span,
+            type_params,
+        )
+    }
+
     /// Register a struct in the `Struct(None)` state. The
     /// resolved field layout is stamped in later by
     /// [`Self::set_struct_definition`]; preloaded stdlib stub
@@ -350,6 +400,69 @@ impl GlobalRegistry {
                 );
             }
         }
+    }
+
+    /// Stamp a resolved [`ProtocolImplDefinition`] onto a protocol
+    /// impl entry. Panics unless the entry's kind is exactly
+    /// `ProtocolImpl(None)`.
+    pub fn set_protocol_impl_definition(
+        &mut self,
+        id: GlobalRegistryId,
+        definition: ProtocolImplDefinition,
+    ) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!(
+                "set_protocol_impl_definition on missing registry id {id} — \
+                 collect invariant violation",
+            )
+        });
+        match &entry.kind {
+            GlobalKind::ProtocolImpl(None) => {
+                entry.kind = GlobalKind::ProtocolImpl(Some(definition));
+            }
+            GlobalKind::ProtocolImpl(Some(_)) => {
+                panic!(
+                    "set_protocol_impl_definition called twice on `{}` — \
+                     lift_signatures must stamp each impl exactly once",
+                    entry.identifier,
+                );
+            }
+            other => {
+                panic!(
+                    "set_protocol_impl_definition called on non-impl entry `{}` ({}) — \
+                     only ProtocolImpl entries carry definitions",
+                    entry.identifier,
+                    other.label(),
+                );
+            }
+        }
+    }
+
+    /// Lookup the protocol impl entry (if any) registering
+    /// `protocol_id` for `target_id`. Scans every
+    /// `GlobalKind::ProtocolImpl(Some(_))` entry — the impl itself
+    /// encodes the relation via its `target` head and `protocol`
+    /// head, so a separate index would be redundant state. Used by
+    /// call-site bound enforcement and IR-side bounded dispatch.
+    /// O(impl-count); programs in practice have dozens of impls,
+    /// not millions.
+    pub fn lookup_protocol_impl(
+        &self,
+        target_id: GlobalRegistryId,
+        protocol_id: GlobalRegistryId,
+    ) -> Option<GlobalRegistryId> {
+        self.iter().find_map(|(id, entry)| {
+            let GlobalKind::ProtocolImpl(Some(definition)) = &entry.kind else {
+                return None;
+            };
+            let Resolution::Global(head_id) = definition.target.resolution else {
+                return None;
+            };
+            let Resolution::Global(trait_id) = definition.protocol.resolution else {
+                return None;
+            };
+            (head_id == target_id && trait_id == protocol_id).then_some(id)
+        })
     }
 
     /// Stamp a resolved method roster. Panics unless the entry's
@@ -434,6 +547,7 @@ impl GlobalRegistry {
         let id = GlobalRegistryId::new(self.next_id);
         self.next_id += 1;
         self.by_identifier.insert(identifier.clone(), id);
+        let type_param_bounds = vec![Vec::new(); type_params.len()];
         self.entries.insert(
             id,
             RegistryEntry {
@@ -441,6 +555,7 @@ impl GlobalRegistry {
                 kind,
                 span,
                 type_params,
+                type_param_bounds,
             },
         );
         InsertOutcome::Fresh(id)
@@ -526,6 +641,39 @@ impl GlobalRegistry {
     /// `(owner, TypeParamIndex)`.
     pub fn type_params(&self, owner: GlobalRegistryId) -> Option<&[String]> {
         self.get(owner).map(|entry| entry.type_params.as_slice())
+    }
+
+    /// Slice of resolved bounds on `owner`'s generic-decl params,
+    /// parallel to [`Self::type_params`] (same length, same indexing).
+    /// Inner vec is the `&`-composed protocol-id list for that param;
+    /// empty means unbounded. `None` when `owner` is unknown.
+    pub fn type_param_bounds(&self, owner: GlobalRegistryId) -> Option<&[Vec<GlobalRegistryId>]> {
+        self.get(owner)
+            .map(|entry| entry.type_param_bounds.as_slice())
+    }
+
+    /// Replace `owner`'s `type_param_bounds`. `bounds.len()` must equal
+    /// the entry's `type_params.len()`. Called by lift's bounds-resolve
+    /// sub-pass after every protocol id is registered.
+    pub fn set_type_param_bounds(
+        &mut self,
+        owner: GlobalRegistryId,
+        bounds: Vec<Vec<GlobalRegistryId>>,
+    ) {
+        let entry = self
+            .entries
+            .get_mut(&owner)
+            .unwrap_or_else(|| panic!("set_type_param_bounds on missing registry id {owner}"));
+        if bounds.len() != entry.type_params.len() {
+            panic!(
+                "set_type_param_bounds length mismatch on `{}`: \
+                 type_params.len() = {}, bounds.len() = {}",
+                entry.identifier,
+                entry.type_params.len(),
+                bounds.len(),
+            );
+        }
+        entry.type_param_bounds = bounds;
     }
 
     /// Iterate every entry. `HashMap` iteration is not stable across

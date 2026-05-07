@@ -15,7 +15,7 @@ use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructF
 
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
-use super::types::display_resolution;
+use super::types::{display_resolution, verify_bounds};
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init
@@ -166,6 +166,7 @@ fn infer_struct_type_args(
             ));
         }
     }
+    verify_bounds(callee, &subst, span, registry, diagnostics);
     subst
 }
 

@@ -5,19 +5,22 @@
 //! `value.m(...)`) and slice the dispatch / params accordingly.
 
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{
+    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
+    ResolvedProtocolMethod,
 };
 
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::structs::lookup_type;
-use super::types::display_resolution;
+use super::types::{display_resolution, verify_bounds};
 
 /// Inputs to [`infer_method_call_type_args`] — bundles the two
 /// [`Callee`]s in play (the method and its enclosing type), the
@@ -33,36 +36,38 @@ struct MethodInferenceTarget<'a> {
     explicit_params: &'a [ResolvedParam],
 }
 
-/// Receiver classification for method-call dispatch. Captures only
-/// the `struct_id` so the dispatcher can re-look-up the
-/// [`RegistryEntry`] without holding a borrow across mutations.
-/// Extends to enum variants by adding new variants here.
+/// Receiver classification for method-call dispatch. `Static` and
+/// `Instance` capture the receiver's struct id; `Bounded` captures
+/// the type-param's `(owner, index)` for bounded dispatch — the
+/// concrete struct id only emerges post-monomorphization.
 #[derive(Clone, Copy)]
 enum MethodReceiver {
-    Static { struct_id: GlobalRegistryId },
-    Instance { struct_id: GlobalRegistryId },
+    Static {
+        struct_id: GlobalRegistryId,
+    },
+    Instance {
+        struct_id: GlobalRegistryId,
+    },
+    Bounded {
+        owner: GlobalRegistryId,
+        index: TypeParamIndex,
+    },
 }
 
 impl MethodReceiver {
-    fn struct_id(self) -> GlobalRegistryId {
-        match self {
-            Self::Static { struct_id } | Self::Instance { struct_id } => struct_id,
-        }
-    }
-
     fn expected_dispatch(self) -> Dispatch {
         match self {
             Self::Static { .. } => Dispatch::Static,
-            Self::Instance { .. } => Dispatch::Instance,
+            Self::Instance { .. } | Self::Bounded { .. } => Dispatch::Instance,
         }
     }
 
-    /// Params the user wrote against. Instance dispatch absorbs
-    /// `params[0]` (`self`) into the receiver.
+    /// Params the user wrote against. Instance / bounded dispatch
+    /// absorbs `params[0]` (`self`) into the receiver.
     fn explicit_params(self, params: &[ResolvedParam]) -> &[ResolvedParam] {
         match self {
             Self::Static { .. } => params,
-            Self::Instance { .. } => params.get(1..).unwrap_or(&[]),
+            Self::Instance { .. } | Self::Bounded { .. } => params.get(1..).unwrap_or(&[]),
         }
     }
 }
@@ -189,6 +194,7 @@ fn infer_call_type_args(
         }
     }
     diagnose_phantom_params(&callee, &subst, call_span, diagnostics);
+    verify_bounds(callee, &subst, call_span, registry, diagnostics);
     let substituted_params = sig
         .params
         .iter()
@@ -266,7 +272,22 @@ pub(super) fn resolve_method_call(
         return ResolvedType::unresolved();
     };
 
-    let struct_id = method_receiver.struct_id();
+    if let MethodReceiver::Bounded { owner, index } = method_receiver {
+        let site = BoundedCall {
+            receiver,
+            owner,
+            index,
+            method,
+            args,
+            call_span,
+        };
+        return resolve_bounded_method_call(site, resolver, diagnostics);
+    }
+
+    let struct_id = match method_receiver {
+        MethodReceiver::Static { struct_id } | MethodReceiver::Instance { struct_id } => struct_id,
+        MethodReceiver::Bounded { .. } => unreachable!("handled above"),
+    };
     let Some(struct_entry) = resolver.registry.get(struct_id) else {
         return ResolvedType::unresolved();
     };
@@ -319,6 +340,7 @@ pub(super) fn resolve_method_call(
     let receiver_seed: &[ResolvedType] = match method_receiver {
         MethodReceiver::Static { .. } => &[],
         MethodReceiver::Instance { .. } => &receiver.resolution.type_args,
+        MethodReceiver::Bounded { .. } => unreachable!("bounded path returns above"),
     };
     let target = MethodInferenceTarget {
         receiver: Callee {
@@ -352,6 +374,191 @@ pub(super) fn resolve_method_call(
         diagnostics,
     );
     substituted_return
+}
+
+/// Resolve `t.method()` where `t`'s static type is a generic
+/// type-parameter `T` whose bounds list provides the method. Walks
+/// the bound's protocols, finds the unique provider (or emits
+/// not-found / ambiguity), validates args against the protocol
+/// method's signature with `Self → t`, and returns the substituted
+/// return type. The receiver's `Resolution::TypeParam` stays put;
+/// IR-side substitution rewrites it into a concrete type post-mono
+/// and the regular `[concrete_target, method_name]` lookup picks up
+/// the impl method.
+/// Inputs to [`resolve_bounded_method_call`]. Bundles every
+/// `recv.method(args)` shard so the helper stays under
+/// `too_many_arguments` and reads as a structured site rather than
+/// a positional argument soup.
+struct BoundedCall<'a> {
+    receiver: &'a Expr,
+    owner: GlobalRegistryId,
+    index: TypeParamIndex,
+    method: &'a str,
+    args: &'a [Arg],
+    call_span: Span,
+}
+
+fn resolve_bounded_method_call(
+    site: BoundedCall<'_>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let BoundedCall {
+        receiver,
+        owner,
+        index,
+        method,
+        args,
+        call_span,
+    } = site;
+    let bounds = resolver
+        .registry
+        .type_param_bounds(owner)
+        .and_then(|all| all.get(index.as_u32() as usize))
+        .map(|v| v.as_slice())
+        .unwrap_or(&[]);
+    let param_name = resolver
+        .registry
+        .type_param_name(owner, index)
+        .unwrap_or("?")
+        .to_string();
+    if bounds.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!("no method `{method}` on type parameter `{param_name}` (no bounds declared)",),
+            call_span,
+        ));
+        return ResolvedType::unresolved();
+    }
+    let providers = collect_bound_providers(bounds, method, resolver.registry);
+    if providers.is_empty() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "no method `{method}` on type parameter `{param_name}` \
+                 (no bound provides it)",
+            ),
+            call_span,
+        ));
+        return ResolvedType::unresolved();
+    }
+    if providers.len() > 1 {
+        let labels: Vec<String> = providers
+            .iter()
+            .map(|(id, _)| {
+                resolver
+                    .registry
+                    .get(*id)
+                    .map(|e| e.identifier.last().to_string())
+                    .unwrap_or_else(|| format!("<id {id}>"))
+            })
+            .collect();
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "ambiguous method `{method}` on type parameter `{param_name}` \
+                 — provided by both `{}` and `{}` in bounds",
+                labels[0], labels[1],
+            ),
+            call_span,
+        ));
+        return ResolvedType::unresolved();
+    }
+    let (_, protocol_method) = providers.into_iter().next().expect("len == 1");
+    if protocol_method.dispatch != Dispatch::Instance {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot call static method `{method}` of bound protocol on a value of \
+                 type parameter `{param_name}` — use the protocol name to dispatch",
+            ),
+            call_span,
+        ));
+        return ResolvedType::unresolved();
+    }
+    validate_bounded_args(
+        method,
+        &param_name,
+        args,
+        &protocol_method,
+        call_span,
+        resolver.registry,
+        diagnostics,
+    );
+    // Return type may carry `Self` (TypeParam at protocol's slot 0).
+    // Generic protocols (slice 2.7+) will additionally substitute the
+    // protocol's user-declared params against the receiver's type-args
+    // — currently the protocol-method scope is `Self`-only so the
+    // return type passes through unchanged.
+    let _ = receiver;
+    protocol_method.return_type
+}
+
+/// Walk a type-param's bound list and collect every protocol that
+/// declares a method named `method`. Returns clones so the caller
+/// can drop the registry borrow before validating arg shapes.
+fn collect_bound_providers(
+    bounds: &[GlobalRegistryId],
+    method: &str,
+    registry: &GlobalRegistry,
+) -> Vec<(GlobalRegistryId, ResolvedProtocolMethod)> {
+    let mut providers = Vec::new();
+    for &protocol_id in bounds {
+        let Some(entry) = registry.get(protocol_id) else {
+            continue;
+        };
+        let GlobalKind::Protocol(Some(definition)) = &entry.kind else {
+            continue;
+        };
+        if let Some(found) = definition.methods.iter().find(|m| m.name == method) {
+            providers.push((protocol_id, found.clone()));
+        }
+    }
+    providers
+}
+
+/// Check arity + per-position type compatibility for a bounded
+/// method call. Mirrors [`validate_arg_signature`]'s wording so a
+/// "wrong arg type" diagnostic reads identically whether the call
+/// dispatches against a struct method or a protocol method.
+fn validate_bounded_args(
+    method: &str,
+    param_name: &str,
+    args: &[Arg],
+    protocol_method: &ResolvedProtocolMethod,
+    call_span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if args.len() != protocol_method.non_self_params.len() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "method `{method}` on `{param_name}` expects {} argument{}, got {}",
+                protocol_method.non_self_params.len(),
+                if protocol_method.non_self_params.len() == 1 {
+                    ""
+                } else {
+                    "s"
+                },
+                args.len(),
+            ),
+            call_span,
+        ));
+        return;
+    }
+    for (arg, expected) in args.iter().zip(protocol_method.non_self_params.iter()) {
+        let actual = &arg.value.resolution;
+        if !actual.is_resolved() {
+            continue;
+        }
+        if actual != &expected.ty {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "argument `{}` to `{method}` expects `{}`, got `{}`",
+                    expected.name,
+                    display_resolution(&expected.ty, registry),
+                    display_resolution(actual, registry),
+                ),
+                arg.span,
+            ));
+        }
+    }
 }
 
 /// Method-call inference. Splits the substitution into two owners:
@@ -412,6 +619,8 @@ fn infer_method_call_type_args(
     }
     diagnose_phantom_params(&method, &method_subst, call_span, diagnostics);
     diagnose_phantom_params(&receiver, &receiver_subst, call_span, diagnostics);
+    verify_bounds(method, &method_subst, call_span, registry, diagnostics);
+    verify_bounds(receiver, &receiver_subst, call_span, registry, diagnostics);
     let substituted_params: Vec<ResolvedParam> = sig
         .params
         .iter()
@@ -469,26 +678,31 @@ fn classify_receiver(
         // Receiver already triggered its own diagnostic.
         return None;
     }
-    let Resolution::Global(struct_id) = receiver.resolution.resolution else {
-        diagnostics.push(Diagnostic::error(
-            "instance method receiver must have a struct or enum type".to_string(),
-            receiver.span,
-        ));
-        return None;
-    };
-    let entry = resolver.registry.get(struct_id)?;
-    if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "instance method receiver must be a struct or enum value (`{}` is a {})",
-                entry.identifier,
-                entry.kind.label(),
-            ),
-            receiver.span,
-        ));
-        return None;
+    match receiver.resolution.resolution {
+        Resolution::Global(struct_id) => {
+            let entry = resolver.registry.get(struct_id)?;
+            if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "instance method receiver must be a struct or enum value (`{}` is a {})",
+                        entry.identifier,
+                        entry.kind.label(),
+                    ),
+                    receiver.span,
+                ));
+                return None;
+            }
+            Some(MethodReceiver::Instance { struct_id })
+        }
+        Resolution::TypeParam { owner, index } => Some(MethodReceiver::Bounded { owner, index }),
+        _ => {
+            diagnostics.push(Diagnostic::error(
+                "instance method receiver must have a struct or enum type".to_string(),
+                receiver.span,
+            ));
+            None
+        }
     }
-    Some(MethodReceiver::Instance { struct_id })
 }
 
 fn bare_ident_name(kind: &ExprKind) -> Option<&str> {
@@ -530,6 +744,7 @@ fn method_lookup_message(
         MethodReceiver::Instance { .. } => {
             format!("`{}` has no method `{method}`", struct_entry.identifier,)
         }
+        MethodReceiver::Bounded { .. } => unreachable!("bounded receivers don't reach this path"),
     }
 }
 
@@ -550,6 +765,7 @@ fn dispatch_mismatch_message(
              instead",
             method_entry.identifier, struct_entry.identifier,
         ),
+        MethodReceiver::Bounded { .. } => unreachable!("bounded receivers don't reach this path"),
     }
 }
 

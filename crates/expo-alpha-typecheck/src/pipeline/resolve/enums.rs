@@ -29,7 +29,7 @@ use crate::registry::{
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::structs::{lookup_type, validate_named_fields};
-use super::types::display_resolution;
+use super::types::{display_resolution, verify_bounds};
 
 pub(super) fn resolve_enum_construction(
     type_path: &[String],
@@ -220,6 +220,7 @@ fn infer_enum_type_args(
             ));
         }
     }
+    verify_bounds(callee, &subst, span, registry, diagnostics);
     subst
 }
 

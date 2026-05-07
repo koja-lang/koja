@@ -17,7 +17,8 @@ use expo_ast::identifier::{Resolution, ResolvedType};
 
 use super::{
     EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ProtocolDefinition,
-    ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData, StructDefinition,
+    ProtocolImplDefinition, ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData,
+    StructDefinition,
 };
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
@@ -47,9 +48,23 @@ fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
         GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
         GlobalKind::Protocol(None) => "protocol".to_string(),
         GlobalKind::Protocol(Some(def)) => format_protocol(def, registry),
+        GlobalKind::ProtocolImpl(None) => "impl <unlifted>".to_string(),
+        GlobalKind::ProtocolImpl(Some(def)) => format_protocol_impl(def, registry),
         GlobalKind::Struct(None) => "struct".to_string(),
         GlobalKind::Struct(Some(def)) => format_struct(def, registry),
     }
+}
+
+fn format_protocol_impl(def: &ProtocolImplDefinition, registry: &GlobalRegistry) -> String {
+    let target = format_resolved(&def.target, registry);
+    let protocol = format_resolved(&def.protocol, registry);
+    let methods = def
+        .method_ids
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("impl {protocol} for {target} {{{methods}}}")
 }
 
 fn format_enum(def: &EnumDefinition, registry: &GlobalRegistry) -> String {

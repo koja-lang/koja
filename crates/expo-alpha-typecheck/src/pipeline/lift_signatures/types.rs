@@ -7,7 +7,7 @@ use expo_ast::identifier::{
 };
 use expo_ast::span::Span;
 
-use crate::registry::{Dispatch, GlobalRegistry};
+use crate::registry::{Dispatch, GlobalKind, GlobalRegistry};
 
 /// Stack of generic-decl owners visible at this resolution site.
 /// Innermost first (e.g. `[fn_id, struct_id]` for an inline method
@@ -42,6 +42,14 @@ impl<'a> TypeParamScope<'a> {
         }
         None
     }
+
+    /// Walk innermost-out and return the first owner whose kind owns
+    /// a `Self` (protocols, structs, enums). Functions are skipped —
+    /// `Self` inside a top-level / inline `fn` looks past it to the
+    /// enclosing receiver.
+    pub(crate) fn self_owner(&self) -> &'a [GlobalRegistryId] {
+        self.owners
+    }
 }
 
 /// Resolve a [`TypeExpr`] against the registry. Single-segment
@@ -71,13 +79,7 @@ pub(crate) fn resolve_type_expr(
         TypeExpr::Named { path, span } => {
             resolve_named(path, *span, scope, package, registry, diagnostics)
         }
-        TypeExpr::Self_ { span } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support `Self` type annotations".to_string(),
-                *span,
-            ));
-            ResolvedType::unresolved()
-        }
+        TypeExpr::Self_ { span } => resolve_self(*span, scope, registry, diagnostics),
         TypeExpr::Union { span, .. } => {
             diagnostics.push(Diagnostic::error(
                 "alpha typecheck does not yet support union type annotations".to_string(),
@@ -86,6 +88,74 @@ pub(crate) fn resolve_type_expr(
             ResolvedType::unresolved()
         }
         TypeExpr::Unit { .. } => registry.primitive("Unit"),
+    }
+}
+
+/// Resolve a bare `Self` type-expression. Walks the scope from
+/// innermost outward and dispatches by owner kind: a protocol owner
+/// resolves to its implicit slot-0 type-param (protocols register
+/// with `["Self", ...declared]`); a struct/enum owner resolves to
+/// the type itself with each of its type-params projected as
+/// [`Resolution::TypeParam`] anchors so `fn make() -> Self` on
+/// `struct Pair<T, U>` reads as `Pair<T, U>`. Functions are skipped
+/// — `Self` inside a generic `fn` looks past the fn to its
+/// enclosing struct/enum/impl.
+fn resolve_self(
+    span: Span,
+    scope: TypeParamScope<'_>,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    for &owner in scope.self_owner() {
+        let Some(entry) = registry.get(owner) else {
+            continue;
+        };
+        match &entry.kind {
+            GlobalKind::Protocol(_) => {
+                return ResolvedType::leaf(Resolution::TypeParam {
+                    owner,
+                    index: TypeParamIndex::new(0),
+                });
+            }
+            GlobalKind::Struct(_) | GlobalKind::Enum(_) => {
+                return concrete_self_type(owner, registry);
+            }
+            GlobalKind::Function(_) | GlobalKind::ProtocolImpl(_) => continue,
+        }
+    }
+    diagnostics.push(Diagnostic::error(
+        "`Self` is only valid inside a protocol, struct, enum, or impl block".to_string(),
+        span,
+    ));
+    ResolvedType::unresolved()
+}
+
+/// Build a `ResolvedType` for `Self` in a struct/enum context: the
+/// type itself with each of its declared type-params projected as a
+/// `TypeParam(owner, i)` so monomorphization substitutes them
+/// alongside every other body resolution naming the same param.
+/// Shared between `Self` resolution and the `self` receiver lifter
+/// in [`super::functions`] so both produce identical receiver types
+/// for generic-target methods.
+pub(crate) fn concrete_self_type(
+    owner: GlobalRegistryId,
+    registry: &GlobalRegistry,
+) -> ResolvedType {
+    let arity = registry
+        .type_params(owner)
+        .map(<[String]>::len)
+        .unwrap_or(0);
+    let type_args = (0..arity)
+        .map(|i| {
+            ResolvedType::leaf(Resolution::TypeParam {
+                owner,
+                index: TypeParamIndex::new(i as u32),
+            })
+        })
+        .collect();
+    ResolvedType {
+        resolution: Resolution::Global(owner),
+        type_args,
     }
 }
 
@@ -230,6 +300,99 @@ pub(super) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
         TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
         _ => None,
     }
+}
+
+/// Stable source-syntax render of a `TypeExpr` for synthetic
+/// protocol-impl identifiers. Whitespace-insensitive (renders
+/// comma-separated without spaces) so two trivially-different
+/// formattings of the same impl head produce the same identifier
+/// (and collide on insert for "duplicate impl" detection).
+pub(crate) fn render_type_expr(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Named { path, .. } => path.join("."),
+        TypeExpr::Generic { path, args, .. } => {
+            let rendered_args = args
+                .iter()
+                .map(render_type_expr)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("{}<{rendered_args}>", path.join("."))
+        }
+        TypeExpr::Self_ { .. } => "Self".to_string(),
+        TypeExpr::Unit { .. } => "Unit".to_string(),
+        TypeExpr::Function {
+            params,
+            return_type,
+            ..
+        } => {
+            let rendered_params = params
+                .iter()
+                .map(render_type_expr)
+                .collect::<Vec<_>>()
+                .join(",");
+            format!("({rendered_params})->{}", render_type_expr(return_type))
+        }
+        TypeExpr::Union { types, .. } => types
+            .iter()
+            .map(render_type_expr)
+            .collect::<Vec<_>>()
+            .join("|"),
+    }
+}
+
+/// Synthesize a protocol impl block's registry [`Identifier`].
+/// `<impl>` is illegal in source so it can't collide with user-named
+/// decls; `target_render` and `protocol_render` give two
+/// textually-different impls distinct identifiers (and two
+/// textually-identical `impl P for T` blocks collide on insert,
+/// surfacing a "duplicate impl" diagnostic).
+pub(crate) fn protocol_impl_identifier(
+    package: &str,
+    target: &TypeExpr,
+    trait_expr: &TypeExpr,
+) -> Identifier {
+    Identifier::new(
+        package,
+        vec![
+            "<impl>".to_string(),
+            render_type_expr(target),
+            render_type_expr(trait_expr),
+        ],
+    )
+}
+
+/// Resolve a `<T: Bound>` bound name to the protocol's registry id.
+/// Looks up `bound` first in `package` then under `Global`. Emits a
+/// diagnostic at `span` and returns `None` when the name doesn't
+/// resolve or names a non-protocol entry.
+pub(crate) fn resolve_bound_to_id(
+    bound: &str,
+    span: Span,
+    package: &str,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<GlobalRegistryId> {
+    let local = Identifier::new(package, vec![bound.to_string()]);
+    let global = Identifier::new("Global", vec![bound.to_string()]);
+    let Some((id, entry)) = registry.lookup(&local).or_else(|| registry.lookup(&global)) else {
+        diagnostics.push(Diagnostic::error(
+            format!("type-parameter bound `{bound}` does not resolve to a known protocol"),
+            span,
+        ));
+        return None;
+    };
+    if !matches!(entry.kind, GlobalKind::Protocol(_)) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "type-parameter bound `{bound}` must name a protocol (`{}` is a {})",
+                entry.identifier,
+                entry.kind.label(),
+            ),
+            span,
+        ));
+        return None;
+    }
+    Some(id)
 }
 
 pub(super) fn dispatch_label(dispatch: Dispatch) -> &'static str {

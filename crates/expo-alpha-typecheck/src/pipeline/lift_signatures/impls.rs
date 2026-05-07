@@ -1,21 +1,29 @@
 //! Inherent + trait impl lifting. Inherent impls forward each member
 //! to [`functions::lift_function_with_identifier`]. Trait impls
-//! additionally check protocol conformance and synthesize any
-//! default-bodied protocol methods that the impl omitted.
+//! additionally check protocol conformance, synthesize any
+//! default-bodied protocol methods that the impl omitted, and stamp
+//! a [`ProtocolImplDefinition`] onto the impl's
+//! [`GlobalKind::ProtocolImpl`] registry entry (created at collect)
+//! so call-site bound enforcement and IR-side bounded dispatch can
+//! find the right impl by `(target, protocol)` head ids.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use expo_ast::ast::{Diagnostic, Function, ImplBlock, ImplMember, ProtocolMethod, Visibility};
 use expo_ast::identifier::Identifier;
 
 use crate::registry::{
-    Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition, ResolvedProtocolMethod,
+    Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
+    ProtocolImplDefinition, ResolvedProtocolMethod,
 };
 
 use super::ProtocolBodies;
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
-use super::types::{dispatch_label, impl_target_name, render_resolved, type_expr_span};
+use super::types::{
+    TypeParamScope, dispatch_label, impl_target_name, protocol_impl_identifier, render_resolved,
+    resolve_type_expr, type_expr_span,
+};
 
 /// Recurring args threaded through trait-impl handling. Pure data
 /// bundle; helpers take it by value (everything inside is a borrow).
@@ -70,7 +78,64 @@ pub(super) fn lift_impl(
             registry,
             diagnostics,
         );
+        stamp_protocol_impl_entry(impl_block, &target_name, package, registry, diagnostics);
     }
+}
+
+/// Stamp [`ProtocolImplDefinition`] onto the protocol-impl entry
+/// that `collect::register_impl` created. Runs after conformance
+/// verification + default-body synthesis so `method_ids` covers
+/// declared *and* synthesized methods. Resolves `target` and
+/// `trait_expr` against the impl entry's own [`TypeParamScope`] so
+/// `T` in `impl Show for List<T>` anchors to the impl id rather
+/// than the target struct.
+fn stamp_protocol_impl_entry(
+    impl_block: &ImplBlock,
+    target_name: &str,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let trait_expr = impl_block
+        .trait_expr
+        .as_ref()
+        .expect("stamp_protocol_impl_entry called on inherent impl");
+    let identifier = protocol_impl_identifier(package, &impl_block.target, trait_expr);
+    let Some((impl_id, impl_entry)) = registry.lookup(&identifier) else {
+        return;
+    };
+    if matches!(impl_entry.kind, GlobalKind::ProtocolImpl(Some(_))) {
+        return;
+    }
+    let owners = if registry.type_params(impl_id).is_some_and(|p| !p.is_empty()) {
+        vec![impl_id]
+    } else {
+        Vec::new()
+    };
+    let scope = TypeParamScope::new(&owners);
+    let target = resolve_type_expr(&impl_block.target, scope, package, registry, diagnostics);
+    let protocol = resolve_type_expr(trait_expr, scope, package, registry, diagnostics);
+    let mut method_ids = BTreeMap::new();
+    for member in &impl_block.members {
+        let ImplMember::Function(function) = member else {
+            continue;
+        };
+        let method_identifier = Identifier::new(
+            package,
+            vec![target_name.to_string(), function.name.clone()],
+        );
+        if let Some((id, _)) = registry.lookup(&method_identifier) {
+            method_ids.insert(function.name.clone(), id);
+        }
+    }
+    registry.set_protocol_impl_definition(
+        impl_id,
+        ProtocolImplDefinition {
+            target,
+            protocol,
+            method_ids,
+        },
+    );
 }
 
 fn verify_and_synthesize_trait_impl(

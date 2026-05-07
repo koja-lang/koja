@@ -496,24 +496,6 @@ fn unknown_variant_in_construction_diagnoses() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn generic_enum_with_bound_diagnoses_bounds_gap() {
-    let source = "
-        enum Holder<T: Show>
-          Of(T)
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not yet support type-parameter bounds")),
-        "expected type-parameter-bounds gap diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
 fn annotated_enum_diagnoses_feature_gap() {
     let source = "
         @derive

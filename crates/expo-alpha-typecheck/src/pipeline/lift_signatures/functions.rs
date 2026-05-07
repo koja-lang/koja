@@ -3,14 +3,12 @@
 //! via the [`super::SelfContext`] knob.
 
 use expo_ast::ast::{Diagnostic, Function, Param, PassMode};
-use expo_ast::identifier::{
-    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
-};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::registry::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
 
 use super::SelfContext;
-use super::types::{TypeParamScope, resolve_type_expr};
+use super::types::{TypeParamScope, concrete_self_type, resolve_type_expr};
 
 /// Resolve a function's param + return types and stamp the lifted
 /// [`FunctionSignature`] onto its registry entry. The caller picks
@@ -84,8 +82,10 @@ pub(super) fn lift_function_with_identifier(
 /// Build the chained [`TypeParamScope`] owner stack for a function
 /// being lifted. Innermost first: the function's own id (only when
 /// it declares its own params) over the enclosing receiver's id
-/// (when this is a method on a struct/enum/impl). Top-level
-/// non-generic fns produce an empty stack.
+/// (always pushed for method contexts so `Self` resolves through
+/// the scope walker — the type-param name lookup naturally returns
+/// `None` for non-generic receivers). Top-level non-generic fns
+/// produce an empty stack.
 fn type_param_owners(
     fn_id: GlobalRegistryId,
     function: &Function,
@@ -105,12 +105,7 @@ fn type_param_owners(
                  invariant violation",
             );
         };
-        if !registry
-            .type_params(receiver_id)
-            .is_some_and(|p| p.is_empty())
-        {
-            owners.push(receiver_id);
-        }
+        owners.push(receiver_id);
     }
     owners
 }
@@ -148,7 +143,7 @@ fn lift_param(
             };
             ResolvedParam {
                 name: "self".to_string(),
-                ty: receiver_self_type(receiver_id, registry),
+                ty: concrete_self_type(receiver_id, registry),
             }
         }
         Param::Regular {
@@ -183,29 +178,5 @@ fn lift_param(
                 ty,
             }
         }
-    }
-}
-
-/// Type a `self` receiver against its enclosing struct/enum. For a
-/// generic receiver `Pair<T, U>` the resulting [`ResolvedType`]
-/// carries `type_args = [T, U]` as [`Resolution::TypeParam`]s
-/// anchored to the receiver — so monomorphization substitutes them
-/// alongside every other body resolution that names `T` / `U`.
-fn receiver_self_type(receiver_id: GlobalRegistryId, registry: &GlobalRegistry) -> ResolvedType {
-    let arity = registry
-        .type_params(receiver_id)
-        .map(<[String]>::len)
-        .unwrap_or(0);
-    let type_args = (0..arity)
-        .map(|i| {
-            ResolvedType::leaf(Resolution::TypeParam {
-                owner: receiver_id,
-                index: TypeParamIndex::new(i as u32),
-            })
-        })
-        .collect();
-    ResolvedType {
-        resolution: Resolution::Global(receiver_id),
-        type_args,
     }
 }

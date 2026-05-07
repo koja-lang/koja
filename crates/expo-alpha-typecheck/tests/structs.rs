@@ -321,24 +321,6 @@ fn nested_field_access_resolves_through_inner_struct() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn generic_struct_with_bound_diagnoses_bounds_gap() {
-    let source = "
-        struct Wrapper<T: Show>
-          value: T
-        end
-        ";
-
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("does not yet support type-parameter bounds")),
-        "expected type-parameter-bounds gap diagnostic, got {messages:?}",
-    );
-}
-
-#[test]
 fn annotated_struct_diagnoses_feature_gap() {
     let source = "
         @derive
@@ -852,7 +834,7 @@ fn instance_method_in_impl_block_lifts_with_dispatch_instance() {
 }
 
 #[test]
-fn static_method_self_return_type_diagnoses_feature_gap() {
+fn static_method_self_return_type_resolves_to_enclosing_struct() {
     let source = "
         struct Point
           x: Int
@@ -863,13 +845,34 @@ fn static_method_self_return_type_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
+    let program = typecheck(&dedent(source));
+    let identifier = Identifier::new("TestApp", vec!["Point".to_string(), "origin".to_string()]);
+    let (_, entry) = program
+        .registry
+        .lookup(&identifier)
+        .expect("Point.origin registered");
+    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+        panic!("Point.origin should have a lifted signature");
+    };
+    let Resolution::Global(point_id) = sig.return_type.resolution else {
+        panic!(
+            "expected `Self` to resolve to Global(Point), got {:?}",
+            sig.return_type
+        );
+    };
+    let point_identifier = Identifier::new("TestApp", vec!["Point".to_string()]);
+    let (expected_id, _) = program
+        .registry
+        .lookup(&point_identifier)
+        .expect("Point registered");
+    assert_eq!(
+        point_id, expected_id,
+        "`Self` must alias the enclosing struct id"
+    );
     assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("`Self` type annotations")),
-        "expected Self-return gap diagnostic, got {messages:?}",
+        sig.return_type.type_args.is_empty(),
+        "non-generic Point's `Self` carries no type args, got {:?}",
+        sig.return_type.type_args,
     );
 }
 
