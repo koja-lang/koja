@@ -16,13 +16,15 @@
 //! `seal_program` runs as the last sub-pass of `lower_program`; seal
 //! violations panic per northstar (compiler bugs, not user errors).
 
+use std::collections::BTreeSet;
+
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
-use crate::function::{IRFunction, IRSymbol};
+use crate::function::{FunctionKind, IRFunction, IRSymbol};
 use crate::generics;
 use crate::lower::LowerOutput;
 use crate::package::IRPackage;
@@ -38,9 +40,16 @@ use crate::{lower, merge, seal};
 /// function. Stamped from the [`Identifier`] the caller passed into
 /// [`lower_program`] — backends consume the symbol and never need to
 /// reach back into `expo-ast`.
+///
+/// `link_libraries` is the deduped, sorted list of bare library names
+/// (`m`, `crypto`) collected from every `@extern "C"` function's
+/// [`crate::IRExternAttrs::link_lib`]. The driver feeds these to the
+/// linker as `-l<name>`. Per-function `link_name` overrides stay on
+/// the [`IRFunction`] — only the library set surfaces here.
 #[derive(Debug, Clone)]
 pub struct IRProgram {
     pub entry_point: IRSymbol,
+    pub link_libraries: Vec<String>,
     pub packages: Vec<IRPackage>,
 }
 
@@ -157,7 +166,8 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
     }
 
     let entry_symbol = IRSymbol::from_identifier(&entry);
-    let program = merge::merge(packages, entry_symbol);
+    let mut program = merge::merge(packages, entry_symbol);
+    program.link_libraries = collect_link_libraries(program.packages.iter());
 
     if program.function(program.entry_point.mangled()).is_none() {
         return Err(LowerError::EntryPointNotFound { identifier: entry });
@@ -165,4 +175,27 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
 
     seal::seal_program(&program);
     Ok(program)
+}
+
+/// Walk every `@extern "C"` function across `packages` and collect a
+/// deduped, sorted list of `link_lib` names. Used at lower time so
+/// backends and cache layers don't re-walk the IR. Functions without
+/// a `link_lib` (bare `@extern "C"` with no `@link`) contribute
+/// nothing; the C symbol is still resolved via the normal libc /
+/// runtime search path at link time.
+pub(crate) fn collect_link_libraries<'a, I>(packages: I) -> Vec<String>
+where
+    I: IntoIterator<Item = &'a IRPackage>,
+{
+    let mut libs = BTreeSet::new();
+    for pkg in packages {
+        for function in pkg.functions.values() {
+            if let FunctionKind::Extern(attrs) = &function.kind
+                && let Some(lib) = &attrs.link_lib
+            {
+                libs.insert(lib.clone());
+            }
+        }
+    }
+    libs.into_iter().collect()
 }

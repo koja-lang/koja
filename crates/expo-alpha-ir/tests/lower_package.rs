@@ -181,19 +181,35 @@ fn lower_program_reports_missing_entry_point() {
     }
 }
 
+/// Extern fns no longer surface a lower-time feature gap — they
+/// lower to [`expo_alpha_ir::FunctionKind::Extern`] with empty
+/// blocks. Type-shape rejections are intercepted earlier by the
+/// alpha-typecheck FFI gate (see `expo-alpha-typecheck`'s
+/// `extern_c.rs`). This test pins the lower-time positive path:
+/// FFI-admissible signatures lower cleanly with the empty-body
+/// shape the seal pass requires for `FunctionKind::Extern`.
 #[test]
-fn extern_fn_without_body_surfaces_feature_gap_diagnostic() {
+fn extern_fn_lowers_with_empty_blocks_and_extern_kind() {
     let source = "
         @extern \"C\"
-        fn missing() -> Int
+        fn cosf(x: Float32) -> Float32
+
+        fn main -> Int
+          1
+        end
         ";
 
-    let program = dedent(source);
-    let messages = expect_diagnostics(lower_err(&program, "missing"));
-    assert_eq!(messages.len(), 1);
+    let program = lower(&dedent(source));
+    let cosf = common::function(&program, "cosf");
     assert!(
-        messages[0].contains("extern fn `TestApp.missing`"),
-        "expected extern-fn diagnostic, got: {messages:?}",
+        cosf.blocks.is_empty(),
+        "extern fn should lower to zero blocks; got {}",
+        cosf.blocks.len(),
+    );
+    assert!(
+        matches!(cosf.kind, expo_alpha_ir::FunctionKind::Extern(_)),
+        "expected FunctionKind::Extern for cosf; got {:?}",
+        cosf.kind,
     );
 }
 

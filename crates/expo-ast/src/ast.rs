@@ -98,6 +98,61 @@ pub fn is_intrinsic(annotations: &[Annotation]) -> bool {
         .any(|a| a.name == "intrinsic" && a.value.is_none())
 }
 
+/// Parsed payload from `@link "..."` annotations on a function.
+///
+/// `link_lib` is the linker library name passed as `-l<lib>` to the
+/// link step (e.g. `@link "m"` → `-lm`). `link_name` is an optional
+/// override for the C symbol the function should resolve to at link
+/// time, taken from the `lib:sym` shape; without it the function's
+/// bare source name is used.
+///
+/// Both fields default to `None` and may be set independently across
+/// multiple `@link` annotations on the same function. See
+/// [`extract_link_attrs`] for the parsing rules.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct LinkAttrs {
+    pub link_lib: Option<String>,
+    pub link_name: Option<String>,
+}
+
+/// Walk `annotations` collecting every `@link "lib"` / `@link "lib:sym"`
+/// entry into a [`LinkAttrs`].
+///
+/// Parsing rules:
+///
+/// - `@link "openssl"` → `link_lib = Some("openssl")`, `link_name = None`.
+/// - `@link "crypto:SHA256_Init"` → `link_lib = Some("crypto")`,
+///   `link_name = Some("SHA256_Init")` (split on the first `:`).
+/// - Multiple `@link`s on one function: each annotation overwrites the
+///   field(s) it sets, so the **last** `@link` wins for whichever fields
+///   it carries. Mirrors v1's `expo_codegen::compiler::extract_extern_attrs`.
+/// - Annotations with `name != "link"` or non-string values are skipped.
+///
+/// Pure parsing helper — knows nothing about ABI semantics or whether
+/// the host function carries `@extern "C"`. Combining the two pieces
+/// (the extern marker + the link metadata) is the IR layer's job.
+pub fn extract_link_attrs(annotations: &[Annotation]) -> LinkAttrs {
+    let mut attrs = LinkAttrs::default();
+    for annotation in annotations {
+        if annotation.name != "link" {
+            continue;
+        }
+        let Some(AnnotationValue::String(payload)) = &annotation.value else {
+            continue;
+        };
+        match payload.split_once(':') {
+            Some((lib, sym)) => {
+                attrs.link_lib = Some(lib.to_string());
+                attrs.link_name = Some(sym.to_string());
+            }
+            None => {
+                attrs.link_lib = Some(payload.clone());
+            }
+        }
+    }
+    attrs
+}
+
 /// Returns `true` when `annotation` is a well-formed `@doc` marker
 /// (`@doc "..."`, `@doc false`, or bare `@doc`). Pure metadata for
 /// `expo-doc` / `expo-fmt`; the compiler proper neither honors nor

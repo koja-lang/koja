@@ -371,11 +371,11 @@ fn emit_call<'ctx>(
     args: &[ValueId],
     values: &ValueMap<'ctx>,
 ) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
-    let mangled = callee.mangled();
-    let function = ctx.module.get_function(mangled).unwrap_or_else(|| {
+    let function = ctx.declared_function(callee).unwrap_or_else(|| {
         panic!(
-            "alpha LLVM emit: callee `{mangled}` not declared on the module — \
-             declaration order or seal violation",
+            "alpha LLVM emit: callee `{}` not registered in the declared-functions \
+             index — declaration order or seal violation",
+            callee.mangled(),
         )
     });
     let mut arg_values: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
@@ -385,7 +385,7 @@ fn emit_call<'ctx>(
     let call_site = ctx
         .builder
         .build_call(function, &arg_values, "call")
-        .map_err(|e| inkwell_err(format_args!("build_call for `{mangled}`"), e))?;
+        .map_err(|e| inkwell_err(format_args!("build_call for `{}`", callee.mangled()), e))?;
     Ok(call_site.try_as_basic_value().basic())
 }
 

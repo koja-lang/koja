@@ -1,8 +1,9 @@
 //! Non-entry function emission: declare an LLVM function for an
 //! [`IRFunction`] (no body), then define its body once every helper
 //! has been declared. The two-phase declare-then-define pattern lets
-//! mutually-recursive calls resolve through `module.get_function`
-//! before either body has been walked.
+//! mutually-recursive calls resolve through the
+//! `IRSymbol -> FunctionValue` index on [`EmitContext`] (populated
+//! at declare time) before either body has been walked.
 //!
 //! The entry function (`main`) follows a different shape — see
 //! [`crate::main_wrapper::emit_as_main`] for the auto-print
@@ -22,21 +23,49 @@ use crate::error::LlvmError;
 use crate::intrinsics;
 use crate::types::ir_basic_type;
 
-/// Declare an LLVM function for `function` under its mangled
-/// [`expo_alpha_ir::IRSymbol`]. The signature mirrors the IR exactly:
-/// each [`expo_alpha_ir::IRFunctionParam::ty`] becomes its LLVM basic
-/// type and the return type does the same. `Unit` returns / params
-/// surface as feature-gap diagnostics through [`ir_basic_type`].
+/// Declare an LLVM function for `function`. The signature mirrors
+/// the IR exactly: each [`expo_alpha_ir::IRFunctionParam::ty`]
+/// becomes its LLVM basic type and the return type does the same.
+/// `Unit` returns / params surface as feature-gap diagnostics
+/// through [`ir_basic_type`].
+///
+/// The LLVM symbol name is picked per-kind:
+///
+/// - `Regular` / `Intrinsic` declare under
+///   [`expo_alpha_ir::IRSymbol::mangled`] (the alpha-internal form).
+/// - `Extern(attrs)` declares under
+///   [`expo_alpha_ir::IRExternAttrs::link_name`] when present, or
+///   the function's bare last segment otherwise (`TestApp.cosf` →
+///   `cosf`). The IRSymbol stays the call-site's resolution key,
+///   regardless of the LLVM name.
+///
+/// Idempotent: if `module.get_function(name)` already exists for a
+/// previously-seen `link_name` (multiple alpha decls of the same C
+/// symbol), reuse the existing handle rather than colliding. The
+/// returned [`FunctionValue`] is also registered in the
+/// `IRSymbol -> FunctionValue` index on `ctx` so call sites can
+/// resolve through [`EmitContext::declared_function`] without
+/// re-deriving the alias name.
 pub(crate) fn declare_function<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
     let signature = function_signature(ctx, function)?;
-    Ok(ctx.module.add_function(
-        function.symbol.mangled(),
-        signature,
-        Some(Linkage::External),
-    ))
+    let llvm_name = match &function.kind {
+        FunctionKind::Extern(attrs) => attrs
+            .link_name
+            .clone()
+            .unwrap_or_else(|| function.symbol.last_segment().to_string()),
+        FunctionKind::Intrinsic | FunctionKind::Regular => function.symbol.mangled().to_string(),
+    };
+    let llvm_function = match ctx.module.get_function(&llvm_name) {
+        Some(existing) => existing,
+        None => ctx
+            .module
+            .add_function(&llvm_name, signature, Some(Linkage::External)),
+    };
+    ctx.register_declared_function(function.symbol.clone(), llvm_function);
+    Ok(llvm_function)
 }
 
 fn function_signature<'ctx>(
@@ -72,8 +101,17 @@ pub(crate) fn define_function<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    if function.kind == FunctionKind::Intrinsic {
-        return intrinsics::emit_intrinsic_body(ctx, function, llvm_function);
+    match &function.kind {
+        FunctionKind::Intrinsic => {
+            return intrinsics::emit_intrinsic_body(ctx, function, llvm_function);
+        }
+        FunctionKind::Extern(_) => {
+            // FFI declarations carry no body. Mirrors `Intrinsic`'s
+            // skip path but without dispatching to an emitter — the
+            // C linker provides the implementation at link time.
+            return Ok(());
+        }
+        FunctionKind::Regular => {}
     }
     // Slot table is per-function — flush any leftovers from the
     // previous helper before walking this body.

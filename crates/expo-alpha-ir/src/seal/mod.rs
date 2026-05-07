@@ -54,18 +54,16 @@
 //! 7. Every `IRInstruction::Call`'s `callee` symbol resolves to a
 //!    function that actually exists somewhere in the `IRProgram` /
 //!    `IRScript`.
-//! 8. **Transient slice invariant**: every [`ConstValue`] and
-//!    [`IRType`] that flows through the IR is one of `Bool`,
-//!    `Float64`, `Int64`, `String`, `Struct(_)`, or `Unit`. The
-//!    narrower / unsigned / `Float32` width variants (`Int8` /
-//!    `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32` /
-//!    `UInt64` / `Float32`) exist in the IR vocabulary so future
-//!    stdlib stub expansion + literal width inference can stamp
-//!    them without reshuffling, but they're forbidden until those
-//!    upstream pieces land. Loosen this invariant when adding
-//!    `Int8` / `Float32` / etc. to the stdlib stubs. Applies to
-//!    function return types, parameter types, and every
-//!    value-flow [`IRType`] alike.
+//! 8. **Transient slice invariant**: every [`ConstValue`] that flows
+//!    through the IR is one of `Bool`, `Float64`, `Int64`, `String`,
+//!    or `Unit`. The narrower / unsigned / `Float32` width variants
+//!    exist in the [`ConstValue`] vocabulary but are forbidden until
+//!    literal width inference lands — there's no surface syntax that
+//!    materializes them yet. The [`IRType`] vocabulary is broader:
+//!    every variant is admitted, since FFI signatures (and any
+//!    regular function that propagates an FFI value) legitimately
+//!    surface explicit-width primitives (`Int8`..`UInt64`,
+//!    `Float32`/`Float64`, `CPtr<T>`).
 //! 9. Every struct declaration has dense, declaration-order field
 //!    indices (`0..n`), unique field names, and field types in the
 //!    transient set. Every `IRInstruction::StructInit` carries
@@ -95,24 +93,38 @@ mod structs;
 pub(crate) use program::seal_program;
 pub(crate) use script::seal_script;
 
-/// Transient slice invariant: only `Bool` / `Enum(_)` / `Float64` /
-/// `Int64` / `String` / `Struct(_)` / `Unit` flow through the IR.
-/// See module docstring invariant 8.
+/// Every [`IRType`] variant is admitted. The narrower / explicit-
+/// width numeric variants and `CPtr<T>` are reachable through
+/// extern-fn signatures (`FunctionKind::Extern` declarations) and
+/// through regular function bodies that propagate FFI values; the
+/// rest are reachable through ordinary user code. Inner `CPtr`
+/// pointees recurse so `CPtr<CPtr<UInt8>>` rejects nothing
+/// structurally.
+///
+/// Kept as a function (not deleted) so the per-edge call sites in
+/// [`function::seal_function`] retain their location-aware error
+/// surface — useful when seal panics ever loosen back into recoverable
+/// diagnostics. See module docstring invariant 8.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
         IRType::Bool
         | IRType::Enum(_)
+        | IRType::Float32
         | IRType::Float64
+        | IRType::Int8
+        | IRType::Int16
+        | IRType::Int32
         | IRType::Int64
         | IRType::String
         | IRType::Struct(_)
+        | IRType::UInt8
+        | IRType::UInt16
+        | IRType::UInt32
+        | IRType::UInt64
         | IRType::Unit => {}
-        other => seal_panic(&format!(
-            "{}: IRType `{other:?}` is not yet supported (alpha slice admits only \
-             Bool / Enum / Float64 / Int64 / String / Struct / Unit until stdlib stub \
-             expansion lands)",
-            location(),
-        )),
+        IRType::CPtr(inner) => {
+            require_supported_type(inner, &|| format!("{} (CPtr pointee)", location()))
+        }
     }
 }
 

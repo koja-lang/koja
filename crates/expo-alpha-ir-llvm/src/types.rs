@@ -35,6 +35,9 @@ pub(crate) fn ir_int_type<'ctx>(
 ) -> Result<IntType<'ctx>, LlvmError> {
     match ty {
         IRType::Bool => Ok(context.bool_type()),
+        IRType::CPtr(_) => Err(LlvmError::Codegen(format!(
+            "expected an integer or Bool IRType, got `{ty:?}`"
+        ))),
         IRType::Enum(_) => Err(LlvmError::Codegen(format!(
             "expected an integer or Bool IRType, got `{ty:?}`"
         ))),
@@ -80,6 +83,7 @@ pub(crate) fn ir_basic_type<'ctx>(
         | IRType::UInt16
         | IRType::UInt32
         | IRType::UInt64 => Ok(ir_int_type(ctx.context, ty)?.into()),
+        IRType::CPtr(_) => Ok(ctx.context.ptr_type(AddressSpace::default()).into()),
         IRType::Enum(symbol) => Ok(ctx.layouts.enum_outer_type(symbol.mangled()).into()),
         IRType::Float32 => Ok(ctx.context.f32_type().into()),
         IRType::Float64 => Ok(ctx.context.f64_type().into()),

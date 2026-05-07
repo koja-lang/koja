@@ -116,6 +116,14 @@ pub enum IRUnaryOp {
 /// opaque blob with per-variant complete + payload structs (see
 /// [`crate::IREnumDecl`]'s module-level docs).
 ///
+/// `CPtr(pointee)` is the FFI pointer wrapper — at the LLVM layer
+/// every `CPtr<T>` lowers to an opaque `ptr` (default address
+/// space), regardless of `T`. The pointee is preserved here so
+/// the IR carries enough type information for future safety checks
+/// and for surfaces (mangling, debug printing) that distinguish
+/// `CPtr<UInt8>` from `CPtr<Float32>`. Pointee variants are
+/// themselves unrestricted — `CPtr<CPtr<T>>` is a valid shape.
+///
 /// **Concrete-only**: every variant of `IRType` names a fully
 /// monomorphized type. There is no "generic parameter" variant —
 /// generic-decl bodies are never lowered to `IRType`; instead
@@ -126,6 +134,7 @@ pub enum IRUnaryOp {
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum IRType {
     Bool,
+    CPtr(Box<IRType>),
     Enum(IRSymbol),
     Float32,
     Float64,

@@ -2,8 +2,9 @@
 //! functions (top-level, inline struct methods, impl-block methods)
 //! via the [`super::SelfContext`] knob.
 
-use expo_ast::ast::{Diagnostic, Function, Param, PassMode};
-use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
+use expo_ast::ast::{Diagnostic, Function, Param, PassMode, TypeExpr, is_extern_c, is_intrinsic};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::span::Span;
 
 use crate::registry::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
 
@@ -76,7 +77,155 @@ pub(super) fn lift_function_with_identifier(
         return_type,
     };
 
+    if is_extern_c(&function.annotations) {
+        validate_extern_c_signature(function, &identifier, &signature, registry, diagnostics);
+    }
+
     registry.set_signature(id, signature);
+}
+
+/// Mirror of v1's `validate_ffi_signature`. Run after a function's
+/// resolved signature is in hand (so type validation works against
+/// `ResolvedType`s, not raw `TypeExpr`s) but before stamping it onto
+/// the registry — emitting diagnostics here keeps every path through
+/// alpha typecheck honest. Stamping the signature anyway preserves
+/// downstream invariants (call sites can still see a `Function(Some(_))`
+/// entry, so resolve doesn't double-error on every call).
+///
+/// Rules (parity with v1's `expo_typecheck`):
+///
+/// - `@extern "C"` and `@intrinsic` are mutually exclusive — both
+///   describe bodyless functions but with different semantics
+///   (FFI-linked vs compiler-synthesized).
+/// - `@extern "C"` functions cannot have a body (the FFI symbol is
+///   the implementation).
+/// - `@extern "C"` functions cannot take a `self` receiver — they
+///   are top-level FFI declarations, not methods.
+/// - Every parameter and the return type must name an FFI-admissible
+///   primitive: `Bool`, `Unit`, `Int8..UInt64`, `Float32`, `Float64`,
+///   or `CPtr<T>` (any `T`). `Int`, `Float`, `String`, and any
+///   user-declared struct/enum are rejected.
+fn validate_extern_c_signature(
+    function: &Function,
+    identifier: &Identifier,
+    signature: &FunctionSignature,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if is_intrinsic(&function.annotations) {
+        diagnostics.push(Diagnostic::error(
+            format!("`@extern \"C\"` and `@intrinsic` are mutually exclusive (on `{identifier}`)"),
+            function.span,
+        ));
+    }
+    if function.body.is_some() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`@extern \"C\"` functions cannot have a body — the C symbol is the \
+                 implementation (on `{identifier}`)"
+            ),
+            function.span,
+        ));
+    }
+    for param in &function.params {
+        if let Param::Self_ { span, .. } = param {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "`@extern \"C\"` functions cannot take a `self` receiver \
+                     (on `{identifier}`)"
+                ),
+                *span,
+            ));
+        }
+    }
+    for (index, param) in function.params.iter().enumerate() {
+        let Param::Regular {
+            name,
+            type_expr,
+            span,
+            ..
+        } = param
+        else {
+            continue;
+        };
+        let Some(resolved) = signature.params.get(index) else {
+            continue;
+        };
+        if !is_ffi_admissible_type(&resolved.ty, registry) {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "`@extern \"C\"` parameter `{name}` has type `{}`, which is not \
+                     an FFI-admissible C type — admit only `Bool`, `Unit`, \
+                     `Int8`..`UInt64`, `Float32`, `Float64`, or `CPtr<T>` \
+                     (on `{identifier}`)",
+                    type_expr_label(type_expr),
+                ),
+                *span,
+            ));
+        }
+    }
+    if !is_ffi_admissible_type(&signature.return_type, registry) {
+        let span = function
+            .return_type
+            .as_ref()
+            .map(type_expr_span)
+            .unwrap_or(function.span);
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`@extern \"C\"` return type is not an FFI-admissible C type — \
+                 admit only `Bool`, `Unit`, `Int8`..`UInt64`, `Float32`, \
+                 `Float64`, or `CPtr<T>` (on `{identifier}`)"
+            ),
+            span,
+        ));
+    }
+}
+
+/// True when `ty` is one of the explicit-width numeric primitives,
+/// `Bool`, `Unit`, or `CPtr<T>` (any pointee). Mirrors v1's FFI gate.
+fn is_ffi_admissible_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    let Resolution::Global(id) = ty.resolution else {
+        return false;
+    };
+    let Some(entry) = registry.get(id) else {
+        return false;
+    };
+    if !entry.identifier.is_in_package("Global") {
+        return false;
+    }
+    match entry.identifier.last() {
+        "Bool" | "Unit" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32"
+        | "UInt64" | "Float32" | "Float64" => ty.type_args.is_empty(),
+        "CPtr" => ty.type_args.len() == 1,
+        _ => false,
+    }
+}
+
+/// Best-effort surface label for a [`TypeExpr`] in diagnostics. Picks
+/// the head identifier — close enough for FFI rejection messaging,
+/// where the user just needs a clue which type they wrote that we
+/// rejected (full pretty-printing lives in `expo-fmt`).
+fn type_expr_label(ty: &TypeExpr) -> String {
+    match ty {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => path.join("."),
+        TypeExpr::Self_ { .. } => "Self".to_string(),
+        TypeExpr::Unit { .. } => "Unit".to_string(),
+        TypeExpr::Function { .. } => "<function type>".to_string(),
+        TypeExpr::Union { .. } => "<union>".to_string(),
+    }
+}
+
+/// Span associated with a [`TypeExpr`] for diagnostics on the
+/// return-type slot.
+fn type_expr_span(ty: &TypeExpr) -> Span {
+    match ty {
+        TypeExpr::Named { span, .. }
+        | TypeExpr::Generic { span, .. }
+        | TypeExpr::Unit { span }
+        | TypeExpr::Self_ { span }
+        | TypeExpr::Function { span, .. }
+        | TypeExpr::Union { span, .. } => *span,
+    }
 }
 
 /// Build the chained [`TypeParamScope`] owner stack for a function

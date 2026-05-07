@@ -10,12 +10,13 @@
 
 use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
 use expo_ast::ast::{
-    Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_intrinsic,
+    Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c, is_intrinsic,
 };
 use expo_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
+use crate::extern_attrs::IRExternAttrs;
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
@@ -183,9 +184,12 @@ pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
 
 /// Lower one [`Function`] under `identifier`. `@intrinsic`-annotated
 /// functions become [`FunctionKind::Intrinsic`] with empty blocks
-/// (backends synthesize bodies from a mangled-symbol table); regular
-/// functions become [`FunctionKind::Regular`] with at least one
-/// basic block. Returns `None` (with a diagnostic) on feature gaps.
+/// (backends synthesize bodies from a mangled-symbol table);
+/// `@extern "C"`-annotated functions become [`FunctionKind::Extern`]
+/// with empty blocks and the parsed `link_name` / `link_lib` attrs;
+/// regular functions become [`FunctionKind::Regular`] with at least
+/// one basic block. Returns `None` (with a diagnostic) on feature
+/// gaps.
 ///
 /// Generic functions are skipped here — same shape as the
 /// generic-struct skip in [`super::structs::lower_struct_decl`].
@@ -221,6 +225,7 @@ pub(crate) fn lower_function_inner(
     let return_type =
         resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
     let intrinsic = is_intrinsic(&function.annotations);
+    let extern_c = is_extern_c(&function.annotations);
 
     if intrinsic && function.body.is_some() {
         output.diagnostics.push(Diagnostic::error(
@@ -243,9 +248,24 @@ pub(crate) fn lower_function_inner(
         });
     }
 
+    if extern_c {
+        let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
+        let attrs = IRExternAttrs::from_annotations(&function.annotations);
+        return Some(IRFunction {
+            blocks: Vec::new(),
+            kind: FunctionKind::Extern(attrs),
+            params,
+            return_type,
+            symbol,
+        });
+    }
+
     let Some(body) = function.body.as_ref() else {
         output.diagnostics.push(Diagnostic::error(
-            format!("alpha IR does not yet lower extern fn `{identifier}` (no body to lower)",),
+            format!(
+                "alpha IR does not yet lower bodyless fn `{identifier}` (no `@intrinsic` / \
+                 `@extern \"C\"` marker — provide one or add a body)",
+            ),
             function.span,
         ));
         return None;
@@ -414,6 +434,17 @@ fn global_to_ir_type(
         panic!("alpha IR lower: ResolvedType id {id} missing from registry — seal violation",)
     });
     if entry.identifier.is_in_package("Global") {
+        if entry.identifier.last() == "CPtr" {
+            assert_eq!(
+                type_args.len(),
+                1,
+                "alpha IR lower: stdlib primitive `Global.CPtr` requires exactly one type \
+                 argument; got {} ({type_args:?})",
+                type_args.len(),
+            );
+            let pointee = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
+            return IRType::CPtr(Box::new(pointee));
+        }
         assert!(
             type_args.is_empty(),
             "alpha IR lower: stdlib primitive `{}` cannot carry type_args",
@@ -421,14 +452,21 @@ fn global_to_ir_type(
         );
         return match entry.identifier.last() {
             "Bool" => IRType::Bool,
-            "Float" => IRType::Float64,
-            "Int" => IRType::Int64,
+            "Float" | "Float64" => IRType::Float64,
+            "Float32" => IRType::Float32,
+            "Int" | "Int64" => IRType::Int64,
+            "Int8" => IRType::Int8,
+            "Int16" => IRType::Int16,
+            "Int32" => IRType::Int32,
+            "UInt8" => IRType::UInt8,
+            "UInt16" => IRType::UInt16,
+            "UInt32" => IRType::UInt32,
+            "UInt64" => IRType::UInt64,
             "String" => IRType::String,
             "Unit" => IRType::Unit,
             other => panic!(
                 "alpha IR lower: cannot translate `Global.{other}` to IRType yet \
-                 (`Float32` / `Float64` annotations and width-explicit ints land \
-                  in follow-up slices)",
+                 (extend `with_stdlib_stubs` and this match in lockstep)",
             ),
         };
     }

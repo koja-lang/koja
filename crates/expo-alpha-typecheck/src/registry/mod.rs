@@ -305,9 +305,11 @@ impl GlobalRegistry {
 
     /// Seed a fresh registry with stdlib struct stubs for the scalar
     /// types alpha synthesizes from literals (`Int`/`Bool`/`Unit`/
-    /// `Float`/`String`). They register as ordinary
-    /// [`GlobalKind::Struct`] entries under the `Global` package so
-    /// resolve never special-cases primitives.
+    /// `Float`/`String`), the explicit-width numeric primitives that
+    /// FFI signatures admit (`Int8`..`Int64`, `UInt8`..`UInt64`,
+    /// `Float32`/`Float64`), and the generic `CPtr<T>` pointer wrapper.
+    /// They register as ordinary [`GlobalKind::Struct`] entries under
+    /// the `Global` package so resolve never special-cases primitives.
     ///
     /// Temporary scaffolding — once the real stdlib compiles as a
     /// package these entries land through `collect` like any other
@@ -315,7 +317,10 @@ impl GlobalRegistry {
     /// so the cutover is invisible to downstream consumers.
     pub fn with_stdlib_stubs() -> Self {
         let mut reg = Self::default();
-        for name in ["Int", "Bool", "Unit", "Float", "String"] {
+        for name in [
+            "Int", "Bool", "Unit", "Float", "String", "Int8", "Int16", "Int32", "Int64", "UInt8",
+            "UInt16", "UInt32", "UInt64", "Float32", "Float64",
+        ] {
             let outcome = reg.insert_struct(
                 Identifier::new("Global", vec![name.to_string()]),
                 Span::default(),
@@ -326,6 +331,15 @@ impl GlobalRegistry {
                 "stdlib stub `Global.{name}` collided on preload — registry was not empty",
             );
         }
+        let cptr_outcome = reg.insert_struct(
+            Identifier::new("Global", vec!["CPtr".to_string()]),
+            Span::default(),
+            vec!["T".to_string()],
+        );
+        debug_assert!(
+            matches!(cptr_outcome, InsertOutcome::Fresh(_)),
+            "stdlib stub `Global.CPtr` collided on preload — registry was not empty",
+        );
         reg
     }
 

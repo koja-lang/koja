@@ -435,7 +435,9 @@ fn read_source_or_exit(path: &Path) -> String {
 /// [`pipeline::link`](crate::pipeline) helper for `cc` invocation,
 /// runtime archive embedding, and BoringSSL linkage. `app_name`
 /// flows into the binary's `__expo_app_name` global (panic
-/// backtrace label).
+/// backtrace label). `script.link_libraries` (deduped at lower
+/// time from every `@extern "C" @link "lib"`) flows through to
+/// `cc -l<name>` so FFI calls resolve at link time.
 fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str) {
     let object_path = format!("{output}.o");
     if let Err(err) = expo_alpha_ir_llvm::compile_script(script, app_name, Path::new(&object_path))
@@ -443,17 +445,17 @@ fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str) {
         eprintln!("error: {err}");
         process::exit(1);
     }
-    link_object(&object_path, output);
+    link_object(&object_path, output, &script.link_libraries);
 }
 
-fn link_object(object_path: &str, output: &str) {
+fn link_object(object_path: &str, output: &str, link_libraries: &[String]) {
     let options = BuildOptions {
         color: false,
         emit_llvm: false,
         quiet: true,
         release: false,
     };
-    pipeline::link(object_path, output, &[], options);
+    pipeline::link(object_path, output, link_libraries, options);
 }
 
 /// Canonicalize a user-supplied source path, exiting on miss with

@@ -33,7 +33,7 @@ pub(super) fn seal_package(pkg: &IRPackage) {
 
 fn seal_function(function: &IRFunction) {
     let owner = format!("function `{}`", function.symbol);
-    match function.kind {
+    match &function.kind {
         FunctionKind::Intrinsic => {
             if !function.blocks.is_empty() {
                 seal_panic(&format!(
@@ -46,6 +46,15 @@ fn seal_function(function: &IRFunction) {
         FunctionKind::Regular => {
             if function.blocks.is_empty() {
                 seal_panic(&format!("{owner} has no basic blocks"));
+            }
+        }
+        FunctionKind::Extern(_) => {
+            if !function.blocks.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is `@extern \"C\"` but carries {} basic block(s); FFI \
+                     declarations have no body and must lower to empty `blocks`",
+                    function.blocks.len(),
+                ));
             }
         }
     }
@@ -87,9 +96,10 @@ fn seal_locals(function: &IRFunction, owner: &str) {
             }
         }
     }
-    // Intrinsics carry params for backend signature shape but emit
-    // no body, so they have no matching `LocalDecl`s to check.
-    if function.kind == FunctionKind::Regular {
+    // Intrinsics and `@extern "C"` decls carry params for backend
+    // signature shape but emit no body, so they have no matching
+    // `LocalDecl`s to check.
+    if matches!(function.kind, FunctionKind::Regular) {
         for param in &function.params {
             if !declared.contains(&param.local_id) {
                 seal_panic(&format!(
