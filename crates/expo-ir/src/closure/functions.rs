@@ -109,7 +109,7 @@ fn collect_from_expr(
     pending: &mut Vec<Pending>,
     seen: &mut HashSet<FunctionIdentifier>,
 ) {
-    let ExprKind::Call { callee, args } = &expr.kind else {
+    let ExprKind::Call { callee, args, .. } = &expr.kind else {
         return;
     };
     let ExprKind::Ident { name, .. } = &callee.kind else {

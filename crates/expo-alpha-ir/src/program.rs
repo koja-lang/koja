@@ -127,16 +127,23 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
     for pkg in &checked.packages {
         packages.push(lower::lower_package(pkg, &checked.registry, &mut output));
     }
-    let LowerOutput {
-        diagnostics,
-        instantiations,
-    } = output;
 
-    if !diagnostics.is_empty() {
-        return Err(LowerError::Diagnostics(diagnostics));
+    if !output.diagnostics.is_empty() {
+        return Err(LowerError::Diagnostics(output.diagnostics));
     }
 
-    generics::instantiate(instantiations, &checked.registry, &mut packages);
+    let initial = std::mem::take(&mut output.instantiations);
+    generics::instantiate(
+        initial,
+        &checked.registry,
+        &checked.packages,
+        &mut packages,
+        &mut output,
+    );
+
+    if !output.diagnostics.is_empty() {
+        return Err(LowerError::Diagnostics(output.diagnostics));
+    }
 
     let entry_symbol = IRSymbol::from_identifier(&entry);
     let program = merge::merge(packages, entry_symbol);

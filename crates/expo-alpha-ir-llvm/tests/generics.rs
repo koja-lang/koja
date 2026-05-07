@@ -48,7 +48,8 @@ fn generic_struct_emits_named_llvm_struct_with_mangled_symbol() {
         ";
 
     let script = lower(&dedent(source));
-    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(
@@ -81,7 +82,8 @@ fn generic_struct_distinct_args_emit_distinct_named_llvm_types() {
         ";
 
     let script = lower(&dedent(source));
-    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(
@@ -111,7 +113,8 @@ fn nested_generic_struct_emits_inner_type_inside_outer_field_layout() {
         ";
 
     let script = lower(&dedent(source));
-    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "%\"TestApp.Box_$Int64$\" = type { i64 }");
@@ -138,7 +141,8 @@ fn generic_enum_emits_outer_complete_and_payload_named_types_with_mangled_symbol
         ";
 
     let script = lower(&dedent(source));
-    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     // Outer blob — sized to the largest variant's complete struct.
@@ -169,7 +173,8 @@ fn generic_enum_distinct_args_emit_distinct_named_llvm_types() {
         ";
 
     let script = lower(&dedent(source));
-    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(

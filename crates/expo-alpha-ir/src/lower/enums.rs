@@ -88,7 +88,7 @@ pub(super) fn lower_enum_decl(
         ));
         return None;
     }
-    if !definition.type_params.is_empty() {
+    if !entry.type_params.is_empty() {
         return None;
     }
     let symbol = IRSymbol::from_identifier(&entry.identifier);

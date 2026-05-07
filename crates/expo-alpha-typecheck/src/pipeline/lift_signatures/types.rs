@@ -9,25 +9,50 @@ use expo_ast::span::Span;
 
 use crate::registry::{Dispatch, GlobalRegistry};
 
-/// Surrounding generic-decl context for [`resolve_type_expr`]. The
-/// `owner` is the registry id of the enclosing struct/enum; `names`
-/// are the param names in declaration order so a path-segment match
-/// can mint a [`Resolution::TypeParam`] with the right index.
-#[derive(Clone, Copy)]
+/// Stack of generic-decl owners visible at this resolution site.
+/// Innermost first (e.g. `[fn_id, struct_id]` for an inline method
+/// on a generic struct). [`Self::lookup`] walks the stack and yields
+/// the first `(owner, index)` whose entry registers a matching param
+/// name. Names live on the [`GlobalRegistry`] entry — the scope is
+/// just the chain.
+///
+/// Empty scope (`TypeParamScope::default()`) is the right value
+/// outside any generic-decl body; lookups against it always return
+/// `None` so resolve falls through to global lookup.
+#[derive(Clone, Copy, Default)]
 pub(crate) struct TypeParamScope<'a> {
-    pub(crate) owner: GlobalRegistryId,
-    pub(crate) names: &'a [String],
+    owners: &'a [GlobalRegistryId],
+}
+
+impl<'a> TypeParamScope<'a> {
+    pub(crate) fn new(owners: &'a [GlobalRegistryId]) -> Self {
+        Self { owners }
+    }
+
+    pub(crate) fn lookup(
+        &self,
+        name: &str,
+        registry: &GlobalRegistry,
+    ) -> Option<(GlobalRegistryId, TypeParamIndex)> {
+        for &owner in self.owners {
+            let names = registry.type_params(owner)?;
+            if let Some(pos) = names.iter().position(|n| n == name) {
+                return Some((owner, TypeParamIndex::new(pos as u32)));
+            }
+        }
+        None
+    }
 }
 
 /// Resolve a [`TypeExpr`] against the registry. Single-segment
 /// `TypeExpr::Named` matching the surrounding scope resolves to
 /// [`Resolution::TypeParam`]; otherwise it resolves to a preloaded
 /// `Global.<name>` stub or a user struct/enum. `TypeExpr::Generic`
-/// recurses into its args. `scope` is `Some` inside generic-decl
-/// bodies, `None` everywhere else.
+/// recurses into its args. `scope` is empty outside generic-decl
+/// bodies (see [`TypeParamScope::default`]).
 pub(crate) fn resolve_type_expr(
     type_expr: &TypeExpr,
-    scope: Option<TypeParamScope<'_>>,
+    scope: TypeParamScope<'_>,
     package: &str,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -72,14 +97,12 @@ fn resolve_generic(
     path: &[String],
     args: &[TypeExpr],
     span: Span,
-    scope: Option<TypeParamScope<'_>>,
+    scope: TypeParamScope<'_>,
     package: &str,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    if path.len() == 1
-        && scope.is_some_and(|s| s.names.iter().any(|name| name == &path[0]))
-    {
+    if path.len() == 1 && scope.lookup(&path[0], registry).is_some() {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck: type parameter `{}` cannot take type arguments",
@@ -140,7 +163,7 @@ fn resolve_generic(
 fn resolve_named(
     path: &[String],
     span: Span,
-    scope: Option<TypeParamScope<'_>>,
+    scope: TypeParamScope<'_>,
     package: &str,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -156,13 +179,8 @@ fn resolve_named(
         return ResolvedType::unresolved();
     }
     let name = &path[0];
-    if let Some(scope) = scope
-        && let Some(position) = scope.names.iter().position(|param| param == name)
-    {
-        return ResolvedType::leaf(Resolution::TypeParam {
-            owner: scope.owner,
-            index: TypeParamIndex::new(position as u32),
-        });
+    if let Some((owner, index)) = scope.lookup(name, registry) {
+        return ResolvedType::leaf(Resolution::TypeParam { owner, index });
     }
     // User-defined structs in the current package shadow stdlib
     // primitives by binding lookup order. The collect sub-pass has

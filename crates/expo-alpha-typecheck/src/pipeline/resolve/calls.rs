@@ -9,14 +9,29 @@ use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedTyp
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
+use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
 
-use super::ctx::Resolver;
+use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::structs::lookup_type;
 use super::types::display_resolution;
+
+/// Inputs to [`infer_method_call_type_args`] — bundles the two
+/// [`Callee`]s in play (the method and its enclosing type), the
+/// receiver-scope seed (instance dispatch supplies the receiver's
+/// `resolution.type_args`; static dispatch supplies an empty
+/// slice), and the explicit param slice (sig.params minus `self`
+/// for instance dispatch). The substituted-param return still
+/// walks the full `sig.params`.
+struct MethodInferenceTarget<'a> {
+    receiver: Callee<'a>,
+    method: Callee<'a>,
+    receiver_seed: &'a [ResolvedType],
+    explicit_params: &'a [ResolvedParam],
+}
 
 /// Receiver classification for method-call dispatch. Captures only
 /// the `struct_id` so the dispatcher can re-look-up the
@@ -55,6 +70,7 @@ impl MethodReceiver {
 pub(super) fn resolve_call(
     callee: &mut Expr,
     args: &mut [Arg],
+    type_args: &mut Vec<ResolvedType>,
     call_span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -86,7 +102,7 @@ pub(super) fn resolve_call(
     };
 
     let sig = match &entry.kind {
-        GlobalKind::Function(Some(sig)) => sig,
+        GlobalKind::Function(Some(sig)) => sig.clone(),
         GlobalKind::Function(None) => panic!(
             "resolve_call: function `{}` has no lifted signature — \
              lift_signatures must run before resolve",
@@ -103,25 +119,143 @@ pub(super) fn resolve_call(
             return ResolvedType::unresolved();
         }
     };
+    let callee_label = entry.identifier.to_string();
+    let callee_identifier = entry.identifier.clone();
+    let callee_type_params = entry.type_params.clone();
 
     *ident_resolution = Resolution::Global(id);
-    validate_arg_signature(
-        args,
-        &sig.params,
-        &entry.identifier,
-        call_span,
-        resolver.registry,
-        diagnostics,
-    );
-    sig.return_type.clone()
+
+    if callee_type_params.is_empty() {
+        validate_arg_signature(
+            args,
+            &sig.params,
+            &callee_identifier,
+            call_span,
+            resolver.registry,
+            diagnostics,
+        );
+        sig.return_type.clone()
+    } else {
+        let callee = Callee {
+            id,
+            label: &callee_label,
+            type_params: &callee_type_params,
+        };
+        let (substituted_params, substituted_return) = infer_call_type_args(
+            callee,
+            &sig,
+            args,
+            type_args,
+            call_span,
+            resolver.registry,
+            diagnostics,
+        );
+        validate_arg_signature(
+            args,
+            &substituted_params,
+            &callee_identifier,
+            call_span,
+            resolver.registry,
+            diagnostics,
+        );
+        substituted_return
+    }
+}
+
+/// Drive call-site type inference for a generic callee. Unifies each
+/// declared param against its arg; surfaces conflicts and phantom
+/// params; populates `type_args` on the AST and returns the
+/// substituted param list + return type so [`validate_arg_signature`]
+/// shows concrete types in arity / type diagnostics rather than
+/// leaked `T`.
+fn infer_call_type_args(
+    callee: Callee<'_>,
+    sig: &FunctionSignature,
+    args: &[Arg],
+    out_type_args: &mut Vec<ResolvedType>,
+    call_span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (Vec<ResolvedParam>, ResolvedType) {
+    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
+    for (param, arg) in sig.params.iter().zip(args.iter()) {
+        if !arg.value.resolution.is_resolved() {
+            continue;
+        }
+        if let Err(conflict) =
+            unify_resolved_type(&param.ty, &arg.value.resolution, callee.id, &mut subst)
+        {
+            emit_conflict(&callee, conflict, arg.span, registry, diagnostics);
+        }
+    }
+    diagnose_phantom_params(&callee, &subst, call_span, diagnostics);
+    let substituted_params = sig
+        .params
+        .iter()
+        .map(|p| ResolvedParam {
+            name: p.name.clone(),
+            ty: substitute_resolved_type(&p.ty, &subst, callee.id),
+        })
+        .collect();
+    let substituted_return = substitute_resolved_type(&sig.return_type, &subst, callee.id);
+    *out_type_args = subst
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
+        .collect();
+    (substituted_params, substituted_return)
+}
+
+fn emit_conflict(
+    callee: &Callee<'_>,
+    conflict: Conflict,
+    span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "type parameter `{}` of `{}` cannot be both `{}` and `{}`",
+            callee.type_params[conflict.param_index],
+            callee.label,
+            display_resolution(&conflict.prev, registry),
+            display_resolution(&conflict.actual, registry),
+        ),
+        span,
+    ));
+}
+
+/// Surface a "cannot infer" diagnostic for every type-param slot
+/// that stayed `None` after the unification walk. Shared by the
+/// bare-call and method-call inference paths.
+fn diagnose_phantom_params(
+    callee: &Callee<'_>,
+    subst: &[Option<ResolvedType>],
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (index, slot) in subst.iter().enumerate() {
+        if slot.is_none() {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha typecheck cannot infer type parameter `{}` of `{}` \
+                     from the supplied arguments",
+                    callee.type_params[index], callee.label,
+                ),
+                span,
+            ));
+        }
+    }
 }
 
 /// Resolve a method-style call: classify the receiver, look up
 /// `<Type>.<method>`, check dispatch matches, then validate args.
+/// `out_type_args` is populated when the method or its enclosing
+/// type is generic so IR lower can spawn the right monomorphization.
 pub(super) fn resolve_method_call(
     receiver: &mut Expr,
     method: &str,
     args: &mut [Arg],
+    out_type_args: &mut Vec<ResolvedType>,
     call_span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -136,11 +270,13 @@ pub(super) fn resolve_method_call(
     let Some(struct_entry) = resolver.registry.get(struct_id) else {
         return ResolvedType::unresolved();
     };
+    let receiver_label = struct_entry.identifier.to_string();
+    let receiver_type_params = struct_entry.type_params.clone();
 
     let mut method_path = struct_entry.identifier.path().to_vec();
     method_path.push(method.to_string());
     let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
-    let Some((_, method_entry)) = resolver.registry.lookup(&method_identifier) else {
+    let Some((method_id, method_entry)) = resolver.registry.lookup(&method_identifier) else {
         diagnostics.push(Diagnostic::error(
             method_lookup_message(method_receiver, struct_entry, method),
             call_span,
@@ -149,7 +285,7 @@ pub(super) fn resolve_method_call(
     };
 
     let sig = match function_signature(method_entry) {
-        Ok(sig) => sig,
+        Ok(sig) => sig.clone(),
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
             return ResolvedType::unresolved();
@@ -164,16 +300,139 @@ pub(super) fn resolve_method_call(
         ));
         return sig.return_type.clone();
     }
+    let method_label = method_entry.identifier.to_string();
+    let method_identifier = method_entry.identifier.clone();
+    let method_type_params = method_entry.type_params.clone();
 
-    validate_arg_signature(
+    if receiver_type_params.is_empty() && method_type_params.is_empty() {
+        validate_arg_signature(
+            args,
+            method_receiver.explicit_params(&sig.params),
+            &method_identifier,
+            call_span,
+            resolver.registry,
+            diagnostics,
+        );
+        return sig.return_type.clone();
+    }
+
+    let receiver_seed: &[ResolvedType] = match method_receiver {
+        MethodReceiver::Static { .. } => &[],
+        MethodReceiver::Instance { .. } => &receiver.resolution.type_args,
+    };
+    let target = MethodInferenceTarget {
+        receiver: Callee {
+            id: struct_id,
+            label: &receiver_label,
+            type_params: &receiver_type_params,
+        },
+        method: Callee {
+            id: method_id,
+            label: &method_label,
+            type_params: &method_type_params,
+        },
+        receiver_seed,
+        explicit_params: method_receiver.explicit_params(&sig.params),
+    };
+    let (substituted_params, substituted_return) = infer_method_call_type_args(
+        target,
+        &sig,
         args,
-        method_receiver.explicit_params(&sig.params),
-        &method_entry.identifier,
+        out_type_args,
         call_span,
         resolver.registry,
         diagnostics,
     );
-    sig.return_type.clone()
+    validate_arg_signature(
+        args,
+        method_receiver.explicit_params(&substituted_params),
+        &method_identifier,
+        call_span,
+        resolver.registry,
+        diagnostics,
+    );
+    substituted_return
+}
+
+/// Method-call inference. Splits the substitution into two owners:
+/// the method's own type-param scope and the receiver's. The receiver
+/// scope is seeded by the receiver value's resolved `type_args` (for
+/// instance dispatch); the method scope is populated from the
+/// arg/param walk just like [`infer_call_type_args`]. `out_type_args`
+/// receives the method-scope substitution (the receiver scope is
+/// already on the receiver's [`ResolvedType`] and surfaces through
+/// the IR's existing struct/enum mangling).
+fn infer_method_call_type_args(
+    target: MethodInferenceTarget<'_>,
+    sig: &FunctionSignature,
+    args: &[Arg],
+    out_type_args: &mut Vec<ResolvedType>,
+    call_span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> (Vec<ResolvedParam>, ResolvedType) {
+    let MethodInferenceTarget {
+        receiver,
+        method,
+        receiver_seed,
+        explicit_params,
+    } = target;
+
+    let mut receiver_subst: Vec<Option<ResolvedType>> = vec![None; receiver.type_params.len()];
+    for (slot, arg) in receiver_subst.iter_mut().zip(receiver_seed.iter()) {
+        if arg.resolution.is_resolved() {
+            *slot = Some(arg.clone());
+        }
+    }
+    let mut method_subst: Vec<Option<ResolvedType>> = vec![None; method.type_params.len()];
+    for (param, arg) in explicit_params.iter().zip(args.iter()) {
+        if !arg.value.resolution.is_resolved() {
+            continue;
+        }
+        if !method.type_params.is_empty()
+            && let Err(conflict) = unify_resolved_type(
+                &param.ty,
+                &arg.value.resolution,
+                method.id,
+                &mut method_subst,
+            )
+        {
+            emit_conflict(&method, conflict, arg.span, registry, diagnostics);
+        }
+        if !receiver.type_params.is_empty()
+            && let Err(conflict) = unify_resolved_type(
+                &param.ty,
+                &arg.value.resolution,
+                receiver.id,
+                &mut receiver_subst,
+            )
+        {
+            emit_conflict(&receiver, conflict, arg.span, registry, diagnostics);
+        }
+    }
+    diagnose_phantom_params(&method, &method_subst, call_span, diagnostics);
+    diagnose_phantom_params(&receiver, &receiver_subst, call_span, diagnostics);
+    let substituted_params: Vec<ResolvedParam> = sig
+        .params
+        .iter()
+        .map(|p| {
+            let with_method = substitute_resolved_type(&p.ty, &method_subst, method.id);
+            let with_receiver =
+                substitute_resolved_type(&with_method, &receiver_subst, receiver.id);
+            ResolvedParam {
+                name: p.name.clone(),
+                ty: with_receiver,
+            }
+        })
+        .collect();
+    let with_method_return = substitute_resolved_type(&sig.return_type, &method_subst, method.id);
+    let substituted_return =
+        substitute_resolved_type(&with_method_return, &receiver_subst, receiver.id);
+    *out_type_args = method_subst
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
+        .collect();
+    (substituted_params, substituted_return)
 }
 
 /// Inspect the receiver and pick the dispatch path. Stamps both the

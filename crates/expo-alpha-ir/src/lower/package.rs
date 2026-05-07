@@ -54,15 +54,17 @@ pub(crate) fn lower_package(
                     if let Some(lowered) = lower_enum_decl(decl, &pkg.package, registry, output) {
                         enums.insert(lowered.symbol.clone(), lowered);
                     }
-                    for function in &decl.functions {
-                        let identifier = Identifier::new(
-                            &pkg.package,
-                            vec![decl.name.clone(), function.name.clone()],
-                        );
-                        if let Some(lowered) =
-                            lower_function_with_identifier(function, identifier, registry, output)
-                        {
-                            functions.insert(lowered.symbol.clone(), lowered);
+                    if decl.type_params.is_empty() {
+                        for function in &decl.functions {
+                            let identifier = Identifier::new(
+                                &pkg.package,
+                                vec![decl.name.clone(), function.name.clone()],
+                            );
+                            if let Some(lowered) = lower_function_with_identifier(
+                                function, identifier, registry, output,
+                            ) {
+                                functions.insert(lowered.symbol.clone(), lowered);
+                            }
                         }
                     }
                 }
@@ -78,15 +80,17 @@ pub(crate) fn lower_package(
                     if let Some(lowered) = lower_struct_decl(decl, &pkg.package, registry, output) {
                         structs.insert(lowered.symbol.clone(), lowered);
                     }
-                    for function in &decl.functions {
-                        let identifier = Identifier::new(
-                            &pkg.package,
-                            vec![decl.name.clone(), function.name.clone()],
-                        );
-                        if let Some(lowered) =
-                            lower_function_with_identifier(function, identifier, registry, output)
-                        {
-                            functions.insert(lowered.symbol.clone(), lowered);
+                    if decl.type_params.is_empty() {
+                        for function in &decl.functions {
+                            let identifier = Identifier::new(
+                                &pkg.package,
+                                vec![decl.name.clone(), function.name.clone()],
+                            );
+                            if let Some(lowered) = lower_function_with_identifier(
+                                function, identifier, registry, output,
+                            ) {
+                                functions.insert(lowered.symbol.clone(), lowered);
+                            }
                         }
                     }
                 }
@@ -121,6 +125,9 @@ fn lower_impl(
     let Some(target_name) = impl_target_name(&impl_block.target) else {
         return;
     };
+    if impl_target_is_generic(target_name, package, registry) {
+        return;
+    }
     for member in &impl_block.members {
         let ImplMember::Function(function) = member else {
             continue;
@@ -137,7 +144,19 @@ fn lower_impl(
     }
 }
 
-fn impl_target_name(target: &TypeExpr) -> Option<&str> {
+/// True when `target_name` resolves to a generic struct/enum.
+/// Methods on a generic target are specialized through
+/// [`crate::generics::instantiate`] when the receiver type is
+/// concrete; lowering them eagerly at the template would feed
+/// `TypeParam` into [`resolved_type_to_ir_type`] and panic.
+fn impl_target_is_generic(target_name: &str, package: &str, registry: &GlobalRegistry) -> bool {
+    let identifier = Identifier::new(package, vec![target_name.to_string()]);
+    registry
+        .lookup(&identifier)
+        .is_some_and(|(_, entry)| !entry.type_params.is_empty())
+}
+
+pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
     match target {
         TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
         _ => None,
@@ -149,13 +168,38 @@ fn impl_target_name(target: &TypeExpr) -> Option<&str> {
 /// (backends synthesize bodies from a mangled-symbol table); regular
 /// functions become [`FunctionKind::Regular`] with at least one
 /// basic block. Returns `None` (with a diagnostic) on feature gaps.
+///
+/// Generic functions are skipped here — same shape as the
+/// generic-struct skip in [`super::structs::lower_struct_decl`].
+/// Specialization happens later when [`crate::generics::instantiate`]
+/// drives the worklist of [`Instantiation`]s recorded at call sites.
 pub(super) fn lower_function_with_identifier(
     function: &Function,
     identifier: Identifier,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRFunction> {
+    if !function.type_params.is_empty() {
+        return None;
+    }
     let signature = function_signature(registry, &identifier)?;
+    let symbol = IRSymbol::from_identifier(&identifier);
+    lower_function_inner(function, &identifier, signature, symbol, registry, output)
+}
+
+/// Body of [`lower_function_with_identifier`] minus the registry
+/// signature lookup and the generic skip — both of which the
+/// monomorphization driver supplies on its own (substituted
+/// signature, mangled symbol). Shared by the concrete top-level
+/// path and `crate::generics::monomorphize::monomorphize_function`.
+pub(crate) fn lower_function_inner(
+    function: &Function,
+    identifier: &Identifier,
+    signature: &FunctionSignature,
+    symbol: IRSymbol,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Option<IRFunction> {
     let return_type =
         resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
     let intrinsic = is_intrinsic(&function.annotations);
@@ -177,7 +221,7 @@ pub(super) fn lower_function_with_identifier(
             kind: FunctionKind::Intrinsic,
             params,
             return_type,
-            symbol: IRSymbol::from_identifier(&identifier),
+            symbol,
         });
     }
 
@@ -190,7 +234,7 @@ pub(super) fn lower_function_with_identifier(
     };
 
     let entry = ctx.fresh_block("entry");
-    let params = lower_params(function, &identifier, signature, registry, output, &mut ctx)?;
+    let params = lower_params(function, identifier, signature, registry, output, &mut ctx)?;
 
     let flow = lower_body(body, &mut ctx, entry, registry, output).ok()?;
     finalize_open_flow(&mut ctx, flow);
@@ -201,7 +245,7 @@ pub(super) fn lower_function_with_identifier(
         kind: FunctionKind::Regular,
         params,
         return_type,
-        symbol: IRSymbol::from_identifier(&identifier),
+        symbol,
     })
 }
 
@@ -379,6 +423,7 @@ fn global_to_ir_type(
         instantiations.push(Instantiation {
             template: id,
             args: type_args.to_vec(),
+            owner: id,
         });
     }
     let symbol = mangled_type_name(&template, &translated);

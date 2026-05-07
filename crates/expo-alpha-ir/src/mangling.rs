@@ -21,6 +21,14 @@ pub(crate) fn mangled_type_name(symbol: &IRSymbol, args: &[IRType]) -> IRSymbol 
     symbol.derived(&format!("_${}$", rendered.join(".")))
 }
 
+/// Mangle a generic function's identifier with its inferred
+/// type-args. Same shape as [`mangled_type_name`] — the `_$..$`
+/// suffix attaches directly to the function symbol so call sites
+/// and monomorphization agree on the symbol form.
+pub(crate) fn mangled_function_name(symbol: &IRSymbol, args: &[IRType]) -> IRSymbol {
+    mangled_type_name(symbol, args)
+}
+
 fn mangle_type(ty: &IRType) -> String {
     match ty {
         IRType::Bool => "Bool".to_string(),

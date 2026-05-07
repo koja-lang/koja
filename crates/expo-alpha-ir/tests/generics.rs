@@ -138,10 +138,7 @@ fn generic_struct_distinct_args_produce_distinct_decls() {
     pair_decls.sort();
     assert_eq!(
         pair_decls,
-        vec![
-            "TestApp.Pair_$Int64.String$",
-            "TestApp.Pair_$String.Int64$",
-        ],
+        vec!["TestApp.Pair_$Int64.String$", "TestApp.Pair_$String.Int64$",],
     );
 }
 
@@ -200,7 +197,10 @@ fn nested_generic_struct_yields_concrete_decls_for_outer_and_inner() {
     let outer = script
         .struct_decl(outer_mangled)
         .unwrap_or_else(|| panic!("expected outer concrete `{outer_mangled}`"));
-    assert_eq!(outer.fields[0].ir_type, IRType::Struct(inner.symbol.clone()));
+    assert_eq!(
+        outer.fields[0].ir_type,
+        IRType::Struct(inner.symbol.clone())
+    );
     assert_eq!(outer.fields[1].ir_type, IRType::String);
 }
 
@@ -360,7 +360,10 @@ fn nested_generic_enum_in_generic_struct_yields_concrete_decls_for_both() {
         .enum_decl(inner_mangled)
         .unwrap_or_else(|| panic!("expected nested concrete `{inner_mangled}`"));
     let IRVariantPayload::Tuple(inner_types) = &inner.variants[0].payload else {
-        panic!("expected Tuple payload, got {:?}", inner.variants[0].payload);
+        panic!(
+            "expected Tuple payload, got {:?}",
+            inner.variants[0].payload
+        );
     };
     assert_eq!(inner_types, &vec![IRType::Int64]);
 

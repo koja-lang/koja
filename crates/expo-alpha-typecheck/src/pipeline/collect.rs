@@ -111,7 +111,8 @@ fn register_function_with_identifier(
     if reject_self_param(function, &identifier, self_context, diagnostics) {
         return;
     }
-    match registry.insert_function(identifier, function.span) {
+    let type_params = type_param_names(&function.type_params);
+    match registry.insert_function(identifier, function.span, type_params) {
         InsertOutcome::Fresh(_) => {}
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
@@ -164,7 +165,8 @@ fn register_struct(
 ) {
     diagnose_struct_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    match registry.insert_struct(identifier, decl.span) {
+    let type_params = type_param_names(&decl.type_params);
+    match registry.insert_struct(identifier, decl.span, type_params) {
         InsertOutcome::Fresh(_) => {}
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
@@ -207,7 +209,8 @@ fn register_enum(
 ) {
     diagnose_enum_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    match registry.insert_enum(identifier, decl.span) {
+    let type_params = type_param_names(&decl.type_params);
+    match registry.insert_enum(identifier, decl.span, type_params) {
         InsertOutcome::Fresh(_) => {}
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
@@ -317,7 +320,10 @@ fn register_protocol(
 ) {
     diagnose_protocol_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    if let InsertOutcome::Collision { existing } = registry.insert_protocol(identifier, decl.span) {
+    let type_params = type_param_names(&decl.type_params);
+    if let InsertOutcome::Collision { existing } =
+        registry.insert_protocol(identifier, decl.span, type_params)
+    {
         diagnostics.push(Diagnostic::error_with_hint(
             format!("`{}` is already defined", existing.identifier),
             format!(
@@ -338,6 +344,14 @@ fn simple_named_target(target: &TypeExpr) -> Option<&str> {
         TypeExpr::Named { path, .. } if path.len() == 1 => Some(path[0].as_str()),
         _ => None,
     }
+}
+
+/// Project the AST `[TypeParam]` list down to the param-name `Vec`
+/// the registry stores. Bounds are intentionally dropped here —
+/// alpha typecheck doesn't enforce them yet and lift / resolve only
+/// need names for [`crate::pipeline::lift_signatures::types::TypeParamScope::lookup`].
+fn type_param_names(type_params: &[TypeParam]) -> Vec<String> {
+    type_params.iter().map(|p| p.name.clone()).collect()
 }
 
 fn type_expr_span(type_expr: &TypeExpr) -> Span {

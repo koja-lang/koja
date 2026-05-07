@@ -158,7 +158,7 @@ impl<'a> Lowerer<'a> {
                 let (out, operand) = self.lower_binary_literal(builder, open, segments)?;
                 return Ok((out, operand, Type::Primitive(Primitive::Binary)));
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 if let ExprKind::Ident { name, .. } = &callee.kind {
                     if let Some((open, operand, ty)) =
                         self.lower_call_or_stub(builder, open, name, args, tail, expr.span)?
@@ -199,6 +199,7 @@ impl<'a> Lowerer<'a> {
                 receiver,
                 method,
                 args,
+                ..
             } => {
                 if let Some((open, operand, ty)) =
                     self.lower_method_call_or_stub(builder, open, receiver, method, args, tail)?

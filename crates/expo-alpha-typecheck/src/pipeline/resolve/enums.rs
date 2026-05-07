@@ -26,7 +26,7 @@ use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::ctx::Resolver;
+use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::structs::{lookup_type, validate_named_fields};
 use super::types::display_resolution;
@@ -78,6 +78,7 @@ pub(super) fn resolve_enum_construction(
     };
 
     let enum_label = enum_entry.identifier.to_string();
+    let type_params = enum_entry.type_params.clone();
     let Some((_, variant_def)) = definition.lookup_variant(variant) else {
         diagnostics.push(Diagnostic::error(
             format!("`{enum_label}` has no variant `{variant}`"),
@@ -86,8 +87,7 @@ pub(super) fn resolve_enum_construction(
         return ResolvedType::leaf(Resolution::Global(enum_id));
     };
 
-    let type_param_count = definition.type_params.len();
-    if type_param_count == 0 {
+    if type_params.is_empty() {
         validate_variant_payload(
             &enum_label,
             variant_def,
@@ -104,21 +104,24 @@ pub(super) fn resolve_enum_construction(
             format!(
                 "alpha typecheck cannot infer type parameters of `{enum_label}` from \
                  unit variant `{variant}` (no payload to constrain `{}`)",
-                definition.type_params.join("`, `"),
+                type_params.join("`, `"),
             ),
             span,
         ));
         return ResolvedType {
             resolution: Resolution::Global(enum_id),
-            type_args: vec![ResolvedType::unresolved(); type_param_count],
+            type_args: vec![ResolvedType::unresolved(); type_params.len()],
         };
     }
 
+    let callee = Callee {
+        id: enum_id,
+        label: &enum_label,
+        type_params: &type_params,
+    };
     let subst = infer_enum_type_args(
-        &enum_label,
-        enum_id,
+        callee,
         variant_def,
-        &definition.type_params,
         data,
         span,
         resolver.registry,
@@ -149,18 +152,15 @@ pub(super) fn resolve_enum_construction(
 /// emits one diagnostic per [`Conflict`] and one per Phantom param.
 /// Shape-mismatched constructions skip inference and let
 /// [`validate_variant_payload`] surface the shape diagnostic.
-#[allow(clippy::too_many_arguments)]
 fn infer_enum_type_args(
-    enum_label: &str,
-    enum_id: GlobalRegistryId,
+    callee: Callee<'_>,
     variant: &ResolvedEnumVariant,
-    type_params: &[String],
     data: &EnumConstructionData,
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<Option<ResolvedType>> {
-    let mut subst: Vec<Option<ResolvedType>> = vec![None; type_params.len()];
+    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
     match (&variant.data, data) {
         (ResolvedVariantData::Tuple(declared), EnumConstructionData::Tuple(exprs)) => {
             for (declared_ty, expr) in declared.iter().zip(exprs.iter()) {
@@ -168,12 +168,11 @@ fn infer_enum_type_args(
                     continue;
                 }
                 if let Err(conflict) =
-                    unify_resolved_type(declared_ty, &expr.resolution, enum_id, &mut subst)
+                    unify_resolved_type(declared_ty, &expr.resolution, callee.id, &mut subst)
                 {
                     emit_conflict(
-                        enum_label,
+                        &callee,
                         &variant.name,
-                        type_params,
                         conflict,
                         expr.span,
                         registry,
@@ -193,13 +192,12 @@ fn infer_enum_type_args(
                 if let Err(conflict) = unify_resolved_type(
                     &declared_field.ty,
                     &init.value.resolution,
-                    enum_id,
+                    callee.id,
                     &mut subst,
                 ) {
                     emit_conflict(
-                        enum_label,
+                        &callee,
                         &variant.name,
-                        type_params,
                         conflict,
                         init.span,
                         registry,
@@ -214,9 +212,9 @@ fn infer_enum_type_args(
         if slot.is_none() {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck cannot infer type parameter `{}` of `{enum_label}` \
+                    "alpha typecheck cannot infer type parameter `{}` of `{}` \
                      from the supplied `{}` payload",
-                    type_params[index], variant.name,
+                    callee.type_params[index], callee.label, variant.name,
                 ),
                 span,
             ));
@@ -225,11 +223,9 @@ fn infer_enum_type_args(
     subst
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_conflict(
-    enum_label: &str,
+    callee: &Callee<'_>,
     variant_name: &str,
-    type_params: &[String],
     conflict: Conflict,
     span: Span,
     registry: &GlobalRegistry,
@@ -237,8 +233,9 @@ fn emit_conflict(
 ) {
     diagnostics.push(Diagnostic::error(
         format!(
-            "type parameter `{}` of `{enum_label}` cannot be both `{}` and `{}` in `{}`",
-            type_params[conflict.param_index],
+            "type parameter `{}` of `{}` cannot be both `{}` and `{}` in `{}`",
+            callee.type_params[conflict.param_index],
+            callee.label,
             display_resolution(&conflict.prev, registry),
             display_resolution(&conflict.actual, registry),
             variant_name,

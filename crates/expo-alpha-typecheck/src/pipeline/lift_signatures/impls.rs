@@ -180,8 +180,13 @@ fn synthesize_default_method(
         ctx.package,
         vec![ctx.target_name.to_string(), function.name.clone()],
     );
+    let type_params: Vec<String> = function
+        .type_params
+        .iter()
+        .map(|p| p.name.clone())
+        .collect();
     if !matches!(
-        registry.insert_function(method_identifier.clone(), function.span),
+        registry.insert_function(method_identifier.clone(), function.span, type_params),
         InsertOutcome::Fresh(_)
     ) {
         return;

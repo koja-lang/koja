@@ -28,7 +28,9 @@
 
 use std::collections::HashMap;
 
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex};
+use expo_ast::identifier::{
+    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+};
 use expo_ast::span::Span;
 
 mod format;
@@ -88,26 +90,22 @@ pub struct FunctionSignature {
 /// Field layout for a user-declared struct. Stamped onto a
 /// [`GlobalKind::Struct`] entry by the `lift_signatures` sub-pass.
 /// Field order matches declaration order — downstream consumers
-/// (IR lower, codegen) index by position. `type_params` is non-empty
-/// for generic structs (`struct Pair<T, U>`); each name is in scope
-/// inside the field types and resolves through
-/// [`expo_ast::identifier::Resolution::TypeParam`].
+/// (IR lower, codegen) index by position. Generic-decl param names
+/// live on the [`RegistryEntry`] itself, not here, so the registry
+/// can answer "what params does this owner declare?" mid-lift.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructDefinition {
     pub fields: Vec<ResolvedStructField>,
-    pub type_params: Vec<String>,
 }
 
 /// Variant roster for a user-declared enum. Stamped onto a
 /// [`GlobalKind::Enum`] entry by the `lift_signatures` sub-pass.
 /// Variant order matches declaration order — the IR's discriminant
 /// tag is the variant's position in this vec, and downstream
-/// consumers (IR lower, codegen) index by position. `type_params`
-/// is non-empty for generic enums (`enum Result<T, E>`); each name
-/// is in scope inside variant payload types.
+/// consumers (IR lower, codegen) index by position. Generic-decl
+/// param names live on the [`RegistryEntry`] itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumDefinition {
-    pub type_params: Vec<String>,
     pub variants: Vec<ResolvedEnumVariant>,
 }
 
@@ -167,14 +165,6 @@ impl StructDefinition {
             .find(|(_, field)| field.name == name)
             .map(|(index, field)| (index as u32, field))
     }
-
-    /// Render the name of a type parameter by its anchored index.
-    /// `None` if the index is out of range (compiler bug).
-    pub fn type_param_name(&self, index: TypeParamIndex) -> Option<&str> {
-        self.type_params
-            .get(index.as_u32() as usize)
-            .map(String::as_str)
-    }
 }
 
 impl EnumDefinition {
@@ -190,14 +180,6 @@ impl EnumDefinition {
             .enumerate()
             .find(|(_, variant)| variant.name == name)
             .map(|(index, variant)| (index as u32, variant))
-    }
-
-    /// Render the name of a type parameter by its anchored index.
-    /// `None` if the index is out of range (compiler bug).
-    pub fn type_param_name(&self, index: TypeParamIndex) -> Option<&str> {
-        self.type_params
-            .get(index.as_u32() as usize)
-            .map(String::as_str)
     }
 }
 
@@ -228,13 +210,18 @@ impl GlobalKind {
 }
 
 /// A single registered declaration: canonical [`Identifier`],
-/// [`GlobalKind`], and source span (used for "already defined here"
-/// diagnostic notes).
+/// [`GlobalKind`], source span (used for "already defined here"
+/// diagnostic notes), and any generic-decl param names declared on
+/// it. `type_params` is stamped at collect time directly from the
+/// AST so [`GlobalRegistry::type_params`] is queryable mid-lift —
+/// before [`StructDefinition`] / [`EnumDefinition`] / signature
+/// payloads are stamped.
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
     pub identifier: Identifier,
     pub kind: GlobalKind,
     pub span: Span,
+    pub type_params: Vec<String>,
 }
 
 /// Outcome of an insert attempt. `Collision` carries the existing
@@ -274,6 +261,7 @@ impl GlobalRegistry {
             let outcome = reg.insert_struct(
                 Identifier::new("Global", vec![name.to_string()]),
                 Span::default(),
+                Vec::new(),
             );
             debug_assert!(
                 matches!(outcome, InsertOutcome::Fresh(_)),
@@ -285,29 +273,55 @@ impl GlobalRegistry {
 
     /// Register an enum in the `Enum(None)` state. The resolved
     /// variant roster is stamped in later by
-    /// [`Self::set_enum_definition`].
-    pub fn insert_enum(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Enum(None), span)
+    /// [`Self::set_enum_definition`]. `type_params` carries the
+    /// declared generic-param names from the AST so resolve and
+    /// lift can answer "what params are in scope inside this decl?"
+    /// before the variant payload types have been resolved.
+    pub fn insert_enum(
+        &mut self,
+        identifier: Identifier,
+        span: Span,
+        type_params: Vec<String>,
+    ) -> InsertOutcome<'_> {
+        self.insert(identifier, GlobalKind::Enum(None), span, type_params)
     }
 
     /// Register a function in the `Function(None)` state. The
     /// signature is stamped in later by [`Self::set_signature`].
-    pub fn insert_function(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Function(None), span)
+    /// `type_params` carries the function's own declared generic
+    /// params (not the enclosing struct/impl's; chained scopes are
+    /// rebuilt at resolve time).
+    pub fn insert_function(
+        &mut self,
+        identifier: Identifier,
+        span: Span,
+        type_params: Vec<String>,
+    ) -> InsertOutcome<'_> {
+        self.insert(identifier, GlobalKind::Function(None), span, type_params)
     }
 
     /// Register a protocol in the `Protocol(None)` state. Method
     /// roster is stamped later by [`Self::set_protocol_definition`].
-    pub fn insert_protocol(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Protocol(None), span)
+    pub fn insert_protocol(
+        &mut self,
+        identifier: Identifier,
+        span: Span,
+        type_params: Vec<String>,
+    ) -> InsertOutcome<'_> {
+        self.insert(identifier, GlobalKind::Protocol(None), span, type_params)
     }
 
     /// Register a struct in the `Struct(None)` state. The
     /// resolved field layout is stamped in later by
     /// [`Self::set_struct_definition`]; preloaded stdlib stub
     /// primitives stay in `Struct(None)` permanently.
-    pub fn insert_struct(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Struct(None), span)
+    pub fn insert_struct(
+        &mut self,
+        identifier: Identifier,
+        span: Span,
+        type_params: Vec<String>,
+    ) -> InsertOutcome<'_> {
+        self.insert(identifier, GlobalKind::Struct(None), span, type_params)
     }
 
     /// Stamp a resolved variant roster onto an enum entry. Panics
@@ -408,6 +422,7 @@ impl GlobalRegistry {
         identifier: Identifier,
         kind: GlobalKind,
         span: Span,
+        type_params: Vec<String>,
     ) -> InsertOutcome<'_> {
         if let Some(&id) = self.by_identifier.get(&identifier) {
             let existing = self
@@ -425,6 +440,7 @@ impl GlobalRegistry {
                 identifier,
                 kind,
                 span,
+                type_params,
             },
         );
         InsertOutcome::Fresh(id)
@@ -492,21 +508,24 @@ impl GlobalRegistry {
     }
 
     /// Render the name of a type parameter by its anchored
-    /// `(owner, index)`. Hides the `GlobalKind::{Struct,Enum}` dispatch
-    /// from rendering call sites. `None` when `owner` doesn't resolve
-    /// to a generic struct/enum or `index` is out of range
-    /// (compiler bug).
-    pub fn type_param_name(
-        &self,
-        owner: GlobalRegistryId,
-        index: TypeParamIndex,
-    ) -> Option<&str> {
-        let entry = self.get(owner)?;
-        match &entry.kind {
-            GlobalKind::Enum(Some(definition)) => definition.type_param_name(index),
-            GlobalKind::Struct(Some(definition)) => definition.type_param_name(index),
-            _ => None,
-        }
+    /// `(owner, index)`. `None` when `owner` is unknown or `index`
+    /// is out of range (compiler bug — index should have come from
+    /// a [`Resolution::TypeParam`] anchored to the same owner).
+    pub fn type_param_name(&self, owner: GlobalRegistryId, index: TypeParamIndex) -> Option<&str> {
+        self.get(owner)?
+            .type_params
+            .get(index.as_u32() as usize)
+            .map(String::as_str)
+    }
+
+    /// Slice of generic-decl param names declared on `owner`. `None`
+    /// when `owner` is unknown; a known owner with no generics
+    /// returns `Some(&[])`. Used by
+    /// [`crate::pipeline::lift_signatures::types::TypeParamScope::lookup`]
+    /// to walk a chained scope and turn a name into
+    /// `(owner, TypeParamIndex)`.
+    pub fn type_params(&self, owner: GlobalRegistryId) -> Option<&[String]> {
+        self.get(owner).map(|entry| entry.type_params.as_slice())
     }
 
     /// Iterate every entry. `HashMap` iteration is not stable across

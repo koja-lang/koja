@@ -57,7 +57,7 @@ pub(super) fn lower_struct_decl(
              lift_signatures invariant violation",
         );
     };
-    if !definition.type_params.is_empty() {
+    if !entry.type_params.is_empty() {
         return None;
     }
     let symbol = IRSymbol::from_identifier(&entry.identifier);

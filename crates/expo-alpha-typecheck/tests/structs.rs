@@ -1067,8 +1067,12 @@ fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
 
     let checked = typecheck(&dedent(source));
     let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
+    let entry = checked
+        .registry
+        .get(pair_id)
+        .expect("registered Pair entry");
+    assert_eq!(entry.type_params, vec!["T".to_string(), "U".to_string()]);
     let definition = struct_definition(&checked, "Pair");
-    assert_eq!(definition.type_params, vec!["T".to_string(), "U".to_string()]);
     assert_eq!(definition.fields.len(), 2);
     assert!(matches!(
         definition.fields[0].ty.resolution,
@@ -1079,8 +1083,7 @@ fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
         Resolution::TypeParam { owner, .. } if owner == pair_id,
     ));
     assert_ne!(
-        definition.fields[0].ty.resolution,
-        definition.fields[1].ty.resolution,
+        definition.fields[0].ty.resolution, definition.fields[1].ty.resolution,
         "T and U must mint distinct TypeParam handles",
     );
 }

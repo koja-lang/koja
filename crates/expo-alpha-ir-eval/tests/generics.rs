@@ -52,10 +52,7 @@ fn generic_struct_construction_yields_value_struct_with_mangled_symbol() {
         panic!("expected Value::Struct, got {value:?}");
     };
     assert_eq!(symbol.mangled(), "TestApp.Pair_$Int64.String$");
-    assert_eq!(
-        fields,
-        vec![Value::Int(1), Value::String("x".to_string())],
-    );
+    assert_eq!(fields, vec![Value::Int(1), Value::String("x".to_string())],);
 }
 
 #[test]

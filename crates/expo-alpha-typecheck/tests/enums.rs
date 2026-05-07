@@ -641,8 +641,12 @@ fn generic_enum_lifts_with_type_params_and_typeparam_payload_resolutions() {
 
     let checked = typecheck(&dedent(source));
     let result_id = lookup_enum_id(&checked, "Result");
+    let entry = checked
+        .registry
+        .get(result_id)
+        .expect("registered Result entry");
+    assert_eq!(entry.type_params, vec!["T".to_string(), "E".to_string()]);
     let definition = enum_definition(&checked, "Result");
-    assert_eq!(definition.type_params, vec!["T".to_string(), "E".to_string()]);
 
     let ok = variant(definition, "Ok");
     let ResolvedVariantData::Tuple(ok_payload) = &ok.data else {

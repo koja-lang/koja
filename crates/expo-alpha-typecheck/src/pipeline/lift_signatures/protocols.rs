@@ -9,7 +9,7 @@ use crate::registry::{
     Dispatch, GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedParam, ResolvedProtocolMethod,
 };
 
-use super::types::resolve_type_expr;
+use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_protocol(
     decl: &ProtocolDecl,
@@ -55,13 +55,25 @@ fn lift_protocol_method(
                 name, type_expr, ..
             } => Some(ResolvedParam {
                 name: name.clone(),
-                ty: resolve_type_expr(type_expr, None, package, registry, diagnostics),
+                ty: resolve_type_expr(
+                    type_expr,
+                    TypeParamScope::default(),
+                    package,
+                    registry,
+                    diagnostics,
+                ),
             }),
             Param::Self_ { .. } => None,
         })
         .collect();
     let return_type = match method.return_type.as_ref() {
-        Some(type_expr) => resolve_type_expr(type_expr, None, package, registry, diagnostics),
+        Some(type_expr) => resolve_type_expr(
+            type_expr,
+            TypeParamScope::default(),
+            package,
+            registry,
+            diagnostics,
+        ),
         None => registry.primitive("Unit"),
     };
     ResolvedProtocolMethod {

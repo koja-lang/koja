@@ -82,7 +82,7 @@ fn zero_arg_call_resolves_to_callee_return_type() {
         "call site should resolve to `answer`'s return type (Int)",
     );
 
-    let ExprKind::Call { callee, args } = &call.kind else {
+    let ExprKind::Call { callee, args, .. } = &call.kind else {
         panic!("expected Call expression, got {:?}", call.kind);
     };
     assert!(args.is_empty(), "zero-arg call should carry zero args");

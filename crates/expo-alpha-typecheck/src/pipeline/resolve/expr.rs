@@ -31,9 +31,11 @@ pub(super) fn resolve_expr(
             resolve_expr(right, resolver, diagnostics);
             binary_type(*op, left, right, expr.span, resolver.registry, diagnostics)
         }
-        ExprKind::Call { callee, args } => {
-            resolve_call(callee, args, expr.span, resolver, diagnostics)
-        }
+        ExprKind::Call {
+            callee,
+            args,
+            type_args,
+        } => resolve_call(callee, args, type_args, expr.span, resolver, diagnostics),
         ExprKind::EnumConstruction {
             type_path,
             variant,
@@ -66,7 +68,16 @@ pub(super) fn resolve_expr(
             receiver,
             method,
             args,
-        } => resolve_method_call(receiver, method, args, expr.span, resolver, diagnostics),
+            type_args,
+        } => resolve_method_call(
+            receiver,
+            method,
+            args,
+            type_args,
+            expr.span,
+            resolver,
+            diagnostics,
+        ),
         ExprKind::Self_ { local_id } => resolve_self(local_id, expr.span, resolver, diagnostics),
         ExprKind::String { parts, .. } => resolve_string(parts, expr.span, resolver, diagnostics),
         ExprKind::StructConstruction { type_path, fields } => {

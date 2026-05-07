@@ -589,7 +589,17 @@ pub enum ExprKind {
     /// A binary/bitstring literal: `<<0xFF, 0x00, length::16>>`.
     BinaryLiteral { segments: Vec<BinarySegment> },
     /// A function call: `f(args)`.
-    Call { callee: Box<Expr>, args: Vec<Arg> },
+    ///
+    /// `type_args` is empty after parse and stamped by typecheck:
+    /// for a generic callee `fn id<T>(x: T)`, the inferred concrete
+    /// type for each declared param lands here in declaration order
+    /// so IR lower can spawn the right monomorphization. Non-generic
+    /// callees keep it empty.
+    Call {
+        callee: Box<Expr>,
+        args: Vec<Arg>,
+        type_args: Vec<ResolvedType>,
+    },
     /// A block closure: `fn (x: Int) -> Int ... end`.
     Closure {
         params: Vec<ClosureParam>,
@@ -642,10 +652,12 @@ pub enum ExprKind {
         arms: Vec<MatchArm>,
     },
     /// A method or qualified call: `obj.method(args)`, `math.add(1, 2)`.
+    /// `type_args` follows the same shape as [`ExprKind::Call`].
     MethodCall {
         receiver: Box<Expr>,
         method: String,
         args: Vec<Arg>,
+        type_args: Vec<ResolvedType>,
     },
     /// A receive block with match arms and optional timeout:
     /// `receive ... after timeout -> ... end`.

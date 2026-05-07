@@ -277,6 +277,7 @@ pub(crate) fn infer_expr(expr: &mut Expr, ctx: &mut TypeContext, ce: &mut CheckE
             receiver,
             method,
             args,
+            ..
         } => infer_method_call(receiver, method, args, span, ctx, ce),
 
         ExprKind::ShortClosure { params, body, .. } => {

@@ -57,15 +57,14 @@ fn lift_struct_definition(
         return;
     }
 
-    let type_params: Vec<String> = decl
-        .type_params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect();
-    let scope = (!type_params.is_empty()).then_some(TypeParamScope {
-        owner: id,
-        names: &type_params,
-    });
+    // Param names live on the registry entry (stamped at collect
+    // time); resolve through the chained scope rooted at this id.
+    let owners = if decl.type_params.is_empty() {
+        Vec::new()
+    } else {
+        vec![id]
+    };
+    let scope = TypeParamScope::new(&owners);
 
     let mut fields = Vec::with_capacity(decl.fields.len());
     for field in &decl.fields {
@@ -75,11 +74,5 @@ fn lift_struct_definition(
             ty,
         });
     }
-    registry.set_struct_definition(
-        id,
-        StructDefinition {
-            fields,
-            type_params,
-        },
-    );
+    registry.set_struct_definition(id, StructDefinition { fields });
 }

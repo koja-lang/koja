@@ -28,7 +28,7 @@ mod protocols;
 mod structs;
 mod types;
 
-pub(crate) use types::resolve_type_expr;
+pub(crate) use types::{TypeParamScope, resolve_type_expr};
 
 /// `protocol_id -> method_name -> protocol method with default body`.
 /// Local to one `lift_signatures` call.

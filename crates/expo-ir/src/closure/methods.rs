@@ -99,6 +99,7 @@ fn collect_from_expr(
         receiver,
         method,
         args,
+        ..
     } = &expr.kind
     else {
         return;

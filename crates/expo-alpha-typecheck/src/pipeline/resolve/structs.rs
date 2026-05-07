@@ -13,7 +13,7 @@ use expo_ast::span::Span;
 use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
-use super::ctx::Resolver;
+use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::types::display_resolution;
 
@@ -71,8 +71,8 @@ pub(super) fn resolve_struct_construction(
     };
 
     let owner = struct_entry.identifier.to_string();
-    let type_param_count = definition.type_params.len();
-    if type_param_count == 0 {
+    let type_params = struct_entry.type_params.clone();
+    if type_params.is_empty() {
         validate_named_fields(
             &owner,
             &definition.fields,
@@ -84,11 +84,14 @@ pub(super) fn resolve_struct_construction(
         return ResolvedType::leaf(Resolution::Global(struct_id));
     }
 
+    let callee = Callee {
+        id: struct_id,
+        label: &owner,
+        type_params: &type_params,
+    };
     let subst = infer_struct_type_args(
-        &owner,
-        struct_id,
+        callee,
         &definition.fields,
-        &definition.type_params,
         fields,
         span,
         resolver.registry,
@@ -126,18 +129,15 @@ pub(super) fn resolve_struct_construction(
 /// per [`Conflict`] (T inferred to two distinct types) and one per
 /// Phantom param (no field constrains it). Slots without inference
 /// stay `None` so the caller surfaces an unresolved leaf.
-#[allow(clippy::too_many_arguments)]
 fn infer_struct_type_args(
-    owner_label: &str,
-    struct_id: GlobalRegistryId,
+    callee: Callee<'_>,
     declared: &[ResolvedStructField],
-    type_params: &[String],
     fields: &[FieldInit],
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<Option<ResolvedType>> {
-    let mut subst: Vec<Option<ResolvedType>> = vec![None; type_params.len()];
+    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
     for field in fields {
         let Some((_, declared_field)) = lookup_named_field(declared, &field.name) else {
             continue;
@@ -148,19 +148,19 @@ fn infer_struct_type_args(
         if let Err(conflict) = unify_resolved_type(
             &declared_field.ty,
             &field.value.resolution,
-            struct_id,
+            callee.id,
             &mut subst,
         ) {
-            emit_conflict(owner_label, type_params, conflict, field.span, registry, diagnostics);
+            emit_conflict(&callee, conflict, field.span, registry, diagnostics);
         }
     }
     for (index, slot) in subst.iter().enumerate() {
         if slot.is_none() {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck cannot infer type parameter `{}` of `{owner_label}` \
+                    "alpha typecheck cannot infer type parameter `{}` of `{}` \
                      from the supplied fields",
-                    type_params[index],
+                    callee.type_params[index], callee.label,
                 ),
                 span,
             ));
@@ -170,8 +170,7 @@ fn infer_struct_type_args(
 }
 
 fn emit_conflict(
-    owner_label: &str,
-    type_params: &[String],
+    callee: &Callee<'_>,
     conflict: Conflict,
     span: Span,
     registry: &GlobalRegistry,
@@ -179,8 +178,9 @@ fn emit_conflict(
 ) {
     diagnostics.push(Diagnostic::error(
         format!(
-            "type parameter `{}` of `{owner_label}` cannot be both `{}` and `{}`",
-            type_params[conflict.param_index],
+            "type parameter `{}` of `{}` cannot be both `{}` and `{}`",
+            callee.type_params[conflict.param_index],
+            callee.label,
             display_resolution(&conflict.prev, registry),
             display_resolution(&conflict.actual, registry),
         ),

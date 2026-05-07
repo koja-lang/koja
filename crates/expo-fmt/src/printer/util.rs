@@ -595,7 +595,7 @@ fn expr_text_len(expr: &Expr) -> usize {
             expr_text_len(left) + expr_text_len(right) + binop_str(op).len() + 2
         }
         ExprKind::Unary { operand, .. } => expr_text_len(operand) + 4,
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call { callee, args, .. } => {
             expr_text_len(callee)
                 + args.iter().map(|a| expr_text_len(&a.value)).sum::<usize>()
                 + args.len().saturating_sub(1) * 2

@@ -412,7 +412,7 @@ impl<'a> Printer<'a> {
                     self.binary_segment(seg);
                 }
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call { callee, args, .. } => {
                 self.section("callee", |p| p.expr(callee));
                 if !args.is_empty() {
                     self.section("args", |p| {

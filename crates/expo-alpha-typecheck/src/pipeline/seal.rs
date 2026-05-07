@@ -7,40 +7,66 @@
 
 use expo_ast::ast::{
     AssignTarget, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item, LValue,
-    Statement, StringPart,
+    Statement, StringPart, TypeExpr,
 };
-use expo_ast::identifier::{Resolution, ResolvedType};
+use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::program::CheckedProgram;
+use crate::registry::GlobalRegistry;
 use expo_ast::labels::expr_kind_label;
 
 /// Asserts the sealed-AST invariants on `program`. Panics on violation.
+///
+/// Generic decl bodies (functions with their own type params, plus
+/// inline `fn` items on generic struct/enum decls and impl-block
+/// methods on generic targets) are skipped — their bodies still
+/// carry [`Resolution::TypeParam`] leaves until IR's monomorphization
+/// substitutes through and re-lowers a concrete copy. The IR pipeline
+/// drops generic templates before seal-equivalent invariants apply
+/// downstream.
 pub(crate) fn seal_ast(program: &CheckedProgram) {
     for pkg in &program.packages {
         for file in &pkg.files {
-            seal_file(file);
+            seal_file(file, &pkg.package, &program.registry);
         }
     }
 }
 
-fn seal_file(file: &File) {
+fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
     for item in &file.items {
         match item {
-            Item::Function(function) => seal_function(function),
+            Item::Function(function) => {
+                if !function.type_params.is_empty() {
+                    continue;
+                }
+                seal_function(function);
+            }
             Item::Struct(decl) => {
+                let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
+                    if owner_generic || !function.type_params.is_empty() {
+                        continue;
+                    }
                     seal_function(function);
                 }
             }
             Item::Enum(decl) => {
+                let owner_generic = !decl.type_params.is_empty();
                 for function in &decl.functions {
+                    if owner_generic || !function.type_params.is_empty() {
+                        continue;
+                    }
                     seal_function(function);
                 }
             }
             Item::Impl(impl_block) => {
+                let target_generic = impl_target_is_generic(&impl_block.target, package, registry);
                 for member in &impl_block.members {
-                    if let ImplMember::Function(function) = member {
+                    if let ImplMember::Function(function) = member
+                        && function.type_params.is_empty()
+                        && !target_generic
+                    {
                         seal_function(function);
                     }
                 }
@@ -56,6 +82,23 @@ fn seal_file(file: &File) {
             seal_statement(stmt);
         }
     }
+}
+
+/// True when an `impl` target names a generic struct/enum (e.g.
+/// `impl Pair` for `struct Pair<T, U>`). Methods on a generic target
+/// inherit the type-param scope, so their bodies carry `TypeParam`
+/// resolutions and seal must skip them.
+fn impl_target_is_generic(target: &TypeExpr, package: &str, registry: &GlobalRegistry) -> bool {
+    let TypeExpr::Named { path, .. } = target else {
+        return false;
+    };
+    if path.len() != 1 {
+        return false;
+    }
+    let identifier = Identifier::new(package, vec![path[0].clone()]);
+    registry
+        .lookup(&identifier)
+        .is_some_and(|(_, entry)| !entry.type_params.is_empty())
 }
 
 fn seal_function(function: &Function) {
@@ -163,10 +206,17 @@ fn seal_expr(expr: &Expr) {
             seal_expr(left);
             seal_expr(right);
         }
-        ExprKind::Call { callee, args } => {
+        ExprKind::Call {
+            callee,
+            args,
+            type_args,
+        } => {
             seal_call_callee(callee);
             for arg in args {
                 seal_expr(&arg.value);
+            }
+            for ty in type_args {
+                seal_no_type_param(ty, expr.span);
             }
         }
         ExprKind::EnumConstruction { data, .. } => match data {
@@ -218,7 +268,12 @@ fn seal_expr(expr: &Expr) {
         }
         ExprKind::Literal { .. } => {}
         ExprKind::Self_ { .. } => {}
-        ExprKind::MethodCall { receiver, args, .. } => {
+        ExprKind::MethodCall {
+            receiver,
+            args,
+            type_args,
+            ..
+        } => {
             // Static method calls: receiver must resolve like any
             // other `Ident` reference (its `resolution` is the
             // struct id, populated by resolve). Args follow the same
@@ -228,6 +283,9 @@ fn seal_expr(expr: &Expr) {
             seal_expr(receiver);
             for arg in args {
                 seal_expr(&arg.value);
+            }
+            for ty in type_args {
+                seal_no_type_param(ty, expr.span);
             }
         }
         ExprKind::String { parts, .. } => {

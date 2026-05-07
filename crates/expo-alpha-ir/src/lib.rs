@@ -44,9 +44,7 @@ mod seal;
 mod struct_decl;
 mod types;
 
-pub use enum_decl::{
-    EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
-};
+pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 pub use error::LowerError;
 pub use function::{
     FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,

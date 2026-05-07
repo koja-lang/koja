@@ -124,13 +124,8 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
 
     let lowered = lower_body_to_blocks(body, &checked.registry, &mut output);
 
-    let LowerOutput {
-        diagnostics,
-        instantiations,
-    } = output;
-
-    if !diagnostics.is_empty() {
-        return Err(LowerError::Diagnostics(diagnostics));
+    if !output.diagnostics.is_empty() {
+        return Err(LowerError::Diagnostics(output.diagnostics));
     }
 
     let (blocks, return_type) = lowered.unwrap_or_else(|()| {
@@ -140,7 +135,18 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
         )
     });
 
-    generics::instantiate(instantiations, &checked.registry, &mut packages);
+    let initial = std::mem::take(&mut output.instantiations);
+    generics::instantiate(
+        initial,
+        &checked.registry,
+        &checked.packages,
+        &mut packages,
+        &mut output,
+    );
+
+    if !output.diagnostics.is_empty() {
+        return Err(LowerError::Diagnostics(output.diagnostics));
+    }
 
     let script = IRScript {
         blocks,

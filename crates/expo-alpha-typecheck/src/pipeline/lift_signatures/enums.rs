@@ -64,15 +64,12 @@ fn lift_enum_definition(
         return;
     }
 
-    let type_params: Vec<String> = decl
-        .type_params
-        .iter()
-        .map(|param| param.name.clone())
-        .collect();
-    let scope = (!type_params.is_empty()).then_some(TypeParamScope {
-        owner: id,
-        names: &type_params,
-    });
+    let owners = if decl.type_params.is_empty() {
+        Vec::new()
+    } else {
+        vec![id]
+    };
+    let scope = TypeParamScope::new(&owners);
 
     let mut variants = Vec::with_capacity(decl.variants.len());
     for variant in &decl.variants {
@@ -90,13 +87,8 @@ fn lift_enum_definition(
                 }
                 let mut resolved = Vec::with_capacity(fields.len());
                 for field in fields {
-                    let ty = resolve_type_expr(
-                        &field.type_expr,
-                        scope,
-                        package,
-                        registry,
-                        diagnostics,
-                    );
+                    let ty =
+                        resolve_type_expr(&field.type_expr, scope, package, registry, diagnostics);
                     resolved.push(ResolvedStructField {
                         name: field.name.clone(),
                         ty,
@@ -128,11 +120,5 @@ fn lift_enum_definition(
             name: variant.name.clone(),
         });
     }
-    registry.set_enum_definition(
-        id,
-        EnumDefinition {
-            type_params,
-            variants,
-        },
-    );
+    registry.set_enum_definition(id, EnumDefinition { variants });
 }
