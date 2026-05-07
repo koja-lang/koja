@@ -1084,14 +1084,15 @@ fn generic_protocol_impl_with_wrong_concrete_arg_diagnoses() {
 }
 
 #[test]
-fn generic_target_impl_anchors_self_at_impl_id() {
-    // `impl Render for Bag<T>` — the impl block introduces a free
-    // type-param `T` that anchors at the impl entry, *not* at the
-    // struct's slot-0 anchor. This pins:
-    //   - `self: Bag<T>` resolves to `Bag<TypeParam(impl_id, 0)>`,
-    //   - free names propagate to method param/return types,
+fn generic_target_impl_anchors_self_at_receiver_id() {
+    // `impl Render for Bag<T>` — the impl block's free type-param
+    // `T` aliases the receiver struct's slot-0 anchor. This pins:
+    //   - `self: Bag<T>` resolves to `Bag<TypeParam(Bag, 0)>`,
+    //     identical to an inline `fn render(self)` on `struct Bag<T>`,
     //   - methods register at `[Bag, render]` regardless of the
-    //     `<T>` decoration on the target head.
+    //     `<T>` decoration on the target head,
+    //   - call-site inference substitutes via the receiver's
+    //     type-args alone (no separate impl scope).
     //
     // Names are picked deliberately to not collide with anything
     // a future stdlib auto-import would bring in.
@@ -1136,9 +1137,9 @@ fn generic_target_impl_anchors_self_at_impl_id() {
         .registry
         .lookup(&bag_identifier)
         .expect("Bag registered");
-    assert_ne!(
+    assert_eq!(
         owner, bag_id,
-        "trait-impl method `T` must not anchor at the struct id; got the struct's own anchor"
+        "trait-impl method `T` must alias the struct's slot-0 anchor",
     );
 }
 

@@ -29,7 +29,6 @@ use expo_ast::identifier::Identifier;
 use expo_ast::labels::{item_label, item_span};
 use expo_ast::span::Span;
 
-use super::lift_signatures;
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome};
 
 pub(crate) fn collect_file(
@@ -239,18 +238,13 @@ fn register_enum(
 }
 
 /// Register every method declared in an `impl Type ... end` block
-/// under `(package, [type_name, fn_name])`, plus — for protocol
-/// impls — a synthetic [`GlobalKind::ProtocolImpl`] entry that owns
-/// the impl's free type-params and anchors the
-/// `(target, protocol) -> impl_id` relation. Inherent impls don't
-/// get a registry entry of their own; multiple inherent `impl T`
+/// under `(package, [type_name, fn_name])`. Inherent and trait
+/// impls share this path — neither gets its own registry entry.
+/// Trait-impl conformance facts (`target : protocol`) are recorded
+/// at lift time onto the target's struct/enum definition; duplicate
+/// `impl P for T` blocks surface there. Multiple inherent `impl T`
 /// blocks accumulate methods on `T` (collisions surface per-method,
 /// not per-block).
-///
-/// Generic-target / generic-`trait_expr` impls are still gated here
-/// (slices 2.7 / 2.8 lift those gates); when they land, only the
-/// "simple_named_target" guards here change — the protocol-impl
-/// entry + methods registration below is already shaped for them.
 fn register_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -284,25 +278,6 @@ fn register_impl(
         ));
         return;
     }
-    if let Some(trait_expr) = &impl_block.trait_expr {
-        let identifier =
-            lift_signatures::protocol_impl_identifier(package, &impl_block.target, trait_expr);
-        let free_names = impl_free_type_names(impl_block, registry, package);
-        if let InsertOutcome::Collision { existing } =
-            registry.insert_protocol_impl(identifier, impl_block.span, free_names)
-        {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!(
-                    "duplicate `impl {} for {}`",
-                    lift_signatures::render_type_expr(trait_expr),
-                    lift_signatures::render_type_expr(&impl_block.target),
-                ),
-                format!("previous definition at line {}", existing.span.start.line),
-                impl_block.span,
-            ));
-            return;
-        }
-    }
     for member in &impl_block.members {
         let ImplMember::Function(function) = member else {
             continue;
@@ -319,67 +294,6 @@ fn register_impl(
             diagnostics,
         );
     }
-}
-
-/// Walk `target ∪ trait_expr` and collect every single-segment
-/// `TypeExpr::Named` name that doesn't resolve to a registered
-/// top-level decl (same-package or `Global.*`). Order is
-/// first-occurrence — target traversed before `trait_expr` — and
-/// duplicates are removed so `impl Foo<T, T>` produces `[T]`. The
-/// returned names own the impl entry's `Resolution::TypeParam`
-/// anchors during lift.
-fn impl_free_type_names(
-    impl_block: &ImplBlock,
-    registry: &GlobalRegistry,
-    package: &str,
-) -> Vec<String> {
-    let mut out = Vec::new();
-    walk_free_names(&impl_block.target, registry, package, &mut out);
-    if let Some(trait_expr) = &impl_block.trait_expr {
-        walk_free_names(trait_expr, registry, package, &mut out);
-    }
-    out
-}
-
-fn walk_free_names(ty: &TypeExpr, registry: &GlobalRegistry, package: &str, out: &mut Vec<String>) {
-    match ty {
-        TypeExpr::Named { path, .. } if path.len() == 1 => {
-            let name = &path[0];
-            if !is_registered_top_level(name, registry, package) && !out.contains(name) {
-                out.push(name.clone());
-            }
-        }
-        TypeExpr::Generic { args, .. } => {
-            for arg in args {
-                walk_free_names(arg, registry, package, out);
-            }
-        }
-        TypeExpr::Function {
-            params,
-            return_type,
-            ..
-        } => {
-            for p in params {
-                walk_free_names(p, registry, package, out);
-            }
-            walk_free_names(return_type, registry, package, out);
-        }
-        TypeExpr::Union { types, .. } => {
-            for t in types {
-                walk_free_names(t, registry, package, out);
-            }
-        }
-        TypeExpr::Named { .. } | TypeExpr::Self_ { .. } | TypeExpr::Unit { .. } => {}
-    }
-}
-
-fn is_registered_top_level(name: &str, registry: &GlobalRegistry, package: &str) -> bool {
-    registry
-        .lookup(&Identifier::new(package, vec![name.to_string()]))
-        .is_some()
-        || registry
-            .lookup(&Identifier::new("Global", vec![name.to_string()]))
-            .is_some()
 }
 
 /// Register a protocol decl. Stamps `type_params` as

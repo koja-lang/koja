@@ -6,6 +6,8 @@
 //! Inline method bodies see no type-param scope yet (out of scope
 //! until the generic-functions slice).
 
+use std::collections::BTreeMap;
+
 use expo_ast::ast::{Diagnostic, StructDecl};
 use expo_ast::identifier::Identifier;
 
@@ -29,7 +31,10 @@ pub(super) fn lift_struct(
         lift_function_with_identifier(
             function,
             method_identifier,
-            SelfContext::Receiver(&struct_identifier),
+            SelfContext::Receiver {
+                receiver: &struct_identifier,
+                self_override: None,
+            },
             package,
             registry,
             diagnostics,
@@ -74,5 +79,11 @@ fn lift_struct_definition(
             ty,
         });
     }
-    registry.set_struct_definition(id, StructDefinition { fields });
+    registry.set_struct_definition(
+        id,
+        StructDefinition {
+            fields,
+            conformances: BTreeMap::new(),
+        },
+    );
 }

@@ -30,9 +30,7 @@ mod protocols;
 mod structs;
 mod types;
 
-pub(crate) use types::{
-    TypeParamScope, protocol_impl_identifier, render_type_expr, resolve_type_expr,
-};
+pub(crate) use types::{TypeParamScope, resolve_type_expr};
 
 use types::resolve_bound_to_id;
 
@@ -41,21 +39,29 @@ use types::resolve_bound_to_id;
 pub(super) type ProtocolBodies = HashMap<GlobalRegistryId, HashMap<String, ProtocolMethod>>;
 
 /// Whether a function being lifted may declare a `self` receiver
-/// and how to type it. `Receiver(ident)` is the inline-method case
-/// (`fn` declared inside `struct` / `enum` body or an inherent
-/// `impl` block) — `self` types as `concrete_self_type(ident)`.
-/// `Impl { impl_id, target }` is the trait-impl method case
-/// (`impl P for T { fn ... }`) — `self` types as the resolved
-/// target so generic-target impls like `impl Show for List<T>`
-/// see `self: List<TypeParam(impl_id, 0)>` and the protocol-impl
-/// entry's free type-params anchor at `impl_id`.
+/// and how to type it. `Receiver { receiver, self_override }`
+/// covers every shape that has a `self`: `fn` declared inside a
+/// `struct`/`enum` body, an inherent `impl` block, or a trait
+/// `impl P for T` block. The type-param scope always anchors at
+/// the receiver's id.
+///
+/// `self_override` is the trait-impl target hook. When `None`,
+/// `self` types as
+/// [`super::types::concrete_self_type`] of the receiver — the
+/// inline / inherent path. When `Some`, `self` types as the
+/// resolved target verbatim. For a generic-target impl like
+/// `impl P for Bag<T>` the override is `Bag<TypeParam(Bag, 0)>`,
+/// which equals `concrete_self_type(Bag)`, so the two paths
+/// converge. The override only diverges when the impl pins
+/// concrete args (e.g. `impl P for Bag<Int>`); pinning `self` to
+/// `Bag<Int>` is what lets call-site dispatch diagnose
+/// `Bag<String>.render()` as a domain miss.
 #[derive(Clone, Copy)]
 pub(super) enum SelfContext<'a> {
     None,
-    Receiver(&'a Identifier),
-    Impl {
-        impl_id: GlobalRegistryId,
-        target: &'a ResolvedType,
+    Receiver {
+        receiver: &'a Identifier,
+        self_override: Option<&'a ResolvedType>,
     },
 }
 

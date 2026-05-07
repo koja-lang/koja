@@ -10,6 +10,8 @@
 //! empty tuple or struct is a parse-shape that doesn't carry useful
 //! information beyond what `Unit` already captures.
 
+use std::collections::BTreeMap;
+
 use expo_ast::ast::{Diagnostic, EnumDecl, EnumVariantData};
 use expo_ast::identifier::Identifier;
 
@@ -36,7 +38,10 @@ pub(super) fn lift_enum(
         lift_function_with_identifier(
             function,
             method_identifier,
-            SelfContext::Receiver(&enum_identifier),
+            SelfContext::Receiver {
+                receiver: &enum_identifier,
+                self_override: None,
+            },
             package,
             registry,
             diagnostics,
@@ -120,5 +125,11 @@ fn lift_enum_definition(
             name: variant.name.clone(),
         });
     }
-    registry.set_enum_definition(id, EnumDefinition { variants });
+    registry.set_enum_definition(
+        id,
+        EnumDefinition {
+            variants,
+            conformances: BTreeMap::new(),
+        },
+    );
 }

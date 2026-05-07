@@ -17,8 +17,7 @@ use expo_ast::identifier::{Resolution, ResolvedType};
 
 use super::{
     EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ProtocolDefinition,
-    ProtocolImplDefinition, ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData,
-    StructDefinition,
+    ResolvedEnumVariant, ResolvedProtocolMethod, ResolvedVariantData, StructDefinition,
 };
 
 pub fn format_registry(registry: &GlobalRegistry) -> String {
@@ -48,23 +47,9 @@ fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
         GlobalKind::Function(Some(sig)) => format_signature(sig, registry),
         GlobalKind::Protocol(None) => "protocol".to_string(),
         GlobalKind::Protocol(Some(def)) => format_protocol(def, registry),
-        GlobalKind::ProtocolImpl(None) => "impl <unlifted>".to_string(),
-        GlobalKind::ProtocolImpl(Some(def)) => format_protocol_impl(def, registry),
         GlobalKind::Struct(None) => "struct".to_string(),
         GlobalKind::Struct(Some(def)) => format_struct(def, registry),
     }
-}
-
-fn format_protocol_impl(def: &ProtocolImplDefinition, registry: &GlobalRegistry) -> String {
-    let target = format_resolved(&def.target, registry);
-    let protocol = format_resolved(&def.protocol, registry);
-    let methods = def
-        .method_ids
-        .keys()
-        .cloned()
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!("impl {protocol} for {target} {{{methods}}}")
 }
 
 fn format_enum(def: &EnumDefinition, registry: &GlobalRegistry) -> String {
@@ -74,7 +59,8 @@ fn format_enum(def: &EnumDefinition, registry: &GlobalRegistry) -> String {
         .map(|v| format_variant(v, registry))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("enum {{{variants}}}")
+    let conformances = format_conformances(&def.conformances, registry);
+    format!("enum {{{variants}}}{conformances}")
 }
 
 fn format_variant(variant: &ResolvedEnumVariant, registry: &GlobalRegistry) -> String {
@@ -140,7 +126,45 @@ fn format_struct(def: &StructDefinition, registry: &GlobalRegistry) -> String {
         .map(|f| format!("{}: {}", f.name, format_resolved(&f.ty, registry)))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("struct {{{fields}}}")
+    let conformances = format_conformances(&def.conformances, registry);
+    format!("struct {{{fields}}}{conformances}")
+}
+
+/// Render a struct/enum's protocol conformance map as a trailing
+/// `:[Proto, Proto<Arg>]` annotation. Empty maps render to nothing
+/// so unconformant types stay visually identical to pre-conformance
+/// renders. Args are rendered via [`format_resolved`] for stability.
+fn format_conformances(
+    conformances: &std::collections::BTreeMap<
+        expo_ast::identifier::GlobalRegistryId,
+        Vec<ResolvedType>,
+    >,
+    registry: &GlobalRegistry,
+) -> String {
+    if conformances.is_empty() {
+        return String::new();
+    }
+    let entries = conformances
+        .iter()
+        .map(|(protocol_id, args)| {
+            let head = registry
+                .get(*protocol_id)
+                .map(|e| e.identifier.qualified_name())
+                .unwrap_or_else(|| format!("<id {protocol_id}>"));
+            if args.is_empty() {
+                head
+            } else {
+                let rendered = args
+                    .iter()
+                    .map(|a| format_resolved(a, registry))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{head}<{rendered}>")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(" :[{entries}]")
 }
 
 fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> String {

@@ -87,26 +87,47 @@ pub struct FunctionSignature {
     pub return_type: ResolvedType,
 }
 
-/// Field layout for a user-declared struct. Stamped onto a
-/// [`GlobalKind::Struct`] entry by the `lift_signatures` sub-pass.
-/// Field order matches declaration order — downstream consumers
-/// (IR lower, codegen) index by position. Generic-decl param names
-/// live on the [`RegistryEntry`] itself, not here, so the registry
-/// can answer "what params does this owner declare?" mid-lift.
+/// Field layout + protocol conformances for a user-declared struct.
+/// Stamped onto a [`GlobalKind::Struct`] entry by the
+/// `lift_signatures` sub-pass. Field order matches declaration
+/// order — downstream consumers (IR lower, codegen) index by
+/// position. Generic-decl param names live on the
+/// [`RegistryEntry`] itself, not here, so the registry can answer
+/// "what params does this owner declare?" mid-lift.
+///
+/// `conformances` is the per-target index of which protocols the
+/// struct implements: `protocol_id -> user-written protocol args`
+/// (e.g. `Eq -> [String]` for `impl Eq<String> for User`). The
+/// methods themselves register at `[target_head, method_name]`,
+/// so dispatch is `[target, method_name]` directly — IR doesn't
+/// walk this map. Typecheck consults it for bound enforcement
+/// (slice 2.3) and duplicate-impl detection.
+///
+/// Transitional note: this representation lets a struct/enum
+/// entry be self-contained for IR consumption — IR never has to
+/// walk a separate impl table. A future incremental-cache pass
+/// may want a richer structural index over `(target, protocol)`
+/// pairs (e.g. for cross-package resolution); revisit then.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct StructDefinition {
     pub fields: Vec<ResolvedStructField>,
+    pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
 }
 
-/// Variant roster for a user-declared enum. Stamped onto a
-/// [`GlobalKind::Enum`] entry by the `lift_signatures` sub-pass.
-/// Variant order matches declaration order — the IR's discriminant
-/// tag is the variant's position in this vec, and downstream
-/// consumers (IR lower, codegen) index by position. Generic-decl
-/// param names live on the [`RegistryEntry`] itself.
+/// Variant roster + protocol conformances for a user-declared
+/// enum. Stamped onto a [`GlobalKind::Enum`] entry by the
+/// `lift_signatures` sub-pass. Variant order matches declaration
+/// order — the IR's discriminant tag is the variant's position in
+/// this vec, and downstream consumers (IR lower, codegen) index by
+/// position. Generic-decl param names live on the
+/// [`RegistryEntry`] itself.
+///
+/// See [`StructDefinition::conformances`] for the conformance-map
+/// shape and rationale.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct EnumDefinition {
     pub variants: Vec<ResolvedEnumVariant>,
+    pub conformances: BTreeMap<GlobalRegistryId, Vec<ResolvedType>>,
 }
 
 /// One variant on an [`EnumDefinition`]. `name` is the surface
@@ -138,23 +159,6 @@ pub enum ResolvedVariantData {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ProtocolDefinition {
     pub methods: Vec<ResolvedProtocolMethod>,
-}
-
-/// Lifted shape of an `impl P for T` block. Only protocol impls get
-/// a registry entry; inherent `impl T` blocks register their methods
-/// on `[target, method]` directly without anchoring an entry of their
-/// own. `target` is the type the impl extends (`List<T>`, `User`,
-/// `CPtr<UInt8>`); `protocol` is the protocol's full resolved type
-/// (carries `Eq<String>`'s `String` arg). `method_ids` maps each
-/// declared method's surface name to its `[target_name, method_name]`
-/// registry id so IR-side bounded dispatch can route
-/// `Resolution::Global(<protocol_method>)` to the concrete impl
-/// method without a name search.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ProtocolImplDefinition {
-    pub target: ResolvedType,
-    pub protocol: ResolvedType,
-    pub method_ids: BTreeMap<String, GlobalRegistryId>,
 }
 
 /// One method on a [`ProtocolDefinition`]. `has_default` flags whether
@@ -205,15 +209,20 @@ impl EnumDefinition {
 /// Every variant carries its lifted payload inline as `Option<_>`:
 /// `None` is the "collected but not yet lifted" state (and the
 /// permanent state for stdlib stub primitives), `Some(_)` the lifted
-/// state reached after `lift_signatures` runs. `ProtocolImpl` entries
-/// are synthetic — their `Identifier` carries a `<impl>` first segment
-/// (illegal in source) so they can't collide with user-named decls.
+/// state reached after `lift_signatures` runs.
+///
+/// Trait `impl P for T` blocks do *not* get their own registry
+/// entry kind. Their methods register on `[target_head, method]`
+/// like inherent / inline methods, and the conformance fact
+/// (`T : P`) lives on `T`'s [`StructDefinition`] /
+/// [`EnumDefinition`] `conformances` field. This keeps the
+/// receiver entry self-contained for IR — see
+/// [`StructDefinition::conformances`] for the full rationale.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GlobalKind {
     Enum(Option<EnumDefinition>),
     Function(Option<FunctionSignature>),
     Protocol(Option<ProtocolDefinition>),
-    ProtocolImpl(Option<ProtocolImplDefinition>),
     Struct(Option<StructDefinition>),
 }
 
@@ -223,7 +232,6 @@ impl GlobalKind {
             GlobalKind::Enum(_) => "enum",
             GlobalKind::Function(_) => "function",
             GlobalKind::Protocol(_) => "protocol",
-            GlobalKind::ProtocolImpl(_) => "protocol impl",
             GlobalKind::Struct(_) => "struct",
         }
     }
@@ -339,28 +347,6 @@ impl GlobalRegistry {
         self.insert(identifier, GlobalKind::Protocol(None), span, type_params)
     }
 
-    /// Register a protocol impl in the `ProtocolImpl(None)` state.
-    /// The lifted `target` / `protocol` / method roster is stamped
-    /// later by [`Self::set_protocol_impl_definition`]. `type_params`
-    /// carries the free type names that appear in `target ∪
-    /// trait_expr` (e.g. `T` in `impl Show for List<T>`); they own
-    /// the impl's [`Resolution::TypeParam`] anchors. Inherent
-    /// `impl T` blocks register their methods on `[target, method]`
-    /// directly and do *not* get a [`GlobalKind::ProtocolImpl`] entry.
-    pub fn insert_protocol_impl(
-        &mut self,
-        identifier: Identifier,
-        span: Span,
-        type_params: Vec<String>,
-    ) -> InsertOutcome<'_> {
-        self.insert(
-            identifier,
-            GlobalKind::ProtocolImpl(None),
-            span,
-            type_params,
-        )
-    }
-
     /// Register a struct in the `Struct(None)` state. The
     /// resolved field layout is stamped in later by
     /// [`Self::set_struct_definition`]; preloaded stdlib stub
@@ -402,90 +388,62 @@ impl GlobalRegistry {
         }
     }
 
-    /// Stamp a resolved [`ProtocolImplDefinition`] onto a protocol
-    /// impl entry. Panics unless the entry's kind is exactly
-    /// `ProtocolImpl(None)`.
-    pub fn set_protocol_impl_definition(
+    /// Record `target_id` as conforming to `protocol_id` with the
+    /// user-written `protocol_args` (e.g. `[String]` for
+    /// `impl Eq<String> for User`). Returns the previously-recorded
+    /// args if `target` already conformed to `protocol` — the
+    /// caller emits a "duplicate `impl P for T`" diagnostic.
+    /// Panics unless `target_id` names a struct or enum with a
+    /// stamped definition (lift orders enum/struct definition
+    /// stamping before impl conformance recording).
+    pub fn record_conformance(
         &mut self,
-        id: GlobalRegistryId,
-        definition: ProtocolImplDefinition,
-    ) {
-        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+        target_id: GlobalRegistryId,
+        protocol_id: GlobalRegistryId,
+        protocol_args: Vec<ResolvedType>,
+    ) -> Option<Vec<ResolvedType>> {
+        let entry = self.entries.get_mut(&target_id).unwrap_or_else(|| {
             panic!(
-                "set_protocol_impl_definition on missing registry id {id} — \
-                 collect invariant violation",
+                "record_conformance on missing registry id {target_id} — \
+                 lift invariant violation",
             )
         });
-        match &entry.kind {
-            GlobalKind::ProtocolImpl(None) => {
-                entry.kind = GlobalKind::ProtocolImpl(Some(definition));
-            }
-            GlobalKind::ProtocolImpl(Some(_)) => {
-                panic!(
-                    "set_protocol_impl_definition called twice on `{}` — \
-                     lift_signatures must stamp each impl exactly once",
-                    entry.identifier,
-                );
-            }
-            other => {
-                panic!(
-                    "set_protocol_impl_definition called on non-impl entry `{}` ({}) — \
-                     only ProtocolImpl entries carry definitions",
-                    entry.identifier,
-                    other.label(),
-                );
-            }
+        let conformances = match &mut entry.kind {
+            GlobalKind::Struct(Some(def)) => &mut def.conformances,
+            GlobalKind::Enum(Some(def)) => &mut def.conformances,
+            other => panic!(
+                "record_conformance on `{}` ({}) — only stamped struct/enum entries \
+                 accept conformances",
+                entry.identifier,
+                other.label(),
+            ),
+        };
+        if let Some(prev) = conformances.get(&protocol_id) {
+            return Some(prev.clone());
         }
+        conformances.insert(protocol_id, protocol_args);
+        None
     }
 
-    /// Lookup the protocol impl entry (if any) registering
-    /// `protocol_id` for `target_id`. Scans every
-    /// `GlobalKind::ProtocolImpl(Some(_))` entry — the impl itself
-    /// encodes the relation via its `target` head and `protocol`
-    /// head, so a separate index would be redundant state. Used by
-    /// call-site bound enforcement and IR-side bounded dispatch.
-    /// O(impl-count); programs in practice have dozens of impls,
-    /// not millions.
-    pub fn lookup_protocol_impl(
+    /// Whether `target_id` conforms to `protocol_id`. Returns the
+    /// user-written protocol args (e.g. `[String]` for
+    /// `Eq<String>`) when present, else `None`. O(1) HashMap
+    /// lookup on the target's conformance index — IR's bounded
+    /// dispatch never reaches this path (it goes straight to
+    /// `[target, method_name]`); typecheck uses it for
+    /// bound enforcement.
+    pub fn lookup_conformance(
         &self,
         target_id: GlobalRegistryId,
         protocol_id: GlobalRegistryId,
-    ) -> Option<GlobalRegistryId> {
-        self.iter().find_map(|(id, entry)| {
-            let GlobalKind::ProtocolImpl(Some(definition)) = &entry.kind else {
-                return None;
-            };
-            let Resolution::Global(head_id) = definition.target.resolution else {
-                return None;
-            };
-            let Resolution::Global(trait_id) = definition.protocol.resolution else {
-                return None;
-            };
-            (head_id == target_id && trait_id == protocol_id).then_some(id)
-        })
-    }
-
-    /// Reverse-lookup the [`GlobalKind::ProtocolImpl`] entry whose
-    /// `method_ids` registers `method_id`. Returns `None` for inline
-    /// struct/enum methods and inherent-impl methods (those don't
-    /// pass through a `ProtocolImpl` entry). O(impl-count) like
-    /// [`Self::lookup_protocol_impl`]; the call site already paid
-    /// for a method lookup so adding one more scan is cheap relative
-    /// to overall typecheck cost.
-    pub fn find_protocol_impl_owning(
-        &self,
-        method_id: GlobalRegistryId,
-    ) -> Option<GlobalRegistryId> {
-        self.iter().find_map(|(id, entry)| {
-            let GlobalKind::ProtocolImpl(Some(definition)) = &entry.kind else {
-                return None;
-            };
-            definition
-                .method_ids
-                .values()
-                .any(|&mid| mid == method_id)
-                .then_some(id)
-        })
+    ) -> Option<&[ResolvedType]> {
+        let entry = self.entries.get(&target_id)?;
+        let conformances = match &entry.kind {
+            GlobalKind::Struct(Some(def)) => &def.conformances,
+            GlobalKind::Enum(Some(def)) => &def.conformances,
+            _ => return None,
+        };
+        conformances.get(&protocol_id).map(Vec::as_slice)
     }
 
     /// Stamp a resolved method roster. Panics unless the entry's

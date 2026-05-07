@@ -90,7 +90,7 @@ pub(super) fn verify_bounds(
         };
         for &protocol_id in param_bounds {
             if registry
-                .lookup_protocol_impl(target_id, protocol_id)
+                .lookup_conformance(target_id, protocol_id)
                 .is_some()
             {
                 continue;

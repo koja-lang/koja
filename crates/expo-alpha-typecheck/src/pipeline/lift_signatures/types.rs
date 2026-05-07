@@ -19,31 +19,14 @@ use crate::registry::{Dispatch, GlobalKind, GlobalRegistry};
 /// Empty scope (`TypeParamScope::default()`) is the right value
 /// outside any generic-decl body; lookups against it always return
 /// `None` so resolve falls through to global lookup.
-///
-/// `self_type_override` is the trait-impl escape hatch: when a
-/// `SelfContext::Impl` method is being lifted we can't reuse
-/// [`concrete_self_type`] on the impl entry (its `target` isn't
-/// stamped yet, and its anchors live on `impl_id`, not on the
-/// target struct/enum). The lifter passes the resolved target via
-/// this field so [`resolve_self`] returns it verbatim for any
-/// `Self` in the method's signature.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct TypeParamScope<'a> {
     owners: &'a [GlobalRegistryId],
-    self_type_override: Option<&'a ResolvedType>,
 }
 
 impl<'a> TypeParamScope<'a> {
     pub(crate) fn new(owners: &'a [GlobalRegistryId]) -> Self {
-        Self {
-            owners,
-            self_type_override: None,
-        }
-    }
-
-    pub(crate) fn with_self_type(mut self, ty: &'a ResolvedType) -> Self {
-        self.self_type_override = Some(ty);
-        self
+        Self { owners }
     }
 
     pub(crate) fn lookup(
@@ -66,10 +49,6 @@ impl<'a> TypeParamScope<'a> {
     /// enclosing receiver.
     pub(crate) fn self_owner(&self) -> &'a [GlobalRegistryId] {
         self.owners
-    }
-
-    pub(crate) fn self_type_override(&self) -> Option<&'a ResolvedType> {
-        self.self_type_override
     }
 }
 
@@ -127,14 +106,6 @@ fn resolve_self(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    // Trait-impl method lift hands us the resolved target via the
-    // override channel — see [`super::SelfContext::Impl`]. Owner
-    // walk wouldn't find the right anchor here (the impl's
-    // `ProtocolImpl` entry has no `Self` of its own, and the
-    // receiver struct/enum's anchors are the wrong owner).
-    if let Some(self_ty) = scope.self_type_override() {
-        return self_ty.clone();
-    }
     for &owner in scope.self_owner() {
         let Some(entry) = registry.get(owner) else {
             continue;
@@ -149,7 +120,7 @@ fn resolve_self(
             GlobalKind::Struct(_) | GlobalKind::Enum(_) => {
                 return concrete_self_type(owner, registry);
             }
-            GlobalKind::Function(_) | GlobalKind::ProtocolImpl(_) => continue,
+            GlobalKind::Function(_) => continue,
         }
     }
     diagnostics.push(Diagnostic::error(
@@ -331,65 +302,6 @@ pub(super) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
         }
         _ => None,
     }
-}
-
-/// Stable source-syntax render of a `TypeExpr` for synthetic
-/// protocol-impl identifiers. Whitespace-insensitive (renders
-/// comma-separated without spaces) so two trivially-different
-/// formattings of the same impl head produce the same identifier
-/// (and collide on insert for "duplicate impl" detection).
-pub(crate) fn render_type_expr(ty: &TypeExpr) -> String {
-    match ty {
-        TypeExpr::Named { path, .. } => path.join("."),
-        TypeExpr::Generic { path, args, .. } => {
-            let rendered_args = args
-                .iter()
-                .map(render_type_expr)
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("{}<{rendered_args}>", path.join("."))
-        }
-        TypeExpr::Self_ { .. } => "Self".to_string(),
-        TypeExpr::Unit { .. } => "Unit".to_string(),
-        TypeExpr::Function {
-            params,
-            return_type,
-            ..
-        } => {
-            let rendered_params = params
-                .iter()
-                .map(render_type_expr)
-                .collect::<Vec<_>>()
-                .join(",");
-            format!("({rendered_params})->{}", render_type_expr(return_type))
-        }
-        TypeExpr::Union { types, .. } => types
-            .iter()
-            .map(render_type_expr)
-            .collect::<Vec<_>>()
-            .join("|"),
-    }
-}
-
-/// Synthesize a protocol impl block's registry [`Identifier`].
-/// `<impl>` is illegal in source so it can't collide with user-named
-/// decls; `target_render` and `protocol_render` give two
-/// textually-different impls distinct identifiers (and two
-/// textually-identical `impl P for T` blocks collide on insert,
-/// surfacing a "duplicate impl" diagnostic).
-pub(crate) fn protocol_impl_identifier(
-    package: &str,
-    target: &TypeExpr,
-    trait_expr: &TypeExpr,
-) -> Identifier {
-    Identifier::new(
-        package,
-        vec![
-            "<impl>".to_string(),
-            render_type_expr(target),
-            render_type_expr(trait_expr),
-        ],
-    )
 }
 
 /// Resolve a `<T: Bound>` bound name to the protocol's registry id.
