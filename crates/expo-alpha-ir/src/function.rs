@@ -8,6 +8,7 @@ use std::fmt;
 use expo_ast::identifier::Identifier;
 
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
+use crate::extern_attrs::IRExternAttrs;
 use crate::local::IRLocalId;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
@@ -44,6 +45,17 @@ impl IRSymbol {
     /// or to any other linker-aware lookup.
     pub fn mangled(&self) -> &str {
         &self.0
+    }
+
+    /// The bare last segment of the underlying AST identifier path
+    /// (e.g. `TestApp.cosf` → `cosf`). Falls back to the full
+    /// mangled name when no `.` is present (root identifiers,
+    /// derived monomorphization suffixes that don't contain a
+    /// path separator). Used by the LLVM backend when it needs a
+    /// human-readable C-symbol-style name for an `@extern "C"`
+    /// declaration whose `@link "lib"` payload didn't supply one.
+    pub fn last_segment(&self) -> &str {
+        self.0.rsplit('.').next().unwrap_or(self.0.as_str())
     }
 }
 
@@ -90,15 +102,28 @@ impl fmt::Display for IRBlockId {
     }
 }
 
-/// How a function's body is materialized at emission time. `Regular`
-/// carries non-empty blocks the backend walks; `Intrinsic` carries
-/// empty blocks and the backend synthesizes a body from a per-backend
-/// dispatch table keyed by [`IRSymbol::mangled`]. Per-kind body shape
-/// is enforced by the seal pass.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How a function's body is materialized at emission time.
+///
+/// - `Regular` carries non-empty blocks the backend walks.
+/// - `Intrinsic` carries empty blocks and the backend synthesizes
+///   a body from a per-backend dispatch table keyed by
+///   [`IRSymbol::mangled`].
+/// - `Extern(attrs)` carries empty blocks and an FFI-linked
+///   declaration only — the backend declares the function under
+///   the C symbol named by [`IRExternAttrs::link_name`] (or the
+///   function's bare last-segment when `None`) and emits no body;
+///   call sites resolve through an `IRSymbol`-keyed function
+///   index built at declare time.
+///
+/// Per-kind body shape is enforced by the seal pass. The
+/// `Extern` variant carries data, which is why this enum is no
+/// longer `Copy` — `Clone` callers compose the per-fn metadata
+/// without ambient interior mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
     Intrinsic,
     Regular,
+    Extern(IRExternAttrs),
 }
 
 /// A lowered function. `blocks[0]` is the entry block; `params`

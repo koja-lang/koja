@@ -24,6 +24,12 @@ pub enum RuntimeError {
     /// interpreter has no registered handler for. Indicates a missing
     /// registration in `crate::intrinsics`, not a user error.
     UnknownIntrinsic { symbol: String },
+    /// An `@extern "C"` (FFI-linked) function was called inside the
+    /// interpreter. The eval backend has no C-runtime linkage, so
+    /// FFI calls are unsupported by design — projects that exercise
+    /// extern functions need the LLVM backend
+    /// (`--backend=llvm`).
+    ExternNotSupported { symbol: String },
     /// Catch-all for IR shapes the interpreter doesn't yet handle.
     Unsupported { detail: String },
     /// An operand referenced a `ValueId` not yet defined in the
@@ -49,6 +55,13 @@ impl fmt::Display for RuntimeError {
                 write!(
                     f,
                     "unknown intrinsic `{symbol}`: no eval handler registered"
+                )
+            }
+            RuntimeError::ExternNotSupported { symbol } => {
+                write!(
+                    f,
+                    "extern \"C\" calls are not supported by the interpreter \
+                     (`{symbol}`); use --backend=llvm",
                 )
             }
             RuntimeError::Unsupported { detail } => write!(f, "unsupported: {detail}"),

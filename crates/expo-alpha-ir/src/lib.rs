@@ -32,6 +32,7 @@ mod cfg;
 mod constant;
 mod enum_decl;
 mod error;
+mod extern_attrs;
 mod function;
 mod generics;
 mod local;
@@ -48,6 +49,7 @@ mod types;
 pub use constant::IRConstantValue;
 pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 pub use error::LowerError;
+pub use extern_attrs::IRExternAttrs;
 pub use function::{
     FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
     IRTerminator,

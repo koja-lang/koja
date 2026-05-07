@@ -30,6 +30,7 @@ use crate::function::{IRBasicBlock, IRFunction};
 use crate::generics;
 use crate::lower::{LowerOutput, lower_body_to_blocks, lower_package};
 use crate::package::IRPackage;
+use crate::program::collect_link_libraries;
 use crate::seal;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
@@ -47,6 +48,12 @@ use crate::types::IRType;
 /// `IRInstruction::Call` callees without revisiting the typecheck
 /// registry.
 ///
+/// `link_libraries` mirrors [`crate::IRProgram::link_libraries`] —
+/// a deduped, sorted list of `-l<name>` linker library names
+/// collected from every `@extern "C"` function declared anywhere in
+/// the script's package fragments. Per-function `link_name`
+/// overrides stay on the [`IRFunction`].
+///
 /// `return_type` is the static type of the script's trailing
 /// expression value (or `IRType::Unit` for an empty / non-expression
 /// trailing statement). Backends consume this directly to size the
@@ -54,6 +61,7 @@ use crate::types::IRType;
 #[derive(Debug, Clone)]
 pub struct IRScript {
     pub blocks: Vec<IRBasicBlock>,
+    pub link_libraries: Vec<String>,
     pub packages: Vec<IRPackage>,
     pub return_type: IRType,
 }
@@ -158,8 +166,10 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
         return Err(LowerError::Diagnostics(output.diagnostics));
     }
 
+    let link_libraries = collect_link_libraries(packages.iter());
     let script = IRScript {
         blocks,
+        link_libraries,
         packages,
         return_type,
     };

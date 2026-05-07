@@ -301,14 +301,6 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "is not yet supported")]
-    fn unsupported_field_type_panics() {
-        let mut decl = point_decl();
-        decl.fields[0].ir_type = IRType::Int32;
-        seal_struct_decls(&package_with(decl));
-    }
-
-    #[test]
     fn well_formed_struct_init_passes_seal() {
         let decl = point_decl();
         let inst = IRInstruction::StructInit {

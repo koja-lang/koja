@@ -14,6 +14,7 @@ use crate::package::IRPackage;
 pub(crate) fn merge(packages: Vec<IRPackage>, entry_point: IRSymbol) -> IRProgram {
     IRProgram {
         entry_point,
+        link_libraries: Vec::new(),
         packages,
     }
 }

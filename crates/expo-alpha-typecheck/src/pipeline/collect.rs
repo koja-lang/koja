@@ -21,9 +21,9 @@
 //! never see those shapes.
 
 use expo_ast::ast::{
-    Annotation, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File, Function,
-    ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl, StructField,
-    TypeExpr, TypeParam, is_doc_annotation,
+    Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File,
+    Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl,
+    StructField, TypeExpr, TypeParam,
 };
 use expo_ast::identifier::Identifier;
 use expo_ast::labels::{item_label, item_span};
@@ -378,7 +378,7 @@ fn diagnose_constant_annotations(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for annotation in annotations {
-        if is_doc_annotation(annotation) {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -447,7 +447,7 @@ fn diagnose_struct_annotations(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for annotation in annotations {
-        if is_doc_annotation(annotation) {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -484,7 +484,7 @@ fn diagnose_struct_field_gaps(
 /// sees a populated registry.
 fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
-        if is_doc_annotation(annotation) {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -544,7 +544,7 @@ fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut V
 /// `["Self", ...user_declared]` type-param stamping.
 fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
-        if is_doc_annotation(annotation) {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
             continue;
         }
         diagnostics.push(Diagnostic::error(
@@ -577,7 +577,7 @@ fn diagnose_protocol_method_feature_gaps(
         ));
     }
     for annotation in &method.annotations {
-        if is_doc_annotation(annotation) {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
             continue;
         }
         diagnostics.push(Diagnostic::error(

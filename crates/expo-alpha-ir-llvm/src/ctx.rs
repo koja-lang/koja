@@ -29,6 +29,7 @@ use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::BasicType;
 use inkwell::values::BasicValueEnum;
+use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
 
 use crate::constant_pool::ConstantPoolSnapshot;
@@ -63,6 +64,14 @@ pub(crate) struct EmitContext<'ctx> {
     /// `LoadConst` materializes (enum / struct aggregate or string
     /// global); later references reuse the cached handle.
     pub(crate) load_const_cache: RefCell<BTreeMap<IRSymbol, BasicValueEnum<'ctx>>>,
+    /// `IRSymbol -> FunctionValue` index populated at function
+    /// declare time. Decouples call-site resolution from the LLVM
+    /// symbol name — `@extern "C"` declarations may declare under a
+    /// `link_name` alias (`fn cosf` → `@cos`), so `module.get_function`
+    /// keyed at the IR's mangled name would miss. Instruction
+    /// emission goes through [`Self::declared_function`] /
+    /// [`Self::register_declared_function`] instead.
+    declared_functions: RefCell<BTreeMap<IRSymbol, FunctionValue<'ctx>>>,
 }
 
 impl<'ctx> EmitContext<'ctx> {
@@ -84,7 +93,26 @@ impl<'ctx> EmitContext<'ctx> {
             local_slots: RefCell::new(HashMap::new()),
             constant_pool: RefCell::new(None),
             load_const_cache: RefCell::new(BTreeMap::new()),
+            declared_functions: RefCell::new(BTreeMap::new()),
         }
+    }
+
+    /// Insert a freshly-declared function into the
+    /// `IRSymbol -> FunctionValue` index. Idempotent on a per-symbol
+    /// basis; the second call for the same `symbol` overwrites with
+    /// the (presumed-equal) handle, mirroring the inkwell module's
+    /// own dedup behavior for symbols already present in the LLVM
+    /// module.
+    pub(crate) fn register_declared_function(&self, symbol: IRSymbol, value: FunctionValue<'ctx>) {
+        self.declared_functions.borrow_mut().insert(symbol, value);
+    }
+
+    /// Resolve `symbol` to its registered LLVM function. `None` when
+    /// no declare step has run for this symbol yet — call sites
+    /// surface that as a codegen error since the declare phase is
+    /// supposed to run before any body emission.
+    pub(crate) fn declared_function(&self, symbol: &IRSymbol) -> Option<FunctionValue<'ctx>> {
+        self.declared_functions.borrow().get(symbol).copied()
     }
 
     /// Wire the flattened constant pool built from input packages.

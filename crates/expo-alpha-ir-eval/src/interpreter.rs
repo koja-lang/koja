@@ -111,8 +111,16 @@ fn execute_function<R: CallResolver>(
         function.params.len(),
         args.len(),
     );
-    if function.kind == FunctionKind::Intrinsic {
-        return intrinsics::dispatch(function.symbol.mangled(), &args);
+    match &function.kind {
+        FunctionKind::Intrinsic => {
+            return intrinsics::dispatch(function.symbol.mangled(), &args);
+        }
+        FunctionKind::Extern(_) => {
+            return Err(RuntimeError::ExternNotSupported {
+                symbol: function.symbol.mangled().to_string(),
+            });
+        }
+        FunctionKind::Regular => {}
     }
     let mut frame = Frame::new();
     for (param, value) in function.params.iter().zip(args.into_iter()) {

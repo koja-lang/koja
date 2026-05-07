@@ -209,6 +209,13 @@ fn emit_print_call<'ctx>(
             ctx.context.ptr_type(AddressSpace::default()).into(),
             body_value.into_pointer_value().into(),
         ),
+        IRType::CPtr(pointee) => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM does not auto-print `CPtr<{pointee:?}>` return values \
+                 (FFI pointers are opaque at the Expo level); call sites that need a \
+                 print must project a primitive scalar before the trailing expression",
+            )));
+        }
         IRType::Enum(symbol) => {
             return Err(LlvmError::Codegen(format!(
                 "alpha LLVM does not yet auto-print enum values (return type \
