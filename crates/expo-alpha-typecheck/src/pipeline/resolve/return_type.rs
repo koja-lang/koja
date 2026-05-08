@@ -70,6 +70,14 @@ pub(super) fn check_return_type(
         // skip to avoid pile-on noise.
         return;
     }
+    // `Never` is the lattice bottom: a body that diverges (e.g. its
+    // trailing expression is `if cond then return 1 else return 2 end`,
+    // or once `Kernel.panic` lands, a bare `panic()` call) satisfies
+    // any non-`Never` declared return type without ever actually
+    // returning a value.
+    if is_primitive(actual, registry, "Never") {
+        return;
+    }
     if actual != declared {
         diagnostics.push(Diagnostic::error(
             format!(

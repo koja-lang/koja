@@ -13,6 +13,8 @@
 //! See [`expo-runtime/src/alpha.rs`](../../expo-runtime/src/alpha.rs)
 //! for the runtime side of these conventions.
 
+use std::collections::HashSet;
+
 use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRTerminator, IRType};
 use inkwell::AddressSpace;
 use inkwell::module::Linkage;
@@ -76,10 +78,19 @@ pub(crate) fn emit_as_main<'ctx>(
     // helper so `LocalDecl` registers cleanly here.
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, function, blocks);
-    let return_block_id = find_return_block(blocks)?;
+    let reachable = emit::reachable_blocks(blocks);
+    let return_block_id = find_return_block(blocks, &reachable)?;
 
     let mut values: ValueMap<'ctx> = ValueMap::new();
+    let phi_map = emit::declare_block_param_phis(ctx, blocks, &block_map, &mut values)?;
     for block in blocks {
+        if !reachable.contains(&block.id) {
+            // Same boundary stand-in as `define_function`: blocks the
+            // CFG can't reach get `unreachable` so we never try to
+            // materialize their (impossible-to-reach) value reads.
+            emit::emit_unreachable_terminator(ctx, block.id, &block_map)?;
+            continue;
+        }
         let llvm_block = block_map[&block.id];
         ctx.builder.position_at_end(llvm_block);
         if block.id == return_block_id {
@@ -88,7 +99,7 @@ pub(crate) fn emit_as_main<'ctx>(
             values = next_values;
             emit_main_return(ctx, return_type, terminator, &values)?;
         } else {
-            emit::emit_block(ctx, block, &block_map, &mut values)?;
+            emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
         }
     }
     Ok(())
@@ -124,21 +135,31 @@ fn emit_main_return<'ctx>(
         .map_err(|e| inkwell_err("build_return for main", e))
 }
 
-/// The [`IRBlockId`] of the unique block ending in `Return`. The
-/// auto-print wrapper around `main` patches in `ret i64 0` after
-/// executing the body, so we need to know which IR block carries
-/// the body's value before walking. Today's slice produces exactly
-/// one `Return`-terminated block per function (the merge block of
-/// an `if` / `unless` falls through to it via `Branch`), so a
-/// missing or duplicate `Return` is a lowering bug we surface as a
-/// codegen error.
-fn find_return_block(blocks: &[IRBasicBlock]) -> Result<IRBlockId, LlvmError> {
+/// The [`IRBlockId`] of the unique *reachable* block ending in
+/// `Return`. The auto-print wrapper around `main` patches in
+/// `ret i64 0` after executing the body, so we need to know which
+/// IR block carries the body's value before walking. Today's slice
+/// produces exactly one reachable `Return`-terminated block per
+/// function (the merge block of an `if` / `unless` falls through to
+/// it via `Branch`); divergent if/else's may synthesize an
+/// unreachable merge whose `Return` reads an unmaterialized
+/// `BlockParam` — those don't count and are filtered out via
+/// `reachable`. A missing or duplicate reachable `Return` is a
+/// lowering bug we surface as a codegen error.
+fn find_return_block(
+    blocks: &[IRBasicBlock],
+    reachable: &HashSet<IRBlockId>,
+) -> Result<IRBlockId, LlvmError> {
     let mut found: Option<IRBlockId> = None;
     for block in blocks {
+        if !reachable.contains(&block.id) {
+            continue;
+        }
         if matches!(block.terminator, IRTerminator::Return { .. }) {
             if found.is_some() {
                 return Err(LlvmError::Codegen(
-                    "alpha LLVM expects exactly one Return-terminated block in `main`".to_string(),
+                    "alpha LLVM expects exactly one reachable Return-terminated block in `main`"
+                        .to_string(),
                 ));
             }
             found = Some(block.id);
@@ -146,7 +167,8 @@ fn find_return_block(blocks: &[IRBasicBlock]) -> Result<IRBlockId, LlvmError> {
     }
     found.ok_or_else(|| {
         LlvmError::Codegen(
-            "alpha LLVM expects at least one Return-terminated block in `main`".to_string(),
+            "alpha LLVM expects at least one reachable Return-terminated block in `main`"
+                .to_string(),
         )
     })
 }

@@ -293,6 +293,19 @@ fn seal_expr(expr: &Expr) {
                 ),
             }
         }
+        ExprKind::Cond { arms, else_body } => {
+            for arm in arms {
+                seal_expr(&arm.condition);
+                for stmt in &arm.body {
+                    seal_statement(stmt);
+                }
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    seal_statement(stmt);
+                }
+            }
+        }
         ExprKind::If {
             condition,
             then_body,
@@ -341,6 +354,15 @@ fn seal_expr(expr: &Expr) {
             for field in fields {
                 seal_expr(&field.value);
             }
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            seal_expr(condition);
+            seal_expr(then_expr);
+            seal_expr(else_expr);
         }
         ExprKind::Unary { operand, .. } => seal_expr(operand),
         ExprKind::Unless { condition, body } => {

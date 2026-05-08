@@ -21,7 +21,8 @@
 
 use std::collections::HashMap;
 
-use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
+use crate::function::{BlockParam, IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
+use crate::types::{IRType, ValueId};
 
 /// Accumulator for a single CFG fragment. Owns the in-progress
 /// [`IRBasicBlock`] list and tracks which blocks have had a real
@@ -65,10 +66,20 @@ impl CFGBuilder {
         self.blocks.push(IRBasicBlock {
             id,
             label: label.into(),
+            params: Vec::new(),
             instructions: Vec::new(),
-            terminator: IRTerminator::Branch(id),
+            terminator: IRTerminator::branch(id),
         });
         self.by_id.insert(id, index);
+    }
+
+    /// Push a typed [`BlockParam`] onto block `id`'s entry signature.
+    /// The caller has already minted `dest` via the surrounding
+    /// `FnLowerCtx::fresh_value` (so the value-types index is in
+    /// sync); this helper just records the param on the block. Panics
+    /// if the block is not present.
+    pub(crate) fn declare_block_param(&mut self, id: IRBlockId, dest: ValueId, ty: IRType) {
+        self.block_mut(id).params.push(BlockParam { dest, ty });
     }
 
     /// Append `instr` to the block identified by `id`. Panics if the

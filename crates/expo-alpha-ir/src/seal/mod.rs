@@ -173,20 +173,31 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
 
 pub(super) fn terminator_operands(term: &IRTerminator) -> Vec<ValueId> {
     match term {
-        IRTerminator::Branch(_) => vec![],
-        IRTerminator::CondBranch { cond, .. } => vec![*cond],
+        IRTerminator::Branch(target) => target.args.clone(),
+        IRTerminator::CondBranch {
+            cond,
+            else_target,
+            then_target,
+        } => {
+            let mut operands =
+                Vec::with_capacity(1 + then_target.args.len() + else_target.args.len());
+            operands.push(*cond);
+            operands.extend(then_target.args.iter().copied());
+            operands.extend(else_target.args.iter().copied());
+            operands
+        }
         IRTerminator::Return { value } => value.iter().copied().collect(),
     }
 }
 
 pub(super) fn terminator_targets(term: &IRTerminator) -> Vec<IRBlockId> {
     match term {
-        IRTerminator::Branch(target) => vec![*target],
+        IRTerminator::Branch(target) => vec![target.block],
         IRTerminator::CondBranch {
-            then_block,
-            else_block,
+            then_target,
+            else_target,
             ..
-        } => vec![*then_block, *else_block],
+        } => vec![then_target.block, else_target.block],
         IRTerminator::Return { .. } => vec![],
     }
 }

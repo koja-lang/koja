@@ -12,7 +12,7 @@ use expo_ast::identifier::ResolvedType;
 use expo_ast::labels::expr_kind_label;
 
 use super::calls::{resolve_call, resolve_method_call};
-use super::control_flow::{resolve_if, resolve_unless};
+use super::control_flow::{resolve_cond, resolve_if, resolve_ternary, resolve_unless};
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
@@ -51,6 +51,13 @@ pub(super) fn resolve_expr(
         ExprKind::Ident { name, resolution } => {
             resolve_ident(name, resolution, expr.span, resolver, diagnostics)
         }
+        ExprKind::Cond { arms, else_body } => resolve_cond(
+            arms,
+            else_body.as_deref_mut(),
+            expr.span,
+            resolver,
+            diagnostics,
+        ),
         ExprKind::If {
             condition,
             then_body,
@@ -83,6 +90,18 @@ pub(super) fn resolve_expr(
         ExprKind::StructConstruction { type_path, fields } => {
             resolve_struct_construction(type_path, fields, expr.span, resolver, diagnostics)
         }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => resolve_ternary(
+            condition,
+            then_expr,
+            else_expr,
+            expr.span,
+            resolver,
+            diagnostics,
+        ),
         ExprKind::Unary { op, operand } => {
             resolve_expr(operand, resolver, diagnostics);
             unary_type(*op, operand, expr.span, resolver.registry, diagnostics)

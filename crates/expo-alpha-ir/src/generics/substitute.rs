@@ -153,6 +153,28 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
                 substitute_in_expr(&mut field.value, args, owner);
             }
         }
+        ExprKind::Cond { arms, else_body } => {
+            for arm in arms {
+                substitute_in_expr(&mut arm.condition, args, owner);
+                for stmt in &mut arm.body {
+                    substitute_in_statement(stmt, args, owner);
+                }
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    substitute_in_statement(stmt, args, owner);
+                }
+            }
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            substitute_in_expr(condition, args, owner);
+            substitute_in_expr(then_expr, args, owner);
+            substitute_in_expr(else_expr, args, owner);
+        }
         ExprKind::Unary { operand, .. } => substitute_in_expr(operand, args, owner),
         ExprKind::Unless { condition, body } => {
             substitute_in_expr(condition, args, owner);
@@ -166,7 +188,6 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         // rather than a silent miss.
         ExprKind::BinaryLiteral { .. }
         | ExprKind::Closure { .. }
-        | ExprKind::Cond { .. }
         | ExprKind::For { .. }
         | ExprKind::List { .. }
         | ExprKind::Loop { .. }
@@ -175,7 +196,6 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         | ExprKind::Receive { .. }
         | ExprKind::ShortClosure { .. }
         | ExprKind::Spawn { .. }
-        | ExprKind::Ternary { .. }
         | ExprKind::While { .. } => {}
     }
 }

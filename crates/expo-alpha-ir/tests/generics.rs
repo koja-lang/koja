@@ -205,6 +205,43 @@ fn nested_generic_struct_yields_concrete_decls_for_outer_and_inner() {
 }
 
 // ---------------------------------------------------------------------------
+// Substitution coverage for control-flow expressions
+// ---------------------------------------------------------------------------
+
+/// Regression: prior to the alpha-ternary work, [`ExprKind::Cond`]
+/// was in `substitute_in_expr`'s no-op list, so type substitution
+/// silently skipped any `cond` arm bodies. A generic struct
+/// constructed inside a `cond` arm of a generic function would keep
+/// its template-`T`-typed resolution instead of getting rewritten to
+/// the call-site type arg, leaving the worklist with no `Box<Int>`
+/// instantiation to monomorphize.
+#[test]
+fn generic_fn_with_cond_in_body_substitutes_arm_body_resolutions() {
+    let source = "
+        struct Box<T>
+          value: T
+        end
+
+        fn wrap<T>(value: T) -> Box<T>
+          cond
+            true -> Box{value: value}
+            else -> Box{value: value}
+          end
+        end
+
+        wrap(1)
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let mangled = "TestApp.Box_$Int64$";
+    let decl = script.struct_decl(mangled).unwrap_or_else(|| {
+        panic!("expected `{mangled}` in script — Cond substitution did not walk arm bodies")
+    });
+    assert_eq!(decl.fields.len(), 1);
+    assert_eq!(decl.fields[0].ir_type, IRType::Int64);
+}
+
+// ---------------------------------------------------------------------------
 // Generic enums
 // ---------------------------------------------------------------------------
 
