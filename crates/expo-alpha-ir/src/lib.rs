@@ -51,8 +51,8 @@ pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload
 pub use error::LowerError;
 pub use extern_attrs::IRExternAttrs;
 pub use function::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
-    IRTerminator,
+    BlockParam, BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam,
+    IRInstruction, IRSymbol, IRTerminator,
 };
 pub use local::IRLocalId;
 pub use package::IRPackage;

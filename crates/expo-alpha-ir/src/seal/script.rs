@@ -6,9 +6,11 @@
 
 use std::collections::BTreeSet;
 
-use crate::function::IRInstruction;
+use std::collections::BTreeMap;
+
+use crate::function::{IRBasicBlock, IRBlockId, IRInstruction};
 use crate::script::IRScript;
-use crate::types::ValueId;
+use crate::types::{IRType, ValueId};
 
 use super::enums::seal_enum_ops;
 use super::function::{collect_block_ids, seal_block, seal_package};
@@ -25,14 +27,42 @@ pub(crate) fn seal_script(script: &IRScript) {
     }
     require_supported_type(&script.return_type, &|| format!("{owner} return type"));
     let block_ids = collect_block_ids(&script.blocks, owner);
+    let block_params = collect_script_block_params(&script.blocks, owner);
     let seeded: BTreeSet<ValueId> = BTreeSet::new();
     for block in &script.blocks {
-        seal_block(block, owner, &seeded, &block_ids);
+        seal_block(block, owner, &seeded, &block_ids, &block_params);
     }
     seal_script_calls(script);
     seal_script_struct_ops(script);
     seal_script_enum_ops(script);
     seal_script_loadconst_pool(script);
+}
+
+/// Mirror of `super::function::collect_block_params` for the
+/// implicit-function shape: walks the script body's basic blocks,
+/// validates every block param's type, and returns the
+/// `id -> param-types` index `seal_block` consumes for branch-arg
+/// arity checks.
+fn collect_script_block_params(
+    blocks: &[IRBasicBlock],
+    owner: &str,
+) -> BTreeMap<IRBlockId, Vec<IRType>> {
+    let mut by_block: BTreeMap<IRBlockId, Vec<IRType>> = BTreeMap::new();
+    for block in blocks {
+        for (index, param) in block.params.iter().enumerate() {
+            require_supported_type(&param.ty, &|| {
+                format!(
+                    "{owner} block {} param #{index} ({}) type",
+                    block.id, param.dest
+                )
+            });
+        }
+        by_block.insert(
+            block.id,
+            block.params.iter().map(|p| p.ty.clone()).collect(),
+        );
+    }
+    by_block
 }
 
 /// Cross-IR struct check for script-shaped output. Mirrors

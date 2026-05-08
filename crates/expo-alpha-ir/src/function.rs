@@ -142,12 +142,65 @@ pub struct IRFunction {
 /// A straight-line sequence of [`IRInstruction`]s ending in exactly
 /// one [`IRTerminator`]. `label` is a short human hint (`"entry"`,
 /// `"if_then"`) borrowed by the IR text format and LLVM block names.
+///
+/// `params` is the block's typed entry-arg signature: each predecessor
+/// branching into this block must pass exactly that many `ValueId`s
+/// of matching types in its terminator's [`BranchTarget::args`]. Each
+/// [`BlockParam::dest`] is a fresh SSA value, defined-on-entry to the
+/// block, available to every instruction in the block. The seal pass
+/// asserts the per-edge count and type match. Most blocks declare no
+/// params (entry / straight-line bodies); merge blocks of value-
+/// producing `if`/`else`/`cond` are the typical sites that do.
 #[derive(Debug, Clone)]
 pub struct IRBasicBlock {
     pub id: IRBlockId,
     pub label: String,
+    pub params: Vec<BlockParam>,
     pub instructions: Vec<IRInstruction>,
     pub terminator: IRTerminator,
+}
+
+/// A typed entry-argument of an [`IRBasicBlock`]. Block parameters
+/// are the SSA join model alpha-IR uses in place of phi nodes:
+/// values flow into a block along its incoming edges via the
+/// terminating [`BranchTarget::args`] at each predecessor, and the
+/// block's body sees the joined value as a normal `ValueId`. The
+/// LLVM backend translates the block-param/branch-args pair to a
+/// phi node + `add_incoming` calls at emission time; the
+/// interpreter binds args to params on edge traversal.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockParam {
+    pub dest: ValueId,
+    pub ty: IRType,
+}
+
+/// A branch terminator's per-edge payload: the target [`IRBlockId`]
+/// plus the operand list passed as the target block's
+/// [`BlockParam`] values. `args.len()` must equal the target's
+/// `params.len()`; arg types must match the corresponding params.
+/// `args` is empty for the common no-param case, so most existing
+/// terminator construction sites pass `BranchTarget::to(block)`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BranchTarget {
+    pub args: Vec<ValueId>,
+    pub block: IRBlockId,
+}
+
+impl BranchTarget {
+    /// Branch to `block` with no args. Convenience for the common
+    /// case where the target declares zero block params.
+    pub fn to(block: IRBlockId) -> Self {
+        Self {
+            args: Vec::new(),
+            block,
+        }
+    }
+
+    /// Branch to `block` carrying `args`. Caller is responsible for
+    /// arg/param count and type match (seal will reject mismatches).
+    pub fn with_args(block: IRBlockId, args: Vec<ValueId>) -> Self {
+        Self { args, block }
+    }
 }
 
 /// A single SSA-style instruction. Most variants define a fresh
@@ -269,17 +322,32 @@ impl IRInstruction {
 }
 
 /// How a basic block ends. The seal pass guarantees every targeted
-/// `IRBlockId` resolves in the enclosing function.
+/// `IRBlockId` resolves in the enclosing function and that every
+/// [`BranchTarget`]'s `args` list matches the target block's
+/// [`BlockParam`] signature in count and type.
 #[derive(Debug, Clone, PartialEq)]
 pub enum IRTerminator {
-    Branch(IRBlockId),
+    /// Unconditional jump. Most existing call sites use [`Self::branch`]
+    /// to construct one with no args.
+    Branch(BranchTarget),
+    /// Two-way branch on a `Bool`-typed `cond`. Each side carries its
+    /// own [`BranchTarget`] so the two edges can pass distinct
+    /// per-edge args (used by value-producing `if`/`else` whose merge
+    /// block declares a result-typed [`BlockParam`]).
     CondBranch {
         cond: ValueId,
-        then_block: IRBlockId,
-        else_block: IRBlockId,
+        else_target: BranchTarget,
+        then_target: BranchTarget,
     },
     /// Exit the function with `value` (or `Unit` when `None`).
-    Return {
-        value: Option<ValueId>,
-    },
+    Return { value: Option<ValueId> },
+}
+
+impl IRTerminator {
+    /// Unconditional branch to `block` with no args. Convenience for
+    /// the common case (most existing call sites have no per-edge
+    /// args because their targets declare no [`BlockParam`]s).
+    pub fn branch(block: IRBlockId) -> Self {
+        Self::Branch(BranchTarget::to(block))
+    }
 }

@@ -293,6 +293,19 @@ fn seal_expr(expr: &Expr) {
                 ),
             }
         }
+        ExprKind::Cond { arms, else_body } => {
+            for arm in arms {
+                seal_expr(&arm.condition);
+                for stmt in &arm.body {
+                    seal_statement(stmt);
+                }
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    seal_statement(stmt);
+                }
+            }
+        }
         ExprKind::If {
             condition,
             then_body,

@@ -125,6 +125,19 @@ impl FnLowerCtx {
         id
     }
 
+    /// Declare a typed [`crate::function::BlockParam`] on `block` and
+    /// return the fresh `ValueId` that names it. The minted id is
+    /// registered in the value-types index just like every other
+    /// `ValueId` from [`Self::fresh_value`], so downstream operand
+    /// lookups (and the seal pass) see a consistent type for it.
+    /// Used by value-producing control-flow lowering (`if`/`else`,
+    /// `cond`) to declare merge-block result params.
+    pub(crate) fn declare_block_param(&mut self, block: IRBlockId, ty: IRType) -> ValueId {
+        let dest = self.fresh_value(ty.clone());
+        self.cfg.declare_block_param(block, dest, ty);
+        dest
+    }
+
     /// The entry block of the function being lowered. Panics if
     /// called before [`Self::fresh_block`] — every consumer (param
     /// promotion, body-assignment lowering) sequences after entry

@@ -318,8 +318,8 @@ impl GlobalRegistry {
     pub fn with_stdlib_stubs() -> Self {
         let mut reg = Self::default();
         for name in [
-            "Int", "Bool", "Unit", "Float", "String", "Int8", "Int16", "Int32", "Int64", "UInt8",
-            "UInt16", "UInt32", "UInt64", "Float32", "Float64",
+            "Int", "Bool", "Unit", "Float", "Never", "String", "Int8", "Int16", "Int32", "Int64",
+            "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64",
         ] {
             let outcome = reg.insert_struct(
                 Identifier::new("Global", vec![name.to_string()]),

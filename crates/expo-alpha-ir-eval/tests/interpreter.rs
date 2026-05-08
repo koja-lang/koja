@@ -308,3 +308,108 @@ fn if_drives_program_mode_through_helper_calls() {
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(3));
 }
+
+// -- value-producing if/else (block params) -------------------------
+
+#[test]
+fn if_else_value_producing_then_arm_with_true_condition() {
+    // The if/else lowers to a 4-block CFG with a typed BlockParam
+    // on the merge; cond=true reaches merge with the then-arm's
+    // value, which becomes the function's return.
+    let source = "
+        fn pick -> Int
+          if true
+            7
+          else
+            9
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn if_else_value_producing_else_arm_with_false_condition() {
+    let source = "
+        fn pick -> Int
+          if false
+            7
+          else
+            9
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(9));
+}
+
+#[test]
+fn if_else_with_diverging_then_arm_produces_else_value() {
+    // The then-arm diverges via `return`; only the else-arm reaches
+    // merge, passing its tail value via the BlockParam.
+    let source = "
+        fn pick -> Int
+          if false
+            return 1
+          else
+            42
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(42));
+}
+
+// -- cond -----------------------------------------------------------
+
+#[test]
+fn cond_first_matching_arm_drives_return() {
+    let source = "
+        fn pick -> Int
+          cond
+            true -> 1
+            false -> 2
+            else -> 3
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(1));
+}
+
+#[test]
+fn cond_second_arm_runs_when_first_test_is_false() {
+    let source = "
+        fn pick -> Int
+          cond
+            false -> 1
+            true -> 2
+            else -> 3
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(2));
+}
+
+#[test]
+fn cond_else_runs_when_no_arm_matches() {
+    let source = "
+        fn pick -> Int
+          cond
+            false -> 1
+            false -> 2
+            else -> 3
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(3));
+}

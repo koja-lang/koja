@@ -7,9 +7,9 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId, IRConstantValue,
-    IREnumDecl, IRFunction, IRInstruction, IRLocalId, IRProgram, IRScript, IRSymbol, IRTerminator,
-    IRVariantPayload, IRVariantTag, ValueId,
+    BranchTarget, ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId,
+    IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId, IRProgram, IRScript,
+    IRSymbol, IRTerminator, IRVariantPayload, IRVariantTag, ValueId,
 };
 
 use crate::error::RuntimeError;
@@ -148,11 +148,14 @@ fn execute_blocks<R: CallResolver>(
             execute_instruction(instruction, frame, resolver)?;
         }
         match &block.terminator {
-            IRTerminator::Branch(target) => current = *target,
+            IRTerminator::Branch(target) => {
+                bind_block_params(target, blocks, &mut frame.values)?;
+                current = target.block;
+            }
             IRTerminator::CondBranch {
                 cond,
-                then_block,
-                else_block,
+                else_target,
+                then_target,
             } => {
                 let cond_value = lookup(&frame.values, *cond)?;
                 let Value::Bool(b) = cond_value else {
@@ -160,12 +163,53 @@ fn execute_blocks<R: CallResolver>(
                         detail: format!("cond_branch expects a Bool condition; got {cond_value}",),
                     });
                 };
-                current = if b { *then_block } else { *else_block };
+                let chosen = if b { then_target } else { else_target };
+                bind_block_params(chosen, blocks, &mut frame.values)?;
+                current = chosen.block;
             }
             IRTerminator::Return { value: None } => return Ok(Value::Unit),
             IRTerminator::Return { value: Some(id) } => return lookup(&frame.values, *id),
         }
     }
+}
+
+/// Evaluate `target.args` in the predecessor's value-map and bind
+/// the resulting [`Value`]s to the target block's
+/// [`expo_alpha_ir::BlockParam::dest`] ids before stepping into the
+/// target. Block params are SSA defs available on entry to the
+/// block; backends bind them on edge traversal so the body's
+/// instructions see them as ordinary `ValueId`s.
+///
+/// Seal asserts arg/param arity match, so a length mismatch is a
+/// compiler bug; we panic with the same shape as `find_block`'s
+/// missing-block panic. Args are looked up before bindings are
+/// inserted so a hypothetical self-loop's arg list reads the
+/// pre-edge values, not the new param bindings.
+fn bind_block_params(
+    target: &BranchTarget,
+    blocks: &[IRBasicBlock],
+    values: &mut BTreeMap<ValueId, Value>,
+) -> Result<(), RuntimeError> {
+    let target_block = find_block(blocks, target.block);
+    if target.args.len() != target_block.params.len() {
+        panic!(
+            "interpreter: branch to `{}` passes {} arg(s) but target declares {} param(s) — \
+             seal invariant violation",
+            target.block,
+            target.args.len(),
+            target_block.params.len(),
+        );
+    }
+    let bindings: Vec<(ValueId, Value)> = target
+        .args
+        .iter()
+        .zip(target_block.params.iter())
+        .map(|(arg, param)| Ok((param.dest, lookup(values, *arg)?)))
+        .collect::<Result<_, RuntimeError>>()?;
+    for (param_id, value) in bindings {
+        values.insert(param_id, value);
+    }
+    Ok(())
 }
 
 fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {

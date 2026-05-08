@@ -23,7 +23,9 @@ use crate::mangling::{mangled_function_name, mangled_type_name};
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
-use super::control_flow::{lower_if, lower_unless};
+use super::control_flow::{
+    CondLowering, IfLowering, lower_cond, lower_if, lower_result_ty, lower_unless,
+};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
 use super::ops::{
@@ -115,19 +117,38 @@ pub(super) fn lower_expr(
                 &mut output.instantiations,
             ))
         }
+        ExprKind::Cond { arms, else_body } => {
+            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            lower_cond(
+                CondLowering {
+                    arms,
+                    else_body: else_body.as_deref(),
+                    result_ty,
+                },
+                ctx,
+                block,
+                registry,
+                output,
+            )
+        }
         ExprKind::If {
             condition,
             then_body,
             else_body,
         } => {
-            if else_body.is_some() {
-                output.diagnostics.push(Diagnostic::error(
-                    "alpha IR does not yet lower `else` branches",
-                    expr.span,
-                ));
-                return Err(());
-            }
-            lower_if(condition, then_body, ctx, block, registry, output)
+            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            lower_if(
+                IfLowering {
+                    condition,
+                    else_body: else_body.as_deref(),
+                    result_ty,
+                    then_body,
+                },
+                ctx,
+                block,
+                registry,
+                output,
+            )
         }
         ExprKind::Literal { value } => {
             let const_value = lower_literal(value, expr.span, &mut output.diagnostics)?;

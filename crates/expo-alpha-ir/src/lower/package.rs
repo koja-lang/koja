@@ -458,6 +458,14 @@ fn global_to_ir_type(
             "Int8" => IRType::Int8,
             "Int16" => IRType::Int16,
             "Int32" => IRType::Int32,
+            // `Never` has no runtime representation. The only place
+            // an alpha expression's resolution surfaces `Never` is a
+            // fully-divergent `if`/`else`/`cond` whose merge block we
+            // still synthesize for surrounding-flow continuity but
+            // is never reached at runtime. Mapping to `Unit` is a
+            // structurally-safe placeholder until `IRType::Never`
+            // lands alongside `Kernel.panic` and friends.
+            "Never" => IRType::Unit,
             "UInt8" => IRType::UInt8,
             "UInt16" => IRType::UInt16,
             "UInt32" => IRType::UInt32,

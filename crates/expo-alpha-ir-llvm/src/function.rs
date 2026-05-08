@@ -118,10 +118,21 @@ pub(crate) fn define_function<'ctx>(
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, llvm_function, &function.blocks);
     let mut values = seed_params(function, llvm_function);
+    let phi_map = emit::declare_block_param_phis(ctx, &function.blocks, &block_map, &mut values)?;
+    // Blocks unreachable from the entry block (e.g. the merge of a
+    // value-producing `if`/`else` whose arms both diverge) get
+    // `unreachable` instead of their natural terminator. The
+    // alpha-IR layer doesn't model `IRTerminator::Unreachable` yet;
+    // the LLVM boundary's reachability walk is the stand-in.
+    let reachable = emit::reachable_blocks(&function.blocks);
     for block in &function.blocks {
+        if !reachable.contains(&block.id) {
+            emit::emit_unreachable_terminator(ctx, block.id, &block_map)?;
+            continue;
+        }
         let llvm_block = block_map[&block.id];
         ctx.builder.position_at_end(llvm_block);
-        emit::emit_block(ctx, block, &block_map, &mut values)?;
+        emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
     }
     Ok(())
 }
