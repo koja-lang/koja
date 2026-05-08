@@ -396,6 +396,7 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
             let elements = bindings
                 .iter()
                 .map(|name| Pattern::Binding {
+                    local_id: None,
                     name: name.clone(),
                     span,
                 })
@@ -417,6 +418,7 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
                 .map(|f| FieldPattern {
                     name: f.name.clone(),
                     pattern: Pattern::Binding {
+                        local_id: None,
                         name: f.name.clone(),
                         span,
                     },

@@ -4,16 +4,14 @@
 //! then validates all call targets against the script's own
 //! [`IRScript::function`] lookup.
 
-use std::collections::BTreeSet;
-
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use crate::function::{IRBasicBlock, IRBlockId, IRInstruction};
 use crate::script::IRScript;
 use crate::types::{IRType, ValueId};
 
 use super::enums::seal_enum_ops;
-use super::function::{collect_block_ids, seal_block, seal_package};
+use super::function::{collect_block_ids, seal_block, seal_package, seal_ssa};
 use super::structs::{package_instructions, script_body_instructions, seal_struct_ops};
 use super::{require_supported_type, seal_panic};
 
@@ -28,10 +26,13 @@ pub(crate) fn seal_script(script: &IRScript) {
     require_supported_type(&script.return_type, &|| format!("{owner} return type"));
     let block_ids = collect_block_ids(&script.blocks, owner);
     let block_params = collect_script_block_params(&script.blocks, owner);
-    let seeded: BTreeSet<ValueId> = BTreeSet::new();
     for block in &script.blocks {
-        seal_block(block, owner, &seeded, &block_ids, &block_params);
+        seal_block(block, owner, &block_ids, &block_params);
     }
+    // Script bodies have no function parameters; the dominator-tree
+    // walk starts with an empty defined set.
+    let parameter_value_ids: HashSet<ValueId> = HashSet::new();
+    seal_ssa(&script.blocks, owner, &parameter_value_ids);
     seal_script_calls(script);
     seal_script_struct_ops(script);
     seal_script_enum_ops(script);

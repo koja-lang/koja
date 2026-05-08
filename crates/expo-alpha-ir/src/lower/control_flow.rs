@@ -15,13 +15,12 @@
 use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{CondArm, Expr, Statement};
 
-use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
-use crate::types::{ConstValue, IRType, ValueId};
+use crate::function::{BranchTarget, IRBlockId, IRTerminator};
+use crate::types::{IRType, ValueId};
 
-use super::body::lower_body;
-use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
+use super::arms::{emit_unit, lower_arm_into, lower_expr_arm_into};
+use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
-use super::package::resolved_type_to_ir_type;
 
 /// AST-side inputs to [`lower_if`]. Bundled so the helper signature
 /// stays under the clippy `too_many_arguments` threshold without
@@ -295,7 +294,7 @@ pub(super) fn lower_ternary(
         },
     );
 
-    lower_ternary_arm(
+    lower_expr_arm_into(
         then_expr,
         ctx,
         then_block,
@@ -304,7 +303,7 @@ pub(super) fn lower_ternary(
         registry,
         output,
     )?;
-    lower_ternary_arm(
+    lower_expr_arm_into(
         else_expr,
         ctx,
         else_block,
@@ -314,108 +313,4 @@ pub(super) fn lower_ternary(
         output,
     )?;
     Ok((result_id, merge_block))
-}
-
-/// Lower one arm of a ternary: walk the arm expression in
-/// `arm_block`, then unconditionally jump to `merge_block` passing
-/// the arm's value as the merge's per-edge branch arg. Mirrors
-/// [`lower_arm_into`] minus the `lower_body` / `FlowResult` pieces.
-fn lower_ternary_arm(
-    expr: &Expr,
-    ctx: &mut FnLowerCtx,
-    arm_block: IRBlockId,
-    merge_block: IRBlockId,
-    result_ty: &IRType,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-) -> Result<(), ()> {
-    let (value, after) = lower_expr(expr, ctx, arm_block, registry, output)?;
-    let arg = coerce_arm_value(ctx, after, value, result_ty);
-    ctx.cfg.set_terminator(
-        after,
-        IRTerminator::Branch(BranchTarget::with_args(merge_block, vec![arg])),
-    );
-    Ok(())
-}
-
-/// Lower an arm of an `if` / `unless` / `cond`: walk the body in
-/// `arm_block`, then unconditionally jump to `merge_block` if flow
-/// is still open, passing the arm's tail value (or a synthesized
-/// `Const::Unit` for tail-less / Unit-typed bodies) as the merge's
-/// per-edge branch arg. Closed flow (early `return` inside the
-/// arm) leaves the terminator already set; we don't overwrite it,
-/// and the merge-block's [`BlockParam`] simply has one fewer
-/// incoming edge.
-fn lower_arm_into(
-    body: &[Statement],
-    ctx: &mut FnLowerCtx,
-    arm_block: IRBlockId,
-    merge_block: IRBlockId,
-    result_ty: &IRType,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-) -> Result<(), ()> {
-    match lower_body(body, ctx, arm_block, registry, output)? {
-        FlowResult::Open { block, value } => {
-            let arg = match value {
-                Some(id) => coerce_arm_value(ctx, block, id, result_ty),
-                None => emit_unit(ctx, block),
-            };
-            ctx.cfg.set_terminator(
-                block,
-                IRTerminator::Branch(BranchTarget::with_args(merge_block, vec![arg])),
-            );
-        }
-        FlowResult::Closed => {}
-    }
-    Ok(())
-}
-
-/// Conform an arm's tail value to the merge block's [`BlockParam`]
-/// type. The two cases that surface today:
-///
-/// - Identity match (the arm produced a value of `result_ty`):
-///   no-op, the value flows through.
-/// - `result_ty == Unit` and the arm produced something else: emit
-///   a fresh `Const::Unit` so the merge edge stays type-consistent.
-///   Used when a no-else `if`'s then-arm tails on a non-Unit value
-///   that the surface ignores (the surrounding expression types as
-///   `Unit`, so the merge-param type is `Unit`).
-///
-/// Other type mismatches indicate a typecheck/lowering disagreement
-/// — we'd let the seal pass surface them rather than silently coerce.
-fn coerce_arm_value(
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
-    value: ValueId,
-    result_ty: &IRType,
-) -> ValueId {
-    if matches!(result_ty, IRType::Unit) && !matches!(ctx.type_of(value), IRType::Unit) {
-        return emit_unit(ctx, block);
-    }
-    value
-}
-
-/// Resolve the typecheck-stamped result type on an `if` / `cond` /
-/// `unless` expression to its IR equivalent. Centralized so the
-/// per-arm lower helpers don't each redo the registry walk.
-pub(super) fn lower_result_ty(
-    resolution: &expo_ast::identifier::ResolvedType,
-    registry: &GlobalRegistry,
-    output: &mut LowerOutput,
-) -> IRType {
-    resolved_type_to_ir_type(resolution, registry, &mut output.instantiations)
-}
-
-/// Emit a fresh `Const::Unit` in `block` and return its `ValueId`.
-fn emit_unit(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
-    let dest = ctx.fresh_value(IRType::Unit);
-    ctx.cfg.append(
-        block,
-        IRInstruction::Const {
-            dest,
-            value: ConstValue::Unit,
-        },
-    );
-    dest
 }

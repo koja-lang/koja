@@ -169,6 +169,7 @@ fn execute_blocks<R: CallResolver>(
             }
             IRTerminator::Return { value: None } => return Ok(Value::Unit),
             IRTerminator::Return { value: Some(id) } => return lookup(&frame.values, *id),
+            IRTerminator::Unreachable => return Err(RuntimeError::UnreachableExecuted),
         }
     }
 }
@@ -274,6 +275,67 @@ fn execute_instruction<R: CallResolver>(
         } => {
             let value = materialize_enum(ty, *tag, payload, frame, resolver)?;
             frame.values.insert(*dest, value);
+            Ok(())
+        }
+        IRInstruction::EnumPayloadFieldGet {
+            dest,
+            payload_index,
+            tag,
+            value,
+            ..
+        } => {
+            let base = lookup(&frame.values, *value)?;
+            let Value::Enum {
+                payload,
+                tag: actual_tag,
+                ..
+            } = base
+            else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("EnumPayloadFieldGet expects an Enum receiver; got {base}"),
+                });
+            };
+            if actual_tag != *tag {
+                panic!(
+                    "interpreter: EnumPayloadFieldGet expected tag {tag} but value carries \
+                     tag {actual_tag} — match driver should have gated on a tag check first",
+                );
+            }
+            let field = match payload {
+                EnumPayload::Tuple(values) => values
+                    .into_iter()
+                    .nth(*payload_index as usize)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
+                             out of range — seal invariant violation",
+                        )
+                    }),
+                EnumPayload::Struct(fields) => fields
+                    .into_iter()
+                    .nth(*payload_index as usize)
+                    .map(|(_, value)| value)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "interpreter: EnumPayloadFieldGet struct index {payload_index} \
+                             out of range — seal invariant violation",
+                        )
+                    }),
+                EnumPayload::Unit => panic!(
+                    "interpreter: EnumPayloadFieldGet on a Unit variant — seal invariant violation",
+                ),
+            };
+            frame.values.insert(*dest, field);
+            Ok(())
+        }
+        IRInstruction::EnumTagGet { dest, value, .. } => {
+            let base = lookup(&frame.values, *value)?;
+            let Value::Enum { tag, .. } = base else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("EnumTagGet expects an Enum receiver; got {base}"),
+                });
+            };
+            frame.values.insert(*dest, Value::Int(i64::from(tag.0)));
             Ok(())
         }
         IRInstruction::FieldGet {

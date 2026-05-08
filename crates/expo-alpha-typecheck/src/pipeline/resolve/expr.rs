@@ -16,6 +16,7 @@ use super::control_flow::{resolve_cond, resolve_if, resolve_ternary, resolve_unl
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
+use super::match_expr::resolve_match;
 use super::ops::{binary_type, literal_type, unary_type};
 use super::strings::resolve_string;
 use super::structs::{resolve_field_access, resolve_struct_construction};
@@ -71,6 +72,9 @@ pub(super) fn resolve_expr(
             diagnostics,
         ),
         ExprKind::Literal { value } => literal_type(value, resolver.registry),
+        ExprKind::Match { subject, arms } => {
+            resolve_match(subject, arms, expr.span, resolver, diagnostics)
+        }
         ExprKind::MethodCall {
             receiver,
             method,

@@ -30,6 +30,12 @@ pub enum RuntimeError {
     /// extern functions need the LLVM backend
     /// (`--backend=llvm`).
     ExternNotSupported { symbol: String },
+    /// Reached an `IRTerminator::Unreachable`. Lowering only emits
+    /// these on the failure edge of an exhaustive `match`, so
+    /// hitting one means typecheck's exhaustiveness analysis is
+    /// wrong (or the IR was constructed by hand outside the
+    /// pipeline).
+    UnreachableExecuted,
     /// Catch-all for IR shapes the interpreter doesn't yet handle.
     Unsupported { detail: String },
     /// An operand referenced a `ValueId` not yet defined in the
@@ -64,6 +70,11 @@ impl fmt::Display for RuntimeError {
                      (`{symbol}`); use --backend=llvm",
                 )
             }
+            RuntimeError::UnreachableExecuted => write!(
+                f,
+                "control reached `IRTerminator::Unreachable`: an exhaustive \
+                 match's failure edge fired at runtime",
+            ),
             RuntimeError::Unsupported { detail } => write!(f, "unsupported: {detail}"),
             RuntimeError::ValueUndefined { id } => {
                 write!(f, "undefined SSA value `{id}`")

@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use expo_ast::ast::{Diagnostic, File};
+use expo_ast::ast::{Diagnostic, File, Severity};
 use expo_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
@@ -24,8 +24,15 @@ pub struct CheckedPackage {
 /// Sealed output of [`check_program`]'s success path. Every relevant
 /// AST annotation is populated; lowering crates can rely on this
 /// without re-validating.
+///
+/// `diagnostics` carries non-error-severity diagnostics (today:
+/// reachability / redundancy warnings on `match` arms). Errors
+/// short-circuit to [`crate::CheckFailure`]; only warnings ride the
+/// success path. Downstream consumers (driver, LSP) surface them
+/// alongside parse-phase warnings.
 #[derive(Debug, Clone)]
 pub struct CheckedProgram {
+    pub diagnostics: Vec<Diagnostic>,
     pub packages: Vec<CheckedPackage>,
     /// Canonical source of truth for what was registered. Lowering
     /// crates build their own indices over `Identifier`.
@@ -84,14 +91,18 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         }
     }
 
-    if !diagnostics.is_empty() {
+    if diagnostics.iter().any(|d| d.severity == Severity::Error) {
         return Err(CheckFailure {
             diagnostics,
             partial: rebuild_parsed(&packages),
         });
     }
 
-    let checked = CheckedProgram { packages, registry };
+    let checked = CheckedProgram {
+        diagnostics,
+        packages,
+        registry,
+    };
     seal::seal_ast(&checked);
     Ok(checked)
 }

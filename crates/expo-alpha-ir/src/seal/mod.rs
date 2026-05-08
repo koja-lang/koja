@@ -26,9 +26,8 @@
 //!   closure the program / script paths supply).
 //! - This module ([`mod.rs`]) — shared helpers used by all
 //!   submodules: [`seal_panic`], [`require_supported_type`],
-//!   [`require_supported_const`], [`require_defined`],
-//!   [`instruction_operands`], [`terminator_operands`],
-//!   [`terminator_targets`].
+//!   [`require_supported_const`], [`instruction_operands`],
+//!   [`terminator_operands`], [`terminator_targets`].
 //!
 //! Invariants asserted (program path):
 //!
@@ -42,13 +41,17 @@
 //!    backend's `intrinsics/` dispatch).
 //! 4. Every basic-block id is unique within its function.
 //! 5. Every operand referenced by an instruction or terminator points
-//!    at a `ValueId` defined earlier in the same basic block.
-//!    Parameter `ValueId`s are seeded into the entry block's defined
-//!    set so body references to params are valid without a distinct
-//!    "definition" instruction. Cross-block value flow doesn't appear
-//!    in this slice — the assignment / locals slice introduces it via
-//!    `StoreLocal` / `LoadLocal` (alloca-backed memory, not raw SSA
-//!    use across blocks).
+//!    at a `ValueId` whose definition dominates the using block — i.e.
+//!    the def lives in the using block itself or in some block that
+//!    sits on every path from the entry block to it. Function
+//!    parameter `ValueId`s seed the entry block's scope, so body
+//!    references to params are valid without a distinct
+//!    "definition" instruction. Block parameters define their
+//!    `dest` on entry to the declaring block, so the dominator-tree
+//!    walk picks them up at the right level. Cross-block value flow
+//!    via local slots (`LocalDecl` / `LocalWrite` / `LocalRead`)
+//!    flows on top of this and is checked separately by
+//!    `seal_locals`.
 //! 6. Every `IRTerminator::Branch` / `CondBranch` target is a block
 //!    that exists in the same function.
 //! 7. Every `IRInstruction::Call`'s `callee` symbol resolves to a
@@ -77,8 +80,6 @@
 //! implicit-function shape ([`crate::IRScript::blocks`] +
 //! [`crate::IRScript::return_type`]), and re-asserts (7) using
 //! [`crate::IRScript::packages`] as the call-target lookup.
-
-use std::collections::BTreeSet;
 
 use crate::enum_decl::EnumPayloadInit;
 use crate::function::{IRBlockId, IRInstruction, IRTerminator};
@@ -132,12 +133,13 @@ pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() ->
     match value {
         ConstValue::Bool(_)
         | ConstValue::Float64(_)
+        | ConstValue::Int8(_)
         | ConstValue::Int64(_)
         | ConstValue::String(_)
         | ConstValue::Unit => {}
         other => seal_panic(&format!(
-            "{}: ConstValue `{other:?}` is not yet supported (alpha slice admits only \
-             Bool / Float64 / Int64 / String / Unit until stdlib stub expansion lands)",
+            "{}: ConstValue `{other:?}` is not yet admitted (alpha admits only \
+             Bool / Float64 / Int8 / Int64 / String / Unit)",
             location(),
         )),
     }
@@ -153,6 +155,10 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             EnumPayloadInit::Tuple(values) => values.clone(),
             EnumPayloadInit::Unit => vec![],
         },
+        IRInstruction::EnumPayloadFieldGet { value, .. }
+        | IRInstruction::EnumTagGet { value, .. } => {
+            vec![*value]
+        }
         IRInstruction::FieldGet { base, .. } => vec![*base],
         // `LoadConst` reads from the package constant pool, not a
         // `ValueId`, so it has no operand to validate here — the
@@ -187,6 +193,7 @@ pub(super) fn terminator_operands(term: &IRTerminator) -> Vec<ValueId> {
             operands
         }
         IRTerminator::Return { value } => value.iter().copied().collect(),
+        IRTerminator::Unreachable => vec![],
     }
 }
 
@@ -198,15 +205,7 @@ pub(super) fn terminator_targets(term: &IRTerminator) -> Vec<IRBlockId> {
             else_target,
             ..
         } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } => vec![],
-    }
-}
-
-pub(super) fn require_defined(value: ValueId, owner: &str, defined: &BTreeSet<ValueId>) {
-    if !defined.contains(&value) {
-        seal_panic(&format!(
-            "{owner} references value `{value}` before it is defined",
-        ));
+        IRTerminator::Return { .. } | IRTerminator::Unreachable => vec![],
     }
 }
 

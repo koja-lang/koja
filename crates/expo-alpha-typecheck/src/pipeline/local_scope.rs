@@ -41,4 +41,25 @@ impl LocalScope {
             .expect("LocalScope: name table points at id missing from type table");
         Some((id, ty))
     }
+
+    /// Capture the visible name → id map so per-arm pattern bindings
+    /// can be unwound at the arm boundary. Only names are saved; the
+    /// id → type table and the `next_id` counter intentionally keep
+    /// growing so any lowering / seal walk that reaches the popped
+    /// binding's `LocalId` still sees its type.
+    pub(crate) fn snapshot(&self) -> LocalScopeSnapshot {
+        LocalScopeSnapshot {
+            names: self.names.clone(),
+        }
+    }
+
+    /// Restore the visible name → id map captured by [`snapshot`].
+    pub(crate) fn restore(&mut self, snapshot: LocalScopeSnapshot) {
+        self.names = snapshot.names;
+    }
+}
+
+/// Opaque token returned by [`LocalScope::snapshot`].
+pub(crate) struct LocalScopeSnapshot {
+    names: HashMap<String, LocalId>,
 }

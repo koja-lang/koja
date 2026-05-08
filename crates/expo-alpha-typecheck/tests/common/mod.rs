@@ -21,6 +21,10 @@
 //! - [`diagnostic_messages`] — flatten a [`CheckFailure`] to its raw
 //!   message strings for the `.contains(...)` assertions every
 //!   negative test ends in.
+//! - [`warning_messages`] — flatten a [`CheckedProgram`]'s success-
+//!   path diagnostics to message strings so tests asserting on
+//!   warning-severity output (Phase 5 reachability) can compare
+//!   against the raw text.
 
 // Each `tests/*.rs` file is its own Cargo test binary that only
 // pulls a subset of the helpers below, so `dead_code` would fire on
@@ -31,6 +35,7 @@
 use std::path::PathBuf;
 
 use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
+use expo_ast::ast::Severity;
 use expo_parser::{ParseMode, SourceFile, parse_program};
 
 pub const PACKAGE: &str = "TestApp";
@@ -82,6 +87,15 @@ pub fn diagnostic_messages(failure: &CheckFailure) -> Vec<String> {
     failure
         .diagnostics
         .iter()
+        .map(|d| d.message.clone())
+        .collect()
+}
+
+pub fn warning_messages(checked: &CheckedProgram) -> Vec<String> {
+    checked
+        .diagnostics
+        .iter()
+        .filter(|d| d.severity == Severity::Warning)
         .map(|d| d.message.clone())
         .collect()
 }

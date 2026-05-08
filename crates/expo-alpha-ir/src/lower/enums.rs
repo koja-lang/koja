@@ -185,7 +185,7 @@ pub(super) fn lower_enum_construction(
 /// Mirrors [`super::structs`]'s `resolved_struct_symbol` — routes
 /// through [`resolved_type_to_ir_type`] so any non-empty `type_args`
 /// land in `instantiations`.
-fn resolved_enum_symbol(
+pub(super) fn resolved_enum_symbol(
     resolution: &ResolvedType,
     registry: &GlobalRegistry,
     instantiations: &mut Vec<Instantiation>,
@@ -272,7 +272,7 @@ fn lower_struct_variant(
     Ok((dest, current))
 }
 
-fn enum_entry_from_resolution<'a>(
+pub(super) fn enum_entry_from_resolution<'a>(
     resolution: &ResolvedType,
     registry: &'a GlobalRegistry,
 ) -> &'a RegistryEntry {
@@ -284,7 +284,7 @@ fn enum_entry_from_resolution<'a>(
     })
 }
 
-fn enum_definition_from_entry(entry: &RegistryEntry) -> &EnumDefinition {
+pub(super) fn enum_definition_from_entry(entry: &RegistryEntry) -> &EnumDefinition {
     let GlobalKind::Enum(Some(definition)) = &entry.kind else {
         panic!(
             "alpha IR lower: enum construction target `{}` has no lifted definition — \

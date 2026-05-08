@@ -117,7 +117,7 @@ fn terminator_successors(term: &IRTerminator) -> Vec<IRBlockId> {
             then_target,
             ..
         } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } => Vec::new(),
+        IRTerminator::Return { .. } | IRTerminator::Unreachable => Vec::new(),
     }
 }
 
@@ -282,6 +282,11 @@ pub(crate) fn emit_terminator_default<'ctx>(
                 .map(|_| ())
                 .map_err(|e| inkwell_err("build_return", e))
         }
+        IRTerminator::Unreachable => ctx
+            .builder
+            .build_unreachable()
+            .map(|_| ())
+            .map_err(|e| inkwell_err("build_unreachable", e)),
     }
 }
 

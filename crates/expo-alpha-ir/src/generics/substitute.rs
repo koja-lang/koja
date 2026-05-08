@@ -166,6 +166,23 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
                 }
             }
         }
+        ExprKind::Match { subject, arms } => {
+            // Supported patterns carry no `ResolvedType` slots
+            // (wildcards / literals / bindings / enum constructors
+            // / struct destructures are leaves or carry only paths
+            // and named-field patterns), so the pattern walk is a
+            // no-op; the subject, arm guards, and arm bodies need
+            // substitution.
+            substitute_in_expr(subject, args, owner);
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    substitute_in_expr(guard, args, owner);
+                }
+                for stmt in &mut arm.body {
+                    substitute_in_statement(stmt, args, owner);
+                }
+            }
+        }
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -192,7 +209,6 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         | ExprKind::List { .. }
         | ExprKind::Loop { .. }
         | ExprKind::Map { .. }
-        | ExprKind::Match { .. }
         | ExprKind::Receive { .. }
         | ExprKind::ShortClosure { .. }
         | ExprKind::Spawn { .. }

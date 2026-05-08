@@ -54,13 +54,9 @@ pub(super) fn lower_literal(
                 Err(())
             }
         },
-        Literal::String(_) => {
-            diagnostics.push(Diagnostic::error(
-                "alpha IR does not yet lower String literals",
-                span,
-            ));
-            Err(())
-        }
+        // Used by `match`-arm literal patterns; expression-position
+        // strings still flow through `ExprKind::String`'s own lower.
+        Literal::String(text) => Ok(ConstValue::String(text.clone())),
         Literal::Unit => Ok(ConstValue::Unit),
     }
 }

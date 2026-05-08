@@ -439,3 +439,450 @@ fn ternary_returns_else_value_when_false() {
         ";
     assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(9));
 }
+
+// -- match ----------------------------------------------------------
+
+#[test]
+fn match_int_literal_first_arm_wins_when_subject_matches() {
+    let source = "
+        fn pick -> Int
+          match 1
+            1 -> 10
+            2 -> 20
+            _ -> 30
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(10));
+}
+
+#[test]
+fn match_int_literal_falls_through_to_second_arm() {
+    let source = "
+        fn pick -> Int
+          match 2
+            1 -> 10
+            2 -> 20
+            _ -> 30
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(20));
+}
+
+#[test]
+fn match_wildcard_catch_all_runs_when_no_literal_matches() {
+    let source = "
+        fn pick -> Int
+          match 99
+            1 -> 10
+            2 -> 20
+            _ -> 30
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(30));
+}
+
+#[test]
+fn match_binding_arm_evaluates_with_subject_bound_to_name() {
+    let source = "
+        fn pick -> Int
+          match 7
+            x -> x + 1
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(8));
+}
+
+#[test]
+fn match_string_literal_first_arm_wins_on_string_equality() {
+    let source = "
+        fn pick -> Int
+          match \"hi\"
+            \"hi\" -> 1
+            _ -> 0
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(1));
+}
+
+#[test]
+fn match_string_literal_falls_through_when_subject_differs() {
+    let source = "
+        fn pick -> Int
+          match \"world\"
+            \"hi\" -> 1
+            _ -> 0
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(0));
+}
+
+#[test]
+fn match_enum_tuple_some_binds_payload_to_local() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) -> x
+            Box.None -> 0
+          end
+        end
+
+        unwrap(Box.Some(7))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn match_enum_tuple_none_falls_through_to_unit_arm() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) -> x
+            Box.None -> 99
+          end
+        end
+
+        unwrap(Box.None)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(99));
+}
+
+#[test]
+fn match_result_ok_arm_returns_ok_payload() {
+    let source = "
+        enum Status
+          Ok(Int)
+          Err(Int)
+        end
+
+        fn classify(s: Status) -> Int
+          match s
+            Status.Ok(v) -> v
+            Status.Err(_) -> -1
+          end
+        end
+
+        classify(Status.Ok(42))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(42));
+}
+
+#[test]
+fn match_result_err_arm_runs_when_payload_is_err() {
+    let source = "
+        enum Status
+          Ok(Int)
+          Err(Int)
+        end
+
+        fn classify(s: Status) -> Int
+          match s
+            Status.Ok(v) -> v
+            Status.Err(_) -> -1
+          end
+        end
+
+        classify(Status.Err(13))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(-1));
+}
+
+#[test]
+fn match_or_of_strings_fires_for_any_alternative() {
+    let source = "
+        fn pick(s: String) -> Int
+          match s
+            \"a\" | \"b\" | \"c\" -> 1
+            _ -> 0
+          end
+        end
+
+        pick(\"b\")
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(1));
+}
+
+#[test]
+fn match_guarded_arm_fires_when_guard_is_true() {
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            x when x > 0 -> 10
+            _ -> 20
+          end
+        end
+
+        pick(7)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(10));
+}
+
+#[test]
+fn match_guarded_arm_falls_through_when_guard_is_false() {
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            x when x > 0 -> 10
+            _ -> 20
+          end
+        end
+
+        pick(-3)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(20));
+}
+
+#[test]
+fn match_guarded_enum_payload_binding_visible_to_guard() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) when x > 0 -> x
+            _ -> -1
+          end
+        end
+
+        unwrap(Box.Some(7))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn match_guarded_enum_payload_arm_falls_through_on_guard_false() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) when x > 0 -> x
+            _ -> -1
+          end
+        end
+
+        unwrap(Box.Some(-4))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(-1));
+}
+
+#[test]
+fn match_struct_destructure_binds_each_field() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn add(p: Point) -> Int
+          match p
+            Point{x: a, y: b} -> a + b
+          end
+        end
+
+        add(Point{x: 3, y: 4})
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn match_struct_destructure_partial_omits_unlisted_fields() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn x_only(p: Point) -> Int
+          match p
+            Point{x: x} -> x
+          end
+        end
+
+        x_only(Point{x: 5, y: 99})
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(5));
+}
+
+#[test]
+fn match_struct_destructure_with_wildcard_field_skips_bind() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn first(p: Point) -> Int
+          match p
+            Point{x: a, y: _} -> a
+          end
+        end
+
+        first(Point{x: 9, y: 4})
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(9));
+}
+
+#[test]
+fn match_enum_struct_destructure_dispatches_by_variant() {
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn area(s: Shape) -> Int
+          match s
+            Shape.Rect{w: w, h: h} -> w * h
+            Shape.Circle{r: r} -> r * r
+          end
+        end
+
+        area(Shape.Rect{w: 3, h: 4}) + area(Shape.Circle{r: 5})
+        ";
+    assert_eq!(
+        evaluate_script(&dedent(source)).unwrap(),
+        Value::Int(12 + 25)
+    );
+}
+
+#[test]
+fn match_enum_struct_destructure_visible_to_guard() {
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn classify(s: Shape) -> Int
+          match s
+            Shape.Rect{w: w, h: h} when w == h -> 1
+            Shape.Rect{w: _, h: _} -> 2
+            Shape.Circle{r: _} -> 3
+          end
+        end
+
+        classify(Shape.Rect{w: 4, h: 4}) + classify(Shape.Rect{w: 3, h: 4}) + classify(Shape.Circle{r: 9})
+        ";
+    assert_eq!(
+        evaluate_script(&dedent(source)).unwrap(),
+        Value::Int(1 + 2 + 3)
+    );
+}
+
+#[test]
+fn match_exhaustive_enum_no_catch_all_runs_correctly() {
+    let source = "
+        enum Color
+          Red
+          Green
+          Blue
+        end
+
+        fn rank(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Green -> 2
+            Color.Blue -> 3
+          end
+        end
+
+        rank(Color.Green)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(2));
+}
+
+#[test]
+fn match_unguarded_catch_all_skips_lowering_of_following_arms() {
+    let source = "
+        enum Color
+          Red
+          Blue
+          Green
+        end
+
+        c = Color.Blue
+
+        match c
+          _ -> \"catchall\"
+          Color.Green -> \"green\"
+        end
+        ";
+    assert_eq!(
+        evaluate_script(&dedent(source)).unwrap(),
+        Value::String("catchall".to_string()),
+    );
+}
+
+#[test]
+fn match_constructor_some_binds_inner_value() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x) -> x + 1
+            None -> 0
+          end
+        end
+
+        unwrap(Box.Some(7))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(8));
+}
+
+#[test]
+fn match_constructor_none_arm_runs_on_none_subject() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x) -> x
+            None -> 99
+          end
+        end
+
+        unwrap(Box.None)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(99));
+}
