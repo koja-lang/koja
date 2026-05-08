@@ -113,6 +113,28 @@ fn if_else_with_both_arms_diverging_emits_unreachable_merge_phi() {
 }
 
 #[test]
+fn ternary_emits_phi_for_int_arms() {
+    // Same merge-block-with-BlockParam shape as `if`/`else`'s
+    // with-else path, just driven by `cond ? a : b`. The LLVM
+    // emitter sees the same IR shape and produces a `phi i64`
+    // with one incoming per arm.
+    let source = "
+        fn pick -> Int
+          true ? 7 : 9
+        end
+
+        fn main
+          pick()
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "phi i64");
+    assert_contains(&ir_text, "ternary_merge");
+}
+
+#[test]
 fn if_else_with_diverging_arm_still_emits_phi_with_one_incoming() {
     // The then-arm diverges via `return`; only the else-arm reaches
     // merge. LLVM accepts a phi with a single incoming (LLVM IR

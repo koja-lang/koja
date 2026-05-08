@@ -352,6 +352,93 @@ fn cond_lowers_to_chained_test_blocks_with_typed_merge_param() {
 }
 
 #[test]
+fn ternary_emits_cond_branch_to_two_arms_and_merge_block_param() {
+    // Same shape as `if`/`else`'s with-else path: entry CondBranches
+    // to a then- and an else-block, both arms unconditionally branch
+    // into a typed merge block, and the merge's BlockParam is the
+    // ternary's value.
+    let source = "
+        fn pick -> Int
+          true ? 1 : 2
+        end
+
+        fn main
+          pick()
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let pick = function(&program, "pick");
+    assert_eq!(
+        pick.blocks.len(),
+        4,
+        "expected entry/then/else/merge blocks; got {} blocks",
+        pick.blocks.len(),
+    );
+
+    let entry = &pick.blocks[0];
+    let IRTerminator::CondBranch {
+        else_target,
+        then_target,
+        ..
+    } = &entry.terminator
+    else {
+        panic!("entry should end in CondBranch; got {:?}", entry.terminator);
+    };
+    assert!(
+        then_target.args.is_empty(),
+        "ternary then-target branches to body block with no args; got {:?}",
+        then_target.args,
+    );
+    assert!(
+        else_target.args.is_empty(),
+        "ternary else-target branches to body block with no args; got {:?}",
+        else_target.args,
+    );
+
+    let then_block = pick
+        .blocks
+        .iter()
+        .find(|b| b.id == then_target.block)
+        .expect("then-block missing");
+    let else_block = pick
+        .blocks
+        .iter()
+        .find(|b| b.id == else_target.block)
+        .expect("else-block missing");
+    assert_eq!(then_block.label, "ternary_then");
+    assert_eq!(else_block.label, "ternary_else");
+
+    let then_term = match &then_block.terminator {
+        IRTerminator::Branch(target) => target,
+        other => panic!("then-block should end in Branch; got {other:?}"),
+    };
+    let else_term = match &else_block.terminator {
+        IRTerminator::Branch(target) => target,
+        other => panic!("else-block should end in Branch; got {other:?}"),
+    };
+    assert_eq!(
+        then_term.block, else_term.block,
+        "ternary arms must share a merge block",
+    );
+
+    let merge = pick
+        .blocks
+        .iter()
+        .find(|b| b.id == then_term.block)
+        .expect("merge-block missing");
+    assert_eq!(merge.label, "ternary_merge");
+    assert_eq!(merge.params.len(), 1);
+    assert_eq!(
+        merge.params[0].ty,
+        IRType::Int64,
+        "ternary merge BlockParam should be Int-typed for an Int-valued ternary",
+    );
+    assert_eq!(then_term.args.len(), 1);
+    assert_eq!(else_term.args.len(), 1);
+}
+
+#[test]
 fn merge_block_param_value_drives_function_return() {
     // The trailing if/else expression's value is the merge block's
     // BlockParam; the function-end Return reads that param.

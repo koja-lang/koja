@@ -248,6 +248,96 @@ pub(super) fn lower_cond(
     Ok((result_id, merge_block))
 }
 
+/// AST-side inputs to [`lower_ternary`]. See [`IfLowering`] for the
+/// motivation. Ternary arms are expressions rather than statement
+/// bodies, so the carried payload is one `Expr` per arm rather than
+/// a `&[Statement]`, and we always have both arms (the parser
+/// requires `else_expr`).
+pub(super) struct TernaryLowering<'a> {
+    pub(super) condition: &'a Expr,
+    pub(super) then_expr: &'a Expr,
+    pub(super) else_expr: &'a Expr,
+    pub(super) result_ty: IRType,
+}
+
+/// Lower a `cond ? then_expr : else_expr` ternary. Same merge-block
+/// shape as `lower_if`'s with-else path: one [`BlockParam`] typed
+/// by `result_ty`, each arm branches into the merge with the arm's
+/// expression value as the per-edge branch arg. Strictly simpler
+/// than `lower_if` because the arms are single expressions — no
+/// statement-body walk, no [`FlowResult::Closed`] bookkeeping (a
+/// ternary arm cannot syntactically contain a `return`).
+pub(super) fn lower_ternary(
+    inputs: TernaryLowering<'_>,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let TernaryLowering {
+        condition,
+        then_expr,
+        else_expr,
+        result_ty,
+    } = inputs;
+    let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
+    let then_block = ctx.fresh_block("ternary_then");
+    let else_block = ctx.fresh_block("ternary_else");
+    let merge_block = ctx.fresh_block("ternary_merge");
+    let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
+
+    ctx.cfg.set_terminator(
+        block,
+        IRTerminator::CondBranch {
+            cond: cond_value,
+            else_target: BranchTarget::to(else_block),
+            then_target: BranchTarget::to(then_block),
+        },
+    );
+
+    lower_ternary_arm(
+        then_expr,
+        ctx,
+        then_block,
+        merge_block,
+        &result_ty,
+        registry,
+        output,
+    )?;
+    lower_ternary_arm(
+        else_expr,
+        ctx,
+        else_block,
+        merge_block,
+        &result_ty,
+        registry,
+        output,
+    )?;
+    Ok((result_id, merge_block))
+}
+
+/// Lower one arm of a ternary: walk the arm expression in
+/// `arm_block`, then unconditionally jump to `merge_block` passing
+/// the arm's value as the merge's per-edge branch arg. Mirrors
+/// [`lower_arm_into`] minus the `lower_body` / `FlowResult` pieces.
+fn lower_ternary_arm(
+    expr: &Expr,
+    ctx: &mut FnLowerCtx,
+    arm_block: IRBlockId,
+    merge_block: IRBlockId,
+    result_ty: &IRType,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(), ()> {
+    let (value, after) = lower_expr(expr, ctx, arm_block, registry, output)?;
+    let arg = coerce_arm_value(ctx, after, value, result_ty);
+    ctx.cfg.set_terminator(
+        after,
+        IRTerminator::Branch(BranchTarget::with_args(merge_block, vec![arg])),
+    );
+    Ok(())
+}
+
 /// Lower an arm of an `if` / `unless` / `cond`: walk the body in
 /// `arm_block`, then unconditionally jump to `merge_block` if flow
 /// is still open, passing the arm's tail value (or a synthesized

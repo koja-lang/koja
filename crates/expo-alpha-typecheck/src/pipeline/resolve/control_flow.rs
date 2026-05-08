@@ -63,6 +63,35 @@ pub(super) fn resolve_if(
     )
 }
 
+/// Resolve a `cond ? then_expr : else_expr` ternary. Same arm-tail
+/// join semantics as `if`/`else` (strict equality with `Never` as
+/// bottom), but the arms are expressions rather than statement
+/// bodies so we read `expr.resolution` directly instead of routing
+/// through `body_tail_type`. The parser disallows nested ternaries
+/// — `a ? b ? c : d : e` is a parse error — so we only ever join
+/// two arms here.
+pub(super) fn resolve_ternary(
+    condition: &mut Expr,
+    then_expr: &mut Expr,
+    else_expr: &mut Expr,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    resolve_expr(condition, resolver, diagnostics);
+    require_bool_condition("ternary", condition, resolver.registry, diagnostics);
+    resolve_expr(then_expr, resolver, diagnostics);
+    resolve_expr(else_expr, resolver, diagnostics);
+    join_two_arms(
+        "ternary",
+        ("then", &then_expr.resolution),
+        ("else", &else_expr.resolution),
+        span,
+        resolver.registry,
+        diagnostics,
+    )
+}
+
 pub(super) fn resolve_unless(
     condition: &mut Expr,
     body: &mut [Statement],

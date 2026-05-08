@@ -355,6 +355,15 @@ fn seal_expr(expr: &Expr) {
                 seal_expr(&field.value);
             }
         }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            seal_expr(condition);
+            seal_expr(then_expr);
+            seal_expr(else_expr);
+        }
         ExprKind::Unary { operand, .. } => seal_expr(operand),
         ExprKind::Unless { condition, body } => {
             seal_expr(condition);

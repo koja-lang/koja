@@ -300,6 +300,53 @@ fn cond_with_diverging_arms_joins_against_else() {
 }
 
 #[test]
+fn ternary_with_matching_int_arms_resolves_to_int() {
+    let source = "
+        fn main
+          true ? 1 : 2
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn ternary_with_mismatched_arms_diagnoses() {
+    let source = "
+        fn main
+          true ? 1 : false
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("ternary arms have inconsistent types")),
+        "expected ternary mismatch diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn ternary_with_int_condition_diagnoses() {
+    let source = "
+        fn main
+          1 ? 2 : 3
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("`ternary` condition must be `Bool`")),
+        "expected ternary condition diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
 fn nested_if_inside_unless_resolves_to_unit() {
     let source = "
         fn main

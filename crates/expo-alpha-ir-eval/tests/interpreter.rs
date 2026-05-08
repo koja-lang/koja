@@ -413,3 +413,29 @@ fn cond_else_runs_when_no_arm_matches() {
         ";
     assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(3));
 }
+
+// -- ternary --------------------------------------------------------
+
+#[test]
+fn ternary_returns_then_value_when_true() {
+    let source = "
+        fn pick -> Int
+          true ? 7 : 9
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn ternary_returns_else_value_when_false() {
+    let source = "
+        fn pick -> Int
+          false ? 7 : 9
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(9));
+}

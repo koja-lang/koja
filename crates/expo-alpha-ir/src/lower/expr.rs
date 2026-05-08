@@ -24,7 +24,8 @@ use crate::types::{ConstValue, IRType, ValueId};
 
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{
-    CondLowering, IfLowering, lower_cond, lower_if, lower_result_ty, lower_unless,
+    CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_result_ty,
+    lower_ternary, lower_unless,
 };
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
@@ -186,6 +187,25 @@ pub(super) fn lower_expr(
         }
         ExprKind::StructConstruction { fields, .. } => {
             lower_struct_construction(fields, &expr.resolution, ctx, block, registry, output)
+        }
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => {
+            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            lower_ternary(
+                TernaryLowering {
+                    condition,
+                    then_expr,
+                    else_expr,
+                    result_ty,
+                },
+                ctx,
+                block,
+                registry,
+                output,
+            )
         }
         ExprKind::Unary { op, operand } => {
             let (operand, block) = lower_expr(operand, ctx, block, registry, output)?;
