@@ -38,6 +38,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
+mod binary_construct;
 mod instruction;
 mod ops;
 

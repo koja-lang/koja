@@ -8,7 +8,7 @@
 //! out to it.
 
 use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
-use expo_ast::ast::{Diagnostic, Expr, ExprKind, StringPart};
+use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, StringPart};
 use expo_ast::identifier::{GlobalRegistryId, LocalId, Resolution};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
@@ -16,9 +16,10 @@ use expo_ast::span::Span;
 use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::local::IRLocalId;
-use crate::types::{ConstValue, IRType, ValueId};
+use crate::types::{ConcatKind, ConstValue, IRType, ValueId};
 
 use super::arms::lower_result_ty;
+use super::binary_literal::lower_binary_literal;
 use super::calls::{lower_call, lower_method_call};
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{
@@ -45,6 +46,28 @@ pub(super) fn lower_expr(
         ExprKind::Binary { op, left, right } => {
             let (lhs, block) = lower_expr(left, ctx, block, registry, output)?;
             let (rhs, block) = lower_expr(right, ctx, block, registry, output)?;
+            if matches!(op, BinOp::Concat) {
+                let kind = concat_kind_from_operand(ctx.type_of(lhs)).ok_or_else(|| {
+                    output.diagnostics.push(Diagnostic::error(
+                        format!(
+                            "alpha IR lower: `<>` operands must be String / Binary / Bits, got `{:?}`",
+                            ctx.type_of(lhs),
+                        ),
+                        expr.span,
+                    ));
+                })?;
+                let dest = ctx.fresh_value(kind.ir_type());
+                ctx.cfg.append(
+                    block,
+                    IRInstruction::Concat {
+                        dest,
+                        kind,
+                        lhs,
+                        rhs,
+                    },
+                );
+                return Ok((dest, block));
+            }
             let ir_op = lower_bin_op(*op, expr.span, &mut output.diagnostics)?;
             let result_ty = bin_op_result_type(ir_op, ctx.type_of(lhs));
             let dest = ctx.fresh_value(result_ty);
@@ -58,6 +81,9 @@ pub(super) fn lower_expr(
                 },
             );
             Ok((dest, block))
+        }
+        ExprKind::BinaryLiteral { segments } => {
+            lower_binary_literal(segments, expr.span, ctx, block, registry, output)
         }
         ExprKind::Call {
             callee,
@@ -320,6 +346,22 @@ fn lower_constant_ident(
         let dest = ctx.fresh_value(const_value_type(&value));
         ctx.cfg.append(block, IRInstruction::Const { dest, value });
         (dest, block)
+    }
+}
+
+/// Pick the [`ConcatKind`] that matches a `<>` operand's IR type.
+/// Typecheck guarantees both operands share a heap-payload type
+/// (`String`, `Binary`, `Bits`); the lowerer just transcribes that
+/// into an [`IRInstruction::Concat`]'s `kind`. Any other type
+/// surfaces `None` so the call site can emit a clear lower-layer
+/// diagnostic (defense-in-depth — the only path that reaches here
+/// is a typecheck-passed `BinOp::Concat`).
+fn concat_kind_from_operand(ty: IRType) -> Option<ConcatKind> {
+    match ty {
+        IRType::String => Some(ConcatKind::String),
+        IRType::Binary => Some(ConcatKind::Binary),
+        IRType::Bits => Some(ConcatKind::Bits),
+        _ => None,
     }
 }
 

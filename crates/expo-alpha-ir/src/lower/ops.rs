@@ -80,9 +80,15 @@ pub(super) fn lower_bin_op(
         BinOp::NotEq => Ok(IRBinOp::NotEq),
         BinOp::Or => Ok(IRBinOp::Or),
         BinOp::Sub => Ok(IRBinOp::Sub),
+        // `<>` concat doesn't reach this helper — the expression
+        // lowerer intercepts `BinOp::Concat` and emits
+        // [`IRInstruction::Concat`] directly. If we land here, the
+        // dispatcher branched incorrectly; surface a hard error so
+        // the caller fails fast rather than silently miscompiling.
         BinOp::Concat => {
             diagnostics.push(Diagnostic::error(
-                "alpha IR does not yet lower the `<>` concat operator",
+                "alpha IR lower: `<>` concat must route through `IRInstruction::Concat`, \
+                 not `lower_bin_op` — caller dispatch bug",
                 span,
             ));
             Err(())
@@ -102,6 +108,8 @@ pub(super) fn lower_unary_op(op: UnaryOp) -> IRUnaryOp {
 /// type, and `Bool` / `String` / `Unit` round-trip directly.
 pub(super) fn const_value_type(value: &ConstValue) -> IRType {
     match value {
+        ConstValue::Binary(_) => IRType::Binary,
+        ConstValue::Bits { .. } => IRType::Bits,
         ConstValue::Bool(_) => IRType::Bool,
         ConstValue::Float32(_) => IRType::Float32,
         ConstValue::Float64(_) => IRType::Float64,

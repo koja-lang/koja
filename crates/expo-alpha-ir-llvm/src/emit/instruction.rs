@@ -4,18 +4,19 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    ConstValue, EnumPayloadInit, IRConstantValue, IRInstruction, IRLocalId, IRSymbol, IRType,
-    IRVariantTag, StructFieldInit, ValueId,
+    ConcatKind, ConstValue, EnumPayloadInit, IRConstantValue, IRInstruction, IRLocalId, IRSymbol,
+    IRType, IRVariantTag, StructFieldInit, ValueId,
 };
 use inkwell::module::Linkage;
 use inkwell::types::StructType;
-use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
+use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, IntValue, PointerValue};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
-use crate::runtime::declare_free_extern;
+use crate::runtime::{declare_concat_bits_extern, declare_free_extern, declare_malloc_extern};
 use crate::types::ir_basic_type;
 
+use super::binary_construct::emit_binary_construct;
 use super::{ValueMap, inkwell_err, lookup, ops};
 
 pub(super) fn emit_instruction<'ctx>(
@@ -24,6 +25,15 @@ pub(super) fn emit_instruction<'ctx>(
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     match instr {
+        IRInstruction::BinaryConstruct {
+            dest,
+            layout,
+            segments,
+        } => {
+            let result = emit_binary_construct(ctx, *layout, segments, values)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
         IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
             let lhs_value = lookup(values, *lhs)?;
             let rhs_value = lookup(values, *rhs)?;
@@ -35,6 +45,18 @@ pub(super) fn emit_instruction<'ctx>(
             if let Some(result) = emit_call(ctx, callee, args, values)? {
                 values.insert(*dest, result);
             }
+            Ok(())
+        }
+        IRInstruction::Concat {
+            dest,
+            kind,
+            lhs,
+            rhs,
+        } => {
+            let lhs_value = lookup(values, *lhs)?;
+            let rhs_value = lookup(values, *rhs)?;
+            let result = emit_concat(ctx, *kind, lhs_value, rhs_value)?;
+            values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::EnumConstruct {
@@ -546,26 +568,170 @@ fn emit_local_write<'ctx>(
         .map_err(|e| inkwell_err(format_args!("build_store for `{local}`"), e))
 }
 
-/// Lower a `DropLocal` to an LLVM `free` call against the slot's
-/// current heap-block base. Heap-typed payloads carry an `i64
-/// bit_length` header 8 bytes before the SSA pointer; recover the
-/// block base via a negative GEP, then hand it to `free`. The slot's
-/// stack alloca remains valid through fn return — no `LocalDecl`
-/// teardown.
-///
-/// Today only [`IRType::String`] reaches this path; adding `Binary`
-/// / `Bits` to the heap-type set in
-/// [`expo_alpha_ir::lower::ownership`] expands the match here in
-/// the next slice. Non-heap types panic loudly: the lowerer is
+/// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
+/// and `Binary` both byte-align — the common shape is `malloc(8 +
+/// total_bytes [+1])` + two `memcpy`s + (String only) trailing
+/// `\0`. `Bits` defers to the `__expo_alpha_concat_bits` runtime
+/// helper because sub-byte alignment is far cleaner in Rust than
+/// LLVM IR.
+fn emit_concat<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    kind: ConcatKind,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    match kind {
+        ConcatKind::Bits => {
+            let helper = declare_concat_bits_extern(ctx);
+            let result = ctx
+                .builder
+                .build_call(helper, &[lhs.into(), rhs.into()], "concat_bits")
+                .map_err(|e| inkwell_err(format_args!("concat_bits call"), e))?;
+            let basic = result.try_as_basic_value().basic().ok_or_else(|| {
+                LlvmError::Codegen(
+                    "alpha LLVM emit: __expo_alpha_concat_bits returned void; \
+                     runtime declaration drift?"
+                        .to_string(),
+                )
+            })?;
+            Ok(basic)
+        }
+        ConcatKind::String | ConcatKind::Binary => {
+            emit_byte_aligned_concat(ctx, lhs, rhs, matches!(kind, ConcatKind::String))
+        }
+    }
+}
+
+/// `String` / `Binary` share a single inline shape: load both
+/// `i64 bit_length`s from the `payload-8` headers, derive byte
+/// counts via `>> 3`, `malloc` the combined block, store the
+/// combined `bit_length`, `memcpy` lhs then rhs payloads, and (for
+/// `String`) write a trailing `\0`. Returns the new payload pointer.
+fn emit_byte_aligned_concat<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    lhs: BasicValueEnum<'ctx>,
+    rhs: BasicValueEnum<'ctx>,
+    with_nul: bool,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
+    let neg8 = i64_ty.const_int((-8i64) as u64, true);
+    let eight = i64_ty.const_int(8, false);
+    let three = i64_ty.const_int(3, false);
+    let l_ptr = lhs.into_pointer_value();
+    let r_ptr = rhs.into_pointer_value();
+
+    let (l_bits, l_bytes) = load_bit_length(ctx, l_ptr, "l", i8_ty, i64_ty, neg8, three)?;
+    let (r_bits, r_bytes) = load_bit_length(ctx, r_ptr, "r", i8_ty, i64_ty, neg8, three)?;
+
+    let total_bits = ctx
+        .builder
+        .build_int_add(l_bits, r_bits, "cat_total_bits")
+        .map_err(|e| inkwell_err(format_args!("concat total_bits"), e))?;
+    let total_bytes = ctx
+        .builder
+        .build_int_add(l_bytes, r_bytes, "cat_total_bytes")
+        .map_err(|e| inkwell_err(format_args!("concat total_bytes"), e))?;
+    let header_size = if with_nul {
+        i64_ty.const_int(9, false)
+    } else {
+        eight
+    };
+    let alloc_size = ctx
+        .builder
+        .build_int_add(total_bytes, header_size, "cat_alloc")
+        .map_err(|e| inkwell_err(format_args!("concat alloc"), e))?;
+
+    let malloc = declare_malloc_extern(ctx);
+    let base = ctx
+        .builder
+        .build_call(malloc, &[alloc_size.into()], "cat_base")
+        .map_err(|e| inkwell_err(format_args!("concat malloc"), e))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
+        .into_pointer_value();
+
+    ctx.builder
+        .build_store(base, total_bits)
+        .map_err(|e| inkwell_err(format_args!("concat store header"), e))?;
+
+    let payload = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(i8_ty, base, &[eight], "cat_payload")
+            .map_err(|e| inkwell_err(format_args!("concat payload GEP"), e))?
+    };
+
+    ctx.builder
+        .build_memcpy(payload, 1, l_ptr, 1, l_bytes)
+        .map_err(|e| inkwell_err(format_args!("concat memcpy lhs"), e))?;
+
+    let mid = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(i8_ty, payload, &[l_bytes], "cat_mid")
+            .map_err(|e| inkwell_err(format_args!("concat mid GEP"), e))?
+    };
+    ctx.builder
+        .build_memcpy(mid, 1, r_ptr, 1, r_bytes)
+        .map_err(|e| inkwell_err(format_args!("concat memcpy rhs"), e))?;
+
+    if with_nul {
+        let end = unsafe {
+            ctx.builder
+                .build_in_bounds_gep(i8_ty, payload, &[total_bytes], "cat_end")
+                .map_err(|e| inkwell_err(format_args!("concat end GEP"), e))?
+        };
+        ctx.builder
+            .build_store(end, i8_ty.const_int(0, false))
+            .map_err(|e| inkwell_err(format_args!("concat NUL store"), e))?;
+    }
+
+    Ok(payload.into())
+}
+
+/// Load the `i64 bit_length` header at `payload - 8` plus its
+/// derived `bit_length >> 3` byte count. Shared between the lhs /
+/// rhs sides of [`emit_byte_aligned_concat`]; `prefix` is just for
+/// LLVM SSA-name readability.
+fn load_bit_length<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    payload: PointerValue<'ctx>,
+    prefix: &str,
+    i8_ty: inkwell::types::IntType<'ctx>,
+    i64_ty: inkwell::types::IntType<'ctx>,
+    neg8: IntValue<'ctx>,
+    three: IntValue<'ctx>,
+) -> Result<(IntValue<'ctx>, IntValue<'ctx>), LlvmError> {
+    let hdr = unsafe {
+        ctx.builder
+            .build_gep(i8_ty, payload, &[neg8], &format!("{prefix}_hdr"))
+            .map_err(|e| inkwell_err(format_args!("concat header GEP for `{prefix}`"), e))?
+    };
+    let bits = ctx
+        .builder
+        .build_load(i64_ty, hdr, &format!("{prefix}_bits"))
+        .map_err(|e| inkwell_err(format_args!("concat header load for `{prefix}`"), e))?
+        .into_int_value();
+    let bytes = ctx
+        .builder
+        .build_right_shift(bits, three, false, &format!("{prefix}_bytes"))
+        .map_err(|e| inkwell_err(format_args!("concat byte count for `{prefix}`"), e))?;
+    Ok((bits, bytes))
+}
+
+/// `String`, `Binary`, and `Bits` all share the single bit-length-
+/// header layout (`[i64 bit_length][payload]` with the SSA pointer
+/// at the payload), so a single GEP-by-`-8` + `free` shape covers
+/// all three. Non-heap types panic loudly: the lowerer is
 /// responsible for never emitting `DropLocal` for stack types
-/// (it keys on [`IRType`] in the classifier).
+/// (it keys on [`IRType`] in `is_heap_type`).
 fn emit_drop_local<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
     ty: &IRType,
 ) -> Result<(), LlvmError> {
     match ty {
-        IRType::String => {
+        IRType::Binary | IRType::Bits | IRType::String => {
             let payload = emit_local_read(ctx, local, ty)?;
             let payload_ptr = payload.into_pointer_value();
             let i8_type = ctx.context.i8_type();
@@ -587,7 +753,7 @@ fn emit_drop_local<'ctx>(
         }
         _ => panic!(
             "alpha LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}` — \
-             extend `emit_drop_local` when the next slice ships heap types beyond `String`",
+             extend `emit_drop_local` when more heap types ship",
         ),
     }
 }
@@ -620,6 +786,12 @@ fn emit_const<'ctx>(
     value: &ConstValue,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     match value {
+        ConstValue::Binary(bytes) => {
+            Ok(emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, false, "bin").into())
+        }
+        ConstValue::Bits { bytes, bit_length } => {
+            Ok(emit_const_payload(ctx, bytes, *bit_length, false, "bits").into())
+        }
         ConstValue::Bool(b) => Ok(ctx
             .context
             .bool_type()
@@ -633,7 +805,9 @@ fn emit_const<'ctx>(
         ConstValue::Int16(v) => Ok(ctx.context.i16_type().const_int(*v as u64, true).into()),
         ConstValue::Int32(v) => Ok(ctx.context.i32_type().const_int(*v as u64, true).into()),
         ConstValue::Int64(v) => Ok(ctx.context.i64_type().const_int(*v as u64, true).into()),
-        ConstValue::String(s) => Ok(emit_const_string(ctx, s.as_bytes()).into()),
+        ConstValue::String(s) => {
+            Ok(emit_const_payload(ctx, s.as_bytes(), (s.len() as u64) * 8, true, "str").into())
+        }
         ConstValue::UInt8(v) => Ok(ctx.context.i8_type().const_int(u64::from(*v), false).into()),
         ConstValue::UInt16(v) => Ok(ctx
             .context
@@ -652,30 +826,40 @@ fn emit_const<'ctx>(
     }
 }
 
-/// Emit a string literal as a private constant global with the v1
-/// header layout: `{ i64 bit_length, [N+1 x i8] bytes\00 }`. Returns a
-/// const-GEP to the payload (8 bytes past the header), matching
-/// `expo-codegen`'s `create_string_global` byte-for-byte so the
-/// runtime printer + future `String.to_cstring()` intrinsic can read
-/// `*(payload - 8)` for the bit-length without any layout
-/// translation.
-fn emit_const_string<'ctx>(
+/// Emit a heap-payload literal as a private constant global with
+/// the v1 header layout: `{ i64 bit_length, [N (+1) x i8] bytes }`.
+/// Returns a const-GEP to the payload (8 bytes past the header) so
+/// the runtime helpers can read `*(payload - 8)` for the bit length
+/// without any layout translation.
+///
+/// `with_nul` adds a trailing `\0` byte to the payload array — used
+/// by `String` for libc compat. `Binary` and `Bits` pass `false`:
+/// no terminator. `bytes.len()` is the source-byte count; for
+/// `Bits` whose `bit_length` is a non-multiple of 8, the producer
+/// is responsible for zero-padding the trailing partial byte.
+///
+/// `prefix` becomes `alpha_<prefix>.<n>` in the LLVM IR — purely
+/// cosmetic but helps reading raw IR (`str` / `bin` / `bits`).
+fn emit_const_payload<'ctx>(
     ctx: &EmitContext<'ctx>,
     bytes: &[u8],
+    bit_length: u64,
+    with_nul: bool,
+    prefix: &str,
 ) -> inkwell::values::PointerValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
-    let payload_ty = i8_ty.array_type(bytes.len() as u32 + 1);
+    let array_len = bytes.len() as u32 + if with_nul { 1 } else { 0 };
+    let payload_ty = i8_ty.array_type(array_len);
     let header_ty = ctx
         .context
         .struct_type(&[i64_ty.into(), payload_ty.into()], false);
-    let bytes_const = ctx.context.const_string(bytes, true);
-    let bit_length = (bytes.len() as u64) * 8;
+    let bytes_const = ctx.context.const_string(bytes, with_nul);
     let initializer = header_ty.const_named_struct(&[
         i64_ty.const_int(bit_length, false).into(),
         bytes_const.into(),
     ]);
-    let symbol = ctx.next_string_symbol();
+    let symbol = ctx.next_payload_symbol(prefix);
     let global = ctx.module.add_global(header_ty, None, &symbol);
     global.set_initializer(&initializer);
     global.set_constant(true);

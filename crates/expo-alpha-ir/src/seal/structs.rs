@@ -136,8 +136,10 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
                     ));
                 }
             }
-            IRInstruction::BinaryOp { .. }
+            IRInstruction::BinaryConstruct { .. }
+            | IRInstruction::BinaryOp { .. }
             | IRInstruction::Call { .. }
+            | IRInstruction::Concat { .. }
             | IRInstruction::Const { .. }
             | IRInstruction::DropLocal { .. }
             | IRInstruction::EnumConstruct { .. }

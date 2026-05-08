@@ -15,6 +15,15 @@ use expo_alpha_ir::{IRSymbol, IRVariantTag};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
+    /// Owned heap bytes; `bit_length` is implicitly `bytes.len() * 8`.
+    Binary(Vec<u8>),
+    /// Owned heap bits. `bit_length` may be a non-multiple of 8 —
+    /// payload occupies `ceil(bit_length / 8)` bytes; trailing bits
+    /// in the last byte are zero-padded.
+    Bits {
+        bytes: Vec<u8>,
+        bit_length: u64,
+    },
     Bool(bool),
     Enum {
         name: String,
@@ -78,6 +87,8 @@ impl Value {
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            Value::Binary(bytes) => write_binary_bytes(f, bytes),
+            Value::Bits { bytes, bit_length } => write_bits_bytes(f, bytes, *bit_length),
             Value::Bool(b) => write!(f, "{b}"),
             Value::Enum {
                 symbol,
@@ -130,4 +141,47 @@ impl fmt::Display for Value {
             Value::Unit => write!(f, "()"),
         }
     }
+}
+
+/// Render a [`Value::Binary`] as `<<0x48, 0x65>>`. Mirrors the LLVM
+/// runtime printer's output so eval / native produce byte-identical
+/// stdout for tests.
+fn write_binary_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
+    write!(f, "<<")?;
+    for (index, byte) in bytes.iter().enumerate() {
+        if index > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "0x{byte:02X}")?;
+    }
+    write!(f, ">>")
+}
+
+/// Render a [`Value::Bits`] as `<<0x48, 0b101::3>>`. Byte-aligned
+/// `Bits` (rare but legal) reuses the [`write_binary_bytes`] shape;
+/// non-byte-aligned tails render the trailing partial byte as a
+/// width-suffixed binary literal.
+fn write_bits_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8], bit_length: u64) -> fmt::Result {
+    let trailing_bits = (bit_length % 8) as u8;
+    if trailing_bits == 0 {
+        return write_binary_bytes(f, bytes);
+    }
+    let full_bytes = bytes.len().saturating_sub(1);
+    write!(f, "<<")?;
+    for index in 0..full_bytes {
+        if index > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "0x{:02X}", bytes[index])?;
+    }
+    if full_bytes > 0 {
+        write!(f, ", ")?;
+    }
+    let tail = bytes.last().copied().unwrap_or(0) >> (8 - trailing_bits);
+    write!(
+        f,
+        "0b{tail:0>width$b}::{trailing_bits}",
+        width = trailing_bits as usize
+    )?;
+    write!(f, ">>")
 }

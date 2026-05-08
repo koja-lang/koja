@@ -60,6 +60,18 @@ fn neg_flips_int_sign() {
 }
 
 #[test]
+fn string_concat_appends_payloads() {
+    // End-to-end String <> String through the interpreter — pins
+    // `concat_values`'s String arm. Phase C will add Binary/Bits
+    // coverage once `<<…>>` literals can mint those values from
+    // source.
+    assert_eq!(
+        evaluate("fn main -> String\n  \"foo\" <> \"bar\"\nend\n").unwrap(),
+        Value::String("foobar".to_string()),
+    );
+}
+
+#[test]
 fn integer_comparisons_produce_bool() {
     assert_eq!(
         evaluate("fn main\n  1 < 2\nend\n").unwrap(),

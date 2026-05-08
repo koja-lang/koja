@@ -14,7 +14,12 @@ use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
 
+pub(crate) const CONCAT_BITS_SYMBOL: &str = "__expo_alpha_concat_bits";
 pub(crate) const FREE_SYMBOL: &str = "free";
+pub(crate) const MALLOC_SYMBOL: &str = "malloc";
+pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_alpha_pack_bits";
+pub(crate) const PRINT_BINARY_SYMBOL: &str = "__expo_alpha_print_binary";
+pub(crate) const PRINT_BITS_SYMBOL: &str = "__expo_alpha_print_bits";
 pub(crate) const PRINT_BOOL_SYMBOL: &str = "__expo_alpha_print_bool";
 pub(crate) const PRINT_F32_SYMBOL: &str = "__expo_alpha_print_f32";
 pub(crate) const PRINT_F64_SYMBOL: &str = "__expo_alpha_print_f64";
@@ -50,4 +55,55 @@ pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValu
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(FREE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the libc `malloc` extern. The concat /
+/// binary-construct emitters call this for the heap block base.
+/// Signature: `i8* malloc(i64)` (alpha targets 64-bit hosts; the
+/// argument type matches `size_t` on those targets).
+pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(MALLOC_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[i64_ty.into()], false);
+    ctx.module
+        .add_function(MALLOC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `__expo_alpha_concat_bits` runtime
+/// helper. Signature: `i8* __expo_alpha_concat_bits(i8* lhs_payload,
+/// i8* rhs_payload)`. Reads bit-lengths from each operand's `-8`
+/// header, allocates a new `[i64 bit_length][ceil((L+R)/8) bytes]`
+/// block, and bit-shifts rhs to land at the lhs trailing partial
+/// byte. Sub-byte alignment is far cleaner in Rust than LLVM IR.
+pub(crate) fn declare_concat_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(CONCAT_BITS_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+    ctx.module
+        .add_function(CONCAT_BITS_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `__expo_alpha_pack_bits` runtime helper.
+/// Signature: `void __expo_alpha_pack_bits(i8* payload, i64 value,
+/// i8 width, i64 bit_offset)`. Packs `width` bits of `value` into
+/// `payload` MSB-first starting at `bit_offset`. The binary-literal
+/// emitter calls this for sub-byte segment widths.
+pub(crate) fn declare_pack_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(PACK_BITS_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let i8_ty = ctx.context.i8_type();
+    let signature = ctx.context.void_type().fn_type(
+        &[ptr_ty.into(), i64_ty.into(), i8_ty.into(), i64_ty.into()],
+        false,
+    );
+    ctx.module
+        .add_function(PACK_BITS_SYMBOL, signature, Some(Linkage::External))
 }

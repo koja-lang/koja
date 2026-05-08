@@ -11,6 +11,7 @@ use expo_ast::identifier::ResolvedType;
 
 use expo_ast::labels::expr_kind_label;
 
+use super::binary_literal::resolve_binary_literal;
 use super::calls::{resolve_call, resolve_method_call};
 use super::control_flow::{resolve_cond, resolve_if, resolve_ternary, resolve_unless};
 use super::ctx::Resolver;
@@ -31,6 +32,9 @@ pub(super) fn resolve_expr(
             resolve_expr(left, resolver, diagnostics);
             resolve_expr(right, resolver, diagnostics);
             binary_type(*op, left, right, expr.span, resolver.registry, diagnostics)
+        }
+        ExprKind::BinaryLiteral { segments } => {
+            resolve_binary_literal(segments, expr.span, resolver, diagnostics)
         }
         ExprKind::Call {
             callee,

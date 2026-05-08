@@ -12,7 +12,10 @@ use crate::extern_attrs::IRExternAttrs;
 use crate::local::IRLocalId;
 use crate::ownership::Ownership;
 use crate::struct_decl::StructFieldInit;
-use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
+use crate::types::{
+    ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp, LoweredBinarySegment, ResolvedBinaryLayout,
+    ValueId,
+};
 
 /// The IR's stable, backend-facing handle for a callable. Stamped
 /// once at lower time from the AST [`Identifier`]; downstream
@@ -217,12 +220,58 @@ pub enum IRInstruction {
         op: IRBinOp,
         rhs: ValueId,
     },
+    /// `dest = <<segments>>` — assemble a `Binary` (when
+    /// `layout.byte_aligned`) or `Bits` (otherwise) value from
+    /// already-evaluated segment SSA values. `layout` cached at
+    /// lower time so backends mint the destination buffer without
+    /// re-summing widths; `segments` is in source order, each
+    /// carrying its own `bit_offset` from the same lower-time pass.
+    ///
+    /// Result is freshly-allocated owned heap storage with the
+    /// shared bit-length-header layout (`[i64 bit_length][payload]`),
+    /// so the lowering layer stamps [`Ownership::Owned`] on the
+    /// corresponding `LocalWrite` and the slot auto-drops at fn
+    /// exit.
+    ///
+    /// LLVM emission keys on the per-segment `width % 8` /
+    /// `bit_offset % 8` to choose between inline byte-aligned
+    /// packing (fast path: integer byte-shift loop, float bit-cast
+    /// then byte-shift, string `memcpy`) and the runtime
+    /// `__expo_alpha_pack_bits` helper (sub-byte shape).
+    BinaryConstruct {
+        dest: ValueId,
+        layout: ResolvedBinaryLayout,
+        segments: Vec<LoweredBinarySegment>,
+    },
     /// `dest = callee(args)`. The callee resolves through the
     /// enclosing `IRProgram` / `IRScript` by [`IRSymbol`].
     Call {
         dest: ValueId,
         callee: IRSymbol,
         args: Vec<ValueId>,
+    },
+    /// `dest = lhs <> rhs` for the heap-payload family (`String`,
+    /// `Binary`, `Bits`). Separate from [`Self::BinaryOp`] because
+    /// the LLVM emission shape differs:
+    ///
+    /// - `String` / `Binary`: inline `malloc` + two `memcpy`s.
+    /// - `Bits`: extern `__expo_alpha_concat_bits` runtime helper
+    ///   (sub-byte alignment is far cleaner in Rust than LLVM IR).
+    ///
+    /// Result is freshly-allocated owned heap storage with the same
+    /// `[i64 bit_length][payload]` layout as the operands. The
+    /// lowering layer stamps [`Ownership::Owned`] on the
+    /// corresponding `LocalWrite`, so the slot is auto-dropped at
+    /// fn exit. Both operands flow through unchanged — `<>` does
+    /// **not** consume them at the IR level (consumption is a
+    /// surface-language concept; at the IR layer the result is a
+    /// fresh value and the operands' lifetimes are managed by their
+    /// own slots).
+    Concat {
+        dest: ValueId,
+        kind: ConcatKind,
+        lhs: ValueId,
+        rhs: ValueId,
     },
     /// `dest = <constant>`.
     Const { dest: ValueId, value: ConstValue },
@@ -368,8 +417,10 @@ impl IRInstruction {
     /// contents into a fresh value) defines a destination.
     pub fn dest(&self) -> Option<ValueId> {
         match self {
-            IRInstruction::BinaryOp { dest, .. }
+            IRInstruction::BinaryConstruct { dest, .. }
+            | IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
+            | IRInstruction::Concat { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }
             | IRInstruction::EnumPayloadFieldGet { dest, .. }

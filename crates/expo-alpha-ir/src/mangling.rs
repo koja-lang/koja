@@ -31,6 +31,8 @@ pub(crate) fn mangled_function_name(symbol: &IRSymbol, args: &[IRType]) -> IRSym
 
 fn mangle_type(ty: &IRType) -> String {
     match ty {
+        IRType::Binary => "Binary".to_string(),
+        IRType::Bits => "Bits".to_string(),
         IRType::Bool => "Bool".to_string(),
         IRType::CPtr(inner) => format!("CPtr_${}$", mangle_type(inner)),
         IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.mangled().to_string(),

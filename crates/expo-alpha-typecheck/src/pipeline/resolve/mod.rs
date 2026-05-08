@@ -34,6 +34,7 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 //! [`ResolvedType`]: expo_ast::identifier::ResolvedType
 
+mod binary_literal;
 mod calls;
 mod control_flow;
 mod ctx;

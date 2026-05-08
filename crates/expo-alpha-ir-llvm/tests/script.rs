@@ -81,6 +81,34 @@ fn string_literal_emits_v1_header_layout_and_print_string_call() {
 }
 
 #[test]
+fn string_concat_emits_inline_malloc_and_memcpy() {
+    // `<>` for `String`/`Binary` lowers to inline LLVM:
+    //   1. read both `i64 bit_length`s from the `payload-8` headers
+    //      (negative GEP + load),
+    //   2. derive byte counts via `>> 3`,
+    //   3. `malloc(8 + total_bytes [+1])` for the new heap block,
+    //   4. store the combined bit_length at offset 0,
+    //   5. `memcpy` lhs payload, `memcpy` rhs payload, and (String
+    //      only) write a trailing `\0`.
+    // Pin the externs we declare and the SSA prefixes the inkwell
+    // builder produces. The trailing `\0` write surfaces as a
+    // `store i8 0` against a GEP off the new payload.
+    let script = lower_as_script("\"foo\" <> \"bar\"\n");
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "call ptr @malloc(i64");
+    // Two memcpys (lhs payload, rhs payload) + the trailing-NUL
+    // store. inkwell renders memcpy as the `llvm.memcpy.p0.p0.i64`
+    // intrinsic.
+    assert_contains(&ir_text, "@llvm.memcpy.p0.p0.i64");
+    // Concat result reaches the auto-print sink.
+    assert_contains(&ir_text, "call void @__expo_alpha_print_string(ptr ");
+}
+
+#[test]
 fn empty_string_literal_uses_zero_bit_length() {
     let script = lower_as_script("\"\"\n");
     let ir_text =
