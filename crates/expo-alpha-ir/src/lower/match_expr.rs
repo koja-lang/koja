@@ -25,6 +25,12 @@
 //! on true and to the same fall-through on false. Without a guard,
 //! the success block *is* the body block and binds happen at its
 //! head as before.
+//!
+//! Block allocation is lazy: body / guard / next-test blocks are
+//! minted only after the arm's [`PatternCheck`] is known. This way
+//! arms following an unguarded catch-all (Phase 5 reachability
+//! warns on them but typecheck still admits the source) are never
+//! processed and contribute no orphan blocks to the CFG.
 
 use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Expr, MatchArm};
@@ -65,20 +71,11 @@ pub(super) fn lower_match(
     let merge_block = ctx.fresh_block("match_merge");
     let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
 
-    let body_blocks: Vec<IRBlockId> = (0..arms.len())
-        .map(|i| ctx.fresh_block(format!("match_body_{i}")))
-        .collect();
-    let next_arm_blocks: Vec<IRBlockId> = (1..arms.len())
-        .map(|i| ctx.fresh_block(format!("match_test_{i}")))
-        .collect();
-
     let mut current_test = block;
     let mut closed_chain = false;
     let mut trap_block: Option<IRBlockId> = None;
     for (index, arm) in arms.iter().enumerate() {
-        let body_block = body_blocks[index];
-        let next_arm = next_arm_blocks.get(index).copied();
-        let fall_through = next_arm.unwrap_or_else(|| trap_block_for(&mut trap_block, ctx));
+        let body_block = ctx.fresh_block(format!("match_body_{index}"));
         let success_block = if arm.guard.is_some() {
             ctx.fresh_block(format!("match_guard_{index}"))
         } else {
@@ -90,6 +87,26 @@ pub(super) fn lower_match(
             subject_ty: &subject.resolution,
         };
         let (check, _) = lower_pattern_check(&arm.pattern, inputs, ctx, current_test, output)?;
+        // An unguarded catch-all has no failure edge, so it never
+        // needs a fall-through. Any other arm — including a
+        // guarded catch-all whose guard might be false — falls
+        // through to the next arm's test block (or a shared trap
+        // when this is the last arm).
+        let needs_fall_through = match &check {
+            PatternCheck::CatchAll { .. } => arm.guard.is_some(),
+            PatternCheck::Tests { .. } => true,
+        };
+        let is_last = index + 1 == arms.len();
+        let next_arm: Option<IRBlockId> = if needs_fall_through && !is_last {
+            Some(ctx.fresh_block(format!("match_test_{}", index + 1)))
+        } else {
+            None
+        };
+        let fall_through = if needs_fall_through {
+            next_arm.unwrap_or_else(|| trap_block_for(&mut trap_block, ctx))
+        } else {
+            success_block
+        };
         match check {
             PatternCheck::CatchAll { binds } => {
                 ctx.cfg.set_terminator(

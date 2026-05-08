@@ -3,7 +3,10 @@
 //! - subject + arm bodies resolve under the same rules as anywhere else
 //! - the surface expression's type is the join of every reaching arm tail
 //!   (with `Never` as the lattice bottom — divergent arms don't constrain it)
-//! - a wildcard / binding catch-all is required (no enum-exhaustiveness yet)
+//! - a wildcard / binding catch-all is required, except for enum subjects
+//!   with full structural variant coverage and `Bool` subjects with both
+//!   `true` and `false` literal coverage
+//! - missing-variant and missing-catch-all errors carry suggestion hints
 //! - `pattern when expr -> body` guards resolve `expr` against `Bool` in
 //!   the post-pattern-bind scope, and a guarded arm does not contribute
 //!   to catch-all detection or enum variant coverage
@@ -15,6 +18,9 @@
 //! - unsupported pattern shapes and literal patterns over non-primitive
 //!   subjects diagnose feature gaps
 //! - bindings stamp a `LocalId` on the AST node
+//! - reachability/redundancy fires warning-severity diagnostics for arms
+//!   following an unguarded catch-all, duplicate enum-variant or literal
+//!   arms, and overlapping alternatives within an or-pattern
 
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{ExprKind, Function, Item, Pattern, Statement};
@@ -23,7 +29,9 @@ use expo_ast::util::dedent;
 
 mod common;
 
-use common::{PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail};
+use common::{
+    PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail, warning_messages,
+};
 
 fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
     let pkg = checked
@@ -751,4 +759,221 @@ fn match_struct_destructure_acts_as_catch_all() {
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+// --- Phase 5: reachability / hint / Bool exhaustiveness ---
+
+#[test]
+fn match_arm_after_catch_all_warns_unreachable() {
+    let source = "
+        fn main
+          match 1
+            _ -> 10
+            2 -> 20
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("unreachable") && m.contains("matches every value")),
+        "expected arm-after-catch-all warning, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_duplicate_literal_arm_warns_unreachable() {
+    let source = "
+        fn main
+          match 1
+            1 -> 10
+            1 -> 11
+            _ -> 20
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("unreachable") && m.contains("literal")),
+        "expected duplicate-literal warning, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_duplicate_enum_variant_arm_warns_unreachable() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn pick(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Red -> 11
+            Color.Green -> 2
+          end
+        end
+
+        fn main
+          pick(Color.Red)
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("unreachable") && m.contains("variant")),
+        "expected duplicate-variant warning, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_overlapping_or_alternative_warns_unreachable() {
+    let source = "
+        fn main
+          match 1
+            1 | 1 -> 10
+            _ -> 20
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("or-pattern alternative is unreachable")),
+        "expected overlapping or-alternative warning, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_multiple_catch_alls_warns_on_each_extra() {
+    let source = "
+        fn main
+          match 1
+            _ -> 10
+            _ -> 20
+            _ -> 30
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    let unreachable_count = warnings
+        .iter()
+        .filter(|m| m.contains("unreachable") && m.contains("matches every value"))
+        .count();
+    assert_eq!(
+        unreachable_count, 2,
+        "expected one warning per extra catch-all, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_missing_variant_diagnostic_carries_hint() {
+    let source = "
+        enum Color
+          Red
+          Green
+          Blue
+        end
+
+        fn pick(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Green -> 2
+          end
+        end
+
+        fn main
+          pick(Color.Red)
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    let with_hint = failure
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("not exhaustive") && d.message.contains("Blue"));
+    let diag = with_hint.expect("expected missing-variant diagnostic");
+    let hint = diag
+        .hint
+        .as_deref()
+        .expect("missing-variant diagnostic should carry a hint");
+    assert!(
+        hint.contains("`_ -> ...`") && hint.contains("Blue"),
+        "hint should suggest catch-all and list the missing variant, got: {hint:?}",
+    );
+}
+
+#[test]
+fn match_missing_catch_all_diagnostic_carries_hint_with_subject_type() {
+    let source = "
+        fn main
+          match 1
+            1 -> 10
+            2 -> 20
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    let with_hint = failure
+        .diagnostics
+        .iter()
+        .find(|d| d.message.contains("must include a wildcard"));
+    let diag = with_hint.expect("expected missing-catch-all diagnostic");
+    let hint = diag
+        .hint
+        .as_deref()
+        .expect("missing-catch-all diagnostic should carry a hint");
+    assert!(
+        hint.contains("`Int`") && hint.contains("`_ -> ...`"),
+        "hint should mention the subject type and catch-all syntax, got: {hint:?}",
+    );
+}
+
+#[test]
+fn match_bool_exhaustive_without_catch_all_typechecks() {
+    let source = "
+        fn main
+          match true
+            true -> 1
+            false -> 0
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings.is_empty(),
+        "exhaustive Bool match should not emit warnings, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_bool_only_true_arm_still_requires_catch_all() {
+    let source = "
+        fn main
+          match true
+            true -> 1
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("must include a wildcard")),
+        "expected missing-catch-all diagnostic for partial Bool match, got: {:?}",
+        failure.diagnostics,
+    );
 }

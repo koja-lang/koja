@@ -9,6 +9,8 @@
 //! run the catch-all-or-exhaustiveness check without re-walking
 //! the arm.
 
+use std::collections::BTreeSet;
+
 use expo_ast::ast::{Diagnostic, FieldPattern, Literal, Pattern};
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use expo_ast::labels::{pattern_kind_label, pattern_span};
@@ -538,6 +540,8 @@ fn resolve_or_pattern(
     let mut variant_tags: Vec<u32> = Vec::new();
     let mut all_literal = true;
     let mut all_enum_units = true;
+    let mut seen_alt_literals: BTreeSet<String> = BTreeSet::new();
+    let mut seen_alt_variants: BTreeSet<u32> = BTreeSet::new();
     for alternative in patterns.iter_mut() {
         if !is_admitted_or_alternative(alternative) {
             diagnostics.push(Diagnostic::error(
@@ -552,13 +556,41 @@ fn resolve_or_pattern(
             all_enum_units = false;
             continue;
         }
+        let alt_span = pattern_span(alternative);
+        let pre_literal = match alternative {
+            Pattern::Literal { value, .. } => Some(literal_repr(value)),
+            _ => None,
+        };
         match resolve_pattern(alternative, subject_ty, resolver, diagnostics) {
             PatternCoverage::Variants(tags) => {
                 all_literal = false;
+                let mut all_dup = !tags.is_empty();
+                for tag in &tags {
+                    if !seen_alt_variants.insert(*tag) {
+                        continue;
+                    }
+                    all_dup = false;
+                }
+                if all_dup {
+                    diagnostics.push(Diagnostic::warning(
+                        "or-pattern alternative is unreachable: already listed earlier in \
+                         this or-pattern",
+                        alt_span,
+                    ));
+                }
                 variant_tags.extend(tags);
             }
             PatternCoverage::Other => {
                 all_enum_units = false;
+                if let Some(repr) = pre_literal
+                    && !seen_alt_literals.insert(repr)
+                {
+                    diagnostics.push(Diagnostic::warning(
+                        "or-pattern alternative is unreachable: already listed earlier in \
+                         this or-pattern",
+                        alt_span,
+                    ));
+                }
             }
             PatternCoverage::CatchAll => {
                 // Only reachable via an unhandled future shape; the
@@ -683,6 +715,39 @@ fn declared_shape_label(data: &ResolvedVariantData) -> &'static str {
         ResolvedVariantData::Struct(_) => "a struct variant (named fields)",
         ResolvedVariantData::Tuple(_) => "a tuple variant (positional fields)",
         ResolvedVariantData::Unit => "a unit variant (no payload)",
+    }
+}
+
+/// Walk `pattern` and append a canonical string representation of
+/// every `Literal` / `Or`-of-literal alternative it contains. Used
+/// by [`super::match_expr::resolve_match`] to detect cross-arm
+/// literal duplication (`1 -> _, 1 -> _`) without re-walking the
+/// pattern's enum / struct / binding shapes.
+pub(super) fn collect_literal_reprs(pattern: &Pattern, out: &mut Vec<String>) {
+    match pattern {
+        Pattern::Literal { value, .. } => out.push(literal_repr(value)),
+        Pattern::Or { patterns, .. } => {
+            for alt in patterns {
+                collect_literal_reprs(alt, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Canonical surface-string form of a literal pattern's value.
+/// Stable enough to use as a dedupe key for cross-arm literal-arm
+/// reachability checks. Strings are wrapped in quotes so an `Int`
+/// literal "true" never collides with a `Bool` literal `true`
+/// (subjects in the same `match` always have the same type, so the
+/// collision is theoretical, but the wrapping costs nothing).
+pub(super) fn literal_repr(value: &Literal) -> String {
+    match value {
+        Literal::Bool(b) => b.to_string(),
+        Literal::Float(s) => s.clone(),
+        Literal::Int(s) => s.clone(),
+        Literal::String(s) => format!("\"{s}\""),
+        Literal::Unit => "()".to_string(),
     }
 }
 

@@ -824,3 +824,25 @@ fn match_exhaustive_enum_no_catch_all_runs_correctly() {
         ";
     assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(2));
 }
+
+#[test]
+fn match_unguarded_catch_all_skips_lowering_of_following_arms() {
+    let source = "
+        enum Color
+          Red
+          Blue
+          Green
+        end
+
+        c = Color.Blue
+
+        match c
+          _ -> \"catchall\"
+          Color.Green -> \"green\"
+        end
+        ";
+    assert_eq!(
+        evaluate_script(&dedent(source)).unwrap(),
+        Value::String("catchall".to_string()),
+    );
+}

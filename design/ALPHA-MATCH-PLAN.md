@@ -87,7 +87,26 @@ StructField}` discriminator and `PatternCheck::CatchAll { binds }` so
   variant coverage exactly like `EnumTuple`. End-to-end coverage extends
   the same four match-named test sections: `resolve_match.rs`,
   `lower_match.rs`, `interpreter.rs`, `control_flow.rs`.
-- **Phases 5–7 — Pending.**
+- **Phase 5 — Shipped (May 2026).** Exhaustiveness diagnostics. Three
+  buckets land together: (A) reachability / redundancy warnings — arms
+  after an unguarded catch-all, duplicate enum-variant or literal arms
+  across the chain, and overlapping alternatives within a single
+  or-pattern, all emitted at warning severity; (B) hint text on the
+  existing missing-variant and missing-catch-all errors via
+  `Diagnostic::error_with_hint`, suggesting `_ -> ...` (with the
+  missing variant list, or the subject type for non-enum subjects);
+  (C) primitive `Bool` exhaustiveness — `true | false` literal coverage
+  closes the chain without a `_` arm. Prerequisite plumbing: alpha
+  `check_program` now gates short-circuit on `Severity::Error` only and
+  the success-path `CheckedProgram` carries a `pub diagnostics:
+  Vec<Diagnostic>` field so warnings ride alongside the registered
+  packages (lowering crates ignore it; the driver / LSP surface it).
+  IR lowering is unchanged: `lower/match_expr.rs` still truncates after
+  the first unguarded catch-all, dead arms simply don't lower, and the
+  warning is the user-facing signal. End-to-end coverage extends
+  `resolve_match.rs` with one test per bucket-A/B/C behavior plus a
+  `warning_messages` helper on the test scaffolding.
+- **Phases 6–7 — Pending.**
 
 ---
 
@@ -293,13 +312,14 @@ graph LR
     p1[Phase 1 ✓<br/>literals + wildcards + bindings<br/>linear-chain CFG] --> p2[Phase 2 ✓<br/>EnumUnit + EnumTuple<br/>+ Or<br/>STDLIB UNBLOCKED]
     p2 --> p3[Phase 3 ✓<br/>Guards]
     p3 --> p4[Phase 4 ✓<br/>EnumStruct + Struct<br/>destructuring]
-    p4 --> p5[Phase 5<br/>Exhaustiveness<br/>diagnostics]
+    p4 --> p5[Phase 5 ✓<br/>Exhaustiveness<br/>diagnostics]
     p5 --> p6[Phase 6<br/>Constructor + List<br/>+ TypedBinding]
     p6 --> p7[Phase 7<br/>Binary patterns]
     style p1 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p2 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p3 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p4 fill:#1f7a3a,stroke:#0f3,color:#fff
+    style p5 fill:#1f7a3a,stroke:#0f3,color:#fff
 ```
 
 ### Phase 1 — Skeleton (literals + wildcards + bindings) ✓
@@ -521,17 +541,39 @@ Stdlib doesn't reach for struct destructuring yet, but the surface
 completes the "destructuring" story and rounds out the post-`EnumTuple`
 follow-up.
 
-### Phase 5 — Exhaustiveness diagnostics
+### Phase 5 — Exhaustiveness diagnostics ✓
 
-Surface: missing-variant / missing-member errors.
+Surface: reachability/redundancy warnings, hint polish on existing
+exhaustiveness errors, and `Bool` primitive structural exhaustiveness.
 
-- Direct port of v1's `check_match_exhaustiveness`. Catch-all detection
-  via `pattern_is_catch_all`. Variant-name list per enum; member-name
-  list per union. Missing → diagnostic with hint.
-- Today, missing arms fall through to `fallthrough_block` and `panic` at
-  runtime. Lifting it to a typecheck error is the quality bar.
-- Defer until after stdlib compiles, so the stdlib's matches are run
-  through the full check at the same time as everything else.
+- **Bucket A — reachability warnings.** Inside `resolve_match`'s arm
+  loop, walk per-arm `PatternCoverage` against rolling `BTreeSet<u32>` /
+  `BTreeSet<String>` accumulators of seen variant tags / literal reprs.
+  Five distinct shapes, all warning severity, all lowering-neutral: arm
+  after an unguarded catch-all, every-variant-already-seen arm,
+  every-literal-already-seen arm, multiple unguarded catch-alls
+  (subsumed by the first rule), and overlapping alternatives within a
+  single or-pattern (handled inline in `resolve_or_pattern` against a
+  per-or-pattern set).
+- **Bucket B — hint polish.** `diagnose_missing_enum_variants` and the
+  non-enum missing-catch-all branch switch to
+  `Diagnostic::error_with_hint` and suggest `_ -> ...` (with the
+  missing variant list, or the subject type's display for non-enum
+  subjects).
+- **Bucket C — `Bool` exhaustiveness.** When the subject is
+  `Global.Bool` and the seen-literal set contains both `true` and
+  `false`, suppress the missing-catch-all error. `Int` / `Float` /
+  `String` keep the catch-all rule (no finite domain).
+- **Plumbing.** `expo-alpha-typecheck::check_program` short-circuits on
+  `Severity::Error` only and `CheckedProgram` carries a `pub
+  diagnostics: Vec<Diagnostic>` field, so warnings ride the success
+  path alongside the registered packages. Lowering is unchanged: the
+  existing `lower/match_expr.rs` truncation after the first unguarded
+  catch-all still describes the runtime CFG; dead arms simply don't
+  lower, and the warning is the user-facing signal.
+- **Tests.** `resolve_match.rs` grows nine bucket-A/B/C tests pinned to
+  one behavior each, plus a `warning_messages` helper on
+  `tests/common/mod.rs` for asserting on success-path warnings.
 
 ### Phase 6 — Remaining pattern shapes
 
@@ -583,7 +625,7 @@ Per [build.mdc](../../.cursor/rules/build.mdc):
 | 2     | `EnumTagGet`, `EnumPayloadFieldGet`, terminator `Unreachable` | enum patterns + or, structural enum exhaustiveness, per-arm scope unwind | **all `Option`/`Result` stdlib** | **Shipped** |
 | 3     | (none)                                                        | guard typing                                                             | (none — spec parity)             | **Shipped** |
 | 4     | (none)                                                        | struct/enum-struct field patterns                                        | (none — surface polish)          | **Shipped** |
-| 5     | (none)                                                        | exhaustiveness check (full diagnostics)                                  | (quality bar)                    | Pending     |
+| 5     | (none)                                                        | reachability warnings, hints, Bool exhaustiveness                        | (quality bar)                    | **Shipped** |
 | 6     | (none)                                                        | shorthand `Constructor`, `List`, `TypedBinding`                          | (post-stdlib)                    | Pending     |
 | 7     | binary submachine                                             | `check_binary_pattern`                                                   | (post-stdlib)                    | Pending     |
 
