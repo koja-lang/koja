@@ -249,10 +249,10 @@ fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     is_primitive(ty, registry, "Never")
 }
 
-/// Diagnose a non-Bool condition on an `if` / `unless` / `cond`.
-/// Skips the check when the condition itself failed to resolve —
-/// its own diagnostic is already in flight.
-fn require_bool_condition(
+/// Diagnose a non-Bool condition. Skips the check when the
+/// condition itself failed to resolve — its own diagnostic is
+/// already in flight.
+pub(super) fn require_bool_condition(
     keyword: &str,
     condition: &Expr,
     registry: &GlobalRegistry,

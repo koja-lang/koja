@@ -1,16 +1,20 @@
 //! `match` expression resolution. Walks the subject and every arm
-//! body, requires a wildcard / binding catch-all, and joins the arm
-//! tails using the same lattice [`super::control_flow`] uses for
-//! `if` / `cond` / ternary.
+//! body, requires a wildcard / binding catch-all (or full structural
+//! variant coverage for enum subjects), and joins the arm tails using
+//! the same lattice [`super::control_flow`] uses for `if` / `cond` /
+//! ternary.
 //!
-//! Guards (`when ...`) and unsupported pattern shapes diagnose
-//! feature gaps so the surface stays well-defined.
+//! Arm guards (`pattern when expr -> body`) resolve in the
+//! post-pattern-bind scope so the guard sees pattern-introduced
+//! locals. Guarded arms are excluded from coverage attribution: a
+//! guard can fail at runtime, so `Color.Red when ...` does not
+//! cover `Red`.
 
 use expo_ast::ast::{Diagnostic, Expr, MatchArm};
 use expo_ast::identifier::ResolvedType;
 use expo_ast::span::Span;
 
-use super::control_flow::{body_tail_type, join_arm_tails};
+use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::patterns::{
@@ -38,25 +42,26 @@ pub(super) fn resolve_match(
     let mut covered_variants: Vec<u32> = Vec::new();
     let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len());
     for (index, arm) in arms.iter_mut().enumerate() {
-        if let Some(guard) = &arm.guard {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support `when` guards in match arms",
-                guard.span,
-            ));
-        }
         if matches!(arm.pattern, expo_ast::ast::Pattern::Literal { .. }) {
             has_literal_arm = true;
         }
         let scope_snapshot = resolver.scope.snapshot();
-        match resolve_pattern(&mut arm.pattern, &subject_ty, resolver, diagnostics) {
-            PatternCoverage::CatchAll => has_catch_all = true,
-            PatternCoverage::Variants(tags) => covered_variants.extend(tags),
-            PatternCoverage::Other => {}
+        let coverage = resolve_pattern(&mut arm.pattern, &subject_ty, resolver, diagnostics);
+        if let Some(guard) = &mut arm.guard {
+            resolve_expr(guard, resolver, diagnostics);
+            require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
         }
         for stmt in &mut arm.body {
             resolve_statement(stmt, resolver, diagnostics);
         }
         resolver.scope.restore(scope_snapshot);
+        if arm.guard.is_none() {
+            match coverage {
+                PatternCoverage::CatchAll => has_catch_all = true,
+                PatternCoverage::Variants(tags) => covered_variants.extend(tags),
+                PatternCoverage::Other => {}
+            }
+        }
         tails.push((
             format!("arm #{}", index + 1),
             body_tail_type(&arm.body, resolver.registry),

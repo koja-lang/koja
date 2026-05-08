@@ -9,7 +9,7 @@
 //! Each arm's [`PatternCheck::Tests`] may carry multiple gating
 //! predicates (single-test for `Literal` / `EnumUnit` /
 //! `EnumTuple`, n-test for `Or`); the driver wires every step's
-//! success edge to the arm body block, every interior step's
+//! success edge to the arm's success block, every interior step's
 //! failure edge to the next step, and the final step's failure
 //! edge to either the next arm's first test block or — when the
 //! arm chain has no successor — a synthesized `Unreachable` trap
@@ -17,6 +17,14 @@
 //! subjects, so the trap is statically unreachable; it exists to
 //! keep the CFG well-formed for backends that demand a terminator
 //! on every block.
+//!
+//! When the arm carries a `when` guard, the success block is a
+//! fresh `match_guard_<n>` that hosts the payload binds (so the
+//! guard sees pattern-introduced locals) and ends in a
+//! `CondBranch` on the guard's value, branching to the arm's body
+//! on true and to the same fall-through on false. Without a guard,
+//! the success block *is* the body block and binds happen at its
+//! head as before.
 
 use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Expr, MatchArm};
@@ -68,6 +76,12 @@ pub(super) fn lower_match(
     for (index, arm) in arms.iter().enumerate() {
         let body_block = body_blocks[index];
         let next_arm = next_arm_blocks.get(index).copied();
+        let fall_through = next_arm.unwrap_or_else(|| trap_block_for(&mut trap_block, ctx));
+        let success_block = if arm.guard.is_some() {
+            ctx.fresh_block(format!("match_guard_{index}"))
+        } else {
+            body_block
+        };
         let inputs = PatternInputs {
             registry,
             subject: subject_value,
@@ -78,18 +92,30 @@ pub(super) fn lower_match(
             PatternCheck::CatchAll => {
                 ctx.cfg.set_terminator(
                     current_test,
-                    IRTerminator::Branch(BranchTarget::to(body_block)),
+                    IRTerminator::Branch(BranchTarget::to(success_block)),
                 );
-                closed_chain = true;
+                if arm.guard.is_none() {
+                    closed_chain = true;
+                }
             }
             PatternCheck::Tests {
                 payload_binds,
                 steps,
             } => {
-                let fall_through = next_arm.unwrap_or_else(|| trap_block_for(&mut trap_block, ctx));
-                wire_test_chain(&steps, body_block, fall_through, ctx);
-                emit_payload_binds(&payload_binds, body_block, subject_value, ctx);
+                wire_test_chain(&steps, success_block, fall_through, ctx);
+                emit_payload_binds(&payload_binds, success_block, subject_value, ctx);
             }
+        }
+        if let Some(guard) = &arm.guard {
+            let (guard_value, after) = lower_expr(guard, ctx, success_block, registry, output)?;
+            ctx.cfg.set_terminator(
+                after,
+                IRTerminator::CondBranch {
+                    cond: guard_value,
+                    else_target: BranchTarget::to(fall_through),
+                    then_target: BranchTarget::to(body_block),
+                },
+            );
         }
         lower_arm_into(
             &arm.body,

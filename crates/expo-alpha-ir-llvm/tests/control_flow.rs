@@ -311,6 +311,33 @@ fn match_enum_tuple_payload_emits_field_gep_chain() {
 }
 
 #[test]
+fn match_guarded_arm_emits_dedicated_guard_block_with_cond_branch() {
+    // A guarded arm interposes a `match_guard_<n>` block between
+    // the pattern-success edge and the body. The guard expr's i1
+    // becomes the cond on a `br i1 ..., body, fall_through`, and
+    // the merge block picks up an extra incoming via `phi`.
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            x when x > 0 -> 10
+            _ -> 20
+          end
+        end
+
+        fn main
+          pick(7)
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "match_guard_");
+    assert_contains(&ir_text, "match_merge");
+    assert_contains(&ir_text, "icmp sgt i64");
+    assert_contains(&ir_text, "phi i64");
+}
+
+#[test]
 fn match_exhaustive_enum_emits_unreachable_trap_block() {
     // An enum match with no catch-all and no remaining arm to fall
     // into materializes a synthesized trap block whose terminator is

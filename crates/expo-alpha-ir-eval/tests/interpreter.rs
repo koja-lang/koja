@@ -630,6 +630,76 @@ fn match_or_of_strings_fires_for_any_alternative() {
 }
 
 #[test]
+fn match_guarded_arm_fires_when_guard_is_true() {
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            x when x > 0 -> 10
+            _ -> 20
+          end
+        end
+
+        pick(7)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(10));
+}
+
+#[test]
+fn match_guarded_arm_falls_through_when_guard_is_false() {
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            x when x > 0 -> 10
+            _ -> 20
+          end
+        end
+
+        pick(-3)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(20));
+}
+
+#[test]
+fn match_guarded_enum_payload_binding_visible_to_guard() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) when x > 0 -> x
+            _ -> -1
+          end
+        end
+
+        unwrap(Box.Some(7))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn match_guarded_enum_payload_arm_falls_through_on_guard_false() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) when x > 0 -> x
+            _ -> -1
+          end
+        end
+
+        unwrap(Box.Some(-4))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(-1));
+}
+
+#[test]
 fn match_exhaustive_enum_no_catch_all_runs_correctly() {
     let source = "
         enum Color

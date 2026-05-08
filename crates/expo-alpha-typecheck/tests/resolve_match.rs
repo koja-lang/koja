@@ -4,12 +4,15 @@
 //! - the surface expression's type is the join of every reaching arm tail
 //!   (with `Never` as the lattice bottom — divergent arms don't constrain it)
 //! - a wildcard / binding catch-all is required (no enum-exhaustiveness yet)
-//! - guard clauses, unsupported pattern shapes, and literal patterns over
-//!   non-primitive subjects diagnose feature gaps
+//! - `pattern when expr -> body` guards resolve `expr` against `Bool` in
+//!   the post-pattern-bind scope, and a guarded arm does not contribute
+//!   to catch-all detection or enum variant coverage
+//! - unsupported pattern shapes and literal patterns over non-primitive
+//!   subjects diagnose feature gaps
 //! - bindings stamp a `LocalId` on the AST node
 
 use expo_alpha_typecheck::CheckedProgram;
-use expo_ast::ast::{ExprKind, Item, Pattern, Statement};
+use expo_ast::ast::{ExprKind, Function, Item, Pattern, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
@@ -41,6 +44,22 @@ fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
         Statement::Expr(expr) => expr.resolution.clone(),
         other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
     }
+}
+
+fn main_fn(checked: &CheckedProgram) -> &Function {
+    let pkg = checked
+        .packages
+        .iter()
+        .find(|p| p.package == PACKAGE)
+        .expect("checked program is missing the test package");
+    let file = pkg.files.first().expect("package has no files");
+    file.items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(function) if function.name == "main" => Some(function),
+            _ => None,
+        })
+        .expect("file is missing `fn main`")
 }
 
 fn primitive_type(checked: &CheckedProgram, name: &str) -> ResolvedType {
@@ -225,12 +244,93 @@ fn match_with_literal_type_mismatch_diagnoses() {
 }
 
 #[test]
-fn match_guard_diagnoses_feature_gap() {
+fn match_guard_resolves_against_pattern_locals() {
+    let source = "
+        fn main
+          match 7
+            x when x > 0 -> 10
+            _ -> 20
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let main = main_fn(&checked);
+    let Statement::Expr(match_expr) = main.body.as_deref().unwrap().last().unwrap() else {
+        panic!("expected trailing Statement::Expr");
+    };
+    let ExprKind::Match { arms, .. } = &match_expr.kind else {
+        panic!("expected ExprKind::Match");
+    };
+    let Pattern::Binding { local_id, .. } = &arms[0].pattern else {
+        panic!("expected Pattern::Binding for arm 0");
+    };
+    let binding_id = local_id.expect("binding should carry a stamped LocalId");
+    let guard = arms[0].guard.as_ref().expect("arm 0 should carry a guard");
+    let ExprKind::Binary { left, .. } = &guard.kind else {
+        panic!("expected guard to be a Binary expression");
+    };
+    let ExprKind::Ident { resolution, .. } = &left.kind else {
+        panic!("expected guard's left operand to be an Ident");
+    };
+    assert_eq!(
+        *resolution,
+        Resolution::Local(binding_id),
+        "guard ident `x` should resolve to the arm's pattern binding",
+    );
+}
+
+#[test]
+fn match_guard_non_bool_diagnoses() {
     let source = "
         fn main
           match 1
-            x when x > 0 -> 10
+            x when x -> 10
             _ -> 20
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure.diagnostics.iter().any(|d| d
+            .message
+            .contains("`match arm guard` condition must be `Bool`")),
+        "expected non-Bool guard diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_guarded_catch_all_does_not_close_chain() {
+    let source = "
+        fn main
+          match 1
+            _ when 1 > 0 -> 10
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure.diagnostics.iter().any(|d| d
+            .message
+            .contains("must include a wildcard `_` or binding catch-all arm")),
+        "expected missing-catch-all diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_guarded_enum_arm_does_not_count_as_coverage() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn pick(c: Color) -> Int
+          match c
+            Color.Red when 1 > 0 -> 1
+            Color.Green -> 2
           end
         end
         ";
@@ -239,8 +339,8 @@ fn match_guard_diagnoses_feature_gap() {
         failure
             .diagnostics
             .iter()
-            .any(|d| d.message.contains("does not yet support `when` guards")),
-        "expected guard feature-gap diagnostic, got: {:?}",
+            .any(|d| d.message.contains("not exhaustive") && d.message.contains("Red")),
+        "expected missing-Red diagnostic, got: {:?}",
         failure.diagnostics,
     );
 }

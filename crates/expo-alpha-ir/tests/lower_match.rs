@@ -5,7 +5,11 @@
 //! next arm's test, and every arm body branches into one merge
 //! block carrying the join value as a typed [`BlockParam`]. The
 //! catch-all arm closes the chain with an unconditional `Branch`
-//! to its body block.
+//! to its body block. A guarded arm interposes a `match_guard_<n>`
+//! block between pattern success and the body — payload binds
+//! land at the head of the guard block, the guard expr runs there,
+//! and the block ends in a `CondBranch` to the body or the same
+//! fall-through the pattern's failure edge uses.
 //!
 //! [`BlockParam`]: expo_alpha_ir::BlockParam
 
@@ -477,4 +481,110 @@ fn match_or_alternatives_chain_through_dedicated_test_blocks() {
             alt_block.terminator,
         );
     }
+}
+
+#[test]
+fn match_guarded_arm_interposes_guard_block_between_test_and_body() {
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            x when x > 0 -> 10
+            _ -> 20
+          end
+        end
+
+        fn main
+          pick(7)
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let pick = function(&program, "pick");
+
+    let guard_block = pick
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_guard_0")
+        .expect("guarded arm should mint a `match_guard_0` block");
+
+    let IRTerminator::CondBranch {
+        then_target,
+        else_target,
+        ..
+    } = &guard_block.terminator
+    else {
+        panic!(
+            "guard block should terminate in a `CondBranch`; got {:?}",
+            guard_block.terminator,
+        );
+    };
+    let body_block = pick
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_body_0")
+        .expect("missing match_body_0");
+    assert_eq!(
+        then_target.block, body_block.id,
+        "guard true should branch into the arm body block",
+    );
+    let fall_through = pick
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_body_1")
+        .expect("missing match_body_1 (the catch-all body)");
+    let next_test = pick.blocks.iter().find(|b| b.label == "match_test_1");
+    let expected_else = next_test.map(|b| b.id).unwrap_or(fall_through.id);
+    assert_eq!(
+        else_target.block, expected_else,
+        "guard false should fall through to the next arm's test (or its body when the \
+         catch-all is the next arm)",
+    );
+
+    let body_has_local_write = body_block
+        .instructions
+        .iter()
+        .any(|i| matches!(i, IRInstruction::LocalWrite { .. }));
+    assert!(
+        !body_has_local_write,
+        "the body block should not host a `LocalWrite` for a guarded binding — the \
+         binding writes upstream so the guard sees it",
+    );
+}
+
+#[test]
+fn match_guarded_enum_payload_binds_land_in_guard_block() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) when x > 0 -> x
+            _ -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.Some(7))
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let unwrap_fn = function(&program, "unwrap");
+
+    let guard_block = unwrap_fn
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_guard_0")
+        .expect("guarded enum-tuple arm should mint a `match_guard_0` block");
+    let guard_has_payload_get = guard_block
+        .instructions
+        .iter()
+        .any(|i| matches!(i, IRInstruction::EnumPayloadFieldGet { .. }));
+    assert!(
+        guard_has_payload_get,
+        "payload-field-get must run in the guard block so the guard expr sees the binding",
+    );
 }

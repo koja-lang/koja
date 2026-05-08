@@ -326,6 +326,9 @@ fn seal_expr(expr: &Expr) {
             seal_expr(subject);
             for arm in arms {
                 seal_pattern(&arm.pattern);
+                if let Some(guard) = &arm.guard {
+                    seal_expr(guard);
+                }
                 for stmt in &arm.body {
                     seal_statement(stmt);
                 }

@@ -53,7 +53,23 @@ For pipeline shape and seal contracts, see
   `lower_match.rs`, `interpreter.rs`, `control_flow.rs`. Stdlib
   `Option`/`Result`/`Step`/`StopReason`/`Lifecycle` matches all execute
   end-to-end through both the interpreter and LLVM backends.
-- **Phases 3–7 — Pending.**
+- **Phase 3 — Shipped (May 2026).** Arm guards (`pattern when expr -> body`).
+  Guard expressions resolve as `Bool` in the post-pattern-bind scope (the
+  guard sees pattern-introduced locals), and guarded arms are excluded
+  from coverage attribution: a guarded `Color.Red when ...` does not
+  cover `Red`, and a guarded `_ when ...` does not satisfy the
+  primitive-subject catch-all rule. Lowering interposes a fresh
+  `match_guard_<n>` block between the pattern's success edge and the
+  body block; payload binds (for `EnumTuple` patterns) land at the head
+  of the guard block so the guard expr can read them, and the guard
+  block ends in a `CondBranch` to the body on true and to the same
+  fall-through (next arm or shared trap) the pattern's failure edge
+  uses. No new IR instructions, no new terminators — guards reuse the
+  existing `Branch` / `CondBranch` vocabulary, so both backends pick up
+  the new edge into `match_merge` for free. End-to-end coverage extends
+  the same four match-named test sections: `resolve_match.rs`,
+  `lower_match.rs`, `interpreter.rs`, `control_flow.rs`.
+- **Phases 4–7 — Pending.**
 
 ---
 
@@ -257,13 +273,14 @@ testable end-to-end (typecheck → IR → eval → LLVM).
 ```mermaid
 graph LR
     p1[Phase 1 ✓<br/>literals + wildcards + bindings<br/>linear-chain CFG] --> p2[Phase 2 ✓<br/>EnumUnit + EnumTuple<br/>+ Or<br/>STDLIB UNBLOCKED]
-    p2 --> p3[Phase 3<br/>Guards]
+    p2 --> p3[Phase 3 ✓<br/>Guards]
     p3 --> p4[Phase 4<br/>EnumStruct + Struct<br/>destructuring]
     p4 --> p5[Phase 5<br/>Exhaustiveness<br/>diagnostics]
     p5 --> p6[Phase 6<br/>Constructor + List<br/>+ TypedBinding]
     p6 --> p7[Phase 7<br/>Binary patterns]
     style p1 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p2 fill:#1f7a3a,stroke:#0f3,color:#fff
+    style p3 fill:#1f7a3a,stroke:#0f3,color:#fff
 ```
 
 ### Phase 1 — Skeleton (literals + wildcards + bindings) ✓
@@ -393,20 +410,46 @@ stdlib are unrelated alpha typecheck work (function-typed annotations,
 type-arg inference from payload patterns, multi-file imports — see
 ALPHA-ROADMAP.md).
 
-### Phase 3 — Guards
+### Phase 3 — Guards ✓
 
-Surface: `pattern when expr -> body`.
+Shipped May 2026. Surface: `pattern when expr -> body`.
 
-- Resolve: `expr` checks against `Bool` in the post-pattern-bind scope
-  (the guard sees pattern-introduced locals).
-- Lower: append the guard's lowered i1 to the arm's check sub-CFG;
-  `BoolAnd`-fuse with the pattern's success i1; that combined value is
-  the cond for the body branch. Failure path is the existing failure
-  target (the guard isn't a separate arm; a guard miss falls to the
-  next arm just like a pattern miss).
+- **AST.** No changes — `MatchArm.guard: Option<Expr>` was already
+  populated by the parser.
+- **IR.** No new instructions, no new terminators. Guards reuse the
+  existing `Branch` / `CondBranch` vocabulary.
+- **Resolve.**
+  `expo-alpha-typecheck/src/pipeline/resolve/match_expr.rs` resolves
+  the guard expr after the pattern (and so under the same per-arm
+  `LocalScope::snapshot` window the body uses), and runs it through
+  the lifted `require_bool_condition` helper from `control_flow.rs`.
+  Coverage attribution is gated on `arm.guard.is_none()`: a guard
+  can fail at runtime, so a guarded `Color.Red when ...` does not
+  cover `Red`, and a guarded `_ when ...` does not satisfy the
+  primitive-subject catch-all rule.
+- **Seal.** `seal_expr` walks `arm.guard` between the pattern walk
+  and the body walk in
+  `expo-alpha-typecheck/src/pipeline/seal.rs`'s `ExprKind::Match`
+  arm.
+- **Substitute.** `expo-alpha-ir/src/generics/substitute.rs` walks
+  `arm.guard` for type-arg substitution alongside the body so guards
+  inside generic decls are specialized correctly.
+- **IR lowering.** `expo-alpha-ir/src/lower/match_expr.rs` mints a
+  fresh `match_guard_<index>` block when `arm.guard.is_some()` and
+  uses it as the success target for the pattern test chain (instead
+  of the body block). Payload binds emit at the head of that guard
+  block, so the guard expr sees pattern-introduced locals; the
+  guard expr lowers in the same block and the resulting i1 becomes
+  the `cond` of a `CondBranch` to the body on true and the same
+  fall-through (next arm or shared trap) on false. A guarded
+  catch-all does not close the per-arm chain — a guard miss can
+  fall through to subsequent arms.
+- **Eval / LLVM.** No backend changes. The interpreter already
+  handles `CondBranch` / `LocalDecl` / `LocalWrite` /
+  `EnumPayloadFieldGet`; LLVM picks up the extra incoming edge into
+  `match_merge` through the existing phi-synthesis path.
 
-Stdlib doesn't use guards, but spec parity requires them and they're a
-small phase.
+Stdlib doesn't use guards yet, but spec parity required them.
 
 ### Phase 4 — Struct destructuring (`EnumStruct` + `Struct`)
 
@@ -482,7 +525,7 @@ Per [build.mdc](../../.cursor/rules/build.mdc):
 | ----- | ------------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------- | ----------- |
 | 1     | (none, but seal moved to dominance)                          | `match` resolve, literal/wildcard/bind patterns                        | (none)                           | **Shipped** |
 | 2     | `EnumTagGet`, `EnumPayloadFieldGet`, terminator `Unreachable` | enum patterns + or, structural enum exhaustiveness, per-arm scope unwind | **all `Option`/`Result` stdlib** | **Shipped** |
-| 3     | (none)                                                       | guard typing                                                           | (none — spec parity)             | Pending     |
+| 3     | (none)                                                       | guard typing                                                           | (none — spec parity)             | **Shipped** |
 | 4     | (none)                                                       | struct/enum-struct field patterns                                      | (none — surface polish)          | Pending     |
 | 5     | (none)                                                       | exhaustiveness check (full diagnostics)                                | (quality bar)                    | Pending     |
 | 6     | (none)                                                       | shorthand `Constructor`, `List`, `TypedBinding`                        | (post-stdlib)                    | Pending     |
