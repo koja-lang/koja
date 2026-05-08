@@ -1150,6 +1150,100 @@ fn alpha_run_interpreter_script_protocol_method_prints_point() {
     );
 }
 
+/// Script-mode fixture exercising the alpha string-concat slice
+/// end-to-end. `"foo" <> "bar"` lowers to
+/// `IRInstruction::Concat { kind: ConcatKind::String, .. }`. The
+/// LLVM backend emits inline `malloc + memcpy` for the new heap
+/// block (no runtime helper); the auto-print wrapper hands the
+/// resulting payload pointer to `__expo_alpha_print_string`. Both
+/// backends produce stdout `foobar\n`.
+const STRING_CONCAT_SCRIPT_SOURCE: &str = "
+    \"foo\" <> \"bar\"
+";
+
+#[test]
+fn alpha_run_llvm_script_string_concat_prints_foobar() {
+    assert_script_prints(
+        "run_llvm_string_concat",
+        STRING_CONCAT_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "foobar",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_string_concat_prints_foobar() {
+    assert_script_prints(
+        "run_interpreter_string_concat",
+        STRING_CONCAT_SCRIPT_SOURCE,
+        None,
+        "foobar",
+    );
+}
+
+/// Script-mode fixture exercising the alpha `<<segments>>` literal
+/// slice for byte-aligned (`Binary`) output end-to-end. The two
+/// 8-bit unsigned segments produce a 16-bit, byte-aligned heap
+/// block; the auto-print wrapper routes the payload pointer through
+/// `__expo_alpha_print_binary` (LLVM) or formats `Value::Binary`
+/// (interpreter). Both backends print `<<0x48, 0x69>>\n`
+/// (`"Hi"` as raw bytes).
+const BINARY_LITERAL_SCRIPT_SOURCE: &str = "
+    <<72::8, 105::8>>
+";
+
+#[test]
+fn alpha_run_llvm_script_binary_literal_prints_hex_bytes() {
+    assert_script_prints(
+        "run_llvm_binary_literal",
+        BINARY_LITERAL_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "<<0x48, 0x69>>",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_binary_literal_prints_hex_bytes() {
+    assert_script_prints(
+        "run_interpreter_binary_literal",
+        BINARY_LITERAL_SCRIPT_SOURCE,
+        None,
+        "<<0x48, 0x69>>",
+    );
+}
+
+/// Script-mode fixture exercising the alpha `<<segments>>` literal
+/// slice for non-byte-aligned (`Bits`) output end-to-end. A 5-bit
+/// segment + a 3-bit segment yields a single byte (`0b10110_101 =
+/// 0xB5`) that's still byte-aligned; combined with a trailing 3-bit
+/// segment the total bit width is 11, forcing the result type to
+/// `Bits`. The auto-print wrapper formats `<<0xB5, 0b101::3>>\n`
+/// through `__expo_alpha_print_bits` on LLVM and through
+/// `Value::Bits`'s `Display` on the interpreter, mirroring exactly.
+const BITS_LITERAL_SCRIPT_SOURCE: &str = "
+    <<22::5, 5::3, 5::3>>
+";
+
+#[test]
+fn alpha_run_llvm_script_bits_literal_prints_partial_byte() {
+    assert_script_prints(
+        "run_llvm_bits_literal",
+        BITS_LITERAL_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "<<0xB5, 0b101::3>>",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_bits_literal_prints_partial_byte() {
+    assert_script_prints(
+        "run_interpreter_bits_literal",
+        BITS_LITERAL_SCRIPT_SOURCE,
+        None,
+        "<<0xB5, 0b101::3>>",
+    );
+}
+
 #[test]
 fn alpha_build_interpreter_backend_errors() {
     let scratch = scratch_dir("build_interpreter_backend");

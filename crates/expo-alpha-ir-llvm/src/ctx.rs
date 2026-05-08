@@ -45,10 +45,12 @@ pub(crate) struct EmitContext<'ctx> {
     /// the host [`inkwell::targets::TargetData`] used by the enum
     /// layout computation. See [`crate::layout`].
     pub(crate) layouts: TypeLayouts<'ctx>,
-    /// Counter for `alpha_str.<n>` global names. `Cell<u32>` because
-    /// emission walks `&EmitContext` immutably; mirrors v1's
+    /// Counter for `alpha_<prefix>.<n>` global names — strings,
+    /// binary, bits constants all share a single sequence so each
+    /// emitted global symbol is unique. `Cell<u32>` because emission
+    /// walks `&EmitContext` immutably; mirrors v1's
     /// `string_const.<n>` pattern in `expo-codegen`.
-    string_counter: Cell<u32>,
+    payload_counter: Cell<u32>,
     /// Per-function local-variable slot map: `IRLocalId ->
     /// PointerValue` (the LLVM `alloca` materializing the slot).
     /// Populated as `LocalDecl` instructions emit; consumed by
@@ -89,7 +91,7 @@ impl<'ctx> EmitContext<'ctx> {
             context,
             module,
             layouts,
-            string_counter: Cell::new(0),
+            payload_counter: Cell::new(0),
             local_slots: RefCell::new(HashMap::new()),
             constant_pool: RefCell::new(None),
             load_const_cache: RefCell::new(BTreeMap::new()),
@@ -121,10 +123,15 @@ impl<'ctx> EmitContext<'ctx> {
         *self.constant_pool.borrow_mut() = Some(pool);
     }
 
-    pub(crate) fn next_string_symbol(&self) -> String {
-        let n = self.string_counter.get();
-        self.string_counter.set(n + 1);
-        format!("alpha_str.{n}")
+    /// Mint a fresh module-unique symbol name for a heap-payload
+    /// global. Callers pass `"str"` for strings, `"bin"` for binary,
+    /// `"bits"` for bits — the prefix is purely cosmetic (helps
+    /// reading raw LLVM IR) but the counter is shared so two
+    /// different prefixes can't collide.
+    pub(crate) fn next_payload_symbol(&self, prefix: &str) -> String {
+        let n = self.payload_counter.get();
+        self.payload_counter.set(n + 1);
+        format!("alpha_{prefix}.{n}")
     }
 
     /// Register an `alloca` for `local`. Panics on duplicate keys —

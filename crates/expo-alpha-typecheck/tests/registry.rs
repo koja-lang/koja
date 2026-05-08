@@ -14,7 +14,7 @@ mod common;
 
 use common::{PACKAGE, typecheck_file};
 
-const STDLIB_STUBS: &[&str] = &["Int", "Bool", "Unit", "Float", "String"];
+const STDLIB_STUBS: &[&str] = &["Int", "Bool", "Unit", "Float", "String", "Binary", "Bits"];
 
 fn check_empty_main() -> CheckedProgram {
     typecheck_file("fn main\n  1\nend\n")

@@ -26,6 +26,125 @@ mod common;
 use common::{APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower};
 
 // ---------------------------------------------------------------------------
+// `<>` concat (Phase B): String/Binary go inline (`malloc + memcpy`),
+// Bits routes through the `__expo_alpha_concat_bits` runtime helper.
+// Print routing for Binary/Bits is Phase D; until then we pin the
+// helper-fn IR shape rather than driving the value through `main`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
+    // Same inline shape as String concat (no trailing NUL though —
+    // `with_nul=false` for `Binary`). Emitted in a non-`main` fn
+    // because Binary isn't yet routable through the auto-print
+    // wrapper (see Phase D).
+    let source = "
+        fn join(move a: Binary, move b: Binary) -> Binary
+          a <> b
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "@llvm.memcpy.p0.p0.i64");
+    // The runtime concat-bits extern must NOT be declared for a
+    // pure-Binary program — Binary stays inline.
+    assert!(
+        !ir_text.contains("@__expo_alpha_concat_bits"),
+        "Binary concat should not pull in the bits runtime helper:\n{ir_text}",
+    );
+}
+
+#[test]
+fn binary_literal_emits_malloc_and_byte_packing() {
+    // `<<1, 2, 3>>` lowers to BinaryConstruct → inline malloc(11)
+    // (8-byte header + 3 payload bytes), `memset` the payload to
+    // zero, then per-byte stores at offsets 0..2. Pin the malloc
+    // declaration and the memset zero-init shape since both sit on
+    // every BinaryConstruct path.
+    let source = "
+        fn build -> Binary
+          <<1, 2, 3>>
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "@llvm.memset.p0.i64");
+    // Pure byte-aligned segments must NOT pull in the runtime
+    // pack-bits helper — that path is reserved for sub-byte
+    // segments.
+    assert!(
+        !ir_text.contains("@__expo_alpha_pack_bits"),
+        "byte-aligned BinaryConstruct should not reference the bit-packer:\n{ir_text}",
+    );
+}
+
+#[test]
+fn sub_byte_binary_literal_routes_through_pack_bits() {
+    // `<<5::3, 9::4>>` totals 7 bits — sub-byte alignment means
+    // each segment routes through the runtime helper rather than
+    // emitting an inline byte-shift loop.
+    let source = "
+        fn build -> Bits
+          <<5::3, 9::4>>
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(
+        &ir_text,
+        "declare void @__expo_alpha_pack_bits(ptr, i64, i8, i64)",
+    );
+    assert_contains(&ir_text, "call void @__expo_alpha_pack_bits(");
+}
+
+#[test]
+fn bits_concat_helper_routes_through_runtime() {
+    // `Bits` has a sub-byte-aligned bit_length and so cannot share
+    // the inline `memcpy` shape — `emit_concat`'s `Bits` arm
+    // declares and calls the runtime `__expo_alpha_concat_bits`
+    // helper instead.
+    let source = "
+        fn join(move a: Bits, move b: Bits) -> Bits
+          a <> b
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "declare ptr @__expo_alpha_concat_bits(ptr, ptr)");
+    assert_contains(&ir_text, "call ptr @__expo_alpha_concat_bits(");
+}
+
+// ---------------------------------------------------------------------------
 // `fn main` body: literals, arithmetic, boolean, comparison
 // ---------------------------------------------------------------------------
 

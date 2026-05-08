@@ -25,8 +25,8 @@ use crate::emit::{self, ValueMap, inkwell_err};
 use crate::error::LlvmError;
 use crate::function::declare_blocks;
 use crate::runtime::{
-    PRINT_BOOL_SYMBOL, PRINT_F32_SYMBOL, PRINT_F64_SYMBOL, PRINT_INT_SYMBOL, PRINT_STRING_SYMBOL,
-    declare_runtime_printer,
+    PRINT_BINARY_SYMBOL, PRINT_BITS_SYMBOL, PRINT_BOOL_SYMBOL, PRINT_F32_SYMBOL, PRINT_F64_SYMBOL,
+    PRINT_INT_SYMBOL, PRINT_STRING_SYMBOL, declare_runtime_printer,
 };
 
 const APP_NAME_SYMBOL: &str = "__expo_app_name";
@@ -226,6 +226,16 @@ fn emit_print_call<'ctx>(
                 extended.into(),
             )
         }
+        IRType::Binary => (
+            PRINT_BINARY_SYMBOL,
+            ctx.context.ptr_type(AddressSpace::default()).into(),
+            body_value.into_pointer_value().into(),
+        ),
+        IRType::Bits => (
+            PRINT_BITS_SYMBOL,
+            ctx.context.ptr_type(AddressSpace::default()).into(),
+            body_value.into_pointer_value().into(),
+        ),
         IRType::String => (
             PRINT_STRING_SYMBOL,
             ctx.context.ptr_type(AddressSpace::default()).into(),

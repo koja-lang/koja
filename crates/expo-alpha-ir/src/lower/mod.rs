@@ -49,6 +49,7 @@
 //!   [`lower_struct_construction`], [`lower_field_access`].
 
 mod arms;
+mod binary_literal;
 mod body;
 mod calls;
 mod constants;

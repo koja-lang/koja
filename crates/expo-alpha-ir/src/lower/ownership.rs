@@ -64,12 +64,13 @@ pub(super) fn ownership_for_param(mode: PassMode, ty: &IRType) -> Ownership {
     }
 }
 
-/// Heap-allocated IR types: `String` today; `Binary` and `Bits`
-/// extend this when the next slice ships them. Struct / enum
-/// variants stay stack-allocated until they gain heap-typed fields,
-/// at which point they migrate here too.
+/// Heap-allocated IR types: the bit-length-header family (`String`,
+/// `Binary`, `Bits`). All three share a single `[i64 bit_length]
+/// [payload]` heap layout and a single drop shape (`free(payload -
+/// 8)`). Struct / enum variants stay stack-allocated until they
+/// gain heap-typed fields, at which point they migrate here too.
 fn is_heap_type(ty: &IRType) -> bool {
-    matches!(ty, IRType::String)
+    matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
 }
 
 fn is_interpolation(part: &StringPart) -> bool {

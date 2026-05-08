@@ -108,7 +108,9 @@ pub(crate) use script::seal_script;
 /// diagnostics. See module docstring invariant 8.
 pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String) {
     match ty {
-        IRType::Bool
+        IRType::Binary
+        | IRType::Bits
+        | IRType::Bool
         | IRType::Enum(_)
         | IRType::Float32
         | IRType::Float64
@@ -131,7 +133,9 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
 
 pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() -> String) {
     match value {
-        ConstValue::Bool(_)
+        ConstValue::Binary(_)
+        | ConstValue::Bits { .. }
+        | ConstValue::Bool(_)
         | ConstValue::Float64(_)
         | ConstValue::Int8(_)
         | ConstValue::Int64(_)
@@ -139,7 +143,7 @@ pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() ->
         | ConstValue::Unit => {}
         other => seal_panic(&format!(
             "{}: ConstValue `{other:?}` is not yet admitted (alpha admits only \
-             Bool / Float64 / Int8 / Int64 / String / Unit)",
+             Binary / Bits / Bool / Float64 / Int8 / Int64 / String / Unit)",
             location(),
         )),
     }
@@ -147,8 +151,12 @@ pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() ->
 
 pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
     match inst {
+        IRInstruction::BinaryConstruct { segments, .. } => {
+            segments.iter().map(|s| s.value()).collect()
+        }
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Call { args, .. } => args.clone(),
+        IRInstruction::Concat { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Const { .. } => vec![],
         IRInstruction::EnumConstruct { payload, .. } => match payload {
             EnumPayloadInit::Struct(fields) => fields.iter().map(|f| f.value).collect(),

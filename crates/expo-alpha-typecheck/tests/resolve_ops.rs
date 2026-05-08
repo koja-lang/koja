@@ -166,6 +166,43 @@ fn neg_on_bool_diagnoses() {
 }
 
 #[test]
+fn string_concat_resolves_to_string() {
+    assert_trailing_is("fn main\n  \"foo\" <> \"bar\"\nend\n", "String");
+}
+
+#[test]
+fn binary_concat_requires_binary_operands() {
+    // Cross-type concat (String <> Binary) is rejected: the user
+    // must convert through an explicit stdlib helper. Pin the
+    // diagnostic shape so accidental cross-type acceptance gets
+    // caught.
+    let failure = typecheck_fail(
+        "fn copy(move b: Binary) -> Binary\n  \"hi\" <> b\nend\n\nfn main\n  1\nend\n",
+    );
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("String, Binary, or Bits")),
+        "expected concat-mismatch diagnostic; got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn int_concat_diagnoses() {
+    let failure = typecheck_fail("fn main\n  1 <> 2\nend\n");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("String, Binary, or Bits")),
+        "expected non-concat-typed diagnostic; got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
 fn float_arithmetic_resolves_to_float() {
     for source in [
         "fn main\n  1.0 + 2.0\nend\n",

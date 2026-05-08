@@ -29,6 +29,11 @@ pub(super) fn seal_expr(expr: &Expr) {
             seal_expr(left);
             seal_expr(right);
         }
+        ExprKind::BinaryLiteral { segments } => {
+            for segment in segments {
+                seal_expr(&segment.value);
+            }
+        }
         ExprKind::Call {
             callee,
             args,

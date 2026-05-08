@@ -62,4 +62,7 @@ pub use package::IRPackage;
 pub use program::{IRProgram, lower_program};
 pub use script::{IRScript, lower_script};
 pub use struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
-pub use types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
+pub use types::{
+    BinaryEndian, BinarySign, ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp,
+    LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
+};

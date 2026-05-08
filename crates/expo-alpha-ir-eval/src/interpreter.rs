@@ -7,9 +7,10 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{
-    BranchTarget, ConstValue, EnumPayloadInit, FunctionKind, IRBasicBlock, IRBlockId,
-    IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId, IRProgram, IRScript,
-    IRSymbol, IRTerminator, IRVariantPayload, IRVariantTag, ValueId,
+    BinaryEndian, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
+    IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId,
+    IRProgram, IRScript, IRSymbol, IRTerminator, IRVariantPayload, IRVariantTag,
+    LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
 };
 
 use crate::error::RuntimeError;
@@ -226,6 +227,15 @@ fn execute_instruction<R: CallResolver>(
     resolver: &R,
 ) -> Result<(), RuntimeError> {
     match instruction {
+        IRInstruction::BinaryConstruct {
+            dest,
+            layout,
+            segments,
+        } => {
+            let value = construct_binary_literal(*layout, segments, frame)?;
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
         IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
             let lhs_value = lookup(&frame.values, *lhs)?;
             let rhs_value = lookup(&frame.values, *rhs)?;
@@ -245,6 +255,18 @@ fn execute_instruction<R: CallResolver>(
                 )
             });
             let result = execute_function(callee_fn, arg_values, resolver)?;
+            frame.values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::Concat {
+            dest,
+            kind,
+            lhs,
+            rhs,
+        } => {
+            let left = lookup(&frame.values, *lhs)?;
+            let right = lookup(&frame.values, *rhs)?;
+            let result = concat_values(*kind, &left, &right)?;
             frame.values.insert(*dest, result);
             Ok(())
         }
@@ -533,11 +555,271 @@ fn materialize_enum<R: CallResolver>(
     })
 }
 
+/// Apply `<>` to two heap-payload values. Mirrors the LLVM
+/// backend's split: `String` / `Binary` are byte-aligned `memcpy`s,
+/// `Bits` does sub-byte alignment in Rust (the runtime helper's
+/// algorithm). Mismatched [`Value`] kinds vs `kind` surface a
+/// `TypeMismatch` — defensive, since seal + typecheck should have
+/// kept these consistent.
+fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
+    match kind {
+        ConcatKind::String => {
+            let (Value::String(l), Value::String(r)) = (left, right) else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("Concat<String> on `{left}` and `{right}`"),
+                });
+            };
+            let mut out = String::with_capacity(l.len() + r.len());
+            out.push_str(l);
+            out.push_str(r);
+            Ok(Value::String(out))
+        }
+        ConcatKind::Binary => {
+            let (Value::Binary(l), Value::Binary(r)) = (left, right) else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("Concat<Binary> on `{left}` and `{right}`"),
+                });
+            };
+            let mut out = Vec::with_capacity(l.len() + r.len());
+            out.extend_from_slice(l);
+            out.extend_from_slice(r);
+            Ok(Value::Binary(out))
+        }
+        ConcatKind::Bits => {
+            let (
+                Value::Bits {
+                    bytes: lb,
+                    bit_length: ll,
+                },
+                Value::Bits {
+                    bytes: rb,
+                    bit_length: rl,
+                },
+            ) = (left, right)
+            else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("Concat<Bits> on `{left}` and `{right}`"),
+                });
+            };
+            let total = ll + rl;
+            let total_bytes = total.div_ceil(8) as usize;
+            let mut out = vec![0u8; total_bytes];
+            // Copy lhs bits (which are already left-aligned in `lb`)
+            // verbatim — the trailing partial byte already has its
+            // high bits set and low bits zeroed.
+            for (idx, byte) in lb.iter().enumerate() {
+                out[idx] = *byte;
+            }
+            // Append rhs bits starting at bit offset `ll`.
+            append_bits(&mut out, *ll, rb, *rl);
+            Ok(Value::Bits {
+                bytes: out,
+                bit_length: total,
+            })
+        }
+    }
+}
+
+/// Append `length` bits from `src` (which is left-aligned with
+/// `length` valid bits and possible zero padding in the low bits of
+/// its trailing byte) into `dest` starting at bit offset
+/// `start_bit`. Helper for [`concat_values`]'s `Bits` arm; mirrors
+/// the algorithm the LLVM `__expo_alpha_concat_bits` runtime helper
+/// runs at native code speed.
+fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
+    if length == 0 {
+        return;
+    }
+    let shift = (start_bit % 8) as u32;
+    let dest_byte_start = (start_bit / 8) as usize;
+    if shift == 0 {
+        let src_bytes = length.div_ceil(8) as usize;
+        for i in 0..src_bytes {
+            dest[dest_byte_start + i] = src[i];
+        }
+        return;
+    }
+    // Bit-shift each source byte right by `shift`, OR'd into the
+    // current dest byte's low bits + the next dest byte's high
+    // bits.
+    let mut remaining = length;
+    let mut src_idx = 0;
+    let mut dest_idx = dest_byte_start;
+    while remaining > 0 {
+        let byte = src[src_idx];
+        dest[dest_idx] |= byte >> shift;
+        let next_bits = remaining.min(8);
+        let consumed_in_low = next_bits + (shift as u64).saturating_sub(0);
+        if consumed_in_low > 8 - shift as u64 && dest_idx + 1 < dest.len() {
+            dest[dest_idx + 1] |= byte << (8 - shift);
+        }
+        if remaining > 8 {
+            remaining -= 8;
+            src_idx += 1;
+            dest_idx += 1;
+        } else {
+            remaining = 0;
+        }
+    }
+}
+
+/// Build a `<<segments>>` literal as a runtime [`Value::Binary`] (when
+/// `layout.byte_aligned`) or [`Value::Bits`] (otherwise). Segments
+/// are packed in source order at their pre-computed `bit_offset`s;
+/// integer / float bytes get endian-shuffled, string segments
+/// `memcpy` their payload, sub-byte segments funnel through
+/// [`pack_bits_into`] (the eval-side mirror of the
+/// `__expo_alpha_pack_bits` runtime helper). The buffer is
+/// pre-zeroed so unused trailing bits in the last byte stay zero.
+fn construct_binary_literal(
+    layout: ResolvedBinaryLayout,
+    segments: &[LoweredBinarySegment],
+    frame: &Frame,
+) -> Result<Value, RuntimeError> {
+    let total_bytes = layout.total_bits.div_ceil(8) as usize;
+    let mut buffer = vec![0u8; total_bytes];
+
+    for segment in segments {
+        match segment {
+            LoweredBinarySegment::Integer {
+                value,
+                width,
+                endian,
+                bit_offset,
+                ..
+            } => {
+                let resolved = lookup(&frame.values, *value)?;
+                let int_value = match resolved {
+                    Value::Int(n) => n as u64,
+                    other => {
+                        return Err(RuntimeError::TypeMismatch {
+                            detail: format!(
+                                "binary literal integer segment expected an Int value; got {other}",
+                            ),
+                        });
+                    }
+                };
+                pack_integer_segment(&mut buffer, int_value, *width, *endian, *bit_offset);
+            }
+            LoweredBinarySegment::Float {
+                value,
+                width,
+                endian,
+                bit_offset,
+            } => {
+                let resolved = lookup(&frame.values, *value)?;
+                let bits: u64 = match (*width, &resolved) {
+                    (32, Value::Float32(v)) => u64::from(v.to_bits()),
+                    (32, Value::Float64(v)) => u64::from((*v as f32).to_bits()),
+                    (64, Value::Float64(v)) => v.to_bits(),
+                    (64, Value::Float32(v)) => f64::from(*v).to_bits(),
+                    (w, _) => panic!(
+                        "interpreter: BinaryConstruct float segment of width {w} — \
+                         seal invariant violation (float widths are 32 or 64)",
+                    ),
+                };
+                pack_integer_segment(&mut buffer, bits, *width, *endian, *bit_offset);
+            }
+            LoweredBinarySegment::String {
+                value,
+                byte_length,
+                bit_offset,
+            } => {
+                let resolved = lookup(&frame.values, *value)?;
+                let Value::String(text) = resolved else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!(
+                            "binary literal string segment expected a String value; got {resolved}",
+                        ),
+                    });
+                };
+                let bytes = text.as_bytes();
+                debug_assert!(
+                    bytes.len() as u64 >= *byte_length,
+                    "interpreter: BinaryConstruct string segment carries byte_length {byte_length} \
+                     but the runtime String holds {} bytes — typecheck/lower invariant violation",
+                    bytes.len(),
+                );
+                let start_byte = (bit_offset / 8) as usize;
+                buffer[start_byte..start_byte + *byte_length as usize]
+                    .copy_from_slice(&bytes[..*byte_length as usize]);
+            }
+        }
+    }
+
+    if layout.byte_aligned {
+        Ok(Value::Binary(buffer))
+    } else {
+        Ok(Value::Bits {
+            bytes: buffer,
+            bit_length: layout.total_bits,
+        })
+    }
+}
+
+/// Pack the low `width` bits of `value` into `buffer` starting at
+/// `start_bit`, byte-flipping per `endian`. The byte-aligned fast
+/// path collapses to a per-byte `or` (mirrors the LLVM backend's
+/// `emit_byte_packing` shape); the sub-byte path delegates to
+/// [`pack_bits_into`] so the integer / float arms share one
+/// bit-stream packer.
+fn pack_integer_segment(
+    buffer: &mut [u8],
+    value: u64,
+    width: u64,
+    endian: BinaryEndian,
+    start_bit: u64,
+) {
+    if width == 0 {
+        return;
+    }
+    if start_bit % 8 == 0 && width % 8 == 0 {
+        let num_bytes = (width / 8) as usize;
+        let start_byte = (start_bit / 8) as usize;
+        for i in 0..num_bytes {
+            let shift = match endian {
+                BinaryEndian::Little => (i as u32) * 8,
+                BinaryEndian::Big => ((num_bytes - 1 - i) as u32) * 8,
+            };
+            buffer[start_byte + i] = (value >> shift) as u8;
+        }
+        return;
+    }
+    // Sub-byte: write the low `width` bits MSB-first, mirroring the
+    // runtime `__expo_alpha_pack_bits` helper. Endianness is
+    // meaningless for non-byte-multiple widths in v1, so we only
+    // honour the high-order-first convention.
+    pack_bits_into(buffer, value, width, start_bit);
+}
+
+/// Eval-side mirror of the `__expo_alpha_pack_bits` runtime helper:
+/// write the low `width` bits of `value` (MSB first) into `buffer`
+/// at bit offset `start_bit`. `buffer` is assumed pre-zeroed; we
+/// `or` rather than overwrite so adjacent segments that share a
+/// byte don't clobber each other.
+fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
+    for i in 0..width {
+        let bit = ((value >> (width - 1 - i)) & 1) as u8;
+        if bit == 0 {
+            continue;
+        }
+        let bit_pos = start_bit + i;
+        let byte = (bit_pos / 8) as usize;
+        let bit_in_byte = 7 - (bit_pos % 8) as u32;
+        buffer[byte] |= 1 << bit_in_byte;
+    }
+}
+
 /// Materialize a `ConstValue` as a runtime [`Value`]. Every int
 /// width collapses to `Value::Int(i64)` (the seal pass keeps
 /// width-mismatched flows out, but the arms stay exhaustive).
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
+        ConstValue::Binary(bytes) => Value::Binary(bytes.clone()),
+        ConstValue::Bits { bytes, bit_length } => Value::Bits {
+            bytes: bytes.clone(),
+            bit_length: *bit_length,
+        },
         ConstValue::Bool(b) => Value::Bool(*b),
         ConstValue::Float32(v) => Value::Float32(*v),
         ConstValue::Float64(v) => Value::Float64(*v),

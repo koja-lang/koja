@@ -465,6 +465,8 @@ fn global_to_ir_type(
             entry.identifier,
         );
         return match entry.identifier.last() {
+            "Binary" => IRType::Binary,
+            "Bits" => IRType::Bits,
             "Bool" => IRType::Bool,
             "Float" | "Float64" => IRType::Float64,
             "Float32" => IRType::Float32,

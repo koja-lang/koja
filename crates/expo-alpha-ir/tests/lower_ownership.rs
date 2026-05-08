@@ -171,6 +171,131 @@ fn move_param_with_string_type_stamps_owned_on_promotion() {
 }
 
 #[test]
+fn move_param_with_binary_type_stamps_owned_on_promotion() {
+    // `Binary` joined the heap-type family in the strings/binary/bits
+    // slice. `move b: Binary` must stamp Owned on the promotion
+    // `LocalWrite`, mirroring `move s: String`. This pins the
+    // `is_heap_type` extension to Binary.
+    let source = "
+        fn taker(move b: Binary) -> Binary
+          b
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let taker = function(&program, "taker");
+
+    let writes = local_writes(taker);
+    let owned_writes: Vec<_> = writes
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                IRInstruction::LocalWrite {
+                    ownership: Ownership::Owned,
+                    ..
+                }
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        owned_writes.len(),
+        1,
+        "exactly one Owned LocalWrite expected (the `b` promotion); got {} in {writes:?}",
+        owned_writes.len(),
+    );
+    let IRInstruction::LocalWrite { local, .. } = owned_writes[0] else {
+        unreachable!()
+    };
+
+    let entry = taker.blocks.first().expect("entry block missing");
+    let decl = entry
+        .instructions
+        .iter()
+        .find_map(|i| match i {
+            IRInstruction::LocalDecl {
+                local: decl_local,
+                ty,
+            } if decl_local == local => Some(ty),
+            _ => None,
+        })
+        .expect("LocalDecl for `b`'s slot must precede its Owned LocalWrite");
+
+    assert_eq!(
+        decl,
+        &IRType::Binary,
+        "`move b: Binary` slot's declared type must be IRType::Binary, got {decl:?}",
+    );
+}
+
+#[test]
+fn move_param_with_bits_type_stamps_owned_on_promotion() {
+    // Sibling of [`move_param_with_binary_type_stamps_owned_on_promotion`]:
+    // `Bits` is the second new heap type added in this slice and must
+    // stamp Owned on `move` promotion just like `String` and `Binary`.
+    let source = "
+        fn taker(move b: Bits) -> Bits
+          b
+        end
+
+        fn main
+          1
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let taker = function(&program, "taker");
+
+    let writes = local_writes(taker);
+    let owned_writes: Vec<_> = writes
+        .iter()
+        .filter(|i| {
+            matches!(
+                i,
+                IRInstruction::LocalWrite {
+                    ownership: Ownership::Owned,
+                    ..
+                }
+            )
+        })
+        .collect();
+
+    assert_eq!(
+        owned_writes.len(),
+        1,
+        "exactly one Owned LocalWrite expected (the `b` promotion); got {} in {writes:?}",
+        owned_writes.len(),
+    );
+    let IRInstruction::LocalWrite { local, .. } = owned_writes[0] else {
+        unreachable!()
+    };
+
+    let entry = taker.blocks.first().expect("entry block missing");
+    let decl = entry
+        .instructions
+        .iter()
+        .find_map(|i| match i {
+            IRInstruction::LocalDecl {
+                local: decl_local,
+                ty,
+            } if decl_local == local => Some(ty),
+            _ => None,
+        })
+        .expect("LocalDecl for `b`'s slot must precede its Owned LocalWrite");
+
+    assert_eq!(
+        decl,
+        &IRType::Bits,
+        "`move b: Bits` slot's declared type must be IRType::Bits, got {decl:?}",
+    );
+}
+
+#[test]
 fn match_binding_stamps_local_write_unowned() {
     let source = "
         fn main

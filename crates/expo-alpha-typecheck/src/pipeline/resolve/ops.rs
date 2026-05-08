@@ -106,12 +106,30 @@ pub(super) fn binary_type(
                 ResolvedType::unresolved()
             }
         }
-        _ => {
-            diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck does not yet support binary operator `{op:?}`"),
-                span,
-            ));
-            ResolvedType::unresolved()
+        BinOp::Concat => {
+            // `<>` requires both operands to share a heap-payload
+            // type — `String`, `Binary`, or `Bits`. Cross-type
+            // concat (e.g. `String <> Binary`) is rejected; the
+            // user must convert through a stdlib helper. Result
+            // type matches operands.
+            if both(lhs, rhs, registry, "String") {
+                registry.primitive("String")
+            } else if both(lhs, rhs, registry, "Binary") {
+                registry.primitive("Binary")
+            } else if both(lhs, rhs, registry, "Bits") {
+                registry.primitive("Bits")
+            } else {
+                push_op_mismatch(
+                    diagnostics,
+                    op,
+                    "matching String, Binary, or Bits operands",
+                    lhs,
+                    rhs,
+                    span,
+                    registry,
+                );
+                ResolvedType::unresolved()
+            }
         }
     }
 }
