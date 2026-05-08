@@ -7,14 +7,14 @@
 
 use expo_ast::ast::{
     AssignTarget, Constant, EnumConstructionData, Expr, ExprKind, File, Function, ImplMember, Item,
-    LValue, Statement, StringPart, TypeExpr,
+    LValue, Pattern, Statement, StringPart, TypeExpr,
 };
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::program::CheckedProgram;
 use crate::registry::{GlobalKind, GlobalRegistry};
-use expo_ast::labels::expr_kind_label;
+use expo_ast::labels::{expr_kind_label, pattern_kind_label, pattern_span};
 
 /// Asserts the sealed-AST invariants on `program`. Panics on violation.
 ///
@@ -322,6 +322,15 @@ fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::Match { subject, arms } => {
+            seal_expr(subject);
+            for arm in arms {
+                seal_pattern(&arm.pattern);
+                for stmt in &arm.body {
+                    seal_statement(stmt);
+                }
+            }
+        }
         ExprKind::Self_ { .. } => {}
         ExprKind::MethodCall {
             receiver,
@@ -419,6 +428,38 @@ fn seal_no_type_param(ty: &ResolvedType, span: Span) {
     }
     for arg in &ty.type_args {
         seal_no_type_param(arg, span);
+    }
+}
+
+/// Supported patterns are leaves: wildcards, literals, and bindings
+/// (which must carry a stamped `LocalId`). Every other shape is a
+/// feature-gap diagnostic in resolve and never reaches seal on the
+/// success path; if one slips through, that is an upstream bug.
+fn seal_pattern(pattern: &Pattern) {
+    match pattern {
+        Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
+        Pattern::Binding {
+            local_id,
+            name,
+            span,
+        } => {
+            if local_id.is_none() {
+                seal_panic(
+                    &format!(
+                        "match binding `{name}` carries no LocalId; resolver should have \
+                         stamped it on the success path",
+                    ),
+                    *span,
+                );
+            }
+        }
+        other => seal_panic(
+            &format!(
+                "alpha typecheck seal does not yet recognize pattern kind `{}`",
+                pattern_kind_label(other),
+            ),
+            pattern_span(other),
+        ),
     }
 }
 

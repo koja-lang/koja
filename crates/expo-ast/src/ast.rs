@@ -954,8 +954,14 @@ pub enum Pattern {
         segments: Vec<BinarySegment>,
         span: Span,
     },
-    /// A variable binding: `x`, `name`.
-    Binding { name: String, span: Span },
+    /// A variable binding: `x`, `name`. `local_id` is `None` after
+    /// parse and stamped by typecheck resolve, mirroring the
+    /// [`Param::Regular`] / [`ExprKind::Self_`] slot.
+    Binding {
+        local_id: Option<LocalId>,
+        name: String,
+        span: Span,
+    },
     /// A unit enum variant: `Color.Red`.
     EnumUnit {
         type_path: Vec<String>,

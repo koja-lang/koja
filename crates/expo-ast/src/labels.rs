@@ -2,7 +2,7 @@
 //! `expr_kind_label` / `item_label` return compact kind names ("binary",
 //! "fn"); `bin_op_label` renders the literal source token ("+", "and").
 
-use crate::ast::{BinOp, CompoundOp, ExprKind, Item};
+use crate::ast::{BinOp, CompoundOp, ExprKind, Item, Pattern};
 use crate::span::Span;
 
 pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
@@ -47,6 +47,40 @@ pub fn item_label(item: &Item) -> &'static str {
         Item::Protocol(_) => "protocol",
         Item::Struct(_) => "struct",
         Item::TypeAlias(_) => "type",
+    }
+}
+
+pub fn pattern_kind_label(pattern: &Pattern) -> &'static str {
+    match pattern {
+        Pattern::Binary { .. } => "binary",
+        Pattern::Binding { .. } => "binding",
+        Pattern::Constructor { .. } => "constructor",
+        Pattern::EnumStruct { .. } => "enum-struct",
+        Pattern::EnumTuple { .. } => "enum-tuple",
+        Pattern::EnumUnit { .. } => "enum-unit",
+        Pattern::List { .. } => "list",
+        Pattern::Literal { .. } => "literal",
+        Pattern::Or { .. } => "or",
+        Pattern::Struct { .. } => "struct",
+        Pattern::TypedBinding { .. } => "typed-binding",
+        Pattern::Wildcard { .. } => "wildcard",
+    }
+}
+
+pub fn pattern_span(pattern: &Pattern) -> Span {
+    match pattern {
+        Pattern::Binary { span, .. }
+        | Pattern::Binding { span, .. }
+        | Pattern::Constructor { span, .. }
+        | Pattern::EnumStruct { span, .. }
+        | Pattern::EnumTuple { span, .. }
+        | Pattern::EnumUnit { span, .. }
+        | Pattern::List { span, .. }
+        | Pattern::Literal { span, .. }
+        | Pattern::Or { span, .. }
+        | Pattern::Struct { span, .. }
+        | Pattern::TypedBinding { span, .. }
+        | Pattern::Wildcard { span, .. } => *span,
     }
 }
 

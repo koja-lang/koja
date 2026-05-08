@@ -12,12 +12,18 @@
 //! return type) instead of narrow `IntValue` / `FloatValue`.
 
 use expo_alpha_ir::{IRBinOp, IRUnaryOp};
-use inkwell::values::{BasicValueEnum, FloatValue, IntValue};
+use inkwell::AddressSpace;
+use inkwell::module::Linkage;
+use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+
+/// libc `strcmp`. Alpha string globals carry a trailing NUL, so
+/// `strcmp` matches `String == String`'s byte-sequence semantics.
+const STRCMP_SYMBOL: &str = "strcmp";
 
 pub(super) fn emit_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -27,6 +33,11 @@ pub(super) fn emit_binary_op<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     if lhs.is_float_value() {
         emit_float_binary_op(ctx, op, lhs.into_float_value(), rhs.into_float_value())
+    } else if lhs.is_pointer_value() {
+        // `IRType::String` is the only pointer-typed operand
+        // typecheck admits in a binary op today (and only for
+        // `Eq` / `NotEq`).
+        emit_string_binary_op(ctx, op, lhs.into_pointer_value(), rhs.into_pointer_value())
     } else {
         emit_int_binary_op(ctx, op, lhs.into_int_value(), rhs.into_int_value())
     }
@@ -171,6 +182,62 @@ fn emit_int_unary_op<'ctx>(
     }
     .map_err(|e| inkwell_err(format_args!("emit for {op:?}"), e))?;
     Ok(result.into())
+}
+
+/// `strcmp(lhs, rhs)` then `icmp` the result against zero. Only
+/// `Eq` / `NotEq` admit string operands — typecheck doesn't admit
+/// ordering or arithmetic on strings.
+fn emit_string_binary_op<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    op: IRBinOp,
+    lhs: PointerValue<'ctx>,
+    rhs: PointerValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let predicate = match op {
+        IRBinOp::Eq => IntPredicate::EQ,
+        IRBinOp::NotEq => IntPredicate::NE,
+        other => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM emit: `{other:?}` is not defined for `String` operands — \
+                 typecheck violation",
+            )));
+        }
+    };
+    let strcmp = declare_strcmp(ctx);
+    let diff_call = ctx
+        .builder
+        .build_call(strcmp, &[lhs.into(), rhs.into()], "strcmp")
+        .map_err(|e| inkwell_err(format_args!("build_call for `{STRCMP_SYMBOL}`"), e))?;
+    let diff = diff_call
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!(
+                "alpha LLVM emit: `{STRCMP_SYMBOL}` returned no basic value — \
+                 inkwell builder regression",
+            ))
+        })?
+        .into_int_value();
+    let zero = ctx.context.i32_type().const_zero();
+    let result = ctx
+        .builder
+        .build_int_compare(predicate, diff, zero, "streq")
+        .map_err(|e| inkwell_err(format_args!("emit for {op:?} on String"), e))?;
+    Ok(result.into())
+}
+
+/// Idempotent `i32 @strcmp(i8*, i8*)` declaration.
+fn declare_strcmp<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(STRCMP_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx
+        .context
+        .i32_type()
+        .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+    ctx.module
+        .add_function(STRCMP_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// `Neg` is the only float-applicable unary; `Not` is Bool-only and

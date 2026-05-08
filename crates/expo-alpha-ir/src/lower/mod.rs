@@ -33,14 +33,17 @@
 //!   field-access lowering: [`lower_struct_decl`],
 //!   [`lower_struct_construction`], [`lower_field_access`].
 
+mod arms;
 mod body;
 mod constants;
 mod control_flow;
 mod ctx;
 mod enums;
 mod expr;
+mod match_expr;
 mod ops;
 pub(crate) mod package;
+mod patterns;
 mod structs;
 
 pub(crate) use body::lower_body_to_blocks;

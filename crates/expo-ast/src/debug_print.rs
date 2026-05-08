@@ -754,7 +754,7 @@ impl<'a> Printer<'a> {
                     }
                 });
             }
-            Pattern::Binding { name, span } => {
+            Pattern::Binding { name, span, .. } => {
                 self.header(&format!("Binding {name}"), *span);
             }
             Pattern::EnumUnit {

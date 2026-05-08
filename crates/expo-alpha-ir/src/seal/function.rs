@@ -1,10 +1,11 @@
 //! Per-function and per-block invariants. [`seal_package`] /
-//! [`seal_block`] are reused for both function- and script-shaped IR;
-//! only the seeded `ValueId` set differs (params for fns, empty for
-//! scripts).
+//! [`seal_block`] / [`seal_ssa`] are reused for both function- and
+//! script-shaped IR; the only difference is the seeded `ValueId` set
+//! (function params for fns, empty for scripts).
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
+use crate::dominators::{compute_immediate_dominators, dominator_tree_children};
 use crate::function::{
     BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRTerminator,
 };
@@ -15,8 +16,8 @@ use crate::types::{IRType, ValueId};
 use super::enums::seal_enum_decls;
 use super::structs::seal_struct_decls;
 use super::{
-    instruction_operands, require_defined, require_supported_const, require_supported_type,
-    seal_panic, terminator_operands, terminator_targets,
+    instruction_operands, require_supported_const, require_supported_type, seal_panic,
+    terminator_operands, terminator_targets,
 };
 
 pub(super) fn seal_package(pkg: &IRPackage) {
@@ -61,24 +62,31 @@ fn seal_function(function: &IRFunction) {
         }
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
-    // Param `ValueId`s seed every block's operand-defined set.
-    let mut seeded: BTreeSet<ValueId> = BTreeSet::new();
+    // Function parameter `ValueId`s seed the entry block's
+    // dominator-tree-rooted defined set: params are visible to
+    // every block the entry dominates, which in a well-formed CFG
+    // is every reachable block.
+    let mut parameter_value_ids: HashSet<ValueId> = HashSet::new();
     for (index, param) in function.params.iter().enumerate() {
         require_supported_type(&param.ty, &|| {
             format!("{owner} parameter #{index} ({}) type", param.id)
         });
-        if !seeded.insert(param.id) {
+        if !parameter_value_ids.insert(param.id) {
             seal_panic(&format!(
                 "{owner} lists duplicate parameter value `{}`",
                 param.id,
             ));
         }
     }
+    if function.blocks.is_empty() {
+        return;
+    }
     let block_ids = collect_block_ids(&function.blocks, &owner);
     let block_params = collect_block_params(&function.blocks, &owner);
     for block in &function.blocks {
-        seal_block(block, &owner, &seeded, &block_ids, &block_params);
+        seal_block(block, &owner, &block_ids, &block_params);
     }
+    seal_ssa(&function.blocks, &owner, &parameter_value_ids);
     seal_locals(function, &owner);
 }
 
@@ -171,42 +179,21 @@ pub(super) fn collect_block_ids(blocks: &[IRBasicBlock], owner: &str) -> HashSet
     ids
 }
 
+/// Block-local structural invariants: every const value sits in the
+/// supported-width set, every terminator target names an existing
+/// block, and every branch arg list matches its target's block-param
+/// arity. The cross-block SSA defined-before-use check lives in
+/// [`seal_ssa`] (function-level, dominator-tree walk).
 pub(super) fn seal_block(
     block: &IRBasicBlock,
     owner: &str,
-    seeded: &BTreeSet<ValueId>,
     block_ids: &HashSet<IRBlockId>,
     block_params: &BTreeMap<IRBlockId, Vec<IRType>>,
 ) {
-    let mut defined = seeded.clone();
-    // Block params are SSA defs available on entry to the block —
-    // seed them into the defined set before any instruction walks
-    // so operand checks see them.
-    for param in &block.params {
-        if !defined.insert(param.dest) {
-            seal_panic(&format!(
-                "{owner} block {} declares block param `{}` that shadows an already-defined value",
-                block.id, param.dest,
-            ));
-        }
-    }
-    for inst in &block.instructions {
-        for operand in instruction_operands(inst) {
-            require_defined(operand, owner, &defined);
-        }
-        if let IRInstruction::Const { value, dest } = inst {
+    for instruction in &block.instructions {
+        if let IRInstruction::Const { value, dest } = instruction {
             require_supported_const(value, &|| format!("{owner} const instruction at {dest}"));
         }
-        // Local-slot instructions don't define a `ValueId`; their
-        // slot-identity invariants are checked in `seal_locals`.
-        if let Some(dest) = inst.dest()
-            && !defined.insert(dest)
-        {
-            seal_panic(&format!("{owner} redefines value `{dest}`"));
-        }
-    }
-    for operand in terminator_operands(&block.terminator) {
-        require_defined(operand, owner, &defined);
     }
     for target in terminator_targets(&block.terminator) {
         if !block_ids.contains(&target) {
@@ -217,6 +204,93 @@ pub(super) fn seal_block(
         }
     }
     seal_branch_target_arities(&block.terminator, block.id, owner, block_params);
+}
+
+/// Walk every reachable block in `blocks` over the dominator tree
+/// rooted at the entry block (`blocks[0]` by lowering convention)
+/// and assert SSA defined-before-use plus single-def. The
+/// `defined` set carries every `ValueId` available at the current
+/// block: function parameters seed it at entry, block params join
+/// it on entry to their declaring block, instruction `dest`s join
+/// it as the walk advances, and every value pops back out when the
+/// dominator-subtree walk returns. An operand is in scope iff its
+/// def lives in some dominator of the using block — exactly what
+/// dominance-based SSA admits.
+pub(super) fn seal_ssa(
+    blocks: &[IRBasicBlock],
+    owner: &str,
+    parameter_value_ids: &HashSet<ValueId>,
+) {
+    let entry = blocks[0].id;
+    let immediate_dominators = compute_immediate_dominators(blocks, entry);
+    let children = dominator_tree_children(&immediate_dominators, blocks);
+    let blocks_by_id: HashMap<IRBlockId, &IRBasicBlock> =
+        blocks.iter().map(|block| (block.id, block)).collect();
+
+    let mut defined = parameter_value_ids.clone();
+    walk_dominator_subtree(entry, owner, &children, &blocks_by_id, &mut defined);
+}
+
+/// Recursive descent over the dominator tree. The mutable `defined`
+/// set is the live "in scope at this point in the walk" set; values
+/// added on entry are removed on exit so siblings see their parent's
+/// scope but not each other's.
+fn walk_dominator_subtree(
+    block_id: IRBlockId,
+    owner: &str,
+    children: &HashMap<IRBlockId, Vec<IRBlockId>>,
+    blocks_by_id: &HashMap<IRBlockId, &IRBasicBlock>,
+    defined: &mut HashSet<ValueId>,
+) {
+    let block = blocks_by_id[&block_id];
+    let mut introduced = Vec::new();
+
+    for param in &block.params {
+        if !defined.insert(param.dest) {
+            seal_panic(&format!(
+                "{owner} block {block_id} declares block param `{}` that shadows an already-defined value",
+                param.dest,
+            ));
+        }
+        introduced.push(param.dest);
+    }
+    for instruction in &block.instructions {
+        for operand in instruction_operands(instruction) {
+            require_in_scope(operand, owner, block_id, defined);
+        }
+        if let Some(dest) = instruction.dest() {
+            if !defined.insert(dest) {
+                seal_panic(&format!("{owner} redefines value `{dest}`"));
+            }
+            introduced.push(dest);
+        }
+    }
+    for operand in terminator_operands(&block.terminator) {
+        require_in_scope(operand, owner, block_id, defined);
+    }
+
+    if let Some(child_blocks) = children.get(&block_id) {
+        for &child in child_blocks {
+            walk_dominator_subtree(child, owner, children, blocks_by_id, defined);
+        }
+    }
+
+    for value in introduced {
+        defined.remove(&value);
+    }
+}
+
+/// Operand-in-scope assertion under dominance. Failure surfaces as
+/// "no dominating block defines `…`" rather than the stricter
+/// "before it is defined" (which only fit the per-block model). The
+/// underlying invariant is the same: a value's def must dominate
+/// every use site.
+fn require_in_scope(value: ValueId, owner: &str, block_id: IRBlockId, defined: &HashSet<ValueId>) {
+    if !defined.contains(&value) {
+        seal_panic(&format!(
+            "{owner} block {block_id} references value `{value}` whose definition does not dominate this use",
+        ));
+    }
 }
 
 /// Validate that every [`BranchTarget`] in `term` passes exactly as
@@ -321,10 +395,11 @@ mod block_param_tests {
     fn run_seal(blocks: &[IRBasicBlock], owner: &str) {
         let block_ids = collect_block_ids(blocks, owner);
         let block_params = collect_block_params(blocks, owner);
-        let seeded: BTreeSet<ValueId> = BTreeSet::new();
         for block in blocks {
-            seal_block(block, owner, &seeded, &block_ids, &block_params);
+            seal_block(block, owner, &block_ids, &block_params);
         }
+        let parameter_value_ids: HashSet<ValueId> = HashSet::new();
+        seal_ssa(blocks, owner, &parameter_value_ids);
     }
 
     #[test]
@@ -389,11 +464,12 @@ mod block_param_tests {
     }
 
     #[test]
-    #[should_panic(expected = "before it is defined")]
+    #[should_panic(expected = "does not dominate")]
     fn block_param_does_not_leak_across_blocks() {
-        // Merge's BlockParam is in scope only inside the merge.
-        // A sibling block trying to use `merge_param` as an operand
-        // hits the defined-before-use check.
+        // Merge's BlockParam is in scope only inside the
+        // dominator-subtree rooted at merge. A sibling block trying
+        // to use `merge_param` as an operand hits the dominance
+        // check (merge does not dominate sibling).
         let entry_id = IRBlockId(0);
         let sibling_id = IRBlockId(1);
         let merge_id = IRBlockId(2);
@@ -409,9 +485,9 @@ mod block_param_tests {
             }],
             terminator: IRTerminator::Branch(BranchTarget::to(sibling_id)),
         };
-        // Sibling references `merge_param` directly — this is an
-        // illegal cross-block SSA use that the per-block defined-set
-        // check rejects.
+        // Sibling references `merge_param` directly — illegal
+        // because merge does not dominate sibling, so its
+        // BlockParam is out of scope here.
         let sibling = IRBasicBlock {
             id: sibling_id,
             label: "sibling".to_string(),

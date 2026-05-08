@@ -152,6 +152,7 @@ impl Parser {
                 Some(Pattern::Wildcard { span: expr.span })
             }
             ExprKind::Ident { name, .. } => Some(Pattern::Binding {
+                local_id: None,
                 name: name.clone(),
                 span: expr.span,
             }),

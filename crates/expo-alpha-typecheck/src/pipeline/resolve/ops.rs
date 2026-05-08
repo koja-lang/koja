@@ -67,16 +67,21 @@ pub(super) fn binary_type(
             }
         }
         BinOp::Eq | BinOp::NotEq => {
+            // String operands flow through the same operator so
+            // `match` arms with string-literal patterns can desugar
+            // to the same equality chain; LLVM emit routes the
+            // `IRType::String` case through `strcmp`.
             if both(lhs, rhs, registry, "Bool")
                 || both(lhs, rhs, registry, "Float")
                 || both(lhs, rhs, registry, "Int")
+                || both(lhs, rhs, registry, "String")
             {
                 registry.primitive("Bool")
             } else {
                 push_op_mismatch(
                     diagnostics,
                     op,
-                    "matching Bool, Float, or Int operands",
+                    "matching Bool, Float, Int, or String operands",
                     lhs,
                     rhs,
                     span,

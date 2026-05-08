@@ -22,13 +22,14 @@ use crate::local::IRLocalId;
 use crate::mangling::{mangled_function_name, mangled_type_name};
 use crate::types::{ConstValue, IRType, ValueId};
 
+use super::arms::lower_result_ty;
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{
-    CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_result_ty,
-    lower_ternary, lower_unless,
+    CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_ternary, lower_unless,
 };
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
+use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
     bin_op_result_type, const_value_type, lower_bin_op, lower_literal, lower_unary_op,
     unary_op_result_type,
@@ -163,6 +164,20 @@ pub(super) fn lower_expr(
                 },
             );
             Ok((dest, block))
+        }
+        ExprKind::Match { subject, arms } => {
+            let result_ty = lower_result_ty(&expr.resolution, registry, output);
+            lower_match(
+                MatchLowering {
+                    subject,
+                    arms,
+                    result_ty,
+                },
+                ctx,
+                block,
+                registry,
+                output,
+            )
         }
         ExprKind::MethodCall {
             receiver,

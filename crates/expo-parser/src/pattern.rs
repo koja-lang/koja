@@ -43,6 +43,7 @@ impl Parser {
                     };
                 }
                 Pattern::Binding {
+                    local_id: None,
                     name,
                     span: self.span_from(start),
                 }

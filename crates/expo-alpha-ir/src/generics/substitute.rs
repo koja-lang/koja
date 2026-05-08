@@ -166,6 +166,18 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
                 }
             }
         }
+        ExprKind::Match { subject, arms } => {
+            // Today's supported patterns carry no `ResolvedType`
+            // slots (wildcards / literals / bindings are leaves), so
+            // the pattern walk is a no-op; only the subject and arm
+            // bodies need substitution.
+            substitute_in_expr(subject, args, owner);
+            for arm in arms {
+                for stmt in &mut arm.body {
+                    substitute_in_statement(stmt, args, owner);
+                }
+            }
+        }
         ExprKind::Ternary {
             condition,
             then_expr,
@@ -192,7 +204,6 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         | ExprKind::List { .. }
         | ExprKind::Loop { .. }
         | ExprKind::Map { .. }
-        | ExprKind::Match { .. }
         | ExprKind::Receive { .. }
         | ExprKind::ShortClosure { .. }
         | ExprKind::Spawn { .. }

@@ -439,3 +439,97 @@ fn ternary_returns_else_value_when_false() {
         ";
     assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(9));
 }
+
+// -- match ----------------------------------------------------------
+
+#[test]
+fn match_int_literal_first_arm_wins_when_subject_matches() {
+    let source = "
+        fn pick -> Int
+          match 1
+            1 -> 10
+            2 -> 20
+            _ -> 30
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(10));
+}
+
+#[test]
+fn match_int_literal_falls_through_to_second_arm() {
+    let source = "
+        fn pick -> Int
+          match 2
+            1 -> 10
+            2 -> 20
+            _ -> 30
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(20));
+}
+
+#[test]
+fn match_wildcard_catch_all_runs_when_no_literal_matches() {
+    let source = "
+        fn pick -> Int
+          match 99
+            1 -> 10
+            2 -> 20
+            _ -> 30
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(30));
+}
+
+#[test]
+fn match_binding_arm_evaluates_with_subject_bound_to_name() {
+    let source = "
+        fn pick -> Int
+          match 7
+            x -> x + 1
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(8));
+}
+
+#[test]
+fn match_string_literal_first_arm_wins_on_string_equality() {
+    let source = "
+        fn pick -> Int
+          match \"hi\"
+            \"hi\" -> 1
+            _ -> 0
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(1));
+}
+
+#[test]
+fn match_string_literal_falls_through_when_subject_differs() {
+    let source = "
+        fn pick -> Int
+          match \"world\"
+            \"hi\" -> 1
+            _ -> 0
+          end
+        end
+
+        pick()
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(0));
+}

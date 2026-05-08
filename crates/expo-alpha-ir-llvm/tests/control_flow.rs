@@ -159,3 +159,89 @@ fn if_else_with_diverging_arm_still_emits_phi_with_one_incoming() {
     assert_contains(&ir_text, "phi i64");
     assert_contains(&ir_text, "if_merge");
 }
+
+#[test]
+fn match_int_chain_emits_chained_test_blocks_and_merge_phi() {
+    // Each non-catch-all arm lowers to a test block plus an arm
+    // body block; the test block fires `icmp eq` against the subject
+    // and `br i1` to either its body or the next test. The dominance
+    // rule means the subject (defined in entry) is visible in every
+    // test block without being threaded through a BlockParam. The
+    // subject comes through a function parameter so LLVM's builder
+    // can't constant-fold the comparisons away.
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            1 -> 10
+            2 -> 20
+            _ -> 30
+          end
+        end
+
+        fn main
+          pick(1)
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "match_merge");
+    assert_contains(&ir_text, "match_test_");
+    assert_contains(&ir_text, "match_body_");
+    assert_contains(&ir_text, "icmp eq i64");
+    assert_contains(&ir_text, "phi i64");
+}
+
+#[test]
+fn match_string_literal_arm_emits_strcmp_test() {
+    // String equality lowers to `strcmp(a, b) == 0`, so the test
+    // block emits a `call @strcmp` followed by an `icmp eq i32 …, 0`
+    // before the conditional branch. Pin both shapes so a regression
+    // in string comparison surfaces clearly. The subject comes
+    // through a function parameter to keep the `strcmp` call from
+    // being constant-folded.
+    let source = "
+        fn pick(s: String) -> Int
+          match s
+            \"hi\" -> 1
+            _ -> 0
+          end
+        end
+
+        fn main
+          pick(\"hi\")
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "match_merge");
+    assert_contains(&ir_text, "@strcmp");
+    assert_contains(&ir_text, "icmp eq i32");
+}
+
+#[test]
+fn match_binding_arm_emits_local_alloca_and_store() {
+    // A binding arm allocates a local slot for the bound name,
+    // stores the subject value into it on entry to the body, and
+    // every read of the binding goes through `load`. Pin the
+    // alloca/store shape so regressions in pattern-binding lowering
+    // surface here.
+    let source = "
+        fn pick(n: Int) -> Int
+          match n
+            x -> x + 1
+          end
+        end
+
+        fn main
+          pick(7)
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "alloca i64");
+    assert_contains(&ir_text, "store i64");
+    assert_contains(&ir_text, "load i64");
+}

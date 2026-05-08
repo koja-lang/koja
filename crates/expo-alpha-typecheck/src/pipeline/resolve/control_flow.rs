@@ -186,11 +186,12 @@ fn join_two_arms(
     ResolvedType::unresolved()
 }
 
-/// N-arm join used by `cond`. Returns the unique non-`Never` tail
-/// type, `Never` when every tail diverges, or `Unresolved` after a
-/// mismatch diagnostic. Unresolved tails short-circuit the join (an
-/// upstream resolution error already produced its own diagnostic).
-fn join_arm_tails(
+/// N-arm join used by `cond` and `match`. Returns the unique
+/// non-`Never` tail type, `Never` when every tail diverges, or
+/// `Unresolved` after a mismatch diagnostic. Unresolved tails
+/// short-circuit the join (an upstream resolution error already
+/// produced its own diagnostic).
+pub(super) fn join_arm_tails(
     keyword: &str,
     tails: &[(String, ResolvedType)],
     span: Span,
