@@ -133,12 +133,13 @@ pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() ->
     match value {
         ConstValue::Bool(_)
         | ConstValue::Float64(_)
+        | ConstValue::Int8(_)
         | ConstValue::Int64(_)
         | ConstValue::String(_)
         | ConstValue::Unit => {}
         other => seal_panic(&format!(
-            "{}: ConstValue `{other:?}` is not yet supported (alpha slice admits only \
-             Bool / Float64 / Int64 / String / Unit until stdlib stub expansion lands)",
+            "{}: ConstValue `{other:?}` is not yet admitted (alpha admits only \
+             Bool / Float64 / Int8 / Int64 / String / Unit)",
             location(),
         )),
     }
@@ -154,6 +155,10 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             EnumPayloadInit::Tuple(values) => values.clone(),
             EnumPayloadInit::Unit => vec![],
         },
+        IRInstruction::EnumPayloadFieldGet { value, .. }
+        | IRInstruction::EnumTagGet { value, .. } => {
+            vec![*value]
+        }
         IRInstruction::FieldGet { base, .. } => vec![*base],
         // `LoadConst` reads from the package constant pool, not a
         // `ValueId`, so it has no operand to validate here — the
@@ -188,6 +193,7 @@ pub(super) fn terminator_operands(term: &IRTerminator) -> Vec<ValueId> {
             operands
         }
         IRTerminator::Return { value } => value.iter().copied().collect(),
+        IRTerminator::Unreachable => vec![],
     }
 }
 
@@ -199,7 +205,7 @@ pub(super) fn terminator_targets(term: &IRTerminator) -> Vec<IRBlockId> {
             else_target,
             ..
         } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } => vec![],
+        IRTerminator::Return { .. } | IRTerminator::Unreachable => vec![],
     }
 }
 

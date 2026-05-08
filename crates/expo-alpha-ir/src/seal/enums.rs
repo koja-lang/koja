@@ -23,9 +23,12 @@
 
 use std::collections::HashSet;
 
-use crate::enum_decl::{EnumPayloadInit, IREnumDecl, IRVariantPayload};
+use crate::enum_decl::{
+    EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
+};
 use crate::function::{IRInstruction, IRSymbol};
 use crate::package::IRPackage;
+use crate::types::IRType;
 
 use super::seal_panic;
 use super::structs::seal_named_field_layout;
@@ -100,69 +103,138 @@ pub(super) fn seal_enum_ops<'inst, 'decl>(
     lookup: &impl Fn(&str) -> Option<&'decl IREnumDecl>,
 ) {
     for (owner, inst) in instructions {
-        let IRInstruction::EnumConstruct {
-            dest: _,
-            payload,
-            tag,
-            ty,
-        } = inst
-        else {
-            continue;
-        };
-        let decl = require_enum(lookup, ty, &owner);
-        let Some(variant) = decl.variants.get(usize::from(tag.0)) else {
-            seal_panic(&format!(
-                "{owner}: EnumConstruct on `{ty}` references tag {tag} but the decl only \
-                 declares {count} variant(s)",
-                count = decl.variants.len(),
-            ));
-        };
-        match (&variant.payload, payload) {
-            (IRVariantPayload::Unit, EnumPayloadInit::Unit) => {}
-            (IRVariantPayload::Tuple(declared), EnumPayloadInit::Tuple(values)) => {
-                if values.len() != declared.len() {
-                    seal_panic(&format!(
-                        "{owner}: EnumConstruct for `{ty}.{name}` carries {got} tuple value(s) \
-                         but the variant declares {expected}",
-                        name = variant.name,
-                        got = values.len(),
-                        expected = declared.len(),
-                    ));
-                }
+        match inst {
+            IRInstruction::EnumConstruct {
+                payload, tag, ty, ..
+            } => {
+                let variant = require_variant(lookup, ty, *tag, &owner, "EnumConstruct");
+                seal_enum_construct_payload(&owner, ty, variant, payload);
             }
-            (IRVariantPayload::Struct(declared), EnumPayloadInit::Struct(inits)) => {
-                if inits.len() != declared.len() {
-                    seal_panic(&format!(
-                        "{owner}: EnumConstruct for `{ty}.{name}` carries {got} struct field(s) \
-                         but the variant declares {expected}",
-                        name = variant.name,
-                        got = inits.len(),
-                        expected = declared.len(),
-                    ));
-                }
-                for (position, init) in inits.iter().enumerate() {
-                    if init.index as usize != position {
-                        seal_panic(&format!(
-                            "{owner}: EnumConstruct for `{ty}.{name}` field-init #{position} \
-                             has index {index}; field inits must be canonicalized to \
-                             declaration order",
-                            name = variant.name,
-                            index = init.index,
-                        ));
-                    }
-                }
+            IRInstruction::EnumTagGet { ty, .. } => {
+                require_enum(lookup, ty, &owner);
             }
-            (declared, supplied) => {
+            IRInstruction::EnumPayloadFieldGet {
+                tag,
+                payload_index,
+                field_type,
+                ty,
+                ..
+            } => {
+                let variant = require_variant(lookup, ty, *tag, &owner, "EnumPayloadFieldGet");
+                seal_payload_field_index(&owner, ty, variant, *payload_index, field_type);
+            }
+            _ => {}
+        }
+    }
+}
+
+fn seal_enum_construct_payload(
+    owner: &str,
+    ty: &IRSymbol,
+    variant: &IREnumVariant,
+    payload: &EnumPayloadInit,
+) {
+    match (&variant.payload, payload) {
+        (IRVariantPayload::Unit, EnumPayloadInit::Unit) => {}
+        (IRVariantPayload::Tuple(declared), EnumPayloadInit::Tuple(values)) => {
+            if values.len() != declared.len() {
                 seal_panic(&format!(
-                    "{owner}: EnumConstruct for `{ty}.{name}` payload shape mismatch \
-                     (declared {declared}, supplied {supplied})",
+                    "{owner}: EnumConstruct for `{ty}.{name}` carries {got} tuple value(s) \
+                     but the variant declares {expected}",
                     name = variant.name,
-                    declared = payload_shape_label(declared),
-                    supplied = init_shape_label(supplied),
+                    got = values.len(),
+                    expected = declared.len(),
                 ));
             }
         }
+        (IRVariantPayload::Struct(declared), EnumPayloadInit::Struct(inits)) => {
+            if inits.len() != declared.len() {
+                seal_panic(&format!(
+                    "{owner}: EnumConstruct for `{ty}.{name}` carries {got} struct field(s) \
+                     but the variant declares {expected}",
+                    name = variant.name,
+                    got = inits.len(),
+                    expected = declared.len(),
+                ));
+            }
+            for (position, init) in inits.iter().enumerate() {
+                if init.index as usize != position {
+                    seal_panic(&format!(
+                        "{owner}: EnumConstruct for `{ty}.{name}` field-init #{position} \
+                         has index {index}; field inits must be canonicalized to \
+                         declaration order",
+                        name = variant.name,
+                        index = init.index,
+                    ));
+                }
+            }
+        }
+        (declared, supplied) => {
+            seal_panic(&format!(
+                "{owner}: EnumConstruct for `{ty}.{name}` payload shape mismatch \
+                 (declared {declared}, supplied {supplied})",
+                name = variant.name,
+                declared = payload_shape_label(declared),
+                supplied = init_shape_label(supplied),
+            ));
+        }
     }
+}
+
+fn seal_payload_field_index(
+    owner: &str,
+    ty: &IRSymbol,
+    variant: &IREnumVariant,
+    payload_index: u32,
+    field_type: &IRType,
+) {
+    let declared = match &variant.payload {
+        IRVariantPayload::Tuple(types) => types.get(payload_index as usize),
+        IRVariantPayload::Struct(fields) => fields.get(payload_index as usize).map(|f| &f.ir_type),
+        IRVariantPayload::Unit => None,
+    };
+    let Some(declared_type) = declared else {
+        seal_panic(&format!(
+            "{owner}: EnumPayloadFieldGet for `{ty}.{name}` references payload index \
+             {payload_index} but the variant's payload exposes {arity} field(s)",
+            name = variant.name,
+            arity = payload_arity(&variant.payload),
+        ));
+    };
+    if declared_type != field_type {
+        seal_panic(&format!(
+            "{owner}: EnumPayloadFieldGet for `{ty}.{name}` payload index {payload_index} \
+             carries field_type `{got:?}` but the decl declares `{expected:?}`",
+            name = variant.name,
+            got = field_type,
+            expected = declared_type,
+        ));
+    }
+}
+
+fn payload_arity(payload: &IRVariantPayload) -> usize {
+    match payload {
+        IRVariantPayload::Struct(fields) => fields.len(),
+        IRVariantPayload::Tuple(types) => types.len(),
+        IRVariantPayload::Unit => 0,
+    }
+}
+
+fn require_variant<'decl>(
+    lookup: &impl Fn(&str) -> Option<&'decl IREnumDecl>,
+    ty: &IRSymbol,
+    tag: IRVariantTag,
+    owner: &str,
+    instruction: &str,
+) -> &'decl IREnumVariant {
+    let decl = require_enum(lookup, ty, owner);
+    decl.variants.get(usize::from(tag.0)).unwrap_or_else(|| {
+        seal_panic(&format!(
+            "{owner}: {instruction} on `{ty}` references tag {tag} but the decl only \
+             declares {count} variant(s)",
+            count = decl.variants.len(),
+        ))
+    })
 }
 
 fn payload_shape_label(payload: &IRVariantPayload) -> &'static str {
@@ -356,6 +428,111 @@ mod tests {
         let decls = vec![decl];
         let lookup = lookup_against(&decls);
         seal_enum_ops(std::iter::once(("test".to_string(), &inst)), &lookup);
+    }
+
+    #[test]
+    fn well_formed_enum_tag_get_passes_seal() {
+        let decl = option_decl();
+        let inst = IRInstruction::EnumTagGet {
+            dest: ValueId(0),
+            value: ValueId(1),
+            ty: decl.symbol.clone(),
+        };
+        let decls = vec![decl];
+        seal_enum_ops(
+            std::iter::once(("test".to_string(), &inst)),
+            &lookup_against(&decls),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "is not registered in any package")]
+    fn enum_tag_get_with_unregistered_symbol_panics() {
+        let inst = IRInstruction::EnumTagGet {
+            dest: ValueId(0),
+            value: ValueId(1),
+            ty: symbol("Unknown"),
+        };
+        let decls: Vec<IREnumDecl> = vec![];
+        seal_enum_ops(
+            std::iter::once(("test".to_string(), &inst)),
+            &lookup_against(&decls),
+        );
+    }
+
+    #[test]
+    fn well_formed_enum_payload_field_get_passes_seal() {
+        let decl = option_decl();
+        let inst = IRInstruction::EnumPayloadFieldGet {
+            dest: ValueId(0),
+            field_type: IRType::Int64,
+            payload_index: 0,
+            tag: IRVariantTag(1),
+            ty: decl.symbol.clone(),
+            value: ValueId(1),
+        };
+        let decls = vec![decl];
+        seal_enum_ops(
+            std::iter::once(("test".to_string(), &inst)),
+            &lookup_against(&decls),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "references tag #5 but the decl only declares 2 variant(s)")]
+    fn enum_payload_field_get_out_of_range_tag_panics() {
+        let decl = option_decl();
+        let inst = IRInstruction::EnumPayloadFieldGet {
+            dest: ValueId(0),
+            field_type: IRType::Int64,
+            payload_index: 0,
+            tag: IRVariantTag(5),
+            ty: decl.symbol.clone(),
+            value: ValueId(1),
+        };
+        let decls = vec![decl];
+        seal_enum_ops(
+            std::iter::once(("test".to_string(), &inst)),
+            &lookup_against(&decls),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "references payload index 4 but the variant's payload exposes 1")]
+    fn enum_payload_field_get_out_of_range_index_panics() {
+        let decl = option_decl();
+        let inst = IRInstruction::EnumPayloadFieldGet {
+            dest: ValueId(0),
+            field_type: IRType::Int64,
+            payload_index: 4,
+            tag: IRVariantTag(1),
+            ty: decl.symbol.clone(),
+            value: ValueId(1),
+        };
+        let decls = vec![decl];
+        seal_enum_ops(
+            std::iter::once(("test".to_string(), &inst)),
+            &lookup_against(&decls),
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "carries field_type")]
+    fn enum_payload_field_get_field_type_mismatch_panics() {
+        let decl = option_decl();
+        let inst = IRInstruction::EnumPayloadFieldGet {
+            dest: ValueId(0),
+            field_type: IRType::Bool,
+            payload_index: 0,
+            tag: IRVariantTag(1),
+            ty: decl.symbol.clone(),
+            value: ValueId(1),
+        };
+        let decls = vec![decl];
+        seal_enum_ops(
+            std::iter::once(("test".to_string(), &inst)),
+            &lookup_against(&decls),
+        );
     }
 
     #[test]

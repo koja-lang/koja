@@ -39,8 +39,21 @@ For pipeline shape and seal contracts, see
   threading. This is the SIL/LLVM model. The match subject lives in entry
   and is consumed in dominated test blocks unchanged — exactly the
   invariant the gated-CFG strategy expects for Phases 2+.
-- **Phases 2–7 — Pending.** Phase 2 (enum patterns + or, the
-  stdlib-unblocking slice) is next.
+- **Phase 2 — Shipped (May 2026).** `EnumUnit`, `EnumTuple` (one-level —
+  payload elements restricted to wildcard / binding), and `Or`
+  (alternatives restricted to literal / EnumUnit, no bindings) over enum
+  subjects. Structural exhaustiveness for enum subjects (catch-all
+  optional when every variant is covered); primitives keep the strict
+  catch-all rule. Two new IR instructions (`EnumTagGet`,
+  `EnumPayloadFieldGet`) and one new terminator (`IRTerminator::Unreachable`)
+  for the trap block synthesized on the failure edge of an exhaustive
+  enum match. Per-arm `LocalScope::snapshot`/`restore` keeps pattern
+  bindings arm-local. End-to-end coverage extends the same four match-
+  named test sections Phase 1 set up: `resolve_match.rs`,
+  `lower_match.rs`, `interpreter.rs`, `control_flow.rs`. Stdlib
+  `Option`/`Result`/`Step`/`StopReason`/`Lifecycle` matches all execute
+  end-to-end through both the interpreter and LLVM backends.
+- **Phases 3–7 — Pending.**
 
 ---
 
@@ -243,13 +256,14 @@ testable end-to-end (typecheck → IR → eval → LLVM).
 
 ```mermaid
 graph LR
-    p1[Phase 1 ✓<br/>literals + wildcards + bindings<br/>linear-chain CFG] --> p2[Phase 2<br/>EnumUnit + EnumTuple<br/>+ Or<br/>STDLIB UNBLOCKED]
+    p1[Phase 1 ✓<br/>literals + wildcards + bindings<br/>linear-chain CFG] --> p2[Phase 2 ✓<br/>EnumUnit + EnumTuple<br/>+ Or<br/>STDLIB UNBLOCKED]
     p2 --> p3[Phase 3<br/>Guards]
     p3 --> p4[Phase 4<br/>EnumStruct + Struct<br/>destructuring]
     p4 --> p5[Phase 5<br/>Exhaustiveness<br/>diagnostics]
     p5 --> p6[Phase 6<br/>Constructor + List<br/>+ TypedBinding]
     p6 --> p7[Phase 7<br/>Binary patterns]
     style p1 fill:#1f7a3a,stroke:#0f3,color:#fff
+    style p2 fill:#1f7a3a,stroke:#0f3,color:#fff
 ```
 
 ### Phase 1 — Skeleton (literals + wildcards + bindings) ✓
@@ -307,27 +321,77 @@ binding terminal arm).
   `BlockParam`, which is the textbook reason mainstream IRs use
   dominance instead. See the Status section above.
 
-### Phase 2 — Enum patterns (`EnumUnit` + `EnumTuple`) + or-patterns
+### Phase 2 — Enum patterns (`EnumUnit` + `EnumTuple`) + or-patterns ✓
 
-The stdlib-unblocking slice.
+The stdlib-unblocking slice. Shipped May 2026.
 
-- Add `IRInstruction::EnumTagGet` and `IRInstruction::EnumPayloadFieldGet`
-  to `expo-alpha-ir`. Seal validates `tag` against the enum decl and
-  `payload_index` against the variant payload.
-- Resolve: per-pattern variant lookup (mirror v1's `resolve_variant_data`),
-  generic-arg substitution through `substitute_resolved_type`.
-- Lower: `EnumUnit` = `EnumTagGet` + Const + `Eq` + `CondBranch`.
-  `EnumTuple` = same + per-element `EnumPayloadFieldGet` projecting into
-  fresh locals on the success edge. Or-patterns = chained `CondBranch`es
-  with shared `failure_target`.
-- Eval: interpret `EnumTagGet` and `EnumPayloadFieldGet` directly off the
-  enum value's runtime representation.
-- LLVM: `EnumTagGet` is a GEP+load on the discriminant field;
-  `EnumPayloadFieldGet` is a GEP-chain (variant payload struct + field).
-- Or-pattern bindings rejection diagnoses at typecheck.
+- **AST.** No changes — `Pattern::EnumUnit`, `Pattern::EnumTuple`, and
+  `Pattern::Or` were already wired up.
+- **IR.** `IRInstruction::EnumTagGet { dest, value, ty }` and
+  `IRInstruction::EnumPayloadFieldGet { dest, value, tag, payload_index, field_type, ty }`
+  in `expo-alpha-ir/src/function.rs`. Seal coverage in
+  `expo-alpha-ir/src/seal/enums.rs` validates `tag` is in range,
+  `payload_index` is in the matched variant's payload, and `field_type`
+  matches the decl. `IRTerminator::Unreachable` joins
+  `Branch` / `CondBranch` / `Return` on the terminator side; lowering
+  emits it on the failure edge of an exhaustive enum match. The seal's
+  successor / arity walks accept it as an exit terminator.
+- **Resolve.** `expo-alpha-typecheck/src/pipeline/resolve/patterns.rs`
+  grew per-shape helpers: `resolve_enum_unit_pattern`,
+  `resolve_enum_tuple_pattern`, `resolve_or_pattern`. Each returns a
+  `PatternCoverage` (`CatchAll` / `Variants(Vec<u32>)` / `Other`) so
+  `resolve_match.rs` can run a structural exhaustiveness check on enum
+  subjects without re-walking the arm. Generic-payload substitution
+  flows through the existing `substitute_resolved_type`. Tuple elements
+  restricted to wildcard / binding; or-alternatives restricted to
+  literal / EnumUnit (no bindings).
+- **Per-arm scope.** `LocalScope::snapshot`/`restore` in
+  `expo-alpha-typecheck/src/pipeline/local_scope.rs` mints a fresh
+  scope for each arm body and unwinds pattern bindings on exit, so two
+  consecutive arms binding `x` get distinct `LocalId`s.
+- **Exhaustiveness.** `resolve_match.rs` keeps the strict catch-all
+  rule for primitives but relaxes it for enums to a structural
+  variant-coverage check; missing variants surface as a diagnostic
+  listing every uncovered name.
+- **Seal walk.** `seal_pattern` in
+  `expo-alpha-typecheck/src/pipeline/seal.rs` recurses into `EnumTuple`
+  elements, `Or` alternatives, and the enum-path metadata.
+- **IR lowering.** `expo-alpha-ir/src/lower/patterns.rs` gained a
+  `PatternCheck::Tests { steps, payload_binds }` variant alongside the
+  existing `CatchAll`. A single test step covers `Literal` / `EnumUnit` /
+  `EnumTuple`; `Or` produces a chain of steps via fresh
+  `match_or_alt_<n>` blocks. `EnumUnit` and `EnumTuple` emit
+  `EnumTagGet` + `Const(Int8)` + `BinaryOp::Eq`; tuple bindings build a
+  `PayloadBind` list the driver emits as `EnumPayloadFieldGet` +
+  `LocalWrite` at the head of the body block (success edge only).
+- **IR match driver.** `expo-alpha-ir/src/lower/match_expr.rs` now
+  iterates the test chain when wiring an arm: every interior step's
+  failure edge points to the next step, the last step's failure edge
+  goes to the next arm's first test block (or, when there is no next
+  arm, a synthesized `match_unreachable` trap block whose terminator
+  is `IRTerminator::Unreachable`). The trap block is lazily minted
+  once per match and shared across every exhausted-edge in the same
+  match.
+- **Eval.** `expo-alpha-ir-eval/src/interpreter.rs` interprets
+  `EnumTagGet` directly off the runtime `Value::Enum.tag` and
+  `EnumPayloadFieldGet` off the matching variant's `EnumPayload`.
+  Tag-mismatch on a payload-field-get panics (gated-CFG invariant
+  violation). Reaching `IRTerminator::Unreachable` raises
+  `RuntimeError::UnreachableExecuted`.
+- **LLVM.** `expo-alpha-ir-llvm/src/emit/instruction.rs` spills the
+  SSA enum to a fresh outer-typed alloca, GEPs through the variant's
+  `complete` struct (field 0 for the tag, field 2 then payload-struct
+  field-N for payload reads), and loads as `i8` / `field_type`
+  respectively. The `Unreachable` terminator emits LLVM's `unreachable`
+  instruction.
+- **Const seal.** `ConstValue::Int8` is now admitted by the const-seal
+  walk so the tag-eq const can land.
 
 After this phase, `Option`/`Result`/`Step`/`StopReason`/`Lifecycle` matches
-all work and the stdlib starts compiling end-to-end.
+all execute end-to-end through both backends; the remaining gaps in the
+stdlib are unrelated alpha typecheck work (function-typed annotations,
+type-arg inference from payload patterns, multi-file imports — see
+ALPHA-ROADMAP.md).
 
 ### Phase 3 — Guards
 
@@ -414,17 +478,17 @@ Per [build.mdc](../../.cursor/rules/build.mdc):
 
 ## Surface area summary
 
-| Phase | New IR                              | New typecheck                                   | Stdlib unblocks                  | Status     |
-| ----- | ----------------------------------- | ----------------------------------------------- | -------------------------------- | ---------- |
-| 1     | (none, but seal moved to dominance) | `match` resolve, literal/wildcard/bind patterns | (none)                           | **Shipped** |
-| 2     | `EnumTagGet`, `EnumPayloadFieldGet` | enum patterns + or                              | **all `Option`/`Result` stdlib** | Pending    |
-| 3     | (none)                              | guard typing                                    | (none — spec parity)             | Pending    |
-| 4     | (none)                              | struct/enum-struct field patterns               | (none — surface polish)          | Pending    |
-| 5     | (none)                              | exhaustiveness check                            | (quality bar)                    | Pending    |
-| 6     | (none)                              | shorthand `Constructor`, `List`, `TypedBinding` | (post-stdlib)                    | Pending    |
-| 7     | binary submachine                   | `check_binary_pattern`                          | (post-stdlib)                    | Pending    |
+| Phase | New IR                                                       | New typecheck                                                          | Stdlib unblocks                  | Status      |
+| ----- | ------------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------- | ----------- |
+| 1     | (none, but seal moved to dominance)                          | `match` resolve, literal/wildcard/bind patterns                        | (none)                           | **Shipped** |
+| 2     | `EnumTagGet`, `EnumPayloadFieldGet`, terminator `Unreachable` | enum patterns + or, structural enum exhaustiveness, per-arm scope unwind | **all `Option`/`Result` stdlib** | **Shipped** |
+| 3     | (none)                                                       | guard typing                                                           | (none — spec parity)             | Pending     |
+| 4     | (none)                                                       | struct/enum-struct field patterns                                      | (none — surface polish)          | Pending     |
+| 5     | (none)                                                       | exhaustiveness check (full diagnostics)                                | (quality bar)                    | Pending     |
+| 6     | (none)                                                       | shorthand `Constructor`, `List`, `TypedBinding`                        | (post-stdlib)                    | Pending     |
+| 7     | binary submachine                                            | `check_binary_pattern`                                                 | (post-stdlib)                    | Pending     |
 
-The work is real but the surface adds up to two new IR instructions and
-one big typecheck-side feature. Everything else is reuse of the
-block-parameter SSA join model + the constructor pass + existing seal
-machinery.
+The work is real but the IR surface adds up to two new value
+instructions, one new terminator, and the relaxed-catch-all rule.
+Everything else is reuse of the block-parameter SSA join model + the
+constructor pass + existing seal machinery.

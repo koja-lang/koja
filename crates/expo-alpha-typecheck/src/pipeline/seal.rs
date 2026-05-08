@@ -437,7 +437,6 @@ fn seal_no_type_param(ty: &ResolvedType, span: Span) {
 /// success path; if one slips through, that is an upstream bug.
 fn seal_pattern(pattern: &Pattern) {
     match pattern {
-        Pattern::Wildcard { .. } | Pattern::Literal { .. } => {}
         Pattern::Binding {
             local_id,
             name,
@@ -453,6 +452,33 @@ fn seal_pattern(pattern: &Pattern) {
                 );
             }
         }
+        Pattern::EnumTuple {
+            elements,
+            type_path,
+            variant,
+            span,
+            ..
+        } => {
+            seal_enum_path(type_path, variant, *span);
+            for element in elements {
+                seal_pattern(element);
+            }
+        }
+        Pattern::EnumUnit {
+            type_path,
+            variant,
+            span,
+            ..
+        } => seal_enum_path(type_path, variant, *span),
+        Pattern::Or { patterns, span } => {
+            if patterns.is_empty() {
+                seal_panic("or-pattern carries no alternatives", *span);
+            }
+            for alternative in patterns {
+                seal_pattern(alternative);
+            }
+        }
+        Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
         other => seal_panic(
             &format!(
                 "alpha typecheck seal does not yet recognize pattern kind `{}`",
@@ -460,6 +486,18 @@ fn seal_pattern(pattern: &Pattern) {
             ),
             pattern_span(other),
         ),
+    }
+}
+
+fn seal_enum_path(type_path: &[String], variant: &str, span: Span) {
+    if type_path.is_empty() {
+        seal_panic(
+            &format!("enum pattern `{variant}` carries an empty type path"),
+            span,
+        );
+    }
+    if variant.is_empty() {
+        seal_panic("enum pattern carries an empty variant name", span);
     }
 }
 

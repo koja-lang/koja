@@ -245,3 +245,98 @@ fn match_binding_arm_emits_local_alloca_and_store() {
     assert_contains(&ir_text, "store i64");
     assert_contains(&ir_text, "load i64");
 }
+
+#[test]
+fn match_enum_unit_arm_emits_tag_gep_and_load() {
+    // EnumTagGet spills the SSA enum into a fresh alloca, GEPs to
+    // field 0 of the variant's complete struct (the i8 tag), and
+    // loads that byte. The chained Eq against `i8 0` (Red's tag)
+    // gates the arm's CondBranch.
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn pick(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Green -> 2
+          end
+        end
+
+        fn main
+          pick(Color.Red)
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "_tag_src");
+    assert_contains(&ir_text, "_tag_ptr");
+    assert_contains(&ir_text, "load i8");
+    assert_contains(&ir_text, "icmp eq i8");
+}
+
+#[test]
+fn match_enum_tuple_payload_emits_field_gep_chain() {
+    // EnumPayloadFieldGet spills the SSA enum, GEPs through the
+    // variant's complete struct to its payload (field 2), then GEPs
+    // again into the payload struct to reach the bound field, and
+    // loads it as the field type. Pin both GEP labels and the
+    // payload-field load so a regression in the chain surfaces here.
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) -> x
+            Box.None -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.Some(7))
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "_payload_src");
+    assert_contains(&ir_text, "_payload");
+    assert_contains(&ir_text, "load i64");
+}
+
+#[test]
+fn match_exhaustive_enum_emits_unreachable_trap_block() {
+    // An enum match with no catch-all and no remaining arm to fall
+    // into materializes a synthesized trap block whose terminator is
+    // the LLVM `unreachable` instruction. Typecheck has proven the
+    // edge can't fire at runtime; the block exists to keep the CFG
+    // well-formed.
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn pick(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Green -> 2
+          end
+        end
+
+        fn main
+          pick(Color.Red)
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "match_unreachable");
+    assert_contains(&ir_text, "unreachable");
+}

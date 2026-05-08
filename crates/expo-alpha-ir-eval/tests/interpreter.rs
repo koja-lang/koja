@@ -533,3 +533,120 @@ fn match_string_literal_falls_through_when_subject_differs() {
         ";
     assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(0));
 }
+
+#[test]
+fn match_enum_tuple_some_binds_payload_to_local() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) -> x
+            Box.None -> 0
+          end
+        end
+
+        unwrap(Box.Some(7))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn match_enum_tuple_none_falls_through_to_unit_arm() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) -> x
+            Box.None -> 99
+          end
+        end
+
+        unwrap(Box.None)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(99));
+}
+
+#[test]
+fn match_result_ok_arm_returns_ok_payload() {
+    let source = "
+        enum Status
+          Ok(Int)
+          Err(Int)
+        end
+
+        fn classify(s: Status) -> Int
+          match s
+            Status.Ok(v) -> v
+            Status.Err(_) -> -1
+          end
+        end
+
+        classify(Status.Ok(42))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(42));
+}
+
+#[test]
+fn match_result_err_arm_runs_when_payload_is_err() {
+    let source = "
+        enum Status
+          Ok(Int)
+          Err(Int)
+        end
+
+        fn classify(s: Status) -> Int
+          match s
+            Status.Ok(v) -> v
+            Status.Err(_) -> -1
+          end
+        end
+
+        classify(Status.Err(13))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(-1));
+}
+
+#[test]
+fn match_or_of_strings_fires_for_any_alternative() {
+    let source = "
+        fn pick(s: String) -> Int
+          match s
+            \"a\" | \"b\" | \"c\" -> 1
+            _ -> 0
+          end
+        end
+
+        pick(\"b\")
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(1));
+}
+
+#[test]
+fn match_exhaustive_enum_no_catch_all_runs_correctly() {
+    let source = "
+        enum Color
+          Red
+          Green
+          Blue
+        end
+
+        fn rank(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Green -> 2
+            Color.Blue -> 3
+          end
+        end
+
+        rank(Color.Green)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(2));
+}

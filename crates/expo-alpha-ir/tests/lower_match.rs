@@ -9,7 +9,7 @@
 //!
 //! [`BlockParam`]: expo_alpha_ir::BlockParam
 
-use expo_alpha_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType};
+use expo_alpha_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType, IRVariantTag};
 use expo_ast::util::dedent;
 
 mod common;
@@ -263,4 +263,218 @@ fn match_string_literal_arm_lowers_const_string_and_eq() {
         has_string_eq,
         "string-literal pattern should compare with `BinaryOp::Eq`",
     );
+}
+
+#[test]
+fn match_enum_unit_arm_emits_tag_get_and_eq_chain() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn pick(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Green -> 2
+          end
+        end
+
+        fn main
+          pick(Color.Red)
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let pick = function(&program, "pick");
+
+    let entry = &pick.blocks[0];
+    let has_tag_get = entry
+        .instructions
+        .iter()
+        .any(|i| matches!(i, IRInstruction::EnumTagGet { .. }));
+    assert!(
+        has_tag_get,
+        "enum-unit pattern should emit `EnumTagGet` against the subject; \
+         got: {:?}",
+        entry.instructions,
+    );
+    let has_int8_const = entry.instructions.iter().any(|i| {
+        matches!(
+            i,
+            IRInstruction::Const {
+                value: ConstValue::Int8(_),
+                ..
+            }
+        )
+    });
+    assert!(
+        has_int8_const,
+        "enum-unit pattern should emit `Const::Int8` for the variant tag",
+    );
+    let has_eq = entry.instructions.iter().any(|i| {
+        matches!(
+            i,
+            IRInstruction::BinaryOp {
+                op: IRBinOp::Eq,
+                ..
+            }
+        )
+    });
+    assert!(
+        has_eq,
+        "enum-unit pattern should chain a `BinaryOp::Eq` between the tag and the const",
+    );
+}
+
+#[test]
+fn match_enum_tuple_binding_emits_payload_field_get_and_local_write() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Box.Some(x) -> x
+            Box.None -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.Some(7))
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let unwrap_fn = function(&program, "unwrap");
+
+    let payload_get = unwrap_fn.blocks.iter().find_map(|b| {
+        b.instructions.iter().find_map(|i| match i {
+            IRInstruction::EnumPayloadFieldGet {
+                payload_index, tag, ..
+            } => Some((*tag, *payload_index)),
+            _ => None,
+        })
+    });
+    let (tag, payload_index) =
+        payload_get.expect("payload binding should emit `EnumPayloadFieldGet`");
+    assert_eq!(
+        tag,
+        IRVariantTag(0),
+        "Some is the first declared variant — tag 0",
+    );
+    assert_eq!(payload_index, 0, "x is the first payload field");
+
+    let body_block = unwrap_fn
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_body_0")
+        .expect("missing match_body_0 block");
+    let body_has_payload_get = body_block
+        .instructions
+        .iter()
+        .any(|i| matches!(i, IRInstruction::EnumPayloadFieldGet { .. }));
+    assert!(
+        body_has_payload_get,
+        "payload field-get must run on the success edge — appears in the arm body block",
+    );
+    let body_has_local_write = body_block
+        .instructions
+        .iter()
+        .any(|i| matches!(i, IRInstruction::LocalWrite { .. }));
+    assert!(
+        body_has_local_write,
+        "binding should emit a `LocalWrite` in the body block",
+    );
+
+    let entry = &unwrap_fn.blocks[0];
+    let entry_has_local_decl = entry
+        .instructions
+        .iter()
+        .any(|i| matches!(i, IRInstruction::LocalDecl { .. }));
+    assert!(
+        entry_has_local_decl,
+        "binding's `LocalDecl` should be hoisted to the function entry block",
+    );
+}
+
+#[test]
+fn match_exhaustive_enum_synthesizes_unreachable_trap_block() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn pick(c: Color) -> Int
+          match c
+            Color.Red -> 1
+            Color.Green -> 2
+          end
+        end
+
+        fn main
+          pick(Color.Red)
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let pick = function(&program, "pick");
+
+    let unreachable_block = pick
+        .blocks
+        .iter()
+        .find(|b| b.terminator == IRTerminator::Unreachable)
+        .expect(
+            "exhaustive enum match without a catch-all should synthesize an `Unreachable` \
+             trap block on the last arm's failure edge",
+        );
+    assert_eq!(
+        unreachable_block.label, "match_unreachable",
+        "trap block should carry the canonical `match_unreachable` label",
+    );
+}
+
+#[test]
+fn match_or_alternatives_chain_through_dedicated_test_blocks() {
+    let source = "
+        fn pick -> Int
+          match \"a\"
+            \"a\" | \"b\" | \"c\" -> 1
+            _ -> 0
+          end
+        end
+
+        fn main
+          pick()
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let pick = function(&program, "pick");
+
+    let alt_count = pick
+        .blocks
+        .iter()
+        .filter(|b| b.label.starts_with("match_or_alt_"))
+        .count();
+    assert_eq!(
+        alt_count, 2,
+        "an or-pattern of 3 alternatives should mint 2 fresh chain blocks (the first \
+         alternative emits into the existing test block); got {alt_count}",
+    );
+    for alt_block in pick
+        .blocks
+        .iter()
+        .filter(|b| b.label.starts_with("match_or_alt_"))
+    {
+        assert!(
+            matches!(alt_block.terminator, IRTerminator::CondBranch { .. }),
+            "every or-alternative test block should terminate in a `CondBranch`; \
+             got {:?}",
+            alt_block.terminator,
+        );
+    }
 }

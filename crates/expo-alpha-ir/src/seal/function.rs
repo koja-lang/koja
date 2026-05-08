@@ -318,7 +318,7 @@ fn seal_branch_target_arities(
             require_branch_target_arity(then_target, pred, owner, block_params);
             require_branch_target_arity(else_target, pred, owner, block_params);
         }
-        IRTerminator::Return { .. } => {}
+        IRTerminator::Return { .. } | IRTerminator::Unreachable => {}
     }
 }
 

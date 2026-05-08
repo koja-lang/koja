@@ -46,6 +46,26 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
+        IRInstruction::EnumPayloadFieldGet {
+            dest,
+            field_type,
+            payload_index,
+            tag,
+            ty,
+            value,
+        } => {
+            let base = lookup(values, *value)?;
+            let result =
+                emit_enum_payload_field_get(ctx, ty, *tag, *payload_index, field_type, base)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::EnumTagGet { dest, value, ty } => {
+            let base = lookup(values, *value)?;
+            let result = emit_enum_tag_get(ctx, ty, base)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
         IRInstruction::LoadConst {
             dest,
             const_id,
@@ -245,6 +265,89 @@ fn emit_enum_construct<'ctx>(
     ctx.builder
         .build_load(outer, alloca, ty.mangled())
         .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` after EnumConstruct"), e))
+}
+
+/// Spill `value` to a fresh outer-typed alloca, GEP through the
+/// matched variant's `complete` struct to the tag slot, and load
+/// it as `i8`. `EnumTagGet` is gated by the typecheck-resolve walk
+/// to operate only on enum-typed receivers, so the tag slot always
+/// exists at field 0 of the variant's complete struct (every
+/// variant's complete struct shares the same `i8` tag prefix —
+/// any variant works for the GEP type).
+fn emit_enum_tag_get<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    ty: &IRSymbol,
+    value: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let outer = ctx.layouts.enum_outer_type(ty.mangled());
+    let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_tag_src"));
+    ctx.builder
+        .build_store(alloca, value)
+        .map_err(|e| inkwell_err(format_args!("build_store for `{ty}` EnumTagGet"), e))?;
+    let (complete, _) = ctx
+        .layouts
+        .enum_variant_types(ty.mangled(), IRVariantTag(0));
+    let tag_ptr = ctx
+        .builder
+        .build_struct_gep(complete, alloca, 0, &format!("{ty}_tag_ptr"))
+        .map_err(|e| inkwell_err(format_args!("build_struct_gep for `{ty}` EnumTagGet"), e))?;
+    ctx.builder
+        .build_load(ctx.context.i8_type(), tag_ptr, &format!("{ty}_tag"))
+        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` EnumTagGet"), e))
+}
+
+/// Spill `value` to a fresh outer-typed alloca, GEP through the
+/// `tag`-specific complete struct's payload (field 2), then GEP
+/// into the variant's payload struct at `payload_index`, and load
+/// the field. Caller (the `match` driver) gates this on a
+/// successful tag check, so the variant's payload struct is
+/// guaranteed to be present and the index in range.
+fn emit_enum_payload_field_get<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    ty: &IRSymbol,
+    tag: IRVariantTag,
+    payload_index: u32,
+    field_type: &IRType,
+    value: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let outer = ctx.layouts.enum_outer_type(ty.mangled());
+    let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_payload_src"));
+    ctx.builder.build_store(alloca, value).map_err(|e| {
+        inkwell_err(
+            format_args!("build_store for `{ty}` EnumPayloadFieldGet"),
+            e,
+        )
+    })?;
+    let (complete, payload_struct) = ctx.layouts.enum_variant_types(ty.mangled(), tag);
+    let Some(payload_struct) = payload_struct else {
+        panic!(
+            "alpha LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` but the variant declares \
+             no payload — IR seal invariant violation",
+        );
+    };
+    let payload_ptr = build_payload_gep(ctx, ty, complete, alloca)?;
+    let field_ptr = ctx
+        .builder
+        .build_struct_gep(
+            payload_struct,
+            payload_ptr,
+            payload_index,
+            &format!("{ty}_payload_{payload_index}_ptr"),
+        )
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_struct_gep for `{ty}` EnumPayloadFieldGet"),
+                e,
+            )
+        })?;
+    let field_llvm_type = ir_basic_type(ctx, field_type)?;
+    ctx.builder
+        .build_load(
+            field_llvm_type,
+            field_ptr,
+            &format!("{ty}_payload_{payload_index}"),
+        )
+        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` EnumPayloadFieldGet"), e))
 }
 
 fn write_variant_tag<'ctx>(

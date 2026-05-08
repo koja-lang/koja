@@ -245,6 +245,25 @@ pub enum IRInstruction {
         tag: IRVariantTag,
         ty: IRSymbol,
     },
+    /// `dest = <value>.tag` (`Int8`). Match-arm CFG compares this
+    /// against the constant variant tag.
+    EnumTagGet {
+        dest: ValueId,
+        value: ValueId,
+        ty: IRSymbol,
+    },
+    /// `dest = <value>.<variant>.payload.<payload_index>`. Only
+    /// well-defined on the success edge of a preceding tag-eq
+    /// gate; seal validates `tag` / `payload_index` / `field_type`
+    /// against the decl.
+    EnumPayloadFieldGet {
+        dest: ValueId,
+        value: ValueId,
+        tag: IRVariantTag,
+        payload_index: u32,
+        field_type: IRType,
+        ty: IRSymbol,
+    },
     /// `dest = base.<field_index>`. Backends emit GEP + load.
     /// `field_type` is the projected field's [`IRType`] (cached from
     /// the [`crate::IRStructDecl`] at lower time); `struct_symbol`
@@ -311,6 +330,8 @@ impl IRInstruction {
             | IRInstruction::Call { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }
+            | IRInstruction::EnumPayloadFieldGet { dest, .. }
+            | IRInstruction::EnumTagGet { dest, .. }
             | IRInstruction::FieldGet { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
@@ -341,6 +362,12 @@ pub enum IRTerminator {
     },
     /// Exit the function with `value` (or `Unit` when `None`).
     Return { value: Option<ValueId> },
+    /// Statically unreachable. Lowering emits this on the failure
+    /// edge of an exhaustive `match` so the CFG stays well-formed
+    /// even when typecheck has guaranteed every runtime value is
+    /// covered. Eval treats it as a fatal panic; LLVM lowers to the
+    /// `unreachable` instruction.
+    Unreachable,
 }
 
 impl IRTerminator {

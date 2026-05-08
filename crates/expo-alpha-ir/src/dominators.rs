@@ -174,7 +174,7 @@ fn successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
             else_target,
             ..
         } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } => Vec::new(),
+        IRTerminator::Return { .. } | IRTerminator::Unreachable => Vec::new(),
     }
 }
 
