@@ -44,6 +44,7 @@ use crate::enum_decl::IRVariantTag;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::substitute_resolved_type;
 use crate::local::IRLocalId;
+use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
 use literals::emit_literal_eq;
@@ -195,18 +196,20 @@ fn lower_binding_check(
             entry,
             IRInstruction::LocalDecl {
                 local: ir_local,
-                ty,
+                ty: ty.clone(),
             },
         );
-        ctx.mark_local_declared(ir_local);
+        ctx.mark_local_declared(ir_local, ty);
     }
     ctx.cfg.append(
         block,
         IRInstruction::LocalWrite {
             local: ir_local,
+            ownership: Ownership::Unowned,
             value: inputs.subject,
         },
     );
+    ctx.mark_local_written(ir_local, Ownership::Unowned);
 }
 
 /// Pin a binding's `LocalId` invariant: every pattern binding must
@@ -252,7 +255,7 @@ pub(super) fn ensure_local_declared(local: IRLocalId, ty: &IRType, ctx: &mut FnL
             ty: ty.clone(),
         },
     );
-    ctx.mark_local_declared(local);
+    ctx.mark_local_declared(local, ty.clone());
 }
 
 fn single_test(cond: ValueId, block: IRBlockId) -> (PatternCheck, IRBlockId) {

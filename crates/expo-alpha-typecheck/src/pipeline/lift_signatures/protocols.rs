@@ -59,8 +59,12 @@ fn lift_protocol_method(
         .iter()
         .filter_map(|param| match param {
             Param::Regular {
-                name, type_expr, ..
+                mode,
+                name,
+                type_expr,
+                ..
             } => Some(ResolvedParam {
+                mode: *mode,
                 name: name.clone(),
                 ty: resolve_type_expr(type_expr, scope, package, registry, diagnostics),
             }),

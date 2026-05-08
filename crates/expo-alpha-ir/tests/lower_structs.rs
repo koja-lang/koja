@@ -420,7 +420,7 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
     assert!(
         entry.instructions.iter().any(|i| matches!(
             i,
-            IRInstruction::LocalWrite { local, value }
+            IRInstruction::LocalWrite { local, value, .. }
                 if *local == self_param.local_id && *value == self_param.id,
         )),
         "entry block should mirror self's value into its slot: {:?}",

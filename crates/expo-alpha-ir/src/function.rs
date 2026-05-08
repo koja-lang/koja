@@ -10,6 +10,7 @@ use expo_ast::identifier::Identifier;
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::extern_attrs::IRExternAttrs;
 use crate::local::IRLocalId;
+use crate::ownership::Ownership;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp, ValueId};
 
@@ -276,6 +277,19 @@ pub enum IRInstruction {
         field_type: IRType,
         struct_symbol: IRSymbol,
     },
+    /// Free the heap storage currently held by `local`'s slot, if
+    /// any. Emitted by the lowering layer at function exits (return,
+    /// fall-through) for slots whose most-recent [`Self::LocalWrite`]
+    /// stamped [`Ownership::Owned`] and whose [`IRType`] is heap-
+    /// allocated (today: [`IRType::String`]; future: `Binary`,
+    /// `Bits`, `List`, owned closure environments). Reads the slot's
+    /// current pointer, computes `payload - 8` to recover the
+    /// allocator block base, and calls extern `free`. No-op when the
+    /// slot's stamped ownership is [`Ownership::Unowned`] — the
+    /// lowering layer doesn't emit `DropLocal` in that case, so a
+    /// `DropLocal` reaching a backend always indicates a slot the
+    /// backend must free. Produces no value.
+    DropLocal { local: IRLocalId, ty: IRType },
     /// Declare a local-variable storage slot. Emitted exactly once
     /// per [`IRLocalId`] per function in the entry block (LLVM hoists
     /// the `alloca`; eval inserts a fresh hashmap entry). Produces no
@@ -289,11 +303,36 @@ pub enum IRInstruction {
         local: IRLocalId,
         ty: IRType,
     },
-    /// Write `value` into the slot named by `local`. Used for surface
-    /// assignments and for parameter promotion (one `LocalWrite` per
-    /// param at function entry). LLVM lowers to `store`; produces no
-    /// value.
-    LocalWrite { local: IRLocalId, value: ValueId },
+    /// Write `value` into the slot named by `local` with the given
+    /// `ownership`. Used for surface assignments and for parameter
+    /// promotion (one `LocalWrite` per param at function entry).
+    /// `ownership` records whether the value being stored is heap
+    /// storage the slot owns ([`Ownership::Owned`]) or a borrowed
+    /// pointer / primitive copy ([`Ownership::Unowned`]); the
+    /// lowering layer reads it back at scope-exit drop emission to
+    /// decide which slots need a `free`. LLVM lowers to `store`;
+    /// produces no value.
+    LocalWrite {
+        local: IRLocalId,
+        ownership: Ownership,
+        value: ValueId,
+    },
+    /// Move the current contents of `local` out of its slot into a
+    /// fresh `ValueId`. Used at sites that consume a local's
+    /// ownership — today only `return <local>` for an
+    /// [`Ownership::Owned`] slot (the returned value transfers to
+    /// the caller; the lowering layer suppresses the slot's
+    /// fn-exit `DropLocal`). Future sites: cross-local moves
+    /// (`t = s` for an Owned `s`), `move`-arg passing. LLVM lowers
+    /// identically to [`Self::LocalRead`] (the moved-vs-borrowed
+    /// distinction is purely IR-level — the slot's stack memory
+    /// remains valid until the function returns); eval removes the
+    /// frame entry so subsequent reads panic with use-after-move.
+    MoveOutLocal {
+        dest: ValueId,
+        local: IRLocalId,
+        ty: IRType,
+    },
     /// `dest = <pool[const_id]>` — load a pooled compound constant.
     /// `const_id` keys an entry on [`crate::IRPackage::constants`];
     /// `ty` cached at lower time so backends mint the dest slot
@@ -321,9 +360,12 @@ pub enum IRInstruction {
 }
 
 impl IRInstruction {
-    /// The `ValueId` this instruction defines, if any. Local-slot
-    /// variants ([`IRInstruction::LocalDecl`] /
-    /// [`IRInstruction::LocalWrite`]) return `None`.
+    /// The `ValueId` this instruction defines, if any. Storage-slot
+    /// side-effect variants ([`IRInstruction::DropLocal`] /
+    /// [`IRInstruction::LocalDecl`] / [`IRInstruction::LocalWrite`])
+    /// return `None`; everything else (including
+    /// [`IRInstruction::MoveOutLocal`], which moves the slot's
+    /// contents into a fresh value) defines a destination.
     pub fn dest(&self) -> Option<ValueId> {
         match self {
             IRInstruction::BinaryOp { dest, .. }
@@ -335,9 +377,12 @@ impl IRInstruction {
             | IRInstruction::FieldGet { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
+            | IRInstruction::MoveOutLocal { dest, .. }
             | IRInstruction::StructInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => Some(*dest),
-            IRInstruction::LocalDecl { .. } | IRInstruction::LocalWrite { .. } => None,
+            IRInstruction::DropLocal { .. }
+            | IRInstruction::LocalDecl { .. }
+            | IRInstruction::LocalWrite { .. } => None,
         }
     }
 }

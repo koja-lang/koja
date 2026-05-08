@@ -314,6 +314,7 @@ fn infer_call_type_args(
         .params
         .iter()
         .map(|p| ResolvedParam {
+            mode: p.mode,
             name: p.name.clone(),
             ty: substitute_resolved_type(&p.ty, &subst, callee.id),
         })

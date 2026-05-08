@@ -366,6 +366,7 @@ fn execute_instruction<R: CallResolver>(
         // Slot identity comes from `LocalWrite`; `LocalDecl` is a
         // no-op for the interpreter (the LLVM backend uses it to
         // emit an entry-block alloca).
+        IRInstruction::DropLocal { .. } => Ok(()),
         IRInstruction::LocalDecl { .. } => Ok(()),
         IRInstruction::LocalRead { dest, local, .. } => {
             let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
@@ -377,9 +378,23 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, value);
             Ok(())
         }
-        IRInstruction::LocalWrite { local, value } => {
+        IRInstruction::LocalWrite {
+            local,
+            ownership: _,
+            value,
+        } => {
             let resolved = lookup(&frame.values, *value)?;
             frame.locals.insert(*local, resolved);
+            Ok(())
+        }
+        IRInstruction::MoveOutLocal { dest, local, .. } => {
+            let value = frame.locals.remove(local).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: `MoveOutLocal` on `{local}` before its `LocalWrite` (or \
+                     after a prior move) — seal / lower invariant violation",
+                )
+            });
+            frame.values.insert(*dest, value);
             Ok(())
         }
         IRInstruction::StructInit { dest, fields, ty } => {

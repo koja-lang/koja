@@ -25,6 +25,11 @@
 //!   then/merge (or body/merge) blocks, stamps `CondBranch` /
 //!   `Branch` terminators, and emits the merge `Const::Unit`
 //!   placeholder for the conditional's value.
+//! - [`drops`] — function-exit drop emission. Appends one
+//!   [`crate::IRInstruction::DropLocal`] per Live & Owned slot
+//!   into the block immediately before the function-exit
+//!   terminator. Invoked from the return-path lowerer and the
+//!   fall-through finalizer.
 //! - [`calls`] — call-site lowering: [`calls::lower_call`] (bare
 //!   calls) + [`calls::lower_method_call`] (instance / static
 //!   method calls), with a shared `emit_call` tail.
@@ -33,6 +38,12 @@
 //! - [`ops`] — operator / literal translation: [`lower_literal`],
 //!   [`lower_bin_op`], [`lower_unary_op`], plus the small
 //!   `IRType`-shaped result-type helpers.
+//! - [`ownership`] — classifies an assignment-RHS expression
+//!   ([`ownership::ownership_for_expr`]) or parameter-promotion slot
+//!   ([`ownership::ownership_for_param`]) as
+//!   [`crate::Ownership::Owned`] vs [`crate::Ownership::Unowned`]
+//!   so [`crate::IRInstruction::LocalWrite`] sites can stamp the
+//!   right value at IR-build time.
 //! - [`structs`] — struct decl, struct-literal construction, and
 //!   field-access lowering: [`lower_struct_decl`],
 //!   [`lower_struct_construction`], [`lower_field_access`].
@@ -43,10 +54,12 @@ mod calls;
 mod constants;
 mod control_flow;
 mod ctx;
+mod drops;
 mod enums;
 mod expr;
 mod match_expr;
 mod ops;
+mod ownership;
 pub(crate) mod package;
 mod patterns;
 mod structs;

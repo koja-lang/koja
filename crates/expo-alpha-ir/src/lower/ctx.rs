@@ -19,7 +19,7 @@
 //!   this value" from "flow terminated already (e.g. via early
 //!   `return`)".
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::BTreeMap;
 
 use expo_ast::ast::Diagnostic;
 
@@ -27,6 +27,7 @@ use crate::cfg::CFGBuilder;
 use crate::function::{IRBasicBlock, IRBlockId};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
+use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
 /// Per-package write-back bag threaded through every `lower_*`
@@ -64,6 +65,32 @@ pub(crate) enum FlowResult {
     Closed,
 }
 
+/// Per-slot bookkeeping for the lowering layer's drop pipeline. One
+/// entry per [`IRLocalId`] declared in the function. Records:
+///
+/// - `moved` — `true` once a [`crate::IRInstruction::MoveOutLocal`]
+///   has consumed the slot. Drop emission skips moved slots: the
+///   value transferred to the new owner.
+/// - `ownership` — the most-recent [`crate::IRInstruction::LocalWrite`]'s
+///   stamp. Drop emission keys on this to decide whether the slot's
+///   storage is heap-allocated.
+/// - `ty` — the slot's [`IRType`], pinned at the [`crate::IRInstruction::LocalDecl`]
+///   site. Drop emission threads this back into
+///   [`crate::IRInstruction::DropLocal::ty`] so the LLVM backend
+///   can dispatch the correct `free` shape without walking the
+///   function's instruction list.
+///
+/// The seal pass already enforces that locals are never read across
+/// CFG joins (one `LocalWrite` per slot per branch path); this slot
+/// state is a function-flat snapshot consulted at fn-exit drop
+/// emission, not a per-block lattice.
+#[derive(Clone, Debug)]
+pub(crate) struct SlotState {
+    pub(crate) moved: bool,
+    pub(crate) ownership: Ownership,
+    pub(crate) ty: IRType,
+}
+
 /// Per-function lowering context. Owns the [`CFGBuilder`] plus the
 /// `ValueId` / `IRBlockId` counters and a `value -> IRType` index
 /// callers consult to derive operator result types and the function's
@@ -73,10 +100,18 @@ pub(crate) enum FlowResult {
 /// created (before parameter promotion), so any later body lowering
 /// step can append [`crate::function::IRInstruction::LocalDecl`]s
 /// into the entry regardless of the currently-open block.
-/// `declared_locals` is the per-function set of [`IRLocalId`]s that
-/// have already been declared, so reassignments emit a single `LocalDecl`
-/// followed by repeated `LocalWrite`s rather than a fresh decl per
-/// write.
+///
+/// `locals` tracks the per-slot [`SlotState`] (ownership stamp +
+/// moved flag) that drop emission keys on at fn exit. The map is
+/// also the canonical "declared local" set: presence in the map
+/// means a `LocalDecl` was emitted in the entry block.
+///
+/// `value_sources` is the inverse `ValueId -> IRLocalId` index for
+/// the most-recent [`crate::IRInstruction::LocalRead`] of each
+/// `value`. The return-path lowerer consults it to decide whether a
+/// returned `ValueId` originates from a local slot (eligible for
+/// `MoveOutLocal` substitution) or is a direct expression result
+/// (no slot to consume).
 ///
 /// One context per `IRFunction` (or per script body). Discarded after
 /// the function's blocks are extracted via [`Self::into_blocks`];
@@ -87,7 +122,8 @@ pub(crate) struct FnLowerCtx {
     next_block: u32,
     value_types: BTreeMap<ValueId, IRType>,
     entry_block: Option<IRBlockId>,
-    declared_locals: HashSet<IRLocalId>,
+    locals: BTreeMap<IRLocalId, SlotState>,
+    value_sources: BTreeMap<ValueId, IRLocalId>,
 }
 
 impl FnLowerCtx {
@@ -98,7 +134,8 @@ impl FnLowerCtx {
             next_block: 0,
             value_types: BTreeMap::new(),
             entry_block: None,
-            declared_locals: HashSet::new(),
+            locals: BTreeMap::new(),
+            value_sources: BTreeMap::new(),
         }
     }
 
@@ -153,14 +190,98 @@ impl FnLowerCtx {
     /// without a prior `LocalDecl` need to seed one in the entry
     /// block; subsequent writes skip the seed.
     pub(crate) fn local_is_declared(&self, local: IRLocalId) -> bool {
-        self.declared_locals.contains(&local)
+        self.locals.contains_key(&local)
     }
 
-    /// Record that `local` has been declared. Returns `true` if this
-    /// is the first declaration (so the caller should emit the
-    /// `LocalDecl`); `false` if `local` was already in the set.
-    pub(crate) fn mark_local_declared(&mut self, local: IRLocalId) -> bool {
-        self.declared_locals.insert(local)
+    /// Record that `local` has been declared with type `ty`. The
+    /// caller should emit the `LocalDecl` when this is the first
+    /// declaration; subsequent calls are no-ops on the slot-state
+    /// side. The slot starts with [`Ownership::Unowned`] /
+    /// `moved = false`; the matching [`Self::mark_local_written`]
+    /// from the parameter-promotion or first-assignment site
+    /// supplies the real ownership stamp.
+    pub(crate) fn mark_local_declared(&mut self, local: IRLocalId, ty: IRType) -> bool {
+        if self.locals.contains_key(&local) {
+            return false;
+        }
+        self.locals.insert(
+            local,
+            SlotState {
+                moved: false,
+                ownership: Ownership::Unowned,
+                ty,
+            },
+        );
+        true
+    }
+
+    /// Snapshot of `local`'s current [`SlotState`]. Returns `None`
+    /// when the slot was never declared; consumers (drop emission,
+    /// reassignment-drop check) treat absence as "no slot to consider"
+    /// rather than panicking, since seal validates declaration
+    /// invariants in a separate pass.
+    pub(crate) fn slot_state(&self, local: IRLocalId) -> Option<&SlotState> {
+        self.locals.get(&local)
+    }
+
+    /// Update `local`'s slot state to reflect a fresh
+    /// [`crate::IRInstruction::LocalWrite`] with the given
+    /// `ownership`. Resets `moved` (the slot is live again), and
+    /// stamps the new ownership over any previous one — per-write
+    /// stamping matches v1's `StoreLocal` semantics, where a slot's
+    /// ownership can change as different RHS expressions assign to
+    /// it (e.g. `s = "literal"` then `s = a <> b`). Panics when the
+    /// slot was never declared; the lowering layer always emits a
+    /// `LocalDecl` before any `LocalWrite`.
+    pub(crate) fn mark_local_written(&mut self, local: IRLocalId, ownership: Ownership) {
+        let state = self.locals.get_mut(&local).unwrap_or_else(|| {
+            panic!(
+                "alpha IR lower: mark_local_written for undeclared slot `{local}` — lowering bug"
+            )
+        });
+        state.moved = false;
+        state.ownership = ownership;
+    }
+
+    /// Mark `local` consumed by a [`crate::IRInstruction::MoveOutLocal`].
+    /// Drop emission skips moved slots — the value transferred to a
+    /// new owner (today: the function return; future: cross-local
+    /// moves). No-op when the slot was never declared (defensive;
+    /// seal catches stray references).
+    pub(crate) fn mark_local_moved(&mut self, local: IRLocalId) {
+        if let Some(state) = self.locals.get_mut(&local) {
+            state.moved = true;
+        }
+    }
+
+    /// Iterator over every Live & Owned slot, paired with its
+    /// [`IRType`], in declaration order. "Live" = `!moved`; "Owned"
+    /// = `ownership == Ownership::Owned`. The drop-emission helper
+    /// ([`super::drops::emit_function_exit_drops`]) consumes this
+    /// to decide which slots need a `DropLocal` before the
+    /// function-exit terminator.
+    pub(crate) fn live_owned_locals(&self) -> impl Iterator<Item = (IRLocalId, IRType)> + '_ {
+        self.locals
+            .iter()
+            .filter(|(_, state)| !state.moved && matches!(state.ownership, Ownership::Owned))
+            .map(|(local, state)| (*local, state.ty.clone()))
+    }
+
+    /// Record that the [`ValueId`] `value` was just minted by a
+    /// [`crate::IRInstruction::LocalRead`] of slot `local`. Used by
+    /// the return-path lowerer to detect when a returned value
+    /// originated from a local slot (eligible for `MoveOutLocal`
+    /// substitution) versus an expression intermediate.
+    pub(crate) fn record_value_source(&mut self, value: ValueId, local: IRLocalId) {
+        self.value_sources.insert(value, local);
+    }
+
+    /// Reverse-lookup the [`IRLocalId`] that minted `value` via a
+    /// recorded [`crate::IRInstruction::LocalRead`]. Returns `None`
+    /// for values from any other source (constants, op results,
+    /// calls, etc.).
+    pub(crate) fn value_source(&self, value: ValueId) -> Option<IRLocalId> {
+        self.value_sources.get(&value).copied()
     }
 
     /// Lookup the recorded `IRType` for `id`. Panics on a miss —

@@ -165,12 +165,19 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         // pool entry is checked against the program-level constants
         // index by `seal_loadconst_pool`.
         IRInstruction::LoadConst { .. } => vec![],
+        // `DropLocal` and `MoveOutLocal` consume a slot, not a
+        // `ValueId`; the slot's existence is checked by
+        // `seal_locals_in_function`. `MoveOutLocal` produces a new
+        // value (its `dest`); `DropLocal` produces nothing.
         // `LocalDecl` declares the slot; nothing in scope yet to read.
         // `LocalRead` reads the slot named by `local`, not a `ValueId`,
         // so the per-block defined-set walk has nothing to validate
         // here — `local` is checked against the per-function decl set
         // by `seal_locals_in_function`.
-        IRInstruction::LocalDecl { .. } | IRInstruction::LocalRead { .. } => vec![],
+        IRInstruction::DropLocal { .. }
+        | IRInstruction::LocalDecl { .. }
+        | IRInstruction::LocalRead { .. }
+        | IRInstruction::MoveOutLocal { .. } => vec![],
         IRInstruction::LocalWrite { value, .. } => vec![*value],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],

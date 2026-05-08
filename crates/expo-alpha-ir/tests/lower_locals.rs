@@ -78,6 +78,7 @@ fn body_decl_emits_local_decl_then_local_write() {
     let IRInstruction::LocalWrite {
         local: write_local,
         value,
+        ..
     } = &body[write_pos]
     else {
         unreachable!()
@@ -168,7 +169,7 @@ fn param_promotion_emits_local_decl_and_local_write_in_entry() {
         .position(|i| {
             matches!(
                 i,
-                IRInstruction::LocalWrite { local, value }
+                IRInstruction::LocalWrite { local, value, .. }
                     if *local == param.local_id && *value == param.id
             )
         })

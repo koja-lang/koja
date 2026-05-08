@@ -40,6 +40,7 @@ mod local;
 mod lower;
 mod mangling;
 mod merge;
+mod ownership;
 mod package;
 mod program;
 mod script;
@@ -56,6 +57,7 @@ pub use function::{
     IRInstruction, IRSymbol, IRTerminator,
 };
 pub use local::IRLocalId;
+pub use ownership::Ownership;
 pub use package::IRPackage;
 pub use program::{IRProgram, lower_program};
 pub use script::{IRScript, lower_script};

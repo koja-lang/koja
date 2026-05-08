@@ -50,6 +50,7 @@ pub(super) fn substitute_signature(
             .params
             .iter()
             .map(|param| ResolvedParam {
+                mode: param.mode,
                 name: param.name.clone(),
                 ty: substitute_resolved_type(&param.ty, args, owner),
             })

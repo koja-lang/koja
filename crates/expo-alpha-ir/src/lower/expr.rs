@@ -272,6 +272,7 @@ fn lower_local_read(
             ty,
         },
     );
+    ctx.record_value_source(dest, ir_local);
     (dest, block)
 }
 

@@ -36,6 +36,7 @@ use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Expr, MatchArm};
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
+use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
 use super::arms::lower_arm_into;
@@ -225,9 +226,11 @@ fn emit_payload_binds(
             body_block,
             IRInstruction::LocalWrite {
                 local: bind.local,
+                ownership: Ownership::Unowned,
                 value: dest,
             },
         );
+        ctx.mark_local_written(bind.local, Ownership::Unowned);
     }
 }
 

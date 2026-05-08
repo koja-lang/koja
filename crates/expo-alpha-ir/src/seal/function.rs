@@ -151,8 +151,10 @@ fn seal_locals(function: &IRFunction, owner: &str) {
     for block in &function.blocks {
         for inst in &block.instructions {
             match inst {
-                IRInstruction::LocalRead { local, .. }
+                IRInstruction::DropLocal { local, .. }
+                | IRInstruction::LocalRead { local, .. }
                 | IRInstruction::LocalWrite { local, .. }
+                | IRInstruction::MoveOutLocal { local, .. }
                     if !declared.contains(local) =>
                 {
                     seal_panic(&format!(

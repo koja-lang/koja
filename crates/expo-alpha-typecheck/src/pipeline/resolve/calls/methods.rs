@@ -216,6 +216,7 @@ pub(super) fn infer_method_call_type_args(
             let with_receiver =
                 substitute_resolved_type(&with_method, &receiver_subst, receiver.id);
             ResolvedParam {
+                mode: p.mode,
                 name: p.name.clone(),
                 ty: with_receiver,
             }

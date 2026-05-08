@@ -139,6 +139,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             IRInstruction::BinaryOp { .. }
             | IRInstruction::Call { .. }
             | IRInstruction::Const { .. }
+            | IRInstruction::DropLocal { .. }
             | IRInstruction::EnumConstruct { .. }
             | IRInstruction::EnumPayloadFieldGet { .. }
             | IRInstruction::EnumTagGet { .. }
@@ -146,6 +147,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalRead { .. }
             | IRInstruction::LocalWrite { .. }
+            | IRInstruction::MoveOutLocal { .. }
             | IRInstruction::UnaryOp { .. } => {}
         }
     }

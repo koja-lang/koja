@@ -2,7 +2,7 @@
 //! functions (top-level, inline struct methods, impl-block methods)
 //! via the [`super::SelfContext`] knob.
 
-use expo_ast::ast::{Diagnostic, Function, Param, PassMode, TypeExpr, is_extern_c, is_intrinsic};
+use expo_ast::ast::{Diagnostic, Function, Param, TypeExpr, is_extern_c, is_intrinsic};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
@@ -280,7 +280,7 @@ fn lift_param(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedParam {
     match param {
-        Param::Self_ { span, .. } => {
+        Param::Self_ { mode, span, .. } => {
             let SelfContext::Receiver {
                 receiver: receiver_identifier,
                 self_override,
@@ -294,6 +294,7 @@ fn lift_param(
                     *span,
                 ));
                 return ResolvedParam {
+                    mode: *mode,
                     name: "self".to_string(),
                     ty: ResolvedType::unresolved(),
                 };
@@ -312,6 +313,7 @@ fn lift_param(
                 }
             };
             ResolvedParam {
+                mode: *mode,
                 name: "self".to_string(),
                 ty,
             }
@@ -324,15 +326,6 @@ fn lift_param(
             span,
             ..
         } => {
-            if !matches!(mode, PassMode::Borrow) {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "alpha typecheck does not yet support `move` parameters \
-                         (`{identifier}.{name}`)",
-                    ),
-                    *span,
-                ));
-            }
             if default.is_some() {
                 diagnostics.push(Diagnostic::error(
                     format!(
@@ -344,6 +337,7 @@ fn lift_param(
             }
             let ty = resolve_type_expr(type_expr, scope, package, registry, diagnostics);
             ResolvedParam {
+                mode: *mode,
                 name: name.clone(),
                 ty,
             }

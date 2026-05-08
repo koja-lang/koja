@@ -13,6 +13,7 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
+use crate::runtime::declare_free_extern;
 use crate::types::ir_basic_type;
 
 use super::{ValueMap, inkwell_err, lookup, ops};
@@ -134,15 +135,25 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
+        IRInstruction::DropLocal { local, ty } => emit_drop_local(ctx, *local, ty),
         IRInstruction::LocalDecl { local, ty } => emit_local_decl(ctx, *local, ty),
         IRInstruction::LocalRead { dest, local, ty } => {
             let value = emit_local_read(ctx, *local, ty)?;
             values.insert(*dest, value);
             Ok(())
         }
-        IRInstruction::LocalWrite { local, value } => {
+        IRInstruction::LocalWrite {
+            local,
+            ownership: _,
+            value,
+        } => {
             let resolved = lookup(values, *value)?;
             emit_local_write(ctx, *local, resolved)
+        }
+        IRInstruction::MoveOutLocal { dest, local, ty } => {
+            let value = emit_local_read(ctx, *local, ty)?;
+            values.insert(*dest, value);
+            Ok(())
         }
         IRInstruction::StructInit { dest, fields, ty } => {
             let struct_type = ctx.layouts.struct_type(ty.mangled());
@@ -533,6 +544,52 @@ fn emit_local_write<'ctx>(
         .build_store(slot, value)
         .map(|_| ())
         .map_err(|e| inkwell_err(format_args!("build_store for `{local}`"), e))
+}
+
+/// Lower a `DropLocal` to an LLVM `free` call against the slot's
+/// current heap-block base. Heap-typed payloads carry an `i64
+/// bit_length` header 8 bytes before the SSA pointer; recover the
+/// block base via a negative GEP, then hand it to `free`. The slot's
+/// stack alloca remains valid through fn return — no `LocalDecl`
+/// teardown.
+///
+/// Today only [`IRType::String`] reaches this path; adding `Binary`
+/// / `Bits` to the heap-type set in
+/// [`expo_alpha_ir::lower::ownership`] expands the match here in
+/// the next slice. Non-heap types panic loudly: the lowerer is
+/// responsible for never emitting `DropLocal` for stack types
+/// (it keys on [`IRType`] in the classifier).
+fn emit_drop_local<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    local: IRLocalId,
+    ty: &IRType,
+) -> Result<(), LlvmError> {
+    match ty {
+        IRType::String => {
+            let payload = emit_local_read(ctx, local, ty)?;
+            let payload_ptr = payload.into_pointer_value();
+            let i8_type = ctx.context.i8_type();
+            let i64_type = ctx.context.i64_type();
+            let block_base = unsafe {
+                ctx.builder.build_gep(
+                    i8_type,
+                    payload_ptr,
+                    &[i64_type.const_int((-8i64) as u64, true)],
+                    &format!("{local}.block_base"),
+                )
+            }
+            .map_err(|e| inkwell_err(format_args!("drop block-base GEP for `{local}`"), e))?;
+            let free = declare_free_extern(ctx);
+            ctx.builder
+                .build_call(free, &[block_base.into()], &format!("{local}.free"))
+                .map_err(|e| inkwell_err(format_args!("free call for `{local}`"), e))?;
+            Ok(())
+        }
+        _ => panic!(
+            "alpha LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}` — \
+             extend `emit_drop_local` when the next slice ships heap types beyond `String`",
+        ),
+    }
 }
 
 /// Recursively materialize an [`IRConstantValue`] pool entry into a
