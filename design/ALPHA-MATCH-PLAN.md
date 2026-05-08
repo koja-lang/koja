@@ -106,7 +106,27 @@ StructField}` discriminator and `PatternCheck::CatchAll { binds }` so
   warning is the user-facing signal. End-to-end coverage extends
   `resolve_match.rs` with one test per bucket-A/B/C behavior plus a
   `warning_messages` helper on the test scaffolding.
-- **Phases 6–7 — Pending.**
+- **Phase 6 — Shipped (constructor only, May 2026).** Constructor
+  shorthand: `Some(x)` / `Ok(x)` / `Err(x)` against an enum subject
+  resolves the variant on the subject's enum and rewrites the
+  `Pattern::Constructor` AST node in place to `Pattern::EnumTuple`
+  (or `Pattern::EnumUnit` when the variant is a unit and the
+  shorthand has no arguments) before re-entering `resolve_pattern`.
+  Seal, the `expo-alpha-ir/src/generics/substitute.rs` walker, and
+  `lower/patterns.rs` therefore see only `EnumTuple` / `EnumUnit`
+  and need no new arms; the rewrite synthesizes a single-segment
+  `type_path` from the registered enum's identifier so seal's
+  non-empty-path invariant holds. Diagnostics: non-enum subject,
+  unknown variant (with declared variant list), unit-variant with
+  payload, and struct-variant redirect to the
+  `Type.Variant{...}` syntax. `Pattern::List` and
+  `Pattern::TypedBinding` stay as feature-gap diagnostics — list
+  patterns block on alpha-IR list ops + a stable `List<T>` layout
+  contract; typed bindings block on surface unions. End-to-end
+  coverage extends the same four match-named test sections:
+  `resolve_match.rs`, `lower_match.rs`, `interpreter.rs`,
+  `control_flow.rs`.
+- **Phase 7 — Pending (blocked on binary literals).**
 
 ---
 
@@ -313,13 +333,14 @@ graph LR
     p2 --> p3[Phase 3 ✓<br/>Guards]
     p3 --> p4[Phase 4 ✓<br/>EnumStruct + Struct<br/>destructuring]
     p4 --> p5[Phase 5 ✓<br/>Exhaustiveness<br/>diagnostics]
-    p5 --> p6[Phase 6<br/>Constructor + List<br/>+ TypedBinding]
-    p6 --> p7[Phase 7<br/>Binary patterns]
+    p5 --> p6[Phase 6 ✓<br/>Constructor shorthand]
+    p6 --> p7[Phase 7<br/>Binary patterns<br/>blocked on binary literals]
     style p1 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p2 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p3 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p4 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p5 fill:#1f7a3a,stroke:#0f3,color:#fff
+    style p6 fill:#1f7a3a,stroke:#0f3,color:#fff
 ```
 
 ### Phase 1 — Skeleton (literals + wildcards + bindings) ✓
@@ -575,21 +596,51 @@ exhaustiveness errors, and `Bool` primitive structural exhaustiveness.
   one behavior each, plus a `warning_messages` helper on
   `tests/common/mod.rs` for asserting on success-path warnings.
 
-### Phase 6 — Remaining pattern shapes
+### Phase 6 — Constructor shorthand ✓
 
-`Constructor` (shorthand `Some(x)`), `List`, `TypedBinding` (union
-narrowing). `Constructor` becomes a small adapter that resolves the
-shorthand to a full `EnumTuple`/`EnumUnit`. `List` and `TypedBinding`
-are post-stdlib polish.
+Surface: rewrite the `Some(x)` / `None` / `Ok(x)` / `Err(x)` shorthand
+to its qualified form so the rest of the match pipeline never sees
+`Pattern::Constructor`.
 
-### Phase 7 — Binary patterns
+- **Resolver rewrite.** A new `resolve_constructor_pattern` helper in
+  [`resolve/patterns.rs`](expo/crates/expo-alpha-typecheck/src/pipeline/resolve/patterns.rs)
+  pulls the subject's enum out of the registry, looks the variant up
+  by name, and swaps the AST node in place to either
+  `Pattern::EnumTuple` (when the variant is tuple-shaped) or
+  `Pattern::EnumUnit` (when the variant is a unit and the shorthand
+  has no parens, which is exactly how the parser emits a bare
+  `None`). The synthetic `type_path` is a single segment derived
+  from the enum's registered identifier, matching the user-shorthand
+  idiom (`Option.Some(x)` parses to `type_path = ["Option"]`).
+  Substitution into payload field types reuses
+  `build_enum_substitution` so generic enum subjects (`Option<Int>`)
+  feed concrete payload types into the rewritten `EnumTuple`.
+- **Diagnostics.** Non-enum subject, unknown variant (with the
+  declared variant list), unit-variant-with-payload, and struct-
+  variant redirect to the `Type.Variant{...}` syntax. Sub-patterns
+  resolve unbound on the failure path so `LocalId`s still stamp.
+- **Seal / lower / substitute.** No changes — they already handle
+  the post-rewrite shapes. The defense-in-depth panics on
+  `Pattern::Constructor` in
+  [`seal.rs`](expo/crates/expo-alpha-typecheck/src/pipeline/seal.rs)
+  and
+  [`lower/patterns.rs`](expo/crates/expo-alpha-ir/src/lower/patterns.rs)
+  become statically unreachable for valid sources.
+- **Deferred shapes.** `Pattern::List` (blocked on alpha-IR list ops
+  + a stable `List<T>` layout contract) and `Pattern::TypedBinding`
+  (blocked on surface unions) keep firing feature-gap diagnostics;
+  pinned tests in `resolve_match.rs` ensure the gap diagnostic stays
+  in place until those prerequisites land.
+
+### Phase 7 — Binary patterns (blocked on binary literals)
 
 `<<header::8, payload::16 big>>`. The payload here is the
 `Pattern::Binary` plus the `BinarySegment` machinery v1 already has. This
 is a discrete sub-language — independent typecheck (`check_binary_pattern`,
 greedy-rest validation, byte-alignment checks) and independent lowering
 (stays as its own IR primitive, since binary inspection doesn't decompose
-into primitive ops). Stdlib doesn't reach for it — defer indefinitely.
+into primitive ops). Stdlib doesn't reach for it — defer until alpha
+gains binary literals.
 
 ---
 
@@ -626,8 +677,8 @@ Per [build.mdc](../../.cursor/rules/build.mdc):
 | 3     | (none)                                                        | guard typing                                                             | (none — spec parity)             | **Shipped** |
 | 4     | (none)                                                        | struct/enum-struct field patterns                                        | (none — surface polish)          | **Shipped** |
 | 5     | (none)                                                        | reachability warnings, hints, Bool exhaustiveness                        | (quality bar)                    | **Shipped** |
-| 6     | (none)                                                        | shorthand `Constructor`, `List`, `TypedBinding`                          | (post-stdlib)                    | Pending     |
-| 7     | binary submachine                                             | `check_binary_pattern`                                                   | (post-stdlib)                    | Pending     |
+| 6     | (none)                                                        | shorthand `Constructor` rewrite to `EnumTuple` / `EnumUnit`              | shorthand `Some(x)` / `None`     | **Shipped** |
+| 7     | binary submachine                                             | `check_binary_pattern`                                                   | (post-stdlib)                    | Pending (blocked on binary literals) |
 
 The work is real but the IR surface adds up to two new value
 instructions, one new terminator, and the relaxed-catch-all rule.

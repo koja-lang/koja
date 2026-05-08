@@ -763,3 +763,54 @@ fn match_struct_destructure_acts_as_catch_all_in_chain() {
         "struct destructure as the first / only arm should not mint any extra test blocks",
     );
 }
+
+#[test]
+fn lower_match_constructor_tuple_emits_enum_tuple_shape() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x) -> x
+            None -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.Some(7))
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let unwrap_fn = function(&program, "unwrap");
+
+    let has_tag_check = unwrap_fn
+        .blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .any(|i| matches!(i, IRInstruction::EnumTagGet { .. }));
+    assert!(
+        has_tag_check,
+        "constructor shorthand `Some(x)` should rewrite to EnumTuple and emit `EnumTagGet`",
+    );
+
+    let payload_get = unwrap_fn.blocks.iter().find_map(|b| {
+        b.instructions.iter().find_map(|i| match i {
+            IRInstruction::EnumPayloadFieldGet {
+                payload_index, tag, ..
+            } => Some((*tag, *payload_index)),
+            _ => None,
+        })
+    });
+    let (tag, payload_index) = payload_get
+        .expect("constructor shorthand should emit `EnumPayloadFieldGet` for the binding");
+    assert_eq!(
+        tag,
+        IRVariantTag(0),
+        "Some is the first declared variant — tag 0",
+    );
+    assert_eq!(payload_index, 0, "x is the first payload field");
+}

@@ -433,3 +433,35 @@ fn match_exhaustive_enum_emits_unreachable_trap_block() {
     assert_contains(&ir_text, "match_unreachable");
     assert_contains(&ir_text, "unreachable");
 }
+
+#[test]
+fn match_constructor_shorthand_emits_same_tag_check_as_enum_tuple() {
+    // The constructor shorthand `Some(x)` resolves to an `EnumTuple`
+    // pattern in place, so the LLVM emission should match the
+    // qualified `Box.Some(x)` shape: tag GEP + load + payload GEP +
+    // payload load. Pin the tag-GEP marker so a regression in the
+    // rewrite surfaces here without re-checking the full chain.
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x) -> x
+            None -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.Some(7))
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "_payload_src");
+    assert_contains(&ir_text, "_payload");
+    assert_contains(&ir_text, "load i64");
+}

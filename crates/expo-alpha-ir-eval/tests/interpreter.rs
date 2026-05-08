@@ -846,3 +846,43 @@ fn match_unguarded_catch_all_skips_lowering_of_following_arms() {
         Value::String("catchall".to_string()),
     );
 }
+
+#[test]
+fn match_constructor_some_binds_inner_value() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x) -> x + 1
+            None -> 0
+          end
+        end
+
+        unwrap(Box.Some(7))
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(8));
+}
+
+#[test]
+fn match_constructor_none_arm_runs_on_none_subject() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x) -> x
+            None -> 99
+          end
+        end
+
+        unwrap(Box.None)
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(99));
+}

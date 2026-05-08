@@ -46,8 +46,10 @@ The full list of "not yet" diagnostics lives in:
 
 - `expo-alpha-typecheck/src/pipeline/collect.rs`
 - `expo-alpha-typecheck/src/pipeline/lift_signatures/{functions,types,constants}.rs`
-- `expo-alpha-typecheck/src/pipeline/resolve/{expr,ops,calls,statements,strings}.rs`
-- `expo-alpha-ir/src/lower/{expr,ops,body,structs,enums,package}.rs`
+- `expo-alpha-typecheck/src/pipeline/resolve/{expr,ops,statements,strings}.rs`
+  (note: `resolve/calls/` is now its own submodule — see
+  `mod.rs`, `methods.rs`, `bounded.rs`)
+- `expo-alpha-ir/src/lower/{expr,ops,body,structs,enums,package,calls}.rs`
 - `expo-alpha-ir-llvm/src/{emit/mod,emit/instruction,main_wrapper}.rs`
 
 ---
@@ -57,46 +59,46 @@ The full list of "not yet" diagnostics lives in:
 Cataloguing what the stdlib actually reaches for. Counts are
 approximate — the point is which files use a given construct.
 
-| Construct                                  | Files / examples                                                                       |
-| ------------------------------------------ | -------------------------------------------------------------------------------------- |
-| `struct` / `enum` / `protocol`             | every file                                                                             |
-| Inherent `impl Type`                       | every file                                                                             |
-| Trait `impl Protocol for Type`             | `kernel` (Equality, Hash for primitives), `debug`, `string`, `set`, `map`, `list`      |
-| Generic types (`<T>`, `<K,V>`, `<U>`)      | `kernel`, `list`, `map`, `set`, `process`                                              |
-| **Generic impl target** (`impl Pair<A,B>`) | `kernel` (Pair, Option, Result), `list`, `map`, `set`, `process` (Ref, ReplyTo, Step…) |
-| `Self` type in signatures                  | `bitwise`, `debug`, `set`, `map`, `list`                                               |
-| `move` parameter mode                      | `process` (8x), `list` (8x), `map` (5x), `cptr`, `cstring`, `set`, `string`            |
-| `priv` visibility                          | every FFI-wrapping file                                                                |
-| `@intrinsic` / `@extern "C"` / `@doc`      | every file (we shipped `@extern`/`@link`/`AnnotationKind`)                             |
-| Closure parameter types (`fn (T) -> U`)    | `kernel` (Option/Result map/then), `list` (filter/find/all?/map/reduce), `process`     |
-| Closure expressions (block & short)        | none in stdlib bodies (parameters only — closures arrive at call sites in user code)   |
-| **`match` expression**                     | `kernel` (12x — Option/Result), `string` (8x), `process` (7x), `list`, `io`, `fd`      |
-| **OR pattern** (`"a" \| "b" \| ...`)       | `string` (alpha?, digit?, escape_debug, trim\_\*, whitespace?, upcase, downcase)       |
-| **Tuple pattern** (`Some(val)`, `Ok(v)`)   | every match-using file                                                                 |
-| **Wildcard pattern** (`_`)                 | every match-using file                                                                 |
-| **`for` loop**                             | `string` (codepoints, digit?, alpha?, …), `list` (filter/find/all?/any?/map/reduce)    |
-| **`while` loop**                           | `string` (10+), `list` (reverse)                                                       |
-| `return` statement                         | `string`, `list`                                                                       |
-| `break` (in `loop`)                        | none in stdlib                                                                         |
-| `unless`                                   | `list` (`all?`)                                                                        |
-| `if`/`else` value-producing                | `system`, `fd`, `cptr`, `string` (just shipped)                                        |
-| `cond`                                     | `string` (alpha?, contains?, ends_with?, starts_with?) (just shipped)                  |
-| **Ternary `cond ? a : b`**                 | `fd` (5+), `system`                                                                    |
-| **String concat `<>`**                     | `string` (heavy — upcase/downcase/escape_debug), `debug` (`format` for `String`)       |
-| **Compound assign** (`+=`, `-=`)           | `string` (15+), `list` (`reverse`)                                                     |
-| **String literal in IR**                   | `kernel` (`Kernel.panic("…")`), `string`, `io`, `fd`, `system` — pervasive             |
-| **String interpolation `#{…}`**            | none — stdlib avoids it intentionally                                                  |
-| **`const` declarations**                   | `io` (STDIN, STDOUT, STDERR — struct-literal initializers)                             |
-| Numeric coercion (`Int` → `Int32` etc.)    | `io` (`Fd{descriptor: 2}`), `fd` (CPtr ops with mixed widths), `time`                  |
-| `spawn`                                    | `process` (`Task.async`)                                                               |
-| `receive` / `receive ... after`            | `process` (`run` loops)                                                                |
-| List / Map / Set literal syntax            | none in stdlib bodies (collections are constructed via `.new()` + `.append`/`.put`)    |
-| Bitstring / `<<…>>` literals               | none in stdlib                                                                         |
-| Nested `MyApp.Config` types                | none in stdlib                                                                         |
-| Type unions (`A \| B`)                     | none in stdlib                                                                         |
-| `type` aliases inside `impl`               | none in stdlib                                                                         |
-| Free functions (no `impl`)                 | none — every fn lives in an `impl`                                                     |
-| Default field values                       | none in stdlib                                                                         |
+| Construct                               | Files / examples                                                                      |
+| --------------------------------------- | ------------------------------------------------------------------------------------- |
+| `struct` / `enum` / `protocol`          | every file                                                                            |
+| Inherent `impl Type`                    | every file                                                                            |
+| Trait `impl Protocol for Type`          | `kernel` (Equality, Hash for primitives), `debug`, `string`, `set`, `map`, `list`     |
+| Generic types (`<T>`, `<K,V>`, `<U>`)   | `kernel`, `list`, `map`, `set`, `process` (shipped end-to-end)                        |
+| Generic impl target (`impl Pair<A,B>`)  | `kernel` (Pair, Option, Result), `list`, `map`, `set`, `process` (shipped end-to-end) |
+| `Self` type in signatures               | `bitwise`, `debug`, `set`, `map`, `list`                                              |
+| `move` parameter mode                   | `process` (8x), `list` (8x), `map` (5x), `cptr`, `cstring`, `set`, `string`           |
+| `priv` visibility                       | every FFI-wrapping file                                                               |
+| `@intrinsic` / `@extern "C"` / `@doc`   | every file (we shipped `@extern`/`@link`/`AnnotationKind`)                            |
+| Closure parameter types (`fn (T) -> U`) | `kernel` (Option/Result map/then), `list` (filter/find/all?/map/reduce), `process`    |
+| Closure expressions (block & short)     | none in stdlib bodies (parameters only — closures arrive at call sites in user code)  |
+| `match` expression                      | `kernel` (12x — Option/Result), `string` (8x), `process` (7x), `list`, `io`, `fd`     |
+| OR pattern (`"a" \| "b" \| ...`)        | `string` (alpha?, digit?, escape_debug, trim\_\*, whitespace?, upcase, downcase)      |
+| Tuple pattern (`Some(val)`, `Ok(v)`)    | every match-using file                                                                |
+| Wildcard pattern (`_`)                  | every match-using file                                                                |
+| **`for` loop**                          | `string` (codepoints, digit?, alpha?, …), `list` (filter/find/all?/any?/map/reduce)   |
+| **`while` loop**                        | `string` (10+), `list` (reverse)                                                      |
+| `return` statement                      | `string`, `list`                                                                      |
+| `break` (in `loop`)                     | none in stdlib                                                                        |
+| `unless`                                | `list` (`all?`)                                                                       |
+| `if`/`else` value-producing             | `system`, `fd`, `cptr`, `string` (already shipped)                                    |
+| `cond`                                  | `string` (alpha?, contains?, ends_with?, starts_with?) (already shipped)              |
+| Ternary `cond ? a : b`                  | `fd` (5+), `system` (already shipped)                                                 |
+| **String concat `<>`**                  | `string` (heavy — upcase/downcase/escape_debug), `debug` (`format` for `String`)      |
+| Compound assign (`+=`, `-=`)            | `string` (15+), `list` (`reverse`) (already shipped)                                  |
+| **String literal in IR**                | `kernel` (`Kernel.panic("…")`), `string`, `io`, `fd`, `system` — pervasive            |
+| String interpolation `#{…}`             | none — stdlib avoids it intentionally                                                 |
+| **`const` declarations**                | `io` (STDIN, STDOUT, STDERR — struct-literal initializers)                            |
+| Numeric coercion (`Int` → `Int32` etc.) | `io` (`Fd{descriptor: 2}`), `fd` (CPtr ops with mixed widths), `time`                 |
+| `spawn`                                 | `process` (`Task.async`)                                                              |
+| `receive` / `receive ... after`         | `process` (`run` loops)                                                               |
+| List / Map / Set literal syntax         | none in stdlib bodies (collections are constructed via `.new()` + `.append`/`.put`)   |
+| Bitstring / `<<…>>` literals            | none in stdlib                                                                        |
+| Nested `MyApp.Config` types             | none in stdlib                                                                        |
+| Type unions (`A \| B`)                  | none in stdlib                                                                        |
+| `type` aliases inside `impl`            | none in stdlib                                                                        |
+| Free functions (no `impl`)              | none — every fn lives in an `impl`                                                    |
+| Default field values                    | none in stdlib                                                                        |
 
 The "none in stdlib" rows are useful negative space: those features are
 **not** alpha blockers for the stdlib effort, no matter how much they
@@ -110,14 +112,6 @@ Every gap below maps to one or more diagnostics already wired into the
 alpha crates.
 
 ### Blockers — without these the stdlib does not type-check
-
-- **`match` expressions** — `resolve/expr.rs:104` falls through to
-  "alpha typecheck does not yet support expression `match`". Touches
-  every "interesting" file in the stdlib (12 sites in `kernel` alone).
-  Patterns the stdlib actually uses: enum-tuple (`Option.Some(val)`),
-  enum-unit (`Option.None`), wildcard (`_`), literal (`"a"`, `0`),
-  and OR (`"a" | "b" | ...`). No struct patterns, no nested patterns,
-  no guards, no typed bindings — small subset relative to v1.
 
 - **Loops — `for` and `while`** — `resolve/expr.rs` falls through;
   `lower/expr.rs:211` reports "alpha IR does not yet lower this
@@ -160,16 +154,12 @@ alpha crates.
   that bridges String / Binary / Bits, so it slots in alongside the
   binary literal & bitstring story rather than as a one-off.
 
-- **Ternary `?:`** — `resolve/expr.rs` falls through. `fd.expo` uses
-  the form 5 times in idiomatic FFI-result wrapping
-  (`result >= 0 ? Result.Ok(...) : Result.Err(...)`); rewriting to
-  `if`/`else` works today but produces ugly stdlib code. Lower as
-  sugar over `if`/`else` (block params already in place).
-
 - **`return` from inside `for`/`while`** — `resolve/return_type.rs`
-  handles divergence via `Never`, but `match` arms in stdlib also
-  return early from inside an enclosing loop (e.g. `String.alpha?`).
-  Falls out once `match` and loops are in.
+  already handles divergence via `Never`, and `match` arms already
+  return early through the same path (e.g. `String.alpha?`'s
+  `return false` from inside a match arm typechecks today). The
+  "from inside a loop" piece is the one remaining wedge — falls out
+  once Phase 1 (loops) is in.
 
 ### Significant — required for non-trivial stdlib pieces
 
@@ -180,20 +170,37 @@ alpha crates.
 
 ### Already supported — common false positives
 
-- **Generic impl targets** (`impl Pair<A, B>`, `impl Option<T>`,
-  `impl Greeter for Bag<T>`, …). The diagnostic at
-  `pipeline/collect.rs:260` ("alpha typecheck does not yet support
-  generic impl targets") fires only when the target path is _not_
-  length-1 (e.g. `impl pkg.Foo`, function types). `simple_named_target`
-  accepts `TypeExpr::Named { path, .. } |
-  TypeExpr::Generic { path, .. } if path.len() == 1` — exactly the
-  shape every stdlib impl uses. `lift_signatures/impls.rs` resolves
-  the target (concrete or generic), threads it as the `self` override
-  into method lifting; the `expo-alpha-ir/src/generics/` monomorphizer
-  carries it the rest of the way. Pinned by
-  `concrete_impl_specialization.rs` (`impl Bag<Int>`) and
-  `bounded_dispatch.rs::bounded_dispatch_generic_struct_receiver_resolves_through_substitution`
-  (`impl Greeter for Bag<T>` mono'd to `Bag_$Int64$.greet`).
+- **Generics — full feature, end-to-end.** Generic types
+  (`<T>`, `<K,V>`), generic functions, generic impls (concrete
+  `impl Bag<Int>` and trait `impl Show for List<T>`), bounds
+  (`<T: Eq>`, `<T: Eq & Hash>`), protocol conformance recording on
+  the target's `StructDefinition` / `EnumDefinition`, bounded-method
+  dispatch (`t.method()` against the type-param's bounds), trait-impl
+  domain check (`Bag<Int>::greet` vs `Bag<String>::greet`), dual-scope
+  inference (receiver scope + method scope) at every call site.
+  Substitution drives end-to-end through monomorphization
+  (`expo-alpha-ir/src/generics/`) and name-mangling
+  (`Bag_$Int64$.greet`). Pinned by
+  `concrete_impl_specialization.rs`, `bounded_dispatch.rs`,
+  `generic_method_inference.rs`, `trait_impl_domain.rs`, and
+  `substitution.rs` across `expo-alpha-typecheck`, `expo-alpha-ir`,
+  and `expo-alpha-ir-llvm`. **Out**: generic protocol methods
+  (i.e. `protocol P { fn m<U>(...) }`) — separate slice; no stdlib
+  use.
+
+- **`match` expression — full v1-parity surface.** Patterns:
+  literal, wildcard, binding, enum-unit, enum-tuple, enum-struct
+  (named-field destructure), struct destructure, or, and constructor
+  shorthand (`Some(x)`). Guards (`pattern when expr -> body`).
+  Exhaustiveness checking on enum subjects with `Bool`
+  specialization. Reachability / redundancy diagnostics (dead
+  arms, duplicates, overlaps) as warnings. Pinned by
+  `crates/expo-alpha-typecheck/tests/resolve_match.rs`,
+  `crates/expo-alpha-ir/tests/lower_match.rs`,
+  `crates/expo-alpha-ir-eval/tests/interpreter.rs`,
+  `crates/expo-alpha-ir-llvm/tests/control_flow.rs`. **Out**:
+  `Pattern::Binary` (gated on binary literals; tracked as Phase 7
+  of [ALPHA-MATCH-PLAN.md](ALPHA-MATCH-PLAN.md)).
 
 - **Const with struct literals.** `const STDOUT: Fd = Fd{descriptor: 1}`
   (used in `io.expo`) is wired end-to-end:
@@ -245,30 +252,7 @@ Order is chosen to maximize what each step _unblocks_, not by
 implementation cost in isolation. Each step lands behind seal-asserted
 output and standalone tests, per northstar.
 
-### Phase 1 — `match`
-
-- AST is already there (`ExprKind::Match`, `Pattern`, `MatchArm`).
-- Typecheck: arm-tail join (already have `body_tail_type` /
-  `join_arm_tails` from the if/else work; `match` reuses these
-  verbatim), pattern resolution (only the subset stdlib uses:
-  enum-tuple, enum-unit, wildcard, literal, OR), exhaustiveness check
-  for enum subjects.
-- IR lowering: leverages block-parameter SSA. Each arm is a basic
-  block with the merge taking the result via a `BlockParam`. Pattern
-  matching lowers to a switch terminator (or a chain of conditional
-  branches when the discriminant is small). OR patterns split each
-  alternative into its own predecessor block branching to a shared
-  arm body.
-- Eval: pattern interpreter — straight `match` on `Value`.
-- LLVM: phi at the merge block (already in place); discriminant load +
-  conditional branch tower or LLVM `switch` for enums.
-
-This is the single highest-leverage blocker. The block-parameter work
-we just shipped was sequenced specifically to make `match` cheap.
-Estimated lift: comparable to `if`/`else`/`cond` combined, since the
-control-flow shape is the same and the pattern subset is narrow.
-
-### Phase 2 — Loops
+### Phase 1 — Loops
 
 - `while` first (lower to a header block with no params + a back-edge
   — the existing `if`/`else` machinery already has every primitive).
@@ -279,7 +263,7 @@ control-flow shape is the same and the pattern subset is narrow.
   SSA carries divergence (which it does — `Never` joins fine).
 - `break` is post-stdlib; nothing in `lib/global/` uses it.
 
-### Phase 3 — Closure parameter types
+### Phase 2 — Closure parameter types
 
 - Lift `fn (T) -> U` as a `ResolvedType::Function { params, ret }`
   (new variant on `ResolvedType` or a new node type — northstar
@@ -290,7 +274,7 @@ control-flow shape is the same and the pattern subset is narrow.
 - User-code closure-_expressions_ (block & short) is a separate later
   step, sequenced behind (or alongside) `List`/`Map` literal syntax.
 
-### Phase 4 — Mechanical glue
+### Phase 3 — Mechanical glue
 
 Small; can land in any order or batched into one PR each.
 
@@ -307,10 +291,8 @@ Small; can land in any order or batched into one PR each.
   and `expo-alpha-ir-llvm` to the existing runtime `String` constants;
   typecheck already resolves them. `<>` concat lands separately
   alongside binary / bitstring support.
-- **Ternary** — desugar at IR-lowering time to the same `if`/`else`
-  shape we just shipped. Trivial.
 
-### Phase 5 — Concurrency (optional)
+### Phase 4 — Concurrency (optional)
 
 - Required only for `process.expo` to type-check & lower. `spawn` and
   `receive` already have AST nodes and runtime support in v1.
@@ -320,8 +302,8 @@ Small; can land in any order or batched into one PR each.
 - LLVM emits `expo_rt_spawn` / `expo_rt_receive*` calls (same symbols
   v1 codegen uses).
 
-After Phase 5, `expo alpha check expo/lib/global/src/*.expo` should be
-fully green. Phases 1–4 alone get every non-`process.expo` file green,
+After Phase 4, `expo alpha check expo/lib/global/src/*.expo` should be
+fully green. Phases 1–3 alone get every non-`process.expo` file green,
 which is most of the stdlib by line count.
 
 ---
@@ -354,24 +336,45 @@ of these, that's the trigger to revisit — not before.
 
 ---
 
-## Status snapshot (post-`alpha-if-cond-blockparams`)
+## Status snapshot (post-generics, post-`match`)
 
-What just shipped (block-parameter SSA join):
+What's shipped since the last audit:
 
-- `if`/`else` and `cond` are value-producing, with `Never` as the
-  lattice bottom for diverging arms.
-- `IRBasicBlock.params: Vec<BlockParam>` and
-  `IRTerminator::{Branch, CondBranch}` carry `BranchTarget { block,
-args }`.
-- LLVM emission goes block-params → phi nodes; CFG reachability
-  analysis emits `unreachable` for dead merge blocks.
-- `ResolvedType::Never` is a first-class lattice bottom in typecheck;
-  the IR side maps it to `IRType::Unit` (LLVM elides Unit-typed phis
-  entirely).
+- **Generics — full feature, end-to-end (~6 kLOC).** Generic types
+  (`<T>`, `<K, V>`), generic functions, generic impls (concrete
+  `impl Bag<Int>` and trait `impl Show for List<T>`), bounds
+  (`<T: Eq>`, `<T: Eq & Hash>`), protocol conformance recording,
+  trait-impl domain check, bounded-method dispatch (`t.method()`
+  against type-param bounds), and dual-scope inference (receiver
+  scope + method scope). Substitution drives end-to-end through
+  monomorphization (`expo-alpha-ir/src/generics/`) and
+  name-mangling (`Bag_$Int64$.greet`). Single representation:
+  `Resolution::TypeParam { owner, index }` plus
+  `substitute_resolved_type(ty, subst, owner)`.
 
-This substrate is exactly what `match` and the loops want. Phase 1
-above starts from a load-bearing position rather than a green field.
+- **`match` expression — full surface beyond the original
+  stdlib subset.** Patterns: literal, wildcard, binding, enum-unit,
+  enum-tuple, enum-struct (named-field destructure), struct
+  destructure, or, and constructor shorthand (`Some(x)` via in-place
+  AST rewrite at resolve). Guards (`pattern when expr -> body`)
+  with `Bool` enforcement and "guards don't contribute to coverage"
+  semantics. Exhaustiveness checking on enum subjects with `Bool`
+  specialization. Reachability / redundancy diagnostics (dead arms,
+  duplicates, overlaps) as warnings. Subset originally scoped for
+  the stdlib delivered alongside the v1-parity surface; only
+  `Pattern::Binary` is deferred (gated on binary literals).
+
+- **Block-parameter SSA join** (the substrate `match` rode in on).
+  `IRBasicBlock.params: Vec<BlockParam>` plus
+  `IRTerminator::{Branch, CondBranch}` carrying
+  `BranchTarget { block, args }`; LLVM emission goes block-params →
+  phi nodes; CFG reachability emits `unreachable` for dead merge
+  blocks. `ResolvedType::Never` is a first-class lattice bottom
+  (maps to `IRType::Unit` in IR; LLVM elides Unit-typed phis).
+
+The roadmap's original Phase 1 is closed; loops are now the next
+critical-path slice.
 
 ---
 
-Audited 2026-05-07.
+Audited 2026-05-08.

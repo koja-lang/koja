@@ -15,8 +15,12 @@
 //!   resolve each named field against the declared roster, restrict
 //!   field elements to wildcard / binding, and stamp a `LocalId` on
 //!   each binding; plain-struct destructure counts as a catch-all
-//! - unsupported pattern shapes and literal patterns over non-primitive
-//!   subjects diagnose feature gaps
+//! - constructor shorthand (`Some(x)` / `None` against an enum subject)
+//!   rewrites in place to the corresponding `EnumTuple` / `EnumUnit`,
+//!   reusing every downstream invariant
+//! - unsupported pattern shapes (`Pattern::List`, `Pattern::TypedBinding`,
+//!   `Pattern::Binary`) and literal patterns over non-primitive subjects
+//!   diagnose feature gaps
 //! - bindings stamp a `LocalId` on the AST node
 //! - reachability/redundancy fires warning-severity diagnostics for arms
 //!   following an unguarded catch-all, duplicate enum-variant or literal
@@ -974,6 +978,300 @@ fn match_bool_only_true_arm_still_requires_catch_all() {
             .iter()
             .any(|d| d.message.contains("must include a wildcard")),
         "expected missing-catch-all diagnostic for partial Bool match, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+// --- Constructor shorthand + deferred-shape feature gaps ---
+
+#[test]
+fn match_constructor_unit_resolves() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn pick(b: Box) -> Int
+          match b
+            None -> 0
+            Box.Some(x) -> x
+          end
+        end
+
+        fn main
+          pick(Box.None)
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let pkg = checked
+        .packages
+        .iter()
+        .find(|p| p.package == PACKAGE)
+        .expect("missing test package");
+    let file = pkg.files.first().expect("package has no files");
+    let pick_fn = file
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "pick" => Some(f),
+            _ => None,
+        })
+        .expect("missing fn pick");
+    let body = pick_fn.body.as_deref().expect("missing fn pick body");
+    let Statement::Expr(match_expr) = body.last().expect("missing trailing match") else {
+        panic!("expected trailing Statement::Expr");
+    };
+    let ExprKind::Match { arms, .. } = &match_expr.kind else {
+        panic!("expected ExprKind::Match");
+    };
+    assert!(
+        matches!(arms[0].pattern, Pattern::EnumUnit { .. }),
+        "expected `None` constructor to be rewritten to Pattern::EnumUnit, got: {:?}",
+        arms[0].pattern,
+    );
+}
+
+#[test]
+fn match_constructor_tuple_resolves_and_binds() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x) -> x
+            None -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.Some(7))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let pkg = checked
+        .packages
+        .iter()
+        .find(|p| p.package == PACKAGE)
+        .expect("missing test package");
+    let file = pkg.files.first().expect("package has no files");
+    let unwrap_fn = file
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Function(f) if f.name == "unwrap" => Some(f),
+            _ => None,
+        })
+        .expect("missing fn unwrap");
+    let body = unwrap_fn.body.as_deref().expect("missing fn unwrap body");
+    let Statement::Expr(match_expr) = body.last().expect("missing trailing match") else {
+        panic!("expected trailing Statement::Expr");
+    };
+    let ExprKind::Match { arms, .. } = &match_expr.kind else {
+        panic!("expected ExprKind::Match");
+    };
+    let Pattern::EnumTuple { elements, .. } = &arms[0].pattern else {
+        panic!(
+            "expected `Some(x)` constructor to rewrite to Pattern::EnumTuple, got: {:?}",
+            arms[0].pattern,
+        );
+    };
+    let Pattern::Binding { local_id, name, .. } = &elements[0] else {
+        panic!("expected payload binding inside the rewritten EnumTuple");
+    };
+    assert_eq!(name, "x");
+    assert!(
+        local_id.is_some(),
+        "constructor-shorthand payload binding `x` should carry a stamped LocalId",
+    );
+}
+
+#[test]
+fn match_constructor_unknown_variant_diagnoses() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Foo(x) -> x
+            _ -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.None)
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("has no variant `Foo`")),
+        "expected unknown-variant diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_constructor_arity_mismatch_diagnoses() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            Some(x, y) -> x + y
+            _ -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.None)
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("expects 1 positional element")),
+        "expected arity-mismatch diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_constructor_struct_variant_diagnoses() {
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle(Int)
+        end
+
+        fn area(s: Shape) -> Int
+          match s
+            Rect(w) -> w
+            _ -> 0
+          end
+        end
+
+        fn main
+          area(Shape.Circle(3))
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("is a struct variant")
+                && d.message.contains("Shape.Rect{...}")),
+        "expected struct-variant shorthand redirect diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_constructor_unit_variant_with_payload_diagnoses() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn unwrap(b: Box) -> Int
+          match b
+            None(x) -> x
+            _ -> 0
+          end
+        end
+
+        fn main
+          unwrap(Box.None)
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("is a unit variant and takes no payload")),
+        "expected unit-variant-with-payload diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_constructor_non_enum_subject_diagnoses() {
+    let source = "
+        fn main
+          match 1
+            Some(x) -> x
+            _ -> 0
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("requires an enum subject")),
+        "expected non-enum-subject diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_list_pattern_still_diagnoses_feature_gap() {
+    let source = "
+        fn main
+          match 1
+            [a, b] -> a + b
+            _ -> 0
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("does not yet support list patterns")),
+        "expected list-pattern feature-gap diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_typed_binding_still_diagnoses_feature_gap() {
+    let source = "
+        struct Post
+          id: Int
+        end
+
+        fn main
+          match 1
+            p: Post -> p.id
+            _ -> 0
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure.diagnostics.iter().any(|d| d
+            .message
+            .contains("does not yet support typed-binding patterns")),
+        "expected typed-binding feature-gap diagnostic, got: {:?}",
         failure.diagnostics,
     );
 }

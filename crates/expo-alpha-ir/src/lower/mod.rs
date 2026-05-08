@@ -25,7 +25,11 @@
 //!   then/merge (or body/merge) blocks, stamps `CondBranch` /
 //!   `Branch` terminators, and emits the merge `Const::Unit`
 //!   placeholder for the conditional's value.
-//! - [`expr`] — expression dispatch: [`lower_expr`] + [`lower_call`].
+//! - [`calls`] — call-site lowering: [`calls::lower_call`] (bare
+//!   calls) + [`calls::lower_method_call`] (instance / static
+//!   method calls), with a shared `emit_call` tail.
+//! - [`expr`] — expression dispatch: [`expr::lower_expr`] fans out
+//!   to every other submodule.
 //! - [`ops`] — operator / literal translation: [`lower_literal`],
 //!   [`lower_bin_op`], [`lower_unary_op`], plus the small
 //!   `IRType`-shaped result-type helpers.
@@ -35,6 +39,7 @@
 
 mod arms;
 mod body;
+mod calls;
 mod constants;
 mod control_flow;
 mod ctx;
