@@ -69,7 +69,25 @@ For pipeline shape and seal contracts, see
   the new edge into `match_merge` for free. End-to-end coverage extends
   the same four match-named test sections: `resolve_match.rs`,
   `lower_match.rs`, `interpreter.rs`, `control_flow.rs`.
-- **Phases 4–7 — Pending.**
+- **Phase 4 — Shipped (May 2026).** Struct destructuring for both plain
+  structs (`Point{x: a, y: b}`) and struct-shaped enum variants
+  (`Shape.Rect{w: w, h: h}`). Field elements restricted to wildcard /
+  binding (the same gate `EnumTuple` uses), each named binding stamps a
+  fresh `LocalId` resolved against the substituted field type,
+  declaration-position payload index, and per-field-name uniqueness +
+  unknown-field diagnostics. No new IR instructions: enum-struct
+  variants reuse `EnumPayloadFieldGet` (`payload_index` is the field's
+  declaration position), and plain-struct destructures reuse `FieldGet`.
+  The pattern-lowering vocabulary grew a `BindSource::{EnumPayload,
+StructField}` discriminator and `PatternCheck::CatchAll { binds }` so
+  a plain-struct destructure can act as an unconditional catch-all that
+  still emits its per-field binds at the head of the success block.
+  Plain-struct destructures count toward the catch-all rule (no test
+  block, no fall-through edge); enum-struct destructures contribute to
+  variant coverage exactly like `EnumTuple`. End-to-end coverage extends
+  the same four match-named test sections: `resolve_match.rs`,
+  `lower_match.rs`, `interpreter.rs`, `control_flow.rs`.
+- **Phases 5–7 — Pending.**
 
 ---
 
@@ -274,13 +292,14 @@ testable end-to-end (typecheck → IR → eval → LLVM).
 graph LR
     p1[Phase 1 ✓<br/>literals + wildcards + bindings<br/>linear-chain CFG] --> p2[Phase 2 ✓<br/>EnumUnit + EnumTuple<br/>+ Or<br/>STDLIB UNBLOCKED]
     p2 --> p3[Phase 3 ✓<br/>Guards]
-    p3 --> p4[Phase 4<br/>EnumStruct + Struct<br/>destructuring]
+    p3 --> p4[Phase 4 ✓<br/>EnumStruct + Struct<br/>destructuring]
     p4 --> p5[Phase 5<br/>Exhaustiveness<br/>diagnostics]
     p5 --> p6[Phase 6<br/>Constructor + List<br/>+ TypedBinding]
     p6 --> p7[Phase 7<br/>Binary patterns]
     style p1 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p2 fill:#1f7a3a,stroke:#0f3,color:#fff
     style p3 fill:#1f7a3a,stroke:#0f3,color:#fff
+    style p4 fill:#1f7a3a,stroke:#0f3,color:#fff
 ```
 
 ### Phase 1 — Skeleton (literals + wildcards + bindings) ✓
@@ -297,11 +316,11 @@ binding terminal arm).
   walks the match subject + every arm pattern + arm body.
   `seal_pattern` is the new leaf-recursive helper.
 - **Resolve.** `expo-alpha-typecheck/src/pipeline/resolve/match_expr.rs`
-  + `resolve/patterns.rs`. Subject and arm bodies resolve unchanged;
-  arm tails join through the same `join_arm_tails` helper
-  `if`/`cond`/`ternary` already use (visibility was lifted to
-  `pub(super)`). Guards and any non-Phase-1 pattern shape diagnose
-  as `feature gap` errors.
+  - `resolve/patterns.rs`. Subject and arm bodies resolve unchanged;
+    arm tails join through the same `join_arm_tails` helper
+    `if`/`cond`/`ternary` already use (visibility was lifted to
+    `pub(super)`). Guards and any non-Phase-1 pattern shape diagnose
+    as `feature gap` errors.
 - **Substitute.** `ExprKind::Match` was pulled out of the no-op list
   in `expo-alpha-ir/src/generics/substitute.rs`; subject + arm bodies
   walk for type substitution. Pattern nodes carry no `ResolvedType`
@@ -451,19 +470,56 @@ Shipped May 2026. Surface: `pattern when expr -> body`.
 
 Stdlib doesn't use guards yet, but spec parity required them.
 
-### Phase 4 — Struct destructuring (`EnumStruct` + `Struct`)
+### Phase 4 — Struct destructuring (`EnumStruct` + `Struct`) ✓
 
-Surface: `Shape.Rect{width: w, height: h}`, `Point{x, y}`.
+Shipped May 2026. Surface: `Shape.Rect{w: w, h: h}`, `Point{x: a, y: b}`.
+The parser requires `name: pattern` syntax — there is no `Point{x, y}`
+shorthand. Field elements are restricted to wildcard / binding (same
+gate as `EnumTuple` payloads).
 
-- v1's `check_struct_field_patterns` is the reference. Field-name lookup
-  against the variant payload / struct decl, recursive `check_pattern`
-  per field. Unlisted fields are implicit wildcards (no projection
-  emitted).
-- Lower reuses `EnumPayloadFieldGet` (for variant-struct) and `FieldGet`
-  (for plain struct). Same gated-CFG shape, just one branch per field.
+- **AST.** No changes — `Pattern::EnumStruct`, `Pattern::Struct`, and
+  `FieldPattern { name, pattern, span }` were already populated by the
+  parser.
+- **IR.** No new instructions, no new terminators. Enum-struct variants
+  reuse `EnumPayloadFieldGet` with `payload_index` set to the field's
+  declaration position (matching what
+  `seal::enums::seal_payload_field_index` already validates for the
+  `Struct` payload arm); plain-struct destructures reuse `FieldGet`.
+- **Resolve.** `expo-alpha-typecheck/src/pipeline/resolve/patterns.rs`
+  grew `resolve_enum_struct_pattern` and `resolve_struct_pattern`,
+  plus a shared `walk_field_patterns` helper that performs the
+  per-field name lookup, duplicate / unknown / non-binding diagnostics,
+  and recursion into the field pattern. Generic-payload substitution
+  flows through the existing `substitute_resolved_type` against the
+  subject's `type_args`. `Pattern::Struct` returns
+  `PatternCoverage::CatchAll` (a struct destructure always matches);
+  `Pattern::EnumStruct` returns `PatternCoverage::Variants(vec![tag])`,
+  contributing to coverage exactly like `EnumTuple`.
+- **Seal.** `seal_pattern` in
+  `expo-alpha-typecheck/src/pipeline/seal.rs` recurses into the
+  per-field patterns of both `EnumStruct` and `Struct`, and validates
+  the type-path is non-empty.
+- **IR lowering.** `expo-alpha-ir/src/lower/patterns.rs` generalized
+  `PayloadBind` to carry a `BindSource::{EnumPayload, StructField}`
+  discriminator and grew `PatternCheck::CatchAll { binds }`. Three new
+  per-shape helpers — `lower_enum_struct_check`, `lower_struct_check`,
+  and the shared `enum_pattern_metadata` — drive the bind-list
+  construction. The match driver in `lower/match_expr.rs` now emits
+  binds in the success block on both `CatchAll` and `Tests`, and
+  `emit_payload_binds` switches on `BindSource` to pick the right
+  `*FieldGet` instruction.
+- **Substitute.** `expo-alpha-ir/src/generics/substitute.rs` is
+  unchanged; the new pattern shapes carry no `ResolvedType` slots
+  (only paths and named-field patterns), so the existing no-op
+  pattern walk still applies.
+- **Eval / LLVM.** No backend changes. The interpreter already handles
+  `EnumPayloadFieldGet` and `FieldGet`; LLVM's existing GEP-based
+  field-access lowering picks up the plain-struct destructure
+  unchanged.
 
-Stdlib doesn't use these, but they're a clean follow-up to enum patterns
-and complete the "destructuring" story.
+Stdlib doesn't reach for struct destructuring yet, but the surface
+completes the "destructuring" story and rounds out the post-`EnumTuple`
+follow-up.
 
 ### Phase 5 — Exhaustiveness diagnostics
 
@@ -521,15 +577,15 @@ Per [build.mdc](../../.cursor/rules/build.mdc):
 
 ## Surface area summary
 
-| Phase | New IR                                                       | New typecheck                                                          | Stdlib unblocks                  | Status      |
-| ----- | ------------------------------------------------------------ | ---------------------------------------------------------------------- | -------------------------------- | ----------- |
-| 1     | (none, but seal moved to dominance)                          | `match` resolve, literal/wildcard/bind patterns                        | (none)                           | **Shipped** |
+| Phase | New IR                                                        | New typecheck                                                            | Stdlib unblocks                  | Status      |
+| ----- | ------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------- | ----------- |
+| 1     | (none, but seal moved to dominance)                           | `match` resolve, literal/wildcard/bind patterns                          | (none)                           | **Shipped** |
 | 2     | `EnumTagGet`, `EnumPayloadFieldGet`, terminator `Unreachable` | enum patterns + or, structural enum exhaustiveness, per-arm scope unwind | **all `Option`/`Result` stdlib** | **Shipped** |
-| 3     | (none)                                                       | guard typing                                                           | (none — spec parity)             | **Shipped** |
-| 4     | (none)                                                       | struct/enum-struct field patterns                                      | (none — surface polish)          | Pending     |
-| 5     | (none)                                                       | exhaustiveness check (full diagnostics)                                | (quality bar)                    | Pending     |
-| 6     | (none)                                                       | shorthand `Constructor`, `List`, `TypedBinding`                        | (post-stdlib)                    | Pending     |
-| 7     | binary submachine                                            | `check_binary_pattern`                                                 | (post-stdlib)                    | Pending     |
+| 3     | (none)                                                        | guard typing                                                             | (none — spec parity)             | **Shipped** |
+| 4     | (none)                                                        | struct/enum-struct field patterns                                        | (none — surface polish)          | **Shipped** |
+| 5     | (none)                                                        | exhaustiveness check (full diagnostics)                                  | (quality bar)                    | Pending     |
+| 6     | (none)                                                        | shorthand `Constructor`, `List`, `TypedBinding`                          | (post-stdlib)                    | Pending     |
+| 7     | binary submachine                                             | `check_binary_pattern`                                                   | (post-stdlib)                    | Pending     |
 
 The work is real but the IR surface adds up to two new value
 instructions, one new terminator, and the relaxed-catch-all rule.

@@ -108,7 +108,7 @@ pub(super) fn lower_struct_construction(
 /// Routes through [`resolved_type_to_ir_type`] so any non-empty
 /// `type_args` are recorded as instantiations and folded into the
 /// returned mangled symbol.
-fn resolved_struct_symbol(
+pub(super) fn resolved_struct_symbol(
     resolution: &ResolvedType,
     registry: &GlobalRegistry,
     instantiations: &mut Vec<crate::generics::Instantiation>,
@@ -218,7 +218,7 @@ fn struct_entry_from_resolution<'a>(
     })
 }
 
-fn struct_definition_from_resolution<'a>(
+pub(super) fn struct_definition_from_resolution<'a>(
     resolution: &ResolvedType,
     registry: &'a GlobalRegistry,
     role: &str,

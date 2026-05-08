@@ -169,9 +169,10 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         ExprKind::Match { subject, arms } => {
             // Supported patterns carry no `ResolvedType` slots
             // (wildcards / literals / bindings / enum constructors
-            // are leaves or carry only paths), so the pattern walk
-            // is a no-op; the subject, arm guards, and arm bodies
-            // need substitution.
+            // / struct destructures are leaves or carry only paths
+            // and named-field patterns), so the pattern walk is a
+            // no-op; the subject, arm guards, and arm bodies need
+            // substitution.
             substitute_in_expr(subject, args, owner);
             for arm in arms {
                 if let Some(guard) = &mut arm.guard {

@@ -338,6 +338,72 @@ fn match_guarded_arm_emits_dedicated_guard_block_with_cond_branch() {
 }
 
 #[test]
+fn match_struct_destructure_emits_field_geps_and_no_tag_check() {
+    // A plain-struct destructure pattern always matches, so the IR
+    // emits no `EnumTagGet` and no `match_test_<n>` block. The
+    // per-field bindings lower to `getelementptr` + `load` chains
+    // labelled `field_<index>` against the subject struct.
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn add -> Int
+          match Point{x: 3, y: 4}
+            Point{x: a, y: b} -> a + b
+          end
+        end
+
+        fn main
+          add()
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "field_0");
+    assert_contains(&ir_text, "field_1");
+    assert_contains(&ir_text, "match_body_0");
+    assert!(
+        !ir_text.contains("match_test_"),
+        "plain-struct destructure should not emit any chained test block",
+    );
+}
+
+#[test]
+fn match_enum_struct_destructure_emits_payload_field_geps_per_variant() {
+    // Enum-struct variants share the EnumPayloadFieldGet payload-
+    // GEP chain with tuple variants. Pin the payload-load shape and
+    // the tag-check `icmp i8` so a regression in the per-variant
+    // wiring shows up here.
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn area(s: Shape) -> Int
+          match s
+            Shape.Rect{w: w, h: h} -> w * h
+            Shape.Circle{r: r} -> r * r
+          end
+        end
+
+        fn main
+          area(Shape.Rect{w: 3, h: 4})
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "icmp eq i8");
+    assert_contains(&ir_text, "_payload_src");
+    assert_contains(&ir_text, "_payload");
+    assert_contains(&ir_text, "load i64");
+}
+
+#[test]
 fn match_exhaustive_enum_emits_unreachable_trap_block() {
     // An enum match with no catch-all and no remaining arm to fall
     // into materializes a synthesized trap block whose terminator is

@@ -700,6 +700,110 @@ fn match_guarded_enum_payload_arm_falls_through_on_guard_false() {
 }
 
 #[test]
+fn match_struct_destructure_binds_each_field() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn add(p: Point) -> Int
+          match p
+            Point{x: a, y: b} -> a + b
+          end
+        end
+
+        add(Point{x: 3, y: 4})
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(7));
+}
+
+#[test]
+fn match_struct_destructure_partial_omits_unlisted_fields() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn x_only(p: Point) -> Int
+          match p
+            Point{x: x} -> x
+          end
+        end
+
+        x_only(Point{x: 5, y: 99})
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(5));
+}
+
+#[test]
+fn match_struct_destructure_with_wildcard_field_skips_bind() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn first(p: Point) -> Int
+          match p
+            Point{x: a, y: _} -> a
+          end
+        end
+
+        first(Point{x: 9, y: 4})
+        ";
+    assert_eq!(evaluate_script(&dedent(source)).unwrap(), Value::Int(9));
+}
+
+#[test]
+fn match_enum_struct_destructure_dispatches_by_variant() {
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn area(s: Shape) -> Int
+          match s
+            Shape.Rect{w: w, h: h} -> w * h
+            Shape.Circle{r: r} -> r * r
+          end
+        end
+
+        area(Shape.Rect{w: 3, h: 4}) + area(Shape.Circle{r: 5})
+        ";
+    assert_eq!(
+        evaluate_script(&dedent(source)).unwrap(),
+        Value::Int(12 + 25)
+    );
+}
+
+#[test]
+fn match_enum_struct_destructure_visible_to_guard() {
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn classify(s: Shape) -> Int
+          match s
+            Shape.Rect{w: w, h: h} when w == h -> 1
+            Shape.Rect{w: _, h: _} -> 2
+            Shape.Circle{r: _} -> 3
+          end
+        end
+
+        classify(Shape.Rect{w: 4, h: 4}) + classify(Shape.Rect{w: 3, h: 4}) + classify(Shape.Circle{r: 9})
+        ";
+    assert_eq!(
+        evaluate_script(&dedent(source)).unwrap(),
+        Value::Int(1 + 2 + 3)
+    );
+}
+
+#[test]
 fn match_exhaustive_enum_no_catch_all_runs_correctly() {
     let source = "
         enum Color

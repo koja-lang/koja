@@ -7,6 +7,11 @@
 //! - `pattern when expr -> body` guards resolve `expr` against `Bool` in
 //!   the post-pattern-bind scope, and a guarded arm does not contribute
 //!   to catch-all detection or enum variant coverage
+//! - struct destructure patterns (`Type{ field: x, ... }` for plain
+//!   structs, `Type.Variant{ field: x, ... }` for struct-variant enums)
+//!   resolve each named field against the declared roster, restrict
+//!   field elements to wildcard / binding, and stamp a `LocalId` on
+//!   each binding; plain-struct destructure counts as a catch-all
 //! - unsupported pattern shapes and literal patterns over non-primitive
 //!   subjects diagnose feature gaps
 //! - bindings stamp a `LocalId` on the AST node
@@ -591,4 +596,159 @@ fn match_arm_binding_does_not_leak_to_following_arm() {
         x_id, y_id,
         "per-arm bindings must mint distinct LocalIds (the snapshot/restore unwound `x`)",
     );
+}
+
+#[test]
+fn match_struct_destructure_binds_resolve_against_field_types() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          match Point{x: 1, y: 2}
+            Point{x: a, y: b} -> a + b
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let main = main_fn(&checked);
+    let Statement::Expr(match_expr) = main.body.as_deref().unwrap().last().unwrap() else {
+        panic!("expected trailing Statement::Expr");
+    };
+    let ExprKind::Match { arms, .. } = &match_expr.kind else {
+        panic!("expected ExprKind::Match");
+    };
+    let Pattern::Struct { fields, .. } = &arms[0].pattern else {
+        panic!("expected Pattern::Struct for arm 0");
+    };
+    assert_eq!(fields.len(), 2);
+    for field in fields {
+        let Pattern::Binding { local_id, .. } = &field.pattern else {
+            panic!("expected Pattern::Binding inside the struct destructure");
+        };
+        assert!(
+            local_id.is_some(),
+            "field-pattern binding `{}` should carry a stamped LocalId",
+            field.name,
+        );
+    }
+}
+
+#[test]
+fn match_struct_destructure_unknown_field_diagnoses() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          match Point{x: 1, y: 2}
+            Point{z: a} -> a
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("has no field `z`")),
+        "expected unknown-field diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_struct_destructure_non_binding_field_diagnoses() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          match Point{x: 1, y: 2}
+            Point{x: 1, y: b} -> b
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure.diagnostics.iter().any(|d| d
+            .message
+            .contains("only admits wildcard / binding patterns inside")),
+        "expected field-element feature-gap diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_enum_struct_destructure_binds_resolve() {
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn area(s: Shape) -> Int
+          match s
+            Shape.Rect{w: w, h: h} -> w * h
+            Shape.Circle{r: r} -> r * r
+          end
+        end
+
+        fn main
+          area(Shape.Rect{w: 3, h: 4})
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_enum_struct_destructure_against_tuple_variant_diagnoses() {
+    let source = "
+        enum Box
+          Some(Int)
+          None
+        end
+
+        fn main
+          match Box.Some(7)
+            Box.Some{x: x} -> x
+            Box.None -> 0
+          end
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("not a struct variant")),
+        "expected struct-vs-tuple variant diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn match_struct_destructure_acts_as_catch_all() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          match Point{x: 1, y: 2}
+            Point{x: a, y: _} -> a
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
 }

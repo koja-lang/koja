@@ -35,7 +35,9 @@ use crate::types::{IRType, ValueId};
 use super::arms::lower_arm_into;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
-use super::patterns::{PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check};
+use super::patterns::{
+    BindSource, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
+};
 
 /// AST-side inputs to [`lower_match`]. Bundled per the same
 /// `too_many_arguments` discipline [`super::control_flow::IfLowering`]
@@ -89,11 +91,12 @@ pub(super) fn lower_match(
         };
         let (check, _) = lower_pattern_check(&arm.pattern, inputs, ctx, current_test, output)?;
         match check {
-            PatternCheck::CatchAll => {
+            PatternCheck::CatchAll { binds } => {
                 ctx.cfg.set_terminator(
                     current_test,
                     IRTerminator::Branch(BranchTarget::to(success_block)),
                 );
+                emit_payload_binds(&binds, success_block, subject_value, ctx);
                 if arm.guard.is_none() {
                     closed_chain = true;
                 }
@@ -167,17 +170,40 @@ fn emit_payload_binds(
 ) {
     for bind in binds {
         let dest = ctx.fresh_value(bind.field_type.clone());
-        ctx.cfg.append(
-            body_block,
-            IRInstruction::EnumPayloadFieldGet {
-                dest,
-                field_type: bind.field_type.clone(),
-                payload_index: bind.payload_index,
-                tag: bind.tag,
-                ty: bind.enum_symbol.clone(),
-                value: subject,
-            },
-        );
+        match &bind.source {
+            BindSource::EnumPayload {
+                enum_symbol,
+                payload_index,
+                tag,
+            } => {
+                ctx.cfg.append(
+                    body_block,
+                    IRInstruction::EnumPayloadFieldGet {
+                        dest,
+                        field_type: bind.field_type.clone(),
+                        payload_index: *payload_index,
+                        tag: *tag,
+                        ty: enum_symbol.clone(),
+                        value: subject,
+                    },
+                );
+            }
+            BindSource::StructField {
+                field_index,
+                struct_symbol,
+            } => {
+                ctx.cfg.append(
+                    body_block,
+                    IRInstruction::FieldGet {
+                        base: subject,
+                        dest,
+                        field_index: *field_index,
+                        field_type: bind.field_type.clone(),
+                        struct_symbol: struct_symbol.clone(),
+                    },
+                );
+            }
+        }
         ctx.cfg.append(
             body_block,
             IRInstruction::LocalWrite {

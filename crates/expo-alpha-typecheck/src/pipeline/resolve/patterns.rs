@@ -1,20 +1,23 @@
 //! Match-arm pattern resolution.
 //!
 //! Admits `Wildcard`, `Binding`, primitive `Literal`, `EnumUnit`,
-//! `EnumTuple` (one-level — elements restricted to wildcard /
-//! binding), and `Or` (alternatives restricted to literal /
-//! EnumUnit, no bindings). Every other shape diagnoses a feature
-//! gap. Returns [`PatternCoverage`] so
-//! [`super::match_expr::resolve_match`] can run the
-//! catch-all-or-exhaustiveness check without re-walking the arm.
+//! `EnumTuple` / `EnumStruct` (one-level — elements / fields
+//! restricted to wildcard / binding), `Struct` (same restriction),
+//! and `Or` (alternatives restricted to literal / EnumUnit, no
+//! bindings). Every other shape diagnoses a feature gap. Returns
+//! [`PatternCoverage`] so [`super::match_expr::resolve_match`] can
+//! run the catch-all-or-exhaustiveness check without re-walking
+//! the arm.
 
-use expo_ast::ast::{Diagnostic, Literal, Pattern};
+use expo_ast::ast::{Diagnostic, FieldPattern, Literal, Pattern};
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use expo_ast::labels::{pattern_kind_label, pattern_span};
 use expo_ast::span::Span;
 
 use crate::pipeline::unify::substitute_resolved_type;
-use crate::registry::{EnumDefinition, GlobalKind, GlobalRegistry, ResolvedVariantData};
+use crate::registry::{
+    EnumDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
+};
 
 use super::ctx::Resolver;
 use super::ops::literal_type;
@@ -49,6 +52,21 @@ pub(super) fn resolve_pattern(
             *local_id = Some(id);
             PatternCoverage::CatchAll
         }
+        Pattern::EnumStruct {
+            fields,
+            span,
+            type_path,
+            variant,
+            ..
+        } => resolve_enum_struct_pattern(
+            type_path,
+            variant,
+            fields,
+            subject_ty,
+            *span,
+            resolver,
+            diagnostics,
+        ),
         Pattern::EnumTuple {
             elements,
             span,
@@ -79,12 +97,16 @@ pub(super) fn resolve_pattern(
         Pattern::Or { patterns, span } => {
             resolve_or_pattern(patterns, subject_ty, *span, resolver, diagnostics)
         }
+        Pattern::Struct {
+            fields,
+            span,
+            type_path,
+            ..
+        } => resolve_struct_pattern(type_path, fields, subject_ty, *span, resolver, diagnostics),
         Pattern::Wildcard { .. } => PatternCoverage::CatchAll,
         Pattern::Binary { .. }
         | Pattern::Constructor { .. }
-        | Pattern::EnumStruct { .. }
         | Pattern::List { .. }
-        | Pattern::Struct { .. }
         | Pattern::TypedBinding { .. } => {
             diagnostics.push(Diagnostic::error(
                 format!(
@@ -233,6 +255,275 @@ fn resolve_enum_tuple_metadata(
     })
 }
 
+fn resolve_enum_struct_pattern(
+    type_path: &[String],
+    variant_name: &str,
+    fields: &mut [FieldPattern],
+    subject_ty: &ResolvedType,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> PatternCoverage {
+    let resolved = resolve_enum_struct_metadata(
+        type_path,
+        variant_name,
+        subject_ty,
+        span,
+        resolver,
+        diagnostics,
+    );
+    let Some(metadata) = resolved else {
+        resolve_field_patterns_unbound(fields, resolver, diagnostics);
+        return PatternCoverage::Other;
+    };
+    let owner_label = format!("{}.{variant_name}", metadata.label);
+    walk_field_patterns(
+        &owner_label,
+        fields,
+        &metadata.declared,
+        resolver,
+        diagnostics,
+    );
+    PatternCoverage::Variants(vec![metadata.variant_index])
+}
+
+struct EnumStructPatternMetadata {
+    declared: Vec<ResolvedStructField>,
+    label: String,
+    variant_index: u32,
+}
+
+/// Resolve the variant + substituted field roster for an
+/// `EnumStruct` pattern. Splits out so the immutable registry
+/// borrow ends before the per-field walk re-borrows the resolver
+/// mutably to recurse into bindings.
+fn resolve_enum_struct_metadata(
+    type_path: &[String],
+    variant_name: &str,
+    subject_ty: &ResolvedType,
+    span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<EnumStructPatternMetadata> {
+    let target = lookup_pattern_enum(type_path, subject_ty, span, resolver, diagnostics)?;
+    let Some((variant_index, variant)) = target.definition.lookup_variant(variant_name) else {
+        diagnostics.push(Diagnostic::error(
+            format!("`{}` has no variant `{variant_name}`", target.label),
+            span,
+        ));
+        return None;
+    };
+    let ResolvedVariantData::Struct(declared) = &variant.data else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "variant `{}.{variant_name}` is {}, not a struct variant",
+                target.label,
+                declared_shape_label(&variant.data),
+            ),
+            span,
+        ));
+        return None;
+    };
+    let subst = build_enum_substitution(target.enum_id, subject_ty);
+    let declared = declared
+        .iter()
+        .map(|field| ResolvedStructField {
+            name: field.name.clone(),
+            ty: substitute_resolved_type(&field.ty, &subst, target.enum_id),
+        })
+        .collect();
+    Some(EnumStructPatternMetadata {
+        declared,
+        label: target.label,
+        variant_index,
+    })
+}
+
+fn resolve_struct_pattern(
+    type_path: &[String],
+    fields: &mut [FieldPattern],
+    subject_ty: &ResolvedType,
+    span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> PatternCoverage {
+    let resolved = resolve_struct_metadata(type_path, subject_ty, span, resolver, diagnostics);
+    let Some(metadata) = resolved else {
+        resolve_field_patterns_unbound(fields, resolver, diagnostics);
+        return PatternCoverage::CatchAll;
+    };
+    walk_field_patterns(
+        &metadata.label,
+        fields,
+        &metadata.declared,
+        resolver,
+        diagnostics,
+    );
+    PatternCoverage::CatchAll
+}
+
+struct StructPatternMetadata {
+    declared: Vec<ResolvedStructField>,
+    label: String,
+}
+
+/// Resolve a plain-struct pattern's target and substituted field
+/// roster. Mirrors [`resolve_enum_struct_metadata`] for the non-
+/// variant case and substitutes generic type-args via
+/// `subject_ty.type_args`, so `Bag<Int>{ item: x }` views `item` as
+/// `Int`.
+fn resolve_struct_metadata(
+    type_path: &[String],
+    subject_ty: &ResolvedType,
+    span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<StructPatternMetadata> {
+    let Some((struct_id, entry)) = lookup_type(type_path, resolver.package, resolver.registry)
+    else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not recognize the struct type `{}`",
+                type_path.join("."),
+            ),
+            span,
+        ));
+        return None;
+    };
+    let GlobalKind::Struct(definition) = &entry.kind else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot match against `{}`: it is a {}, not a struct",
+                entry.identifier,
+                entry.kind.label(),
+            ),
+            span,
+        ));
+        return None;
+    };
+    let Some(definition) = definition.as_ref() else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "internal: struct `{}` has no lifted definition",
+                entry.identifier
+            ),
+            span,
+        ));
+        return None;
+    };
+    if subject_ty.is_resolved() && subject_ty.resolution != Resolution::Global(struct_id) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "match arm pattern targets `{}`, but the subject has type `{}`",
+                entry.identifier,
+                display_resolution(subject_ty, resolver.registry),
+            ),
+            span,
+        ));
+    }
+    let subst: Vec<Option<ResolvedType>> = if subject_ty.resolution == Resolution::Global(struct_id)
+    {
+        subject_ty.type_args.iter().cloned().map(Some).collect()
+    } else {
+        Vec::new()
+    };
+    let declared = definition
+        .fields
+        .iter()
+        .map(|field| ResolvedStructField {
+            name: field.name.clone(),
+            ty: substitute_resolved_type(&field.ty, &subst, struct_id),
+        })
+        .collect();
+    Some(StructPatternMetadata {
+        declared,
+        label: entry.identifier.to_string(),
+    })
+}
+
+/// Walk a `FieldPattern` list against a substituted declared
+/// roster: lookup by name, gate on [`is_admitted_field_element`],
+/// recurse into the binding / wildcard sub-pattern. Diagnoses
+/// unknown fields and duplicate field-name patterns. Used by both
+/// [`resolve_enum_struct_pattern`] and [`resolve_struct_pattern`].
+fn walk_field_patterns(
+    owner_label: &str,
+    fields: &mut [FieldPattern],
+    declared: &[ResolvedStructField],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let mut seen: Vec<bool> = vec![false; declared.len()];
+    for field in fields {
+        let lookup = declared
+            .iter()
+            .enumerate()
+            .find(|(_, declared_field)| declared_field.name == field.name);
+        let Some((index, declared_field)) = lookup else {
+            diagnostics.push(Diagnostic::error(
+                format!("`{owner_label}` has no field `{}`", field.name),
+                field.span,
+            ));
+            resolve_pattern(
+                &mut field.pattern,
+                &ResolvedType::unresolved(),
+                resolver,
+                diagnostics,
+            );
+            continue;
+        };
+        if seen[index] {
+            diagnostics.push(Diagnostic::error(
+                format!("field `{}` of `{owner_label}` matched twice", field.name),
+                field.span,
+            ));
+            resolve_pattern(
+                &mut field.pattern,
+                &declared_field.ty,
+                resolver,
+                diagnostics,
+            );
+            continue;
+        }
+        seen[index] = true;
+        if !is_admitted_field_element(&field.pattern) {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha typecheck only admits wildcard / binding patterns inside \
+                     `{owner_label}` fields (got `{}`)",
+                    pattern_kind_label(&field.pattern),
+                ),
+                pattern_span(&field.pattern),
+            ));
+            continue;
+        }
+        resolve_pattern(
+            &mut field.pattern,
+            &declared_field.ty,
+            resolver,
+            diagnostics,
+        );
+    }
+}
+
+/// Walk every field pattern when the surrounding struct / variant
+/// failed to resolve. Stamps `local_id` on bindings so seal sees a
+/// well-formed AST even when an upstream diagnostic fired.
+fn resolve_field_patterns_unbound(
+    fields: &mut [FieldPattern],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for field in fields {
+        resolve_pattern(
+            &mut field.pattern,
+            &ResolvedType::unresolved(),
+            resolver,
+            diagnostics,
+        );
+    }
+}
+
 fn resolve_or_pattern(
     patterns: &mut [Pattern],
     subject_ty: &ResolvedType,
@@ -375,12 +666,16 @@ fn build_enum_substitution(
     subject_ty.type_args.iter().cloned().map(Some).collect()
 }
 
-fn is_admitted_tuple_element(pat: &Pattern) -> bool {
+fn is_admitted_field_element(pat: &Pattern) -> bool {
     matches!(pat, Pattern::Binding { .. } | Pattern::Wildcard { .. })
 }
 
 fn is_admitted_or_alternative(pat: &Pattern) -> bool {
     matches!(pat, Pattern::EnumUnit { .. } | Pattern::Literal { .. })
+}
+
+fn is_admitted_tuple_element(pat: &Pattern) -> bool {
+    matches!(pat, Pattern::Binding { .. } | Pattern::Wildcard { .. })
 }
 
 fn declared_shape_label(data: &ResolvedVariantData) -> &'static str {

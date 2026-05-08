@@ -455,6 +455,18 @@ fn seal_pattern(pattern: &Pattern) {
                 );
             }
         }
+        Pattern::EnumStruct {
+            fields,
+            type_path,
+            variant,
+            span,
+            ..
+        } => {
+            seal_enum_path(type_path, variant, *span);
+            for field in fields {
+                seal_pattern(&field.pattern);
+            }
+        }
         Pattern::EnumTuple {
             elements,
             type_path,
@@ -473,6 +485,7 @@ fn seal_pattern(pattern: &Pattern) {
             span,
             ..
         } => seal_enum_path(type_path, variant, *span),
+        Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
         Pattern::Or { patterns, span } => {
             if patterns.is_empty() {
                 seal_panic("or-pattern carries no alternatives", *span);
@@ -481,7 +494,19 @@ fn seal_pattern(pattern: &Pattern) {
                 seal_pattern(alternative);
             }
         }
-        Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
+        Pattern::Struct {
+            fields,
+            type_path,
+            span,
+            ..
+        } => {
+            if type_path.is_empty() {
+                seal_panic("struct pattern carries an empty type path", *span);
+            }
+            for field in fields {
+                seal_pattern(&field.pattern);
+            }
+        }
         other => seal_panic(
             &format!(
                 "alpha typecheck seal does not yet recognize pattern kind `{}`",

@@ -11,6 +11,12 @@
 //! and the block ends in a `CondBranch` to the body or the same
 //! fall-through the pattern's failure edge uses.
 //!
+//! Struct destructure patterns extend the bind protocol: enum
+//! struct variants emit `EnumPayloadFieldGet` indexed by declared
+//! field position; plain-struct destructures emit `FieldGet` and
+//! act as catch-alls (no tag check, no test block — only binds in
+//! the success block).
+//!
 //! [`BlockParam`]: expo_alpha_ir::BlockParam
 
 use expo_alpha_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType, IRVariantTag};
@@ -586,5 +592,174 @@ fn match_guarded_enum_payload_binds_land_in_guard_block() {
     assert!(
         guard_has_payload_get,
         "payload-field-get must run in the guard block so the guard expr sees the binding",
+    );
+}
+
+#[test]
+fn match_struct_destructure_emits_field_get_in_body_block() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn add -> Int
+          match Point{x: 3, y: 4}
+            Point{x: a, y: b} -> a + b
+          end
+        end
+
+        fn main
+          add()
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let add_fn = function(&program, "add");
+
+    let body_block = add_fn
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_body_0")
+        .expect("missing match_body_0 block");
+
+    let field_indices: Vec<u32> = body_block
+        .instructions
+        .iter()
+        .filter_map(|i| match i {
+            IRInstruction::FieldGet { field_index, .. } => Some(*field_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        field_indices,
+        vec![0, 1],
+        "struct destructure should emit one `FieldGet` per binding in declared order; \
+         got {field_indices:?}",
+    );
+
+    let local_writes = body_block
+        .instructions
+        .iter()
+        .filter(|i| matches!(i, IRInstruction::LocalWrite { .. }))
+        .count();
+    assert_eq!(
+        local_writes, 2,
+        "each binding should emit a `LocalWrite` after its `FieldGet`",
+    );
+
+    let no_tag_get = !body_block
+        .instructions
+        .iter()
+        .any(|i| matches!(i, IRInstruction::EnumTagGet { .. }));
+    assert!(
+        no_tag_get,
+        "plain-struct destructure should not emit any `EnumTagGet`",
+    );
+}
+
+#[test]
+fn match_enum_struct_destructure_emits_payload_field_get_by_declared_index() {
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn area(s: Shape) -> Int
+          match s
+            Shape.Rect{w: w, h: h} -> w * h
+            Shape.Circle{r: r} -> r * r
+          end
+        end
+
+        fn main
+          area(Shape.Rect{w: 3, h: 4})
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let area_fn = function(&program, "area");
+
+    let rect_body = area_fn
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_body_0")
+        .expect("missing match_body_0 (Rect arm)");
+    let payload_indices: Vec<u32> = rect_body
+        .instructions
+        .iter()
+        .filter_map(|i| match i {
+            IRInstruction::EnumPayloadFieldGet {
+                payload_index, tag, ..
+            } if *tag == IRVariantTag(0) => Some(*payload_index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        payload_indices,
+        vec![0, 1],
+        "enum-struct destructure should look up by name and emit declared-position \
+         payload indices; got {payload_indices:?}",
+    );
+
+    let circle_body = area_fn
+        .blocks
+        .iter()
+        .find(|b| b.label == "match_body_1")
+        .expect("missing match_body_1 (Circle arm)");
+    let circle_tags: Vec<IRVariantTag> = circle_body
+        .instructions
+        .iter()
+        .filter_map(|i| match i {
+            IRInstruction::EnumPayloadFieldGet { tag, .. } => Some(*tag),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        circle_tags,
+        vec![IRVariantTag(1)],
+        "Circle's bind should carry the Circle variant's tag",
+    );
+}
+
+#[test]
+fn match_struct_destructure_acts_as_catch_all_in_chain() {
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn first -> Int
+          match Point{x: 1, y: 2}
+            Point{x: a, y: _} -> a
+          end
+        end
+
+        fn main
+          first()
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let first_fn = function(&program, "first");
+
+    let entry = &first_fn.blocks[0];
+    assert!(
+        matches!(&entry.terminator, IRTerminator::Branch(_)),
+        "plain-struct destructure should close the chain with an unconditional Branch \
+         from the entry block; got {:?}",
+        entry.terminator,
+    );
+
+    let test_block_count = first_fn
+        .blocks
+        .iter()
+        .filter(|b| b.label.starts_with("match_test_"))
+        .count();
+    assert_eq!(
+        test_block_count, 0,
+        "struct destructure as the first / only arm should not mint any extra test blocks",
     );
 }
