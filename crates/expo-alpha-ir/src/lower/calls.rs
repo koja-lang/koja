@@ -8,20 +8,25 @@ use expo_alpha_typecheck::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry,
 };
 use expo_ast::ast::{Arg, Expr, ExprKind};
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{
+    AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
+};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::package::resolved_type_to_ir_type;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
+use crate::local::IRLocalId;
 use crate::mangling::{mangled_function_name, mangled_type_name};
 use crate::types::{IRType, ValueId};
 
 /// Lower a `ExprKind::Call`. Seal guarantees the callee is a bare
-/// `Ident` resolving to `Global(id)`; anything else panics. Generic
-/// callees use the typecheck-stamped `type_args` to mangle the call
-/// symbol and record a function instantiation for the worklist.
+/// `Ident`; the inner [`Resolution`] dispatches: `Global(id)` lowers
+/// to a direct [`IRInstruction::Call`] (with mangling for generic
+/// callees), `Local(local_id)` lowers to an indirect
+/// [`IRInstruction::CallClosure`] through the local's
+/// `IRType::Function` slot.
 pub(super) fn lower_call(
     callee: &Expr,
     args: &[Arg],
@@ -37,6 +42,17 @@ pub(super) fn lower_call(
             callee.kind,
         );
     };
+    if let Resolution::Local(local_id) = resolution {
+        return lower_local_closure_call(
+            *local_id,
+            &callee.resolution,
+            args,
+            ctx,
+            block,
+            registry,
+            output,
+        );
+    }
     let Resolution::Global(id) = resolution else {
         panic!("alpha IR lower: callee `{name}` has Unresolved resolution after typecheck seal",);
     };
@@ -77,6 +93,77 @@ pub(super) fn lower_call(
         prepend: None,
     };
     emit_call(site, ctx, block, registry, output)
+}
+
+/// Lower a `Resolution::Local` callee — `f(args)` where `f` is a
+/// closure-typed local slot. Reads the slot through the normal
+/// local-or-capture path ([`super::expr::lower_local_read`] is the
+/// equivalent path; here we inline because we already hold the
+/// slot's resolved type), lowers each arg in sequence, then emits
+/// [`IRInstruction::CallClosure`] dispatching through the loaded
+/// fat pointer.
+fn lower_local_closure_call(
+    local_id: LocalId,
+    callee_ty: &ResolvedType,
+    args: &[Arg],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = callee_ty else {
+        panic!(
+            "alpha IR lower: local closure call callee resolved to non-function type \
+             ({callee_ty:?}) — typecheck seal violation",
+        );
+    };
+    let callee_ir_type = resolved_type_to_ir_type(callee_ty, registry, &mut output.instantiations);
+    let return_ty = resolved_type_to_ir_type(ret, registry, &mut output.instantiations);
+
+    let ir_local = IRLocalId::from_local_id(local_id);
+    let callee_value = if let Some(capture_index) = ctx.closures().capture_index(local_id) {
+        let dest = ctx.fresh_value(callee_ir_type.clone());
+        ctx.cfg.append(
+            block,
+            IRInstruction::LoadCapture {
+                capture_index,
+                dest,
+                ty: callee_ir_type.clone(),
+            },
+        );
+        dest
+    } else {
+        let dest = ctx.fresh_value(callee_ir_type.clone());
+        ctx.cfg.append(
+            block,
+            IRInstruction::LocalRead {
+                dest,
+                local: ir_local,
+                ty: callee_ir_type.clone(),
+            },
+        );
+        dest
+    };
+
+    let mut lowered_args = Vec::with_capacity(args.len());
+    let mut current = block;
+    for arg in args {
+        let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
+        lowered_args.push(value);
+        current = next;
+    }
+
+    let dest = ctx.fresh_value(return_ty.clone());
+    ctx.cfg.append(
+        current,
+        IRInstruction::CallClosure {
+            args: lowered_args,
+            callee: callee_value,
+            dest,
+            result_ty: return_ty,
+        },
+    );
+    Ok((dest, current))
 }
 
 /// Lower `ExprKind::MethodCall`. Static dispatch (`Type.method(...)`)
@@ -169,7 +256,10 @@ pub(super) fn lower_method_call(
 fn receiver_type_args(receiver: &Expr, dispatch: Dispatch) -> Vec<ResolvedType> {
     match dispatch {
         Dispatch::Static => Vec::new(),
-        Dispatch::Instance => receiver.resolution.type_args.clone(),
+        Dispatch::Instance => match &receiver.resolution {
+            ResolvedType::Named { type_args, .. } => type_args.clone(),
+            _ => Vec::new(),
+        },
     }
 }
 
@@ -227,13 +317,17 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
         }
         Dispatch::Instance => {
             let resolution = &receiver.resolution;
-            let Resolution::Global(struct_id) = resolution.resolution else {
+            let ResolvedType::Named {
+                resolution: Resolution::Global(struct_id),
+                ..
+            } = resolution
+            else {
                 panic!(
                     "alpha IR lower: instance method receiver resolved to non-Global type \
                      ({resolution:?}) — typecheck seal must have rejected this",
                 );
             };
-            struct_id
+            *struct_id
         }
     }
 }

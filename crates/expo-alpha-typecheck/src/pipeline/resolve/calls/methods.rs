@@ -108,8 +108,12 @@ pub(super) fn classify_receiver(
         // Receiver already triggered its own diagnostic.
         return None;
     }
-    match receiver.resolution.resolution {
-        Resolution::Global(struct_id) => {
+    match &receiver.resolution {
+        ResolvedType::Named {
+            resolution: Resolution::Global(struct_id),
+            ..
+        } => {
+            let struct_id = *struct_id;
             let entry = resolver.registry.get(struct_id)?;
             if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
                 diagnostics.push(Diagnostic::error(
@@ -124,7 +128,13 @@ pub(super) fn classify_receiver(
             }
             Some(MethodReceiver::Instance { struct_id })
         }
-        Resolution::TypeParam { owner, index } => Some(MethodReceiver::Bounded { owner, index }),
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, index },
+            ..
+        } => Some(MethodReceiver::Bounded {
+            owner: *owner,
+            index: *index,
+        }),
         _ => {
             diagnostics.push(Diagnostic::error(
                 "instance method receiver must have a struct or enum type".to_string(),
@@ -170,11 +180,12 @@ pub(super) fn infer_method_call_type_args(
     } = target;
 
     let mut receiver_subst: Vec<Option<ResolvedType>> = vec![None; receiver.type_params.len()];
-    for (slot, arg) in receiver_subst
-        .iter_mut()
-        .zip(receiver_type.type_args.iter())
-    {
-        if arg.resolution.is_resolved() {
+    let receiver_args: &[ResolvedType] = match receiver_type {
+        ResolvedType::Named { type_args, .. } => type_args,
+        _ => &[],
+    };
+    for (slot, arg) in receiver_subst.iter_mut().zip(receiver_args.iter()) {
+        if arg.is_resolved() {
             *slot = Some(arg.clone());
         }
     }

@@ -21,7 +21,7 @@ use crate::ast::{
     Literal, MatchArm, Param, PassMode, Pattern, ProtocolDecl, ProtocolMethod, Statement,
     StringPart, StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
 };
-use crate::identifier::{Resolution, ResolvedType};
+use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
 use crate::span::Span;
 
 /// Render `file` as a compact indented tree suitable for `--emit-ast`
@@ -720,8 +720,9 @@ impl<'a> Printer<'a> {
             ClosureParam::Name {
                 mode,
                 name,
-                type_expr,
                 span,
+                type_expr,
+                ..
             } => {
                 let mut header = format!("Name {name}");
                 if let Some(ty) = type_expr {
@@ -946,29 +947,46 @@ fn expr_header(expr: &Expr) -> String {
     if let Some(ty) = &expr.resolved_type {
         let _ = write!(out, " : {}", ty.display());
     }
-    if expr.resolution.resolution != Resolution::Unresolved || !expr.resolution.type_args.is_empty()
-    {
+    if !matches!(expr.resolution, ResolvedType::Unresolved) {
         let _ = write!(out, " ~> {}", format_resolved_type(&expr.resolution));
     }
     out
 }
 
 /// Compact rendering of a [`ResolvedType`] for `--emit-ast` output.
-/// Leaves show the head `<id>`; generics show `<id><arg, ...>`
-/// recursively. Unresolved heads render as `?` so partial resolution
-/// states are visible during development.
+/// `Named` leaves show the head `<id>`; generics show `<id><arg, ...>`
+/// recursively. Anonymous function types render as
+/// `fn (T, U) -> R`. Unresolved heads render as `?` so partial
+/// resolution states are visible during development.
 fn format_resolved_type(ty: &ResolvedType) -> String {
-    let head = match ty.resolution {
-        Resolution::Global(id) => id.to_string(),
-        Resolution::Local(local_id) => format!("local {local_id}"),
-        Resolution::TypeParam { owner, index } => format!("typeparam {owner}#{index}"),
-        Resolution::Unresolved => String::from("?"),
-    };
-    if ty.type_args.is_empty() {
-        head
-    } else {
-        let args: Vec<String> = ty.type_args.iter().map(format_resolved_type).collect();
-        format!("{head}<{}>", args.join(", "))
+    match ty {
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            let rendered_params: Vec<String> =
+                params.iter().map(|p| format_resolved_type(&p.ty)).collect();
+            format!(
+                "fn ({}) -> {}",
+                rendered_params.join(", "),
+                format_resolved_type(ret),
+            )
+        }
+        ResolvedType::Named {
+            resolution,
+            type_args,
+        } => {
+            let head = match resolution {
+                Resolution::Global(id) => id.to_string(),
+                Resolution::Local(local_id) => format!("local {local_id}"),
+                Resolution::TypeParam { owner, index } => format!("typeparam {owner}#{index}"),
+                Resolution::Unresolved => String::from("?"),
+            };
+            if type_args.is_empty() {
+                head
+            } else {
+                let args: Vec<String> = type_args.iter().map(format_resolved_type).collect();
+                format!("{head}<{}>", args.join(", "))
+            }
+        }
+        ResolvedType::Unresolved => String::from("?"),
     }
 }
 

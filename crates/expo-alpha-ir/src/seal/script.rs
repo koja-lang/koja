@@ -10,6 +10,7 @@ use crate::function::{IRBasicBlock, IRBlockId, IRInstruction};
 use crate::script::IRScript;
 use crate::types::{IRType, ValueId};
 
+use super::closures::seal_closure_ops;
 use super::enums::seal_enum_ops;
 use super::function::{collect_block_ids, seal_block, seal_package, seal_ssa};
 use super::structs::{package_instructions, script_body_instructions, seal_struct_ops};
@@ -36,7 +37,41 @@ pub(crate) fn seal_script(script: &IRScript) {
     seal_script_calls(script);
     seal_script_struct_ops(script);
     seal_script_enum_ops(script);
+    seal_script_closure_ops(script);
     seal_script_loadconst_pool(script);
+    seal_script_no_loadcapture(script);
+}
+
+/// Mirror of [`super::program::seal_program_closure_ops`] for the
+/// script shape: validates every `MakeClosure` against the
+/// assembled `IRScript::function` lookup. Walks the script body
+/// itself plus every package fragment.
+fn seal_script_closure_ops(script: &IRScript) {
+    let lookup = |mangled: &str| script.function(mangled);
+    seal_closure_ops(script_body_instructions(&script.blocks), &lookup);
+    for pkg in &script.packages {
+        seal_closure_ops(package_instructions(pkg), &lookup);
+    }
+}
+
+/// `LoadCapture` is only well-defined inside a closure body. The
+/// implicit script-body function isn't a closure, so any
+/// `LoadCapture` directly in `script.blocks` is a lowering bug.
+/// Per-package closure-body checks live in
+/// [`super::closures::seal_closure_decls`] (called from
+/// [`super::function::seal_package`]).
+fn seal_script_no_loadcapture(script: &IRScript) {
+    for block in &script.blocks {
+        for inst in &block.instructions {
+            if let IRInstruction::LoadCapture { capture_index, .. } = inst {
+                seal_panic(&format!(
+                    "script body block {} emits LoadCapture #{capture_index} but the script \
+                     root is not a closure body",
+                    block.id,
+                ));
+            }
+        }
+    }
 }
 
 /// Mirror of `super::function::collect_block_params` for the

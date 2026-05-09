@@ -8,7 +8,7 @@
 
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{ExprKind, Item, Statement};
-use expo_ast::identifier::{Identifier, Resolution};
+use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_parser::ParseMode;
 
 mod common;
@@ -52,8 +52,8 @@ fn script_body_resolves_top_level_expression() {
         "top-level `2 + 2` carried unresolved type after resolve",
     );
     assert_eq!(
-        expr.resolution.resolution,
-        Resolution::Global(int_id),
+        expr.resolution,
+        ResolvedType::leaf(Resolution::Global(int_id)),
         "top-level `2 + 2` did not resolve to Global.Int",
     );
 }
@@ -83,8 +83,8 @@ fn script_body_with_helper_fn_resolves_call_through_packages() {
         panic!("expected Statement::Expr, got {:?}", body[0]);
     };
     assert_eq!(
-        expr.resolution.resolution,
-        Resolution::Global(int_id),
+        expr.resolution,
+        ResolvedType::leaf(Resolution::Global(int_id)),
         "`helper() + 1` did not resolve to Global.Int",
     );
 

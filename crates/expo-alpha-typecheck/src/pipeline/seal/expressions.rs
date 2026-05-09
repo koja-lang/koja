@@ -5,7 +5,7 @@
 //! first-class values yet, so the outer callee `Expr.resolution`
 //! stays `Unresolved` while the inner `Ident` carries `Global(_)`.
 
-use expo_ast::ast::{EnumConstructionData, Expr, ExprKind, StringPart};
+use expo_ast::ast::{ClosureParam, EnumConstructionData, Expr, ExprKind, StringPart};
 use expo_ast::identifier::Resolution;
 use expo_ast::labels::expr_kind_label;
 
@@ -46,6 +46,16 @@ pub(super) fn seal_expr(expr: &Expr) {
             for ty in type_args {
                 seal_no_type_param(ty, expr.span);
             }
+        }
+        ExprKind::Closure { params, body, .. } => {
+            seal_closure_params(params, expr);
+            for stmt in body {
+                seal_statement(stmt);
+            }
+        }
+        ExprKind::ShortClosure { params, body } => {
+            seal_closure_params(params, expr);
+            seal_expr(body);
         }
         ExprKind::EnumConstruction { data, .. } => match data {
             EnumConstructionData::Struct(fields) => {
@@ -189,6 +199,28 @@ pub(super) fn seal_expr(expr: &Expr) {
             ),
             expr.span,
         ),
+    }
+}
+
+/// Each closure `Name` param must have its `local_id` stamped by
+/// resolve so IR lower can find the binding without re-walking. The
+/// AST type-expr annotation, if any, is enforced via the closure's
+/// outer `Expr.resolution` (an `AnonymousKind::Function` with each
+/// param's resolved type) — already checked by the top-level
+/// `seal_no_type_param` walk.
+fn seal_closure_params(params: &[ClosureParam], outer: &Expr) {
+    for param in params {
+        if let ClosureParam::Name {
+            local_id: None,
+            name,
+            ..
+        } = param
+        {
+            seal_panic(
+                &format!("closure parameter `{name}` missing local_id after typecheck"),
+                outer.span,
+            );
+        }
     }
 }
 

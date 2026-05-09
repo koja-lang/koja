@@ -270,6 +270,13 @@ fn emit_print_call<'ctx>(
                     .to_string(),
             ));
         }
+        IRType::Function { .. } => {
+            return Err(LlvmError::Codegen(
+                "alpha LLVM does not yet auto-print closure values; bind the closure to a \
+                 local before the trailing expression"
+                    .to_string(),
+            ));
+        }
     };
     let printer = declare_runtime_printer(ctx, printer_symbol, argument_type);
     ctx.builder

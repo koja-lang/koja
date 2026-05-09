@@ -34,7 +34,7 @@ mod patterns;
 mod statements;
 
 use expo_ast::ast::{Constant, File, Function, ImplMember, Item, TypeExpr};
-use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use expressions::seal_expr;
@@ -184,17 +184,29 @@ fn seal_function(function: &Function) {
 /// expected for monomorphizable construction sites — so this only
 /// rejects the `TypeParam` head.
 pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
-    if let Resolution::TypeParam { owner, index } = ty.resolution {
-        seal_panic(
+    match ty {
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, index },
+            ..
+        } => seal_panic(
             &format!(
                 "ResolvedType leaf carries TypeParam {{ owner: {owner}, index: {index} }} \
                  outside a generic-decl body",
             ),
             span,
-        );
-    }
-    for arg in &ty.type_args {
-        seal_no_type_param(arg, span);
+        ),
+        ResolvedType::Named { type_args, .. } => {
+            for arg in type_args {
+                seal_no_type_param(arg, span);
+            }
+        }
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            for param in params {
+                seal_no_type_param(&param.ty, span);
+            }
+            seal_no_type_param(ret, span);
+        }
+        ResolvedType::Unresolved => {}
     }
 }
 

@@ -10,7 +10,7 @@
 //! through to a concrete impl.
 
 use expo_alpha_typecheck::GlobalKind;
-use expo_ast::identifier::{Identifier, Resolution};
+use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
 mod common;
@@ -50,7 +50,11 @@ fn self_in_protocol_return_resolves_to_protocol_slot_zero_typeparam() {
         .iter()
         .find(|m| m.name == "make")
         .expect("make method lifted");
-    let Resolution::TypeParam { owner, index } = make.return_type.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::TypeParam { owner, index },
+        ..
+    } = make.return_type
+    else {
         panic!(
             "expected `Self` to resolve to TypeParam, got {:?}",
             make.return_type
@@ -85,10 +89,14 @@ fn self_in_protocol_param_resolves_to_protocol_slot_zero_typeparam() {
         .expect("equals method lifted");
     assert_eq!(equals.non_self_params.len(), 1);
     let other_ty = &equals.non_self_params[0].ty;
-    let Resolution::TypeParam { owner, index } = other_ty.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::TypeParam { owner, index },
+        ..
+    } = other_ty
+    else {
         panic!("expected `other: Self` -> TypeParam, got {:?}", other_ty);
     };
-    assert_eq!(owner, equal_id);
+    assert_eq!(*owner, equal_id);
     assert_eq!(index.as_u32(), 0);
 }
 
@@ -123,7 +131,11 @@ fn self_in_inherent_method_return_resolves_to_enclosing_struct() {
     let GlobalKind::Function(Some(signature)) = &origin_entry.kind else {
         panic!("Point.origin should be a lifted function");
     };
-    let Resolution::Global(resolved_id) = signature.return_type.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(resolved_id),
+        ..
+    } = signature.return_type
+    else {
         panic!(
             "expected `Self` to resolve to Global(Point), got {:?}",
             signature.return_type
@@ -170,16 +182,15 @@ fn self_in_trait_impl_method_resolves_to_concrete_target() {
     let GlobalKind::Function(Some(signature)) = &entry.kind else {
         panic!("User.equals should be a lifted function");
     };
+    let user_named = ResolvedType::leaf(Resolution::Global(user_id));
     // self
     assert_eq!(
-        signature.params[0].ty.resolution,
-        Resolution::Global(user_id),
+        signature.params[0].ty, user_named,
         "trait-impl method's self type should resolve to User",
     );
     // other: Self
     assert_eq!(
-        signature.params[1].ty.resolution,
-        Resolution::Global(user_id),
+        signature.params[1].ty, user_named,
         "trait-impl method's `other: Self` should resolve to User \
          (Self in the impl context, not the protocol's TypeParam)",
     );
@@ -246,18 +257,29 @@ fn self_in_generic_struct_method_carries_struct_type_args() {
         panic!("Bag.snapshot should be a lifted function");
     };
     let return_ty = &signature.return_type;
-    assert_eq!(return_ty.resolution, Resolution::Global(bag_id));
+    let ResolvedType::Named {
+        resolution: Resolution::Global(head_id),
+        type_args,
+    } = return_ty
+    else {
+        panic!("expected `Self` to resolve to Named(Global(Bag)), got {return_ty:?}");
+    };
+    assert_eq!(*head_id, bag_id);
     assert_eq!(
-        return_ty.type_args.len(),
+        type_args.len(),
         1,
         "`Self` in `Bag<T>.snapshot` must carry one type-arg",
     );
-    let Resolution::TypeParam { owner, index } = return_ty.type_args[0].resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::TypeParam { owner, index },
+        ..
+    } = &type_args[0]
+    else {
         panic!(
             "expected the type-arg to be a TypeParam(Bag, 0), got {:?}",
-            return_ty.type_args[0]
+            type_args[0]
         );
     };
-    assert_eq!(owner, bag_id);
+    assert_eq!(*owner, bag_id);
     assert_eq!(index.as_u32(), 0);
 }

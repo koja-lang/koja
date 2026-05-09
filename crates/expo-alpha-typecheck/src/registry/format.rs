@@ -13,7 +13,7 @@
 
 use std::fmt::Write as _;
 
-use expo_ast::identifier::{Resolution, ResolvedType};
+use expo_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 
 use super::{
     ConstantDefinition, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,
@@ -188,27 +188,45 @@ fn format_signature(sig: &FunctionSignature, registry: &GlobalRegistry) -> Strin
 }
 
 fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    let head = match ty.resolution {
-        Resolution::Global(id) => match registry.get(id) {
-            Some(entry) => entry.identifier.qualified_name(),
-            None => format!("<id {id}>"),
-        },
-        Resolution::Local(local_id) => format!("<local {local_id}>"),
-        Resolution::TypeParam { owner, index } => registry
-            .type_param_name(owner, index)
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-        Resolution::Unresolved => "<unresolved>".to_string(),
-    };
-    if ty.type_args.is_empty() {
-        head
-    } else {
-        let args = ty
-            .type_args
-            .iter()
-            .map(|arg| format_resolved(arg, registry))
-            .collect::<Vec<_>>()
-            .join(", ");
-        format!("{head}<{args}>")
+    match ty {
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            let rendered_params = params
+                .iter()
+                .map(|p| format_resolved(&p.ty, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "fn ({rendered_params}) -> {}",
+                format_resolved(ret, registry),
+            )
+        }
+        ResolvedType::Named {
+            resolution,
+            type_args,
+        } => {
+            let head = match resolution {
+                Resolution::Global(id) => match registry.get(*id) {
+                    Some(entry) => entry.identifier.qualified_name(),
+                    None => format!("<id {id}>"),
+                },
+                Resolution::Local(local_id) => format!("<local {local_id}>"),
+                Resolution::TypeParam { owner, index } => registry
+                    .type_param_name(*owner, *index)
+                    .map(str::to_string)
+                    .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
+                Resolution::Unresolved => "<unresolved>".to_string(),
+            };
+            if type_args.is_empty() {
+                head
+            } else {
+                let args = type_args
+                    .iter()
+                    .map(|arg| format_resolved(arg, registry))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("{head}<{args}>")
+            }
+        }
+        ResolvedType::Unresolved => "<unresolved>".to_string(),
     }
 }

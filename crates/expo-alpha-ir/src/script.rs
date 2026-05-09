@@ -24,9 +24,11 @@
 
 use expo_alpha_typecheck::CheckedProgram;
 
+use expo_ast::identifier::Identifier;
+
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
-use crate::function::{IRBasicBlock, IRFunction};
+use crate::function::{IRBasicBlock, IRFunction, IRSymbol};
 use crate::generics;
 use crate::lower::{LowerOutput, lower_body_to_blocks, lower_package};
 use crate::package::IRPackage;
@@ -140,8 +142,10 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     }
 
     let body = locate_script_body(checked);
+    let body_package = locate_script_body_package(checked);
+    let enclosing = body_package.map(synthesize_script_body_symbol);
 
-    let lowered = lower_body_to_blocks(body, &checked.registry, &mut output);
+    let lowered = lower_body_to_blocks(body, enclosing, &checked.registry, &mut output);
 
     if !output.diagnostics.is_empty() {
         return Err(LowerError::Diagnostics(output.diagnostics));
@@ -153,6 +157,28 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
              lower_body_to_blocks contract violation",
         )
     });
+
+    let synthesized = std::mem::take(&mut output.synthesized_functions);
+    if !synthesized.is_empty() {
+        let target_package = body_package.unwrap_or_else(|| {
+            panic!(
+                "alpha IR lower_script: script body produced synthesized closure(s) but no \
+                 package owns the body — lower-pass invariant violation",
+            )
+        });
+        let target = packages
+            .iter_mut()
+            .find(|pkg| pkg.package == target_package)
+            .unwrap_or_else(|| {
+                panic!(
+                    "alpha IR lower_script: package `{target_package}` owns the script body \
+                     but is missing from the lowered package list",
+                )
+            });
+        for function in synthesized {
+            target.functions.insert(function.symbol.clone(), function);
+        }
+    }
 
     let initial = std::mem::take(&mut output.instantiations);
     generics::instantiate(
@@ -200,4 +226,27 @@ fn locate_script_body(checked: &CheckedProgram) -> &[expo_ast::ast::Statement] {
         }
     }
     body.unwrap_or(&[])
+}
+
+/// Package name of the (unique) file owning the script body. `None`
+/// for an items-only script (every REPL session before the user
+/// types a top-level expression). Mirrors [`locate_script_body`]'s
+/// scan but returns the package handle so synthesized closures can
+/// land alongside the body's own emitted IR.
+fn locate_script_body_package(checked: &CheckedProgram) -> Option<&str> {
+    for pkg in &checked.packages {
+        for file in &pkg.files {
+            if file.body.is_some() {
+                return Some(pkg.package.as_str());
+            }
+        }
+    }
+    None
+}
+
+/// Synthesize the enclosing-symbol root for closures defined inside
+/// the script body. Yields `<package>.__script_body`; child closures
+/// then derive `<package>.__script_body__closure<N>` off it.
+fn synthesize_script_body_symbol(package: &str) -> IRSymbol {
+    IRSymbol::from_identifier(&Identifier::new(package, vec!["__script_body".to_string()]))
 }

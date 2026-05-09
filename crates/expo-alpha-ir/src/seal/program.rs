@@ -6,6 +6,7 @@
 use crate::IRProgram;
 use crate::function::IRInstruction;
 
+use super::closures::seal_closure_ops;
 use super::enums::seal_enum_ops;
 use super::function::seal_package;
 use super::seal_panic;
@@ -24,7 +25,21 @@ pub(crate) fn seal_program(program: &IRProgram) {
     seal_program_calls(program);
     seal_program_struct_ops(program);
     seal_program_enum_ops(program);
+    seal_program_closure_ops(program);
     seal_program_loadconst_pool(program);
+}
+
+/// Cross-package closure check: every `MakeClosure::body` must
+/// resolve to a registered `FunctionKind::Closure` whose
+/// `env_layout` and exposed signature line up with the
+/// instruction's `captures` arity and `IRType::Function` value
+/// type. See [`super::closures::seal_closure_ops`] for the full
+/// rule list.
+fn seal_program_closure_ops(program: &IRProgram) {
+    let lookup = |mangled: &str| program.function(mangled);
+    for pkg in &program.packages {
+        seal_closure_ops(package_instructions(pkg), &lookup);
+    }
 }
 
 /// Cross-package enum check: every `EnumConstruct::ty` must name an

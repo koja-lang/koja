@@ -52,6 +52,7 @@ mod arms;
 mod binary_literal;
 mod body;
 mod calls;
+mod closures;
 mod constants;
 mod control_flow;
 mod ctx;

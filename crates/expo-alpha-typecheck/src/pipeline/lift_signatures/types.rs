@@ -3,7 +3,7 @@
 
 use expo_ast::ast::{Diagnostic, TypeExpr};
 use expo_ast::identifier::{
-    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+    AnonymousKind, FnParam, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
 use expo_ast::span::Span;
 
@@ -66,12 +66,25 @@ pub(crate) fn resolve_type_expr(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     match type_expr {
-        TypeExpr::Function { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support function-typed annotations".to_string(),
-                *span,
-            ));
-            ResolvedType::unresolved()
+        TypeExpr::Function {
+            params,
+            param_modes,
+            return_type,
+            ..
+        } => {
+            let resolved_params = params
+                .iter()
+                .zip(param_modes.iter().copied())
+                .map(|(param_ty, mode)| FnParam {
+                    mode,
+                    ty: resolve_type_expr(param_ty, scope, package, registry, diagnostics),
+                })
+                .collect();
+            let ret = resolve_type_expr(return_type, scope, package, registry, diagnostics);
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: resolved_params,
+                ret: Box::new(ret),
+            })
         }
         TypeExpr::Generic { path, args, span } => {
             resolve_generic(path, args, *span, scope, package, registry, diagnostics)
@@ -153,7 +166,7 @@ pub(crate) fn concrete_self_type(
             })
         })
         .collect();
-    ResolvedType {
+    ResolvedType::Named {
         resolution: Resolution::Global(owner),
         type_args,
     }
@@ -224,7 +237,7 @@ fn resolve_generic(
         .iter()
         .map(|arg| resolve_type_expr(arg, scope, package, registry, diagnostics))
         .collect();
-    ResolvedType {
+    ResolvedType::Named {
         resolution: head,
         type_args: resolved_args,
     }
@@ -355,16 +368,40 @@ pub(super) fn dispatch_label(dispatch: Dispatch) -> &'static str {
 }
 
 pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    match ty.resolution {
-        Resolution::Global(id) => match registry.get(id) {
+    match ty {
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            let rendered_params = params
+                .iter()
+                .map(|p| render_resolved(&p.ty, registry))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!(
+                "fn ({rendered_params}) -> {}",
+                render_resolved(ret, registry),
+            )
+        }
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => match registry.get(*id) {
             Some(entry) => entry.identifier.qualified_name(),
             None => "<unknown>".to_string(),
         },
-        Resolution::Local(_) => "<local>".to_string(),
-        Resolution::TypeParam { owner, index } => registry
-            .type_param_name(owner, index)
+        ResolvedType::Named {
+            resolution: Resolution::Local(_),
+            ..
+        } => "<local>".to_string(),
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, index },
+            ..
+        } => registry
+            .type_param_name(*owner, *index)
             .map(str::to_string)
             .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-        Resolution::Unresolved => "<unresolved>".to_string(),
+        ResolvedType::Named {
+            resolution: Resolution::Unresolved,
+            ..
+        }
+        | ResolvedType::Unresolved => "<unresolved>".to_string(),
     }
 }

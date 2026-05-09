@@ -1,5 +1,7 @@
 use std::fmt;
 
+use crate::ast::PassMode;
+
 /// Which package a type belongs to. Used by [`TypeIdentifier`] to distinguish
 /// types with the same name from different packages.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -221,47 +223,99 @@ impl Resolution {
 }
 
 /// Northstar-aligned type annotation attached to every `Expr` by alpha
-/// typecheck. Pairs a head [`Resolution`] (which registry entry this
-/// type refers to) with its type arguments (themselves `ResolvedType`s,
-/// so generics nest recursively).
+/// typecheck.
+///
+/// Split along the named/anonymous axis:
+///
+/// - [`Self::Named`] — types with a source-given name. Identity is the
+///   head [`Resolution`] (which registry entry this refers to);
+///   `type_args` are the generic arguments at this use site
+///   (themselves `ResolvedType`s, so generics nest).
+/// - [`Self::Anonymous`] — structural types with no source name.
+///   Identity is by shape. Today: function types only; future: records,
+///   tuples.
+/// - [`Self::Unresolved`] — in-flight placeholder before resolve runs.
+///   `Default` returns this.
 ///
 /// Shape examples:
-/// - `Int` -> `{ Global(int_id), [] }`
-/// - `List<Int>` -> `{ Global(list_id), [{ Global(int_id), [] }] }`
-/// - Partially inferred `List<?>` -> `{ Global(list_id), [Unresolved] }`
-///
-/// `Default` returns a fully-unresolved leaf so freshly-constructed
-/// `Expr`s carry a safe placeholder until resolve runs.
+/// - `Int` -> `Named { Global(int_id), [] }`
+/// - `List<Int>` -> `Named { Global(list_id), [Named { Global(int_id), [] }] }`
+/// - `fn (Int) -> Bool` -> `Anonymous(Function { [Int], Bool })`
 #[derive(Clone, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct ResolvedType {
-    pub resolution: Resolution,
-    pub type_args: Vec<ResolvedType>,
+pub enum ResolvedType {
+    /// Anonymous structural type. Identity by shape, never the target
+    /// of a trait impl, no canonical owner.
+    Anonymous(AnonymousKind),
+
+    /// Named type with a head `resolution` and zero or more type
+    /// arguments.
+    Named {
+        resolution: Resolution,
+        type_args: Vec<ResolvedType>,
+    },
+
+    /// In-flight placeholder before resolve runs.
+    #[default]
+    Unresolved,
 }
 
 impl ResolvedType {
-    /// Fully-unresolved leaf: head is [`Resolution::Unresolved`] and no
-    /// arguments. Equivalent to [`ResolvedType::default`], exposed as a
-    /// named constructor for intent at call sites.
+    /// Fully-unresolved placeholder. Equivalent to
+    /// [`ResolvedType::default`]; exposed as a named constructor for
+    /// intent at call sites.
     pub fn unresolved() -> Self {
-        Self::default()
+        Self::Unresolved
     }
 
-    /// Leaf node: carries a head `resolution` and no type arguments.
-    /// Convenience for primitives and other arity-0 types.
+    /// Leaf [`Self::Named`] node: a head `resolution` and no type
+    /// arguments. Convenience for primitives and other arity-0 types.
     pub fn leaf(resolution: Resolution) -> Self {
-        Self {
+        Self::Named {
             resolution,
             type_args: Vec::new(),
         }
     }
 
-    /// Returns `true` iff the head is resolved (either `Global(_)` or
-    /// `Local(_)`) **and** every nested type argument is also fully
-    /// resolved. Seal uses this as its whole-tree invariant — a single
-    /// `Unresolved` hole anywhere in the tree fails the check.
+    /// True iff every leaf is resolved. Seal uses this as its
+    /// whole-tree invariant — a single [`Self::Unresolved`] hole or a
+    /// [`Resolution::Unresolved`] head anywhere in the tree fails the
+    /// check.
     pub fn is_resolved(&self) -> bool {
-        self.resolution.is_resolved() && self.type_args.iter().all(ResolvedType::is_resolved)
+        match self {
+            Self::Anonymous(AnonymousKind::Function { params, ret }) => {
+                params.iter().all(|p| p.ty.is_resolved()) && ret.is_resolved()
+            }
+            Self::Named {
+                resolution,
+                type_args,
+            } => resolution.is_resolved() && type_args.iter().all(Self::is_resolved),
+            Self::Unresolved => false,
+        }
     }
+}
+
+/// Kind tag for [`ResolvedType::Anonymous`]. Each variant is an
+/// anonymous type family with its own structural-equivalence rule.
+///
+/// Today: only [`Self::Function`]. Future: `Record { fields }` and
+/// `Tuple { elements }`.
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub enum AnonymousKind {
+    /// `fn (T, U) -> R` — structural function type with per-parameter
+    /// pass mode. Equates positionally on params (mode + type) and
+    /// covariantly on return.
+    Function {
+        params: Vec<FnParam>,
+        ret: Box<ResolvedType>,
+    },
+}
+
+/// A single parameter of an [`AnonymousKind::Function`]: a type plus
+/// the surface pass mode (`move` / `Borrow` / `Copy`).
+#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+pub struct FnParam {
+    pub mode: PassMode,
+    pub ty: ResolvedType,
 }
 
 /// A canonical, package-qualified identifier for a user-defined type.

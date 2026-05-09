@@ -117,7 +117,7 @@ pub(super) fn resolve_struct_construction(
         .into_iter()
         .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
         .collect();
-    ResolvedType {
+    ResolvedType::Named {
         resolution: Resolution::Global(struct_id),
         type_args,
     }
@@ -278,9 +278,14 @@ pub(super) fn resolve_field_access(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(receiver, resolver, diagnostics);
-    let Resolution::Global(struct_id) = receiver.resolution.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(struct_id),
+        type_args: receiver_args,
+    } = &receiver.resolution
+    else {
         return ResolvedType::unresolved();
     };
+    let struct_id = *struct_id;
     let Some(entry) = resolver.registry.get(struct_id) else {
         return ResolvedType::unresolved();
     };
@@ -309,13 +314,7 @@ pub(super) fn resolve_field_access(
     // receivers (`self: Bag<TypeParam(Bag, 0)>` inside an inherent
     // method on `struct Bag<T>`) the field type's `TypeParam`
     // round-trips back to itself.
-    let subst: Vec<Option<ResolvedType>> = receiver
-        .resolution
-        .type_args
-        .iter()
-        .cloned()
-        .map(Some)
-        .collect();
+    let subst: Vec<Option<ResolvedType>> = receiver_args.iter().cloned().map(Some).collect();
     substitute_resolved_type(&declared.ty, &subst, struct_id)
 }
 

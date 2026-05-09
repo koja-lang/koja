@@ -37,15 +37,23 @@ impl Interpreter {
 
 /// Per-call execution frame. SSA values and local-slot storage live
 /// in separate maps so slot identity never collides with SSA
-/// identity even though both keys happen to be `u32`.
+/// identity even though both keys happen to be `u32`. `captures`
+/// holds the closure environment array (empty for non-closure
+/// frames); `LoadCapture` indexes into it directly.
 struct Frame {
+    captures: Vec<Value>,
     values: BTreeMap<ValueId, Value>,
     locals: BTreeMap<IRLocalId, Value>,
 }
 
 impl Frame {
     fn new() -> Self {
+        Self::with_captures(Vec::new())
+    }
+
+    fn with_captures(captures: Vec<Value>) -> Self {
         Self {
+            captures,
             values: BTreeMap::new(),
             locals: BTreeMap::new(),
         }
@@ -121,6 +129,11 @@ fn execute_function<R: CallResolver>(
                 symbol: function.symbol.mangled().to_string(),
             });
         }
+        FunctionKind::Closure { .. } => panic!(
+            "interpreter: direct `Call` to closure body `{}` — must dispatch via \
+             `CallClosure` (seal invariant violation)",
+            function.symbol,
+        ),
         FunctionKind::Regular => {}
     }
     let mut frame = Frame::new();
@@ -128,6 +141,47 @@ fn execute_function<R: CallResolver>(
         frame.values.insert(param.id, value);
     }
 
+    execute_blocks(&function.blocks, &mut frame, resolver)
+}
+
+/// Dispatch a [`FunctionKind::Closure`] body with its captured
+/// environment. Mirrors [`execute_function`] for `Regular` bodies,
+/// but seeds `frame.captures` so [`IRInstruction::LoadCapture`] can
+/// index into the env array. `captures.len()` matches the body's
+/// `env_layout` (seal invariant).
+fn execute_closure_function<R: CallResolver>(
+    function: &IRFunction,
+    args: Vec<Value>,
+    captures: Vec<Value>,
+    resolver: &R,
+) -> Result<Value, RuntimeError> {
+    debug_assert_eq!(
+        function.params.len(),
+        args.len(),
+        "arity mismatch calling closure body `{}`: {} params vs {} args",
+        function.symbol,
+        function.params.len(),
+        args.len(),
+    );
+    let env_layout = match &function.kind {
+        FunctionKind::Closure { env_layout } => env_layout,
+        other => panic!(
+            "interpreter: `execute_closure_function` on non-Closure kind {other:?} for `{}`",
+            function.symbol,
+        ),
+    };
+    debug_assert_eq!(
+        env_layout.len(),
+        captures.len(),
+        "env arity mismatch calling closure body `{}`: layout has {} entries vs {} captures",
+        function.symbol,
+        env_layout.len(),
+        captures.len(),
+    );
+    let mut frame = Frame::with_captures(captures);
+    for (param, value) in function.params.iter().zip(args.into_iter()) {
+        frame.values.insert(param.id, value);
+    }
     execute_blocks(&function.blocks, &mut frame, resolver)
 }
 
@@ -443,6 +497,70 @@ fn execute_instruction<R: CallResolver>(
             let operand_value = lookup(&frame.values, *operand)?;
             let result = apply_unary_op(*op, operand_value)?;
             frame.values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::CallClosure {
+            args,
+            callee,
+            dest,
+            result_ty: _,
+        } => {
+            let callee_value = lookup(&frame.values, *callee)?;
+            let Value::Closure { body, captures } = callee_value else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("CallClosure expects a Closure receiver; got {callee_value}"),
+                });
+            };
+            let mut arg_values = Vec::with_capacity(args.len());
+            for arg in args {
+                arg_values.push(lookup(&frame.values, *arg)?);
+            }
+            let body_fn = resolver.resolve(body.mangled()).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: closure body `{body}` missing from IR — \
+                     seal invariant violation",
+                )
+            });
+            let result = execute_closure_function(body_fn, arg_values, captures, resolver)?;
+            frame.values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::LoadCapture {
+            capture_index,
+            dest,
+            ty: _,
+        } => {
+            let value = frame
+                .captures
+                .get(*capture_index as usize)
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: LoadCapture index {capture_index} out of range \
+                         (env has {} entries) — seal invariant violation",
+                        frame.captures.len(),
+                    )
+                });
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
+        IRInstruction::MakeClosure {
+            body,
+            captures,
+            dest,
+            ty: _,
+        } => {
+            let mut env = Vec::with_capacity(captures.len());
+            for capture in captures {
+                env.push(lookup(&frame.values, *capture)?);
+            }
+            frame.values.insert(
+                *dest,
+                Value::Closure {
+                    body: body.clone(),
+                    captures: env,
+                },
+            );
             Ok(())
         }
     }

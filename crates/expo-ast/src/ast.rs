@@ -31,7 +31,7 @@ use crate::types::Type;
 ///   x * multiplier                             # multiplier captured as Copy
 /// end
 /// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum PassMode {
     /// Value is duplicated; the original stays live.
     Copy,
@@ -633,15 +633,18 @@ pub enum BinOp {
 /// A parameter in a closure expression.
 #[derive(Debug, Clone)]
 pub enum ClosureParam {
-    /// A named parameter with optional type: `x`, `x: Int`, `move x: Int`.
-    Name {
-        mode: PassMode,
-        name: String,
-        type_expr: Option<TypeExpr>,
-        span: Span,
-    },
     /// A destructuring parameter: `(a, b)`.
     Destructured { names: Vec<String>, span: Span },
+    /// A named parameter with optional type: `x`, `x: Int`, `move x: Int`.
+    /// `local_id` is `None` after parse; resolve stamps it so IR lower
+    /// can reach the same id without re-walking.
+    Name {
+        local_id: Option<LocalId>,
+        mode: PassMode,
+        name: String,
+        span: Span,
+        type_expr: Option<TypeExpr>,
+    },
     /// A wildcard parameter: `_`.
     Wildcard { span: Span },
 }

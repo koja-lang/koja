@@ -12,7 +12,9 @@ use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, Global
 use expo_ast::ast::{
     Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c, is_intrinsic,
 };
-use expo_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
+use expo_ast::identifier::{
+    AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
+};
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
@@ -112,6 +114,9 @@ pub(crate) fn lower_package(
                 _ => {}
             }
         }
+    }
+    for synthesized in output.synthesized_functions.drain(..) {
+        functions.insert(synthesized.symbol.clone(), synthesized);
     }
     IRPackage {
         constants,
@@ -237,6 +242,7 @@ pub(crate) fn lower_function_inner(
     }
 
     let mut ctx = FnLowerCtx::new();
+    ctx.closures_mut().set_enclosing_symbol(symbol.clone());
 
     if intrinsic {
         let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
@@ -428,13 +434,25 @@ pub(crate) fn resolved_type_to_ir_type(
     registry: &GlobalRegistry,
     instantiations: &mut Vec<Instantiation>,
 ) -> IRType {
-    match ty.resolution {
-        Resolution::Global(id) => global_to_ir_type(id, &ty.type_args, registry, instantiations),
-        Resolution::TypeParam { .. } | Resolution::Local(_) | Resolution::Unresolved => panic!(
+    match ty {
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => IRType::Function {
+            params: params
+                .iter()
+                .map(|p| resolved_type_to_ir_type(&p.ty, registry, instantiations))
+                .collect(),
+            ret: Box::new(resolved_type_to_ir_type(ret, registry, instantiations)),
+        },
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            type_args,
+        } => global_to_ir_type(*id, type_args, registry, instantiations),
+        ResolvedType::Named { resolution, .. } => panic!(
             "alpha IR lower: resolved_type_to_ir_type received a non-Global resolution \
-             ({:?}) — every Param must be substituted before lowering",
-            ty.resolution,
+             ({resolution:?}) — every Param must be substituted before lowering",
         ),
+        ResolvedType::Unresolved => {
+            panic!("alpha IR lower: resolved_type_to_ir_type received Unresolved — seal violation",)
+        }
     }
 }
 

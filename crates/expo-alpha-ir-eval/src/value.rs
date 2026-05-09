@@ -25,6 +25,16 @@ pub enum Value {
         bit_length: u64,
     },
     Bool(bool),
+    /// First-class closure value. `body` resolves through the
+    /// interpreter's call resolver to a `FunctionKind::Closure`
+    /// `IRFunction`; `captures` is the env array indexed by every
+    /// `IRInstruction::LoadCapture` inside the body. Captureless
+    /// closures (the fn-as-value adapter shape) carry an empty
+    /// captures vec.
+    Closure {
+        body: IRSymbol,
+        captures: Vec<Value>,
+    },
     Enum {
         name: String,
         payload: EnumPayload,
@@ -90,6 +100,20 @@ impl fmt::Display for Value {
             Value::Binary(bytes) => write_binary_bytes(f, bytes),
             Value::Bits { bytes, bit_length } => write_bits_bytes(f, bytes, *bit_length),
             Value::Bool(b) => write!(f, "{b}"),
+            Value::Closure { body, captures } => {
+                write!(f, "<closure {body}")?;
+                if !captures.is_empty() {
+                    write!(f, " env=[")?;
+                    for (index, capture) in captures.iter().enumerate() {
+                        if index > 0 {
+                            write!(f, ", ")?;
+                        }
+                        write!(f, "{capture}")?;
+                    }
+                    write!(f, "]")?;
+                }
+                write!(f, ">")
+            }
             Value::Enum {
                 symbol,
                 name,

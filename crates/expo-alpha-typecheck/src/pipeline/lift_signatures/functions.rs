@@ -184,10 +184,14 @@ fn validate_extern_c_signature(
 /// True when `ty` is one of the explicit-width numeric primitives,
 /// `Bool`, `Unit`, or `CPtr<T>` (any pointee). Mirrors v1's FFI gate.
 fn is_ffi_admissible_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    let Resolution::Global(id) = ty.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        type_args,
+    } = ty
+    else {
         return false;
     };
-    let Some(entry) = registry.get(id) else {
+    let Some(entry) = registry.get(*id) else {
         return false;
     };
     if !entry.identifier.is_in_package("Global") {
@@ -195,8 +199,8 @@ fn is_ffi_admissible_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool 
     }
     match entry.identifier.last() {
         "Bool" | "Unit" | "Int8" | "Int16" | "Int32" | "Int64" | "UInt8" | "UInt16" | "UInt32"
-        | "UInt64" | "Float32" | "Float64" => ty.type_args.is_empty(),
-        "CPtr" => ty.type_args.len() == 1,
+        | "UInt64" | "Float32" | "Float64" => type_args.is_empty(),
+        "CPtr" => type_args.len() == 1,
         _ => false,
     }
 }

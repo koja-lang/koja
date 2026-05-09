@@ -101,7 +101,11 @@ fn constructor_metadata(
         // stay silent here so the user only sees the original cause.
         return Err(());
     }
-    let Resolution::Global(enum_id) = subject_ty.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(enum_id),
+        ..
+    } = subject_ty
+    else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "constructor pattern `{name}(...)` requires an enum subject (got `{}`)",
@@ -111,6 +115,7 @@ fn constructor_metadata(
         ));
         return Err(());
     };
+    let enum_id = *enum_id;
     let Some(entry) = resolver.registry.get(enum_id) else {
         diagnostics.push(Diagnostic::error(
             "internal: subject enum id is not registered".to_string(),

@@ -27,7 +27,7 @@ use expo_alpha_ir::{IRLocalId, IRSymbol};
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
-use inkwell::types::BasicType;
+use inkwell::types::{BasicType, StructType};
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
@@ -74,6 +74,22 @@ pub(crate) struct EmitContext<'ctx> {
     /// emission goes through [`Self::declared_function`] /
     /// [`Self::register_declared_function`] instead.
     declared_functions: RefCell<BTreeMap<IRSymbol, FunctionValue<'ctx>>>,
+    /// Per-function closure-emit frame, set while a
+    /// `FunctionKind::Closure` body is being defined and cleared
+    /// when it returns. `LoadCapture` reads `env_ptr` + `env_struct`
+    /// to GEP its slot; non-closure bodies see `None`.
+    closure_frame: RefCell<Option<ClosureFrame<'ctx>>>,
+}
+
+/// Borrowed env handle used by the closure-body emit path.
+/// `env_ptr` is the body's first LLVM parameter (the env pointer
+/// the caller's `MakeClosure` malloc'd); `env_struct` is the LLVM
+/// type assembled from the body's `FunctionKind::Closure::env_layout`
+/// so [`crate::emit::instruction`] can GEP into the right field.
+#[derive(Clone, Copy)]
+pub(crate) struct ClosureFrame<'ctx> {
+    pub(crate) env_ptr: PointerValue<'ctx>,
+    pub(crate) env_struct: StructType<'ctx>,
 }
 
 impl<'ctx> EmitContext<'ctx> {
@@ -96,7 +112,34 @@ impl<'ctx> EmitContext<'ctx> {
             constant_pool: RefCell::new(None),
             load_const_cache: RefCell::new(BTreeMap::new()),
             declared_functions: RefCell::new(BTreeMap::new()),
+            closure_frame: RefCell::new(None),
         }
+    }
+
+    /// Set the active [`ClosureFrame`] for the body currently being
+    /// defined. Pairs with [`Self::clear_closure_frame`]; calling
+    /// twice without a clear in between panics so the per-function
+    /// scope stays explicit.
+    pub(crate) fn set_closure_frame(&self, frame: ClosureFrame<'ctx>) {
+        let mut slot = self.closure_frame.borrow_mut();
+        if slot.is_some() {
+            panic!(
+                "alpha LLVM emit: nested closure frame set without clearing the previous one — \
+                 caller must clear before re-entering",
+            );
+        }
+        *slot = Some(frame);
+    }
+
+    pub(crate) fn clear_closure_frame(&self) {
+        *self.closure_frame.borrow_mut() = None;
+    }
+
+    /// Active closure frame for the body being emitted, or `None` in
+    /// non-closure bodies. `LoadCapture` panics on `None` since the
+    /// IR seal pass forbids it outside `FunctionKind::Closure`.
+    pub(crate) fn closure_frame(&self) -> Option<ClosureFrame<'ctx>> {
+        *self.closure_frame.borrow()
     }
 
     /// Insert a freshly-declared function into the

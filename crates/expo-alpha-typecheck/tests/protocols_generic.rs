@@ -9,7 +9,7 @@
 //! lives in `structs.rs`. This file pins the protocol-side surface.
 
 use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
-use expo_ast::identifier::{Identifier, Resolution};
+use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
 mod common;
@@ -55,13 +55,19 @@ fn single_param_generic_protocol_lifts_with_self_then_user_params() {
         .find(|m| m.name == "matches")
         .expect("matches method lifted");
     let other_ty = &matches.non_self_params[0].ty;
-    let Resolution::TypeParam {
-        owner: param_owner,
-        index,
-    } = other_ty.resolution
+    let ResolvedType::Named {
+        resolution:
+            Resolution::TypeParam {
+                owner: param_owner,
+                index,
+            },
+        ..
+    } = other_ty
     else {
         panic!("expected `other: TypeParam`, got {:?}", other_ty);
     };
+    let param_owner = *param_owner;
+    let index = *index;
     assert_eq!(param_owner, id);
     assert_eq!(index.as_u32(), 1, "T is at slot 1 (Self occupies slot 0)");
 }
@@ -136,7 +142,11 @@ fn impl_records_protocol_args_on_target_conformances() {
         .lookup_conformance(user_id, match_id)
         .expect("User conforms to Match");
     assert_eq!(args.len(), 1);
-    let Resolution::Global(string_id) = args[0].resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(string_id),
+        ..
+    } = args[0]
+    else {
         panic!("expected protocol-arg `String`, got {:?}", args[0]);
     };
     let (expected_string_id, _) = checked

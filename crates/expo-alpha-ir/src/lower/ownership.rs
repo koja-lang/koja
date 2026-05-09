@@ -42,6 +42,7 @@ pub(super) fn ownership_for_expr(expr: &Expr, value_type: &IRType) -> Ownership 
             op: BinOp::Concat, ..
         } => Ownership::Owned,
         ExprKind::BinaryLiteral { .. } => Ownership::Owned,
+        ExprKind::Closure { .. } | ExprKind::ShortClosure { .. } => Ownership::Owned,
         ExprKind::Receive { .. } => Ownership::Owned,
         ExprKind::String { parts, .. } if parts.iter().any(is_interpolation) => Ownership::Owned,
         _ => Ownership::Unowned,
@@ -65,12 +66,14 @@ pub(super) fn ownership_for_param(mode: PassMode, ty: &IRType) -> Ownership {
 }
 
 /// Heap-allocated IR types: the bit-length-header family (`String`,
-/// `Binary`, `Bits`). All three share a single `[i64 bit_length]
-/// [payload]` heap layout and a single drop shape (`free(payload -
-/// 8)`). Struct / enum variants stay stack-allocated until they
-/// gain heap-typed fields, at which point they migrate here too.
-fn is_heap_type(ty: &IRType) -> bool {
-    matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
+/// `Binary`, `Bits`) plus closure values, whose env_ptr points at a
+/// heap struct. All share a function-exit `DropLocal`; closure
+/// drops also recurse into `env_layout` to drop captures.
+pub(super) fn is_heap_type(ty: &IRType) -> bool {
+    matches!(
+        ty,
+        IRType::Binary | IRType::Bits | IRType::Function { .. } | IRType::String,
+    )
 }
 
 fn is_interpolation(part: &StringPart) -> bool {

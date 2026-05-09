@@ -316,6 +316,13 @@ pub enum IRType {
     Enum(IRSymbol),
     Float32,
     Float64,
+    /// First-class callable: a `{fn_ptr, env_ptr}` fat pointer.
+    /// `params` excludes the implicit `env_ptr` slot, which
+    /// [`crate::IRInstruction::CallClosure`] threads at call time.
+    Function {
+        params: Vec<IRType>,
+        ret: Box<IRType>,
+    },
     Int8,
     Int16,
     Int32,

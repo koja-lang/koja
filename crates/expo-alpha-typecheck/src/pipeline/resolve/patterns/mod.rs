@@ -194,10 +194,14 @@ pub(super) fn match_subject_enum<'a>(
     subject_ty: &ResolvedType,
     registry: &'a GlobalRegistry,
 ) -> Option<&'a EnumDefinition> {
-    let Resolution::Global(id) = subject_ty.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        ..
+    } = subject_ty
+    else {
         return None;
     };
-    let entry = registry.get(id)?;
+    let entry = registry.get(*id)?;
     let GlobalKind::Enum(definition) = &entry.kind else {
         return None;
     };

@@ -13,6 +13,7 @@ use expo_ast::labels::expr_kind_label;
 
 use super::binary_literal::resolve_binary_literal;
 use super::calls::{resolve_call, resolve_method_call};
+use super::closures::{resolve_closure, resolve_short_closure};
 use super::control_flow::{
     resolve_cond, resolve_if, resolve_ternary, resolve_unless, resolve_while,
 };
@@ -24,8 +25,22 @@ use super::ops::{binary_type, literal_type, unary_type};
 use super::strings::resolve_string;
 use super::structs::{resolve_field_access, resolve_struct_construction};
 
+/// Default entry point: resolves `expr` with no expected-type hint
+/// from the surrounding context.
 pub(super) fn resolve_expr(
     expr: &mut Expr,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    resolve_expr_with_expected(expr, None, resolver, diagnostics);
+}
+
+/// Resolve `expr` with an optional expected-type hint. Closure
+/// expressions consume the hint (param-from-context inference); all
+/// other shapes ignore it.
+pub(super) fn resolve_expr_with_expected(
+    expr: &mut Expr,
+    expected: Option<&ResolvedType>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -43,6 +58,19 @@ pub(super) fn resolve_expr(
             args,
             type_args,
         } => resolve_call(callee, args, type_args, expr.span, resolver, diagnostics),
+        ExprKind::Closure {
+            params,
+            return_type,
+            body,
+        } => resolve_closure(
+            params,
+            return_type,
+            body,
+            expected,
+            expr.span,
+            resolver,
+            diagnostics,
+        ),
         ExprKind::EnumConstruction {
             type_path,
             variant,
@@ -96,6 +124,9 @@ pub(super) fn resolve_expr(
             diagnostics,
         ),
         ExprKind::Self_ { local_id } => resolve_self(local_id, expr.span, resolver, diagnostics),
+        ExprKind::ShortClosure { params, body } => {
+            resolve_short_closure(params, body, expected, expr.span, resolver, diagnostics)
+        }
         ExprKind::String { parts, .. } => resolve_string(parts, expr.span, resolver, diagnostics),
         ExprKind::StructConstruction { type_path, fields } => {
             resolve_struct_construction(type_path, fields, expr.span, resolver, diagnostics)

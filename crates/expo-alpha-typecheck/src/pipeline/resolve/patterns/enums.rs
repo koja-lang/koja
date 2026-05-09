@@ -301,7 +301,7 @@ pub(super) fn lookup_pattern_enum<'a>(
         ));
         return None;
     };
-    if subject_ty.is_resolved() && subject_ty.resolution != Resolution::Global(enum_id) {
+    if subject_ty.is_resolved() && !is_named_global(subject_ty, enum_id) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "match arm pattern targets `{}`, but the subject has type `{}`",
@@ -325,10 +325,27 @@ pub(super) fn build_enum_substitution(
     enum_id: GlobalRegistryId,
     subject_ty: &ResolvedType,
 ) -> Vec<Option<ResolvedType>> {
-    if subject_ty.resolution != Resolution::Global(enum_id) {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        type_args,
+    } = subject_ty
+    else {
+        return Vec::new();
+    };
+    if *id != enum_id {
         return Vec::new();
     }
-    subject_ty.type_args.iter().cloned().map(Some).collect()
+    type_args.iter().cloned().map(Some).collect()
+}
+
+fn is_named_global(ty: &ResolvedType, target: GlobalRegistryId) -> bool {
+    matches!(
+        ty,
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } if *id == target,
+    )
 }
 
 pub(super) fn declared_shape_label(data: &ResolvedVariantData) -> &'static str {

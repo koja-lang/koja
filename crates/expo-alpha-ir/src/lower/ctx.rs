@@ -22,9 +22,10 @@
 use std::collections::BTreeMap;
 
 use expo_ast::ast::Diagnostic;
+use expo_ast::identifier::LocalId;
 
 use crate::cfg::CFGBuilder;
-use crate::function::{IRBasicBlock, IRBlockId};
+use crate::function::{IRBasicBlock, IRBlockId, IRFunction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::ownership::Ownership;
@@ -45,7 +46,16 @@ use crate::types::{IRType, ValueId};
 #[derive(Default)]
 pub(crate) struct LowerOutput {
     pub(crate) diagnostics: Vec<Diagnostic>,
+    /// Cache of fn-as-value adapter wrappers, keyed by the wrapped
+    /// function's symbol. One wrapper per named fn used as a value;
+    /// `synthesize_fn_as_closure_wrapper` reads the cache before
+    /// minting to keep the package's function table dedup'd.
+    pub(crate) fn_as_closure_wrappers: BTreeMap<IRSymbol, IRSymbol>,
     pub(crate) instantiations: Vec<Instantiation>,
+    /// Closure bodies and fn-as-value adapters minted during
+    /// expression lowering. `lower_package` drains this and merges
+    /// into [`crate::IRPackage::functions`].
+    pub(crate) synthesized_functions: Vec<IRFunction>,
 }
 
 /// The shape every `lower_*` helper returns. `Open` carries the
@@ -124,6 +134,50 @@ pub(crate) struct FnLowerCtx {
     entry_block: Option<IRBlockId>,
     locals: BTreeMap<IRLocalId, SlotState>,
     value_sources: BTreeMap<ValueId, IRLocalId>,
+    closures: ClosureState,
+}
+
+/// Per-function closure bookkeeping. Two roles: outer fns mint
+/// child names off `enclosing_symbol` + `next_index`; closure-body
+/// fns redirect outer-local idents through `captures`.
+#[derive(Default)]
+pub(crate) struct ClosureState {
+    enclosing_symbol: Option<IRSymbol>,
+    next_index: u32,
+    captures: BTreeMap<LocalId, u32>,
+}
+
+impl ClosureState {
+    /// Seed the enclosing fn's mangled symbol so child closure
+    /// bodies can derive `__closure<N>` names off it.
+    pub(crate) fn set_enclosing_symbol(&mut self, symbol: IRSymbol) {
+        self.enclosing_symbol = Some(symbol);
+    }
+
+    /// Mint the next `<enclosing>__closure<N>` symbol. Panics when
+    /// no enclosing symbol was seeded.
+    pub(crate) fn mint_symbol(&mut self) -> IRSymbol {
+        let parent = self.enclosing_symbol.as_ref().expect(
+            "alpha IR lower: closure expression encountered without an enclosing function symbol",
+        );
+        let suffix = format!("__closure{}", self.next_index);
+        self.next_index += 1;
+        parent.derived(&suffix)
+    }
+
+    /// Record the captures-by-position list for a closure-body ctx.
+    pub(crate) fn set_captures(&mut self, captures: &[LocalId]) {
+        for (index, local) in captures.iter().enumerate() {
+            self.captures.insert(*local, index as u32);
+        }
+    }
+
+    /// `Some(index)` if `local` is a captured outer-scope local
+    /// inside this body. Ident lowering consults this before
+    /// falling back to a `LocalRead`.
+    pub(crate) fn capture_index(&self, local: LocalId) -> Option<u32> {
+        self.captures.get(&local).copied()
+    }
 }
 
 impl FnLowerCtx {
@@ -136,7 +190,16 @@ impl FnLowerCtx {
             entry_block: None,
             locals: BTreeMap::new(),
             value_sources: BTreeMap::new(),
+            closures: ClosureState::default(),
         }
+    }
+
+    pub(crate) fn closures_mut(&mut self) -> &mut ClosureState {
+        &mut self.closures
+    }
+
+    pub(crate) fn closures(&self) -> &ClosureState {
+        &self.closures
     }
 
     /// Mint a fresh `ValueId` and record its `IRType`.

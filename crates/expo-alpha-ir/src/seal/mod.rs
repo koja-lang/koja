@@ -85,6 +85,7 @@ use crate::enum_decl::EnumPayloadInit;
 use crate::function::{IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
 
+mod closures;
 mod enums;
 mod function;
 mod program;
@@ -128,6 +129,14 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         IRType::CPtr(inner) => {
             require_supported_type(inner, &|| format!("{} (CPtr pointee)", location()))
         }
+        IRType::Function { params, ret } => {
+            for (idx, param) in params.iter().enumerate() {
+                require_supported_type(param, &|| {
+                    format!("{} (Function param[{idx}])", location())
+                });
+            }
+            require_supported_type(ret, &|| format!("{} (Function return)", location()));
+        }
     }
 }
 
@@ -156,6 +165,11 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         }
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Call { args, .. } => args.clone(),
+        IRInstruction::CallClosure { args, callee, .. } => {
+            let mut operands = vec![*callee];
+            operands.extend(args.iter().copied());
+            operands
+        }
         IRInstruction::Concat { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Const { .. } => vec![],
         IRInstruction::EnumConstruct { payload, .. } => match payload {
@@ -168,6 +182,9 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             vec![*value]
         }
         IRInstruction::FieldGet { base, .. } => vec![*base],
+        // `LoadCapture` reads from the enclosing closure's env, not
+        // a `ValueId`; nothing to validate in the per-block walk.
+        IRInstruction::LoadCapture { .. } => vec![],
         // `LoadConst` reads from the package constant pool, not a
         // `ValueId`, so it has no operand to validate here — the
         // pool entry is checked against the program-level constants
@@ -187,6 +204,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         | IRInstruction::LocalRead { .. }
         | IRInstruction::MoveOutLocal { .. } => vec![],
         IRInstruction::LocalWrite { value, .. } => vec![*value],
+        IRInstruction::MakeClosure { captures, .. } => captures.clone(),
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }

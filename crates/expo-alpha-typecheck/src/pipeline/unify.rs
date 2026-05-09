@@ -13,7 +13,7 @@
 //! to [`ResolvedType::unresolved`] so downstream walks see a
 //! non-leaky terminal.
 
-use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
+use expo_ast::identifier::{AnonymousKind, FnParam, GlobalRegistryId, Resolution, ResolvedType};
 
 /// A type parameter was inferred to two incompatible concrete types
 /// across two construction-site fields/args. The caller maps this
@@ -43,70 +43,124 @@ pub(crate) fn unify_resolved_type(
     owner: GlobalRegistryId,
     subst: &mut [Option<ResolvedType>],
 ) -> Result<(), Conflict> {
-    if matches!(actual.resolution, Resolution::Unresolved) {
+    if matches!(actual, ResolvedType::Unresolved) {
         return Ok(());
     }
-    if let Resolution::TypeParam {
-        owner: param_owner,
-        index,
-    } = template.resolution
-    {
-        if param_owner != owner {
-            return Ok(());
-        }
-        let slot = &mut subst[index.as_u32() as usize];
-        return match slot {
-            Some(prev) if prev != actual => Err(Conflict {
-                param_index: index.as_u32() as usize,
-                prev: prev.clone(),
-                actual: actual.clone(),
-            }),
-            Some(_) => Ok(()),
-            None => {
-                *slot = Some(actual.clone());
-                Ok(())
+    match (template, actual) {
+        (
+            ResolvedType::Named {
+                resolution:
+                    Resolution::TypeParam {
+                        owner: param_owner,
+                        index,
+                    },
+                ..
+            },
+            _,
+        ) => {
+            if *param_owner != owner {
+                return Ok(());
             }
-        };
+            let slot = &mut subst[index.as_u32() as usize];
+            match slot {
+                Some(prev) if prev != actual => Err(Conflict {
+                    param_index: index.as_u32() as usize,
+                    prev: prev.clone(),
+                    actual: actual.clone(),
+                }),
+                Some(_) => Ok(()),
+                None => {
+                    *slot = Some(actual.clone());
+                    Ok(())
+                }
+            }
+        }
+        (
+            ResolvedType::Named {
+                resolution: template_head,
+                type_args: template_args,
+            },
+            ResolvedType::Named {
+                resolution: actual_head,
+                type_args: actual_args,
+            },
+        ) => {
+            if template_head != actual_head || template_args.len() != actual_args.len() {
+                return Ok(());
+            }
+            for (sub_template, sub_actual) in template_args.iter().zip(actual_args) {
+                unify_resolved_type(sub_template, sub_actual, owner, subst)?;
+            }
+            Ok(())
+        }
+        (
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: template_params,
+                ret: template_ret,
+            }),
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: actual_params,
+                ret: actual_ret,
+            }),
+        ) => {
+            if template_params.len() != actual_params.len() {
+                return Ok(());
+            }
+            for (template_param, actual_param) in template_params.iter().zip(actual_params) {
+                unify_resolved_type(&template_param.ty, &actual_param.ty, owner, subst)?;
+            }
+            unify_resolved_type(template_ret, actual_ret, owner, subst)
+        }
+        _ => Ok(()),
     }
-    if template.resolution != actual.resolution
-        || template.type_args.len() != actual.type_args.len()
-    {
-        return Ok(());
-    }
-    for (sub_template, sub_actual) in template.type_args.iter().zip(&actual.type_args) {
-        unify_resolved_type(sub_template, sub_actual, owner, subst)?;
-    }
-    Ok(())
 }
 
 /// Substitute `subst` into `template`, replacing any
 /// [`Resolution::TypeParam { owner, index }`][Resolution::TypeParam]
 /// leaf whose `owner` matches with `subst[index]`. `None` slots
 /// (Phantom params) substitute to [`ResolvedType::unresolved`].
-/// Other heads recurse into their `type_args`.
+/// `Named` heads recurse into `type_args`; `Anonymous` heads recurse
+/// into params and return type.
 pub(crate) fn substitute_resolved_type(
     template: &ResolvedType,
     subst: &[Option<ResolvedType>],
     owner: GlobalRegistryId,
 ) -> ResolvedType {
-    if let Resolution::TypeParam {
-        owner: param_owner,
-        index,
-    } = template.resolution
-        && param_owner == owner
-    {
-        return subst
+    match template {
+        ResolvedType::Named {
+            resolution:
+                Resolution::TypeParam {
+                    owner: param_owner,
+                    index,
+                },
+            ..
+        } if *param_owner == owner => subst
             .get(index.as_u32() as usize)
             .and_then(Option::as_ref)
             .cloned()
-            .unwrap_or_else(ResolvedType::unresolved);
-    }
-    ResolvedType {
-        resolution: template.resolution,
-        type_args: template
-            .type_args
-            .iter()
-            .map(|arg| substitute_resolved_type(arg, subst, owner))
-            .collect(),
+            .unwrap_or_else(ResolvedType::unresolved),
+        ResolvedType::Named {
+            resolution,
+            type_args,
+        } => ResolvedType::Named {
+            resolution: *resolution,
+            type_args: type_args
+                .iter()
+                .map(|arg| substitute_resolved_type(arg, subst, owner))
+                .collect(),
+        },
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: params
+                    .iter()
+                    .map(|p| FnParam {
+                        mode: p.mode,
+                        ty: substitute_resolved_type(&p.ty, subst, owner),
+                    })
+                    .collect(),
+                ret: Box::new(substitute_resolved_type(ret, subst, owner)),
+            })
+        }
+        ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
 }

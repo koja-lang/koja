@@ -92,7 +92,14 @@ fn resolve_struct_metadata(
         ));
         return None;
     };
-    if subject_ty.is_resolved() && subject_ty.resolution != Resolution::Global(struct_id) {
+    let subject_args: Option<&[ResolvedType]> = match subject_ty {
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            type_args,
+        } if *id == struct_id => Some(type_args.as_slice()),
+        _ => None,
+    };
+    if subject_ty.is_resolved() && subject_args.is_none() {
         diagnostics.push(Diagnostic::error(
             format!(
                 "match arm pattern targets `{}`, but the subject has type `{}`",
@@ -102,11 +109,9 @@ fn resolve_struct_metadata(
             span,
         ));
     }
-    let subst: Vec<Option<ResolvedType>> = if subject_ty.resolution == Resolution::Global(struct_id)
-    {
-        subject_ty.type_args.iter().cloned().map(Some).collect()
-    } else {
-        Vec::new()
+    let subst: Vec<Option<ResolvedType>> = match subject_args {
+        Some(args) => args.iter().cloned().map(Some).collect(),
+        None => Vec::new(),
     };
     let declared = definition
         .fields

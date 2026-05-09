@@ -118,6 +118,12 @@ impl fmt::Display for IRBlockId {
 ///   function's bare last-segment when `None`) and emits no body;
 ///   call sites resolve through an `IRSymbol`-keyed function
 ///   index built at declare time.
+/// - `Closure { env_layout }` carries non-empty blocks like
+///   `Regular`. The backend prepends an implicit `env_ptr`
+///   parameter pointing at a heap struct laid out per `env_layout`;
+///   body code reads captures via [`IRInstruction::LoadCapture`]
+///   indexed into that layout, and [`IRInstruction::MakeClosure`]
+///   is the only writer.
 ///
 /// Per-kind body shape is enforced by the seal pass. The
 /// `Extern` variant carries data, which is why this enum is no
@@ -125,9 +131,10 @@ impl fmt::Display for IRBlockId {
 /// without ambient interior mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
+    Closure { env_layout: Vec<IRType> },
+    Extern(IRExternAttrs),
     Intrinsic,
     Regular,
-    Extern(IRExternAttrs),
 }
 
 /// A lowered function. `blocks[0]` is the entry block; `params`
@@ -249,6 +256,15 @@ pub enum IRInstruction {
         dest: ValueId,
         callee: IRSymbol,
         args: Vec<ValueId>,
+    },
+    /// `dest = callee(args)` — indirect call through a closure
+    /// fat pointer (`callee.ty == IRType::Function`). The backend
+    /// prepends `env_ptr` to `args` before dispatch.
+    CallClosure {
+        args: Vec<ValueId>,
+        callee: ValueId,
+        dest: ValueId,
+        result_ty: IRType,
     },
     /// `dest = lhs <> rhs` for the heap-payload family (`String`,
     /// `Binary`, `Bits`). Separate from [`Self::BinaryOp`] because
@@ -382,6 +398,27 @@ pub enum IRInstruction {
         local: IRLocalId,
         ty: IRType,
     },
+    /// `dest = (fn_ptr -> body, env_ptr)` where `env_ptr` points
+    /// at a freshly allocated heap struct laid out per `body`'s
+    /// [`FunctionKind::Closure::env_layout`]. `captures[i]` fills
+    /// field `i`. The closure value is `Ownership::Owned`;
+    /// `DropLocal { ty: Function { .. } }` recursively drops
+    /// captures before freeing the env.
+    MakeClosure {
+        body: IRSymbol,
+        captures: Vec<ValueId>,
+        dest: ValueId,
+        ty: IRType,
+    },
+    /// `dest = env.<capture_index>`. Only valid inside a
+    /// [`FunctionKind::Closure`] body; `capture_index` keys into
+    /// that kind's `env_layout`. No `StoreCapture` counterpart —
+    /// captures are structurally read-only inside the body.
+    LoadCapture {
+        capture_index: u32,
+        dest: ValueId,
+        ty: IRType,
+    },
     /// `dest = <pool[const_id]>` — load a pooled compound constant.
     /// `const_id` keys an entry on [`crate::IRPackage::constants`];
     /// `ty` cached at lower time so backends mint the dest slot
@@ -420,14 +457,17 @@ impl IRInstruction {
             IRInstruction::BinaryConstruct { dest, .. }
             | IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
+            | IRInstruction::CallClosure { dest, .. }
             | IRInstruction::Concat { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }
             | IRInstruction::EnumPayloadFieldGet { dest, .. }
             | IRInstruction::EnumTagGet { dest, .. }
             | IRInstruction::FieldGet { dest, .. }
+            | IRInstruction::LoadCapture { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
+            | IRInstruction::MakeClosure { dest, .. }
             | IRInstruction::MoveOutLocal { dest, .. }
             | IRInstruction::StructInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => Some(*dest),

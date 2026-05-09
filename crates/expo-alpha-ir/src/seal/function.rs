@@ -13,6 +13,7 @@ use crate::local::IRLocalId;
 use crate::package::IRPackage;
 use crate::types::{IRType, ValueId};
 
+use super::closures::seal_closure_decls;
 use super::enums::seal_enum_decls;
 use super::structs::seal_struct_decls;
 use super::{
@@ -23,6 +24,7 @@ use super::{
 pub(super) fn seal_package(pkg: &IRPackage) {
     seal_struct_decls(pkg);
     seal_enum_decls(pkg);
+    seal_closure_decls(pkg);
     for (sym, function) in &pkg.functions {
         if sym != &function.symbol {
             seal_panic(&format!(
@@ -57,6 +59,14 @@ fn seal_function(function: &IRFunction) {
                     "{owner} is `@extern \"C\"` but carries {} basic block(s); FFI \
                      declarations have no body and must lower to empty `blocks`",
                     function.blocks.len(),
+                ));
+            }
+        }
+        FunctionKind::Closure { .. } => {
+            if function.blocks.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is a synthesized closure but carries no basic blocks; closure \
+                     bodies must lower to a non-empty CFG",
                 ));
             }
         }
