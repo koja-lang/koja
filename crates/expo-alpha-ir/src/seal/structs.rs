@@ -146,6 +146,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::EnumConstruct { .. }
             | IRInstruction::EnumPayloadFieldGet { .. }
             | IRInstruction::EnumTagGet { .. }
+            | IRInstruction::LoadCapture { .. }
             | IRInstruction::LoadConst { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalRead { .. }

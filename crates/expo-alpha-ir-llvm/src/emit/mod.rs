@@ -18,10 +18,20 @@
 //! # Module layout
 //!
 //! - This file: block seams, lookups, type aliases.
-//! - [`instruction`]: per-instruction dispatch (`emit_instruction`)
-//!   plus the const + call helpers it routes to.
+//! - [`instruction`]: per-instruction dispatch (`emit_instruction`).
 //! - [`ops`]: binary + unary operator emission, parallel to
 //!   `expo-alpha-ir-eval/src/ops.rs`.
+//! - [`binary_construct`]: `BinaryConstruct` literal emission.
+//! - [`calls`]: direct-call (`Call`) emission.
+//! - [`closures`]: closure-shaped instructions (`MakeClosure`,
+//!   `CallClosure`, `LoadCapture`) and the `IRType::Function` arm of
+//!   `DropLocal`.
+//! - [`concat`]: `Concat` emission.
+//! - [`constants`]: `Const` and `LoadConst` emission.
+//! - [`enums`]: `EnumConstruct`, `EnumTagGet`, `EnumPayloadFieldGet`.
+//! - [`locals`]: `LocalDecl` / `LocalRead` / `LocalWrite` /
+//!   `DropLocal` (heap arms).
+//! - [`structs`]: `StructInit`, `FieldGet`.
 //!
 //! Type-creation pre-emit (struct + enum LLVM types from sealed IR
 //! decls) lives in [`crate::layout`], not here. This module is
@@ -39,8 +49,15 @@ use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
 mod binary_construct;
+mod calls;
+mod closures;
+mod concat;
+mod constants;
+mod enums;
 mod instruction;
+mod locals;
 mod ops;
+mod structs;
 
 /// Per-function SSA index. The migration to [`BasicValueEnum`] (from
 /// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`

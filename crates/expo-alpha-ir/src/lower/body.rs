@@ -17,7 +17,7 @@ use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, Statement};
 use expo_ast::identifier::LocalId;
 
-use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRTerminator};
+use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator};
 use crate::local::IRLocalId;
 use crate::ownership::Ownership;
 use crate::types::{IRBinOp, IRType, ValueId};
@@ -33,6 +33,12 @@ use super::ownership::ownership_for_expr;
 /// script body without exposing [`FnLowerCtx`] outside the
 /// [`crate::lower`] module tree.
 ///
+/// `enclosing_symbol` seeds the synthesized-closure naming root for
+/// any closures that surface inside the body — `lower_script`
+/// passes a `<package>.__script_body` shape so script-body closures
+/// get unique mangled names (`<package>.__script_body__closure0`).
+/// `None` callers have no closures in scope (legacy / test-only).
+///
 /// `Err(())` means "a feature-gap diagnostic was already pushed and
 /// the caller should drop this body / function from the surrounding
 /// fragment". This matches the per-function fail-fast policy
@@ -40,10 +46,14 @@ use super::ownership::ownership_for_expr;
 /// the implicit script body.
 pub(crate) fn lower_body_to_blocks(
     body: &[Statement],
+    enclosing_symbol: Option<IRSymbol>,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(Vec<IRBasicBlock>, IRType), ()> {
     let mut ctx = FnLowerCtx::new();
+    if let Some(symbol) = enclosing_symbol {
+        ctx.closures_mut().set_enclosing_symbol(symbol);
+    }
     let entry = ctx.fresh_block("entry");
     let flow = lower_body(body, &mut ctx, entry, registry, output)?;
     let return_type = match &flow {

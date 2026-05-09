@@ -24,7 +24,7 @@ mod bounded;
 mod methods;
 
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
-use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{AnonymousKind, FnParam, Identifier, LocalId, Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
@@ -63,6 +63,22 @@ pub(super) fn resolve_call(
         ));
         return ResolvedType::unresolved();
     };
+
+    if let Some((local_id, local_ty)) = resolver.scope.lookup(name) {
+        let local_ty = local_ty.clone();
+        return resolve_local_call(
+            name,
+            ident_resolution,
+            local_id,
+            local_ty,
+            &mut callee.resolution,
+            args,
+            call_span,
+            callee.span,
+            resolver,
+            diagnostics,
+        );
+    }
 
     let candidate = Identifier::new(resolver.package, vec![name.clone()]);
     let Some((id, entry)) = resolver.registry.lookup(&candidate) else {
@@ -596,6 +612,113 @@ fn validate_arg_signature(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "argument `{}` to `{callee}` expects `{}`, got `{}`",
+                    param.name,
+                    display_resolution(&param.ty, registry),
+                    display_resolution(actual, registry),
+                ),
+                arg.span,
+            ));
+        }
+    }
+}
+
+/// Closure-typed local-call resolution: stamps the ident as
+/// [`Resolution::Local`], threads the function's params as expected
+/// arg types, and validates arity + per-position types. Non-function
+/// locals diagnose and return [`ResolvedType::unresolved`].
+#[allow(clippy::too_many_arguments)]
+fn resolve_local_call(
+    name: &str,
+    ident_resolution: &mut Resolution,
+    local_id: LocalId,
+    local_ty: ResolvedType,
+    callee_ty_slot: &mut ResolvedType,
+    args: &mut [Arg],
+    call_span: Span,
+    callee_span: Span,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let ResolvedType::Anonymous(AnonymousKind::Function {
+        params: fn_params,
+        ret,
+    }) = &local_ty
+    else {
+        resolve_args(args, None, resolver, diagnostics);
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot call `{name}`: it is `{}`, not a function",
+                display_resolution(&local_ty, resolver.registry),
+            ),
+            callee_span,
+        ));
+        return ResolvedType::unresolved();
+    };
+    *ident_resolution = Resolution::Local(local_id);
+    *callee_ty_slot = local_ty.clone();
+    let expected_params = synthesize_local_call_params(fn_params);
+    resolve_args(args, Some(&expected_params), resolver, diagnostics);
+    validate_local_call_signature(
+        args,
+        &expected_params,
+        name,
+        call_span,
+        resolver.registry,
+        diagnostics,
+    );
+    (**ret).clone()
+}
+
+/// Build per-position [`ResolvedParam`]s for a local closure call.
+/// Names are synthesized as `arg<index>` so arity / type
+/// diagnostics still surface a label without depending on a
+/// signature decl that doesn't exist.
+fn synthesize_local_call_params(fn_params: &[FnParam]) -> Vec<ResolvedParam> {
+    fn_params
+        .iter()
+        .enumerate()
+        .map(|(index, p)| ResolvedParam {
+            mode: p.mode,
+            name: format!("arg{index}"),
+            ty: p.ty.clone(),
+        })
+        .collect()
+}
+
+/// Local-call counterpart to [`validate_arg_signature`]. Same
+/// invariants (arity match + per-position type match) but uses a
+/// bare `&str` callee label (the local's surface name) so the
+/// diagnostic doesn't fabricate a fully-qualified identifier the
+/// user never wrote.
+fn validate_local_call_signature(
+    args: &[Arg],
+    expected_params: &[ResolvedParam],
+    callee_label: &str,
+    call_span: Span,
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if args.len() != expected_params.len() {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`{callee_label}` expects {} argument{}, got {}",
+                expected_params.len(),
+                if expected_params.len() == 1 { "" } else { "s" },
+                args.len(),
+            ),
+            call_span,
+        ));
+        return;
+    }
+    for (arg, param) in args.iter().zip(expected_params.iter()) {
+        let actual = &arg.value.resolution;
+        if !actual.is_resolved() {
+            continue;
+        }
+        if actual != &param.ty {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "argument `{}` to `{callee_label}` expects `{}`, got `{}`",
                     param.name,
                     display_resolution(&param.ty, registry),
                     display_resolution(actual, registry),

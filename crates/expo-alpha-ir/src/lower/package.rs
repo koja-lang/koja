@@ -115,6 +115,9 @@ pub(crate) fn lower_package(
             }
         }
     }
+    for synthesized in output.synthesized_functions.drain(..) {
+        functions.insert(synthesized.symbol.clone(), synthesized);
+    }
     IRPackage {
         constants,
         enums,
@@ -239,6 +242,7 @@ pub(crate) fn lower_function_inner(
     }
 
     let mut ctx = FnLowerCtx::new();
+    ctx.closures_mut().set_enclosing_symbol(symbol.clone());
 
     if intrinsic {
         let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;

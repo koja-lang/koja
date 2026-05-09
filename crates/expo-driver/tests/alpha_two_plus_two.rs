@@ -1432,6 +1432,130 @@ fn alpha_run_interpreter_script_for_string_concat_prints_xxx() {
     );
 }
 
+/// Script-mode fixture exercising a user-written block closure
+/// with a captured outer `Int` local, dispatched through
+/// `IRInstruction::CallClosure` against the closure-typed slot.
+///
+/// `f = fn (x: Int) -> Int x + y end` lowers to:
+///
+/// - a synthesized `__closure0` body of `FunctionKind::Closure { env_layout: [Int64] }`;
+/// - a `MakeClosure` site in the script body that mallocs a one-slot env, stores `y`,
+///   and packs the `{fn_ptr, env_ptr}` fat pointer;
+/// - a `CallClosure` site that prepends the env pointer and dispatches indirectly.
+///
+/// Both backends produce stdout `15\n`: the LLVM emit drives
+/// real malloc + indirect call; the eval interpreter materializes a
+/// `Value::Closure { body, captures: [Value::Int(10)] }` and reads
+/// the capture through `LoadCapture` at body time. Backend symmetry
+/// is the headline contract.
+const CLOSURE_LOCAL_CALL_SCRIPT_SOURCE: &str = "
+    y = 10
+    f = fn (x: Int) -> Int
+      x + y
+    end
+    f(5)
+";
+
+/// Script-mode fixture exercising a higher-order function call: a
+/// user closure (capture + body) is passed by value to a regular
+/// helper that calls it through its parameter slot. Pins the
+/// fat-pointer ABI on both sides — `apply` accepts the closure as a
+/// `{fn_ptr, env_ptr}` struct param, and the inner `f(x)` lowers to
+/// `CallClosure` against the slot. Stdout is `15\n` on both
+/// backends.
+const HIGHER_ORDER_CLOSURE_SCRIPT_SOURCE: &str = "
+    fn apply(f: fn (Int) -> Int, x: Int) -> Int
+      f(x)
+    end
+
+    y = 10
+    g = fn (x: Int) -> Int
+      x + y
+    end
+    apply(g, 5)
+";
+
+/// Script-mode fixture exercising the fn-as-value adapter path. A
+/// named top-level `add` is referenced as a value at the call site;
+/// the lower pass synthesizes a captureless `add__as_closure`
+/// wrapper of `FunctionKind::Closure { env_layout: [] }` whose body
+/// forwards directly to `add`, and emits `MakeClosure` with a null
+/// env. `apply` then dispatches indirectly through the wrapper —
+/// the same `CallClosure` ABI as user-written closures, just with a
+/// `null` env pointer the body never reads. Both backends produce
+/// stdout `42\n`.
+const FN_AS_VALUE_ADAPTER_SCRIPT_SOURCE: &str = "
+    fn add(x: Int, y: Int) -> Int
+      x + y
+    end
+
+    fn apply(f: fn (Int, Int) -> Int, x: Int, y: Int) -> Int
+      f(x, y)
+    end
+
+    apply(add, 40, 2)
+";
+
+#[test]
+fn alpha_run_llvm_script_closure_local_call_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_closure_local_call",
+        CLOSURE_LOCAL_CALL_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_closure_local_call_prints_fifteen() {
+    assert_script_prints(
+        "run_interpreter_closure_local_call",
+        CLOSURE_LOCAL_CALL_SCRIPT_SOURCE,
+        None,
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_higher_order_closure_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_higher_order_closure",
+        HIGHER_ORDER_CLOSURE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_higher_order_closure_prints_fifteen() {
+    assert_script_prints(
+        "run_interpreter_higher_order_closure",
+        HIGHER_ORDER_CLOSURE_SCRIPT_SOURCE,
+        None,
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_fn_as_value_adapter_prints_forty_two() {
+    assert_script_prints(
+        "run_llvm_fn_as_value_adapter",
+        FN_AS_VALUE_ADAPTER_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "42",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_fn_as_value_adapter_prints_forty_two() {
+    assert_script_prints(
+        "run_interpreter_fn_as_value_adapter",
+        FN_AS_VALUE_ADAPTER_SCRIPT_SOURCE,
+        None,
+        "42",
+    );
+}
+
 #[test]
 fn alpha_build_interpreter_backend_errors() {
     let scratch = scratch_dir("build_interpreter_backend");

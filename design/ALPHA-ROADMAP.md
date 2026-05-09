@@ -49,8 +49,10 @@ The full list of "not yet" diagnostics lives in:
 - `expo-alpha-typecheck/src/pipeline/resolve/{expr,ops,statements,strings}.rs`
   (note: `resolve/calls/` is now its own submodule — see
   `mod.rs`, `methods.rs`, `bounded.rs`)
-- `expo-alpha-ir/src/lower/{expr,ops,body,structs,enums,package,calls}.rs`
+- `expo-alpha-ir/src/lower/{expr,ops,body,structs,enums,package,calls,closures}.rs`
 - `expo-alpha-ir-llvm/src/{emit/mod,emit/instruction,main_wrapper}.rs`
+  (note: `emit/` is now broken out into per-instruction-family
+  siblings — `emit/{closures,enums,structs,locals,calls,concat,constants}.rs`)
 
 ---
 
@@ -70,8 +72,8 @@ approximate — the point is which files use a given construct.
 | `move` parameter mode                   | `process` (8x), `list` (8x), `map` (5x), `cptr`, `cstring`, `set`, `string` (already shipped) |
 | `priv` visibility                       | every FFI-wrapping file                                                               |
 | `@intrinsic` / `@extern "C"` / `@doc`   | every file (we shipped `@extern`/`@link`/`AnnotationKind`)                            |
-| Closure parameter types (`fn (T) -> U`) | `kernel` (Option/Result map/then), `list` (filter/find/all?/map/reduce), `process`    |
-| Closure expressions (block & short)     | none in stdlib bodies (parameters only — closures arrive at call sites in user code)  |
+| Closure parameter types (`fn (T) -> U`) | `kernel` (Option/Result map/then), `list` (filter/find/all?/map/reduce), `process` (already shipped) |
+| Closure expressions (block & short)     | none in stdlib bodies — shipped for user code; named fns auto-wrap as closure values when needed (already shipped) |
 | `match` expression                      | `kernel` (12x — Option/Result), `string` (8x), `process` (7x), `list`, `io`, `fd`     |
 | OR pattern (`"a" \| "b" \| ...`)        | `string` (alpha?, digit?, escape_debug, trim\_\*, whitespace?, upcase, downcase)      |
 | Tuple pattern (`Some(val)`, `Ok(v)`)    | every match-using file                                                                |
@@ -113,13 +115,6 @@ alpha crates.
 
 ### Blockers — without these the stdlib does not type-check
 
-- **Closure parameter types (`fn (T) -> U`)** —
-  `lift_signatures/types.rs:71` diagnoses
-  "function-typed annotations not yet supported". Stdlib bodies never
-  construct closures (those arrive at call sites in user code), but
-  every higher-order method signature
-  (`List.map`, `Option.then`, `Task.async`, …) needs the type to lift.
-
 - **Numeric coercion at struct-literal sites** —
   `io.expo` writes `const STDOUT: Fd = Fd{descriptor: 1}` where `1` is
   `Int` and `Fd.descriptor: Int32`. Already fails today on user code
@@ -134,6 +129,40 @@ alpha crates.
   needs the runtime calls already used by v1 codegen.
 
 ### Already supported — common false positives
+
+- **Closures — full surface, end-to-end.** Closure parameter types
+  (`fn (T) -> U`) lift as `ResolvedType::Anonymous(AnonymousKind::Function)`
+  with `FnParam` carrying name + `ResolvedType` per slot; closure
+  expressions (both block `(x: T) -> { … }` and short `x -> body`
+  forms) lower to a synthesized `IRFunctionKind::Closure` body
+  named `<enclosing>__closure<N>`. Capture analysis walks the body
+  AST to deduplicate free locals (encounter order); heap-typed
+  captures `MoveOutLocal` into the closure's env at the
+  construction site, stack-typed captures copy. The IR vocabulary
+  is `IRType::Function`, `IRInstruction::{MakeClosure, CallClosure,
+  LoadCapture}`, and `FunctionKind::Closure { env_layout }` for
+  synthesized bodies. Named top-level functions used in a
+  closure-typed context auto-wrap as `<fn>__as_closure` adapters
+  (captureless, env_ptr is null). Closure-typed local variables
+  used as callees dispatch through `CallClosure` rather than the
+  symbol-keyed `Call` form. LLVM ABI: closure values are
+  `{fn_ptr, env_ptr}` fat pointers; closure bodies declare an
+  extra `i8*` env parameter at LLVM position 0; env blocks
+  heap-allocate via `malloc` and free at scope exit through
+  `DropLocal { ty: Function }`. Backend symmetry: eval and LLVM
+  produce identical results for higher-order calls, captureless
+  closures, single/double/heap captures, and fn-as-value adapters.
+  Pinned by `crates/expo-alpha-typecheck/tests/resolve_closures.rs`,
+  `crates/expo-alpha-ir/tests/lower_closures.rs`,
+  `crates/expo-alpha-ir-eval/tests/closures.rs`,
+  `crates/expo-alpha-ir-llvm/tests/closures.rs`, and the
+  `*_closure_*` / `*_higher_order_*` / `*_fn_as_value_*` driver
+  tests in `crates/expo-driver/tests/alpha_two_plus_two.rs`.
+  **Out**: recursive drops of nested heap captures inside the
+  env block (the env itself frees, but heap-typed captures inside
+  it leak today — alpha milestone trade-off for a simpler ABI; a
+  per-body drop function synthesized alongside the closure body
+  closes this).
 
 - **Generics — full feature, end-to-end.** Generic types
   (`<T>`, `<K,V>`), generic functions, generic impls (concrete
@@ -269,16 +298,31 @@ output and standalone tests, per northstar.
   divergence path.
 - `break` / `continue` remain post-stdlib (no `lib/global/` use).
 
-### Phase 2 — Closure parameter types
+### ~~Phase 2 — Closures~~ — **Shipped**
 
-- Lift `fn (T) -> U` as a `ResolvedType::Function { params, ret }`
-  (new variant on `ResolvedType` or a new node type — northstar
-  decision).
-- No closure-expression lowering needed for stdlib (no stdlib body
-  constructs a closure). Just enough to lift the signatures of
-  `List.map`/`Option.then`/`Task.async`/etc.
-- User-code closure-_expressions_ (block & short) is a separate later
-  step, sequenced behind (or alongside) `List`/`Map` literal syntax.
+- Closure parameter types lift as
+  `ResolvedType::Anonymous(AnonymousKind::Function)` with
+  `FnParam { name, ty }`. The `Anonymous` umbrella leaves room for
+  future structural variants (tuples, dictionaries) without
+  reshaping `ResolvedType` again.
+- Closure expressions (block + short form) are stamped with a
+  `LocalId` per parameter at typecheck-resolve time, capture
+  analysis runs at lower time (free-local walk that deduplicates by
+  encounter order), and heap-typed captures `MoveOutLocal` into a
+  per-instance env block.
+- The IR-level move story is "closures never borrow" — every heap
+  capture is `Owned` in the env, the closure value itself is
+  `Owned` (heap env), and the existing `DropLocal` machinery frees
+  the env at scope exit. (Recursive drop of heap captures inside
+  the env is a known follow-up; see "Closures — full surface" above.)
+- Both backends ship: the eval interpreter carries a
+  `Value::Closure { body, captures }` runtime shape; LLVM uses a
+  `{fn_ptr, env_ptr}` fat pointer with the env_ptr threaded as
+  param 0 of every closure body.
+- Fn-as-value adapters (named function used in a closure-typed
+  context) and closure-typed local calls landed in the same slice,
+  so the surface is "first-class functions" rather than just
+  closure expressions.
 
 ### Phase 3 — Mechanical glue
 
@@ -349,7 +393,7 @@ of these, that's the trigger to revisit — not before.
 
 ---
 
-## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits)
+## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits, post-loops, post-closures)
 
 What's shipped since the last audit:
 
@@ -444,13 +488,45 @@ What's shipped since the last audit:
   `lower_loops.rs`, `eval/loops.rs`, `llvm/loops.rs`, and the
   `*_while_*` / `*_for_*` driver tests.
 
-The roadmap's original Phase 1 (loops) is closed; the strings/
-binary/bits slice closed the Phase 3 string-related items, and the
-alpha move/drop foundation slice closed `move` in typecheck. The
-surviving Phase 3 mechanical-glue item (numeric coercion at
-struct-literal sites) and Phase 2 (closure parameter types) are the
-next critical-path slices.
+- **Closures — first-class functions, end-to-end.** Closes
+  Phase 2. Closure parameter types lift as
+  `ResolvedType::Anonymous(AnonymousKind::Function)` (the
+  `Anonymous` umbrella leaves room for future structural variants
+  — tuples, dictionaries — without reshaping `ResolvedType`
+  again). Closure expressions (block + short form) lower to
+  synthesized `IRFunctionKind::Closure` bodies named
+  `<enclosing>__closure<N>`; capture analysis walks the body AST,
+  deduplicates free locals by encounter order, and routes heap
+  captures through `MoveOutLocal` so the env owns its captures.
+  IR vocabulary: `IRType::Function`, `IRInstruction::{MakeClosure,
+  CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
+  Named functions used in a closure-typed context auto-wrap as
+  `<fn>__as_closure` adapters (captureless, null env_ptr); local
+  variables of closure type dispatch via `CallClosure` rather than
+  the symbol-keyed `Call`. Eval carries a
+  `Value::Closure { body, captures }` runtime shape; LLVM uses a
+  `{fn_ptr, env_ptr}` fat pointer with the env_ptr threaded as
+  LLVM param 0 of every closure body. Backend symmetry verified
+  end-to-end. The seal pass enforces structural invariants for
+  `MakeClosure` / `CallClosure` / `LoadCapture`
+  (`seal/closures.rs`). Move story is "closures never borrow" —
+  heap captures move; closure values themselves are `Owned`.
+  Pinned by `resolve_closures.rs`, `lower_closures.rs`,
+  `eval/closures.rs`, `llvm/closures.rs`, and the `*_closure_*` /
+  `*_higher_order_*` / `*_fn_as_value_*` driver tests. **Out**:
+  recursive drops of nested heap captures inside the env (env
+  frees at scope exit, but heap-typed captures inside it leak
+  today — alpha trade-off for a simpler ABI).
+
+The roadmap's original Phase 1 (loops) and Phase 2 (closures)
+are closed; the strings/binary/bits slice closed the Phase 3
+string-related items, and the alpha move/drop foundation slice
+closed `move` in typecheck. The surviving critical-path work is
+the Phase 3 numeric-coercion-at-struct-literal-sites item and the
+optional Phase 4 concurrency slice (`spawn` / `receive`); after
+those, `expo alpha check expo/lib/global/src/*.expo` should be
+fully green.
 
 ---
 
-Audited 2026-05-08.
+Audited 2026-05-09.

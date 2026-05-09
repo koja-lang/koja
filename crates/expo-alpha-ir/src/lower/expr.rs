@@ -9,18 +9,20 @@
 
 use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
 use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, StringPart};
-use expo_ast::identifier::{GlobalRegistryId, LocalId, Resolution};
+use expo_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
 use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
+use crate::generics::Instantiation;
 use crate::local::IRLocalId;
 use crate::types::{ConcatKind, ConstValue, IRType, ValueId};
 
 use super::arms::lower_result_ty;
 use super::binary_literal::lower_binary_literal;
 use super::calls::{lower_call, lower_method_call};
+use super::closures::{lower_block_closure, lower_short_closure, synthesize_fn_as_closure_wrapper};
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{
     CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_ternary, lower_unless,
@@ -91,6 +93,11 @@ pub(super) fn lower_expr(
             args,
             type_args,
         } => lower_call(callee, args, type_args, ctx, block, registry, output),
+        ExprKind::Closure {
+            params,
+            body,
+            return_type: _,
+        } => lower_block_closure(params, body, &expr.resolution, ctx, block, registry, output),
         ExprKind::EnumConstruction { variant, data, .. } => lower_enum_construction(
             variant,
             data,
@@ -119,14 +126,24 @@ pub(super) fn lower_expr(
                 registry,
                 &mut output.instantiations,
             )),
-            Resolution::Global(global_id) => Ok(lower_constant_ident(
-                *global_id, name, expr.span, ctx, block, registry, output,
+            Resolution::Global(global_id) => Ok(lower_global_ident(
+                *global_id,
+                name,
+                &expr.resolution,
+                expr.span,
+                ctx,
+                block,
+                registry,
+                output,
             )),
             other => panic!(
                 "alpha IR lower: bare `Ident` `{name}` reaches lower with non-Local/Global \
                  resolution {other:?} — typecheck seal must have rejected this",
             ),
         },
+        ExprKind::ShortClosure { params, body } => {
+            lower_short_closure(params, body, &expr.resolution, ctx, block, registry, output)
+        }
         ExprKind::Self_ { local_id } => {
             let local_id = local_id.unwrap_or_else(|| {
                 panic!(
@@ -282,17 +299,31 @@ pub(super) fn lower_expr(
 
 /// Materialize a local-slot read. Used for both bare-`Ident` and
 /// `self` references — both flow through the same per-function slot
-/// table.
+/// table. Closure-body ctxs intercept captured-outer-local ids and
+/// emit a [`IRInstruction::LoadCapture`] indexed into the enclosing
+/// closure's env layout.
 fn lower_local_read(
     local_id: LocalId,
-    resolution: &expo_ast::identifier::ResolvedType,
+    resolution: &ResolvedType,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
-    instantiations: &mut Vec<crate::generics::Instantiation>,
+    instantiations: &mut Vec<Instantiation>,
 ) -> (ValueId, IRBlockId) {
-    let ir_local = IRLocalId::from_local_id(local_id);
     let ty = resolved_type_to_ir_type(resolution, registry, instantiations);
+    if let Some(capture_index) = ctx.closures().capture_index(local_id) {
+        let dest = ctx.fresh_value(ty.clone());
+        ctx.cfg.append(
+            block,
+            IRInstruction::LoadCapture {
+                capture_index,
+                dest,
+                ty,
+            },
+        );
+        return (dest, block);
+    }
+    let ir_local = IRLocalId::from_local_id(local_id);
     let dest = ctx.fresh_value(ty.clone());
     ctx.cfg.append(
         block,
@@ -304,6 +335,46 @@ fn lower_local_read(
     );
     ctx.record_value_source(dest, ir_local);
     (dest, block)
+}
+
+/// Dispatch a bare ident with [`Resolution::Global`] on the
+/// resolved entry's kind: constants flow through
+/// [`lower_constant_ident`]; non-generic functions used as values
+/// flow through [`lower_fn_as_value`] (synthesizing a captureless
+/// closure wrapper and emitting [`IRInstruction::MakeClosure`]).
+#[allow(clippy::too_many_arguments)]
+fn lower_global_ident(
+    global_id: GlobalRegistryId,
+    name: &str,
+    expr_resolution: &ResolvedType,
+    span: Span,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> (ValueId, IRBlockId) {
+    let entry = registry.get(global_id).unwrap_or_else(|| {
+        panic!("alpha IR lower: global id {global_id} missing from registry — seal violation",)
+    });
+    match &entry.kind {
+        GlobalKind::Constant(_) => {
+            lower_constant_ident(global_id, name, span, ctx, block, registry, output)
+        }
+        GlobalKind::Function(_) => lower_fn_as_value(
+            global_id,
+            name,
+            expr_resolution,
+            ctx,
+            block,
+            registry,
+            output,
+        ),
+        other => panic!(
+            "alpha IR lower: bare `Ident` `{name}` (id {global_id}) registers as {} — \
+             typecheck seal violation",
+            other.label(),
+        ),
+    }
 }
 
 /// Lower a bare ident that resolves to a package-level constant.
@@ -351,6 +422,54 @@ fn lower_constant_ident(
         ctx.cfg.append(block, IRInstruction::Const { dest, value });
         (dest, block)
     }
+}
+
+/// Lower a bare ident that resolves to a named function used as a
+/// value (the resolver lifts every non-generic function ident to
+/// [`expo_ast::identifier::AnonymousKind::Function`]). Synthesizes
+/// a captureless wrapper closure and emits
+/// [`IRInstruction::MakeClosure`] with no captures.
+fn lower_fn_as_value(
+    function_id: GlobalRegistryId,
+    name: &str,
+    expr_resolution: &ResolvedType,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> (ValueId, IRBlockId) {
+    let entry = registry.get(function_id).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: fn-as-value id {function_id} missing from registry — seal violation",
+        )
+    });
+    let GlobalKind::Function(Some(sig)) = &entry.kind else {
+        panic!(
+            "alpha IR lower: fn-as-value `{name}` (id {function_id}) registers as {} — \
+             typecheck seal violation",
+            entry.kind.label(),
+        );
+    };
+    if !entry.type_params.is_empty() {
+        panic!(
+            "alpha IR lower: fn-as-value `{name}` (id {function_id}) is generic — typecheck \
+             must have diagnosed this before lowering",
+        );
+    }
+    let target_symbol = IRSymbol::from_identifier(&entry.identifier);
+    let wrapper_symbol = synthesize_fn_as_closure_wrapper(&target_symbol, sig, registry, output);
+    let ty = resolved_type_to_ir_type(expr_resolution, registry, &mut output.instantiations);
+    let dest = ctx.fresh_value(ty.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::MakeClosure {
+            body: wrapper_symbol,
+            captures: Vec::new(),
+            dest,
+            ty,
+        },
+    );
+    (dest, block)
 }
 
 /// Pick the [`ConcatKind`] that matches a `<>` operand's IR type.

@@ -1,7 +1,7 @@
 //! Bare identifier and `self` resolution.
 
 use expo_ast::ast::Diagnostic;
-use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
+use expo_ast::identifier::{AnonymousKind, FnParam, Identifier, LocalId, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::registry::GlobalKind;
@@ -11,12 +11,15 @@ use super::ctx::Resolver;
 /// Resolve a bare identifier expression. Locals win first; package-
 /// level constants resolve through a global lookup so an
 /// `EARTH_RADIUS` reference at a use site stamps `Resolution::Global`
-/// and returns the constant's stamped type. Functions and type names
-/// don't flow as first-class values, so a non-constant global hit
-/// still falls through to the unknown-identifier diagnostic. (The
-/// static-method receiver and `Type.method(...)` call paths each
-/// handle struct-name resolution directly so they don't go through
-/// this helper.)
+/// and returns the constant's stamped type. Non-generic functions
+/// also resolve here as first-class values: the bare name lifts to
+/// an [`AnonymousKind::Function`] type so call-site code (the
+/// fn-as-value adapter in IR lower) can wrap them in a closure value.
+/// Generic functions diagnose — first-class references would need an
+/// inference site that doesn't exist for a bare ident. (The static-
+/// method receiver and `Type.method(...)` call paths each handle
+/// struct-name resolution directly so they don't go through this
+/// helper.)
 pub(super) fn resolve_ident(
     name: &str,
     resolution: &mut Resolution,
@@ -29,11 +32,38 @@ pub(super) fn resolve_ident(
         return ty.clone();
     }
     let global_id = Identifier::new(resolver.package, vec![name.to_string()]);
-    if let Some((id, entry)) = resolver.registry.lookup(&global_id)
-        && let GlobalKind::Constant(Some(def)) = &entry.kind
-    {
-        *resolution = Resolution::Global(id);
-        return def.ty.clone();
+    if let Some((id, entry)) = resolver.registry.lookup(&global_id) {
+        match &entry.kind {
+            GlobalKind::Constant(Some(def)) => {
+                *resolution = Resolution::Global(id);
+                return def.ty.clone();
+            }
+            GlobalKind::Function(Some(sig)) => {
+                if !entry.type_params.is_empty() {
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "cannot reference generic function `{name}` as a value \
+                             (alpha typecheck has no inference site for the type args)",
+                        ),
+                        span,
+                    ));
+                    return ResolvedType::unresolved();
+                }
+                *resolution = Resolution::Global(id);
+                return ResolvedType::Anonymous(AnonymousKind::Function {
+                    params: sig
+                        .params
+                        .iter()
+                        .map(|p| FnParam {
+                            mode: p.mode,
+                            ty: p.ty.clone(),
+                        })
+                        .collect(),
+                    ret: Box::new(sig.return_type.clone()),
+                });
+            }
+            _ => {}
+        }
     }
     diagnostics.push(Diagnostic::error(
         format!("unknown identifier `{name}` in this scope"),

@@ -316,12 +316,9 @@ pub enum IRType {
     Enum(IRSymbol),
     Float32,
     Float64,
-    /// A first-class callable value: a fat pointer of
-    /// `{fn_ptr, env_ptr}` carrying the closure's body symbol and
-    /// its heap-allocated capture environment. `params` lists the
-    /// callee's parameter types **excluding** the synthetic
-    /// `env_ptr` slot — that one is implicit and threaded by
-    /// [`crate::IRInstruction::CallClosure`] at call time.
+    /// First-class callable: a `{fn_ptr, env_ptr}` fat pointer.
+    /// `params` excludes the implicit `env_ptr` slot, which
+    /// [`crate::IRInstruction::CallClosure`] threads at call time.
     Function {
         params: Vec<IRType>,
         ret: Box<IRType>,

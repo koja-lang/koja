@@ -17,11 +17,11 @@ use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 
-use crate::ctx::EmitContext;
+use crate::ctx::{ClosureFrame, EmitContext};
 use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::LlvmError;
 use crate::intrinsics;
-use crate::types::ir_basic_type;
+use crate::types::{closure_body_signature, env_struct_type, ir_basic_type};
 
 /// Declare an LLVM function for `function`. The signature mirrors
 /// the IR exactly: each [`expo_alpha_ir::IRFunctionParam::ty`]
@@ -52,13 +52,11 @@ pub(crate) fn declare_function<'ctx>(
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
     let signature = function_signature(ctx, function)?;
     let llvm_name = match &function.kind {
+        FunctionKind::Closure { .. } => function.symbol.mangled().to_string(),
         FunctionKind::Extern(attrs) => attrs
             .link_name
             .clone()
             .unwrap_or_else(|| function.symbol.last_segment().to_string()),
-        FunctionKind::Closure { .. } => {
-            unimplemented!("LLVM closure declaration not yet wired");
-        }
         FunctionKind::Intrinsic | FunctionKind::Regular => function.symbol.mangled().to_string(),
     };
     let llvm_function = match ctx.module.get_function(&llvm_name) {
@@ -75,6 +73,10 @@ fn function_signature<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
 ) -> Result<FunctionType<'ctx>, LlvmError> {
+    if matches!(function.kind, FunctionKind::Closure { .. }) {
+        let user_params: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
+        return closure_body_signature(ctx, &user_params, &function.return_type);
+    }
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
         Vec::with_capacity(function.params.len());
     for param in &function.params {
@@ -104,7 +106,7 @@ pub(crate) fn define_function<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    match &function.kind {
+    let env_layout = match &function.kind {
         FunctionKind::Intrinsic => {
             return intrinsics::emit_intrinsic_body(ctx, function, llvm_function);
         }
@@ -114,33 +116,61 @@ pub(crate) fn define_function<'ctx>(
             // C linker provides the implementation at link time.
             return Ok(());
         }
-        FunctionKind::Closure { .. } => {
-            unimplemented!("LLVM closure body emission not yet wired");
-        }
-        FunctionKind::Regular => {}
-    }
+        FunctionKind::Closure { env_layout } => Some(env_layout.as_slice()),
+        FunctionKind::Regular => None,
+    };
     // Slot table is per-function — flush any leftovers from the
     // previous helper before walking this body.
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, llvm_function, &function.blocks);
-    let mut values = seed_params(function, llvm_function);
+    let mut values = seed_params(function, llvm_function, env_layout.is_some())?;
     let phi_map = emit::declare_block_param_phis(ctx, &function.blocks, &block_map, &mut values)?;
+    if let Some(layout) = env_layout {
+        let env_ptr = closure_env_ptr(function, llvm_function);
+        let env_struct = env_struct_type(ctx, layout)?;
+        ctx.set_closure_frame(ClosureFrame {
+            env_ptr,
+            env_struct,
+        });
+    }
     // Blocks unreachable from the entry block (e.g. the merge of a
     // value-producing `if`/`else` whose arms both diverge) get
     // `unreachable` instead of their natural terminator. The
     // alpha-IR layer doesn't model `IRTerminator::Unreachable` yet;
     // the LLVM boundary's reachability walk is the stand-in.
     let reachable = emit::reachable_blocks(&function.blocks);
-    for block in &function.blocks {
-        if !reachable.contains(&block.id) {
-            emit::emit_unreachable_terminator(ctx, block.id, &block_map)?;
-            continue;
+    let result = (|| -> Result<(), LlvmError> {
+        for block in &function.blocks {
+            if !reachable.contains(&block.id) {
+                emit::emit_unreachable_terminator(ctx, block.id, &block_map)?;
+                continue;
+            }
+            let llvm_block = block_map[&block.id];
+            ctx.builder.position_at_end(llvm_block);
+            emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
         }
-        let llvm_block = block_map[&block.id];
-        ctx.builder.position_at_end(llvm_block);
-        emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
+        Ok(())
+    })();
+    if env_layout.is_some() {
+        ctx.clear_closure_frame();
     }
-    Ok(())
+    result
+}
+
+fn closure_env_ptr<'ctx>(
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> inkwell::values::PointerValue<'ctx> {
+    llvm_function
+        .get_nth_param(0)
+        .unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: closure body `{}` declared no env parameter — \
+                 declare_function ABI invariant violation",
+                function.symbol,
+            )
+        })
+        .into_pointer_value()
 }
 
 /// Pre-create one inkwell [`BasicBlock`] per IR block on
@@ -166,19 +196,28 @@ pub(crate) fn declare_blocks<'ctx>(
 /// uses. Inkwell's `get_nth_param` panics on out-of-bounds; the IR
 /// seal guarantees `params.len()` matches the LLVM function's arity,
 /// so a miss here is a compiler bug.
-fn seed_params<'ctx>(function: &IRFunction, llvm_function: FunctionValue<'ctx>) -> ValueMap<'ctx> {
+///
+/// Closure bodies declare an extra env-pointer parameter at LLVM
+/// position 0, so user-visible IR params start at LLVM index 1.
+/// `is_closure_body` shifts the lookups to keep the LLVM ABI and
+/// the IR's `IRFunctionParam` sequence aligned.
+fn seed_params<'ctx>(
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    is_closure_body: bool,
+) -> Result<ValueMap<'ctx>, LlvmError> {
+    let llvm_offset: u32 = if is_closure_body { 1 } else { 0 };
     let mut seed = ValueMap::new();
     for (index, param) in function.params.iter().enumerate() {
-        let llvm_param = llvm_function
-            .get_nth_param(index as u32)
-            .unwrap_or_else(|| {
-                panic!(
-                    "alpha LLVM emit: missing LLVM param #{index} on `{}` — \
-                     signature/IR arity mismatch",
-                    function.symbol,
-                )
-            });
+        let llvm_index = (index as u32) + llvm_offset;
+        let llvm_param = llvm_function.get_nth_param(llvm_index).unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: missing LLVM param #{llvm_index} on `{}` — \
+                 signature/IR arity mismatch",
+                function.symbol,
+            )
+        });
         seed.insert(param.id, llvm_param);
     }
-    seed
+    Ok(seed)
 }

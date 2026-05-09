@@ -85,6 +85,7 @@ use crate::enum_decl::EnumPayloadInit;
 use crate::function::{IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};
 
+mod closures;
 mod enums;
 mod function;
 mod program;
@@ -181,6 +182,9 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             vec![*value]
         }
         IRInstruction::FieldGet { base, .. } => vec![*base],
+        // `LoadCapture` reads from the enclosing closure's env, not
+        // a `ValueId`; nothing to validate in the per-block walk.
+        IRInstruction::LoadCapture { .. } => vec![],
         // `LoadConst` reads from the package constant pool, not a
         // `ValueId`, so it has no operand to validate here — the
         // pool entry is checked against the program-level constants
