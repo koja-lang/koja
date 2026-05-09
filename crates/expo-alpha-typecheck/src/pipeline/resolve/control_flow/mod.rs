@@ -1,31 +1,30 @@
-//! `if` / `unless` / `cond` resolution.
+//! Control-flow expression resolution: `if` / `else`, `unless`,
+//! `cond ... end`, the `?:` ternary, and `while`.
 //!
-//! `if` and `cond` are value-producing when every reaching arm tail
-//! type joins. The join is strict equality (no coercion) with
-//! `Never` as the lattice bottom (`T ∪ Never = T`); divergent arms
-//! (bodies that end in `return`) contribute `Never` and so don't
-//! constrain the join.
+//! `if`, `cond`, and ternary are value-producing when every reaching
+//! arm tail type joins. The join is strict equality (no coercion)
+//! with `Never` as the lattice bottom (`T ∪ Never = T`); divergent
+//! arms (bodies that end in `return`) contribute `Never` and so
+//! don't constrain the join.
 //!
-//! `unless` stays Unit-typed — surface syntax doesn't admit a value
-//! (no `else` arm), so there's nothing to join.
+//! `unless` and `while` stay Unit-typed — loops are statement-shaped.
 //!
-//! `body_tail_type` is the per-body helper consulted by both
-//! `resolve_if`'s join and `resolve_cond`'s. Mirrors v1's
-//! `infer_body_type`: a body that contains any `Statement::Return`
-//! is `Never`, otherwise the trailing `Statement::Expr`'s resolved
-//! type, falling back to `Unit` for empty / non-`Expr` trailing
-//! statements.
+//! `for` lives in [`crate::pipeline::synthesize::for_desugar`];
+//! resolve never sees a statement-position `for`.
+//!
+//! [`body_tail_type`], [`join_arm_tails`], and
+//! [`require_bool_condition`] are also consumed by
+//! `super::match_expr`.
 
-use expo_ast::ast::{Diagnostic, Expr, Statement};
+use expo_ast::ast::{CondArm, Diagnostic, Expr, Statement};
 use expo_ast::identifier::ResolvedType;
 use expo_ast::span::Span;
-
-use crate::registry::GlobalRegistry;
 
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 use super::types::{display_resolution, is_primitive};
 use super::walker::resolve_statement;
+use crate::registry::GlobalRegistry;
 
 pub(super) fn resolve_if(
     condition: &mut Expr,
@@ -114,7 +113,7 @@ pub(super) fn resolve_unless(
 /// joins to `Unit` regardless of the arm tails — but the parser
 /// requires `else`, so this branch is defensive.
 pub(super) fn resolve_cond(
-    arms: &mut [expo_ast::ast::CondArm],
+    arms: &mut [CondArm],
     else_body: Option<&mut [Statement]>,
     span: Span,
     resolver: &mut Resolver<'_>,
@@ -145,9 +144,29 @@ pub(super) fn resolve_cond(
     join_arm_tails("cond", &tails, span, resolver.registry, diagnostics)
 }
 
+/// Resolve a `while cond ... end` loop. Condition must be `Bool`;
+/// the body resolves under the same scope as anywhere else (no new
+/// `loop_depth` field — alpha doesn't model break/continue yet, so
+/// no scope-tracked loop context is needed). Result type is `Unit`:
+/// `while` is statement-shaped in alpha, mirroring v1's
+/// "loops type as Unit" rule.
+pub(super) fn resolve_while(
+    condition: &mut Expr,
+    body: &mut [Statement],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    resolve_expr(condition, resolver, diagnostics);
+    require_bool_condition("while", condition, resolver.registry, diagnostics);
+    for stmt in body.iter_mut() {
+        resolve_statement(stmt, resolver, diagnostics);
+    }
+    resolver.registry.primitive("Unit")
+}
+
 /// Join exactly two arm tails (`if`/`else`'s shape). Separated from
-/// the n-arm `join_arm_tails` so the diagnostic naming the offending
-/// arms ("then" / "else") stays terse.
+/// the n-arm [`join_arm_tails`] so the diagnostic naming the
+/// offending arms ("then" / "else") stays terse.
 fn join_two_arms(
     keyword: &str,
     then_tail: (&str, &ResolvedType),

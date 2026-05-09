@@ -16,7 +16,7 @@
 //! `seal_program` runs as the last sub-pass of `lower_program`; seal
 //! violations panic per northstar (compiler bugs, not user errors).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
@@ -143,7 +143,8 @@ impl IRProgram {
 /// 6. `seal` — assert sealed-IRProgram invariants. Panics on violation.
 pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRProgram, LowerError> {
     let mut output = LowerOutput::default();
-    let mut packages = Vec::with_capacity(checked.packages.len());
+    let mut packages = Vec::with_capacity(checked.packages.len() + 1);
+    packages.push(empty_global_stdlib_package());
     for pkg in &checked.packages {
         packages.push(lower::lower_package(pkg, &checked.registry, &mut output));
     }
@@ -175,6 +176,18 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
 
     seal::seal_program(&program);
     Ok(program)
+}
+
+/// Empty `Global` IRPackage seeded so `generics::monomorphize` has a
+/// place to land stdlib stub instantiations (today only `Option<T>`).
+pub(crate) fn empty_global_stdlib_package() -> IRPackage {
+    IRPackage {
+        constants: BTreeMap::new(),
+        enums: BTreeMap::new(),
+        functions: BTreeMap::new(),
+        package: "Global".to_string(),
+        structs: BTreeMap::new(),
+    }
 }
 
 /// Walk every `@extern "C"` function across `packages` and collect a

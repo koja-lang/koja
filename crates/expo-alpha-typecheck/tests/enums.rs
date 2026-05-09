@@ -685,14 +685,18 @@ fn generic_enum_partial_construction_diagnoses_phantom_for_unbound_param() {
 
 #[test]
 fn generic_enum_unit_variant_construction_diagnoses_phantom() {
+    // `Option<T>` is reserved as a stdlib stub (the iteration
+    // protocol's canonical return type), so this fixture uses
+    // `Maybe<T>` to test the same generic-unit-variant inference
+    // shape without colliding with `Global.Option`.
     let source = "
-        enum Option<T>
+        enum Maybe<T>
           Some(T)
           None
         end
 
         fn main
-          Option.None
+          Maybe.None
         end
         ";
 
@@ -701,7 +705,7 @@ fn generic_enum_unit_variant_construction_diagnoses_phantom() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("cannot infer type parameters of `TestApp.Option`")),
+            .any(|m| m.contains("cannot infer type parameters of `TestApp.Maybe`")),
         "expected unit-variant Phantom diagnostic, got {messages:?}",
     );
 }

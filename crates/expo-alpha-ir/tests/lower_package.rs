@@ -40,9 +40,15 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
     let program = lower(&dedent(source));
 
     assert_eq!(program.entry_point.mangled(), format!("{PACKAGE}.main"));
-    assert_eq!(program.packages.len(), 1);
-    let pkg = &program.packages[0];
-    assert_eq!(pkg.package, PACKAGE);
+    // Two packages: the seeded `Global` stdlib package (where stdlib
+    // generic stubs like `Option<T>` would land if instantiated) and
+    // the `TestApp` package the source lives in.
+    assert_eq!(program.packages.len(), 2);
+    let pkg = program
+        .packages
+        .iter()
+        .find(|pkg| pkg.package == PACKAGE)
+        .expect("test package missing from lowered IR");
     assert_eq!(pkg.functions.len(), 1);
 
     let main: &IRFunction = program.entry_function();

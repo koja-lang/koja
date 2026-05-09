@@ -169,6 +169,19 @@ pub(super) fn seal_expr(expr: &Expr) {
                 seal_statement(stmt);
             }
         }
+        ExprKind::While { condition, body } => {
+            seal_expr(condition);
+            for stmt in body {
+                seal_statement(stmt);
+            }
+        }
+        // `synthesize` rewrites statement-position fors and
+        // resolve diagnoses expression-position fors; seal should
+        // never see one.
+        ExprKind::For { .. } => seal_panic(
+            "alpha typecheck seal saw an `ExprKind::For` after synthesize",
+            expr.span,
+        ),
         other => seal_panic(
             &format!(
                 "alpha typecheck seal does not yet recognize expression kind `{}`",

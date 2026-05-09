@@ -133,7 +133,13 @@ fn execute_function<R: CallResolver>(
 
 /// Drive a function body starting at `blocks[0]` until a `Return`
 /// exits. The frame is shared across every block; unknown branch
-/// targets panic per the seal contract.
+/// targets panic per the seal contract. Loop back-edges fall out of
+/// [`IRTerminator::Branch`] to any [`IRBlockId`] — the dispatcher
+/// treats them like any other branch. The interpreter imposes no
+/// step / iteration cap: real programs have legitimate infinite
+/// loops (a server's main loop, an actor's `receive`, the eventual
+/// `loop { ... }` construct). Test harnesses provide their own
+/// timeouts at the binary level if a test accidentally diverges.
 fn execute_blocks<R: CallResolver>(
     blocks: &[IRBasicBlock],
     frame: &mut Frame,
@@ -634,9 +640,7 @@ fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
     let dest_byte_start = (start_bit / 8) as usize;
     if shift == 0 {
         let src_bytes = length.div_ceil(8) as usize;
-        for i in 0..src_bytes {
-            dest[dest_byte_start + i] = src[i];
-        }
+        dest[dest_byte_start..dest_byte_start + src_bytes].copy_from_slice(&src[..src_bytes]);
         return;
     }
     // Bit-shift each source byte right by `shift`, OR'd into the
@@ -773,7 +777,7 @@ fn pack_integer_segment(
     if width == 0 {
         return;
     }
-    if start_bit % 8 == 0 && width % 8 == 0 {
+    if start_bit.is_multiple_of(8) && width.is_multiple_of(8) {
         let num_bytes = (width / 8) as usize;
         let start_byte = (start_bit / 8) as usize;
         for i in 0..num_bytes {

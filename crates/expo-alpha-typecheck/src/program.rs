@@ -11,7 +11,7 @@ use expo_ast::ast::{Diagnostic, File, Severity};
 use expo_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
-use crate::pipeline::{collect, lift_signatures, resolve, seal};
+use crate::pipeline::{collect, lift_signatures, resolve, seal, synthesize};
 use crate::registry::GlobalRegistry;
 
 /// A package fragment of a [`CheckedProgram`].
@@ -53,17 +53,14 @@ pub struct CheckedProgram {
 ///    land in the `Function(None)` state.
 /// 2. `lift_signatures` — resolve each function's `TypeExpr` params +
 ///    return into `ResolvedType`s and upgrade the registry entry to
-///    `Function(Some(signature))`. After `collect` so cross-references
-///    resolve; before `resolve` so call sites see callee signatures.
-/// 3. `resolve` — walk every body (`File.items[Function]` and
-///    `File.body` for script mode) and populate `Resolution` +
+///    `Function(Some(signature))`.
+/// 3. `synthesize` — surface-shape AST rewrites (today: `for` desugar).
+/// 4. `resolve` — walk every body and populate `Resolution` +
 ///    `Expr.resolution`.
-/// 4. `seal` — assert sealed-AST invariants. Accepts both project-mode
-///    (body `None`) and script-mode (body `Some(_)`) files. Panics on
-///    violation.
+/// 5. `seal` — assert sealed-AST invariants. Panics on violation.
 ///
-/// Future sub-passes (`strip_cfg`, `synthesize`, `check`, `annotate`)
-/// land between these when the work they do becomes load-bearing.
+/// Future sub-passes (`strip_cfg`, `check`, `annotate`) land between
+/// these when the work they do becomes load-bearing.
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure> {
     if parsed.has_errors() {
         return Err(CheckFailure {
@@ -84,6 +81,8 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     }
 
     lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
+
+    synthesize::synthesize_program(&mut packages);
 
     for pkg in &mut packages {
         for file in &mut pkg.files {

@@ -30,7 +30,7 @@ use crate::function::{IRBasicBlock, IRFunction};
 use crate::generics;
 use crate::lower::{LowerOutput, lower_body_to_blocks, lower_package};
 use crate::package::IRPackage;
-use crate::program::collect_link_libraries;
+use crate::program::{collect_link_libraries, empty_global_stdlib_package};
 use crate::seal;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
@@ -133,7 +133,8 @@ impl IRScript {
 ///    violation per the seal contract.
 pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     let mut output = LowerOutput::default();
-    let mut packages: Vec<IRPackage> = Vec::with_capacity(checked.packages.len());
+    let mut packages: Vec<IRPackage> = Vec::with_capacity(checked.packages.len() + 1);
+    packages.push(empty_global_stdlib_package());
     for pkg in &checked.packages {
         packages.push(lower_package(pkg, &checked.registry, &mut output));
     }

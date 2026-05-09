@@ -168,11 +168,11 @@ fn write_bits_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8], bit_length: u64) -
     }
     let full_bytes = bytes.len().saturating_sub(1);
     write!(f, "<<")?;
-    for index in 0..full_bytes {
+    for (index, byte) in bytes.iter().take(full_bytes).enumerate() {
         if index > 0 {
             write!(f, ", ")?;
         }
-        write!(f, "0x{:02X}", bytes[index])?;
+        write!(f, "0x{byte:02X}")?;
     }
     if full_bytes > 0 {
         write!(f, ", ")?;

@@ -58,6 +58,7 @@ mod ctx;
 mod drops;
 mod enums;
 mod expr;
+mod loops;
 mod match_expr;
 mod ops;
 mod ownership;

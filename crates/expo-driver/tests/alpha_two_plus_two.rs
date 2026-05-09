@@ -1244,6 +1244,194 @@ fn alpha_run_interpreter_script_bits_literal_prints_partial_byte() {
     );
 }
 
+/// Script-mode fixture exercising the alpha `while` slice end-to-end.
+/// A counter accumulator (`sum = sum + i; i = i + 1`) iterates 10
+/// times and the trailing expression renders the accumulated `45`.
+/// Pins the loop CFG (header / body / exit + back-edge) and
+/// loop-carried alloca-slot state through both backends — LLVM
+/// emits real `br`-and-phi-free machine-code branches, the
+/// interpreter dispatches `Branch` and `CondBranch` terminators at
+/// runtime.
+const WHILE_COUNTER_SCRIPT_SOURCE: &str = "
+    fn sum_to_ten -> Int
+      i = 0
+      sum = 0
+      while i < 10
+        sum = sum + i
+        i = i + 1
+      end
+      sum
+    end
+
+    sum_to_ten()
+";
+
+#[test]
+fn alpha_run_llvm_script_while_counter_prints_forty_five() {
+    assert_script_prints(
+        "run_llvm_while_counter",
+        WHILE_COUNTER_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "45",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_while_counter_prints_forty_five() {
+    assert_script_prints(
+        "run_interpreter_while_counter",
+        WHILE_COUNTER_SCRIPT_SOURCE,
+        None,
+        "45",
+    );
+}
+
+/// Script-mode fixture exercising loop-carried heap state through
+/// `while`. Each iteration's `s = s <> "x"` reassignment drops the
+/// prior heap value via the existing ownership-aware `LocalWrite`
+/// drop on reassignment; after 3 iterations the trailing expression
+/// renders `xxx`. Pins the move/drop story end-to-end inside a loop.
+const WHILE_STRING_CONCAT_SCRIPT_SOURCE: &str = "
+    fn build_xs -> String
+      i = 0
+      s = \"\"
+      while i < 3
+        s = s <> \"x\"
+        i = i + 1
+      end
+      s
+    end
+
+    build_xs()
+";
+
+#[test]
+fn alpha_run_llvm_script_while_string_concat_prints_xxx() {
+    assert_script_prints(
+        "run_llvm_while_string_concat",
+        WHILE_STRING_CONCAT_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "xxx",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_while_string_concat_prints_xxx() {
+    assert_script_prints(
+        "run_interpreter_while_string_concat",
+        WHILE_STRING_CONCAT_SCRIPT_SOURCE,
+        None,
+        "xxx",
+    );
+}
+
+/// Script-mode fixture exercising the alpha `for` slice end-to-end.
+/// `Counter{0..5}` exposes the `Enumeration<Int>` contract via
+/// `length` and `get -> Option<Int>`. The typecheck `synthesize`
+/// sub-pass rewrites the for into a while + match against
+/// `Option<Int>`, so the whole pipeline (lower, monomorphize
+/// `Option<Int>`, eval / LLVM) has to handle the desugared CFG
+/// transparently. Sum is 0+1+2+3+4 = 10.
+const FOR_COUNTER_SCRIPT_SOURCE: &str = "
+    struct Counter
+      start: Int
+      finish: Int
+    end
+
+    impl Counter
+      fn length(self) -> Int
+        self.finish - self.start
+      end
+
+      fn get(self, index: Int) -> Option<Int>
+        Option.Some(self.start + index)
+      end
+    end
+
+    fn sum_counter -> Int
+      c = Counter{start: 0, finish: 5}
+      sum = 0
+      for x in c
+        sum = sum + x
+      end
+      sum
+    end
+
+    sum_counter()
+";
+
+#[test]
+fn alpha_run_llvm_script_for_counter_prints_ten() {
+    assert_script_prints(
+        "run_llvm_for_counter",
+        FOR_COUNTER_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "10",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_for_counter_prints_ten() {
+    assert_script_prints(
+        "run_interpreter_for_counter",
+        FOR_COUNTER_SCRIPT_SOURCE,
+        None,
+        "10",
+    );
+}
+
+/// Script-mode fixture pinning loop-carried heap state through the
+/// `for` desugar. Each iteration reassigns the heap-typed `s`, so the
+/// existing ownership-aware `LocalWrite`-drops have to fire inside
+/// the desugared while + match body. Output is `xxx`.
+const FOR_STRING_CONCAT_SCRIPT_SOURCE: &str = "
+    struct Counter
+      start: Int
+      finish: Int
+    end
+
+    impl Counter
+      fn length(self) -> Int
+        self.finish - self.start
+      end
+
+      fn get(self, index: Int) -> Option<Int>
+        Option.Some(self.start + index)
+      end
+    end
+
+    fn build_xs -> String
+      c = Counter{start: 0, finish: 3}
+      s = \"\"
+      for _ in c
+        s = s <> \"x\"
+      end
+      s
+    end
+
+    build_xs()
+";
+
+#[test]
+fn alpha_run_llvm_script_for_string_concat_prints_xxx() {
+    assert_script_prints(
+        "run_llvm_for_string_concat",
+        FOR_STRING_CONCAT_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "xxx",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_for_string_concat_prints_xxx() {
+    assert_script_prints(
+        "run_interpreter_for_string_concat",
+        FOR_STRING_CONCAT_SCRIPT_SOURCE,
+        None,
+        "xxx",
+    );
+}
+
 #[test]
 fn alpha_build_interpreter_backend_errors() {
     let scratch = scratch_dir("build_interpreter_backend");

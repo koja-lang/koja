@@ -139,7 +139,7 @@ fn classify_segment(
         };
         let width = match segment.unit {
             BinaryUnit::Bit => bits,
-            BinaryUnit::Byte => bits.checked_mul(8).unwrap_or(u64::MAX),
+            BinaryUnit::Byte => bits.saturating_mul(8),
         };
         return Ok(ClassifiedSegment::Integer { width });
     }

@@ -447,7 +447,11 @@ fn global_to_ir_type(
     let entry = registry.get(id).unwrap_or_else(|| {
         panic!("alpha IR lower: ResolvedType id {id} missing from registry — seal violation",)
     });
-    if entry.identifier.is_in_package("Global") {
+    // Stdlib `Struct(_)` stubs (scalars, `CPtr<T>`) need fixed-
+    // shape lowering; stdlib `Enum(_)` stubs (today `Option<T>`)
+    // fall through to the generic-enum path so they monomorphize
+    // like any other decl.
+    if entry.identifier.is_in_package("Global") && matches!(entry.kind, GlobalKind::Struct(_)) {
         if entry.identifier.last() == "CPtr" {
             assert_eq!(
                 type_args.len(),

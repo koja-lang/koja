@@ -27,6 +27,7 @@ use super::control_flow::{
 };
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
+use super::loops::lower_while;
 use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
     bin_op_result_type, const_value_type, lower_bin_op, lower_literal, lower_unary_op,
@@ -262,6 +263,9 @@ pub(super) fn lower_expr(
         }
         ExprKind::Unless { condition, body } => {
             lower_unless(condition, body, ctx, block, registry, output)
+        }
+        ExprKind::While { condition, body } => {
+            lower_while(condition, body, ctx, block, registry, output)
         }
         other => {
             output.diagnostics.push(Diagnostic::error(

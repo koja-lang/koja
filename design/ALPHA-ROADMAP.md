@@ -113,15 +113,6 @@ alpha crates.
 
 ### Blockers — without these the stdlib does not type-check
 
-- **Loops — `for` and `while`** — `resolve/expr.rs` falls through;
-  `lower/expr.rs:211` reports "alpha IR does not yet lower this
-  expression kind". `for` is the iteration primitive built on
-  `Enumeration<T>`; `while` powers `string` and `list.reverse`. The
-  block-parameter SSA join we just shipped
-  (`alpha-if-cond-blockparams`) is the substrate — loops lower the
-  same way: a header block with parameters carrying the loop-carried
-  state, a body, a back-edge.
-
 - **Closure parameter types (`fn (T) -> U`)** —
   `lift_signatures/types.rs:71` diagnoses
   "function-typed annotations not yet supported". Stdlib bodies never
@@ -134,13 +125,6 @@ alpha crates.
   `Int` and `Fd.descriptor: Int32`. Already fails today on user code
   (`thing.Yeah`). Strict-equality is the alpha policy; this is the
   narrowest adjustment that unblocks the stdlib.
-
-- **`return` from inside `for`/`while`** — `resolve/return_type.rs`
-  already handles divergence via `Never`, and `match` arms already
-  return early through the same path (e.g. `String.alpha?`'s
-  `return false` from inside a match arm typechecks today). The
-  "from inside a loop" piece is the one remaining wedge — falls out
-  once Phase 1 (loops) is in.
 
 ### Significant — required for non-trivial stdlib pieces
 
@@ -270,16 +254,20 @@ Order is chosen to maximize what each step _unblocks_, not by
 implementation cost in isolation. Each step lands behind seal-asserted
 output and standalone tests, per northstar.
 
-### Phase 1 — Loops
+### ~~Phase 1 — Loops~~ — **Shipped**
 
-- `while` first (lower to a header block with no params + a back-edge
-  — the existing `if`/`else` machinery already has every primitive).
-- `for` lowers to a `while` over `Enumeration<T>::length` /
-  `Enumeration<T>::get` — exactly v1's strategy. The
-  `Enumeration<T>` protocol is already in `kernel.expo`.
-- `return` from inside loops works out of the box once block-param
-  SSA carries divergence (which it does — `Never` joins fine).
-- `break` is post-stdlib; nothing in `lib/global/` uses it.
+- `while` lowers to a three-block CFG (`while_header` / `while_body`
+  / `while_exit`) using the existing alloca-based local-variable
+  model for loop-carried state.
+- `for` desugars in the typecheck `synthesize` sub-pass (not in IR
+  lowering) to `while` + `match` over `Option<T>`, per the northstar
+  "typecheck owns AST mutation" rule. The desugar emits real method
+  calls to the iterable's `length` / `get`; the structural
+  `Enumeration<T>` contract is checked nominally against
+  `Global.Option<T>`.
+- `return` from inside loops works through the existing `Never`
+  divergence path.
+- `break` / `continue` remain post-stdlib (no `lib/global/` use).
 
 ### Phase 2 — Closure parameter types
 
@@ -439,11 +427,29 @@ What's shipped since the last audit:
   `program.rs` (LLVM), and the `*_concat_*` / `*_literal_*` e2e
   driver tests.
 
-The roadmap's original Phase 1 is closed; the strings/binary/bits
-slice closed the Phase 3 string-related items, and the alpha
-move/drop foundation slice closed `move` in typecheck. Loops and
-the surviving Phase 3 mechanical-glue item (numeric coercion at
-struct-literal sites) are the next critical-path slices.
+- **Loops — `while` + `for` end-to-end.** `while` lowers to a
+  three-block CFG (header / body / exit) with loop-carried state in
+  alloca slots (no block-param plumbing — the existing `LocalRead` /
+  `LocalWrite` path handles re-reads across the back-edge). `for`
+  desugars in the typecheck `synthesize` sub-pass to `while` +
+  `match` over `Option<T>` (canonical `Global.Option<T>` stub is
+  registered as a fully-lifted enum); `Enumeration<T>` is the
+  structural contract — the iterable must expose `length()` and
+  `get(idx) -> Option<T>`. Per the northstar "typecheck owns AST
+  mutation" rule, the desugar runs before `resolve` so IR / eval /
+  LLVM never see `ExprKind::For`. `return` from inside loops, nested
+  loops, `if` / `else` inside loop bodies, and heap-typed loop-
+  carried state (string accumulator, drop-on-reassignment) all fall
+  out of the existing machinery. Pinned by `resolve_loops.rs`,
+  `lower_loops.rs`, `eval/loops.rs`, `llvm/loops.rs`, and the
+  `*_while_*` / `*_for_*` driver tests.
+
+The roadmap's original Phase 1 (loops) is closed; the strings/
+binary/bits slice closed the Phase 3 string-related items, and the
+alpha move/drop foundation slice closed `move` in typecheck. The
+surviving Phase 3 mechanical-glue item (numeric coercion at
+struct-literal sites) and Phase 2 (closure parameter types) are the
+next critical-path slices.
 
 ---
 

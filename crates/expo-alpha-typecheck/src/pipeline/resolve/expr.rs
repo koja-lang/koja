@@ -13,7 +13,9 @@ use expo_ast::labels::expr_kind_label;
 
 use super::binary_literal::resolve_binary_literal;
 use super::calls::{resolve_call, resolve_method_call};
-use super::control_flow::{resolve_cond, resolve_if, resolve_ternary, resolve_unless};
+use super::control_flow::{
+    resolve_cond, resolve_if, resolve_ternary, resolve_unless, resolve_while,
+};
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
@@ -116,6 +118,21 @@ pub(super) fn resolve_expr(
         }
         ExprKind::Unless { condition, body } => {
             resolve_unless(condition, body, resolver, diagnostics)
+        }
+        ExprKind::While { condition, body } => {
+            resolve_while(condition, body, resolver, diagnostics)
+        }
+        // Statement-position `for` is rewritten by `synthesize`
+        // before resolve runs; reaching here means expression
+        // position, which alpha doesn't support yet.
+        ExprKind::For { .. } => {
+            diagnostics.push(Diagnostic::error(
+                "alpha typecheck does not yet support `for` in expression \
+                 position (only statement-position `for` is supported)"
+                    .to_string(),
+                expr.span,
+            ));
+            ResolvedType::unresolved()
         }
         // Unsupported shapes diagnose and leave the expression
         // unresolved. Seal runs only on the success path, so an

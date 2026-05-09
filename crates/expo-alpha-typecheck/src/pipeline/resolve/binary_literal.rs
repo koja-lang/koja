@@ -90,8 +90,8 @@ pub(super) fn resolve_binary_literal(
     resolver.registry.primitive(primitive_name)
 }
 
-/// Validate one segment and produce its [`SegmentInfo`] (or `None`
-/// + a diagnostic on failure). Surfaces feature-gap diagnostics for
+/// Validate one segment and produce its [`SegmentInfo`] (`None` plus
+/// a diagnostic on failure). Surfaces feature-gap diagnostics for
 /// the v1 dynamic-width form (`::n` where `n` is a runtime int).
 fn resolve_segment(
     segment: &BinarySegment,
@@ -138,7 +138,7 @@ fn resolve_segment(
         };
         let width_bits = match segment.unit {
             BinaryUnit::Bit => bits,
-            BinaryUnit::Byte => bits.checked_mul(8).unwrap_or(u64::MAX),
+            BinaryUnit::Byte => bits.saturating_mul(8),
         };
         if width_bits == 0 {
             diagnostics.push(Diagnostic::error(

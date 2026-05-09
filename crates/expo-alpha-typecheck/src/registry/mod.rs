@@ -26,7 +26,7 @@
 //! [`format`] submodule; it's a separate concern from the data + insert
 //! API (different audience: diagnostic rendering vs pipeline work).
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use expo_ast::identifier::{
     GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
@@ -124,18 +124,15 @@ impl GlobalRegistry {
         Self::default()
     }
 
-    /// Seed a fresh registry with stdlib struct stubs for the scalar
-    /// types alpha synthesizes from literals (`Int`/`Bool`/`Unit`/
-    /// `Float`/`String`), the explicit-width numeric primitives that
-    /// FFI signatures admit (`Int8`..`Int64`, `UInt8`..`UInt64`,
-    /// `Float32`/`Float64`), and the generic `CPtr<T>` pointer wrapper.
-    /// They register as ordinary [`GlobalKind::Struct`] entries under
-    /// the `Global` package so resolve never special-cases primitives.
+    /// Seed a fresh registry with stdlib stubs: scalar / FFI-width
+    /// primitives + `String` / `Binary` / `Bits` (struct stubs),
+    /// `CPtr<T>` (generic struct stub), and `Option<T>` (fully-
+    /// lifted enum stub used by the `for` desugar). All under the
+    /// `Global` package so resolve never special-cases them.
     ///
     /// Temporary scaffolding — once the real stdlib compiles as a
     /// package these entries land through `collect` like any other
-    /// decl. Stubs share their shape with the eventual real entries,
-    /// so the cutover is invisible to downstream consumers.
+    /// decl.
     pub fn with_stdlib_stubs() -> Self {
         let mut reg = Self::default();
         for name in [
@@ -161,6 +158,7 @@ impl GlobalRegistry {
             matches!(cptr_outcome, InsertOutcome::Fresh(_)),
             "stdlib stub `Global.CPtr` collided on preload — registry was not empty",
         );
+        seed_option_stub(&mut reg);
         reg
     }
 
@@ -582,4 +580,41 @@ impl GlobalRegistry {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+}
+
+/// Seed `Global.Option<T> = Some(T) | None` fully lifted (head +
+/// variant roster) so the `synthesize` for-desugar and any other
+/// compiler-internal `Option<T>` reference can name the variants
+/// without going through `lift_signatures`.
+fn seed_option_stub(reg: &mut GlobalRegistry) {
+    let outcome = reg.insert_enum(
+        Identifier::new("Global", vec!["Option".to_string()]),
+        Span::default(),
+        vec!["T".to_string()],
+    );
+    let option_id = match outcome {
+        InsertOutcome::Fresh(id) => id,
+        InsertOutcome::Collision { existing } => panic!(
+            "stdlib stub `Global.Option` collided on preload with `{}` — \
+             registry was not empty",
+            existing.identifier,
+        ),
+    };
+    let definition = EnumDefinition {
+        variants: vec![
+            ResolvedEnumVariant {
+                name: "Some".to_string(),
+                data: ResolvedVariantData::Tuple(vec![ResolvedType::leaf(Resolution::TypeParam {
+                    owner: option_id,
+                    index: TypeParamIndex::new(0),
+                })]),
+            },
+            ResolvedEnumVariant {
+                name: "None".to_string(),
+                data: ResolvedVariantData::Unit,
+            },
+        ],
+        conformances: BTreeMap::new(),
+    };
+    reg.set_enum_definition(option_id, definition);
 }
