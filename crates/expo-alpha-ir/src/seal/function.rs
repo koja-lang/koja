@@ -60,6 +60,14 @@ fn seal_function(function: &IRFunction) {
                 ));
             }
         }
+        FunctionKind::Closure { .. } => {
+            if function.blocks.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is a synthesized closure but carries no basic blocks; closure \
+                     bodies must lower to a non-empty CFG",
+                ));
+            }
+        }
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
     // Function parameter `ValueId`s seed the entry block's

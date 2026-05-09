@@ -36,6 +36,7 @@
 
 mod binary_literal;
 mod calls;
+mod closures;
 mod control_flow;
 mod ctx;
 mod enums;

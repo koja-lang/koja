@@ -41,7 +41,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use expo_alpha_typecheck::{CheckedPackage, GlobalRegistry};
 use expo_ast::ast::{Function, ImplMember, Item};
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{
+    AnonymousKind, FnParam, GlobalRegistryId, Identifier, Resolution, ResolvedType,
+};
 
 use crate::lower::LowerOutput;
 use crate::lower::package::impl_target_name;
@@ -198,30 +200,48 @@ pub(crate) fn substitute_resolved_type(
     args: &[ResolvedType],
     owner: GlobalRegistryId,
 ) -> ResolvedType {
-    if let Resolution::TypeParam {
-        owner: param_owner,
-        index,
-    } = template.resolution
-        && param_owner == owner
-    {
-        return args
-            .get(index.as_u32() as usize)
-            .cloned()
-            .unwrap_or_else(|| {
-                panic!(
-                    "alpha IR generics: TypeParam index {} out of range \
+    match template {
+        ResolvedType::Named {
+            resolution:
+                Resolution::TypeParam {
+                    owner: param_owner,
+                    index,
+                },
+            ..
+        } if *param_owner == owner => {
+            args.get(index.as_u32() as usize)
+                .cloned()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "alpha IR generics: TypeParam index {} out of range \
                      (owner `{owner}`, args.len() == {})",
-                    index.as_u32(),
-                    args.len(),
-                );
-            });
-    }
-    ResolvedType {
-        resolution: template.resolution,
-        type_args: template
-            .type_args
-            .iter()
-            .map(|arg| substitute_resolved_type(arg, args, owner))
-            .collect(),
+                        index.as_u32(),
+                        args.len(),
+                    );
+                })
+        }
+        ResolvedType::Named {
+            resolution,
+            type_args,
+        } => ResolvedType::Named {
+            resolution: *resolution,
+            type_args: type_args
+                .iter()
+                .map(|arg| substitute_resolved_type(arg, args, owner))
+                .collect(),
+        },
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: params
+                    .iter()
+                    .map(|p| FnParam {
+                        mode: p.mode,
+                        ty: substitute_resolved_type(&p.ty, args, owner),
+                    })
+                    .collect(),
+                ret: Box::new(substitute_resolved_type(ret, args, owner)),
+            })
+        }
+        ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
 }

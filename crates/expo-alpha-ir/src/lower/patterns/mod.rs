@@ -34,7 +34,7 @@ mod structs;
 
 use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Diagnostic, Pattern};
-use expo_ast::identifier::{LocalId, ResolvedType};
+use expo_ast::identifier::{GlobalRegistryId, LocalId, ResolvedType};
 use expo_ast::labels::{pattern_kind_label, pattern_span};
 
 use super::arms::lower_result_ty;
@@ -230,11 +230,15 @@ pub(super) fn require_local(local_id: Option<LocalId>, name: &str) -> IRLocalId 
 /// instantiate uniformly.
 pub(super) fn field_type_for(
     declared_ty: &ResolvedType,
-    owner: expo_ast::identifier::GlobalRegistryId,
+    owner: GlobalRegistryId,
     inputs: &PatternInputs<'_>,
     output: &mut LowerOutput,
 ) -> IRType {
-    let substituted = substitute_resolved_type(declared_ty, &inputs.subject_ty.type_args, owner);
+    let subject_args: &[ResolvedType] = match inputs.subject_ty {
+        ResolvedType::Named { type_args, .. } => type_args,
+        _ => &[],
+    };
+    let substituted = substitute_resolved_type(declared_ty, subject_args, owner);
     resolved_type_to_ir_type(&substituted, inputs.registry, &mut output.instantiations)
 }
 

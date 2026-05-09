@@ -210,10 +210,14 @@ fn struct_entry_from_resolution<'a>(
     registry: &'a GlobalRegistry,
     role: &str,
 ) -> &'a RegistryEntry {
-    let Resolution::Global(id) = resolution.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        ..
+    } = resolution
+    else {
         panic!("alpha IR lower: struct {role} has Unresolved resolution after typecheck seal",);
     };
-    registry.get(id).unwrap_or_else(|| {
+    registry.get(*id).unwrap_or_else(|| {
         panic!("alpha IR lower: struct id {id} missing from registry — seal invariant violation",)
     })
 }

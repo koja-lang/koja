@@ -635,8 +635,11 @@ fn generic_enum_lifts_with_type_params_and_typeparam_payload_resolutions() {
         panic!("expected Ok to be a tuple variant, got {:?}", ok.data);
     };
     assert!(matches!(
-        ok_payload[0].resolution,
-        Resolution::TypeParam { owner, .. } if owner == result_id,
+        &ok_payload[0],
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, .. },
+            ..
+        } if *owner == result_id,
     ));
 }
 
@@ -656,8 +659,13 @@ fn generic_enum_tuple_variant_construction_infers_type_args() {
     let box_id = lookup_enum_id(&checked, "Box");
     let int = global_leaf(&checked, "Int");
     let trailing = body_trailing_expr(&checked, "main");
-    assert_eq!(trailing.resolution.resolution, Resolution::Global(box_id));
-    assert_eq!(trailing.resolution.type_args, vec![int]);
+    assert_eq!(
+        trailing.resolution,
+        ResolvedType::Named {
+            resolution: Resolution::Global(box_id),
+            type_args: vec![int],
+        },
+    );
 }
 
 #[test]
@@ -749,6 +757,11 @@ fn generic_enum_struct_variant_construction_infers_type_args() {
     let int = global_leaf(&checked, "Int");
     let string = global_leaf(&checked, "String");
     let trailing = body_trailing_expr(&checked, "main");
-    assert_eq!(trailing.resolution.resolution, Resolution::Global(pair_id));
-    assert_eq!(trailing.resolution.type_args, vec![int, string]);
+    assert_eq!(
+        trailing.resolution,
+        ResolvedType::Named {
+            resolution: Resolution::Global(pair_id),
+            type_args: vec![int, string],
+        },
+    );
 }

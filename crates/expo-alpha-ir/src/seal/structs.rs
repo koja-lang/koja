@@ -139,6 +139,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             IRInstruction::BinaryConstruct { .. }
             | IRInstruction::BinaryOp { .. }
             | IRInstruction::Call { .. }
+            | IRInstruction::CallClosure { .. }
             | IRInstruction::Concat { .. }
             | IRInstruction::Const { .. }
             | IRInstruction::DropLocal { .. }
@@ -149,6 +150,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalRead { .. }
             | IRInstruction::LocalWrite { .. }
+            | IRInstruction::MakeClosure { .. }
             | IRInstruction::MoveOutLocal { .. }
             | IRInstruction::UnaryOp { .. } => {}
         }

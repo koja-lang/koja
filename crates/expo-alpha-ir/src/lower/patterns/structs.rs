@@ -6,7 +6,7 @@
 //! the enum-payload path.
 
 use expo_ast::ast::{FieldPattern, Pattern};
-use expo_ast::identifier::Resolution;
+use expo_ast::identifier::{Resolution, ResolvedType};
 
 use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::super::structs::{resolved_struct_symbol, struct_definition_from_resolution};
@@ -38,8 +38,11 @@ fn build_struct_field_binds(
         inputs.registry,
         &mut output.instantiations,
     );
-    let owner = match inputs.subject_ty.resolution {
-        Resolution::Global(id) => id,
+    let owner = match inputs.subject_ty {
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => *id,
         _ => panic!(
             "alpha IR lower: struct pattern subject has non-Global resolution after \
              typecheck seal",

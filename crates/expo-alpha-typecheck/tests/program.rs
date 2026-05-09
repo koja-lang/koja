@@ -7,7 +7,7 @@
 
 use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement};
-use expo_ast::identifier::{Identifier, Resolution};
+use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
 mod common;
@@ -73,14 +73,9 @@ fn fn_main_two_plus_two_typechecks_to_int() {
         expr.resolution,
     );
     assert_eq!(
-        expr.resolution.resolution,
-        Resolution::Global(int_id),
+        expr.resolution,
+        ResolvedType::leaf(Resolution::Global(int_id)),
         "top-level `2 + 2` did not resolve to Global.Int",
-    );
-    assert!(
-        expr.resolution.type_args.is_empty(),
-        "Int is arity-0 but resolution carried type args: {:?}",
-        expr.resolution.type_args,
     );
 
     let ExprKind::Binary { left, right, .. } = &expr.kind else {
@@ -126,8 +121,8 @@ fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
         .lookup(&string_id)
         .expect("Global.String stub should be registered");
     assert_eq!(
-        signature.params[0].ty.resolution,
-        Resolution::Global(string_global_id),
+        signature.params[0].ty,
+        ResolvedType::leaf(Resolution::Global(string_global_id)),
     );
 
     let unit_id = Identifier::new("Global", vec!["Unit".to_string()]);
@@ -136,8 +131,8 @@ fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
         .lookup(&unit_id)
         .expect("Global.Unit stub should be registered");
     assert_eq!(
-        signature.return_type.resolution,
-        Resolution::Global(unit_global_id),
+        signature.return_type,
+        ResolvedType::leaf(Resolution::Global(unit_global_id)),
     );
 }
 
@@ -169,13 +164,8 @@ fn duplicate_fn_in_same_file_emits_diagnostic() {
 
 fn assert_int(expr: &Expr, int_id: expo_ast::identifier::GlobalRegistryId) {
     assert_eq!(
-        expr.resolution.resolution,
-        Resolution::Global(int_id),
+        expr.resolution,
+        ResolvedType::leaf(Resolution::Global(int_id)),
         "operand did not resolve to Global.Int: {expr:?}",
-    );
-    assert!(
-        expr.resolution.type_args.is_empty(),
-        "Int leaf should have no type args: {:?}",
-        expr.resolution.type_args,
     );
 }

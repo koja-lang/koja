@@ -169,7 +169,10 @@ pub(super) fn lower_method_call(
 fn receiver_type_args(receiver: &Expr, dispatch: Dispatch) -> Vec<ResolvedType> {
     match dispatch {
         Dispatch::Static => Vec::new(),
-        Dispatch::Instance => receiver.resolution.type_args.clone(),
+        Dispatch::Instance => match &receiver.resolution {
+            ResolvedType::Named { type_args, .. } => type_args.clone(),
+            _ => Vec::new(),
+        },
     }
 }
 
@@ -227,13 +230,17 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
         }
         Dispatch::Instance => {
             let resolution = &receiver.resolution;
-            let Resolution::Global(struct_id) = resolution.resolution else {
+            let ResolvedType::Named {
+                resolution: Resolution::Global(struct_id),
+                ..
+            } = resolution
+            else {
                 panic!(
                     "alpha IR lower: instance method receiver resolved to non-Global type \
                      ({resolution:?}) — typecheck seal must have rejected this",
                 );
             };
-            struct_id
+            *struct_id
         }
     }
 }

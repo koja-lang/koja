@@ -81,10 +81,13 @@ fn bounded_method_call_resolves_protocol_return_type() {
         .lookup(&Identifier::new("Global", vec!["String".to_string()]))
         .map(|(id, _)| id)
         .expect("String exists in registry");
-    let resolution = trailing.resolution.resolution;
-    let expo_ast::identifier::Resolution::Global(id) = resolution else {
+    let expo_ast::identifier::ResolvedType::Named {
+        resolution: expo_ast::identifier::Resolution::Global(id),
+        ..
+    } = trailing.resolution
+    else {
         panic!(
-            "expected Resolution::Global(String), got {:?}",
+            "expected Named {{ Global(String), .. }}, got {:?}",
             trailing.resolution
         );
     };

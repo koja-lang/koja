@@ -35,7 +35,7 @@ use methods::{
 };
 
 use super::ctx::{Callee, Resolver};
-use super::expr::resolve_expr;
+use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::types::{display_resolution, verify_bounds};
 use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
@@ -48,13 +48,12 @@ pub(super) fn resolve_call(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    resolve_args(args, resolver, diagnostics);
-
     let ExprKind::Ident {
         name,
         resolution: ident_resolution,
     } = &mut callee.kind
     else {
+        resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck only supports bare-identifier callees (got `{}`)",
@@ -67,6 +66,7 @@ pub(super) fn resolve_call(
 
     let candidate = Identifier::new(resolver.package, vec![name.clone()]);
     let Some((id, entry)) = resolver.registry.lookup(&candidate) else {
+        resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!("unknown function `{name}`"),
             callee.span,
@@ -82,6 +82,7 @@ pub(super) fn resolve_call(
             entry.identifier,
         ),
         other => {
+            resolve_args(args, None, resolver, diagnostics);
             diagnostics.push(Diagnostic::error(
                 format!(
                     "cannot call `{name}`: it is a {}, not a function",
@@ -99,6 +100,7 @@ pub(super) fn resolve_call(
     *ident_resolution = Resolution::Global(id);
 
     if callee_type_params.is_empty() {
+        resolve_args(args, Some(&sig.params), resolver, diagnostics);
         validate_arg_signature(
             args,
             &sig.params,
@@ -109,11 +111,23 @@ pub(super) fn resolve_call(
         );
         sig.return_type.clone()
     } else {
+        resolve_non_closure_args(args, resolver, diagnostics);
         let callee = Callee {
             id,
             label: &callee_label,
             type_params: &callee_type_params,
         };
+        let partial_subst = partial_unify_call(callee, &sig, args, resolver.registry, diagnostics);
+        let partially_substituted_params = sig
+            .params
+            .iter()
+            .map(|p| ResolvedParam {
+                mode: p.mode,
+                name: p.name.clone(),
+                ty: substitute_resolved_type(&p.ty, &partial_subst, callee.id),
+            })
+            .collect::<Vec<_>>();
+        resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
         let (substituted_params, substituted_return) = infer_call_type_args(
             callee,
             &sig,
@@ -148,13 +162,13 @@ pub(super) fn resolve_method_call(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    resolve_args(args, resolver, diagnostics);
-
     let Some(method_receiver) = classify_receiver(receiver, resolver, diagnostics) else {
+        resolve_args(args, None, resolver, diagnostics);
         return ResolvedType::unresolved();
     };
 
     if let MethodReceiver::Bounded { owner, index } = method_receiver {
+        resolve_args(args, None, resolver, diagnostics);
         let site = BoundedCall {
             receiver,
             owner,
@@ -208,6 +222,12 @@ pub(super) fn resolve_method_call(
     let method_type_params = method_entry.type_params.clone();
 
     if receiver_type_params.is_empty() && method_type_params.is_empty() {
+        resolve_args(
+            args,
+            Some(method_receiver.explicit_params(&sig.params)),
+            resolver,
+            diagnostics,
+        );
         validate_arg_signature(
             args,
             method_receiver.explicit_params(&sig.params),
@@ -224,17 +244,49 @@ pub(super) fn resolve_method_call(
     // Instance dispatch: receiver carries the value's full
     // resolved type. Either way, the same field seeds receiver
     // substitution.
+    let receiver_callee = Callee {
+        id: struct_id,
+        label: &receiver_label,
+        type_params: &receiver_type_params,
+    };
+    let method_callee = Callee {
+        id: method_id,
+        label: &method_label,
+        type_params: &method_type_params,
+    };
+    resolve_non_closure_args(args, resolver, diagnostics);
+    let (partial_receiver_subst, partial_method_subst) = partial_unify_method_call(
+        receiver_callee,
+        method_callee,
+        method_receiver.explicit_params(&sig.params),
+        &receiver.resolution,
+        args,
+    );
+    let partially_substituted_params = sig
+        .params
+        .iter()
+        .map(|p| {
+            let with_method =
+                substitute_resolved_type(&p.ty, &partial_method_subst, method_callee.id);
+            let with_receiver =
+                substitute_resolved_type(&with_method, &partial_receiver_subst, receiver_callee.id);
+            ResolvedParam {
+                mode: p.mode,
+                name: p.name.clone(),
+                ty: with_receiver,
+            }
+        })
+        .collect::<Vec<_>>();
+    resolve_closure_args(
+        args,
+        method_receiver.explicit_params(&partially_substituted_params),
+        resolver,
+        diagnostics,
+    );
+
     let target = MethodInferenceTarget {
-        receiver: Callee {
-            id: struct_id,
-            label: &receiver_label,
-            type_params: &receiver_type_params,
-        },
-        method: Callee {
-            id: method_id,
-            label: &method_label,
-            type_params: &method_type_params,
-        },
+        receiver: receiver_callee,
+        method: method_callee,
         receiver_type: &receiver.resolution,
         explicit_params: method_receiver.explicit_params(&sig.params),
     };
@@ -371,18 +423,145 @@ pub(super) fn diagnose_phantom_params(
     }
 }
 
-/// Resolve every call argument. Named args diagnose up front but
-/// resolution still proceeds so seal walks a populated tree.
-fn resolve_args(args: &mut [Arg], resolver: &mut Resolver<'_>, diagnostics: &mut Vec<Diagnostic>) {
+/// Resolve every call argument with optional per-position expected
+/// types. Named args diagnose up front but resolution still proceeds
+/// so seal walks a populated tree. The expected type at each position
+/// flows into the corresponding arg via [`resolve_expr_with_expected`]
+/// so closure args can pull their param/return shape from the
+/// callee's signature when the user omits annotations.
+fn resolve_args(
+    args: &mut [Arg],
+    expected: Option<&[ResolvedParam]>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (index, arg) in args.iter_mut().enumerate() {
+        diagnose_named_arg(arg, diagnostics);
+        let expected_ty = expected.and_then(|params| params.get(index)).map(|p| &p.ty);
+        resolve_expr_with_expected(&mut arg.value, expected_ty, resolver, diagnostics);
+    }
+}
+
+/// First-pass arg resolution for generic callees: resolve every arg
+/// that isn't a closure expression so type-arg inference has
+/// something to unify against. Closure args wait for the second pass
+/// once their expected `fn (T) -> U` shape is known.
+fn resolve_non_closure_args(
+    args: &mut [Arg],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for arg in args.iter_mut() {
-        if let Some(name) = arg.name.as_ref() {
-            diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck does not yet support named arguments (got `{name}`)",),
-                arg.span,
-            ));
+        diagnose_named_arg(arg, diagnostics);
+        if is_closure_expr(&arg.value.kind) {
+            continue;
         }
         resolve_expr(&mut arg.value, resolver, diagnostics);
     }
+}
+
+/// Second-pass arg resolution for generic callees: walk closure args
+/// with the substituted param type as the expected hint so closure
+/// param/return slots inherit any type-args inferred from the
+/// non-closure args.
+fn resolve_closure_args(
+    args: &mut [Arg],
+    expected: &[ResolvedParam],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for (index, arg) in args.iter_mut().enumerate() {
+        if !is_closure_expr(&arg.value.kind) {
+            continue;
+        }
+        let expected_ty = expected.get(index).map(|p| &p.ty);
+        resolve_expr_with_expected(&mut arg.value, expected_ty, resolver, diagnostics);
+    }
+}
+
+fn diagnose_named_arg(arg: &Arg, diagnostics: &mut Vec<Diagnostic>) {
+    if let Some(name) = arg.name.as_ref() {
+        diagnostics.push(Diagnostic::error(
+            format!("alpha typecheck does not yet support named arguments (got `{name}`)",),
+            arg.span,
+        ));
+    }
+}
+
+fn is_closure_expr(kind: &ExprKind) -> bool {
+    matches!(
+        kind,
+        ExprKind::Closure { .. } | ExprKind::ShortClosure { .. }
+    )
+}
+
+/// Run a single unification pass without diagnosing conflicts —
+/// used for partial inference before closure args resolve.
+/// Diagnostics for conflicts and phantom params still come from the
+/// final [`infer_call_type_args`] run after every arg has resolved.
+fn partial_unify_call(
+    callee: Callee<'_>,
+    sig: &FunctionSignature,
+    args: &[Arg],
+    _registry: &GlobalRegistry,
+    _diagnostics: &mut Vec<Diagnostic>,
+) -> Vec<Option<ResolvedType>> {
+    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
+    for (param, arg) in sig.params.iter().zip(args.iter()) {
+        if !arg.value.resolution.is_resolved() {
+            continue;
+        }
+        let _ = unify_resolved_type(&param.ty, &arg.value.resolution, callee.id, &mut subst);
+    }
+    subst
+}
+
+/// Method-call counterpart to [`partial_unify_call`]. Seeds the
+/// receiver substitution from the receiver's resolved type-args
+/// (mirroring [`infer_method_call_type_args`]) and unifies each
+/// non-closure arg against its declared param under both the receiver
+/// and method scopes. Returns `(receiver_subst, method_subst)` for
+/// caller-driven substitution before closure args resolve.
+fn partial_unify_method_call(
+    receiver: Callee<'_>,
+    method: Callee<'_>,
+    explicit_params: &[ResolvedParam],
+    receiver_type: &ResolvedType,
+    args: &[Arg],
+) -> (Vec<Option<ResolvedType>>, Vec<Option<ResolvedType>>) {
+    let mut receiver_subst: Vec<Option<ResolvedType>> = vec![None; receiver.type_params.len()];
+    let receiver_args: &[ResolvedType] = match receiver_type {
+        ResolvedType::Named { type_args, .. } => type_args,
+        _ => &[],
+    };
+    for (slot, arg) in receiver_subst.iter_mut().zip(receiver_args.iter()) {
+        if arg.is_resolved() {
+            *slot = Some(arg.clone());
+        }
+    }
+    let mut method_subst: Vec<Option<ResolvedType>> = vec![None; method.type_params.len()];
+    for (param, arg) in explicit_params.iter().zip(args.iter()) {
+        if !arg.value.resolution.is_resolved() {
+            continue;
+        }
+        if !method.type_params.is_empty() {
+            let _ = unify_resolved_type(
+                &param.ty,
+                &arg.value.resolution,
+                method.id,
+                &mut method_subst,
+            );
+        }
+        if !receiver.type_params.is_empty() {
+            let _ = unify_resolved_type(
+                &param.ty,
+                &arg.value.resolution,
+                receiver.id,
+                &mut receiver_subst,
+            );
+        }
+    }
+    (receiver_subst, method_subst)
 }
 
 /// Check arg arity + per-position type compatibility. Diagnostics

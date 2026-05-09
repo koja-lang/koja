@@ -51,6 +51,9 @@ pub(crate) fn ir_int_type<'ctx>(
         IRType::Int16 | IRType::UInt16 => Ok(context.i16_type()),
         IRType::Int32 | IRType::UInt32 => Ok(context.i32_type()),
         IRType::Int64 | IRType::UInt64 => Ok(context.i64_type()),
+        IRType::Function { .. } => Err(LlvmError::Codegen(format!(
+            "expected an integer or Bool IRType, got `{ty:?}`",
+        ))),
         IRType::String => Err(LlvmError::Codegen(
             "expected an integer or Bool IRType, got `String`".to_string(),
         )),
@@ -93,6 +96,11 @@ pub(crate) fn ir_basic_type<'ctx>(
         IRType::Enum(symbol) => Ok(ctx.layouts.enum_outer_type(symbol.mangled()).into()),
         IRType::Float32 => Ok(ctx.context.f32_type().into()),
         IRType::Float64 => Ok(ctx.context.f64_type().into()),
+        IRType::Function { .. } => Err(LlvmError::Codegen(
+            "alpha LLVM does not yet emit closure values; closure-shaped IRType::Function \
+             will lower to a fat pointer in slice 6"
+                .to_string(),
+        )),
         IRType::Struct(symbol) => Ok(ctx.layouts.struct_type(symbol.mangled()).into()),
         IRType::Unit => Err(LlvmError::Codegen(
             "expected a value-level IRType, got `Unit`".to_string(),

@@ -436,10 +436,11 @@ impl Parser {
                     None
                 };
                 ClosureParam::Name {
+                    local_id: None,
                     mode,
                     name,
-                    type_expr,
                     span: self.span_from(start),
+                    type_expr,
                 }
             }
             TokenKind::LParen => {
@@ -479,10 +480,11 @@ impl Parser {
             }
             ExprKind::Ident { name, .. } => {
                 vec![ClosureParam::Name {
+                    local_id: None,
                     mode: PassMode::Borrow,
                     name: name.clone(),
-                    type_expr: None,
                     span: expr.span,
+                    type_expr: None,
                 }]
             }
             ExprKind::Group { expr: inner, .. } => self.expr_to_closure_params(inner, span),

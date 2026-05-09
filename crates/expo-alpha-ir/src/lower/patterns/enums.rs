@@ -7,7 +7,7 @@
 
 use expo_alpha_typecheck::ResolvedVariantData;
 use expo_ast::ast::{FieldPattern, Pattern};
-use expo_ast::identifier::{GlobalRegistryId, Resolution};
+use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 
 use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::super::enums::{
@@ -245,8 +245,11 @@ fn enum_pattern_metadata<'a>(
             entry.identifier,
         )
     });
-    let owner = match inputs.subject_ty.resolution {
-        Resolution::Global(id) => id,
+    let owner = match inputs.subject_ty {
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => *id,
         _ => panic!("alpha IR lower: enum subject has non-Global resolution after typecheck seal",),
     };
     EnumPatternMetadata {

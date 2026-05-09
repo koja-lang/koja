@@ -128,6 +128,14 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         IRType::CPtr(inner) => {
             require_supported_type(inner, &|| format!("{} (CPtr pointee)", location()))
         }
+        IRType::Function { params, ret } => {
+            for (idx, param) in params.iter().enumerate() {
+                require_supported_type(param, &|| {
+                    format!("{} (Function param[{idx}])", location())
+                });
+            }
+            require_supported_type(ret, &|| format!("{} (Function return)", location()));
+        }
     }
 }
 
@@ -156,6 +164,11 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         }
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Call { args, .. } => args.clone(),
+        IRInstruction::CallClosure { args, callee, .. } => {
+            let mut operands = vec![*callee];
+            operands.extend(args.iter().copied());
+            operands
+        }
         IRInstruction::Concat { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Const { .. } => vec![],
         IRInstruction::EnumConstruct { payload, .. } => match payload {
@@ -187,6 +200,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         | IRInstruction::LocalRead { .. }
         | IRInstruction::MoveOutLocal { .. } => vec![],
         IRInstruction::LocalWrite { value, .. } => vec![*value],
+        IRInstruction::MakeClosure { captures, .. } => captures.clone(),
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }

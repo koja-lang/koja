@@ -189,6 +189,9 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
+        IRInstruction::CallClosure { .. } | IRInstruction::MakeClosure { .. } => {
+            unimplemented!("LLVM closure emission not yet wired");
+        }
     }
 }
 

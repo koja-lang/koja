@@ -276,10 +276,14 @@ pub(super) fn enum_entry_from_resolution<'a>(
     resolution: &ResolvedType,
     registry: &'a GlobalRegistry,
 ) -> &'a RegistryEntry {
-    let Resolution::Global(id) = resolution.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        ..
+    } = resolution
+    else {
         panic!("alpha IR lower: enum construction has Unresolved resolution after typecheck seal",);
     };
-    registry.get(id).unwrap_or_else(|| {
+    registry.get(*id).unwrap_or_else(|| {
         panic!("alpha IR lower: enum id {id} missing from registry — seal invariant violation",)
     })
 }

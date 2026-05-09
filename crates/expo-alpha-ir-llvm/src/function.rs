@@ -56,6 +56,9 @@ pub(crate) fn declare_function<'ctx>(
             .link_name
             .clone()
             .unwrap_or_else(|| function.symbol.last_segment().to_string()),
+        FunctionKind::Closure { .. } => {
+            unimplemented!("LLVM closure declaration not yet wired");
+        }
         FunctionKind::Intrinsic | FunctionKind::Regular => function.symbol.mangled().to_string(),
     };
     let llvm_function = match ctx.module.get_function(&llvm_name) {
@@ -110,6 +113,9 @@ pub(crate) fn define_function<'ctx>(
             // skip path but without dispatching to an emitter — the
             // C linker provides the implementation at link time.
             return Ok(());
+        }
+        FunctionKind::Closure { .. } => {
+            unimplemented!("LLVM closure body emission not yet wired");
         }
         FunctionKind::Regular => {}
     }

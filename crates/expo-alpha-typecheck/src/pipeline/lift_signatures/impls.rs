@@ -207,7 +207,11 @@ fn resolve_protocol_impl_heads(
     let scope = TypeParamScope::new(&owners);
     let target = target.clone();
     let protocol = resolve_type_expr(trait_expr, scope, package, registry, diagnostics);
-    let Resolution::Global(protocol_id) = protocol.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(protocol_id),
+        type_args: protocol_args,
+    } = protocol.clone()
+    else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck cannot find protocol on `impl ... for {}`",
@@ -235,13 +239,13 @@ fn resolve_protocol_impl_heads(
         .unwrap_or(0);
     // Slot 0 is the implicit `Self`; only slots 1..N are user-declared.
     let expected_user_args = protocol_arity.saturating_sub(1);
-    if protocol.type_args.len() != expected_user_args {
+    if protocol_args.len() != expected_user_args {
         diagnostics.push(Diagnostic::error(
             format!(
                 "protocol `{}` expects {expected_user_args} type argument{}, got {}",
                 protocol_entry.identifier,
                 if expected_user_args == 1 { "" } else { "s" },
-                protocol.type_args.len(),
+                protocol_args.len(),
             ),
             type_expr_span(trait_expr),
         ));
@@ -251,7 +255,7 @@ fn resolve_protocol_impl_heads(
     if !subst.is_empty() {
         subst[0] = Some(target.clone());
     }
-    for (slot, arg) in subst.iter_mut().skip(1).zip(protocol.type_args.iter()) {
+    for (slot, arg) in subst.iter_mut().skip(1).zip(protocol_args.iter()) {
         *slot = Some(arg.clone());
     }
     Some(ResolvedImplHeads {
@@ -275,7 +279,10 @@ fn record_target_conformance(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let protocol_args: Vec<ResolvedType> = resolved.protocol.type_args.clone();
+    let protocol_args: Vec<ResolvedType> = match &resolved.protocol {
+        ResolvedType::Named { type_args, .. } => type_args.clone(),
+        _ => Vec::new(),
+    };
     if registry
         .record_conformance(target_id, resolved.protocol_id, protocol_args)
         .is_some()

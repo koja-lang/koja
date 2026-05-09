@@ -108,7 +108,7 @@ pub(super) fn resolve_enum_construction(
             ),
             span,
         ));
-        return ResolvedType {
+        return ResolvedType::Named {
             resolution: Resolution::Global(enum_id),
             type_args: vec![ResolvedType::unresolved(); type_params.len()],
         };
@@ -140,7 +140,7 @@ pub(super) fn resolve_enum_construction(
         .into_iter()
         .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
         .collect();
-    ResolvedType {
+    ResolvedType::Named {
         resolution: Resolution::Global(enum_id),
         type_args,
     }

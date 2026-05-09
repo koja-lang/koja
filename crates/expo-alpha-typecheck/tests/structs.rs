@@ -802,8 +802,8 @@ fn instance_method_in_struct_body_lifts_with_dispatch_instance() {
     assert_eq!(signature.params[0].name, "self");
     let receiver_id = lookup_struct_id(&checked, "TestApp", "Point");
     assert_eq!(
-        signature.params[0].ty.resolution,
-        Resolution::Global(receiver_id),
+        signature.params[0].ty,
+        ResolvedType::leaf(Resolution::Global(receiver_id)),
         "self carries the enclosing struct's identifier",
     );
 }
@@ -828,8 +828,8 @@ fn instance_method_in_impl_block_lifts_with_dispatch_instance() {
     assert_eq!(signature.params.len(), 1);
     let receiver_id = lookup_struct_id(&checked, "TestApp", "Point");
     assert_eq!(
-        signature.params[0].ty.resolution,
-        Resolution::Global(receiver_id),
+        signature.params[0].ty,
+        ResolvedType::leaf(Resolution::Global(receiver_id)),
     );
 }
 
@@ -854,9 +854,13 @@ fn static_method_self_return_type_resolves_to_enclosing_struct() {
     let GlobalKind::Function(Some(sig)) = &entry.kind else {
         panic!("Point.origin should have a lifted signature");
     };
-    let Resolution::Global(point_id) = sig.return_type.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(point_id),
+        type_args,
+    } = &sig.return_type
+    else {
         panic!(
-            "expected `Self` to resolve to Global(Point), got {:?}",
+            "expected `Self` to resolve to Named(Global(Point)), got {:?}",
             sig.return_type
         );
     };
@@ -866,13 +870,12 @@ fn static_method_self_return_type_resolves_to_enclosing_struct() {
         .lookup(&point_identifier)
         .expect("Point registered");
     assert_eq!(
-        point_id, expected_id,
+        *point_id, expected_id,
         "`Self` must alias the enclosing struct id"
     );
     assert!(
-        sig.return_type.type_args.is_empty(),
-        "non-generic Point's `Self` carries no type args, got {:?}",
-        sig.return_type.type_args,
+        type_args.is_empty(),
+        "non-generic Point's `Self` carries no type args, got {type_args:?}",
     );
 }
 
@@ -1043,9 +1046,14 @@ fn generic_protocol_impl_with_concrete_args_succeeds() {
         panic!("User.matches should have a lifted signature");
     };
     let other_ty = &sig.params[1].ty;
-    let Resolution::Global(string_id) = other_ty.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(string_id),
+        ..
+    } = other_ty
+    else {
         panic!("expected `other: String`, got {:?}", other_ty);
     };
+    let string_id = *string_id;
     let (expected_string_id, _) = program
         .registry
         .lookup(&Identifier::new("Global", vec!["String".to_string()]))
@@ -1122,16 +1130,25 @@ fn generic_target_impl_anchors_self_at_receiver_id() {
         panic!("Bag.render should have a lifted signature");
     };
     let self_ty = &sig.params[0].ty;
-    let Resolution::Global(_) = self_ty.resolution else {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(_),
+        type_args,
+    } = self_ty
+    else {
         panic!("expected self: Bag<...>, got {:?}", self_ty);
     };
-    assert_eq!(self_ty.type_args.len(), 1, "Bag has one type-arg slot");
-    let Resolution::TypeParam { owner, .. } = self_ty.type_args[0].resolution else {
+    assert_eq!(type_args.len(), 1, "Bag has one type-arg slot");
+    let ResolvedType::Named {
+        resolution: Resolution::TypeParam { owner, .. },
+        ..
+    } = &type_args[0]
+    else {
         panic!(
             "expected self's `T` to be a TypeParam, got {:?}",
-            self_ty.type_args[0]
+            type_args[0]
         );
     };
+    let owner = *owner;
     let bag_identifier = Identifier::new(PACKAGE, vec!["Bag".to_string()]);
     let (bag_id, _) = program
         .registry
@@ -1371,15 +1388,15 @@ fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
     let definition = struct_definition(&checked, "Pair");
     assert_eq!(definition.fields.len(), 2);
     assert!(matches!(
-        definition.fields[0].ty.resolution,
-        Resolution::TypeParam { owner, .. } if owner == pair_id,
+        &definition.fields[0].ty,
+        ResolvedType::Named { resolution: Resolution::TypeParam { owner, .. }, .. } if *owner == pair_id,
     ));
     assert!(matches!(
-        definition.fields[1].ty.resolution,
-        Resolution::TypeParam { owner, .. } if owner == pair_id,
+        &definition.fields[1].ty,
+        ResolvedType::Named { resolution: Resolution::TypeParam { owner, .. }, .. } if *owner == pair_id,
     ));
     assert_ne!(
-        definition.fields[0].ty.resolution, definition.fields[1].ty.resolution,
+        definition.fields[0].ty, definition.fields[1].ty,
         "T and U must mint distinct TypeParam handles",
     );
 }
@@ -1402,8 +1419,13 @@ fn generic_struct_construction_infers_type_args_from_field_values() {
     let int = global_leaf(&checked, "Int");
     let string = global_leaf(&checked, "String");
     let expr = body_trailing_expr(&checked, "main");
-    assert_eq!(expr.resolution.resolution, Resolution::Global(pair_id));
-    assert_eq!(expr.resolution.type_args, vec![int, string]);
+    assert_eq!(
+        expr.resolution,
+        ResolvedType::Named {
+            resolution: Resolution::Global(pair_id),
+            type_args: vec![int, string],
+        },
+    );
 }
 
 #[test]
@@ -1471,11 +1493,21 @@ fn generic_struct_nested_in_generic_struct_resolves_through_typeparam_args() {
     let int = global_leaf(&checked, "Int");
 
     let inner = &box_definition.fields[0].ty;
-    assert_eq!(inner.resolution, Resolution::Global(pair_id));
-    assert_eq!(inner.type_args.len(), 2);
+    let ResolvedType::Named {
+        resolution: Resolution::Global(head_id),
+        type_args,
+    } = inner
+    else {
+        panic!("expected Named(Global(Pair), ...), got {inner:?}");
+    };
+    assert_eq!(*head_id, pair_id);
+    assert_eq!(type_args.len(), 2);
     assert!(matches!(
-        inner.type_args[0].resolution,
-        Resolution::TypeParam { owner, .. } if owner == box_id,
+        &type_args[0],
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, .. },
+            ..
+        } if *owner == box_id,
     ));
-    assert_eq!(inner.type_args[1], int);
+    assert_eq!(type_args[1], int);
 }

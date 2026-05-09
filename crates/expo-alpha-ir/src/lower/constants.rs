@@ -6,7 +6,7 @@
 
 use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
 use expo_ast::ast::{Constant, Expr, ExprKind, Literal, StringPart, UnaryOp};
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IRVariantTag;
@@ -87,7 +87,11 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
             negate_primitive(inner)
         }
         ExprKind::EnumConstruction { variant, .. } => {
-            let Resolution::Global(enum_id) = expr.resolution.resolution else {
+            let ResolvedType::Named {
+                resolution: Resolution::Global(enum_id),
+                ..
+            } = expr.resolution
+            else {
                 return None;
             };
             let entry = registry.get(enum_id)?;
@@ -102,7 +106,11 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
             })
         }
         ExprKind::StructConstruction { fields, .. } => {
-            let Resolution::Global(struct_id) = expr.resolution.resolution else {
+            let ResolvedType::Named {
+                resolution: Resolution::Global(struct_id),
+                ..
+            } = expr.resolution
+            else {
                 return None;
             };
             let entry = registry.get(struct_id)?;

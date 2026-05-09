@@ -118,6 +118,14 @@ impl fmt::Display for IRBlockId {
 ///   function's bare last-segment when `None`) and emits no body;
 ///   call sites resolve through an `IRSymbol`-keyed function
 ///   index built at declare time.
+/// - `Closure { env_layout }` carries non-empty blocks like
+///   `Regular`, but the backend emits the function with an extra
+///   leading `env_ptr` parameter pointing at a heap struct whose
+///   fields match `env_layout` (the captured-locals snapshot).
+///   Body lowering reads captured values via fields off that
+///   pointer; [`IRInstruction::MakeClosure`] is the only writer of
+///   the env. The synthesized symbol mangles the enclosing fn's
+///   name with a `__closure<N>` suffix.
 ///
 /// Per-kind body shape is enforced by the seal pass. The
 /// `Extern` variant carries data, which is why this enum is no
@@ -125,9 +133,10 @@ impl fmt::Display for IRBlockId {
 /// without ambient interior mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
+    Closure { env_layout: Vec<IRType> },
+    Extern(IRExternAttrs),
     Intrinsic,
     Regular,
-    Extern(IRExternAttrs),
 }
 
 /// A lowered function. `blocks[0]` is the entry block; `params`
@@ -249,6 +258,19 @@ pub enum IRInstruction {
         dest: ValueId,
         callee: IRSymbol,
         args: Vec<ValueId>,
+    },
+    /// `dest = callee(args)` — indirect call through a closure
+    /// value (`callee.ty == IRType::Function`). The backend reads
+    /// the fn pointer and env pointer off the fat pointer, prepends
+    /// the env pointer to `args`, and dispatches; for a fn-as-value
+    /// adapter the env pointer is null and the body ignores it.
+    /// `result_ty` mirrors the callee's `IRType::Function`'s `ret`
+    /// for backends that want the dest type without re-deriving.
+    CallClosure {
+        args: Vec<ValueId>,
+        callee: ValueId,
+        dest: ValueId,
+        result_ty: IRType,
     },
     /// `dest = lhs <> rhs` for the heap-payload family (`String`,
     /// `Binary`, `Bits`). Separate from [`Self::BinaryOp`] because
@@ -382,6 +404,29 @@ pub enum IRInstruction {
         local: IRLocalId,
         ty: IRType,
     },
+    /// `dest = MakeClosure { body, captures }` — build a fat
+    /// pointer of `(fn_ptr -> body, env_ptr)` where `env_ptr` is a
+    /// freshly allocated heap struct laid out per `body`'s
+    /// [`FunctionKind::Closure::env_layout`]. Each value in
+    /// `captures` corresponds positionally to one field of that
+    /// layout; the lowering layer takes responsibility for moving /
+    /// copying each capture's underlying ownership before stamping
+    /// the resulting closure value into a slot. Heap captures
+    /// transfer ownership into the env (the slot's fn-exit
+    /// `DropLocal` is suppressed); copy captures are duplicated.
+    /// `dest`'s static type is the matching [`IRType::Function`].
+    ///
+    /// The closure value is itself heap-allocated (`Ownership::Owned`)
+    /// — the env_ptr it references owns the captures recursively, and
+    /// `DropLocal { ty: Function { .. } }` recursively walks
+    /// `env_layout` to drop each captured slot before freeing the
+    /// env block.
+    MakeClosure {
+        body: IRSymbol,
+        captures: Vec<ValueId>,
+        dest: ValueId,
+        ty: IRType,
+    },
     /// `dest = <pool[const_id]>` — load a pooled compound constant.
     /// `const_id` keys an entry on [`crate::IRPackage::constants`];
     /// `ty` cached at lower time so backends mint the dest slot
@@ -420,6 +465,7 @@ impl IRInstruction {
             IRInstruction::BinaryConstruct { dest, .. }
             | IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
+            | IRInstruction::CallClosure { dest, .. }
             | IRInstruction::Concat { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }
@@ -428,6 +474,7 @@ impl IRInstruction {
             | IRInstruction::FieldGet { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
+            | IRInstruction::MakeClosure { dest, .. }
             | IRInstruction::MoveOutLocal { dest, .. }
             | IRInstruction::StructInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => Some(*dest),

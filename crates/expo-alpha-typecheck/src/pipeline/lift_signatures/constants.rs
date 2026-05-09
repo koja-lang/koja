@@ -21,7 +21,7 @@ use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::types::{TypeParamScope, resolve_type_expr};
+use super::types::{TypeParamScope, render_resolved, resolve_type_expr};
 
 pub(super) fn lift_constant(
     constant: &mut Constant,
@@ -315,16 +315,30 @@ fn validate_struct_fields(
 }
 
 fn render_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
-    match ty.resolution {
-        Resolution::Global(id) => registry
-            .get(id)
+    match ty {
+        ResolvedType::Anonymous(_) => render_resolved(ty, registry),
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => registry
+            .get(*id)
             .map(|e| e.identifier.qualified_name())
             .unwrap_or_else(|| format!("<id {id}>")),
-        Resolution::Local(local_id) => format!("<local {local_id}>"),
-        Resolution::TypeParam { owner, index } => registry
-            .type_param_name(owner, index)
+        ResolvedType::Named {
+            resolution: Resolution::Local(local_id),
+            ..
+        } => format!("<local {local_id}>"),
+        ResolvedType::Named {
+            resolution: Resolution::TypeParam { owner, index },
+            ..
+        } => registry
+            .type_param_name(*owner, *index)
             .map(str::to_string)
             .unwrap_or_else(|| format!("<typeparam {owner}#{index}>")),
-        Resolution::Unresolved => "<unresolved>".to_string(),
+        ResolvedType::Named {
+            resolution: Resolution::Unresolved,
+            ..
+        }
+        | ResolvedType::Unresolved => "<unresolved>".to_string(),
     }
 }

@@ -121,6 +121,9 @@ fn execute_function<R: CallResolver>(
                 symbol: function.symbol.mangled().to_string(),
             });
         }
+        FunctionKind::Closure { .. } => {
+            unimplemented!("interpreter closure dispatch not yet wired");
+        }
         FunctionKind::Regular => {}
     }
     let mut frame = Frame::new();
@@ -444,6 +447,9 @@ fn execute_instruction<R: CallResolver>(
             let result = apply_unary_op(*op, operand_value)?;
             frame.values.insert(*dest, result);
             Ok(())
+        }
+        IRInstruction::CallClosure { .. } | IRInstruction::MakeClosure { .. } => {
+            unimplemented!("interpreter closure ops not yet wired");
         }
     }
 }
