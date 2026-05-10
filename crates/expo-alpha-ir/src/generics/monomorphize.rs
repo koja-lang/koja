@@ -17,8 +17,7 @@ use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag
 use crate::function::{IRFunction, IRSymbol};
 use crate::lower::LowerOutput;
 use crate::lower::package::{lower_function_inner, resolved_type_to_ir_type};
-use crate::mangling::mangled_function_name;
-use crate::mangling::mangled_type_name;
+use crate::mangling::{mangled_function_name, mangled_method_name, mangled_type_name};
 use crate::package::IRPackage;
 use crate::struct_decl::{IRStructDecl, IRStructField};
 use crate::types::IRType;
@@ -56,10 +55,16 @@ pub(super) fn monomorphize(
         GlobalKind::Struct(Some(definition)) => {
             assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
             let symbol = mangled_type_name(&template_symbol, &arg_types);
-            let decl = monomorphize_struct(definition, inst, symbol, registry, output);
-            owning_package(packages, &owner_label, &template_symbol)
-                .structs
-                .insert(decl.symbol.clone(), decl);
+            // `Global.CPtr<T>` is a primitive at the IR layer
+            // ([`IRType::CPtr`]), not a struct decl — its fields don't
+            // exist as IR storage. Still enqueue its methods so call
+            // sites against `CPtr_$T$.alloc`, `.free`, etc. resolve.
+            if !is_primitive_struct_template(&entry.identifier) {
+                let decl = monomorphize_struct(definition, inst, symbol, registry, output);
+                owning_package(packages, &owner_label, &template_symbol)
+                    .structs
+                    .insert(decl.symbol.clone(), decl);
+            }
             enqueue_member_methods(inst, registry, function_index, output);
         }
         GlobalKind::Enum(Some(definition)) => {
@@ -72,11 +77,22 @@ pub(super) fn monomorphize(
             enqueue_member_methods(inst, registry, function_index, output);
         }
         GlobalKind::Function(Some(signature)) => {
-            // Methods on generic types inherit the type's params; mangle as
-            // `<struct>_$args$.<method>` so the symbol matches what
-            // `lower_method_call` synthesizes at every call site. Top-level
-            // generic functions mangle their args directly onto the function
-            // symbol via [`mangled_function_name`].
+            // Three flavors share this arm:
+            //
+            // - Top-level generic function (`fn id<T>(x: T)`): `template ==
+            //   owner`, `method_args` empty. Mangle args directly onto the
+            //   function symbol.
+            // - Method on a generic type, struct-level params only
+            //   (`fn first(self) -> T` on `Pair<T, U>`): `template !=
+            //   owner`, `method_args` empty. Mangle as `<struct>_$args$.<m>`.
+            // - Method on a (possibly generic) type with its own type
+            //   params (`fn map<U>` on `Option<T>`): `template != owner`,
+            //   `method_args` non-empty. Mangle as `<struct>_$args$.<m>_$U$`.
+            let method_arg_types: Vec<IRType> = inst
+                .method_args
+                .iter()
+                .map(|arg| resolved_type_to_ir_type(arg, registry, &mut output.instantiations))
+                .collect();
             let symbol = if inst.template == inst.owner {
                 assert_arity(&entry.identifier, entry.type_params.len(), &inst.args);
                 mangled_function_name(&template_symbol, &arg_types)
@@ -93,9 +109,18 @@ pub(super) fn monomorphize(
                     owner_entry.type_params.len(),
                     &inst.args,
                 );
+                assert_arity(
+                    &entry.identifier,
+                    entry.type_params.len(),
+                    &inst.method_args,
+                );
                 let owner_symbol = IRSymbol::from_identifier(&owner_entry.identifier);
-                let mangled_owner = mangled_type_name(&owner_symbol, &arg_types);
-                mangled_owner.derived(&format!(".{}", entry.identifier.last()))
+                mangled_method_name(
+                    &owner_symbol,
+                    &arg_types,
+                    entry.identifier.last(),
+                    &method_arg_types,
+                )
             };
             let function_ast = function_index.get(&inst.template).unwrap_or_else(|| {
                 panic!(
@@ -200,6 +225,10 @@ fn monomorphize_enum(
 /// monomorphized `symbol`. The body's `Expr.resolution` /
 /// `Call.type_args` slots all carry concrete types after the walk,
 /// so [`resolved_type_to_ir_type`] never sees a `TypeParam`.
+///
+/// Methods that declare their own type params get a second
+/// substitution pass scoped at the method's own id so a `<U>` in
+/// the body resolves to its concrete arg.
 fn monomorphize_function(
     inst: &Instantiation,
     function_ast: &Function,
@@ -211,7 +240,12 @@ fn monomorphize_function(
 ) -> Option<IRFunction> {
     let mut substituted_ast = function_ast.clone();
     substitute_in_function(&mut substituted_ast, &inst.args, inst.owner);
-    let substituted_signature = substitute_signature(signature, &inst.args, inst.owner);
+    let mut substituted_signature = substitute_signature(signature, &inst.args, inst.owner);
+    if !inst.method_args.is_empty() {
+        substitute_in_function(&mut substituted_ast, &inst.method_args, inst.template);
+        substituted_signature =
+            substitute_signature(&substituted_signature, &inst.method_args, inst.template);
+    }
     lower_function_inner(
         &substituted_ast,
         identifier,
@@ -230,6 +264,12 @@ fn monomorphize_function(
 /// the type — substitute calls in [`monomorphize_function`] then
 /// resolve `Resolution::TypeParam { owner: type_id, .. }` references
 /// inside the method body to the right concrete type.
+///
+/// Methods that declare their own type params (`fn map<U>` on
+/// `Option<T>`) are skipped here — they need a call site to pick
+/// the method-level args and enqueue the full
+/// `(template, args, method_args, owner)` quadruple. A struct
+/// instantiation alone doesn't pin `<U>`.
 fn enqueue_member_methods(
     inst: &Instantiation,
     registry: &GlobalRegistry,
@@ -252,12 +292,25 @@ fn enqueue_member_methods(
         if !function_index.contains_key(&id) {
             continue;
         }
+        if !candidate.type_params.is_empty() {
+            continue;
+        }
         output.instantiations.push(Instantiation {
             template: id,
             args: inst.args.clone(),
+            method_args: Vec::new(),
             owner: inst.template,
         });
     }
+}
+
+/// True for stdlib structs that lower to a primitive [`IRType`] —
+/// today only `Global.CPtr<T>`, which becomes `IRType::CPtr(...)`.
+/// Mono enqueues the struct's methods (so call sites can dispatch)
+/// but skips creating an `IRStructDecl` (the IR has no struct
+/// storage to describe).
+fn is_primitive_struct_template(identifier: &expo_ast::identifier::Identifier) -> bool {
+    identifier.package() == "Global" && identifier.path() == ["CPtr"]
 }
 
 fn assert_arity(

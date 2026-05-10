@@ -587,22 +587,115 @@ What's shipped since the last audit:
   `string` / `system`) — each rides on additional intrinsic
   families that need wiring through the same dispatch table.
 
+- **Stdlib slice 2: `kernel` / `cptr` / `cstring` autoimport.**
+  Three more `Global.*` source files now flow through the
+  autoimport pipeline end-to-end. The compiler-side blockers
+  closed in lockstep:
+  - **Method-level type parameters** (`fn map<U>(self, f: fn(T) -> U) -> Option<U>`,
+    `fn alloc<T>(count: Int) -> CPtr<T>`). `Instantiation` carries
+    a separate `method_args` channel and the lower-call site
+    threads both struct-level and method-level type args through
+    the new structured `mangled_method_name` helper — `IRSymbol`
+    stays opaque end-to-end, no string parsing at call sites. The
+    monomorphizer enqueues triples `(struct_id, struct_args,
+    method_args)` so each cell mints exactly once. Pinned by
+    `crates/expo-alpha-ir/tests/method_generics.rs`.
+  - **Preload stubs for `Option<T>` / `CPtr<T>`** dropped — the
+    autoimport's source definitions are now the canonical surface
+    for both, so `Result<T, E>` / `Pair<A, B>` / `Range` and the
+    `Equality` / `Hash` protocol impls register the same way as
+    any user-defined type. The escape valve for `with_stdlib_stubs`
+    contracted to the primitive numeric / bool / never tags only.
+  - **`Kernel.panic` typed as `Never`** via a `lift_signatures`
+    override (the source still says `-> Unit` for v1 parity);
+    callers in match-arm tail position propagate the surrounding
+    arm's expected type instead of mismatching against `Unit`.
+    Lowering caps any `Never`-typed `Statement::Expr` with
+    `IRTerminator::Unreachable` so SSA / dominator analysis stays
+    well-formed across the divergent edge.
+  - **Bidirectional inference** for generic enum construction
+    threads an `expected: Option<&ResolvedType>` through
+    `resolve_match` / `resolve_if` / `resolve_cond` /
+    `resolve_ternary` arm tails, the function-body trailing
+    `Statement::Expr`, and `resolve_enum_construction`. Unit
+    variants (`Option.None`) and partially-constrained tuple
+    variants (`Result.Ok(5)` against `Result<Int, String>`)
+    resolve their type parameters from the surrounding context,
+    so `Option.map` / `Option.then` / `Result.map` / `Result.then`
+    use their pure-Expo source bodies rather than the temporary
+    `@intrinsic` stopgap. Pinned by
+    `crates/expo-alpha-typecheck/tests/bidirectional_inference.rs`.
+  - **Concrete-pinned `impl_args` on `FunctionSignature`** so
+    bare static calls inside `impl CPtr<UInt8>` (`strlen` from
+    `to_cstring`) mangle as `Global.CPtr_$UInt8$.strlen` — the
+    typechecker captures the impl block's concrete type args at
+    lift time and the lower-call site consults them when the
+    receiver is a `Self` static method without explicit type
+    args.
+  - **Backend intrinsic + extern emitters** for the families
+    `kernel.expo` / `cptr.expo` / `cstring.expo` introduce —
+    `Equality.eq` × 9 widths, `Hash.hash` × 9 widths,
+    `Kernel.panic`, `CPtr.{alloc,free,null,offset,read,write,
+    null?,to_binary,to_string}`, `CString.to_string`,
+    `Binary.{byte_size,ptr,to_bits,to_string}`, `Bits.to_binary`,
+    `Int.parse` / `Float.parse` — register in both backends.
+    LLVM emitters mirror the v1 inline-IR shapes (SplitMix64 for
+    `Hash`, `icmp eq` for `Equality`, `malloc` / `free` /
+    `memcpy` for `CPtr`, `__expo_alpha_panic` for `Kernel.panic`).
+    Eval implementations cover the cases that fit `Value`'s
+    in-process shape (`Equality.eq`, `Hash.hash`, `Kernel.panic`,
+    `Binary.byte_size` / `to_bits`); CPtr / Result-returning
+    intrinsics route to a clean `RuntimeError::Unsupported` with
+    a pointer to `--backend=llvm`. The eval extern table grew a
+    shim for `expo_kernel_exit` (live FFI into `expo-runtime`)
+    plus an explicit `Unsupported` row for `strlen`
+    (CPtr-trafficking). LLVM-side SSA hygiene tightened:
+    `IRTerminator::Return { value: Some }` against a void-returning
+    function emits `ret void` (skips the SSA lookup since
+    void-typed call results don't get registered), and
+    `Statement::Expr` of `Never` type emits
+    `IRTerminator::Unreachable`. `Random` was extracted from
+    `kernel.expo` into its own `random.expo` and held back from
+    `ALPHA_AUTOIMPORT`: its `bytes` body chains
+    `String.to_binary`, which lives in `string.expo` (still far
+    from alpha-ready — uses `for/in`, multi-pattern `match`, and
+    `List<u8>`), so eagerly typechecking it as part of the
+    autoimport surface would break the whole pipeline. v1 still
+    picks up `random.expo` through the unfiltered `SOURCES`
+    list. **Out**: typed-local bidirectional inference
+    (`p: CPtr<UInt8> = CPtr.alloc(8)` still fails to infer `T`).
+    Result / Option construction in eval intrinsics' return slots
+    requires a registry handle the dispatch seam doesn't carry
+    today, so `Int.parse` / `Float.parse` / `Binary.to_string` /
+    `Bits.to_binary` are stubbed `Unsupported` on eval and
+    `unreachable` on LLVM. Pinned by
+    `crates/expo-alpha-typecheck/tests/{kernel,cptr,cstring}.rs`,
+    `crates/expo-alpha-ir-eval/tests/kernel.rs`,
+    `crates/expo-alpha-ir-llvm/tests/intrinsics.rs`, and the
+    `*_result_ok_map_unwrap_*` driver tests.
+
 The roadmap's original Phase 1 (loops) and Phase 2 (closures)
 are closed; the strings/binary/bits slice closed the Phase 3
 string-related items, the alpha move/drop foundation slice
-closed `move` in typecheck, the stdlib slice 1 closed the
-auto-import substrate plus the first two `Global.*` files, and
+closed `move` in typecheck, stdlib slice 1 closed the
+auto-import substrate plus the first two `Global.*` files,
 the literal-fit narrow-int slice closed the Phase 3 numeric
 coercion item end-to-end (typecheck → IR lower → eval / LLVM /
-driver). The surviving critical-path work is the deferred
-runtime narrowing slice (likely a `.to_int8()` /
-`.to_uint16()` method family on each numeric type, mirroring
-`.to_string()`), the next slice of stdlib intrinsics (building
-toward `cptr` / `kernel` / etc.), and the optional Phase 4
-concurrency slice (`spawn` / `receive`); after those,
+driver), and stdlib slice 2 closed `kernel` / `cptr` /
+`cstring` (with `Result<T, E>` registered, method-level
+generics, and bidirectional inference for generic enum
+construction). The surviving critical-path work is the
+deferred typed-local / runtime narrowing slice (`p: CPtr<UInt8>
+= CPtr.alloc(8)` → drive bidirectional inference through
+typed-local annotations + a `.to_int8()` / `.to_uint16()`
+method family on each numeric type), the next slice of stdlib
+intrinsics (building toward `string` / `list` / `map` / `set`,
+unblocked-on-Result-construction in intrinsic return slots),
+and the optional Phase 4 concurrency slice (`spawn` /
+`receive`); after those,
 `expo alpha check expo/lib/global/src/*.expo` should be fully
 green.
 
 ---
 
-Audited 2026-05-09.
+Audited 2026-05-10.

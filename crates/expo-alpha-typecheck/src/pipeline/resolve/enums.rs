@@ -36,6 +36,7 @@ pub(super) fn resolve_enum_construction(
     type_path: &[String],
     variant: &str,
     data: &mut EnumConstructionData,
+    expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -93,7 +94,15 @@ pub(super) fn resolve_enum_construction(
         return ResolvedType::leaf(Resolution::Global(enum_id));
     }
 
+    let expected_type_args = expected_type_args_for(expected, enum_id, type_params.len());
+
     if matches!(variant_def.data, ResolvedVariantData::Unit) {
+        if let Some(args) = expected_type_args {
+            return ResolvedType::Named {
+                resolution: Resolution::Global(enum_id),
+                type_args: args,
+            };
+        }
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck cannot infer type parameters of `{enum_label}` from \
@@ -117,6 +126,7 @@ pub(super) fn resolve_enum_construction(
         callee,
         variant_def,
         data,
+        expected_type_args.as_deref(),
         span,
         resolver.registry,
         diagnostics,
@@ -133,16 +143,51 @@ pub(super) fn resolve_enum_construction(
     }
 }
 
+/// Pull a same-head expected type's `type_args` for use as an
+/// inference fallback. Returns `Some(args)` only when `expected` is a
+/// fully-resolved [`ResolvedType::Named`] pointing at `enum_id` with
+/// the right arity; any mismatch (different head, partial-resolved
+/// args, missing hint) returns `None` so the caller falls back to
+/// payload-only inference. Bidirectional inference is best-effort —
+/// when expected can't help, we keep the original diagnostic shape.
+fn expected_type_args_for(
+    expected: Option<&ResolvedType>,
+    enum_id: GlobalRegistryId,
+    arity: usize,
+) -> Option<Vec<ResolvedType>> {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(expected_id),
+        type_args,
+    } = expected?
+    else {
+        return None;
+    };
+    if *expected_id != enum_id || type_args.len() != arity {
+        return None;
+    }
+    if !type_args.iter().all(|ty| ty.is_resolved()) {
+        return None;
+    }
+    Some(type_args.clone())
+}
+
 /// Infer concrete `type_args` for a generic enum construction by
 /// unifying each declared payload element's template against the
 /// resolved type of the supplied value. Mirrors the struct path:
 /// emits one diagnostic per [`Conflict`] and one per Phantom param.
 /// Shape-mismatched constructions skip inference and let
 /// [`validate_variant_payload`] surface the shape diagnostic.
+///
+/// `expected_type_args` is the bidirectional fallback — slots that
+/// payload-driven inference can't pin (a `Result.Err(e)` whose `T`
+/// only the surrounding context knows) get filled from the
+/// surrounding expected type before the "cannot infer" diagnostic
+/// fires.
 fn infer_enum_type_args(
     callee: Callee<'_>,
     variant: &ResolvedEnumVariant,
     data: &EnumConstructionData,
+    expected_type_args: Option<&[ResolvedType]>,
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -194,6 +239,13 @@ fn infer_enum_type_args(
             }
         }
         _ => {}
+    }
+    if let Some(expected) = expected_type_args {
+        for (slot, expected_ty) in subst.iter_mut().zip(expected.iter()) {
+            if slot.is_none() {
+                *slot = Some(expected_ty.clone());
+            }
+        }
     }
     for (index, slot) in subst.iter().enumerate() {
         if slot.is_none() {

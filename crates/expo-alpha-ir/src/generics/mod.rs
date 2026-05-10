@@ -63,10 +63,20 @@ use crate::package::IRPackage;
 /// the body's `Resolution::TypeParam { owner, .. }` references
 /// come from (lift gave the method an inherited scope, not its
 /// own).
+///
+/// `method_args` carries the method's own type-args when the
+/// template is a method that declares its own type parameters
+/// (e.g. `fn map<U>` on `Option<T>`). Empty for everything else —
+/// struct/enum templates, top-level generic functions, and methods
+/// that only use their enclosing type's params. When non-empty,
+/// monomorphization substitutes the method body twice: once with
+/// `(args, owner)` for the receiver's params and once with
+/// `(method_args, template)` for the method's own params.
 #[derive(Debug, Clone, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Instantiation {
     pub(crate) template: GlobalRegistryId,
     pub(crate) args: Vec<ResolvedType>,
+    pub(crate) method_args: Vec<ResolvedType>,
     pub(crate) owner: GlobalRegistryId,
 }
 

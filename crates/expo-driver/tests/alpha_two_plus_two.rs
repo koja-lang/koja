@@ -1819,6 +1819,46 @@ fn alpha_run_llvm_script_datetime_now_returns_positive_epoch_millis() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// Script-mode fixture exercising the `Result<T, E>` chain through
+/// the auto-imported `Global.kernel` source. `Result.Ok(5)` pins
+/// `T = Int`, `E = String` via bidirectional inference at the
+/// `make_five -> Result<Int, String>` body tail. `.map(double)`
+/// lowers through `Result.map<U>` (a method-level generic with
+/// `U = Int` recovered from `double`'s signature). `.unwrap()`
+/// projects the `Ok` payload, leaving the trailing expression at
+/// `10` for both backends.
+const RESULT_OK_MAP_UNWRAP_SCRIPT_SOURCE: &str = "
+    fn double(x: Int) -> Int
+      x * 2
+    end
+
+    fn make_five -> Result<Int, String>
+      Result.Ok(5)
+    end
+
+    make_five().map(double).unwrap()
+";
+
+#[test]
+fn alpha_run_llvm_script_result_ok_map_unwrap_prints_ten() {
+    assert_script_prints(
+        "run_llvm_result_ok_map_unwrap",
+        RESULT_OK_MAP_UNWRAP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "10",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_result_ok_map_unwrap_prints_ten() {
+    assert_script_prints(
+        "run_interpreter_result_ok_map_unwrap",
+        RESULT_OK_MAP_UNWRAP_SCRIPT_SOURCE,
+        None,
+        "10",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

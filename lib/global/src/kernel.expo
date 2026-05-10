@@ -48,7 +48,7 @@ struct Pair<A, B>
 end
 
 impl Pair<A, B>
-  fn new<A, B>(first: A, second: B) -> Pair<A, B>
+  fn new(first: A, second: B) -> Pair<A, B>
     Pair{first: first, second: second}
   end
 end
@@ -354,31 +354,6 @@ impl Hash for UInt64
   """
   @intrinsic
   fn hash(self) -> Int
-end
-
-@doc """
-Cryptographically secure random data from the operating system.
-"""
-struct Random
-  @doc """
-  Returns `count` random bytes from the OS entropy source.
-  """
-  fn bytes(count: Int) -> Binary
-    expo_random_bytes(count).to_string().to_binary()
-  end
-
-  @doc """
-  Returns a random integer in the inclusive range [min, max].
-  """
-  fn int(min: Int, max: Int) -> Int
-    expo_random_int(min, max)
-  end
-
-  @extern "C"
-  priv fn expo_random_bytes(count: Int64) -> CPtr<UInt8>
-
-  @extern "C"
-  priv fn expo_random_int(min: Int64, max: Int64) -> Int64
 end
 
 impl Int

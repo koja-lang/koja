@@ -21,7 +21,7 @@ use crate::types::{ConcatKind, ConstValue, IRType, ValueId};
 
 use super::arms::lower_result_ty;
 use super::binary_literal::lower_binary_literal;
-use super::calls::{lower_call, lower_method_call};
+use super::calls::{MethodCallShape, lower_call, lower_method_call};
 use super::closures::{lower_block_closure, lower_short_closure, synthesize_fn_as_closure_wrapper};
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{
@@ -226,19 +226,18 @@ pub(super) fn lower_expr(
             method,
             args,
             type_args,
-        } => {
-            if !type_args.is_empty() {
-                output.diagnostics.push(Diagnostic::error(
-                    format!(
-                        "alpha IR does not yet lower generic method calls \
-                         (`{method}` takes its own type parameters)",
-                    ),
-                    expr.span,
-                ));
-                return Err(());
-            }
-            lower_method_call(receiver, method, args, ctx, block, registry, output)
-        }
+        } => lower_method_call(
+            receiver,
+            MethodCallShape {
+                method,
+                args,
+                method_type_args: type_args,
+            },
+            ctx,
+            block,
+            registry,
+            output,
+        ),
         ExprKind::String { parts, .. } => {
             lower_string(parts, expr.span, ctx, block, &mut output.diagnostics)
         }

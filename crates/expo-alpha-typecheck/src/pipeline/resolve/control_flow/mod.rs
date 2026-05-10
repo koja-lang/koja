@@ -21,24 +21,23 @@ use expo_ast::identifier::ResolvedType;
 use expo_ast::span::Span;
 
 use super::ctx::Resolver;
-use super::expr::resolve_expr;
+use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::types::{display_resolution, is_primitive};
-use super::walker::resolve_statement;
+use super::walker::{resolve_body_with_expected, resolve_statement};
 use crate::registry::GlobalRegistry;
 
 pub(super) fn resolve_if(
     condition: &mut Expr,
     then_body: &mut [Statement],
     else_body: Option<&mut [Statement]>,
+    expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("if", condition, resolver.registry, diagnostics);
-    for stmt in then_body.iter_mut() {
-        resolve_statement(stmt, resolver, diagnostics);
-    }
+    resolve_body_with_expected(then_body, expected, resolver, diagnostics);
     let Some(else_body) = else_body else {
         // No-`else` `if` is statement-shaped — there's no else-arm
         // to join, so the surface expression is `Unit`. Matches the
@@ -47,9 +46,7 @@ pub(super) fn resolve_if(
         // implicit None) is a separate slice.
         return resolver.registry.primitive("Unit");
     };
-    for stmt in else_body.iter_mut() {
-        resolve_statement(stmt, resolver, diagnostics);
-    }
+    resolve_body_with_expected(else_body, expected, resolver, diagnostics);
     let then_tail = body_tail_type(then_body, resolver.registry);
     let else_tail = body_tail_type(else_body, resolver.registry);
     join_two_arms(
@@ -73,14 +70,15 @@ pub(super) fn resolve_ternary(
     condition: &mut Expr,
     then_expr: &mut Expr,
     else_expr: &mut Expr,
+    expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("ternary", condition, resolver.registry, diagnostics);
-    resolve_expr(then_expr, resolver, diagnostics);
-    resolve_expr(else_expr, resolver, diagnostics);
+    resolve_expr_with_expected(then_expr, expected, resolver, diagnostics);
+    resolve_expr_with_expected(else_expr, expected, resolver, diagnostics);
     join_two_arms(
         "ternary",
         ("then", &then_expr.resolution),
@@ -115,6 +113,7 @@ pub(super) fn resolve_unless(
 pub(super) fn resolve_cond(
     arms: &mut [CondArm],
     else_body: Option<&mut [Statement]>,
+    expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -123,9 +122,7 @@ pub(super) fn resolve_cond(
     for (index, arm) in arms.iter_mut().enumerate() {
         resolve_expr(&mut arm.condition, resolver, diagnostics);
         require_bool_condition("cond", &arm.condition, resolver.registry, diagnostics);
-        for stmt in arm.body.iter_mut() {
-            resolve_statement(stmt, resolver, diagnostics);
-        }
+        resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
         tails.push((
             format!("arm #{}", index + 1),
             body_tail_type(&arm.body, resolver.registry),
@@ -133,9 +130,7 @@ pub(super) fn resolve_cond(
     }
     let else_tail = match else_body {
         Some(stmts) => {
-            for stmt in stmts.iter_mut() {
-                resolve_statement(stmt, resolver, diagnostics);
-            }
+            resolve_body_with_expected(stmts, expected, resolver, diagnostics);
             body_tail_type(stmts, resolver.registry)
         }
         None => resolver.registry.primitive("Unit"),

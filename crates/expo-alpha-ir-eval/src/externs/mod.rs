@@ -23,14 +23,30 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 
+mod kernel;
 mod time;
 
 /// Run the registered extern under C symbol `link_name` against
 /// `args`. Returns `None` when no handler is registered so the
 /// caller can surface [`RuntimeError::ExternNotSupported`].
+///
+/// `strlen` traffics in `CPtr<UInt8>`, which the eval interpreter
+/// has no [`Value`] variant for. It's listed here (rather than left
+/// to fall through) so the error message points users at
+/// `--backend=llvm` instead of "not registered" — keeps the gap
+/// legible alongside the matching [`crate::intrinsics::cptr`]
+/// handler.
 pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, RuntimeError>> {
     match link_name {
         "expo_time_now_millis" => Some(time::now_millis(args)),
+        "expo_kernel_exit" => Some(kernel::exit(args)),
+        "strlen" => Some(Err(RuntimeError::Unsupported {
+            detail: format!(
+                "extern \"C\" `{link_name}` returns / consumes a CPtr<UInt8>; \
+                 the eval interpreter has no in-process pointer representation. \
+                 Use `--backend=llvm` instead.",
+            ),
+        })),
         _ => None,
     }
 }

@@ -3,7 +3,7 @@
 //! via the [`super::SelfContext`] knob.
 
 use expo_ast::ast::{Diagnostic, Function, Param, TypeExpr, is_extern_c, is_intrinsic};
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::registry::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
@@ -61,20 +61,23 @@ pub(super) fn lift_function_with_identifier(
         ));
     }
 
-    let return_type = match function.return_type.as_ref() {
+    let declared_return_type = match function.return_type.as_ref() {
         Some(type_expr) => resolve_type_expr(type_expr, scope, package, registry, diagnostics),
         None => registry.primitive("Unit"),
     };
+    let return_type = override_divergent_return(&identifier, declared_return_type, registry);
 
     let dispatch = match function.params.first() {
         Some(Param::Self_ { .. }) => Dispatch::Instance,
         _ => Dispatch::Static,
     };
+    let impl_args = concrete_impl_args(self_context);
 
     let signature = FunctionSignature {
         dispatch,
         params,
         return_type,
+        impl_args,
     };
 
     if is_extern_c(&function.annotations) {
@@ -82,6 +85,67 @@ pub(super) fn lift_function_with_identifier(
     }
 
     registry.set_signature(id, signature);
+}
+
+/// Pull the concrete pinning args off a `SelfContext::Receiver` whose
+/// `self_override` is fully resolved. Returns the impl block target's
+/// `type_args` only when every entry is concrete (no `TypeParam`
+/// references); a generic-pinned `impl Bag<T>` stays empty here so
+/// downstream lower paths skip the impl-args mangling shortcut and
+/// fall through to receiver-driven monomorphization. Inline / trait
+/// / top-level lifts return empty unconditionally.
+fn concrete_impl_args(self_context: SelfContext<'_>) -> Vec<ResolvedType> {
+    let SelfContext::Receiver {
+        self_override: Some(ResolvedType::Named { type_args, .. }),
+        ..
+    } = self_context
+    else {
+        return Vec::new();
+    };
+    if type_args.is_empty() || !type_args.iter().all(is_concrete_type) {
+        return Vec::new();
+    }
+    type_args.clone()
+}
+
+/// True when `ty` contains no `Resolution::TypeParam` references —
+/// either a fully-concrete `Named { resolution: Global, .. }` (with
+/// concrete `type_args` recursively) or a function type whose
+/// params and return are both concrete. Used by
+/// [`concrete_impl_args`] to gate the impl-args mangling shortcut
+/// on "no generics flow through this shape".
+fn is_concrete_type(ty: &ResolvedType) -> bool {
+    match ty {
+        ResolvedType::Named {
+            resolution: Resolution::Global(_),
+            type_args,
+        } => type_args.iter().all(is_concrete_type),
+        ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
+            params.iter().all(|p| is_concrete_type(&p.ty)) && is_concrete_type(ret)
+        }
+        _ => false,
+    }
+}
+
+/// Override the declared return type for compiler-known divergent
+/// functions. `Global.Kernel.panic` is declared `-> Unit` in the
+/// shared stdlib source for v1 back-compat (v1 has no `Never`); alpha
+/// rewrites it to `Never` here so match arms that end in
+/// `Kernel.panic(...)` skip the arm-tail join lattice and let
+/// `Option.unwrap` / `Result.unwrap` typecheck cleanly.
+fn override_divergent_return(
+    identifier: &Identifier,
+    declared: ResolvedType,
+    registry: &GlobalRegistry,
+) -> ResolvedType {
+    if is_kernel_panic(identifier) {
+        return registry.primitive("Never");
+    }
+    declared
+}
+
+fn is_kernel_panic(identifier: &Identifier) -> bool {
+    identifier.package() == "Global" && identifier.path() == ["Kernel", "panic"]
 }
 
 /// Mirror of v1's `validate_ffi_signature`. Run after a function's

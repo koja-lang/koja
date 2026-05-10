@@ -503,6 +503,16 @@ fn global_to_ir_type(
                 type_args.len(),
             );
             let pointee = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
+            // Method monomorphization needs an Instantiation entry even
+            // though the pointer itself doesn't carry a struct decl —
+            // call sites mangle method symbols as `CPtr_$T$.method`,
+            // which mono materializes via `enqueue_member_methods`.
+            instantiations.push(Instantiation {
+                template: id,
+                args: type_args.to_vec(),
+                method_args: Vec::new(),
+                owner: id,
+            });
             return IRType::CPtr(Box::new(pointee));
         }
         let primitive = match last {
@@ -551,6 +561,7 @@ fn global_to_ir_type(
         instantiations.push(Instantiation {
             template: id,
             args: type_args.to_vec(),
+            method_args: Vec::new(),
             owner: id,
         });
     }

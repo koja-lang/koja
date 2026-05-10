@@ -1,0 +1,28 @@
+//! `Kernel.panic(message: String)` — surface the user-supplied
+//! message as [`RuntimeError::Panicked`] so test harnesses can match
+//! on it. The LLVM backend's parallel emitter calls
+//! `__expo_alpha_panic`, which prints `panic: <message>` to stderr
+//! and aborts; the eval interpreter doesn't tear down the host
+//! process, instead it bubbles the message up the same way every
+//! other runtime error does.
+
+use crate::error::RuntimeError;
+use crate::value::Value;
+
+pub(super) fn matches_id(id: &str) -> bool {
+    id == "Kernel.panic"
+}
+
+pub(super) fn dispatch(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::String(message)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "Kernel.panic expects a single String argument; got {} arg(s): {args:?}",
+                args.len(),
+            ),
+        });
+    };
+    Err(RuntimeError::Panicked {
+        message: message.clone(),
+    })
+}

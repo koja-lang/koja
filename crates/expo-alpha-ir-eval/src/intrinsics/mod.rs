@@ -13,7 +13,14 @@ use expo_alpha_ir::IRSymbol;
 use crate::error::RuntimeError;
 use crate::value::Value;
 
+mod binary;
 mod bitwise;
+mod cptr;
+mod cstring;
+mod equality;
+mod hash;
+mod kernel;
+mod parse;
 mod print;
 
 use print::global_print;
@@ -34,6 +41,27 @@ pub(crate) fn dispatch(id: &str, symbol: &IRSymbol, args: &[Value]) -> Result<Va
     // execute the right Rust shift/and/or/xor.
     if bitwise::parse_id(id).is_some() {
         return bitwise::dispatch(id, args);
+    }
+    if equality::matches_id(id) {
+        return equality::dispatch(id, args);
+    }
+    if hash::matches_id(id) {
+        return hash::dispatch(id, args);
+    }
+    if kernel::matches_id(id) {
+        return kernel::dispatch(args);
+    }
+    if cptr::matches_id(id) {
+        return cptr::dispatch(id, args);
+    }
+    if cstring::matches_id(id) {
+        return cstring::dispatch(id, args);
+    }
+    if parse::matches_id(id) {
+        return parse::dispatch(id, args);
+    }
+    if binary::matches_id(id) {
+        return binary::dispatch(id, args);
     }
     Err(RuntimeError::UnknownIntrinsic {
         symbol: format!("{id} (at `{symbol}`)"),

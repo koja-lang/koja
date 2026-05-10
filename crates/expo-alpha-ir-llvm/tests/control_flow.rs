@@ -11,7 +11,10 @@ use expo_ast::util::dedent;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower};
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, extract_function_body,
+    lower_program_source as lower,
+};
 
 #[test]
 fn if_else_merge_emits_phi_for_int_arms() {
@@ -362,12 +365,13 @@ fn match_struct_destructure_emits_field_geps_and_no_tag_check() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "field_0");
-    assert_contains(&ir_text, "field_1");
-    assert_contains(&ir_text, "match_body_0");
+    let add_body = extract_function_body(&ir_text, "TestApp.add");
+    assert_contains(add_body, "field_0");
+    assert_contains(add_body, "field_1");
+    assert_contains(add_body, "match_body_0");
     assert!(
-        !ir_text.contains("match_test_"),
-        "plain-struct destructure should not emit any chained test block",
+        !add_body.contains("match_test_"),
+        "plain-struct destructure should not emit any chained test block in `add`",
     );
 }
 

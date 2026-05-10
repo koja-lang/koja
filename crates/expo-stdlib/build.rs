@@ -109,7 +109,14 @@ fn main() {
     // list are still embedded in `SOURCES` for the v1 path; only the alpha
     // pipeline reads `ALPHA_AUTOIMPORT`. Entries are added here as each file
     // becomes alpha-ready (typecheck + lower + emit on both backends).
-    let alpha_modules: &[&str] = &["Global.bitwise", "Global.time"];
+    let alpha_modules: &[&str] = &[
+        // kernel first — defines Option/Result/Pair referenced downstream
+        "Global.kernel",
+        "Global.cptr",
+        "Global.cstring",
+        "Global.bitwise",
+        "Global.time",
+    ];
     code.push_str("\n/// Stdlib sources auto-imported by the alpha pipeline.\n");
     code.push_str("/// Subset of `SOURCES`; grows as files become alpha-ready.\n");
     code.push_str("pub const ALPHA_AUTOIMPORT: &[(&str, &str)] = &[\n");

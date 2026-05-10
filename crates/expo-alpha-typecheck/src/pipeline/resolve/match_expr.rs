@@ -34,12 +34,13 @@ use super::patterns::{
     resolve_pattern,
 };
 use super::types::{display_resolution, is_primitive};
-use super::walker::resolve_statement;
+use super::walker::resolve_body_with_expected;
 use crate::registry::{EnumDefinition, GlobalRegistry};
 
 pub(super) fn resolve_match(
     subject: &mut Expr,
     arms: &mut [MatchArm],
+    expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -68,9 +69,7 @@ pub(super) fn resolve_match(
             resolve_expr(guard, resolver, diagnostics);
             require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
         }
-        for stmt in &mut arm.body {
-            resolve_statement(stmt, resolver, diagnostics);
-        }
+        resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
         resolver.scope.restore(scope_snapshot);
         check_arm_reachability(
             arm,

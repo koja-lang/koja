@@ -22,7 +22,7 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
 use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement};
-use expo_ast::identifier::Identifier;
+use expo_ast::identifier::{Identifier, ResolvedType};
 
 use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
@@ -30,7 +30,7 @@ use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use super::coercion::Coercions;
 use super::ctx::{Resolver, ResolverEnv};
-use super::expr::resolve_expr;
+use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::return_type::check_return_type;
 use super::statements::{resolve_assignment, resolve_compound_assignment};
 
@@ -142,9 +142,11 @@ fn resolve_function(
     };
     {
         let mut resolver = env.make_resolver(enclosing_type, &mut scope);
-        for stmt in body.iter_mut() {
-            resolve_statement(stmt, &mut resolver, diagnostics);
-        }
+        let expected = signature
+            .as_ref()
+            .filter(|sig| sig.return_type.is_resolved())
+            .map(|sig| sig.return_type.clone());
+        resolve_body_with_expected(body, expected.as_ref(), &mut resolver, diagnostics);
     }
 
     if let Some(signature) = signature {
@@ -198,6 +200,21 @@ pub(super) fn resolve_statement(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    resolve_statement_with_expected(stmt, None, resolver, diagnostics);
+}
+
+/// Like [`resolve_statement`] but threads an expected-type hint into
+/// trailing-position [`Statement::Expr`]s so bidirectional shapes
+/// (`Option.None` in a function returning `Option<T>`,
+/// `Result.Ok(x)` whose `E` only resolves through the surrounding
+/// context, …) get the surrounding type as expected. Non-`Expr`
+/// statements ignore the hint.
+pub(super) fn resolve_statement_with_expected(
+    stmt: &mut Statement,
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match stmt {
         Statement::Assignment {
             target,
@@ -224,7 +241,7 @@ pub(super) fn resolve_statement(
             resolve_compound_assignment(target, *op, value, *span, resolver, diagnostics);
         }
         Statement::Expr(expr) => {
-            resolve_expr(expr, resolver, diagnostics);
+            resolve_expr_with_expected(expr, expected, resolver, diagnostics);
         }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
@@ -232,4 +249,24 @@ pub(super) fn resolve_statement(
             }
         }
     }
+}
+
+/// Walk every statement in `body`, resolving the trailing
+/// `Statement::Expr` (if any) with `expected` as a downward type
+/// hint. Non-trailing statements always resolve without an
+/// expected-type hint — only the value-producing tail matters for
+/// bidirectional inference.
+pub(super) fn resolve_body_with_expected(
+    body: &mut [Statement],
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some((last, leading)) = body.split_last_mut() else {
+        return;
+    };
+    for stmt in leading {
+        resolve_statement(stmt, resolver, diagnostics);
+    }
+    resolve_statement_with_expected(last, expected, resolver, diagnostics);
 }

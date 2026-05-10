@@ -126,21 +126,18 @@ impl GlobalRegistry {
         Self::default()
     }
 
-    /// Seed a fresh registry with stdlib stubs: scalar / FFI-width
-    /// primitives + `String` / `Binary` / `Bits` (struct stubs),
-    /// `CPtr<T>` (generic struct stub), and `Option<T>` (fully-
-    /// lifted enum stub used by the `for` desugar). All under the
-    /// `Global` package so resolve never special-cases them.
+    /// Seed a fresh registry with stdlib primitive stubs: scalar /
+    /// FFI-width primitives plus `String` / `Binary` / `Bits`. All
+    /// under the `Global` package so resolve never special-cases
+    /// them. `CPtr<T>` and `Option<T>` are *not* stubbed here —
+    /// they're defined in autoimported `Global.cptr` / `Global.kernel`
+    /// sources and land through `collect` like any other user decl.
     ///
     /// Each primitive lands as `Struct(Some(empty_def))`: zero
     /// fields, empty conformance map. The empty definition lets
     /// `impl P for Int` blocks register conformances without the
     /// stub-vs-real-struct branching the bare-marker design
     /// originally forced.
-    ///
-    /// Temporary scaffolding — once the real stdlib compiles as a
-    /// package these entries land through `collect` like any other
-    /// decl.
     pub fn with_stdlib_stubs() -> Self {
         let mut reg = Self::default();
         for name in [
@@ -149,8 +146,6 @@ impl GlobalRegistry {
         ] {
             seed_primitive_stub(&mut reg, name, Vec::new());
         }
-        seed_primitive_stub(&mut reg, "CPtr", vec!["T".to_string()]);
-        seed_option_stub(&mut reg);
         reg
     }
 
@@ -598,41 +593,4 @@ fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<St
             fields: Vec::new(),
         },
     );
-}
-
-/// Seed `Global.Option<T> = Some(T) | None` fully lifted (head +
-/// variant roster) so the `synthesize` for-desugar and any other
-/// compiler-internal `Option<T>` reference can name the variants
-/// without going through `lift_signatures`.
-fn seed_option_stub(reg: &mut GlobalRegistry) {
-    let outcome = reg.insert_enum(
-        Identifier::new("Global", vec!["Option".to_string()]),
-        Span::default(),
-        vec!["T".to_string()],
-    );
-    let option_id = match outcome {
-        InsertOutcome::Fresh(id) => id,
-        InsertOutcome::Collision { existing } => panic!(
-            "stdlib stub `Global.Option` collided on preload with `{}` — \
-             registry was not empty",
-            existing.identifier,
-        ),
-    };
-    let definition = EnumDefinition {
-        variants: vec![
-            ResolvedEnumVariant {
-                name: "Some".to_string(),
-                data: ResolvedVariantData::Tuple(vec![ResolvedType::leaf(Resolution::TypeParam {
-                    owner: option_id,
-                    index: TypeParamIndex::new(0),
-                })]),
-            },
-            ResolvedEnumVariant {
-                name: "None".to_string(),
-                data: ResolvedVariantData::Unit,
-            },
-        ],
-        conformances: BTreeMap::new(),
-    };
-    reg.set_enum_definition(option_id, definition);
 }

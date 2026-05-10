@@ -15,7 +15,7 @@
 
 use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, Statement};
-use expo_ast::identifier::LocalId;
+use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 
 use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator};
 use crate::local::IRLocalId;
@@ -111,6 +111,22 @@ fn lower_statement(
     match stmt {
         Statement::Expr(expr) => {
             let (value, next) = lower_expr(expr, ctx, block, registry, output)?;
+            // A statement-position expression typed `Never` (today: a
+            // call to `@intrinsic Kernel.panic`, signature rewritten by
+            // the typecheck `override_divergent_return` pass) cannot
+            // reach the next statement. Cap the open block with
+            // `Unreachable` and report `Closed` so surrounding
+            // arm-merge / fallthrough paths skip the would-be branch
+            // edge — without this, a match arm tail of `panic(...)`
+            // emits a `Branch` with the `Unit`-typed call result as a
+            // branch arg into a merge block whose param is the `T` the
+            // other arms produce, which the LLVM emitter rejects with
+            // an "undefined SSA value" since calls to void-returning
+            // funcs don't register their dest in the value map.
+            if is_never(&expr.resolution, registry) {
+                ctx.cfg.set_terminator(next, IRTerminator::Unreachable);
+                return Ok(FlowResult::Closed);
+            }
             Ok(FlowResult::Open {
                 value: Some(value),
                 block: next,
@@ -284,6 +300,30 @@ fn lower_compound_assignment(
         value: None,
         block: current,
     })
+}
+
+/// True when `ty` is the registry-tracked `Global.Never` primitive.
+/// Cheaper than threading a "divergent expression" flag down from
+/// resolve: typecheck already stamps `expr.resolution` with the
+/// callee's return type, which for [`Kernel.panic`] is rewritten to
+/// `Never` by the lift_signatures pass. Callees with no Never return
+/// (the common case) early-out on the first guard.
+fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        type_args,
+    } = ty
+    else {
+        return false;
+    };
+    if !type_args.is_empty() {
+        return false;
+    }
+    let never_id = match registry.lookup(&Identifier::new("Global", vec!["Never".to_string()])) {
+        Some((id, _)) => id,
+        None => return false,
+    };
+    *id == never_id
 }
 
 fn compound_to_ir(op: CompoundOp) -> IRBinOp {

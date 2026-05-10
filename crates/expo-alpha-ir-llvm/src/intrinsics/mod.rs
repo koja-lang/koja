@@ -16,10 +16,24 @@ use inkwell::values::FunctionValue;
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
+mod binary;
 mod bitwise;
+pub(super) mod cptr;
+mod cstring;
+mod equality;
+mod hash;
+mod kernel;
+mod parse;
 mod print;
 
+use binary::{emit_binary, method_for as binary_method_for};
 use bitwise::{emit_bitwise, op_from_id};
+use cptr::{emit_cptr, method_for as cptr_method_for};
+use cstring::{emit_to_string as emit_cstring_to_string, matches_id as cstring_matches};
+use equality::{emit_eq, matches_id as eq_matches};
+use hash::{emit_hash, matches_id as hash_matches};
+use kernel::{emit_panic, matches_id as kernel_matches};
+use parse::{emit_parse, matches_id as parse_matches};
 use print::emit_global_print;
 
 /// Function pointer type for an intrinsic's LLVM emitter. The
@@ -64,6 +78,31 @@ fn emitter_for<'ctx>(id: &str) -> Option<IntrinsicEmitter<'ctx>> {
     // right LLVM instruction.
     if op_from_id(id).is_some() {
         return Some(emit_bitwise);
+    }
+    // 9-method `CPtr<T>` family: `CPtr.alloc`, `CPtr.free`, ...
+    // Dispatched via the bare `CPtr.<method>` id; the per-symbol
+    // pointee `T` is recovered from the function's IR types inside
+    // the emitter. One emitter handles every monomorphization.
+    if cptr_method_for(id).is_some() {
+        return Some(emit_cptr);
+    }
+    if eq_matches(id) {
+        return Some(emit_eq);
+    }
+    if hash_matches(id) {
+        return Some(emit_hash);
+    }
+    if binary_method_for(id).is_some() {
+        return Some(emit_binary);
+    }
+    if cstring_matches(id) {
+        return Some(emit_cstring_to_string);
+    }
+    if kernel_matches(id) {
+        return Some(emit_panic);
+    }
+    if parse_matches(id) {
+        return Some(emit_parse);
     }
     None
 }
