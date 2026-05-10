@@ -16,15 +16,10 @@ use crate::runtime::declare_malloc_extern;
 
 const STRING_HEADER_BYTES: u64 = 8;
 
-pub(super) fn matches_id(id: &str) -> bool {
-    id == "CString.to_string"
-}
-
 pub(super) fn emit_to_string<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    _id: &str,
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);

@@ -21,6 +21,7 @@ use crate::enum_decl::IREnumDecl;
 use crate::extern_attrs::IRExternAttrs;
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
 use crate::generics::Instantiation;
+use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
 use crate::mangling::mangled_type_name;
 use crate::package::IRPackage;
@@ -248,12 +249,20 @@ pub(crate) fn lower_function_inner(
     ctx.closures_mut().set_enclosing_symbol(symbol.clone());
 
     if intrinsic {
+        let Some(intrinsic_id) = IRIntrinsicId::from_identifier(identifier) else {
+            output.diagnostics.push(Diagnostic::error(
+                format!(
+                    "`@intrinsic` on `{identifier}` has no registered backend handler; \
+                     add a variant to `IRIntrinsicId` and wire its emitter in both backends",
+                ),
+                function.span,
+            ));
+            return None;
+        };
         let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
         return Some(IRFunction {
             blocks: Vec::new(),
-            kind: FunctionKind::Intrinsic {
-                id: intrinsic_id_for(identifier),
-            },
+            kind: FunctionKind::Intrinsic(intrinsic_id),
             params,
             return_type,
             symbol,
@@ -297,21 +306,6 @@ pub(crate) fn lower_function_inner(
         return_type,
         symbol,
     })
-}
-
-/// Derive the backend-stable
-/// [`FunctionKind::Intrinsic`](crate::FunctionKind::Intrinsic)
-/// `id` from a function's canonical AST [`Identifier`]. Drops
-/// the package prefix and joins the remaining path with `.`, so
-/// `Global.Int.band` becomes `"Int.band"`. The id is what both
-/// backends key on at emission/eval time, decoupling the dispatch
-/// table from the mangled symbol (which carries monomorphization
-/// suffixes the table doesn't want to enumerate). All existing
-/// alpha intrinsics live in `Global.<Type>.<method>` shape, so a
-/// two-segment id is enough today; nested-type intrinsics would
-/// extend to `Outer.Inner.method` automatically.
-fn intrinsic_id_for(identifier: &Identifier) -> String {
-    identifier.path().join(".")
 }
 
 /// Mint a [`ValueId`](crate::types::ValueId) per parameter (in

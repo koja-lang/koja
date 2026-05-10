@@ -13,39 +13,42 @@
 //! - `Bits.to_binary(self) -> Result<Binary, String>` — TODO once
 //!   the byte-aligned check lands; same placeholder.
 
-use expo_alpha_ir::IRFunction;
+use expo_alpha_ir::{BinaryMethod, BitsMethod, IRFunction};
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 
-pub(super) fn method_for(id: &str) -> Option<&str> {
-    matches!(
-        id,
-        "Binary.byte_size"
-            | "Binary.ptr"
-            | "Binary.to_bits"
-            | "Binary.to_string"
-            | "Bits.to_binary"
-    )
-    .then_some(id)
-}
-
 pub(super) fn emit_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    id: &str,
+    method: BinaryMethod,
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);
 
-    match id {
-        "Binary.byte_size" => emit_byte_size(ctx, function, llvm_function),
-        "Binary.ptr" | "Binary.to_bits" => emit_self_passthrough(ctx, function, llvm_function),
-        "Binary.to_string" | "Bits.to_binary" => emit_unimplemented_result(ctx, function),
-        other => panic!("emit_binary: unhandled id `{other}`"),
+    match method {
+        BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
+        BinaryMethod::Ptr | BinaryMethod::ToBits => {
+            emit_self_passthrough(ctx, function, llvm_function)
+        }
+        BinaryMethod::ToString => emit_unimplemented_result(ctx, function),
+    }
+}
+
+pub(super) fn emit_bits<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    method: BitsMethod,
+) -> Result<(), LlvmError> {
+    let entry = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry);
+
+    match method {
+        BitsMethod::ToBinary => emit_unimplemented_result(ctx, function),
     }
 }
 

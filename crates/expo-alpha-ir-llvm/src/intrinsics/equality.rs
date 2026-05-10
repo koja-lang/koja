@@ -6,7 +6,7 @@
 //! share this dispatch shape (no `Equality for Float`/`String` impls
 //! today).
 
-use expo_alpha_ir::IRFunction;
+use expo_alpha_ir::{EqualityImpl, IRFunction};
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 
@@ -14,19 +14,11 @@ use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 
-const TYPES: &[&str] = &[
-    "Bool", "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
-];
-
-pub(super) fn matches_id(id: &str) -> bool {
-    TYPES.iter().any(|ty| id == format!("{ty}.eq"))
-}
-
 pub(super) fn emit_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    _id: &str,
+    _impl_: EqualityImpl,
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);

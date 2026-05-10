@@ -13,31 +13,32 @@
 //!   ([`crate::intrinsics::binary`]) by surfacing
 //!   [`RuntimeError::Unsupported`].
 
+use expo_alpha_ir::{BinaryMethod, BitsMethod};
+
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-pub(super) fn matches_id(id: &str) -> bool {
-    matches!(
-        id,
-        "Binary.byte_size"
-            | "Binary.ptr"
-            | "Binary.to_bits"
-            | "Binary.to_string"
-            | "Bits.to_binary"
-    )
-}
-
-pub(super) fn dispatch(id: &str, args: &[Value]) -> Result<Value, RuntimeError> {
-    match id {
-        "Binary.byte_size" => byte_size(args),
-        "Binary.to_bits" => to_bits(args),
-        "Binary.ptr" | "Binary.to_string" | "Bits.to_binary" => Err(RuntimeError::Unsupported {
+pub(super) fn binary(method: BinaryMethod, args: &[Value]) -> Result<Value, RuntimeError> {
+    match method {
+        BinaryMethod::ByteSize => byte_size(args),
+        BinaryMethod::Ptr | BinaryMethod::ToString => Err(RuntimeError::Unsupported {
             detail: format!(
-                "`{id}` is not implemented in the eval interpreter — \
+                "`Binary.{method:?}` is not implemented in the eval interpreter — \
                  mirrors the LLVM-side stub. Use `--backend=llvm`.",
             ),
         }),
-        other => panic!("intrinsics::binary: unhandled id `{other}`"),
+        BinaryMethod::ToBits => to_bits(args),
+    }
+}
+
+pub(super) fn bits(method: BitsMethod, _args: &[Value]) -> Result<Value, RuntimeError> {
+    match method {
+        BitsMethod::ToBinary => Err(RuntimeError::Unsupported {
+            detail: format!(
+                "`Bits.{method:?}` is not implemented in the eval interpreter — \
+                 mirrors the LLVM-side stub. Use `--backend=llvm`.",
+            ),
+        }),
     }
 }
 

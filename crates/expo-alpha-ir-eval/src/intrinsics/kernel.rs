@@ -9,11 +9,7 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-pub(super) fn matches_id(id: &str) -> bool {
-    id == "Kernel.panic"
-}
-
-pub(super) fn dispatch(args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn panic(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::String(message)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(

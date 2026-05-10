@@ -122,8 +122,8 @@ fn execute_function<R: CallResolver>(
         args.len(),
     );
     match &function.kind {
-        FunctionKind::Intrinsic { id } => {
-            return intrinsics::dispatch(id, &function.symbol, &args);
+        FunctionKind::Intrinsic(id) => {
+            return intrinsics::dispatch(id, &args);
         }
         FunctionKind::Extern(attrs) => {
             let c_symbol = attrs

@@ -16,15 +16,10 @@ use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::runtime::declare_panic_extern;
 
-pub(super) fn matches_id(id: &str) -> bool {
-    id == "Kernel.panic"
-}
-
 pub(super) fn emit_panic<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    _id: &str,
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);

@@ -15,7 +15,7 @@
 //! truncate just collapses the same poison into the operand's
 //! native shape.
 
-use expo_alpha_ir::{IRFunction, IRType};
+use expo_alpha_ir::{BitOp, IRFunction, IntType};
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{FunctionValue, IntValue};
 
@@ -24,87 +24,35 @@ use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
-/// One of the six bitwise ops `Bitwise` exposes. Encoded in the
-/// trailing segment of the intrinsic id (`Int.band` → `Op::Band`).
-#[derive(Clone, Copy)]
-pub(super) enum Op {
-    Band,
-    Bnot,
-    Bor,
-    Bsl,
-    Bsr,
-    Bxor,
-}
-
-/// Parse the trailing segment of an intrinsic id (e.g. `"Int.band"`
-/// → `Op::Band`). Returns `None` for non-bitwise ids so
-/// [`super::emitter_for`] can keep this table colocated with the
-/// LLVM dispatch without inflating its match.
-pub(super) fn op_from_id(id: &str) -> Option<Op> {
-    let (_, suffix) = id.rsplit_once('.')?;
-    Some(match suffix {
-        "band" => Op::Band,
-        "bnot" => Op::Bnot,
-        "bor" => Op::Bor,
-        "bsl" => Op::Bsl,
-        "bsr" => Op::Bsr,
-        "bxor" => Op::Bxor,
-        _ => return None,
-    })
-}
-
-/// Whether the receiver type's right-shift should preserve the sign
-/// bit. Signed integer types use arithmetic shift (sign-extend);
-/// unsigned types use logical shift (zero-extend).
-fn is_signed(ty: &IRType) -> bool {
-    matches!(
-        ty,
-        IRType::Int8 | IRType::Int16 | IRType::Int32 | IRType::Int64,
-    )
-}
-
 pub(super) fn emit_bitwise<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    id: &str,
+    ty: IntType,
+    op: BitOp,
 ) -> Result<(), LlvmError> {
-    let op = op_from_id(id).unwrap_or_else(|| {
-        panic!(
-            "emit_bitwise dispatched for non-bitwise id `{id}` (symbol `{}`); \
-             dispatch table and op_from_id must stay in sync",
-            function.symbol,
-        )
-    });
-
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);
 
     let lhs = receiver_param(function, llvm_function);
     let result: IntValue<'ctx> = match op {
-        Op::Band => {
+        BitOp::Band => {
             let rhs = other_param(function, llvm_function);
             ctx.builder
                 .build_and(lhs, rhs, "band")
                 .map_err(|e| inkwell_err(format_args!("build_and for `{}`", function.symbol), e))?
         }
-        Op::Bor => {
+        BitOp::Bnot => ctx
+            .builder
+            .build_not(lhs, "bnot")
+            .map_err(|e| inkwell_err(format_args!("build_not for `{}`", function.symbol), e))?,
+        BitOp::Bor => {
             let rhs = other_param(function, llvm_function);
             ctx.builder
                 .build_or(lhs, rhs, "bor")
                 .map_err(|e| inkwell_err(format_args!("build_or for `{}`", function.symbol), e))?
         }
-        Op::Bxor => {
-            let rhs = other_param(function, llvm_function);
-            ctx.builder
-                .build_xor(lhs, rhs, "bxor")
-                .map_err(|e| inkwell_err(format_args!("build_xor for `{}`", function.symbol), e))?
-        }
-        Op::Bnot => ctx
-            .builder
-            .build_not(lhs, "bnot")
-            .map_err(|e| inkwell_err(format_args!("build_not for `{}`", function.symbol), e))?,
-        Op::Bsl => {
+        BitOp::Bsl => {
             let count = shift_count(ctx, function, llvm_function, &lhs)?;
             ctx.builder
                 .build_left_shift(lhs, count, "bsl")
@@ -115,16 +63,22 @@ pub(super) fn emit_bitwise<'ctx>(
                     )
                 })?
         }
-        Op::Bsr => {
+        BitOp::Bsr => {
             let count = shift_count(ctx, function, llvm_function, &lhs)?;
             ctx.builder
-                .build_right_shift(lhs, count, is_signed(&function.params[0].ty), "bsr")
+                .build_right_shift(lhs, count, ty.is_signed(), "bsr")
                 .map_err(|e| {
                     inkwell_err(
                         format_args!("build_right_shift for `{}`", function.symbol),
                         e,
                     )
                 })?
+        }
+        BitOp::Bxor => {
+            let rhs = other_param(function, llvm_function);
+            ctx.builder
+                .build_xor(lhs, rhs, "bxor")
+                .map_err(|e| inkwell_err(format_args!("build_xor for `{}`", function.symbol), e))?
         }
     };
 

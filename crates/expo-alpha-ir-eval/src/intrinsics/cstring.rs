@@ -8,16 +8,11 @@
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-pub(super) fn matches_id(id: &str) -> bool {
-    id == "CString.to_string"
-}
-
-pub(super) fn dispatch(id: &str, _args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn to_string(_args: &[Value]) -> Result<Value, RuntimeError> {
     Err(RuntimeError::Unsupported {
-        detail: format!(
-            "`{id}` is not implemented in the eval interpreter — \
+        detail: "`CString.to_string` is not implemented in the eval interpreter — \
              CString carries a CPtr<UInt8> with no in-process \
-             representation. Use `--backend=llvm`.",
-        ),
+             representation. Use `--backend=llvm`."
+            .to_string(),
     })
 }

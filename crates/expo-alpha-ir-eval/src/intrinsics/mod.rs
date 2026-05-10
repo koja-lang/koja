@@ -1,14 +1,17 @@
 //! Per-backend dispatch table for `@intrinsic` function bodies on
 //! the eval interpreter side. Mirrors the LLVM backend's
 //! `intrinsics/` shape — each registered intrinsic is keyed by its
-//! [`expo_alpha_ir::FunctionKind::Intrinsic`] `id` (a stable
-//! `Type.method` string) and routed to a hand-written handler.
+//! [`expo_alpha_ir::FunctionKind::Intrinsic`] payload (an
+//! [`IRIntrinsicId`] -- a typed enum the lift pass mints from the
+//! function's identifier path) and routed via an exhaustive `match`
+//! to a hand-written handler.
 //!
-//! Adding a new intrinsic: drop a sibling `<name>.rs` module
-//! exporting `pub(super) fn <name>`, register it in
-//! [`handler_for`], and pin a 1-1 test in `tests/intrinsics.rs`.
+//! Adding a new intrinsic: extend [`IRIntrinsicId`] in
+//! `expo-alpha-ir`, drop a sibling `<name>.rs` module exporting
+//! `pub(super) fn <handler>`, and wire its arm in [`dispatch`]. The
+//! exhaustive match makes the wiring step compiler-checked.
 
-use expo_alpha_ir::IRSymbol;
+use expo_alpha_ir::{BitsMethod, IRIntrinsicId, KernelMethod};
 
 use crate::error::RuntimeError;
 use crate::value::Value;
@@ -23,47 +26,18 @@ mod kernel;
 mod parse;
 mod print;
 
-use print::global_print;
-
-/// Run the registered intrinsic `id` against `args`. The mangled
-/// `symbol` is included only for the unknown-id error message so
-/// users see the full call site, not just the dispatch id.
-/// Unknown ids return [`RuntimeError::UnknownIntrinsic`] — a
-/// missing registration fails loudly instead of silently returning
-/// `Unit`.
-pub(crate) fn dispatch(id: &str, symbol: &IRSymbol, args: &[Value]) -> Result<Value, RuntimeError> {
-    if id == "print" {
-        return global_print(args);
+/// Run the registered intrinsic `id` against `args`.
+pub(crate) fn dispatch(id: &IRIntrinsicId, args: &[Value]) -> Result<Value, RuntimeError> {
+    match *id {
+        IRIntrinsicId::Binary(method) => binary::binary(method, args),
+        IRIntrinsicId::Bits(BitsMethod::ToBinary) => binary::bits(BitsMethod::ToBinary, args),
+        IRIntrinsicId::Bitwise { ty, op } => bitwise::dispatch(ty, op, args),
+        IRIntrinsicId::CPtr(method) => cptr::dispatch(method, args),
+        IRIntrinsicId::CString(_) => cstring::to_string(args),
+        IRIntrinsicId::Equality(impl_) => equality::dispatch(impl_, args),
+        IRIntrinsicId::Hash(impl_) => hash::dispatch(impl_, args),
+        IRIntrinsicId::Kernel(KernelMethod::Panic) => kernel::panic(args),
+        IRIntrinsicId::Parse(target) => parse::dispatch(target, args),
+        IRIntrinsicId::Print => print::global_print(args),
     }
-    // 48-cell `Bitwise` family: `Int.band`, `UInt8.bsr`, ...
-    // Routes here when the trailing segment is one of the six
-    // ops; the handler branches on the parsed `(ty, op)` to
-    // execute the right Rust shift/and/or/xor.
-    if bitwise::parse_id(id).is_some() {
-        return bitwise::dispatch(id, args);
-    }
-    if equality::matches_id(id) {
-        return equality::dispatch(id, args);
-    }
-    if hash::matches_id(id) {
-        return hash::dispatch(id, args);
-    }
-    if kernel::matches_id(id) {
-        return kernel::dispatch(args);
-    }
-    if cptr::matches_id(id) {
-        return cptr::dispatch(id, args);
-    }
-    if cstring::matches_id(id) {
-        return cstring::dispatch(id, args);
-    }
-    if parse::matches_id(id) {
-        return parse::dispatch(id, args);
-    }
-    if binary::matches_id(id) {
-        return binary::dispatch(id, args);
-    }
-    Err(RuntimeError::UnknownIntrinsic {
-        symbol: format!("{id} (at `{symbol}`)"),
-    })
 }

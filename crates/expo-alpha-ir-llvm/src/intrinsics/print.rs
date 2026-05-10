@@ -19,7 +19,6 @@ pub(super) fn emit_global_print<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    _id: &str,
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);

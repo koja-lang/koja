@@ -57,9 +57,7 @@ pub(crate) fn declare_function<'ctx>(
             .link_name
             .clone()
             .unwrap_or_else(|| function.symbol.last_segment().to_string()),
-        FunctionKind::Intrinsic { .. } | FunctionKind::Regular => {
-            function.symbol.mangled().to_string()
-        }
+        FunctionKind::Intrinsic(_) | FunctionKind::Regular => function.symbol.mangled().to_string(),
     };
     let llvm_function = match ctx.module.get_function(&llvm_name) {
         Some(existing) => existing,
@@ -109,7 +107,7 @@ pub(crate) fn define_function<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let env_layout = match &function.kind {
-        FunctionKind::Intrinsic { id } => {
+        FunctionKind::Intrinsic(id) => {
             return intrinsics::emit_intrinsic_body(ctx, function, llvm_function, id);
         }
         FunctionKind::Extern(_) => {

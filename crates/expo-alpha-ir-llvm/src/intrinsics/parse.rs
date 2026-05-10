@@ -11,22 +11,18 @@
 //! "feature gap" instead of a silent miscompile keeps the eager-
 //! lower-stdlib path honest.
 
-use expo_alpha_ir::IRFunction;
+use expo_alpha_ir::{IRFunction, ParseTarget};
 use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 
-pub(super) fn matches_id(id: &str) -> bool {
-    matches!(id, "Int.parse" | "Float.parse")
-}
-
 pub(super) fn emit_parse<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    _id: &str,
+    _target: ParseTarget,
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);

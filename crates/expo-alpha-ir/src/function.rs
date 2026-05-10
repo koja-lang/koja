@@ -9,6 +9,7 @@ use expo_ast::identifier::Identifier;
 
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::extern_attrs::IRExternAttrs;
+use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
 use crate::ownership::Ownership;
 use crate::struct_decl::StructFieldInit;
@@ -109,9 +110,10 @@ impl fmt::Display for IRBlockId {
 /// How a function's body is materialized at emission time.
 ///
 /// - `Regular` carries non-empty blocks the backend walks.
-/// - `Intrinsic { id }` carries empty blocks and a backend-stable
-///   string key. Both backends look `id` up in their per-backend
-///   dispatch tables (e.g. `"Int.band"`) to synthesize the body —
+/// - `Intrinsic(id)` carries empty blocks and a typed
+///   [`IRIntrinsicId`]. Both backends `match` exhaustively on that
+///   enum to synthesize the body, so adding an intrinsic is a
+///   compile-time wiring requirement on every consumer. The id is
 ///   decoupled from [`IRSymbol::mangled`] so monomorphized symbols
 ///   can share an emitter without per-mangling table entries.
 /// - `Extern(attrs)` carries empty blocks and an FFI-linked
@@ -135,7 +137,7 @@ impl fmt::Display for IRBlockId {
 pub enum FunctionKind {
     Closure { env_layout: Vec<IRType> },
     Extern(IRExternAttrs),
-    Intrinsic { id: String },
+    Intrinsic(IRIntrinsicId),
     Regular,
 }
 

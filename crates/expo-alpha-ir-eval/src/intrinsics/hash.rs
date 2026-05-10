@@ -1,32 +1,20 @@
-//! Eval handlers for the 9-cell `Hash` intrinsic family (`Bool.hash`,
-//! `Int.hash`, `Int8.hash`, `Int16.hash`, `Int32.hash`, `UInt8.hash`,
-//! `UInt16.hash`, `UInt32.hash`, `UInt64.hash`).
+//! Eval handlers for the 9-cell `Hash` intrinsic family (`Bool.hash`
+//! plus `IntN.hash` / `UIntN.hash`).
 //!
 //! Implements SplitMix64 against the value re-interpreted as `u64`,
 //! matching the LLVM-side [`crate::intrinsics::hash`] emitter so eval /
 //! native produce byte-identical hash codes for the same input.
 
+use expo_alpha_ir::HashImpl;
+
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-const INT_PREFIXES: &[&str] = &[
-    "Int.", "Int8.", "Int16.", "Int32.", "UInt8.", "UInt16.", "UInt32.", "UInt64.",
-];
-
-pub(super) fn matches_id(id: &str) -> bool {
-    if id == "Bool.hash" {
-        return true;
-    }
-    INT_PREFIXES
-        .iter()
-        .any(|prefix| id.strip_prefix(prefix) == Some("hash"))
-}
-
-pub(super) fn dispatch(id: &str, args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn dispatch(impl_: HashImpl, args: &[Value]) -> Result<Value, RuntimeError> {
     let [arg] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "`{id}` expects 1 argument; got {} arg(s): {args:?}",
+                "Hash.hash ({impl_:?}) expects 1 argument; got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -36,7 +24,7 @@ pub(super) fn dispatch(id: &str, args: &[Value]) -> Result<Value, RuntimeError> 
         Value::Int(v) => *v as u64,
         other => {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("`{id}` expects a Bool/Int operand; got {other:?}"),
+                detail: format!("Hash.hash ({impl_:?}) expects a Bool/Int operand; got {other:?}",),
             });
         }
     };

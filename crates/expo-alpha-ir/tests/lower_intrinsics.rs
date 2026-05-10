@@ -19,7 +19,7 @@
 //!
 //! [`FunctionKind`]: expo_alpha_ir::FunctionKind
 
-use expo_alpha_ir::{FunctionKind, IRInstruction, IRScript, IRTerminator, IRType};
+use expo_alpha_ir::{FunctionKind, IRInstruction, IRIntrinsicId, IRScript, IRTerminator, IRType};
 use expo_ast::util::dedent;
 use expo_parser::ParseMode;
 
@@ -44,13 +44,17 @@ fn intrinsic_fn_lowers_to_function_kind_intrinsic_with_empty_blocks() {
         .function(&mangled)
         .unwrap_or_else(|| panic!("missing intrinsic `{mangled}` in IRScript"));
 
-    let FunctionKind::Intrinsic { id } = &function.kind else {
+    let FunctionKind::Intrinsic(id) = &function.kind else {
         panic!(
-            "intrinsic fn lowered with wrong kind: expected `Intrinsic {{ .. }}`, got {:?}",
+            "intrinsic fn lowered with wrong kind: expected `Intrinsic(_)`, got {:?}",
             function.kind,
         );
     };
-    assert_eq!(id, "print", "intrinsic_id should be the function path");
+    assert_eq!(
+        *id,
+        IRIntrinsicId::Print,
+        "intrinsic id should map to the `print` variant",
+    );
     assert!(
         function.blocks.is_empty(),
         "intrinsic body should lower to zero blocks; got {} block(s)",

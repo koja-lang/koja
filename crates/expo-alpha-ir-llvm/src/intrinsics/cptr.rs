@@ -17,7 +17,7 @@
 //! malloc's a length-prefixed block and memcpy's `len` bytes from
 //! the source pointer.
 
-use expo_alpha_ir::{IRFunction, IRType};
+use expo_alpha_ir::{CPtrMethod, IRFunction, IRType};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::module::Linkage;
@@ -36,47 +36,25 @@ use crate::types::ir_basic_type;
 /// byte-identical heap layouts.
 const STRING_HEADER_BYTES: u64 = 8;
 
-/// Recognize a `CPtr.<method>` dispatch id. Returns the trailing
-/// segment (`alloc`, `free`, …) when the id matches, `None`
-/// otherwise so [`crate::intrinsics::emitter_for`] can fall through
-/// to other families.
-pub(super) fn method_for(id: &str) -> Option<&str> {
-    let suffix = id.strip_prefix("CPtr.")?;
-    match suffix {
-        "alloc" | "null" | "free" | "offset" | "read" | "write" | "null?" | "to_binary"
-        | "to_string" => Some(suffix),
-        _ => None,
-    }
-}
-
 pub(super) fn emit_cptr<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    id: &str,
+    method: CPtrMethod,
 ) -> Result<(), LlvmError> {
-    let method = method_for(id).unwrap_or_else(|| {
-        panic!(
-            "emit_cptr dispatched for non-CPtr id `{id}` (symbol `{}`); \
-             dispatch table and method_for must stay in sync",
-            function.symbol,
-        )
-    });
-
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);
 
     match method {
-        "null" => emit_null(ctx, function),
-        "alloc" => emit_alloc(ctx, function, llvm_function),
-        "free" => emit_free(ctx, function, llvm_function),
-        "offset" => emit_offset(ctx, function, llvm_function),
-        "read" => emit_read(ctx, function, llvm_function),
-        "write" => emit_write(ctx, function, llvm_function),
-        "null?" => emit_null_check(ctx, function, llvm_function),
-        "to_string" => emit_to_string(ctx, function, llvm_function),
-        "to_binary" => emit_to_binary(ctx, function, llvm_function),
-        other => panic!("emit_cptr: unhandled method `{other}`"),
+        CPtrMethod::Alloc => emit_alloc(ctx, function, llvm_function),
+        CPtrMethod::Free => emit_free(ctx, function, llvm_function),
+        CPtrMethod::Null => emit_null(ctx, function),
+        CPtrMethod::NullQ => emit_null_check(ctx, function, llvm_function),
+        CPtrMethod::Offset => emit_offset(ctx, function, llvm_function),
+        CPtrMethod::Read => emit_read(ctx, function, llvm_function),
+        CPtrMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
+        CPtrMethod::ToString => emit_to_string(ctx, function, llvm_function),
+        CPtrMethod::Write => emit_write(ctx, function, llvm_function),
     }
 }
 
@@ -84,15 +62,15 @@ pub(super) fn emit_cptr<'ctx>(
 /// `null` carry it on the return type; every other method receives
 /// `self: CPtr<T>` as `params[0]`. Falls through to a codegen error
 /// if neither slot is a `CPtr`.
-fn pointee<'a>(method: &str, function: &'a IRFunction) -> Result<&'a IRType, LlvmError> {
+fn pointee(method: CPtrMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
     let candidate = match method {
-        "alloc" | "null" => &function.return_type,
+        CPtrMethod::Alloc | CPtrMethod::Null => &function.return_type,
         _ => &function.params[0].ty,
     };
     match candidate {
         IRType::CPtr(inner) => Ok(inner),
         other => Err(LlvmError::Codegen(format!(
-            "CPtr.{method} expected a `CPtr<T>` slot, got `{other:?}` (symbol `{}`)",
+            "CPtr.{method:?} expected a `CPtr<T>` slot, got `{other:?}` (symbol `{}`)",
             function.symbol,
         ))),
     }
@@ -111,7 +89,7 @@ fn emit_alloc<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let inner = pointee("alloc", function)?;
+    let inner = pointee(CPtrMethod::Alloc, function)?;
     let basic = ir_basic_type(ctx, inner)?;
     let element_size = basic.size_of().ok_or_else(|| {
         LlvmError::Codegen(format!(
@@ -169,7 +147,7 @@ fn emit_offset<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let inner = pointee("offset", function)?;
+    let inner = pointee(CPtrMethod::Offset, function)?;
     let element_ty = ir_basic_type(ctx, inner)?;
     let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
     let n = nth_int(function, llvm_function, 1, "n")?;
@@ -189,7 +167,7 @@ fn emit_read<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let inner = pointee("read", function)?;
+    let inner = pointee(CPtrMethod::Read, function)?;
     let element_ty = ir_basic_type(ctx, inner)?;
     let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
     let val = ctx
