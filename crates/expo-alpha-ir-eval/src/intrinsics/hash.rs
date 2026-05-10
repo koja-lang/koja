@@ -1,14 +1,19 @@
-//! Eval handlers for the 9-cell `Hash` intrinsic family (`Bool.hash`
-//! plus `IntN.hash` / `UIntN.hash`).
-//!
-//! Implements SplitMix64 against the value re-interpreted as `u64`,
-//! matching the LLVM-side [`crate::intrinsics::hash`] emitter so eval /
-//! native produce byte-identical hash codes for the same input.
+//! Eval handlers for the `Hash` intrinsic family — `Bool` and the
+//! 8 integer cells (flattened to [`Value::Int(i64)`]) feed their
+//! native bit pattern through SplitMix64. `String` walks each byte
+//! of the UTF-8 payload through FNV-1a (offset basis
+//! `0xcbf29ce484222325`, prime `0x100000001b3`) so eval and native
+//! produce byte-identical hash codes for the same input — see the
+//! LLVM-side [`crate::intrinsics::hash::emit_string_hash`] for the
+//! IR-level twin.
 
 use expo_alpha_ir::HashImpl;
 
 use crate::error::RuntimeError;
 use crate::value::Value;
+
+const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
+const FNV_PRIME: u64 = 0x100000001b3;
 
 pub(super) fn dispatch(impl_: HashImpl, args: &[Value]) -> Result<Value, RuntimeError> {
     let [arg] = args else {
@@ -19,16 +24,29 @@ pub(super) fn dispatch(impl_: HashImpl, args: &[Value]) -> Result<Value, Runtime
             ),
         });
     };
-    let bits = match arg {
-        Value::Bool(b) => *b as u64,
-        Value::Int(v) => *v as u64,
-        other => {
+    let mixed = match (impl_, arg) {
+        (HashImpl::Bool, Value::Bool(b)) => splitmix64(*b as u64),
+        (HashImpl::Int(_), Value::Int(v)) => splitmix64(*v as u64),
+        (HashImpl::String, Value::String(s)) => fnv1a(s.as_bytes()),
+        (_, other) => {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("Hash.hash ({impl_:?}) expects a Bool/Int operand; got {other:?}",),
+                detail: format!(
+                    "Hash.hash ({impl_:?}) expects an operand matching the impl cell; \
+                     got {other:?}",
+                ),
             });
         }
     };
-    Ok(Value::Int(splitmix64(bits) as i64))
+    Ok(Value::Int(mixed as i64))
+}
+
+fn fnv1a(bytes: &[u8]) -> u64 {
+    let mut hash = FNV_OFFSET_BASIS;
+    for &byte in bytes {
+        hash ^= byte as u64;
+        hash = hash.wrapping_mul(FNV_PRIME);
+    }
+    hash
 }
 
 /// SplitMix64 — the same constants the LLVM emitter inlines so eval

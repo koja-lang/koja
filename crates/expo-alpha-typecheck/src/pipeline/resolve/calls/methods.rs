@@ -36,6 +36,12 @@ pub(super) struct MethodInferenceTarget<'a> {
     pub(super) method: Callee<'a>,
     pub(super) receiver_type: &'a ResolvedType,
     pub(super) explicit_params: &'a [ResolvedParam],
+    /// Optional expected return type from the surrounding context.
+    /// When provided, the inference walk unifies the method's
+    /// substituted return type against it so call sites like
+    /// `result: List<T> = List.new()` can constrain the receiver's
+    /// `T` from the binding's annotation without ever touching args.
+    pub(super) expected: Option<&'a ResolvedType>,
 }
 
 /// Receiver classification for method-call dispatch. `Static` and
@@ -163,11 +169,21 @@ fn bare_ident_name(kind: &ExprKind) -> Option<&str> {
 /// Trait-impl free type-params alias the receiver's slots, so a
 /// single `receiver_subst` is enough — there's no separate impl
 /// scope.
+/// Outputs of [`infer_method_call_type_args`] that the caller writes
+/// back onto the AST + receiver shape: the method's own substituted
+/// type-args (the IR's per-method monomorphization key) and the
+/// receiver's substituted type-args (so static-dispatch receivers
+/// can be stitched into a fully-typed [`ResolvedType::Named`]).
+pub(super) struct MethodInferenceOutputs<'a> {
+    pub(super) method_type_args: &'a mut Vec<ResolvedType>,
+    pub(super) receiver_type_args: &'a mut Vec<ResolvedType>,
+}
+
 pub(super) fn infer_method_call_type_args(
     target: MethodInferenceTarget<'_>,
     sig: &FunctionSignature,
     args: &[Arg],
-    out_type_args: &mut Vec<ResolvedType>,
+    outputs: MethodInferenceOutputs<'_>,
     call_span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -177,6 +193,7 @@ pub(super) fn infer_method_call_type_args(
         method,
         receiver_type,
         explicit_params,
+        expected,
     } = target;
 
     let mut receiver_subst: Vec<Option<ResolvedType>> = vec![None; receiver.type_params.len()];
@@ -215,6 +232,18 @@ pub(super) fn infer_method_call_type_args(
             emit_conflict(&receiver, conflict, arg.span, registry, diagnostics);
         }
     }
+    // Expected return type unifies as a *hint* — fills only `None`
+    // slots so it can't conflict with already-inferred receiver /
+    // arg types (those bindings remain authoritative). Lets shapes
+    // like `result: List<T> = List.new()` flow the binding's `T`
+    // into the receiver scope without disturbing fully-determined
+    // contexts like `p.first()` against `Pair<Int, String>`.
+    if let Some(expected) = expected
+        && expected.is_resolved()
+    {
+        fill_remaining_from_expected(&sig.return_type, expected, method.id, &mut method_subst);
+        fill_remaining_from_expected(&sig.return_type, expected, receiver.id, &mut receiver_subst);
+    }
     diagnose_phantom_params(&method, &method_subst, call_span, diagnostics);
     diagnose_phantom_params(&receiver, &receiver_subst, call_span, diagnostics);
     verify_bounds(method, &method_subst, call_span, registry, diagnostics);
@@ -236,11 +265,37 @@ pub(super) fn infer_method_call_type_args(
     let with_method_return = substitute_resolved_type(&sig.return_type, &method_subst, method.id);
     let substituted_return =
         substitute_resolved_type(&with_method_return, &receiver_subst, receiver.id);
-    *out_type_args = method_subst
+    *outputs.method_type_args = method_subst
+        .into_iter()
+        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
+        .collect();
+    *outputs.receiver_type_args = receiver_subst
         .into_iter()
         .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
         .collect();
     (substituted_params, substituted_return)
+}
+
+/// Try to fill `None` slots of `subst` (owned by `owner`) by unifying
+/// `template` (the callee's declared shape) against `actual` (the
+/// expected type from the surrounding context). On conflict, walks
+/// away — the expected type is only a hint; authoritative bindings
+/// from args / receiver are never overridden.
+fn fill_remaining_from_expected(
+    template: &ResolvedType,
+    actual: &ResolvedType,
+    owner: GlobalRegistryId,
+    subst: &mut [Option<ResolvedType>],
+) {
+    let mut scratch = subst.to_vec();
+    if unify_resolved_type(template, actual, owner, &mut scratch).is_err() {
+        return;
+    }
+    for (slot, filled) in subst.iter_mut().zip(scratch.into_iter()) {
+        if slot.is_none() {
+            *slot = filled;
+        }
+    }
 }
 
 pub(super) fn function_signature(entry: &RegistryEntry) -> Result<&FunctionSignature, Diagnostic> {

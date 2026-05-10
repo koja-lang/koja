@@ -7,12 +7,11 @@
 //! returns the [`ResolvedType`] to stamp on `expr.resolution`.
 
 use expo_ast::ast::{Diagnostic, Expr, ExprKind};
-use expo_ast::identifier::ResolvedType;
-
+use expo_ast::identifier::{Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
 
 use super::binary_literal::resolve_binary_literal;
-use super::calls::{resolve_call, resolve_method_call};
+use super::calls::{CallSite, resolve_call, resolve_method_call};
 use super::closures::{resolve_closure, resolve_short_closure};
 use super::control_flow::{
     resolve_cond, resolve_if, resolve_ternary, resolve_unless, resolve_while,
@@ -20,6 +19,7 @@ use super::control_flow::{
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
+use super::list_literal::resolve_list_literal;
 use super::match_expr::resolve_match;
 use super::ops::{binary_type, literal_type, unary_type};
 use super::strings::resolve_string;
@@ -44,6 +44,15 @@ pub(super) fn resolve_expr_with_expected(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // List literals desugar to a `List.new().append(...)` chain with
+    // resolutions stamped from the elements' inferred types. Done up
+    // front (before the main dispatch) because the rewrite must
+    // replace `expr.kind` wholesale — the main match's `&mut expr.kind`
+    // borrow would block that.
+    if matches!(expr.kind, ExprKind::List { .. }) {
+        rewrite_list_literal(expr, expected, resolver, diagnostics);
+        return;
+    }
     let ty = match &mut expr.kind {
         ExprKind::Binary { op, left, right } => {
             resolve_expr(left, resolver, diagnostics);
@@ -57,7 +66,17 @@ pub(super) fn resolve_expr_with_expected(
             callee,
             args,
             type_args,
-        } => resolve_call(callee, args, type_args, expr.span, resolver, diagnostics),
+        } => resolve_call(
+            callee,
+            args,
+            CallSite {
+                out_type_args: type_args,
+                expected,
+                span: expr.span,
+            },
+            resolver,
+            diagnostics,
+        ),
         ExprKind::Closure {
             params,
             return_type,
@@ -128,8 +147,11 @@ pub(super) fn resolve_expr_with_expected(
             receiver,
             method,
             args,
-            type_args,
-            expr.span,
+            CallSite {
+                out_type_args: type_args,
+                expected,
+                span: expr.span,
+            },
             resolver,
             diagnostics,
         ),
@@ -153,6 +175,11 @@ pub(super) fn resolve_expr_with_expected(
             expr.span,
             resolver,
             diagnostics,
+        ),
+        // Handled upfront via [`rewrite_list_literal`]; reaching the
+        // match here means a (previously unreachable) shape change.
+        ExprKind::List { .. } => unreachable!(
+            "ExprKind::List should have been rewritten before the resolve_expr dispatch",
         ),
         ExprKind::Unary { op, operand } => {
             resolve_expr(operand, resolver, diagnostics);
@@ -192,4 +219,27 @@ pub(super) fn resolve_expr_with_expected(
         }
     };
     expr.resolution = ty;
+}
+
+/// Pre-match handler for `ExprKind::List`: takes the elements out
+/// of `expr.kind`, delegates to [`resolve_list_literal`] for the
+/// per-element resolve + chain build, then stamps the rewritten
+/// kind + final type back onto `expr`.
+fn rewrite_list_literal(
+    expr: &mut Expr,
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let placeholder = ExprKind::Ident {
+        name: String::new(),
+        resolution: Resolution::Unresolved,
+    };
+    let ExprKind::List { mut elements } = std::mem::replace(&mut expr.kind, placeholder) else {
+        unreachable!("rewrite_list_literal called on non-List expr");
+    };
+    let (chain_kind, resolution) =
+        resolve_list_literal(&mut elements, expected, expr.span, resolver, diagnostics);
+    expr.kind = chain_kind;
+    expr.resolution = resolution;
 }

@@ -9,7 +9,9 @@
 //! `Display`), and a per-shape [`EnumPayload`]. New variants (lists,
 //! closures, …) land as the IR vocabulary grows.
 
+use std::cell::RefCell;
 use std::fmt;
+use std::rc::Rc;
 
 use expo_alpha_ir::{IRSymbol, IRVariantTag};
 
@@ -44,6 +46,14 @@ pub enum Value {
     Float32(f32),
     Float64(f64),
     Int(i64),
+    /// Heap-backed dynamic array. Shared `Rc<RefCell>` so move-self
+    /// intrinsics (`append`, `pop`, `concat`) can mutate the
+    /// underlying buffer in place — the interpreter copies the `Rc`,
+    /// not the `Vec`. Aliased reads observe the post-mutation state,
+    /// matching the LLVM by-value ABI's conservative copy-on-write
+    /// behavior in practice (every alpha intrinsic that mutates
+    /// consumes its receiver via `move self`).
+    List(Rc<RefCell<Vec<Value>>>),
     String(String),
     Struct {
         symbol: IRSymbol,
@@ -151,6 +161,7 @@ impl fmt::Display for Value {
             Value::Float32(v) => write!(f, "{v:?}"),
             Value::Float64(v) => write!(f, "{v:?}"),
             Value::Int(i) => write!(f, "{i}"),
+            Value::List(items) => write_list_items(f, &items.borrow()),
             Value::String(s) => f.write_str(s),
             Value::Struct { symbol, fields } => {
                 write!(f, "{symbol}(")?;
@@ -165,6 +176,20 @@ impl fmt::Display for Value {
             Value::Unit => write!(f, "()"),
         }
     }
+}
+
+/// Render a [`Value::List`] as `[a, b, c]`. Element values are
+/// formatted with their own `Display` impl so nested lists / structs
+/// round-trip cleanly.
+fn write_list_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result {
+    write!(f, "[")?;
+    for (index, value) in items.iter().enumerate() {
+        if index > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{value}")?;
+    }
+    write!(f, "]")
 }
 
 /// Render a [`Value::Binary`] as `<<0x48, 0x65>>`. Mirrors the LLVM

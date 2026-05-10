@@ -1,10 +1,8 @@
-//! `Equality.eq` family — one impl per primitive integer / bool
-//! type from `kernel.expo` (`Bool`, `Int`, `Int8`, `Int16`, `Int32`,
-//! `UInt8`, `UInt16`, `UInt32`, `UInt64`). Every cell collapses to
-//! the same LLVM shape: `icmp eq` on two same-width integers.
-//! Float and string equality belong to other families that do not
-//! share this dispatch shape (no `Equality for Float`/`String` impls
-//! today).
+//! `Equality.eq` family — `Bool` and the 8 integer cells share a
+//! single `icmp eq` emitter (eval flattens both shapes to fixed-
+//! width integers). `String.eq` delegates to libc `strcmp`; alpha
+//! string payloads carry a trailing NUL, so byte-sequence equality
+//! matches Expo's source-level `==` semantics.
 
 use expo_alpha_ir::{EqualityImpl, IRFunction};
 use inkwell::IntPredicate;
@@ -13,12 +11,82 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::runtime::declare_strcmp_extern;
 
 pub(super) fn emit_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    _impl_: EqualityImpl,
+    impl_: EqualityImpl,
+) -> Result<(), LlvmError> {
+    match impl_ {
+        EqualityImpl::Bool | EqualityImpl::Int(_) => emit_int_eq(ctx, function, llvm_function),
+        EqualityImpl::String => emit_string_eq(ctx, function, llvm_function),
+    }
+}
+
+fn emit_string_eq<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry);
+    let lhs = llvm_function.get_nth_param(0).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "String.eq missing `self` param on `{}`",
+            function.symbol,
+        ))
+    })?;
+    let rhs = llvm_function.get_nth_param(1).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "String.eq missing `other` param on `{}`",
+            function.symbol,
+        ))
+    })?;
+    let strcmp = declare_strcmp_extern(ctx);
+    let diff = ctx
+        .builder
+        .build_call(strcmp, &[lhs.into(), rhs.into()], "strcmp")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_call strcmp for `{}`", function.symbol),
+                e,
+            )
+        })?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!(
+                "strcmp returned no value for `{}`",
+                function.symbol,
+            ))
+        })?
+        .into_int_value();
+    let cmp = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            diff,
+            ctx.context.i32_type().const_zero(),
+            "streq",
+        )
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_int_compare for `{}`", function.symbol),
+                e,
+            )
+        })?;
+    ctx.builder
+        .build_return(Some(&cmp))
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+}
+
+fn emit_int_eq<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);

@@ -268,7 +268,7 @@ fn method_on_generic_struct_for_distinct_args_mints_distinct_methods() {
     let program = lower_program_source(&dedent(source));
     let mut firsts: Vec<_> = collect_function_names(&program)
         .into_iter()
-        .filter(|n| n.ends_with(".first"))
+        .filter(|n| n.starts_with("TestApp.Pair_") && n.ends_with(".first"))
         .collect();
     firsts.sort();
     assert_eq!(

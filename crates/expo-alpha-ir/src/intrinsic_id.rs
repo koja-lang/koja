@@ -42,12 +42,14 @@ pub enum IRIntrinsicId {
     Equality(EqualityImpl),
     Hash(HashImpl),
     Kernel(KernelMethod),
+    List(ListMethod),
     Parse(ParseTarget),
     /// Transitional. The script-mode test fixture's `@intrinsic fn
     /// print(s: String)` plus the project-mode auto-print of
     /// `main`'s tail value. Goes away when the `Debug` protocol
     /// displaces both.
     Print,
+    String(StringMethod),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -86,45 +88,64 @@ pub enum BitsMethod {
     ToBinary,
 }
 
-/// Receiver shape for `Equality.eq` impls. Today the only impls are
-/// on the integral types, so the variant nests an [`IntegralType`].
-/// Adding `String`, `Float`, or aggregate equality later is a new
-/// top-level variant — keeping the seam visible avoids a future
-/// rename.
+/// Methods on `List<T>`. The element type doesn't appear here because
+/// the IR carries it on the [`crate::IRFunction`] signature; backends
+/// monomorphize per element type from there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ListMethod {
+    Append,
+    Concat,
+    EmptyQ,
+    FromList,
+    Get,
+    Length,
+    New,
+    Pop,
+    ReplaceAt,
+    Slice,
+}
+
+/// Methods on `String` flagged `@intrinsic` in
+/// [`crate::stdlib::string`]. Excludes `eq` / `hash`; those route
+/// through [`EqualityImpl::String`] / [`HashImpl::String`] alongside
+/// the other primitive impls.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StringMethod {
+    ByteLength,
+    Get,
+    Length,
+    Slice,
+    ToBinary,
+    ToCstring,
+}
+
+/// Receiver shape for `Equality.eq` impls. `Bool` and `String` are
+/// siblings (each their own variant) rather than wrapped in a
+/// catch-all "integral" enum — the LLVM and eval emitters dispatch
+/// on three distinct shapes (boolean compare, integer compare,
+/// string memcmp), and a flat enum keeps the match arms one-to-one
+/// with the emitter cases.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EqualityImpl {
-    Int(IntegralType),
+    Bool,
+    Int(IntType),
+    String,
 }
 
-/// Same shape as [`EqualityImpl`] for the `Hash.hash` family. The
-/// two are kept distinct (rather than collapsed into a single
-/// "primitive impl" enum) so divergent future variants — e.g. a
-/// `String` `Hash` impl with no equivalent on `Equality` — don't
-/// pollute the other family.
+/// Mirrors [`EqualityImpl`] for the `Hash.hash` family. Each variant
+/// keeps its own emitter cell (SplitMix64 on the boolean extension,
+/// SplitMix64 on the value bits, FNV-style on string bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashImpl {
-    Int(IntegralType),
-}
-
-/// Receivers that participate in `Equality.eq` / `Hash.hash`.
-/// Wider than [`IntType`] because `Bool` carries both protocols
-/// but no bitwise operators (no `Bool.band`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IntegralType {
     Bool,
-    Int,
-    Int8,
-    Int16,
-    Int32,
-    UInt8,
-    UInt16,
-    UInt32,
-    UInt64,
+    Int(IntType),
+    String,
 }
 
-/// Receivers for the 48-cell `Bitwise` family. Exactly the integer
-/// subset of [`IntegralType`]; `Bool` is excluded because the
-/// stdlib's `impl Bitwise` blocks don't cover it.
+/// Integer receivers for the 48-cell `Bitwise` family and the
+/// 8-cell integer slice of `Equality` / `Hash`. `Bool` and `String`
+/// are not included — they're siblings of [`EqualityImpl::Int`] /
+/// [`HashImpl::Int`] at the enum level.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IntType {
     Int,
@@ -188,12 +209,19 @@ impl IRIntrinsicId {
         if receiver == "Kernel" && method == "panic" {
             return Some(Self::Kernel(KernelMethod::Panic));
         }
+        if receiver == "List" {
+            return ListMethod::from_source(method).map(Self::List);
+        }
+        if receiver == "String"
+            && let Some(m) = StringMethod::from_source(method)
+        {
+            return Some(Self::String(m));
+        }
         if method == "eq" {
-            return IntegralType::from_source(receiver)
-                .map(|ty| Self::Equality(EqualityImpl::Int(ty)));
+            return EqualityImpl::from_receiver(receiver).map(Self::Equality);
         }
         if method == "hash" {
-            return IntegralType::from_source(receiver).map(|ty| Self::Hash(HashImpl::Int(ty)));
+            return HashImpl::from_receiver(receiver).map(Self::Hash);
         }
         if method == "parse" {
             return ParseTarget::from_source(receiver).map(Self::Parse);
@@ -241,33 +269,43 @@ impl IntType {
     }
 }
 
-impl IntegralType {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
+impl EqualityImpl {
+    /// Map a receiver-type name (`"Bool"`, `"Int"`, `"String"`, …)
+    /// to the matching impl cell. Returns `None` for receivers
+    /// outside the three families (e.g. `Float`, struct types).
+    pub fn from_receiver(receiver: &str) -> Option<Self> {
+        Some(match receiver {
             "Bool" => Self::Bool,
-            "Int" => Self::Int,
-            "Int8" => Self::Int8,
-            "Int16" => Self::Int16,
-            "Int32" => Self::Int32,
-            "UInt8" => Self::UInt8,
-            "UInt16" => Self::UInt16,
-            "UInt32" => Self::UInt32,
-            "UInt64" => Self::UInt64,
-            _ => return None,
+            "String" => Self::String,
+            other => Self::Int(IntType::from_source(other)?),
         })
     }
 
     fn segment(self) -> &'static str {
         match self {
             Self::Bool => "Bool",
-            Self::Int => "Int",
-            Self::Int8 => "Int8",
-            Self::Int16 => "Int16",
-            Self::Int32 => "Int32",
-            Self::UInt8 => "UInt8",
-            Self::UInt16 => "UInt16",
-            Self::UInt32 => "UInt32",
-            Self::UInt64 => "UInt64",
+            Self::Int(ty) => ty.segment(),
+            Self::String => "String",
+        }
+    }
+}
+
+impl HashImpl {
+    /// Mirror of [`EqualityImpl::from_receiver`] — the two families
+    /// share the same receiver surface today.
+    pub fn from_receiver(receiver: &str) -> Option<Self> {
+        Some(match receiver {
+            "Bool" => Self::Bool,
+            "String" => Self::String,
+            other => Self::Int(IntType::from_source(other)?),
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Bool => "Bool",
+            Self::Int(ty) => ty.segment(),
+            Self::String => "String",
         }
     }
 }
@@ -387,6 +425,39 @@ impl BitsMethod {
     }
 }
 
+impl ListMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "append" => Self::Append,
+            "concat" => Self::Concat,
+            "empty?" => Self::EmptyQ,
+            "from_list" => Self::FromList,
+            "get" => Self::Get,
+            "length" => Self::Length,
+            "new" => Self::New,
+            "pop" => Self::Pop,
+            "replace_at" => Self::ReplaceAt,
+            "slice" => Self::Slice,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Append => "append",
+            Self::Concat => "concat",
+            Self::EmptyQ => "empty?",
+            Self::FromList => "from_list",
+            Self::Get => "get",
+            Self::Length => "length",
+            Self::New => "new",
+            Self::Pop => "pop",
+            Self::ReplaceAt => "replace_at",
+            Self::Slice => "slice",
+        }
+    }
+}
+
 impl ParseTarget {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
@@ -404,6 +475,31 @@ impl ParseTarget {
     }
 }
 
+impl StringMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "byte_length" => Self::ByteLength,
+            "get" => Self::Get,
+            "length" => Self::Length,
+            "slice" => Self::Slice,
+            "to_binary" => Self::ToBinary,
+            "to_cstring" => Self::ToCstring,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::ByteLength => "byte_length",
+            Self::Get => "get",
+            Self::Length => "length",
+            Self::Slice => "slice",
+            Self::ToBinary => "to_binary",
+            Self::ToCstring => "to_cstring",
+        }
+    }
+}
+
 impl fmt::Display for IRIntrinsicId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -412,11 +508,13 @@ impl fmt::Display for IRIntrinsicId {
             Self::Bitwise { ty, op } => write!(f, "{}.{}", ty.segment(), op.segment()),
             Self::CPtr(m) => write!(f, "CPtr.{}", m.segment()),
             Self::CString(m) => write!(f, "CString.{}", m.segment()),
-            Self::Equality(EqualityImpl::Int(ty)) => write!(f, "{}.eq", ty.segment()),
-            Self::Hash(HashImpl::Int(ty)) => write!(f, "{}.hash", ty.segment()),
+            Self::Equality(impl_) => write!(f, "{}.eq", impl_.segment()),
+            Self::Hash(impl_) => write!(f, "{}.hash", impl_.segment()),
             Self::Kernel(m) => write!(f, "Kernel.{}", m.segment()),
+            Self::List(m) => write!(f, "List.{}", m.segment()),
             Self::Parse(target) => write!(f, "{}.parse", target.segment()),
             Self::Print => f.write_str("print"),
+            Self::String(m) => write!(f, "String.{}", m.segment()),
         }
     }
 }
@@ -472,11 +570,51 @@ mod tests {
     }
 
     #[test]
-    fn equality_and_hash_share_the_integral_axis() {
-        for ty_str in [
-            "Bool", "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
+    fn list_methods_cover_the_full_surface() {
+        for (method, variant) in [
+            ("append", ListMethod::Append),
+            ("concat", ListMethod::Concat),
+            ("empty?", ListMethod::EmptyQ),
+            ("from_list", ListMethod::FromList),
+            ("get", ListMethod::Get),
+            ("length", ListMethod::Length),
+            ("new", ListMethod::New),
+            ("pop", ListMethod::Pop),
+            ("replace_at", ListMethod::ReplaceAt),
+            ("slice", ListMethod::Slice),
         ] {
-            let ty = IntegralType::from_source(ty_str).unwrap();
+            assert_round_trip(
+                &["List", method],
+                IRIntrinsicId::List(variant),
+                &format!("List.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn string_methods_cover_the_full_surface() {
+        for (method, variant) in [
+            ("byte_length", StringMethod::ByteLength),
+            ("get", StringMethod::Get),
+            ("length", StringMethod::Length),
+            ("slice", StringMethod::Slice),
+            ("to_binary", StringMethod::ToBinary),
+            ("to_cstring", StringMethod::ToCstring),
+        ] {
+            assert_round_trip(
+                &["String", method],
+                IRIntrinsicId::String(variant),
+                &format!("String.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn equality_and_hash_cover_bool_int_and_string() {
+        for ty_str in [
+            "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
+        ] {
+            let ty = IntType::from_source(ty_str).unwrap();
             assert_round_trip(
                 &[ty_str, "eq"],
                 IRIntrinsicId::Equality(EqualityImpl::Int(ty)),
@@ -488,6 +626,26 @@ mod tests {
                 &format!("{ty_str}.hash"),
             );
         }
+        assert_round_trip(
+            &["Bool", "eq"],
+            IRIntrinsicId::Equality(EqualityImpl::Bool),
+            "Bool.eq",
+        );
+        assert_round_trip(
+            &["Bool", "hash"],
+            IRIntrinsicId::Hash(HashImpl::Bool),
+            "Bool.hash",
+        );
+        assert_round_trip(
+            &["String", "eq"],
+            IRIntrinsicId::Equality(EqualityImpl::String),
+            "String.eq",
+        );
+        assert_round_trip(
+            &["String", "hash"],
+            IRIntrinsicId::Hash(HashImpl::String),
+            "String.hash",
+        );
     }
 
     #[test]

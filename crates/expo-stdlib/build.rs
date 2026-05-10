@@ -115,7 +115,12 @@ fn main() {
         "Global.cptr",
         "Global.cstring",
         "Global.bitwise",
+        "Global.list",
+        "Global.string",
         "Global.time",
+        // random comes last — calls into `String.to_binary`, so the string
+        // module must be lowered before this module's bodies can resolve.
+        "Global.random",
     ];
     code.push_str("\n/// Stdlib sources auto-imported by the alpha pipeline.\n");
     code.push_str("/// Subset of `SOURCES`; grows as files become alpha-ready.\n");

@@ -63,9 +63,9 @@ pub(crate) fn define_enum_bodies<'ctx>(
             max_complete_align.max(ctx.layouts.target_data.get_abi_alignment(&complete_basic));
         variants.push(layout);
     }
-    let outer = define_outer_body(ctx, decl, max_complete_size, max_complete_align);
+    define_outer_body(ctx, decl, max_complete_size, max_complete_align);
     ctx.layouts
-        .register_enum_layout(decl.symbol.clone(), EnumLayout { outer, variants });
+        .register_enum_layout(decl.symbol.clone(), EnumLayout { variants });
     Ok(())
 }
 

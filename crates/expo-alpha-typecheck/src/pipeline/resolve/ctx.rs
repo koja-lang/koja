@@ -35,6 +35,7 @@ impl<'a> ResolverEnv<'a> {
     pub(super) fn make_resolver<'b>(
         &'b mut self,
         enclosing_type: Option<&'b str>,
+        type_param_owners: &'b [GlobalRegistryId],
         scope: &'b mut LocalScope,
     ) -> Resolver<'b> {
         Resolver {
@@ -43,6 +44,7 @@ impl<'a> ResolverEnv<'a> {
             package: self.package,
             registry: self.registry,
             scope,
+            type_param_owners,
         }
     }
 }
@@ -84,6 +86,14 @@ pub(super) struct Resolver<'a> {
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
     pub scope: &'a mut LocalScope,
+    /// Owner chain that any in-body type annotation resolves against
+    /// — innermost first (function's own id when it declares
+    /// type-params, then receiver). Mirrors
+    /// `lift_signatures::functions::type_param_owners`; populated
+    /// once per [`make_resolver`] call so statement-level helpers
+    /// can pass it straight to [`crate::pipeline::lift_signatures::TypeParamScope::new`]
+    /// without rebuilding the chain.
+    pub type_param_owners: &'a [GlobalRegistryId],
 }
 
 /// Registry-side metadata for one inference target — bundled so

@@ -18,6 +18,9 @@ pub(crate) fn declare_struct_type<'ctx>(ctx: &EmitContext<'ctx>, decl: &IRStruct
     let llvm_struct = ctx.context.opaque_struct_type(decl.symbol.mangled());
     ctx.layouts
         .register_struct_type(decl.symbol.clone(), llvm_struct);
+    let field_types = decl.fields.iter().map(|f| f.ir_type.clone()).collect();
+    ctx.layouts
+        .register_struct_fields(decl.symbol.clone(), field_types);
 }
 
 pub(crate) fn define_struct_body<'ctx>(

@@ -22,7 +22,7 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
 use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement};
-use expo_ast::identifier::{Identifier, ResolvedType};
+use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
@@ -117,7 +117,7 @@ pub(crate) fn resolve_file(
     }
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
-        let mut resolver = env.make_resolver(None, &mut scope);
+        let mut resolver = env.make_resolver(None, &[], &mut scope);
         for stmt in body.iter_mut() {
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
@@ -136,12 +136,13 @@ fn resolve_function(
     if let Some(signature) = &signature {
         seed_scope_with_params(function, signature, &mut scope);
     }
+    let type_param_owners = type_param_owners(identifier, function, enclosing_type, env.registry);
 
     let Some(body) = function.body.as_mut() else {
         return;
     };
     {
-        let mut resolver = env.make_resolver(enclosing_type, &mut scope);
+        let mut resolver = env.make_resolver(enclosing_type, &type_param_owners, &mut scope);
         let expected = signature
             .as_ref()
             .filter(|sig| sig.return_type.is_resolved())
@@ -152,6 +153,32 @@ fn resolve_function(
     if let Some(signature) = signature {
         check_return_type(function, &signature, env, diagnostics);
     }
+}
+
+/// Mirrors `lift_signatures::functions::type_param_owners` for the
+/// resolve pass: chain the function's own id (when it declares
+/// type-params) over the receiver type's id (when this is a method).
+/// Used so in-body type annotations like `result: List<T> = ...`
+/// resolve the enclosing scope's `T` / `U` correctly.
+fn type_param_owners(
+    identifier: &Identifier,
+    function: &Function,
+    enclosing_type: Option<&str>,
+    registry: &GlobalRegistry,
+) -> Vec<GlobalRegistryId> {
+    let mut owners = Vec::new();
+    if !function.type_params.is_empty()
+        && let Some((fn_id, _)) = registry.lookup(identifier)
+    {
+        owners.push(fn_id);
+    }
+    if let Some(name) = enclosing_type {
+        let receiver = Identifier::new(identifier.package(), vec![name.to_string()]);
+        if let Some((receiver_id, _)) = registry.lookup(&receiver) {
+            owners.push(receiver_id);
+        }
+    }
+    owners
 }
 
 /// Pull the lifted signature for `identifier` out of the registry, or

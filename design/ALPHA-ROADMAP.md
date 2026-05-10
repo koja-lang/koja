@@ -674,6 +674,115 @@ What's shipped since the last audit:
     `crates/expo-alpha-ir-llvm/tests/intrinsics.rs`, and the
     `*_result_ok_map_unwrap_*` driver tests.
 
+- **Stdlib slice 3: `list` / `string` / `random` autoimport.**
+  Three more `Global.*` source files flow through the autoimport
+  pipeline end-to-end, finishing the collection / text surface
+  the rest of the stdlib depends on. The compiler-side blockers
+  closed in lockstep:
+  - **List as a primitive `IRType`.** `IRType::List(Box<IRType>)`
+    sits next to `IRType::CPtr(_)` so the lowering pass stops
+    synthesizing struct decls for `List<T>` and centralizes the
+    `{ buf_ptr: i8*, len: i64, cap: i64 }` value shape in
+    `types::list_value_type`. Element types still flow through
+    generic monomorphization (`List_$Int64$`, `List_$String$`,
+    etc.); the difference is that the LLVM body is now anchored
+    in the alpha backend rather than the IR's struct registry,
+    matching how `CPtr<T>` was already wired.
+  - **List literal `[a, b, c]` desugar in typecheck-resolve.**
+    `ExprKind::List` is rewritten in-place to
+    `List.new().append(a).append(b).append(c)` after element
+    types are inferred, so a common `T` falls out of the resolve
+    walk and every generated `MethodCall` carries the right
+    `ResolvedType::Named { Global.List, [T] }`. Per the northstar
+    "typecheck owns AST mutation" rule, IR / eval / LLVM never
+    see `ExprKind::List`. Empty `[]` with an annotated target
+    (`my_list: List<Int> = []`) inherits `T` from the typed-local
+    annotation via the existing bidirectional inference seam.
+    Pinned by `crates/expo-alpha-typecheck/tests/list_literal.rs`.
+  - **Typed enum intrinsic dispatch via `IRIntrinsicId`.**
+    `FunctionKind::Intrinsic` now carries an `IRIntrinsicId`
+    enum with nested `KernelMethod` / `CPtrMethod` /
+    `CStringMethod` / `BinaryMethod` / `BitsMethod` /
+    `ListMethod` / `StringMethod` / `IntMethod` / `FloatMethod` /
+    `PrintMethod` / `BitwiseImpl` / `EqualityImpl` / `HashImpl`
+    families (`EqualityImpl` and `HashImpl` flatten to
+    `Bool` / `Int(IntType)` / `String` siblings so primitive
+    receivers stay exhaustive at the match). Both backends key
+    intrinsic dispatch on the nested variant, killing the
+    string-keyed `id: "Type.method"` lookup table. `IRSymbol`
+    stays opaque end-to-end — the receiver string is parsed
+    once at IR build time, never at emit time. The IR-level
+    extern surface picked up the libc-direct symbols the list /
+    string emitters consume (`malloc`, `realloc`, `memcpy`,
+    `free`, `strcmp`, `expo_string_get` / `_length` / `_slice`).
+  - **List runtime ports v1's libc-direct shape.** The LLVM
+    intrinsic emitters in `expo-alpha-ir-llvm/src/intrinsics/list.rs`
+    mirror `expo-codegen::list` one-to-one: `new`/`append` call
+    `malloc`/`realloc`/`memcpy` directly, `get` returns
+    `Option<T>` via the layout-aware enum construction helper
+    (see `build_enum_value` below), `pop` returns
+    `Pair<Option<T>, List<T>>`, `concat` / `slice` /
+    `replace_at` follow the same shape. Eval mints
+    `Value::List(Rc<RefCell<Vec<Value>>>)` and routes through
+    `expo-alpha-ir-eval/src/intrinsics/list.rs`. Both backends
+    cover all ten `ListMethod` variants.
+  - **`build_enum_value` factored out of `emit_enum_construct`.**
+    Intrinsic emitters that mint `Option::Some(_)` / `None` /
+    `Result::Ok(_)` used to hand-GEP raw indices `0` (tag) and
+    `1` (payload) on an assumed-flat outer struct — fine in v1,
+    broken under alpha's alignment-correct chunk-array outer +
+    per-variant `complete` struct. The new
+    `pub(crate) emit::enums::build_enum_value(symbol, tag,
+    payload_values)` helper allocas the outer, GEPs through the
+    variant's `complete` (tag at field 0, payload at field 2),
+    writes each payload field, and loads the populated outer
+    back out — the same path `emit_enum_construct` uses for
+    user-land `Enum.Variant(...)` literals. Killed the
+    duplicated `build_option_some` / `build_option_none` shims
+    in `intrinsics/list.rs` and `intrinsics/string.rs`. The
+    `EmitContext::enum_outer_type` accessor replaces the
+    redundant `enum_outers` map by delegating to
+    `Context::get_struct_type` (the LLVM context's name table
+    already keys opaque structs by name, which is what
+    `declare_enum_type` registers); a sibling
+    `TypeLayouts::struct_field_ir_type` index keeps IR field
+    types around post-layout so `List.pop`'s
+    `Pair<Option<T>, List<T>>` return can recover the inner
+    `Option<T>` symbol without re-deriving from mangled names.
+  - **String intrinsic emitters port v1's UTF-8 layout.**
+    `String` values are `[i64 bit_length][payload bytes]` with
+    the SSA pointer at the payload (header sits 8 bytes back).
+    LLVM emits inline for `byte_length` / `to_binary` (header
+    arithmetic only) and delegates the codepoint-aware
+    `length` / `get` / `slice` to `expo_string_length` /
+    `_get` / `_slice` in `expo-runtime` so Unicode walking
+    stays in Rust. `Equality.eq` for `String` calls `strcmp`;
+    `Hash.hash` for `String` is FNV-1a inlined. `to_cstring`
+    allocates a null-terminated `CString` via `malloc` +
+    `memcpy`. Eval mirrors with Rust `str` primitives;
+    `to_cstring` surfaces `RuntimeError::Unsupported`.
+  - **`Random` rides on `string.expo`'s landing.** Now that
+    `String.to_binary` is alpha-ready, `random.expo` returns to
+    `ALPHA_AUTOIMPORT` (after `Global.string`, since
+    `Random.bytes` chains
+    `expo_random_bytes(count).to_string().to_binary()`). The
+    extern `expo_random_bytes` / `expo_random_int` symbols
+    already live in `expo-runtime::system`, so the LLVM path
+    links cleanly; eval surfaces them as
+    `RuntimeError::ExternNotSupported`.
+
+  Pinned by `crates/expo-alpha-typecheck/tests/{string,random,
+  list_literal,kernel}.rs`,
+  `crates/expo-alpha-ir/tests/lower_list.rs`,
+  `crates/expo-alpha-ir-llvm/tests/intrinsics.rs`
+  (option/pair-aware GEP shape under chunked-outer enum layout),
+  and the `*_list_literal_length_*` / `*_list_get_unwrap_*` /
+  `*_string_length_*` / `*_random_int_fixed_*` driver tests in
+  `crates/expo-driver/tests/alpha_two_plus_two.rs`. **Out**:
+  `Map<K, V>` / `Set<T>` intrinsic surface (next slice); the
+  deferred typed-local / runtime narrowing slice still holds
+  (`p: CPtr<UInt8> = CPtr.alloc(8)` won't infer `T`).
+
 The roadmap's original Phase 1 (loops) and Phase 2 (closures)
 are closed; the strings/binary/bits slice closed the Phase 3
 string-related items, the alpha move/drop foundation slice
@@ -681,18 +790,20 @@ closed `move` in typecheck, stdlib slice 1 closed the
 auto-import substrate plus the first two `Global.*` files,
 the literal-fit narrow-int slice closed the Phase 3 numeric
 coercion item end-to-end (typecheck → IR lower → eval / LLVM /
-driver), and stdlib slice 2 closed `kernel` / `cptr` /
-`cstring` (with `Result<T, E>` registered, method-level
-generics, and bidirectional inference for generic enum
-construction). The surviving critical-path work is the
-deferred typed-local / runtime narrowing slice (`p: CPtr<UInt8>
-= CPtr.alloc(8)` → drive bidirectional inference through
-typed-local annotations + a `.to_int8()` / `.to_uint16()`
-method family on each numeric type), the next slice of stdlib
-intrinsics (building toward `string` / `list` / `map` / `set`,
-unblocked-on-Result-construction in intrinsic return slots),
-and the optional Phase 4 concurrency slice (`spawn` /
-`receive`); after those,
+driver), stdlib slice 2 closed `kernel` / `cptr` / `cstring`
+(with `Result<T, E>` registered, method-level generics, and
+bidirectional inference for generic enum construction), and
+stdlib slice 3 closed `list` / `string` / `random` (with
+`IRType::List`, list-literal desugar, typed `IRIntrinsicId`
+dispatch, and the shared `build_enum_value` helper). The
+surviving critical-path work is the deferred typed-local /
+runtime narrowing slice (`p: CPtr<UInt8> = CPtr.alloc(8)` →
+drive bidirectional inference through typed-local annotations
++ a `.to_int8()` / `.to_uint16()` method family on each
+numeric type), the next slice of stdlib intrinsics (building
+toward `map` / `set` / `io` / `fd` / `system`), and the
+optional Phase 4 concurrency slice (`spawn` / `receive`);
+after those,
 `expo alpha check expo/lib/global/src/*.expo` should be fully
 green.
 

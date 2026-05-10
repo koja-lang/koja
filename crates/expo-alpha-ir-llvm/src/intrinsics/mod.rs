@@ -12,7 +12,7 @@
 //! and pin a 1-1 test in `tests/intrinsics.rs`. The exhaustive match
 //! makes the wiring step compiler-checked.
 
-use expo_alpha_ir::{BitsMethod, EqualityImpl, HashImpl, IRFunction, IRIntrinsicId, KernelMethod};
+use expo_alpha_ir::{BitsMethod, IRFunction, IRIntrinsicId, KernelMethod};
 use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
@@ -25,8 +25,10 @@ mod cstring;
 mod equality;
 mod hash;
 mod kernel;
+mod list;
 mod parse;
 mod print;
+mod string;
 
 /// Synthesize the body of an `@intrinsic` function. Forwards each
 /// variant to its hand-written emitter; each emitter receives the
@@ -47,16 +49,14 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         }
         IRIntrinsicId::CPtr(method) => cptr::emit_cptr(ctx, function, llvm_function, method),
         IRIntrinsicId::CString(_) => cstring::emit_to_string(ctx, function, llvm_function),
-        IRIntrinsicId::Equality(impl_ @ EqualityImpl::Int(_)) => {
-            equality::emit_eq(ctx, function, llvm_function, impl_)
-        }
-        IRIntrinsicId::Hash(impl_ @ HashImpl::Int(_)) => {
-            hash::emit_hash(ctx, function, llvm_function, impl_)
-        }
+        IRIntrinsicId::Equality(impl_) => equality::emit_eq(ctx, function, llvm_function, impl_),
+        IRIntrinsicId::Hash(impl_) => hash::emit_hash(ctx, function, llvm_function, impl_),
         IRIntrinsicId::Kernel(KernelMethod::Panic) => {
             kernel::emit_panic(ctx, function, llvm_function)
         }
+        IRIntrinsicId::List(method) => list::emit_list(ctx, function, llvm_function, method),
         IRIntrinsicId::Parse(target) => parse::emit_parse(ctx, function, llvm_function, target),
         IRIntrinsicId::Print => print::emit_global_print(ctx, function, llvm_function),
+        IRIntrinsicId::String(method) => string::emit_string(ctx, function, llvm_function, method),
     }
 }

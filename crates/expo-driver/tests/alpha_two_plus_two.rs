@@ -1859,6 +1859,123 @@ fn alpha_run_interpreter_script_result_ok_map_unwrap_prints_ten() {
     );
 }
 
+/// Script-mode fixture exercising the auto-imported `Global.list`
+/// stdlib end-to-end through the literal-desugar path. `[10, 20, 30]`
+/// desugars at resolve time to `List.new().append(10).append(20)
+/// .append(30)`, IR lowering monomorphizes `List<Int>` (struct +
+/// every used method), and `.length()` projects the loop-carried
+/// counter. Both backends print `3\n` — LLVM stamps `i64`-shaped
+/// list method bodies emitting libc `malloc`/`memcpy`/`realloc`
+/// directly, eval mints a `Value::List(Rc<RefCell<Vec<_>>>)`.
+const LIST_LITERAL_LENGTH_SCRIPT_SOURCE: &str = "
+    [10, 20, 30].length()
+";
+
+#[test]
+fn alpha_run_llvm_script_list_literal_length_prints_three() {
+    assert_script_prints(
+        "run_llvm_list_literal_length",
+        LIST_LITERAL_LENGTH_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "3",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_list_literal_length_prints_three() {
+    assert_script_prints(
+        "run_interpreter_list_literal_length",
+        LIST_LITERAL_LENGTH_SCRIPT_SOURCE,
+        None,
+        "3",
+    );
+}
+
+/// Script-mode fixture exercising the `List<Int>.get -> Option<Int>`
+/// chain end-to-end. `[10, 20, 30].get(1).unwrap()` walks every
+/// stage of slice 3: list-literal desugar, monomorphized `List.get`
+/// returning a per-`Int` `Option`, `Option.unwrap` calling
+/// `Kernel.panic` in its `None` arm tail (gated by bidirectional
+/// inference + `Never`-typed return). Both backends print `20\n`,
+/// which also confirms `build_enum_value` lays out `Option::Some(i64)`
+/// correctly under the chunked-outer enum layout.
+const LIST_GET_UNWRAP_SCRIPT_SOURCE: &str = "
+    [10, 20, 30].get(1).unwrap()
+";
+
+#[test]
+fn alpha_run_llvm_script_list_get_unwrap_prints_twenty() {
+    assert_script_prints(
+        "run_llvm_list_get_unwrap",
+        LIST_GET_UNWRAP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "20",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_list_get_unwrap_prints_twenty() {
+    assert_script_prints(
+        "run_interpreter_list_get_unwrap",
+        LIST_GET_UNWRAP_SCRIPT_SOURCE,
+        None,
+        "20",
+    );
+}
+
+/// Script-mode fixture exercising the `String` intrinsic surface
+/// end-to-end through the auto-imported `Global.string` source.
+/// `"héllo".length()` returns codepoint count (5, not byte count —
+/// `é` is two UTF-8 bytes), hitting the runtime `expo_string_length`
+/// extern on the LLVM side and Rust's `chars().count()` on the eval
+/// side. Both backends print `5\n`.
+const STRING_LENGTH_SCRIPT_SOURCE: &str = "
+    \"héllo\".length()
+";
+
+#[test]
+fn alpha_run_llvm_script_string_length_prints_five() {
+    assert_script_prints(
+        "run_llvm_string_length",
+        STRING_LENGTH_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "5",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_string_length_prints_five() {
+    assert_script_prints(
+        "run_interpreter_string_length",
+        STRING_LENGTH_SCRIPT_SOURCE,
+        None,
+        "5",
+    );
+}
+
+/// Script-mode fixture exercising the `Random.int` LLVM path
+/// end-to-end. `Random.int(7, 7)` collapses to the inclusive single-
+/// value range — both `min` and `max` are `7`, so the value
+/// `expo_random_int` returns is always `7`. Pins the alpha
+/// pipeline's auto-import of `Global.random` + the extern wire-up
+/// to `expo-runtime::system::expo_random_int`. Eval can't link the
+/// extern (it surfaces as `RuntimeError::ExternNotSupported`), so
+/// only the LLVM backend is exercised here; the eval contract is
+/// pinned separately in `expo-alpha-ir-eval/tests`.
+const RANDOM_INT_FIXED_SCRIPT_SOURCE: &str = "
+    Random.int(7, 7)
+";
+
+#[test]
+fn alpha_run_llvm_script_random_int_fixed_prints_seven() {
+    assert_script_prints(
+        "run_llvm_random_int_fixed",
+        RANDOM_INT_FIXED_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "7",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

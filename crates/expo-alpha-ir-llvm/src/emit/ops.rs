@@ -12,18 +12,13 @@
 //! return type) instead of narrow `IntValue` / `FloatValue`.
 
 use expo_alpha_ir::{IRBinOp, IRUnaryOp};
-use inkwell::AddressSpace;
-use inkwell::module::Linkage;
-use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue, PointerValue};
+use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
-
-/// libc `strcmp`. Alpha string globals carry a trailing NUL, so
-/// `strcmp` matches `String == String`'s byte-sequence semantics.
-const STRCMP_SYMBOL: &str = "strcmp";
+use crate::runtime::{STRCMP_SYMBOL, declare_strcmp_extern};
 
 pub(super) fn emit_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -203,7 +198,7 @@ fn emit_string_binary_op<'ctx>(
             )));
         }
     };
-    let strcmp = declare_strcmp(ctx);
+    let strcmp = declare_strcmp_extern(ctx);
     let diff_call = ctx
         .builder
         .build_call(strcmp, &[lhs.into(), rhs.into()], "strcmp")
@@ -224,20 +219,6 @@ fn emit_string_binary_op<'ctx>(
         .build_int_compare(predicate, diff, zero, "streq")
         .map_err(|e| inkwell_err(format_args!("emit for {op:?} on String"), e))?;
     Ok(result.into())
-}
-
-/// Idempotent `i32 @strcmp(i8*, i8*)` declaration.
-fn declare_strcmp<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(existing) = ctx.module.get_function(STRCMP_SYMBOL) {
-        return existing;
-    }
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let signature = ctx
-        .context
-        .i32_type()
-        .fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
-    ctx.module
-        .add_function(STRCMP_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// `Neg` is the only float-applicable unary; `Not` is Bool-only and

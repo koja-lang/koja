@@ -59,7 +59,7 @@ pub use function::{
 };
 pub use intrinsic_id::{
     BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, EqualityImpl, HashImpl,
-    IRIntrinsicId, IntType, IntegralType, KernelMethod, ParseTarget,
+    IRIntrinsicId, IntType, KernelMethod, ListMethod, ParseTarget, StringMethod,
 };
 pub use local::IRLocalId;
 pub use ownership::Ownership;

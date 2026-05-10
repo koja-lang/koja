@@ -1,11 +1,8 @@
-//! Eval handlers for the 9-cell `Equality` intrinsic family
-//! (`Bool.eq` plus `IntN.eq` / `UIntN.eq`).
-//!
-//! Eval flattens every integer width to [`Value::Int(i64)`], so the
-//! Int family collapses to a single `lhs == rhs` comparison; Bool is
-//! handled in the same arm because the variants are
-//! [`Value::Bool`](crate::Value::Bool) — both shapes round-trip through
-//! the same equality check on their underlying primitive.
+//! Eval handlers for the `Equality` intrinsic family — `Bool`, the
+//! 8 integer cells (flattened to [`Value::Int(i64)`]), and `String`.
+//! Each variant inspects its operands directly; mismatched shapes
+//! surface a typed [`RuntimeError::TypeMismatch`] instead of
+//! coercing.
 
 use expo_alpha_ir::EqualityImpl;
 
@@ -21,13 +18,14 @@ pub(super) fn dispatch(impl_: EqualityImpl, args: &[Value]) -> Result<Value, Run
             ),
         });
     };
-    let result = match (lhs, rhs) {
-        (Value::Bool(a), Value::Bool(b)) => a == b,
-        (Value::Int(a), Value::Int(b)) => a == b,
+    let result = match (impl_, lhs, rhs) {
+        (EqualityImpl::Bool, Value::Bool(a), Value::Bool(b)) => a == b,
+        (EqualityImpl::Int(_), Value::Int(a), Value::Int(b)) => a == b,
+        (EqualityImpl::String, Value::String(a), Value::String(b)) => a == b,
         _ => {
             return Err(RuntimeError::TypeMismatch {
                 detail: format!(
-                    "Equality.eq ({impl_:?}) expects matching Bool/Int operands; \
+                    "Equality.eq ({impl_:?}) expects matching operands for the impl cell; \
                      got {lhs:?} and {rhs:?}",
                 ),
             });

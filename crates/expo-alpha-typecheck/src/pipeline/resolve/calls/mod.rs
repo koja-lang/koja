@@ -32,8 +32,9 @@ use expo_ast::span::Span;
 
 use bounded::{BoundedCall, resolve_bounded_method_call};
 use methods::{
-    MethodInferenceTarget, MethodReceiver, classify_receiver, dispatch_mismatch_message,
-    function_signature, infer_method_call_type_args, method_lookup_message,
+    MethodInferenceOutputs, MethodInferenceTarget, MethodReceiver, classify_receiver,
+    dispatch_mismatch_message, function_signature, infer_method_call_type_args,
+    method_lookup_message,
 };
 
 use super::coercion::{Compatible, check_compatible, coercion_span};
@@ -45,14 +46,28 @@ use crate::registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
 
+/// Co-traveling call-site context shared by [`resolve_call`] /
+/// [`resolve_method_call`] and the inner generic-inference helpers.
+/// Bundles the three slots that always thread together: the AST's
+/// `type_args` output vec, the surrounding expected return type
+/// (when bidirectional inference applies), and the call's span (for
+/// diagnostics). Inputs (receiver / method / args / sig) and the
+/// resolver/diagnostics env stay as separate params — these three
+/// just happen to always move as a group.
+pub(super) struct CallSite<'a> {
+    pub(super) out_type_args: &'a mut Vec<ResolvedType>,
+    pub(super) expected: Option<&'a ResolvedType>,
+    pub(super) span: Span,
+}
+
 pub(super) fn resolve_call(
     callee: &mut Expr,
     args: &mut [Arg],
-    type_args: &mut Vec<ResolvedType>,
-    call_span: Span,
+    site: CallSite<'_>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    let call_span = site.span;
     let ExprKind::Ident {
         name,
         resolution: ident_resolution,
@@ -153,15 +168,8 @@ pub(super) fn resolve_call(
             })
             .collect::<Vec<_>>();
         resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
-        let (substituted_params, substituted_return) = infer_call_type_args(
-            callee,
-            &sig,
-            args,
-            type_args,
-            call_span,
-            resolver.registry,
-            diagnostics,
-        );
+        let (substituted_params, substituted_return) =
+            infer_call_type_args(callee, &sig, args, site, resolver.registry, diagnostics);
         validate_arg_signature(
             args,
             &substituted_params,
@@ -182,11 +190,15 @@ pub(super) fn resolve_method_call(
     receiver: &mut Expr,
     method: &str,
     args: &mut [Arg],
-    out_type_args: &mut Vec<ResolvedType>,
-    call_span: Span,
+    site: CallSite<'_>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    let CallSite {
+        out_type_args,
+        expected,
+        span: call_span,
+    } = site;
     let Some(method_receiver) = classify_receiver(receiver, resolver, diagnostics) else {
         resolve_args(args, None, resolver, diagnostics);
         return ResolvedType::unresolved();
@@ -234,8 +246,8 @@ pub(super) fn resolve_method_call(
         }
     };
 
-    let expected = method_receiver.expected_dispatch();
-    if sig.dispatch != expected {
+    let expected_dispatch = method_receiver.expected_dispatch();
+    if sig.dispatch != expected_dispatch {
         diagnostics.push(Diagnostic::error(
             dispatch_mismatch_message(method_receiver, struct_entry, method_entry, method),
             call_span,
@@ -314,16 +326,32 @@ pub(super) fn resolve_method_call(
         method: method_callee,
         receiver_type: &receiver.resolution,
         explicit_params: method_receiver.explicit_params(&sig.params),
+        expected,
     };
+    let mut receiver_args_inferred: Vec<ResolvedType> = Vec::new();
     let (substituted_params, substituted_return) = infer_method_call_type_args(
         target,
         &sig,
         args,
-        out_type_args,
+        MethodInferenceOutputs {
+            method_type_args: out_type_args,
+            receiver_type_args: &mut receiver_args_inferred,
+        },
         call_span,
         resolver.registry,
         diagnostics,
     );
+    // Static dispatch's receiver.resolution starts as a bare leaf;
+    // stitch in the inferred type_args so IR lower can read them
+    // (instance dispatch already carries the value's full type).
+    if matches!(method_receiver, MethodReceiver::Static { .. })
+        && !receiver_args_inferred.is_empty()
+    {
+        receiver.resolution = ResolvedType::Named {
+            resolution: Resolution::Global(struct_id),
+            type_args: receiver_args_inferred,
+        };
+    }
     // "Extend"-style domain check: a method registered at
     // `[receiver_head, method]` only applies to receivers whose
     // full `ResolvedType` matches the method's substituted `self`
@@ -369,11 +397,15 @@ fn infer_call_type_args(
     callee: Callee<'_>,
     sig: &FunctionSignature,
     args: &[Arg],
-    out_type_args: &mut Vec<ResolvedType>,
-    call_span: Span,
+    site: CallSite<'_>,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<ResolvedParam>, ResolvedType) {
+    let CallSite {
+        out_type_args,
+        expected,
+        span: call_span,
+    } = site;
     let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
     for (param, arg) in sig.params.iter().zip(args.iter()) {
         if !arg.value.resolution.is_resolved() {
@@ -383,6 +415,18 @@ fn infer_call_type_args(
             unify_resolved_type(&param.ty, &arg.value.resolution, callee.id, &mut subst)
         {
             emit_conflict(&callee, conflict, arg.span, registry, diagnostics);
+        }
+    }
+    if let Some(expected) = expected
+        && expected.is_resolved()
+    {
+        let mut scratch = subst.clone();
+        if unify_resolved_type(&sig.return_type, expected, callee.id, &mut scratch).is_ok() {
+            for (slot, filled) in subst.iter_mut().zip(scratch.into_iter()) {
+                if slot.is_none() {
+                    *slot = filled;
+                }
+            }
         }
     }
     diagnose_phantom_params(&callee, &subst, call_span, diagnostics);

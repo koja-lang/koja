@@ -17,7 +17,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{IRSymbol, IRVariantTag};
+use expo_alpha_ir::{IRSymbol, IRType, IRVariantTag};
 use inkwell::OptimizationLevel;
 use inkwell::module::Module;
 use inkwell::targets::{
@@ -30,9 +30,11 @@ pub(crate) mod structs;
 
 /// LLVM layout of a single enum decl. `variants` is indexed by
 /// [`IRVariantTag`].0 so construction can recover the per-variant
-/// types in O(1).
+/// types in O(1). The outer `StructType` lives on the LLVM
+/// context's named-type table (minted in [`enums::declare_enum_type`])
+/// and is fetched by name via [`crate::ctx::EmitContext::enum_outer_type`];
+/// holding it here too would just duplicate that registry.
 pub(crate) struct EnumLayout<'ctx> {
-    pub(crate) outer: StructType<'ctx>,
     pub(crate) variants: Vec<VariantLayout<'ctx>>,
 }
 
@@ -51,6 +53,12 @@ pub(crate) struct VariantLayout<'ctx> {
 pub(crate) struct TypeLayouts<'ctx> {
     pub(crate) target_data: TargetData,
     struct_types: RefCell<BTreeMap<IRSymbol, StructType<'ctx>>>,
+    /// IR-level field types for every declared struct, indexed by
+    /// the same symbol as `struct_types`. Retained post-layout so
+    /// intrinsic emitters can resolve "field `i` of `Pair_$T,U$` is
+    /// `Option<T>`" without re-deriving from mangled names. Mirrors
+    /// the role `enum_layouts` plays for enum-shaped data.
+    struct_fields: RefCell<BTreeMap<IRSymbol, Vec<IRType>>>,
     enum_layouts: RefCell<BTreeMap<IRSymbol, EnumLayout<'ctx>>>,
 }
 
@@ -59,6 +67,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         Self {
             target_data: host_target_data(),
             struct_types: RefCell::new(BTreeMap::new()),
+            struct_fields: RefCell::new(BTreeMap::new()),
             enum_layouts: RefCell::new(BTreeMap::new()),
         }
     }
@@ -89,6 +98,35 @@ impl<'ctx> TypeLayouts<'ctx> {
         })
     }
 
+    pub(crate) fn register_struct_fields(&self, symbol: IRSymbol, fields: Vec<IRType>) {
+        let mut map = self.struct_fields.borrow_mut();
+        if map.insert(symbol.clone(), fields).is_some() {
+            panic!(
+                "alpha LLVM emit: struct fields for `{symbol}` registered twice — \
+                 lower / merge invariant violation",
+            );
+        }
+    }
+
+    /// IR type of `struct_symbol`'s field at `index`. Panics on
+    /// unregistered symbol / out-of-range index — both indicate a
+    /// pre-emit ordering or IR-seal violation upstream.
+    pub(crate) fn struct_field_ir_type(&self, struct_symbol: &IRSymbol, index: usize) -> IRType {
+        let map = self.struct_fields.borrow();
+        let fields = map.get(struct_symbol).unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: struct fields for `{struct_symbol}` not registered — \
+                 pre-emit ordering violation",
+            )
+        });
+        fields.get(index).cloned().unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: struct `{struct_symbol}` has no field at index {index} — \
+                 IR seal invariant violation",
+            )
+        })
+    }
+
     pub(crate) fn register_enum_layout(&self, symbol: IRSymbol, layout: EnumLayout<'ctx>) {
         let mut map = self.enum_layouts.borrow_mut();
         if map.insert(symbol.clone(), layout).is_some() {
@@ -97,10 +135,6 @@ impl<'ctx> TypeLayouts<'ctx> {
                  lower / merge invariant violation",
             );
         }
-    }
-
-    pub(crate) fn enum_outer_type(&self, mangled: &str) -> StructType<'ctx> {
-        self.with_enum_layout(mangled, |layout| layout.outer)
     }
 
     /// Closure-borrow over the `RefCell` so callers can't hold a
