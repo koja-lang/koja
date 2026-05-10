@@ -25,7 +25,13 @@ pub(super) fn emit_literal_eq(
     block: IRBlockId,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ValueId, ()> {
-    let const_value = lower_literal(value, span, diagnostics)?;
+    // Pattern literals match the scrutinee by value at the
+    // scrutinee's runtime type. Literal-fit coercion at the type-
+    // equality sites doesn't apply here (typecheck doesn't record
+    // a coercion span on pattern literals), so pass `None` and let
+    // narrow-int / narrow-float pattern matching land as a separate
+    // slice — pre-existing gap, not regressed by this path.
+    let const_value = lower_literal(value, span, None, diagnostics)?;
     let const_ty = const_value_type(&const_value);
     let const_dest = ctx.fresh_value(const_ty);
     ctx.cfg.append(

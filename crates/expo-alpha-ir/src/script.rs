@@ -134,7 +134,7 @@ impl IRScript {
 /// 4. Run `seal::seal_script` on the assembled script. Panics on
 ///    violation per the seal contract.
 pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
-    let mut output = LowerOutput::default();
+    let mut output = LowerOutput::with_coercions(checked.coercions.clone());
     let mut packages: Vec<IRPackage> = Vec::with_capacity(checked.packages.len() + 1);
     packages.push(empty_global_stdlib_package());
     for pkg in &checked.packages {

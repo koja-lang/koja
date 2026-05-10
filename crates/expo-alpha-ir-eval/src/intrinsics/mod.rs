@@ -1,38 +1,43 @@
 //! Per-backend dispatch table for `@intrinsic` function bodies on
 //! the eval interpreter side. Mirrors the LLVM backend's
 //! `intrinsics/` shape — each registered intrinsic is keyed by its
-//! full mangled symbol name and routed to a hand-written handler.
+//! [`expo_alpha_ir::FunctionKind::Intrinsic`] payload (an
+//! [`IRIntrinsicId`] -- a typed enum the lift pass mints from the
+//! function's identifier path) and routed via an exhaustive `match`
+//! to a hand-written handler.
 //!
-//! Adding a new intrinsic: drop a sibling `<name>.rs` module
-//! exporting `pub(super) fn <name>`, register it in
-//! [`handler_for`], and pin a 1-1 test in `tests/intrinsics.rs`.
+//! Adding a new intrinsic: extend [`IRIntrinsicId`] in
+//! `expo-alpha-ir`, drop a sibling `<name>.rs` module exporting
+//! `pub(super) fn <handler>`, and wire its arm in [`dispatch`]. The
+//! exhaustive match makes the wiring step compiler-checked.
+
+use expo_alpha_ir::{BitsMethod, IRIntrinsicId, KernelMethod};
 
 use crate::error::RuntimeError;
 use crate::value::Value;
 
+mod binary;
+mod bitwise;
+mod cptr;
+mod cstring;
+mod equality;
+mod hash;
+mod kernel;
+mod parse;
 mod print;
 
-use print::global_print;
-
-/// Function pointer type for an intrinsic's interpreter handler.
-type IntrinsicHandler = fn(&[Value]) -> Result<Value, RuntimeError>;
-
-/// Run the registered intrinsic for `mangled` against `args`.
-/// Unknown symbols return [`RuntimeError::UnknownIntrinsic`] — a
-/// missing registration fails loudly instead of silently returning
-/// `Unit`.
-pub(crate) fn dispatch(mangled: &str, args: &[Value]) -> Result<Value, RuntimeError> {
-    let Some(handler) = handler_for(mangled) else {
-        return Err(RuntimeError::UnknownIntrinsic {
-            symbol: mangled.to_string(),
-        });
-    };
-    handler(args)
-}
-
-fn handler_for(symbol: &str) -> Option<IntrinsicHandler> {
-    match symbol {
-        "Global.print" => Some(global_print),
-        _ => None,
+/// Run the registered intrinsic `id` against `args`.
+pub(crate) fn dispatch(id: &IRIntrinsicId, args: &[Value]) -> Result<Value, RuntimeError> {
+    match *id {
+        IRIntrinsicId::Binary(method) => binary::binary(method, args),
+        IRIntrinsicId::Bits(BitsMethod::ToBinary) => binary::bits(BitsMethod::ToBinary, args),
+        IRIntrinsicId::Bitwise { ty, op } => bitwise::dispatch(ty, op, args),
+        IRIntrinsicId::CPtr(method) => cptr::dispatch(method, args),
+        IRIntrinsicId::CString(_) => cstring::to_string(args),
+        IRIntrinsicId::Equality(impl_) => equality::dispatch(impl_, args),
+        IRIntrinsicId::Hash(impl_) => hash::dispatch(impl_, args),
+        IRIntrinsicId::Kernel(KernelMethod::Panic) => kernel::panic(args),
+        IRIntrinsicId::Parse(target) => parse::dispatch(target, args),
+        IRIntrinsicId::Print => print::global_print(args),
     }
 }

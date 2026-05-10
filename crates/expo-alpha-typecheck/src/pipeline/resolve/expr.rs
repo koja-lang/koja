@@ -75,12 +75,20 @@ pub(super) fn resolve_expr_with_expected(
             type_path,
             variant,
             data,
-        } => resolve_enum_construction(type_path, variant, data, expr.span, resolver, diagnostics),
+        } => resolve_enum_construction(
+            type_path,
+            variant,
+            data,
+            expected,
+            expr.span,
+            resolver,
+            diagnostics,
+        ),
         ExprKind::FieldAccess { receiver, field } => {
             resolve_field_access(receiver, field, expr.span, resolver, diagnostics)
         }
         ExprKind::Group { expr: inner } => {
-            resolve_expr(inner, resolver, diagnostics);
+            resolve_expr_with_expected(inner, expected, resolver, diagnostics);
             inner.resolution.clone()
         }
         ExprKind::Ident { name, resolution } => {
@@ -89,6 +97,7 @@ pub(super) fn resolve_expr_with_expected(
         ExprKind::Cond { arms, else_body } => resolve_cond(
             arms,
             else_body.as_deref_mut(),
+            expected,
             expr.span,
             resolver,
             diagnostics,
@@ -101,13 +110,14 @@ pub(super) fn resolve_expr_with_expected(
             condition,
             then_body,
             else_body.as_deref_mut(),
+            expected,
             expr.span,
             resolver,
             diagnostics,
         ),
         ExprKind::Literal { value } => literal_type(value, resolver.registry),
         ExprKind::Match { subject, arms } => {
-            resolve_match(subject, arms, expr.span, resolver, diagnostics)
+            resolve_match(subject, arms, expected, expr.span, resolver, diagnostics)
         }
         ExprKind::MethodCall {
             receiver,
@@ -139,6 +149,7 @@ pub(super) fn resolve_expr_with_expected(
             condition,
             then_expr,
             else_expr,
+            expected,
             expr.span,
             resolver,
             diagnostics,

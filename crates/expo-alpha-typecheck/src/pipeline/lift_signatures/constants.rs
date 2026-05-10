@@ -17,16 +17,30 @@ use expo_ast::ast::{
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
+use crate::pipeline::resolve::coercion::{Coercions, Compatible, check_compatible, coercion_span};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
 
 use super::types::{TypeParamScope, render_resolved, resolve_type_expr};
 
+/// Constant-pass walk inputs. Bundles the read-only registry view
+/// (constant initializers don't need the `&mut` registry surface
+/// — that mutation happens at the [`lift_constant`] entry point
+/// after the walk produces the resolved value), the package-scope
+/// hint used for unqualified type lookups, and the program-wide
+/// numeric-literal coercion sink shared with the resolve pass.
+struct ConstCtx<'a> {
+    coercions: &'a mut Coercions,
+    package: &'a str,
+    registry: &'a GlobalRegistry,
+}
+
 pub(super) fn lift_constant(
     constant: &mut Constant,
     package: &str,
     registry: &mut GlobalRegistry,
+    coercions: &mut Coercions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let identifier = Identifier::new(package, vec![constant.name.clone()]);
@@ -46,14 +60,24 @@ pub(super) fn lift_constant(
         .as_ref()
         .map(|type_expr| resolve_type_expr(type_expr, scope, package, registry, diagnostics));
 
+    let mut ctx = ConstCtx {
+        coercions,
+        package,
+        registry,
+    };
     let inferred = resolve_constant_value(
         &mut constant.value,
         annotated.as_ref(),
-        package,
-        registry,
+        &mut ctx,
         diagnostics,
     );
 
+    // Pin the constant's stamped type at the annotation when the
+    // RHS is a coerced literal: `inferred` is still the literal's
+    // default `Int` / `Float` head, but the coercion table now
+    // carries the literal at the narrower target width and the
+    // registry should reflect the visible type. When no annotation
+    // exists, the inferred head is the visible type.
     let ty = annotated.unwrap_or(inferred);
     registry.set_constant_definition(
         id,
@@ -67,23 +91,24 @@ pub(super) fn lift_constant(
 /// Walk the RHS, validate it's an allowed constant shape, stamp each
 /// node's `resolution`, and yield the inferred type. `expected` is
 /// the resolved annotation (if any) — propagated to children for
-/// per-field type checking.
+/// per-field type checking. When the inferred head and `expected`
+/// disagree, the literal-coercion path is consulted before falling
+/// through to a strict mismatch diagnostic.
 fn resolve_constant_value(
     expr: &mut Expr,
     expected: Option<&ResolvedType>,
-    package: &str,
-    registry: &GlobalRegistry,
+    ctx: &mut ConstCtx<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let ty = match &mut expr.kind {
-        ExprKind::Literal { value } => literal_type(value, registry),
+        ExprKind::Literal { value } => literal_type(value, ctx.registry),
         ExprKind::String { parts, .. } => {
-            string_literal_type(parts, expr.span, registry, diagnostics)
+            string_literal_type(parts, expr.span, ctx.registry, diagnostics)
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
-        } => negated_numeric_type(operand, package, registry, diagnostics),
+        } => negated_numeric_type(operand, ctx, diagnostics),
         ExprKind::EnumConstruction {
             type_path,
             variant,
@@ -93,15 +118,15 @@ fn resolve_constant_value(
             variant,
             data,
             expr.span,
-            package,
-            registry,
+            ctx.package,
+            ctx.registry,
             diagnostics,
         ),
         ExprKind::StructConstruction { type_path, fields } => {
-            struct_construction_type(type_path, fields, expr.span, package, registry, diagnostics)
+            struct_construction_type(type_path, fields, expr.span, ctx, diagnostics)
         }
         ExprKind::Group { expr: inner } => {
-            resolve_constant_value(inner, expected, package, registry, diagnostics)
+            resolve_constant_value(inner, expected, ctx, diagnostics)
         }
         _ => {
             diagnostics.push(Diagnostic::error(
@@ -116,16 +141,37 @@ fn resolve_constant_value(
     if let Some(expected) = expected
         && ty.is_resolved()
         && expected.is_resolved()
-        && ty != *expected
     {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "constant value type `{}` does not match annotation `{}`",
-                render_type(&ty, registry),
-                render_type(expected, registry),
-            ),
-            expr.span,
-        ));
+        match check_compatible(expr, &ty, expected, ctx.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                ctx.coercions.insert(coercion_span(expr), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "constant value `{rendered_value}` does not fit in `{}` \
+                         (range {})",
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    expr.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "constant value type `{}` does not match annotation `{}`",
+                        render_type(&ty, ctx.registry),
+                        render_type(expected, ctx.registry),
+                    ),
+                    expr.span,
+                ));
+            }
+        }
     }
 
     expr.resolution = ty.clone();
@@ -163,16 +209,15 @@ fn string_literal_type(
 
 fn negated_numeric_type(
     operand: &mut Expr,
-    package: &str,
-    registry: &GlobalRegistry,
+    ctx: &mut ConstCtx<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let ty = resolve_constant_value(operand, None, package, registry, diagnostics);
+    let ty = resolve_constant_value(operand, None, ctx, diagnostics);
     if !ty.is_resolved() {
         return ResolvedType::unresolved();
     }
-    let int = registry.primitive("Int");
-    let float = registry.primitive("Float");
+    let int = ctx.registry.primitive("Int");
+    let float = ctx.registry.primitive("Float");
     if ty == int || ty == float {
         ty
     } else {
@@ -238,16 +283,15 @@ fn struct_construction_type(
     type_path: &[String],
     fields: &mut [FieldInit],
     span: Span,
-    package: &str,
-    registry: &GlobalRegistry,
+    ctx: &mut ConstCtx<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let Some(name) = type_path.last().map(String::as_str) else {
         diagnostics.push(Diagnostic::error("missing struct name", span));
         return ResolvedType::unresolved();
     };
-    let identifier = Identifier::new(package, vec![name.to_string()]);
-    let Some((struct_id, entry)) = registry.lookup(&identifier) else {
+    let identifier = Identifier::new(ctx.package, vec![name.to_string()]);
+    let Some((struct_id, entry)) = ctx.registry.lookup(&identifier) else {
         diagnostics.push(Diagnostic::error(format!("unknown struct `{name}`"), span));
         return ResolvedType::unresolved();
     };
@@ -274,13 +318,7 @@ fn struct_construction_type(
             .iter()
             .find(|f| f.name == field_init.name)
             .map(|f| f.ty.clone());
-        resolve_constant_value(
-            &mut field_init.value,
-            expected.as_ref(),
-            package,
-            registry,
-            diagnostics,
-        );
+        resolve_constant_value(&mut field_init.value, expected.as_ref(), ctx, diagnostics);
     }
     ResolvedType::leaf(Resolution::Global(struct_id))
 }

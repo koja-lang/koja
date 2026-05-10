@@ -72,14 +72,13 @@ pub fn typecheck_fail(source: &str, mode: ParseMode) -> CheckFailure {
 }
 
 pub fn parse_and_check(source: &str, mode: ParseMode) -> Result<CheckedProgram, CheckFailure> {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: PACKAGE.to_string(),
-            path: PathBuf::from("test.expo"),
-            source: source.to_string(),
-        }],
-        mode,
-    );
+    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    sources.push(SourceFile {
+        package: PACKAGE.to_string(),
+        path: PathBuf::from("test.expo"),
+        source: source.to_string(),
+    });
+    let parsed = parse_program(sources, mode);
     check_program(parsed)
 }
 

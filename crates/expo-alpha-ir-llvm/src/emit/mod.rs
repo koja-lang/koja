@@ -290,15 +290,31 @@ pub(crate) fn emit_terminator_default<'ctx>(
             wire_phi_incomings(then_target, pred, values, block_map, phi_map)?;
             wire_phi_incomings(else_target, pred, values, block_map, phi_map)
         }
-        IRTerminator::Return { value: None } => Err(LlvmError::Codegen(
-            "alpha LLVM does not yet emit Unit-returning functions".to_string(),
-        )),
+        IRTerminator::Return { value: None } => ctx
+            .builder
+            .build_return(None)
+            .map(|_| ())
+            .map_err(|e| inkwell_err("build_return", e)),
         IRTerminator::Return { value: Some(id) } => {
-            let return_value = lookup(values, *id)?;
-            ctx.builder
-                .build_return(Some(&return_value))
-                .map(|_| ())
-                .map_err(|e| inkwell_err("build_return", e))
+            // A `Return { value: Some(id) }` against a Unit-typed slot
+            // is the trailing-statement-of-a-Unit-fn shape: the IR
+            // tracks the (unobservable) Unit value for seal /
+            // dominator analysis, but LLVM's matching function type
+            // is `void` and `ret void` ignores the SSA dest. Skipping
+            // the `lookup` keeps a void-returning call's unregistered
+            // dest from surfacing as "undefined SSA value".
+            if current_function_returns_void(ctx) {
+                ctx.builder
+                    .build_return(None)
+                    .map(|_| ())
+                    .map_err(|e| inkwell_err("build_return", e))
+            } else {
+                let return_value = lookup(values, *id)?;
+                ctx.builder
+                    .build_return(Some(&return_value))
+                    .map(|_| ())
+                    .map_err(|e| inkwell_err("build_return", e))
+            }
         }
         IRTerminator::Unreachable => ctx
             .builder
@@ -363,6 +379,19 @@ pub(crate) fn lookup<'ctx>(
         .get(&id)
         .copied()
         .ok_or_else(|| LlvmError::Codegen(format!("undefined SSA value {id} during emission")))
+}
+
+/// True when the LLVM function currently being defined has a `void`
+/// return type. Used by the `Return` terminator emitter to drop the
+/// trailing-Unit-value reference (the IR carries it, LLVM doesn't).
+fn current_function_returns_void(ctx: &EmitContext<'_>) -> bool {
+    let Some(block) = ctx.builder.get_insert_block() else {
+        return false;
+    };
+    let Some(function) = block.get_parent() else {
+        return false;
+    };
+    function.get_type().get_return_type().is_none()
 }
 
 /// Narrow [`lookup`] to an [`IntValue`] for op sites whose IR type is

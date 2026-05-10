@@ -1,10 +1,18 @@
 //! Mangling for monomorphized generic instantiations.
 //!
-//! Single helper, single shape. `Pair<Int, String>` mangles to
-//! `TestApp.Pair_$Int.TestApp.String$`. Mirrors v1's mangling so
-//! cross-tool linker output stays comparable. The `_$..$` brackets
-//! delimit the type-args block; nested generic args bring their own
-//! `_$..$` so depth-counting parses unambiguously.
+//! Three helpers, one shape. `Pair<Int, String>` mangles to
+//! `TestApp.Pair_$Int.TestApp.String$`. A method on that struct
+//! mangles to `TestApp.Pair_$Int.TestApp.String$.first`; if the
+//! method itself takes type params (`fn map<U>`) the args attach
+//! to the method segment as `…$.map_$<U-args>$`. Mirrors v1's
+//! mangling so cross-tool linker output stays comparable. The
+//! `_$..$` brackets delimit each type-args block; nested generic
+//! args bring their own `_$..$` so depth-counting parses
+//! unambiguously.
+//!
+//! Call sites pass typed data ([`IRSymbol`], `[IRType]`, `&str`) —
+//! the helpers below own all string concatenation so `IRSymbol`
+//! stays opaque outside this module.
 
 use crate::function::IRSymbol;
 use crate::types::IRType;
@@ -17,8 +25,7 @@ pub(crate) fn mangled_type_name(symbol: &IRSymbol, args: &[IRType]) -> IRSymbol 
     if args.is_empty() {
         return symbol.clone();
     }
-    let rendered: Vec<String> = args.iter().map(mangle_type).collect();
-    symbol.derived(&format!("_${}$", rendered.join(".")))
+    symbol.derived(&render_type_args(args))
 }
 
 /// Mangle a generic function's identifier with its inferred
@@ -27,6 +34,37 @@ pub(crate) fn mangled_type_name(symbol: &IRSymbol, args: &[IRType]) -> IRSymbol 
 /// and monomorphization agree on the symbol form.
 pub(crate) fn mangled_function_name(symbol: &IRSymbol, args: &[IRType]) -> IRSymbol {
     mangled_type_name(symbol, args)
+}
+
+/// Mangle a method on a generic struct or enum, optionally with the
+/// method's own type-args. `struct_template` is the receiver type's
+/// symbol root; `receiver_args` are the receiver's instantiation
+/// (empty for non-generic receivers); `method_name` is the bare
+/// method identifier; `method_args` are the method's own type-args
+/// (empty for struct-level-only methods).
+///
+/// Both call-site lowering and monomorphization route through this
+/// single helper so the symbols agree by construction. With empty
+/// `receiver_args` *and* empty `method_args` the result is just
+/// `struct_template.derived(".{method_name}")`.
+pub(crate) fn mangled_method_name(
+    struct_template: &IRSymbol,
+    receiver_args: &[IRType],
+    method_name: &str,
+    method_args: &[IRType],
+) -> IRSymbol {
+    let receiver = mangled_type_name(struct_template, receiver_args);
+    let suffix = if method_args.is_empty() {
+        format!(".{method_name}")
+    } else {
+        format!(".{method_name}{}", render_type_args(method_args))
+    };
+    receiver.derived(&suffix)
+}
+
+fn render_type_args(args: &[IRType]) -> String {
+    let rendered: Vec<String> = args.iter().map(mangle_type).collect();
+    format!("_${}$", rendered.join("."))
 }
 
 fn mangle_type(ty: &IRType) -> String {

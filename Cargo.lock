@@ -376,6 +376,7 @@ dependencies = [
  "expo-alpha-typecheck",
  "expo-ast",
  "expo-parser",
+ "expo-stdlib",
 ]
 
 [[package]]
@@ -386,6 +387,8 @@ dependencies = [
  "expo-alpha-typecheck",
  "expo-ast",
  "expo-parser",
+ "expo-runtime",
+ "expo-stdlib",
 ]
 
 [[package]]
@@ -396,6 +399,7 @@ dependencies = [
  "expo-alpha-typecheck",
  "expo-ast",
  "expo-parser",
+ "expo-stdlib",
  "inkwell",
 ]
 
@@ -409,6 +413,7 @@ dependencies = [
  "expo-ast",
  "expo-lexer",
  "expo-parser",
+ "expo-stdlib",
 ]
 
 [[package]]
@@ -417,6 +422,7 @@ version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
+ "expo-stdlib",
 ]
 
 [[package]]
@@ -557,6 +563,9 @@ dependencies = [
 [[package]]
 name = "expo-stdlib"
 version = "0.9.0"
+dependencies = [
+ "expo-parser",
+]
 
 [[package]]
 name = "expo-typecheck"

@@ -62,14 +62,13 @@ fn parse_and_check(
     source: &str,
     mode: ParseMode,
 ) -> Result<CheckedProgram, CheckFailure> {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: package.to_string(),
-            path: PathBuf::from("test.expo"),
-            source: source.to_string(),
-        }],
-        mode,
-    );
+    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    sources.push(SourceFile {
+        package: package.to_string(),
+        path: PathBuf::from("test.expo"),
+        source: source.to_string(),
+    });
+    let parsed = parse_program(sources, mode);
     check_program(parsed)
 }
 

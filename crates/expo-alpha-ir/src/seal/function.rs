@@ -39,7 +39,7 @@ pub(super) fn seal_package(pkg: &IRPackage) {
 fn seal_function(function: &IRFunction) {
     let owner = format!("function `{}`", function.symbol);
     match &function.kind {
-        FunctionKind::Intrinsic => {
+        FunctionKind::Intrinsic(_) => {
             if !function.blocks.is_empty() {
                 seal_panic(&format!(
                     "{owner} is `@intrinsic` but carries {} basic block(s); intrinsic bodies \

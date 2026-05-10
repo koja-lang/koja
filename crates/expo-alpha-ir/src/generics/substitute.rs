@@ -56,6 +56,11 @@ pub(super) fn substitute_signature(
             })
             .collect(),
         return_type: substitute_resolved_type(&signature.return_type, args, owner),
+        impl_args: signature
+            .impl_args
+            .iter()
+            .map(|ty| substitute_resolved_type(ty, args, owner))
+            .collect(),
     }
 }
 

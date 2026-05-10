@@ -64,11 +64,21 @@ pub struct ResolvedStructField {
 /// instance (`receiver.method`) calls. `lift_signatures` sets
 /// [`Dispatch::Instance`] when the function declares a `Param::Self_`
 /// first parameter; everything else stays [`Dispatch::Static`].
+///
+/// `impl_args` carries the concrete pinning of a partial-spec impl
+/// block (`impl CPtr<UInt8>` → `[UInt8]`). Empty for top-level
+/// functions, inline struct/enum methods, and generic-pinned impl
+/// blocks (`impl Bag<T>`); set only when every arg of the impl
+/// target is fully resolved (no `TypeParam`s). Lower consults this
+/// to mangle bare static calls between siblings inside a
+/// concrete-pinned impl as `<Type>_$Args$.method`, matching what
+/// monomorphization produces from the receiver side.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FunctionSignature {
     pub dispatch: Dispatch,
     pub params: Vec<ResolvedParam>,
     pub return_type: ResolvedType,
+    pub impl_args: Vec<ResolvedType>,
 }
 
 /// Field layout + protocol conformances for a user-declared struct.

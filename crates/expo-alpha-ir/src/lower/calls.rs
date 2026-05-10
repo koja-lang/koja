@@ -18,7 +18,7 @@ use super::package::resolved_type_to_ir_type;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
 use crate::local::IRLocalId;
-use crate::mangling::{mangled_function_name, mangled_type_name};
+use crate::mangling::{mangled_function_name, mangled_method_name};
 use crate::types::{IRType, ValueId};
 
 /// Lower a `ExprKind::Call`. Seal guarantees the callee is a bare
@@ -67,7 +67,18 @@ pub(super) fn lower_call(
     let (callee_symbol, return_ty) = if type_args.is_empty() {
         let return_ty =
             resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
-        (template_symbol, return_ty)
+        if signature.impl_args.is_empty() {
+            (template_symbol, return_ty)
+        } else {
+            // Bare static call into a sibling inside a concrete-pinned
+            // impl block (`impl CPtr<UInt8>` → `Global.CPtr.strlen`
+            // mangles as `Global.CPtr_$UInt8$.strlen`) — match the
+            // mono-side `enqueue_member_methods` output so the call
+            // resolves through the IRPackage.
+            let mangled =
+                impl_pinned_call_symbol(&entry.identifier, &signature.impl_args, registry, output);
+            (mangled, return_ty)
+        }
     } else {
         let callee_id = *id;
         let arg_ir_types: Vec<IRType> = type_args
@@ -78,6 +89,7 @@ pub(super) fn lower_call(
         output.instantiations.push(Instantiation {
             template: callee_id,
             args: type_args.to_vec(),
+            method_args: Vec::new(),
             owner: callee_id,
         });
         let substituted_return =
@@ -93,6 +105,34 @@ pub(super) fn lower_call(
         prepend: None,
     };
     emit_call(site, ctx, block, registry, output)
+}
+
+/// Mangle a bare static call into a sibling inside a concrete-pinned
+/// `impl Type<Args>` block. Splits the callee identifier into its
+/// owner (everything but the last segment) and the method name,
+/// translates `impl_args` to IR types, and rebuilds the symbol via
+/// [`mangled_method_name`] so the call resolves to the same shape
+/// `enqueue_member_methods` produces from the receiver side
+/// (`Type_$Args$.method`). `impl_args` is guaranteed concrete by
+/// the typecheck-side `concrete_impl_args` filter.
+fn impl_pinned_call_symbol(
+    identifier: &Identifier,
+    impl_args: &[ResolvedType],
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> IRSymbol {
+    let path = identifier.path();
+    assert!(
+        path.len() >= 2,
+        "alpha IR lower: impl_args expects an owner-qualified identifier (got `{identifier}`)",
+    );
+    let owner = Identifier::new(identifier.package(), path[..path.len() - 1].to_vec());
+    let owner_symbol = IRSymbol::from_identifier(&owner);
+    let arg_types: Vec<IRType> = impl_args
+        .iter()
+        .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+        .collect();
+    mangled_method_name(&owner_symbol, &arg_types, identifier.last(), &[])
 }
 
 /// Lower a `Resolution::Local` callee — `f(args)` where `f` is a
@@ -166,6 +206,18 @@ fn lower_local_closure_call(
     Ok((dest, current))
 }
 
+/// Bundle of "what's being called" for [`lower_method_call`]: the
+/// method name, positional args, and any method-level type args
+/// (`recv.m::<U>(arg)`). Splitting these from the lowering-machinery
+/// args (frame ctx, block, registry, output) keeps the entry point
+/// at clippy's seven-arg threshold without dropping any of the
+/// values.
+pub(super) struct MethodCallShape<'a> {
+    pub(super) method: &'a str,
+    pub(super) args: &'a [Arg],
+    pub(super) method_type_args: &'a [ResolvedType],
+}
+
 /// Lower `ExprKind::MethodCall`. Static dispatch (`Type.method(...)`)
 /// reads the struct id off the receiver's `Resolution::Global`;
 /// instance dispatch (`recv.method(...)`) lowers the receiver to a
@@ -173,25 +225,25 @@ fn lower_local_closure_call(
 /// and prepends the receiver to fill `params[0]` (`self`).
 ///
 /// Methods on generic structs/enums mangle the call symbol with the
-/// receiver's type-args (struct mangled prefix derived via
-/// [`IRSymbol::derived`]). The receiver's struct instantiation is
-/// auto-recorded by [`resolved_type_to_ir_type`]; struct
-/// monomorphization in [`crate::generics::instantiate`] picks up
-/// every inline `fn` on the struct decl and produces specialized
-/// IRFunctions keyed at the same mangled prefix. The method's own
-/// generic args (`ExprKind::MethodCall.type_args`) are checked at
-/// the dispatch site in [`super::expr::lower_expr`] — generic
-/// methods are a follow-up slice, so reaching this helper means
-/// `type_args` is already empty.
+/// receiver's type-args plus any method-level type-args via
+/// [`mangled_method_name`]. The receiver's struct instantiation is
+/// auto-recorded by [`resolved_type_to_ir_type`]; method-level args
+/// (`ExprKind::MethodCall.type_args`) drive a fresh `Instantiation`
+/// pinned to the method template so [`crate::generics::instantiate`]
+/// produces a specialized body.
 pub(super) fn lower_method_call(
     receiver: &Expr,
-    method: &str,
-    args: &[Arg],
+    shape: MethodCallShape<'_>,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
+    let MethodCallShape {
+        method,
+        args,
+        method_type_args,
+    } = shape;
     let dispatch = method_dispatch_kind(receiver, registry);
     let (prepend, current_block) = match dispatch {
         Dispatch::Static => (None, block),
@@ -212,7 +264,7 @@ pub(super) fn lower_method_call(
     let mut method_path = struct_entry.identifier.path().to_vec();
     method_path.push(method.to_string());
     let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
-    let (_, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
+    let (method_id, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
         panic!(
             "alpha IR lower: method `{method_identifier}` missing from registry — \
              seal invariant violation",
@@ -221,7 +273,8 @@ pub(super) fn lower_method_call(
     let signature = function_signature_from_entry(method_entry);
 
     let template_symbol = IRSymbol::from_identifier(&method_entry.identifier);
-    let (callee_symbol, return_ty) = if receiver_type_args.is_empty() {
+    let (callee_symbol, return_ty) = if receiver_type_args.is_empty() && method_type_args.is_empty()
+    {
         let return_ty =
             resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
         (template_symbol, return_ty)
@@ -230,14 +283,27 @@ pub(super) fn lower_method_call(
             .iter()
             .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
             .collect();
+        let method_arg_ir: Vec<IRType> = method_type_args
+            .iter()
+            .map(|ty| resolved_type_to_ir_type(ty, registry, &mut output.instantiations))
+            .collect();
         let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
-        let mangled_struct = mangled_type_name(&receiver_template, &receiver_arg_ir);
-        let mangled_method = mangled_struct.derived(&format!(".{method}"));
-        let substituted_return =
+        let callee =
+            mangled_method_name(&receiver_template, &receiver_arg_ir, method, &method_arg_ir);
+        if !method_type_args.is_empty() {
+            output.instantiations.push(Instantiation {
+                template: method_id,
+                args: receiver_type_args.clone(),
+                method_args: method_type_args.to_vec(),
+                owner: struct_id,
+            });
+        }
+        let with_receiver =
             substitute_resolved_type(&signature.return_type, &receiver_type_args, struct_id);
+        let with_method = substitute_resolved_type(&with_receiver, method_type_args, method_id);
         let return_ty =
-            resolved_type_to_ir_type(&substituted_return, registry, &mut output.instantiations);
-        (mangled_method, return_ty)
+            resolved_type_to_ir_type(&with_method, registry, &mut output.instantiations);
+        (callee, return_ty)
     };
     let site = CallSite {
         callee_symbol,

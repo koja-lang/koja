@@ -1640,6 +1640,225 @@ fn alpha_run_no_file_no_project_errors() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// Script-mode fixture exercising the auto-imported `Global.bitwise`
+/// stdlib intrinsics end-to-end. `0b1100.band(0b1010) = 0b1000 = 8`
+/// drives the LLVM emitter's `Op::Band` arm (`and i64`) and the
+/// eval interpreter's `Op::Band` arm (native `&`); both backends
+/// print `8\n`. Pins the auto-import wiring (driver-side
+/// `bundle_with_autoimport`) + the bitwise dispatch path through
+/// `FunctionKind::Intrinsic { id: "Int.band" }` end-to-end.
+const BITWISE_AND_SCRIPT_SOURCE: &str = "
+    0b1100.band(0b1010)
+";
+
+#[test]
+fn alpha_run_llvm_script_bitwise_and_prints_eight() {
+    assert_script_prints(
+        "run_llvm_bitwise_and",
+        BITWISE_AND_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "8",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_bitwise_and_prints_eight() {
+    assert_script_prints(
+        "run_interpreter_bitwise_and",
+        BITWISE_AND_SCRIPT_SOURCE,
+        None,
+        "8",
+    );
+}
+
+/// Script-mode fixture exercising literal-fit coercion at a struct
+/// field site end-to-end. `Fd{descriptor: 1}` flows the `1` literal
+/// into the `descriptor: UInt8` slot — typecheck records a `UInt8`
+/// coercion, IR lower mints `Const UInt8(1)`, both backends store
+/// the byte in the struct slot and project it through `.descriptor`.
+/// Stdout is `1\n` (eval flattens to `i64`; LLVM zero-extends the
+/// `i8` for the auto-print wrapper). Pins the narrow-int struct-
+/// field coercion across the whole pipeline.
+const NARROW_INT_STRUCT_FIELD_SCRIPT_SOURCE: &str = "
+    struct Fd
+      descriptor: UInt8
+    end
+
+    Fd{descriptor: 1}.descriptor
+";
+
+#[test]
+fn alpha_run_llvm_script_narrow_int_struct_field_prints_one() {
+    assert_script_prints(
+        "run_llvm_narrow_int_struct_field",
+        NARROW_INT_STRUCT_FIELD_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "1",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_narrow_int_struct_field_prints_one() {
+    assert_script_prints(
+        "run_interpreter_narrow_int_struct_field",
+        NARROW_INT_STRUCT_FIELD_SCRIPT_SOURCE,
+        None,
+        "1",
+    );
+}
+
+/// Script-mode fixture pinning the bitwise-on-narrow-int path
+/// end-to-end. `band_u8(0xFF, 0x0F) = 15`. Forces both literals
+/// through `UInt8` slots (call args), the narrow `Bitwise.band`
+/// dispatch fires, and both backends print `15\n`. Pins:
+///
+/// - typecheck: `UInt8` coercion at both arg sites + at the
+///   wrapper's return slot;
+/// - IR lower: narrow `Const UInt8(...)` instructions + dispatch
+///   through `Global.UInt8.band`;
+/// - LLVM emit: `and i8 %0, %1` + zero-extension at the call site
+///   for the printer;
+/// - eval: dispatch through the eval-side narrow-`band` cell
+///   (collapses to `Value::Int` for printing).
+const NARROW_INT_BITWISE_SCRIPT_SOURCE: &str = "
+    fn band_u8(x: UInt8, y: UInt8) -> UInt8
+      x.band(y)
+    end
+
+    band_u8(0xFF, 0x0F)
+";
+
+#[test]
+fn alpha_run_llvm_script_narrow_int_bitwise_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_narrow_int_bitwise",
+        NARROW_INT_BITWISE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_narrow_int_bitwise_prints_fifteen() {
+    assert_script_prints(
+        "run_interpreter_narrow_int_bitwise",
+        NARROW_INT_BITWISE_SCRIPT_SOURCE,
+        None,
+        "15",
+    );
+}
+
+/// Script-mode fixture exercising the pure-Expo half of the
+/// auto-imported `Global.time` stdlib file. `Duration.from_secs(3)`
+/// constructs a `Duration{millis: 3000}` and `.millis()` projects
+/// the field; both backends print `3000\n`. The extern-touching
+/// `DateTime.now()` path is exercised only in the LLVM-backed test
+/// below, since eval can't link `expo_time_now_millis`.
+const DURATION_FROM_SECS_SCRIPT_SOURCE: &str = "
+    Duration.from_secs(3).millis()
+";
+
+#[test]
+fn alpha_run_llvm_script_duration_from_secs_prints_three_thousand() {
+    assert_script_prints(
+        "run_llvm_duration_from_secs",
+        DURATION_FROM_SECS_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "3000",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_duration_from_secs_prints_three_thousand() {
+    assert_script_prints(
+        "run_interpreter_duration_from_secs",
+        DURATION_FROM_SECS_SCRIPT_SOURCE,
+        None,
+        "3000",
+    );
+}
+
+/// Script-mode fixture pinning that `DateTime.now().timestamp_millis()`
+/// links cleanly against `expo-runtime`'s `expo_time_now_millis` and
+/// returns a positive Unix-epoch millisecond value. We can't pin the
+/// exact stdout (it changes every run), so we run the binary, assert
+/// exit 0 and a parseable positive i64 — that's the contract for a
+/// successful FFI hop. Only the LLVM backend is exercised here; eval
+/// has no FFI surface and surfaces this as `ExternNotSupported`
+/// (covered in `expo-alpha-ir-eval/tests/time.rs`).
+const DATETIME_NOW_SCRIPT_SOURCE: &str = "
+    DateTime.now().timestamp_millis()
+";
+
+#[test]
+fn alpha_run_llvm_script_datetime_now_returns_positive_epoch_millis() {
+    let scratch = scratch_dir("run_llvm_datetime_now");
+    let fixture = write_fixture(
+        &scratch,
+        "datetime_now.exps",
+        &dedent(DATETIME_NOW_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (DateTime.now) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    let millis: i64 = trimmed
+        .parse()
+        .unwrap_or_else(|_| panic!("expected stdout to parse as i64; got {trimmed:?}"));
+    assert!(
+        millis > 0,
+        "expected positive epoch millis from `expo_time_now_millis`; got {millis}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Script-mode fixture exercising the `Result<T, E>` chain through
+/// the auto-imported `Global.kernel` source. `Result.Ok(5)` pins
+/// `T = Int`, `E = String` via bidirectional inference at the
+/// `make_five -> Result<Int, String>` body tail. `.map(double)`
+/// lowers through `Result.map<U>` (a method-level generic with
+/// `U = Int` recovered from `double`'s signature). `.unwrap()`
+/// projects the `Ok` payload, leaving the trailing expression at
+/// `10` for both backends.
+const RESULT_OK_MAP_UNWRAP_SCRIPT_SOURCE: &str = "
+    fn double(x: Int) -> Int
+      x * 2
+    end
+
+    fn make_five -> Result<Int, String>
+      Result.Ok(5)
+    end
+
+    make_five().map(double).unwrap()
+";
+
+#[test]
+fn alpha_run_llvm_script_result_ok_map_unwrap_prints_ten() {
+    assert_script_prints(
+        "run_llvm_result_ok_map_unwrap",
+        RESULT_OK_MAP_UNWRAP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "10",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_result_ok_map_unwrap_prints_ten() {
+    assert_script_prints(
+        "run_interpreter_result_ok_map_unwrap",
+        RESULT_OK_MAP_UNWRAP_SCRIPT_SOURCE,
+        None,
+        "10",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

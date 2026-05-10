@@ -40,6 +40,37 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
     is_primitive(ty, registry, "Int") || is_primitive(ty, registry, "Float")
 }
 
+/// Two resolved types interchangeable at struct-field / call-arg /
+/// return-type checks. Strict equality plus the `Int ≡ Int64` and
+/// `Float ≡ Float64` aliases — `Int` and `Int64` map to the same
+/// `IRType::Int64` and have the same v1 semantics; `Float` and
+/// `Float64` similarly. Wider numeric coercion (`Int → Int32` etc.)
+/// is a separate slice — see `ALPHA-ROADMAP.md`'s "numeric coercion
+/// at struct-literal sites" entry.
+pub(crate) fn types_equivalent(
+    a: &ResolvedType,
+    b: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> bool {
+    if a == b {
+        return true;
+    }
+    is_primitive_pair(a, b, registry, "Int", "Int64")
+        || is_primitive_pair(a, b, registry, "Float", "Float64")
+}
+
+/// `a` is `Global.<lhs>` and `b` is `Global.<rhs>` (or vice versa).
+fn is_primitive_pair(
+    a: &ResolvedType,
+    b: &ResolvedType,
+    registry: &GlobalRegistry,
+    lhs: &str,
+    rhs: &str,
+) -> bool {
+    (is_primitive(a, registry, lhs) && is_primitive(b, registry, rhs))
+        || (is_primitive(a, registry, rhs) && is_primitive(b, registry, lhs))
+}
+
 /// Human-readable rendering of a [`ResolvedType`] for diagnostics:
 /// dereferences `Global` heads through the registry so users see
 /// `Int` rather than an opaque `#0`.

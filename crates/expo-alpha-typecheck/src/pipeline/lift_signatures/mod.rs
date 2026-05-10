@@ -20,6 +20,7 @@ use expo_ast::ast::{
 };
 use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
+use crate::pipeline::resolve::coercion::Coercions;
 use crate::program::CheckedPackage;
 use crate::registry::GlobalRegistry;
 
@@ -69,6 +70,7 @@ pub(super) enum SelfContext<'a> {
 pub(crate) fn lift_signatures(
     packages: &mut [CheckedPackage],
     registry: &mut GlobalRegistry,
+    coercions: &mut Coercions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let bodies = collect_protocol_bodies(packages, registry);
@@ -133,7 +135,7 @@ pub(crate) fn lift_signatures(
         for file in &mut pkg.files {
             for item in &mut file.items {
                 if let Item::Constant(constant) = item {
-                    constants::lift_constant(constant, &package, registry, diagnostics);
+                    constants::lift_constant(constant, &package, registry, coercions, diagnostics);
                 }
             }
         }

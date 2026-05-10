@@ -36,6 +36,7 @@ mod error;
 mod extern_attrs;
 mod function;
 mod generics;
+mod intrinsic_id;
 mod local;
 mod lower;
 mod mangling;
@@ -55,6 +56,10 @@ pub use extern_attrs::IRExternAttrs;
 pub use function::{
     BlockParam, BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam,
     IRInstruction, IRSymbol, IRTerminator,
+};
+pub use intrinsic_id::{
+    BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, EqualityImpl, HashImpl,
+    IRIntrinsicId, IntType, IntegralType, KernelMethod, ParseTarget,
 };
 pub use local::IRLocalId;
 pub use ownership::Ownership;

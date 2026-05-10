@@ -11,7 +11,15 @@
 //! path. Sealed `IRProgram` / `IRScript` from `expo-alpha-ir` are the
 //! only inputs.
 
+// Pull `expo-runtime`'s rlib into the link graph so the
+// `#[unsafe(no_mangle)] pub extern "C" fn`s referenced by
+// [`crate::externs`] resolve at link time. The crate has no Rust-
+// path uses on its own, so without this import cargo would skip
+// the rlib and the C symbols would come up undefined.
+use expo_runtime as _;
+
 mod error;
+mod externs;
 mod interpreter;
 mod intrinsics;
 mod ops;

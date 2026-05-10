@@ -37,6 +37,7 @@
 mod binary_literal;
 mod calls;
 mod closures;
+pub(crate) mod coercion;
 mod control_flow;
 mod ctx;
 mod enums;

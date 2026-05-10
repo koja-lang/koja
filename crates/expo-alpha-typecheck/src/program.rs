@@ -11,6 +11,7 @@ use expo_ast::ast::{Diagnostic, File, Severity};
 use expo_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
+use crate::pipeline::resolve::coercion::Coercions;
 use crate::pipeline::{collect, lift_signatures, resolve, seal, synthesize};
 use crate::registry::GlobalRegistry;
 
@@ -30,8 +31,17 @@ pub struct CheckedPackage {
 /// short-circuit to [`crate::CheckFailure`]; only warnings ride the
 /// success path. Downstream consumers (driver, LSP) surface them
 /// alongside parse-phase warnings.
+///
+/// `coercions` is the program-wide span-keyed numeric-literal
+/// coercion table populated during `lift_signatures::constants`
+/// and `resolve` whenever a literal flows into a sized target
+/// narrower than its default `Int` / `Float` width. Consumed by
+/// `expo-alpha-ir`'s expression lowerer to mint the matching
+/// `ConstValue::Int*` / `ConstValue::Float*` directly instead of
+/// the default 64-bit form.
 #[derive(Debug, Clone)]
 pub struct CheckedProgram {
+    pub coercions: Coercions,
     pub diagnostics: Vec<Diagnostic>,
     pub packages: Vec<CheckedPackage>,
     /// Canonical source of truth for what was registered. Lowering
@@ -69,6 +79,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         });
     }
 
+    let mut coercions: Coercions = Coercions::default();
     let mut diagnostics: Vec<Diagnostic> = Vec::new();
     let mut registry = GlobalRegistry::with_stdlib_stubs();
 
@@ -80,13 +91,24 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         }
     }
 
-    lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
+    lift_signatures::lift_signatures(
+        &mut packages,
+        &mut registry,
+        &mut coercions,
+        &mut diagnostics,
+    );
 
     synthesize::synthesize_program(&mut packages);
 
     for pkg in &mut packages {
         for file in &mut pkg.files {
-            resolve::resolve_file(file, &pkg.package, &registry, &mut diagnostics);
+            resolve::resolve_file(
+                file,
+                &pkg.package,
+                &registry,
+                &mut coercions,
+                &mut diagnostics,
+            );
         }
     }
 
@@ -98,6 +120,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     }
 
     let checked = CheckedProgram {
+        coercions,
         diagnostics,
         packages,
         registry,

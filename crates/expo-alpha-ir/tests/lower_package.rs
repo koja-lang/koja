@@ -40,10 +40,11 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
     let program = lower(&dedent(source));
 
     assert_eq!(program.entry_point.mangled(), format!("{PACKAGE}.main"));
-    // Two packages: the seeded `Global` stdlib package (where stdlib
-    // generic stubs like `Option<T>` would land if instantiated) and
-    // the `TestApp` package the source lives in.
-    assert_eq!(program.packages.len(), 2);
+    // The user-facing `TestApp` package has just `main`; the
+    // alpha auto-import seeds `Global` packages alongside it
+    // (today `Global.bitwise` + `Global.time`), so we assert on
+    // the user package's shape only and let the stdlib packages
+    // ride along.
     let pkg = program
         .packages
         .iter()
@@ -92,10 +93,15 @@ fn bare_two_plus_two_lowers_to_script_with_const_const_add_return() {
         IRType::Int64,
         "trailing `2 + 2` should stamp Int64 on IRScript.return_type",
     );
+    let user_pkg = script
+        .packages
+        .iter()
+        .find(|pkg| pkg.package == PACKAGE)
+        .expect("test package missing from lowered IRScript");
     assert!(
-        script.packages.iter().all(|pkg| pkg.functions.is_empty()),
-        "no helper fns expected in this fixture; got {:?}",
-        script.packages,
+        user_pkg.functions.is_empty(),
+        "no helper fns expected in this fixture's user package; got {:?}",
+        user_pkg,
     );
     assert_eq!(
         script.blocks.len(),

@@ -21,6 +21,7 @@ use crate::enum_decl::IREnumDecl;
 use crate::extern_attrs::IRExternAttrs;
 use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
 use crate::generics::Instantiation;
+use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
 use crate::mangling::mangled_type_name;
 use crate::package::IRPackage;
@@ -58,9 +59,12 @@ pub(crate) fn lower_package(
         for item in &file.items {
             match item {
                 Item::Constant(constant) => {
-                    if let Some((symbol, value)) =
-                        lower_constant_pool_entry(constant, &pkg.package, registry)
-                    {
+                    if let Some((symbol, value)) = lower_constant_pool_entry(
+                        constant,
+                        &pkg.package,
+                        registry,
+                        &output.coercions,
+                    ) {
                         constants.insert(symbol, value);
                     }
                 }
@@ -245,10 +249,20 @@ pub(crate) fn lower_function_inner(
     ctx.closures_mut().set_enclosing_symbol(symbol.clone());
 
     if intrinsic {
+        let Some(intrinsic_id) = IRIntrinsicId::from_identifier(identifier) else {
+            output.diagnostics.push(Diagnostic::error(
+                format!(
+                    "`@intrinsic` on `{identifier}` has no registered backend handler; \
+                     add a variant to `IRIntrinsicId` and wire its emitter in both backends",
+                ),
+                function.span,
+            ));
+            return None;
+        };
         let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
         return Some(IRFunction {
             blocks: Vec::new(),
-            kind: FunctionKind::Intrinsic,
+            kind: FunctionKind::Intrinsic(intrinsic_id),
             params,
             return_type,
             symbol,
@@ -465,12 +479,16 @@ fn global_to_ir_type(
     let entry = registry.get(id).unwrap_or_else(|| {
         panic!("alpha IR lower: ResolvedType id {id} missing from registry — seal violation",)
     });
-    // Stdlib `Struct(_)` stubs (scalars, `CPtr<T>`) need fixed-
-    // shape lowering; stdlib `Enum(_)` stubs (today `Option<T>`)
-    // fall through to the generic-enum path so they monomorphize
-    // like any other decl.
+    // Stdlib *primitive* `Struct(_)` stubs (scalars, `CPtr<T>`) need
+    // fixed-shape lowering; user-style stdlib structs (`DateTime`,
+    // `Duration`, etc. from auto-imported `Global.*` files) and
+    // stdlib `Enum(_)` stubs (today `Option<T>`) fall through to
+    // the generic monomorphization path. The match below is the
+    // sole authority on which `Global.*` names are primitive — if
+    // you add a new primitive to `with_stdlib_stubs`, add it here.
     if entry.identifier.is_in_package("Global") && matches!(entry.kind, GlobalKind::Struct(_)) {
-        if entry.identifier.last() == "CPtr" {
+        let last = entry.identifier.last();
+        if last == "CPtr" {
             assert_eq!(
                 type_args.len(),
                 1,
@@ -479,23 +497,28 @@ fn global_to_ir_type(
                 type_args.len(),
             );
             let pointee = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
+            // Method monomorphization needs an Instantiation entry even
+            // though the pointer itself doesn't carry a struct decl —
+            // call sites mangle method symbols as `CPtr_$T$.method`,
+            // which mono materializes via `enqueue_member_methods`.
+            instantiations.push(Instantiation {
+                template: id,
+                args: type_args.to_vec(),
+                method_args: Vec::new(),
+                owner: id,
+            });
             return IRType::CPtr(Box::new(pointee));
         }
-        assert!(
-            type_args.is_empty(),
-            "alpha IR lower: stdlib primitive `{}` cannot carry type_args",
-            entry.identifier,
-        );
-        return match entry.identifier.last() {
-            "Binary" => IRType::Binary,
-            "Bits" => IRType::Bits,
-            "Bool" => IRType::Bool,
-            "Float" | "Float64" => IRType::Float64,
-            "Float32" => IRType::Float32,
-            "Int" | "Int64" => IRType::Int64,
-            "Int8" => IRType::Int8,
-            "Int16" => IRType::Int16,
-            "Int32" => IRType::Int32,
+        let primitive = match last {
+            "Binary" => Some(IRType::Binary),
+            "Bits" => Some(IRType::Bits),
+            "Bool" => Some(IRType::Bool),
+            "Float" | "Float64" => Some(IRType::Float64),
+            "Float32" => Some(IRType::Float32),
+            "Int" | "Int64" => Some(IRType::Int64),
+            "Int8" => Some(IRType::Int8),
+            "Int16" => Some(IRType::Int16),
+            "Int32" => Some(IRType::Int32),
             // `Never` has no runtime representation. The only place
             // an alpha expression's resolution surfaces `Never` is a
             // fully-divergent `if`/`else`/`cond` whose merge block we
@@ -503,18 +526,25 @@ fn global_to_ir_type(
             // is never reached at runtime. Mapping to `Unit` is a
             // structurally-safe placeholder until `IRType::Never`
             // lands alongside `Kernel.panic` and friends.
-            "Never" => IRType::Unit,
-            "UInt8" => IRType::UInt8,
-            "UInt16" => IRType::UInt16,
-            "UInt32" => IRType::UInt32,
-            "UInt64" => IRType::UInt64,
-            "String" => IRType::String,
-            "Unit" => IRType::Unit,
-            other => panic!(
-                "alpha IR lower: cannot translate `Global.{other}` to IRType yet \
-                 (extend `with_stdlib_stubs` and this match in lockstep)",
-            ),
+            "Never" => Some(IRType::Unit),
+            "UInt8" => Some(IRType::UInt8),
+            "UInt16" => Some(IRType::UInt16),
+            "UInt32" => Some(IRType::UInt32),
+            "UInt64" => Some(IRType::UInt64),
+            "String" => Some(IRType::String),
+            "Unit" => Some(IRType::Unit),
+            _ => None,
         };
+        if let Some(ir) = primitive {
+            assert!(
+                type_args.is_empty(),
+                "alpha IR lower: stdlib primitive `{}` cannot carry type_args",
+                entry.identifier,
+            );
+            return ir;
+        }
+        // Falls through to the generic struct path below for
+        // user-style `Global.*` structs from the alpha auto-import.
     }
     let template = IRSymbol::from_identifier(&entry.identifier);
     let translated: Vec<IRType> = type_args
@@ -525,6 +555,7 @@ fn global_to_ir_type(
         instantiations.push(Instantiation {
             template: id,
             args: type_args.to_vec(),
+            method_args: Vec::new(),
             owner: id,
         });
     }

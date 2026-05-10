@@ -528,8 +528,8 @@ fn field_access_on_non_struct_diagnoses() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("field access requires a struct receiver")),
-        "expected non-struct-receiver diagnostic, got {messages:?}",
+            .any(|m| m.contains("`Global.Int` has no field `x`")),
+        "expected no-field diagnostic on `Int`, got {messages:?}",
     );
 }
 

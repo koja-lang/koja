@@ -141,21 +141,12 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
 }
 
 pub(super) fn require_supported_const(value: &ConstValue, location: &dyn Fn() -> String) {
-    match value {
-        ConstValue::Binary(_)
-        | ConstValue::Bits { .. }
-        | ConstValue::Bool(_)
-        | ConstValue::Float64(_)
-        | ConstValue::Int8(_)
-        | ConstValue::Int64(_)
-        | ConstValue::String(_)
-        | ConstValue::Unit => {}
-        other => seal_panic(&format!(
-            "{}: ConstValue `{other:?}` is not yet admitted (alpha admits only \
-             Binary / Bits / Bool / Float64 / Int8 / Int64 / String / Unit)",
-            location(),
-        )),
-    }
+    // Every [`ConstValue`] variant is currently admitted — narrow-int
+    // and narrow-float widths landed alongside literal-fit coercion.
+    // Helper exists so future additions to `ConstValue` (e.g. a
+    // bigint variant) can opt in explicitly rather than implicitly
+    // by dint of being defined.
+    let _ = (value, location);
 }
 
 pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {

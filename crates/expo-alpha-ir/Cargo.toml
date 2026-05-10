@@ -11,3 +11,4 @@ expo-ast = { path = "../expo-ast" }
 
 [dev-dependencies]
 expo-parser = { path = "../expo-parser" }
+expo-stdlib = { path = "../expo-stdlib" }

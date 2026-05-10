@@ -18,6 +18,7 @@ pub(crate) const CONCAT_BITS_SYMBOL: &str = "__expo_alpha_concat_bits";
 pub(crate) const FREE_SYMBOL: &str = "free";
 pub(crate) const MALLOC_SYMBOL: &str = "malloc";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_alpha_pack_bits";
+pub(crate) const PANIC_SYMBOL: &str = "__expo_alpha_panic";
 pub(crate) const PRINT_BINARY_SYMBOL: &str = "__expo_alpha_print_binary";
 pub(crate) const PRINT_BITS_SYMBOL: &str = "__expo_alpha_print_bits";
 pub(crate) const PRINT_BOOL_SYMBOL: &str = "__expo_alpha_print_bool";
@@ -106,4 +107,20 @@ pub(crate) fn declare_pack_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functio
     );
     ctx.module
         .add_function(PACK_BITS_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `__expo_alpha_panic` runtime helper.
+/// Signature: `void __expo_alpha_panic(i8* message_payload)`. The
+/// `Kernel.panic` intrinsic body calls this with the `String`
+/// payload pointer (i.e. 8 bytes past the v1 length header) and
+/// trails the call with `unreachable`. The runtime side prints
+/// `panic: <message>` to stderr and aborts.
+pub(crate) fn declare_panic_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(PANIC_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(PANIC_SYMBOL, signature, Some(Linkage::External))
 }

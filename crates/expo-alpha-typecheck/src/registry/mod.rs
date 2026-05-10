@@ -46,10 +46,12 @@ pub use format::format_registry;
 /// What kind of declaration a registry entry points at.
 ///
 /// Most variants carry their lifted payload inline as `Option<_>`:
-/// `None` is the "collected but not yet lifted" state (and the
-/// permanent state for stdlib stub primitives), `Some(_)` the lifted
-/// state reached after `lift_signatures` runs. [`GlobalKind::Constant`]
-/// boxes its `Some(_)` payload so this enum stays a reasonable size despite
+/// `None` is the "collected but not yet lifted" state, `Some(_)` the
+/// lifted state reached after `lift_signatures` runs. Stdlib
+/// primitives land pre-stamped (`Struct(Some(empty_def))`) so
+/// `record_conformance` against them works the same as against
+/// user-declared structs. [`GlobalKind::Constant`] boxes its
+/// `Some(_)` payload so this enum stays a reasonable size despite
 /// the large [`ConstantDefinition`] (AST-valued) shape.
 ///
 /// Trait `impl P for T` blocks do *not* get their own registry
@@ -124,41 +126,26 @@ impl GlobalRegistry {
         Self::default()
     }
 
-    /// Seed a fresh registry with stdlib stubs: scalar / FFI-width
-    /// primitives + `String` / `Binary` / `Bits` (struct stubs),
-    /// `CPtr<T>` (generic struct stub), and `Option<T>` (fully-
-    /// lifted enum stub used by the `for` desugar). All under the
-    /// `Global` package so resolve never special-cases them.
+    /// Seed a fresh registry with stdlib primitive stubs: scalar /
+    /// FFI-width primitives plus `String` / `Binary` / `Bits`. All
+    /// under the `Global` package so resolve never special-cases
+    /// them. `CPtr<T>` and `Option<T>` are *not* stubbed here —
+    /// they're defined in autoimported `Global.cptr` / `Global.kernel`
+    /// sources and land through `collect` like any other user decl.
     ///
-    /// Temporary scaffolding — once the real stdlib compiles as a
-    /// package these entries land through `collect` like any other
-    /// decl.
+    /// Each primitive lands as `Struct(Some(empty_def))`: zero
+    /// fields, empty conformance map. The empty definition lets
+    /// `impl P for Int` blocks register conformances without the
+    /// stub-vs-real-struct branching the bare-marker design
+    /// originally forced.
     pub fn with_stdlib_stubs() -> Self {
         let mut reg = Self::default();
         for name in [
             "Int", "Bool", "Unit", "Float", "Never", "String", "Binary", "Bits", "Int8", "Int16",
             "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32", "Float64",
         ] {
-            let outcome = reg.insert_struct(
-                Identifier::new("Global", vec![name.to_string()]),
-                Span::default(),
-                Vec::new(),
-            );
-            debug_assert!(
-                matches!(outcome, InsertOutcome::Fresh(_)),
-                "stdlib stub `Global.{name}` collided on preload — registry was not empty",
-            );
+            seed_primitive_stub(&mut reg, name, Vec::new());
         }
-        let cptr_outcome = reg.insert_struct(
-            Identifier::new("Global", vec!["CPtr".to_string()]),
-            Span::default(),
-            vec!["T".to_string()],
-        );
-        debug_assert!(
-            matches!(cptr_outcome, InsertOutcome::Fresh(_)),
-            "stdlib stub `Global.CPtr` collided on preload — registry was not empty",
-        );
-        seed_option_stub(&mut reg);
         reg
     }
 
@@ -212,8 +199,7 @@ impl GlobalRegistry {
 
     /// Register a struct in the `Struct(None)` state. The
     /// resolved field layout is stamped in later by
-    /// [`Self::set_struct_definition`]; preloaded stdlib stub
-    /// primitives stay in `Struct(None)` permanently.
+    /// [`Self::set_struct_definition`].
     pub fn insert_struct(
         &mut self,
         identifier: Identifier,
@@ -344,8 +330,7 @@ impl GlobalRegistry {
     }
 
     /// Stamp a resolved field layout onto a struct entry. Panics
-    /// unless the entry's kind is exactly `Struct(None)` — preloaded
-    /// stdlib stubs are bare markers and don't accept a definition.
+    /// unless the entry's kind is exactly `Struct(None)`.
     pub fn set_struct_definition(&mut self, id: GlobalRegistryId, definition: StructDefinition) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
@@ -582,39 +567,30 @@ impl GlobalRegistry {
     }
 }
 
-/// Seed `Global.Option<T> = Some(T) | None` fully lifted (head +
-/// variant roster) so the `synthesize` for-desugar and any other
-/// compiler-internal `Option<T>` reference can name the variants
-/// without going through `lift_signatures`.
-fn seed_option_stub(reg: &mut GlobalRegistry) {
-    let outcome = reg.insert_enum(
-        Identifier::new("Global", vec!["Option".to_string()]),
+/// Seed a primitive struct stub under `Global.<name>` with an empty
+/// `StructDefinition` (no fields, no conformances). The empty
+/// definition lets `impl P for <name>` blocks call
+/// [`GlobalRegistry::record_conformance`] without distinguishing
+/// stubs from user structs.
+fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<String>) {
+    let outcome = reg.insert_struct(
+        Identifier::new("Global", vec![name.to_string()]),
         Span::default(),
-        vec!["T".to_string()],
+        type_params,
     );
-    let option_id = match outcome {
+    let id = match outcome {
         InsertOutcome::Fresh(id) => id,
         InsertOutcome::Collision { existing } => panic!(
-            "stdlib stub `Global.Option` collided on preload with `{}` — \
+            "stdlib stub `Global.{name}` collided on preload with `{}` — \
              registry was not empty",
             existing.identifier,
         ),
     };
-    let definition = EnumDefinition {
-        variants: vec![
-            ResolvedEnumVariant {
-                name: "Some".to_string(),
-                data: ResolvedVariantData::Tuple(vec![ResolvedType::leaf(Resolution::TypeParam {
-                    owner: option_id,
-                    index: TypeParamIndex::new(0),
-                })]),
-            },
-            ResolvedEnumVariant {
-                name: "None".to_string(),
-                data: ResolvedVariantData::Unit,
-            },
-        ],
-        conformances: BTreeMap::new(),
-    };
-    reg.set_enum_definition(option_id, definition);
+    reg.set_struct_definition(
+        id,
+        StructDefinition {
+            conformances: BTreeMap::new(),
+            fields: Vec::new(),
+        },
+    );
 }

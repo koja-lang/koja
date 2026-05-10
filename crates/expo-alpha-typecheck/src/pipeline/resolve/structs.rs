@@ -13,6 +13,7 @@ use expo_ast::span::Span;
 use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
+use super::coercion::{Compatible, check_compatible, coercion_span};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::types::{display_resolution, verify_bounds};
@@ -60,6 +61,14 @@ pub(super) fn resolve_struct_construction(
         return ResolvedType::unresolved();
     };
     let Some(definition) = definition else {
+        panic!(
+            "alpha typecheck: struct entry `{}` reached struct-literal validation \
+             without a stamped definition — every struct (including stdlib stubs) \
+             carries `Struct(Some(_))` after preload",
+            struct_entry.identifier,
+        );
+    };
+    if is_unconstructable_primitive(&struct_entry.identifier) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot construct primitive type `{}` with struct literal syntax",
@@ -68,7 +77,7 @@ pub(super) fn resolve_struct_construction(
             span,
         ));
         return ResolvedType::leaf(Resolution::Global(struct_id));
-    };
+    }
 
     let owner = struct_entry.identifier.to_string();
     let type_params = struct_entry.type_params.clone();
@@ -78,7 +87,7 @@ pub(super) fn resolve_struct_construction(
             &definition.fields,
             fields,
             span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         return ResolvedType::leaf(Resolution::Global(struct_id));
@@ -110,7 +119,7 @@ pub(super) fn resolve_struct_construction(
         &substituted_fields,
         fields,
         span,
-        resolver.registry,
+        resolver,
         diagnostics,
     );
     let type_args = subst
@@ -206,7 +215,7 @@ pub(super) fn validate_named_fields(
     declared: &[ResolvedStructField],
     fields: &[FieldInit],
     span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut seen: Vec<bool> = vec![false; declared.len()];
@@ -234,16 +243,40 @@ pub(super) fn validate_named_fields(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != &declared_field.ty {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "field `{}` of `{owner_label}` expects `{}`, got `{}`",
-                    field.name,
-                    display_resolution(&declared_field.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                field.span,
-            ));
+        match check_compatible(&field.value, actual, &declared_field.ty, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver
+                    .coercions
+                    .insert(coercion_span(&field.value), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "field `{}` of `{owner_label}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        field.name,
+                        display_resolution(&declared_field.ty, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    field.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "field `{}` of `{owner_label}` expects `{}`, got `{}`",
+                        field.name,
+                        display_resolution(&declared_field.ty, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    field.span,
+                ));
+            }
         }
     }
     for (index, present) in seen.iter().enumerate() {
@@ -316,6 +349,38 @@ pub(super) fn resolve_field_access(
     // round-trips back to itself.
     let subst: Vec<Option<ResolvedType>> = receiver_args.iter().cloned().map(Some).collect();
     substitute_resolved_type(&declared.ty, &subst, struct_id)
+}
+
+/// `Global.<name>` types whose values are produced exclusively by
+/// literals, intrinsics, or arithmetic — never by struct-literal
+/// syntax. The list mirrors the preloaded primitive stubs in
+/// [`crate::registry::GlobalRegistry::with_stdlib_stubs`].
+fn is_unconstructable_primitive(identifier: &Identifier) -> bool {
+    if !identifier.is_in_global() {
+        return false;
+    }
+    matches!(
+        identifier.last(),
+        "Binary"
+            | "Bits"
+            | "Bool"
+            | "CPtr"
+            | "Float"
+            | "Float32"
+            | "Float64"
+            | "Int"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "Int8"
+            | "Never"
+            | "String"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "UInt8"
+            | "Unit"
+    )
 }
 
 /// Resolve a single-segment type path against the in-scope package,

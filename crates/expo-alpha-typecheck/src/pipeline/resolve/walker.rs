@@ -22,14 +22,15 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
 use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement};
-use expo_ast::identifier::Identifier;
+use expo_ast::identifier::{Identifier, ResolvedType};
 
 use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
-use super::ctx::Resolver;
-use super::expr::resolve_expr;
+use super::coercion::Coercions;
+use super::ctx::{Resolver, ResolverEnv};
+use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::return_type::check_return_type;
 use super::statements::{resolve_assignment, resolve_compound_assignment};
 
@@ -37,26 +38,48 @@ pub(crate) fn resolve_file(
     file: &mut File,
     package: &str,
     registry: &GlobalRegistry,
+    coercions: &mut Coercions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let mut env = ResolverEnv {
+        coercions,
+        package,
+        registry,
+    };
     for item in &mut file.items {
         match item {
             Item::Function(function) => {
-                let identifier = Identifier::new(package, vec![function.name.clone()]);
-                resolve_function(function, &identifier, package, registry, diagnostics);
+                let identifier = Identifier::new(env.package, vec![function.name.clone()]);
+                resolve_function(function, &identifier, None, &mut env, diagnostics);
             }
             Item::Struct(decl) => {
                 for function in &mut decl.functions {
-                    let identifier =
-                        Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-                    resolve_function(function, &identifier, package, registry, diagnostics);
+                    let identifier = Identifier::new(
+                        env.package,
+                        vec![decl.name.clone(), function.name.clone()],
+                    );
+                    resolve_function(
+                        function,
+                        &identifier,
+                        Some(&decl.name),
+                        &mut env,
+                        diagnostics,
+                    );
                 }
             }
             Item::Enum(decl) => {
                 for function in &mut decl.functions {
-                    let identifier =
-                        Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-                    resolve_function(function, &identifier, package, registry, diagnostics);
+                    let identifier = Identifier::new(
+                        env.package,
+                        vec![decl.name.clone(), function.name.clone()],
+                    );
+                    resolve_function(
+                        function,
+                        &identifier,
+                        Some(&decl.name),
+                        &mut env,
+                        diagnostics,
+                    );
                 }
             }
             // Lift's constants pass already resolved each `Constant.value`
@@ -72,13 +95,20 @@ pub(crate) fn resolve_file(
                 let Some(target_name) = impl_target_name(&impl_block.target) else {
                     continue;
                 };
+                let target_name = target_name.to_string();
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(function) = member {
                         let identifier = Identifier::new(
-                            package,
-                            vec![target_name.to_string(), function.name.clone()],
+                            env.package,
+                            vec![target_name.clone(), function.name.clone()],
                         );
-                        resolve_function(function, &identifier, package, registry, diagnostics);
+                        resolve_function(
+                            function,
+                            &identifier,
+                            Some(&target_name),
+                            &mut env,
+                            diagnostics,
+                        );
                     }
                 }
             }
@@ -87,11 +117,7 @@ pub(crate) fn resolve_file(
     }
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
-        let mut resolver = Resolver {
-            package,
-            registry,
-            scope: &mut scope,
-        };
+        let mut resolver = env.make_resolver(None, &mut scope);
         for stmt in body.iter_mut() {
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
@@ -101,11 +127,11 @@ pub(crate) fn resolve_file(
 fn resolve_function(
     function: &mut Function,
     identifier: &Identifier,
-    package: &str,
-    registry: &GlobalRegistry,
+    enclosing_type: Option<&str>,
+    env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let signature = lifted_signature(identifier, registry).cloned();
+    let signature = lifted_signature(identifier, env.registry).cloned();
     let mut scope = LocalScope::new();
     if let Some(signature) = &signature {
         seed_scope_with_params(function, signature, &mut scope);
@@ -114,17 +140,17 @@ fn resolve_function(
     let Some(body) = function.body.as_mut() else {
         return;
     };
-    let mut resolver = Resolver {
-        package,
-        registry,
-        scope: &mut scope,
-    };
-    for stmt in body.iter_mut() {
-        resolve_statement(stmt, &mut resolver, diagnostics);
+    {
+        let mut resolver = env.make_resolver(enclosing_type, &mut scope);
+        let expected = signature
+            .as_ref()
+            .filter(|sig| sig.return_type.is_resolved())
+            .map(|sig| sig.return_type.clone());
+        resolve_body_with_expected(body, expected.as_ref(), &mut resolver, diagnostics);
     }
 
     if let Some(signature) = signature {
-        check_return_type(function, &signature, registry, diagnostics);
+        check_return_type(function, &signature, env, diagnostics);
     }
 }
 
@@ -174,6 +200,21 @@ pub(super) fn resolve_statement(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    resolve_statement_with_expected(stmt, None, resolver, diagnostics);
+}
+
+/// Like [`resolve_statement`] but threads an expected-type hint into
+/// trailing-position [`Statement::Expr`]s so bidirectional shapes
+/// (`Option.None` in a function returning `Option<T>`,
+/// `Result.Ok(x)` whose `E` only resolves through the surrounding
+/// context, …) get the surrounding type as expected. Non-`Expr`
+/// statements ignore the hint.
+pub(super) fn resolve_statement_with_expected(
+    stmt: &mut Statement,
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     match stmt {
         Statement::Assignment {
             target,
@@ -200,7 +241,7 @@ pub(super) fn resolve_statement(
             resolve_compound_assignment(target, *op, value, *span, resolver, diagnostics);
         }
         Statement::Expr(expr) => {
-            resolve_expr(expr, resolver, diagnostics);
+            resolve_expr_with_expected(expr, expected, resolver, diagnostics);
         }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
@@ -208,4 +249,24 @@ pub(super) fn resolve_statement(
             }
         }
     }
+}
+
+/// Walk every statement in `body`, resolving the trailing
+/// `Statement::Expr` (if any) with `expected` as a downward type
+/// hint. Non-trailing statements always resolve without an
+/// expected-type hint — only the value-producing tail matters for
+/// bidirectional inference.
+pub(super) fn resolve_body_with_expected(
+    body: &mut [Statement],
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some((last, leading)) = body.split_last_mut() else {
+        return;
+    };
+    for stmt in leading {
+        resolve_statement(stmt, resolver, diagnostics);
+    }
+    resolve_statement_with_expected(last, expected, resolver, diagnostics);
 }

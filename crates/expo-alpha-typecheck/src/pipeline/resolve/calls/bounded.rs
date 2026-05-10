@@ -14,6 +14,7 @@ use expo_ast::ast::{Arg, Diagnostic, Expr};
 use expo_ast::identifier::{GlobalRegistryId, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
+use super::super::coercion::{Compatible, check_compatible, coercion_span};
 use super::super::ctx::Resolver;
 use super::super::types::display_resolution;
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
@@ -106,12 +107,14 @@ pub(super) fn resolve_bounded_method_call(
         return ResolvedType::unresolved();
     }
     validate_bounded_args(
-        method,
-        &param_name,
-        args,
-        &protocol_method,
-        call_span,
-        resolver.registry,
+        BoundedArgsSite {
+            method,
+            param_name: &param_name,
+            args,
+            protocol_method: &protocol_method,
+            call_span,
+        },
+        resolver,
         diagnostics,
     );
     // Return type may carry `Self` (TypeParam at protocol's slot 0).
@@ -146,19 +149,36 @@ fn collect_bound_providers(
     providers
 }
 
+/// Inputs to [`validate_bounded_args`]. Bundled so the helper
+/// stays under `too_many_arguments` while still surfacing the
+/// per-call site fields a bounded protocol-method dispatch needs:
+/// the user-facing labels (`method` / `param_name`), the supplied
+/// args, the resolved protocol method's signature, and the call
+/// expression's source span. Mirrors [`BoundedCall`]'s shape.
+pub(super) struct BoundedArgsSite<'a> {
+    pub(super) method: &'a str,
+    pub(super) param_name: &'a str,
+    pub(super) args: &'a [Arg],
+    pub(super) protocol_method: &'a ResolvedProtocolMethod,
+    pub(super) call_span: Span,
+}
+
 /// Check arity + per-position type compatibility for a bounded
-/// method call. Mirrors [`super::validate_arg_signature`]'s wording so a
-/// "wrong arg type" diagnostic reads identically whether the call
-/// dispatches against a struct method or a protocol method.
+/// method call. Mirrors [`super::validate_arg_signature`]'s wording so
+/// a "wrong arg type" diagnostic reads identically whether the
+/// call dispatches against a struct method or a protocol method.
 fn validate_bounded_args(
-    method: &str,
-    param_name: &str,
-    args: &[Arg],
-    protocol_method: &ResolvedProtocolMethod,
-    call_span: Span,
-    registry: &GlobalRegistry,
+    site: BoundedArgsSite<'_>,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let BoundedArgsSite {
+        method,
+        param_name,
+        args,
+        protocol_method,
+        call_span,
+    } = site;
     if args.len() != protocol_method.non_self_params.len() {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -180,16 +200,38 @@ fn validate_bounded_args(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != &expected.ty {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "argument `{}` to `{method}` expects `{}`, got `{}`",
-                    expected.name,
-                    display_resolution(&expected.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                arg.span,
-            ));
+        match check_compatible(&arg.value, actual, &expected.ty, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver.coercions.insert(coercion_span(&arg.value), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{method}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        expected.name,
+                        display_resolution(&expected.ty, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    arg.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{method}` expects `{}`, got `{}`",
+                        expected.name,
+                        display_resolution(&expected.ty, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    arg.span,
+                ));
+            }
         }
     }
 }

@@ -24,7 +24,9 @@ mod bounded;
 mod methods;
 
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
-use expo_ast::identifier::{AnonymousKind, FnParam, Identifier, LocalId, Resolution, ResolvedType};
+use expo_ast::identifier::{
+    AnonymousKind, FnParam, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
+};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
 
@@ -34,11 +36,14 @@ use methods::{
     function_signature, infer_method_call_type_args, method_lookup_message,
 };
 
+use super::coercion::{Compatible, check_compatible, coercion_span};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::types::{display_resolution, verify_bounds};
 use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
-use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
+use crate::registry::{
+    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
+};
 
 pub(super) fn resolve_call(
     callee: &mut Expr,
@@ -80,8 +85,12 @@ pub(super) fn resolve_call(
         );
     }
 
-    let candidate = Identifier::new(resolver.package, vec![name.clone()]);
-    let Some((id, entry)) = resolver.registry.lookup(&candidate) else {
+    let Some((id, entry)) = lookup_bare_callee(
+        name,
+        resolver.package,
+        resolver.enclosing_type,
+        resolver.registry,
+    ) else {
         resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!("unknown function `{name}`"),
@@ -122,7 +131,7 @@ pub(super) fn resolve_call(
             &sig.params,
             &callee_identifier,
             call_span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         sig.return_type.clone()
@@ -158,7 +167,7 @@ pub(super) fn resolve_call(
             &substituted_params,
             &callee_identifier,
             call_span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         substituted_return
@@ -249,7 +258,7 @@ pub(super) fn resolve_method_call(
             method_receiver.explicit_params(&sig.params),
             &method_identifier,
             call_span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         return sig.return_type.clone();
@@ -344,7 +353,7 @@ pub(super) fn resolve_method_call(
         method_receiver.explicit_params(&substituted_params),
         &method_identifier,
         call_span,
-        resolver.registry,
+        resolver,
         diagnostics,
     );
     substituted_return
@@ -437,6 +446,32 @@ pub(super) fn diagnose_phantom_params(
             ));
         }
     }
+}
+
+/// Resolve a bare call `name(...)`: prioritize the enclosing
+/// scope, then fall through to the package scope. Inside a
+/// struct/enum method, `Package.Enclosing.name` wins over
+/// `Package.name` when both exist; the escape hatch for callers
+/// who want the package-level function in the conflict case is
+/// to fully qualify (`Global.name()`), which goes through path-
+/// call resolution and never reaches this helper. Free functions
+/// and file bodies pass `enclosing_type = None` and skip the
+/// first step. Takes the registry directly (rather than the full
+/// [`Resolver`]) so the caller keeps `&mut` access for
+/// diagnostics and arg resolution on the not-found path.
+fn lookup_bare_callee<'a>(
+    name: &str,
+    package: &str,
+    enclosing_type: Option<&str>,
+    registry: &'a GlobalRegistry,
+) -> Option<(GlobalRegistryId, &'a RegistryEntry)> {
+    if let Some(enclosing) = enclosing_type {
+        let scoped = Identifier::new(package, vec![enclosing.to_string(), name.to_string()]);
+        if let Some(found) = registry.lookup(&scoped) {
+            return Some(found);
+        }
+    }
+    registry.lookup(&Identifier::new(package, vec![name.to_string()]))
 }
 
 /// Resolve every call argument with optional per-position expected
@@ -581,13 +616,18 @@ fn partial_unify_method_call(
 }
 
 /// Check arg arity + per-position type compatibility. Diagnostics
-/// use the callee's fully-qualified [`Identifier`].
+/// use the callee's fully-qualified [`Identifier`]. Per-position
+/// equivalence runs through [`check_compatible`] so a numeric
+/// literal flowing into a narrow-int / narrow-float param coerces
+/// when its compile-time value fits the param's range; the
+/// recorded coercion lands on the resolver's program-wide table
+/// for IR lower to consume.
 fn validate_arg_signature(
     args: &[Arg],
     expected_params: &[ResolvedParam],
     callee: &Identifier,
     call_span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if args.len() != expected_params.len() {
@@ -608,16 +648,38 @@ fn validate_arg_signature(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != &param.ty {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "argument `{}` to `{callee}` expects `{}`, got `{}`",
-                    param.name,
-                    display_resolution(&param.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                arg.span,
-            ));
+        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver.coercions.insert(coercion_span(&arg.value), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    arg.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee}` expects `{}`, got `{}`",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    arg.span,
+                ));
+            }
         }
     }
 }
@@ -663,7 +725,7 @@ fn resolve_local_call(
         &expected_params,
         name,
         call_span,
-        resolver.registry,
+        resolver,
         diagnostics,
     );
     (**ret).clone()
@@ -686,16 +748,16 @@ fn synthesize_local_call_params(fn_params: &[FnParam]) -> Vec<ResolvedParam> {
 }
 
 /// Local-call counterpart to [`validate_arg_signature`]. Same
-/// invariants (arity match + per-position type match) but uses a
-/// bare `&str` callee label (the local's surface name) so the
-/// diagnostic doesn't fabricate a fully-qualified identifier the
-/// user never wrote.
+/// invariants (arity match + per-position type match plus the
+/// literal-fit coercion fallback) but uses a bare `&str` callee
+/// label (the local's surface name) so the diagnostic doesn't
+/// fabricate a fully-qualified identifier the user never wrote.
 fn validate_local_call_signature(
     args: &[Arg],
     expected_params: &[ResolvedParam],
     callee_label: &str,
     call_span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if args.len() != expected_params.len() {
@@ -715,16 +777,38 @@ fn validate_local_call_signature(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != &param.ty {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "argument `{}` to `{callee_label}` expects `{}`, got `{}`",
-                    param.name,
-                    display_resolution(&param.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                arg.span,
-            ));
+        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver.coercions.insert(coercion_span(&arg.value), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee_label}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    arg.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee_label}` expects `{}`, got `{}`",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    arg.span,
+                ));
+            }
         }
     }
 }

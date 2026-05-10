@@ -199,6 +199,31 @@ pub unsafe extern "C" fn __expo_alpha_pack_bits(
     }
 }
 
+/// Abort the process with a diagnostic message. Paired with the
+/// alpha LLVM backend's `Kernel.panic` emitter — the emitter passes
+/// the `String` payload pointer (8 bytes past the v1 length header)
+/// and trails the call with `unreachable`, so this helper never has
+/// to return. Reads the `i64` bit length from `payload-8`, writes
+/// `panic: <message>\n` to stderr, then `process::abort`s.
+///
+/// # Safety
+///
+/// `payload` must point at the body of an alpha-emitted string
+/// global (i.e. the byte right after the `i64 bit_length` header).
+/// Calling with any other pointer is undefined behavior.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __expo_alpha_panic(payload: *const u8) -> ! {
+    let header = unsafe { payload.offset(-8).cast::<i64>() };
+    let bit_length = unsafe { *header };
+    let byte_length = (bit_length / 8) as usize;
+    let bytes = unsafe { std::slice::from_raw_parts(payload, byte_length) };
+    let mut stderr = io::stderr().lock();
+    let _ = stderr.write_all(b"panic: ");
+    let _ = stderr.write_all(bytes);
+    let _ = stderr.write_all(b"\n");
+    std::process::abort();
+}
+
 /// Print a `String`-flavored body value followed by a newline.
 /// Reads the `i64` bit-length 8 bytes before `payload` (the v1 header
 /// layout shared with `Binary` / `Bits`; see `IRType::String`) and
