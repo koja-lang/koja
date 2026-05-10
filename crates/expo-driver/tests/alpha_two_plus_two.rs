@@ -1640,6 +1640,108 @@ fn alpha_run_no_file_no_project_errors() {
     let _ = fs::remove_dir_all(&scratch);
 }
 
+/// Script-mode fixture exercising the auto-imported `Global.bitwise`
+/// stdlib intrinsics end-to-end. `0b1100.band(0b1010) = 0b1000 = 8`
+/// drives the LLVM emitter's `Op::Band` arm (`and i64`) and the
+/// eval interpreter's `Op::Band` arm (native `&`); both backends
+/// print `8\n`. Pins the auto-import wiring (driver-side
+/// `bundle_with_autoimport`) + the bitwise dispatch path through
+/// `FunctionKind::Intrinsic { id: "Int.band" }` end-to-end.
+const BITWISE_AND_SCRIPT_SOURCE: &str = "
+    0b1100.band(0b1010)
+";
+
+#[test]
+fn alpha_run_llvm_script_bitwise_and_prints_eight() {
+    assert_script_prints(
+        "run_llvm_bitwise_and",
+        BITWISE_AND_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "8",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_bitwise_and_prints_eight() {
+    assert_script_prints(
+        "run_interpreter_bitwise_and",
+        BITWISE_AND_SCRIPT_SOURCE,
+        None,
+        "8",
+    );
+}
+
+/// Script-mode fixture exercising the pure-Expo half of the
+/// auto-imported `Global.time` stdlib file. `Duration.from_secs(3)`
+/// constructs a `Duration{millis: 3000}` and `.millis()` projects
+/// the field; both backends print `3000\n`. The extern-touching
+/// `DateTime.now()` path is exercised only in the LLVM-backed test
+/// below, since eval can't link `expo_time_now_millis`.
+const DURATION_FROM_SECS_SCRIPT_SOURCE: &str = "
+    Duration.from_secs(3).millis()
+";
+
+#[test]
+fn alpha_run_llvm_script_duration_from_secs_prints_three_thousand() {
+    assert_script_prints(
+        "run_llvm_duration_from_secs",
+        DURATION_FROM_SECS_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "3000",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_duration_from_secs_prints_three_thousand() {
+    assert_script_prints(
+        "run_interpreter_duration_from_secs",
+        DURATION_FROM_SECS_SCRIPT_SOURCE,
+        None,
+        "3000",
+    );
+}
+
+/// Script-mode fixture pinning that `DateTime.now().timestamp_millis()`
+/// links cleanly against `expo-runtime`'s `expo_time_now_millis` and
+/// returns a positive Unix-epoch millisecond value. We can't pin the
+/// exact stdout (it changes every run), so we run the binary, assert
+/// exit 0 and a parseable positive i64 — that's the contract for a
+/// successful FFI hop. Only the LLVM backend is exercised here; eval
+/// has no FFI surface and surfaces this as `ExternNotSupported`
+/// (covered in `expo-alpha-ir-eval/tests/time.rs`).
+const DATETIME_NOW_SCRIPT_SOURCE: &str = "
+    DateTime.now().timestamp_millis()
+";
+
+#[test]
+fn alpha_run_llvm_script_datetime_now_returns_positive_epoch_millis() {
+    let scratch = scratch_dir("run_llvm_datetime_now");
+    let fixture = write_fixture(
+        &scratch,
+        "datetime_now.exps",
+        &dedent(DATETIME_NOW_SCRIPT_SOURCE),
+    );
+
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (DateTime.now) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    let millis: i64 = trimmed
+        .parse()
+        .unwrap_or_else(|_| panic!("expected stdout to parse as i64; got {trimmed:?}"));
+    assert!(
+        millis > 0,
+        "expected positive epoch millis from `expo_time_now_millis`; got {millis}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

@@ -44,7 +44,13 @@ fn intrinsic_fn_lowers_to_function_kind_intrinsic_with_empty_blocks() {
         .function(&mangled)
         .unwrap_or_else(|| panic!("missing intrinsic `{mangled}` in IRScript"));
 
-    assert_eq!(function.kind, FunctionKind::Intrinsic);
+    let FunctionKind::Intrinsic { id } = &function.kind else {
+        panic!(
+            "intrinsic fn lowered with wrong kind: expected `Intrinsic {{ .. }}`, got {:?}",
+            function.kind,
+        );
+    };
+    assert_eq!(id, "print", "intrinsic_id should be the function path");
     assert!(
         function.blocks.is_empty(),
         "intrinsic body should lower to zero blocks; got {} block(s)",

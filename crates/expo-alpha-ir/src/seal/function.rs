@@ -39,12 +39,18 @@ pub(super) fn seal_package(pkg: &IRPackage) {
 fn seal_function(function: &IRFunction) {
     let owner = format!("function `{}`", function.symbol);
     match &function.kind {
-        FunctionKind::Intrinsic => {
+        FunctionKind::Intrinsic { id } => {
             if !function.blocks.is_empty() {
                 seal_panic(&format!(
                     "{owner} is `@intrinsic` but carries {} basic block(s); intrinsic bodies \
                      are synthesized at emit time and must lower to empty `blocks`",
                     function.blocks.len(),
+                ));
+            }
+            if id.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is `@intrinsic` but carries an empty dispatch id; lower stamps \
+                     the id from the function's identifier path",
                 ));
             }
         }

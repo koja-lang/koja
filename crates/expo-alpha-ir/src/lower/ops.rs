@@ -44,11 +44,11 @@ pub(super) fn lower_literal(
         // variant. Once stdlib stubs grow `Int8`..`UInt64` and literal
         // width inference lands, this match grows arms (or threads
         // expected width through from typecheck).
-        Literal::Int(text) => match text.parse::<i64>() {
+        Literal::Int(text) => match parse_int_literal(text) {
             Ok(parsed) => Ok(ConstValue::Int64(parsed)),
-            Err(err) => {
+            Err(detail) => {
                 diagnostics.push(Diagnostic::error(
-                    format!("invalid Int literal `{text}`: {err}"),
+                    format!("invalid Int literal `{text}`: {detail}"),
                     span,
                 ));
                 Err(())
@@ -58,6 +58,29 @@ pub(super) fn lower_literal(
         // strings still flow through `ExprKind::String`'s own lower.
         Literal::String(text) => Ok(ConstValue::String(text.clone())),
         Literal::Unit => Ok(ConstValue::Unit),
+    }
+}
+
+/// Parse an `IntLit` token's raw text into `i64`. The lexer
+/// preserves prefixes (`0x` / `0b`) and underscore separators
+/// verbatim, but `i64::from_str` is decimal-only and rejects both —
+/// strip underscores first, then dispatch to the right radix based
+/// on the prefix. `0X` / `0B` are accepted to match the lexer,
+/// which treats them identically to the lowercase forms.
+fn parse_int_literal(text: &str) -> Result<i64, String> {
+    let cleaned: String = text.chars().filter(|c| *c != '_').collect();
+    if let Some(hex) = cleaned
+        .strip_prefix("0x")
+        .or_else(|| cleaned.strip_prefix("0X"))
+    {
+        i64::from_str_radix(hex, 16).map_err(|e| e.to_string())
+    } else if let Some(bin) = cleaned
+        .strip_prefix("0b")
+        .or_else(|| cleaned.strip_prefix("0B"))
+    {
+        i64::from_str_radix(bin, 2).map_err(|e| e.to_string())
+    } else {
+        cleaned.parse::<i64>().map_err(|e| e.to_string())
     }
 }
 

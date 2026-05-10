@@ -14,6 +14,7 @@ use expo_alpha_ir::{
 };
 
 use crate::error::RuntimeError;
+use crate::externs;
 use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
 use crate::value::{EnumPayload, Value};
@@ -121,13 +122,20 @@ fn execute_function<R: CallResolver>(
         args.len(),
     );
     match &function.kind {
-        FunctionKind::Intrinsic => {
-            return intrinsics::dispatch(function.symbol.mangled(), &args);
+        FunctionKind::Intrinsic { id } => {
+            return intrinsics::dispatch(id, &function.symbol, &args);
         }
-        FunctionKind::Extern(_) => {
-            return Err(RuntimeError::ExternNotSupported {
-                symbol: function.symbol.mangled().to_string(),
-            });
+        FunctionKind::Extern(attrs) => {
+            let c_symbol = attrs
+                .link_name
+                .as_deref()
+                .unwrap_or_else(|| function.symbol.last_segment());
+            return match externs::dispatch(c_symbol, &args) {
+                Some(result) => result,
+                None => Err(RuntimeError::ExternNotSupported {
+                    symbol: function.symbol.mangled().to_string(),
+                }),
+            };
         }
         FunctionKind::Closure { .. } => panic!(
             "interpreter: direct `Call` to closure body `{}` — must dispatch via \

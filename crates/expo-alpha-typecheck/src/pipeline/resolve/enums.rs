@@ -29,7 +29,7 @@ use crate::registry::{
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::structs::{lookup_type, validate_named_fields};
-use super::types::{display_resolution, verify_bounds};
+use super::types::{display_resolution, types_equivalent, verify_bounds};
 
 pub(super) fn resolve_enum_construction(
     type_path: &[String],
@@ -372,7 +372,7 @@ fn validate_tuple_payload(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != declared {
+        if !types_equivalent(actual, declared, registry) {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "argument {} of `{variant_label}` expects `{}`, got `{}`",

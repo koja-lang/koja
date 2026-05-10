@@ -5,9 +5,17 @@
 //! Stubs are temporary scaffolding — once the real stdlib compiles as
 //! a package they land through `collect`. These assertions stay valid
 //! post-cutover because stubs and real entries share the same shape
-//! (`Global.<name>` struct in the registry).
+//! (`Global.<name>` struct with an empty `StructDefinition` in the
+//! registry; user-declared structs may add fields and conformances).
+//!
+//! `typecheck_file` prepends [`expo_stdlib::ALPHA_AUTOIMPORT`], so
+//! protocols defined there (e.g. `Bitwise`) legitimately land
+//! conformances on the primitives via `impl Bitwise for Int` and
+//! friends. The assertions below pin "no leaked fields" (which holds
+//! regardless of autoimport content) and skip the conformance check
+//! to avoid coupling registry tests to the autoimport list.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
+use expo_alpha_typecheck::{CheckedProgram, GlobalKind, StructDefinition};
 use expo_ast::identifier::Identifier;
 
 mod common;
@@ -30,10 +38,16 @@ fn stdlib_stubs_land_in_registry_as_structs() {
             panic!("stdlib stub `Global.{name}` missing from registry after check_program")
         });
 
+        let GlobalKind::Struct(Some(StructDefinition { fields, .. })) = &entry.kind else {
+            panic!(
+                "Global.{name} registered with wrong kind: expected `Struct(Some(_))`, \
+                 got {:?}",
+                entry.kind,
+            );
+        };
         assert!(
-            matches!(entry.kind, GlobalKind::Struct(None)),
-            "Global.{name} registered with wrong kind: {:?}",
-            entry.kind,
+            fields.is_empty(),
+            "Global.{name} primitive stub leaked fields: {fields:?}",
         );
         assert_eq!(
             entry.identifier, ident,

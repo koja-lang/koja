@@ -15,7 +15,7 @@ use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructF
 
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
-use super::types::{display_resolution, verify_bounds};
+use super::types::{display_resolution, types_equivalent, verify_bounds};
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init
@@ -60,6 +60,14 @@ pub(super) fn resolve_struct_construction(
         return ResolvedType::unresolved();
     };
     let Some(definition) = definition else {
+        panic!(
+            "alpha typecheck: struct entry `{}` reached struct-literal validation \
+             without a stamped definition — every struct (including stdlib stubs) \
+             carries `Struct(Some(_))` after preload",
+            struct_entry.identifier,
+        );
+    };
+    if is_unconstructable_primitive(&struct_entry.identifier) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot construct primitive type `{}` with struct literal syntax",
@@ -68,7 +76,7 @@ pub(super) fn resolve_struct_construction(
             span,
         ));
         return ResolvedType::leaf(Resolution::Global(struct_id));
-    };
+    }
 
     let owner = struct_entry.identifier.to_string();
     let type_params = struct_entry.type_params.clone();
@@ -234,7 +242,7 @@ pub(super) fn validate_named_fields(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != &declared_field.ty {
+        if !types_equivalent(actual, &declared_field.ty, registry) {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "field `{}` of `{owner_label}` expects `{}`, got `{}`",
@@ -316,6 +324,38 @@ pub(super) fn resolve_field_access(
     // round-trips back to itself.
     let subst: Vec<Option<ResolvedType>> = receiver_args.iter().cloned().map(Some).collect();
     substitute_resolved_type(&declared.ty, &subst, struct_id)
+}
+
+/// `Global.<name>` types whose values are produced exclusively by
+/// literals, intrinsics, or arithmetic — never by struct-literal
+/// syntax. The list mirrors the preloaded primitive stubs in
+/// [`crate::registry::GlobalRegistry::with_stdlib_stubs`].
+fn is_unconstructable_primitive(identifier: &Identifier) -> bool {
+    if !identifier.is_in_global() {
+        return false;
+    }
+    matches!(
+        identifier.last(),
+        "Binary"
+            | "Bits"
+            | "Bool"
+            | "CPtr"
+            | "Float"
+            | "Float32"
+            | "Float64"
+            | "Int"
+            | "Int16"
+            | "Int32"
+            | "Int64"
+            | "Int8"
+            | "Never"
+            | "String"
+            | "UInt16"
+            | "UInt32"
+            | "UInt64"
+            | "UInt8"
+            | "Unit"
+    )
 }
 
 /// Resolve a single-segment type path against the in-scope package,

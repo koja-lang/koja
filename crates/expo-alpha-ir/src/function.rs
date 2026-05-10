@@ -109,9 +109,11 @@ impl fmt::Display for IRBlockId {
 /// How a function's body is materialized at emission time.
 ///
 /// - `Regular` carries non-empty blocks the backend walks.
-/// - `Intrinsic` carries empty blocks and the backend synthesizes
-///   a body from a per-backend dispatch table keyed by
-///   [`IRSymbol::mangled`].
+/// - `Intrinsic { id }` carries empty blocks and a backend-stable
+///   string key. Both backends look `id` up in their per-backend
+///   dispatch tables (e.g. `"Int.band"`) to synthesize the body —
+///   decoupled from [`IRSymbol::mangled`] so monomorphized symbols
+///   can share an emitter without per-mangling table entries.
 /// - `Extern(attrs)` carries empty blocks and an FFI-linked
 ///   declaration only — the backend declares the function under
 ///   the C symbol named by [`IRExternAttrs::link_name`] (or the
@@ -126,14 +128,14 @@ impl fmt::Display for IRBlockId {
 ///   is the only writer.
 ///
 /// Per-kind body shape is enforced by the seal pass. The
-/// `Extern` variant carries data, which is why this enum is no
-/// longer `Copy` — `Clone` callers compose the per-fn metadata
-/// without ambient interior mutation.
+/// `Extern` and `Intrinsic` variants carry data, which is why
+/// this enum is not `Copy` — `Clone` callers compose the per-fn
+/// metadata without ambient interior mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
     Closure { env_layout: Vec<IRType> },
     Extern(IRExternAttrs),
-    Intrinsic,
+    Intrinsic { id: String },
     Regular,
 }
 

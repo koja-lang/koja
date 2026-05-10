@@ -13,3 +13,4 @@ inkwell = { version = "0.8", features = ["llvm18-1"] }
 expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
 expo-ast = { path = "../expo-ast" }
 expo-parser = { path = "../expo-parser" }
+expo-stdlib = { path = "../expo-stdlib" }

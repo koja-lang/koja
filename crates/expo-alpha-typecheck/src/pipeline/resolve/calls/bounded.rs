@@ -15,7 +15,7 @@ use expo_ast::identifier::{GlobalRegistryId, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::types::display_resolution;
+use super::super::types::{display_resolution, types_equivalent};
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
 
 /// Inputs to [`resolve_bounded_method_call`]. Bundles every
@@ -180,7 +180,7 @@ fn validate_bounded_args(
         if !actual.is_resolved() {
             continue;
         }
-        if actual != &expected.ty {
+        if !types_equivalent(actual, &expected.ty, registry) {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "argument `{}` to `{method}` expects `{}`, got `{}`",

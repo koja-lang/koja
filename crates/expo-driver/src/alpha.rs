@@ -375,6 +375,18 @@ fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
     }
 }
 
+/// Wrap one user-supplied [`SourceFile`] with the curated alpha
+/// stdlib auto-import (`Global.time`, `Global.bitwise`, …) so the
+/// driver, alpha test helpers, and `cmd_check` all feed the parser
+/// the same compilation unit. Stdlib sources lead so the registry
+/// sees `Global.*` declarations before any user code that references
+/// them; the user file is appended last.
+fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
+    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    sources.push(user);
+    sources
+}
+
 /// Read a source file and drive it through the script-mode alpha
 /// pipeline (`parse → check → lower_script`). Returns the sealed
 /// [`IRScript`] on success; bails the process on any pipeline
@@ -399,11 +411,11 @@ fn read_and_check(path: &Path, mode: ParseMode) -> (CheckedProgram, String) {
     let source = read_source_or_exit(path);
     let package = derive_package(path);
     let parsed = parse_program(
-        vec![SourceFile {
+        bundle_with_autoimport(SourceFile {
             package: package.clone(),
             path: path.to_path_buf(),
             source,
-        }],
+        }),
         mode,
     );
     let checked = match check_program(parsed) {
@@ -485,11 +497,11 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
 /// runtime failures.
 fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<Value, String> {
     let parsed = parse_program(
-        vec![SourceFile {
+        bundle_with_autoimport(SourceFile {
             package: package.to_string(),
             path,
             source,
-        }],
+        }),
         ParseMode::Script,
     );
     let checked = check_program(parsed).map_err(format_check_failure)?;
@@ -508,11 +520,11 @@ fn run_check(
     mode: ParseMode,
 ) -> Result<CheckedProgram, String> {
     let parsed = parse_program(
-        vec![SourceFile {
+        bundle_with_autoimport(SourceFile {
             package: package.to_string(),
             path,
             source,
-        }],
+        }),
         mode,
     );
     check_program(parsed).map_err(format_check_failure)

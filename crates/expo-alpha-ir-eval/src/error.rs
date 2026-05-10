@@ -24,11 +24,13 @@ pub enum RuntimeError {
     /// interpreter has no registered handler for. Indicates a missing
     /// registration in `crate::intrinsics`, not a user error.
     UnknownIntrinsic { symbol: String },
-    /// An `@extern "C"` (FFI-linked) function was called inside the
-    /// interpreter. The eval backend has no C-runtime linkage, so
-    /// FFI calls are unsupported by design — projects that exercise
-    /// extern functions need the LLVM backend
-    /// (`--backend=llvm`).
+    /// An `@extern "C"` (FFI-linked) function was called whose C
+    /// symbol isn't registered in [`crate::externs::dispatch`]. The
+    /// eval backend exposes a curated subset of `expo-runtime`
+    /// symbols (the ones the auto-imported stdlib needs); calls
+    /// into externs outside that subset surface this error so users
+    /// see exactly which symbol needs a handler instead of a silent
+    /// `Unit` return.
     ExternNotSupported { symbol: String },
     /// Reached an `IRTerminator::Unreachable`. Lowering only emits
     /// these on the failure edge of an exhaustive `match`, so
@@ -66,8 +68,9 @@ impl fmt::Display for RuntimeError {
             RuntimeError::ExternNotSupported { symbol } => {
                 write!(
                     f,
-                    "extern \"C\" calls are not supported by the interpreter \
-                     (`{symbol}`); use --backend=llvm",
+                    "extern \"C\" `{symbol}` is not registered in the eval \
+                     dispatch table; use --backend=llvm or add a handler \
+                     in `expo-alpha-ir-eval/src/externs`",
                 )
             }
             RuntimeError::UnreachableExecuted => write!(

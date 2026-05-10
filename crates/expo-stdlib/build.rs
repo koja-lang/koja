@@ -105,6 +105,26 @@ fn main() {
     }
     code.push_str("];\n");
 
+    // Curated subset auto-imported by the alpha pipeline. Files outside this
+    // list are still embedded in `SOURCES` for the v1 path; only the alpha
+    // pipeline reads `ALPHA_AUTOIMPORT`. Entries are added here as each file
+    // becomes alpha-ready (typecheck + lower + emit on both backends).
+    let alpha_modules: &[&str] = &["Global.bitwise", "Global.time"];
+    code.push_str("\n/// Stdlib sources auto-imported by the alpha pipeline.\n");
+    code.push_str("/// Subset of `SOURCES`; grows as files become alpha-ready.\n");
+    code.push_str("pub const ALPHA_AUTOIMPORT: &[(&str, &str)] = &[\n");
+    for module in alpha_modules {
+        let const_name = global_entries
+            .iter()
+            .find(|(name, _)| name == module)
+            .map(|(_, c)| c.as_str())
+            .unwrap_or_else(|| {
+                panic!("ALPHA_AUTOIMPORT module `{module}` not found in discovered Global sources")
+            });
+        code.push_str(&format!("    (\"{module}\", {const_name}),\n"));
+    }
+    code.push_str("];\n");
+
     fs::write(out_dir.join("stdlib_gen.rs"), code).unwrap();
 }
 

@@ -233,15 +233,19 @@ impl Session {
 /// statements as first-class. Helper `fn` items land on
 /// [`expo_alpha_ir::IRScript::packages`] for [`Interpreter::run_script`]
 /// to resolve as call targets.
+///
+/// Prepends [`expo_stdlib::alpha_autoimport_sources`] so REPL input
+/// sees the same `Global.*` prelude the driver and alpha tests do —
+/// `Duration.from_secs(3).millis()` and `0b1100.band(0b1010)` work
+/// at the prompt without any imports.
 fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<Value, String> {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: package.to_string(),
-            path,
-            source,
-        }],
-        ParseMode::Script,
-    );
+    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    sources.push(SourceFile {
+        package: package.to_string(),
+        path,
+        source,
+    });
+    let parsed = parse_program(sources, ParseMode::Script);
     let checked = check_program(parsed).map_err(format_check_failure)?;
     let script = lower_script(&checked).map_err(|err| err.to_string())?;
     Interpreter::run_script(script).map_err(|err| err.to_string())

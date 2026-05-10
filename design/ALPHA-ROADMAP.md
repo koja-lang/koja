@@ -115,11 +115,15 @@ alpha crates.
 
 ### Blockers — without these the stdlib does not type-check
 
-- **Numeric coercion at struct-literal sites** —
+- **Numeric coercion at struct-literal sites (narrow-int widths only)** —
   `io.expo` writes `const STDOUT: Fd = Fd{descriptor: 1}` where `1` is
-  `Int` and `Fd.descriptor: Int32`. Already fails today on user code
-  (`thing.Yeah`). Strict-equality is the alpha policy; this is the
-  narrowest adjustment that unblocks the stdlib.
+  `Int` and `Fd.descriptor: Int32`. Strict-equality is the alpha
+  policy; the `Int ≡ Int64` (and `Float ≡ Float64`) half of this is
+  already absorbed by `types_equivalent` (stdlib slice 1), so what
+  remains is genuine narrow-int coercion: `Int → Int8`/`Int16`/`Int32`
+  and the unsigned widths. Mirror v1's `numeric_compatible` /
+  `record_coercion`; flag the coercion in IR as an explicit
+  `IRInstruction::Cast`.
 
 ### Significant — required for non-trivial stdlib pieces
 
@@ -328,12 +332,18 @@ output and standalone tests, per northstar.
 
 Small; can land in any order or batched into one PR each.
 
-- **Numeric coercion at struct-literal sites.** Smallest fix:
-  `Int` literals coerce to the field's annotated narrower type if the
-  value fits. Mirror v1's `numeric_compatible`/`record_coercion`
-  exactly; flag the coercion in IR as an explicit
+- **Numeric coercion at struct-literal sites (narrow-int widths).**
+  `Int ≡ Int64` and `Float ≡ Float64` already collapse via
+  `types_equivalent` (stdlib slice 1). What's left: narrower fits
+  — `Int` literal → `Int8` / `Int16` / `Int32` field, and the
+  unsigned variants. Mirror v1's `numeric_compatible` /
+  `record_coercion`; flag the coercion in IR as an explicit
   `IRInstruction::Cast` (per northstar's coercion rule). Unblocks
-  the stdlib's `const Fd{descriptor: …}` constants for free.
+  the stdlib's `const Fd{descriptor: …}` constants and lets
+  driver/eval tests construct narrow-width values from int
+  literals (currently a gap noted in
+  `expo-alpha-ir-eval/tests/bitwise.rs` and
+  `expo-alpha-ir-llvm/tests/bitwise.rs`).
 - ~~**`move` parameters in typecheck signatures.**~~ **Shipped.**
   `lift_signatures` propagates the surface `PassMode` verbatim
   onto `ResolvedParam::mode`; the IR's `ownership_for_param`
@@ -518,14 +528,79 @@ What's shipped since the last audit:
   frees at scope exit, but heap-typed captures inside it leak
   today — alpha trade-off for a simpler ABI).
 
+- **Stdlib auto-import + first stdlib files (`time` / `bitwise`).**
+  `expo-stdlib` exposes `ALPHA_AUTOIMPORT` (currently
+  `Global.time` + `Global.bitwise`) plus an
+  `alpha_autoimport_sources()` helper that converts the curated
+  list into `Vec<SourceFile>`. The driver's three single-file
+  parse paths (`read_and_check`, `run_script_pipeline`,
+  `run_check`) prepend the curated set before parsing, and every
+  alpha-side test crate's `tests/common/mod.rs` does the same so
+  the test surface and the user-driven pipeline see the same
+  prelude. Backing the auto-import: `IRFunction.kind` grew an
+  `Intrinsic { id }` payload (the dispatch key — `Type.method`
+  string, e.g. `Int.band`, derived from
+  `identifier.path().join(".")`); both backends key their
+  intrinsic dispatch tables on the variant's `id` rather than the
+  mangled symbol so monomorphized cells share one emitter without
+  per-mangling rows. Forty-eight `Bitwise` cells (8 widths × 6 ops)
+  ship in both backends — LLVM uses inkwell's `build_and` /
+  `build_or` / `build_xor` / `build_not` / `build_left_shift` /
+  `build_right_shift` (with `sign_extend` driven by the
+  receiver-type prefix) and truncates the `Int64`-typed shift
+  count to the operand width on narrow receivers; eval flattens
+  every width to `Value::Int(i64)` and branches `bsr` signedness
+  on the same prefix parse. `time.expo` ships pure-Expo (Duration
+  arithmetic + DateTime field projections) with the
+  `@extern "C" priv fn expo_time_now_millis` declaration inside
+  `DateTime` linking against `expo-runtime`'s C symbol — the
+  Phase 3 mechanical glue surface for stdlib-side externs lands
+  here, validated by an e2e driver test that actually links and
+  runs `DateTime.now().timestamp_millis()`. Two type-checker
+  refinements rode in alongside: (1) `Int ≡ Int64` and
+  `Float ≡ Float64` are equivalent at the six type-equality sites
+  (struct fields / enum variants / two call-arg paths /
+  bounded-method args / return types) via a single
+  `types_equivalent` helper — narrows the surviving "numeric
+  coercion at struct-literal sites" blocker to *narrower-than-Int*
+  widths only; (2) bare-call resolution prioritizes the enclosing
+  struct/enum scope before falling back to package scope, so
+  sibling `priv fn`s call by their bare name without
+  qualification (the standard stdlib idiom in `system.expo` /
+  `fd.expo` / etc.); the escape hatch for callers who really want
+  the package-level function is full qualification
+  (`Global.foo()`). Generalizes to nested types when those land —
+  each level wins over the next outward one. Primitive stubs in
+  `with_stdlib_stubs` were promoted from `Struct(None)` to
+  `Struct(Some(empty_def))` so `record_conformance` accepts them
+  (`bitwise.expo` impls `Bitwise for Int` etc. at preload time).
+  Hex/binary/underscored int literals (`0xFF`, `0b1010`,
+  `1_000_000`) lower correctly through alpha-IR's
+  `parse_int_literal` (the lexer already handled them; the IR's
+  `text.parse::<i64>()` was decimal-only). Pinned by
+  `crates/expo-alpha-typecheck/tests/alpha_autoimport.rs`,
+  `crates/expo-alpha-ir/tests/lower_ops.rs` (radix coverage),
+  `crates/expo-alpha-ir-eval/tests/{bitwise,time}.rs`,
+  `crates/expo-alpha-ir-llvm/tests/{bitwise,time}.rs`, and the
+  `*_bitwise_*` / `*_duration_*` / `*_datetime_now_*` driver
+  tests. **Out**: the remaining 7 stdlib files
+  (`cptr` / `fd` / `io` / `kernel` / `list` / `map` / `set` /
+  `string` / `system`) — each rides on additional intrinsic
+  families that need wiring through the same dispatch table.
+
 The roadmap's original Phase 1 (loops) and Phase 2 (closures)
 are closed; the strings/binary/bits slice closed the Phase 3
-string-related items, and the alpha move/drop foundation slice
-closed `move` in typecheck. The surviving critical-path work is
-the Phase 3 numeric-coercion-at-struct-literal-sites item and the
-optional Phase 4 concurrency slice (`spawn` / `receive`); after
-those, `expo alpha check expo/lib/global/src/*.expo` should be
-fully green.
+string-related items, the alpha move/drop foundation slice
+closed `move` in typecheck, and the stdlib slice 1 closed the
+auto-import substrate plus the first two `Global.*` files. The
+surviving critical-path work is narrow-int coercion at
+struct-literal sites (the `Int → Int32`/`Int8`/etc. half of the
+Phase 3 numeric-coercion item — the `Int ≡ Int64` half is now
+`types_equivalent`'d), the next slice of stdlib intrinsics
+(building toward `cptr` / `kernel` / etc.), and the optional
+Phase 4 concurrency slice (`spawn` / `receive`); after those,
+`expo alpha check expo/lib/global/src/*.expo` should be fully
+green.
 
 ---
 

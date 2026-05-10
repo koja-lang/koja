@@ -167,6 +167,50 @@ fn comparisons_lower_to_matching_ir_bin_ops() {
 }
 
 #[test]
+fn hex_int_literal_lowers_with_correct_radix() {
+    // The lexer hands lower the raw text `0xFF` (prefix preserved);
+    // `lower/ops.rs::parse_int_literal` strips `0x` and dispatches
+    // to `i64::from_str_radix(_, 16)`.
+    let program = lower("fn main\n  0xFF\nend\n");
+    let block = entry_block(&program);
+    assert_eq!(
+        block.instructions,
+        vec![IRInstruction::Const {
+            dest: ValueId(0),
+            value: ConstValue::Int64(255),
+        }],
+    );
+}
+
+#[test]
+fn binary_int_literal_lowers_with_correct_radix() {
+    let program = lower("fn main\n  0b1010\nend\n");
+    let block = entry_block(&program);
+    assert_eq!(
+        block.instructions,
+        vec![IRInstruction::Const {
+            dest: ValueId(0),
+            value: ConstValue::Int64(0b1010),
+        }],
+    );
+}
+
+#[test]
+fn underscore_separated_int_literal_strips_separators() {
+    // `1_000_000` is decimal-with-underscores; the parser keeps the
+    // underscores in the token text, so lower must strip them.
+    let program = lower("fn main\n  1_000_000\nend\n");
+    let block = entry_block(&program);
+    assert_eq!(
+        block.instructions,
+        vec![IRInstruction::Const {
+            dest: ValueId(0),
+            value: ConstValue::Int64(1_000_000),
+        }],
+    );
+}
+
+#[test]
 fn float_literal_lowers_to_const_float64() {
     let program = lower("fn main\n  1.5\nend\n");
     let block = entry_block(&program);

@@ -65,7 +65,9 @@ fn unknown_intrinsic_surfaces_as_runtime_error() {
     // The dispatch table itself is private, so we drive the public
     // surface: a script that declares `@intrinsic fn missing` and
     // calls it. `missing` has no registered handler, so the
-    // interpreter surfaces `UnknownIntrinsic { symbol: "Global.missing" }`.
+    // interpreter surfaces `UnknownIntrinsic` carrying both the
+    // dispatch id (`missing`) and the mangled symbol so users see
+    // the full call site, not just the short id.
     let source = "
         @intrinsic
         fn missing
@@ -77,7 +79,14 @@ fn unknown_intrinsic_surfaces_as_runtime_error() {
         .expect_err("calling an unregistered intrinsic should fail at runtime");
     match err {
         RuntimeError::UnknownIntrinsic { symbol } => {
-            assert_eq!(symbol, format!("{PACKAGE}.missing"));
+            assert!(
+                symbol.contains("missing"),
+                "expected UnknownIntrinsic to mention the id `missing`; got `{symbol}`",
+            );
+            assert!(
+                symbol.contains(&format!("{PACKAGE}.missing")),
+                "expected UnknownIntrinsic to mention the full symbol; got `{symbol}`",
+            );
         }
         other => panic!("expected UnknownIntrinsic, got {other:?}"),
     }

@@ -15,7 +15,7 @@ use expo_ast::ast::{Diagnostic, Function, Statement};
 
 use crate::registry::{FunctionSignature, GlobalRegistry};
 
-use super::types::{display_resolution, is_primitive};
+use super::types::{display_resolution, is_primitive, types_equivalent};
 
 /// Diagnose any mismatch between the function's declared return type
 /// and the type produced by its trailing expression.
@@ -78,7 +78,7 @@ pub(super) fn check_return_type(
     if is_primitive(actual, registry, "Never") {
         return;
     }
-    if actual != declared {
+    if !types_equivalent(actual, declared, registry) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "return type mismatch on `{}`: expected `{}`, found `{}`",

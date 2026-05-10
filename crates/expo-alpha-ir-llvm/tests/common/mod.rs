@@ -42,14 +42,13 @@ pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
 }
 
 pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProgram {
-    let parsed = parse_program(
-        vec![SourceFile {
-            package: package.to_string(),
-            path: PathBuf::from("test.expo"),
-            source: source.to_string(),
-        }],
-        mode,
-    );
+    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    sources.push(SourceFile {
+        package: package.to_string(),
+        path: PathBuf::from("test.expo"),
+        source: source.to_string(),
+    });
+    let parsed = parse_program(sources, mode);
     check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
 }
 
@@ -82,4 +81,28 @@ pub fn assert_main_shape(ir_text: &str) {
     assert_contains(ir_text, "define i64 @main()");
     assert_contains(ir_text, "ret i64 0");
     assert_contains(ir_text, "@__expo_app_name");
+}
+
+/// Slice the LLVM textual IR for one function so substring asserts
+/// don't accidentally pick up matches from other defs in the same
+/// module — relevant for any test where the alpha auto-import pulls
+/// stdlib functions (`Global.Int.band`, `DateTime.now`, …) into the
+/// emitted IR alongside the user's `main`. Returns the body between
+/// the `define ... @<name>(...) {` opening brace and the matching
+/// `}` (assumes well-formed LLVM IR with no nested `}` lines, which
+/// holds for everything we emit today).
+pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {
+    let header = format!("@{name}(");
+    let header_idx = ir_text
+        .find(&header)
+        .unwrap_or_else(|| panic!("function `@{name}` not found in IR:\n{ir_text}"));
+    let open = ir_text[header_idx..]
+        .find('{')
+        .unwrap_or_else(|| panic!("opening brace of `@{name}` missing in IR:\n{ir_text}"))
+        + header_idx;
+    let close = ir_text[open..]
+        .find("\n}")
+        .unwrap_or_else(|| panic!("closing brace of `@{name}` missing in IR:\n{ir_text}"))
+        + open;
+    &ir_text[open..close]
 }

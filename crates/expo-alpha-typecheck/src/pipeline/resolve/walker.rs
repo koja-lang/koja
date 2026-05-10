@@ -43,20 +43,34 @@ pub(crate) fn resolve_file(
         match item {
             Item::Function(function) => {
                 let identifier = Identifier::new(package, vec![function.name.clone()]);
-                resolve_function(function, &identifier, package, registry, diagnostics);
+                resolve_function(function, &identifier, package, None, registry, diagnostics);
             }
             Item::Struct(decl) => {
                 for function in &mut decl.functions {
                     let identifier =
                         Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-                    resolve_function(function, &identifier, package, registry, diagnostics);
+                    resolve_function(
+                        function,
+                        &identifier,
+                        package,
+                        Some(&decl.name),
+                        registry,
+                        diagnostics,
+                    );
                 }
             }
             Item::Enum(decl) => {
                 for function in &mut decl.functions {
                     let identifier =
                         Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-                    resolve_function(function, &identifier, package, registry, diagnostics);
+                    resolve_function(
+                        function,
+                        &identifier,
+                        package,
+                        Some(&decl.name),
+                        registry,
+                        diagnostics,
+                    );
                 }
             }
             // Lift's constants pass already resolved each `Constant.value`
@@ -72,13 +86,21 @@ pub(crate) fn resolve_file(
                 let Some(target_name) = impl_target_name(&impl_block.target) else {
                     continue;
                 };
+                let target_name = target_name.to_string();
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(function) = member {
                         let identifier = Identifier::new(
                             package,
-                            vec![target_name.to_string(), function.name.clone()],
+                            vec![target_name.clone(), function.name.clone()],
                         );
-                        resolve_function(function, &identifier, package, registry, diagnostics);
+                        resolve_function(
+                            function,
+                            &identifier,
+                            package,
+                            Some(&target_name),
+                            registry,
+                            diagnostics,
+                        );
                     }
                 }
             }
@@ -88,6 +110,7 @@ pub(crate) fn resolve_file(
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
         let mut resolver = Resolver {
+            enclosing_type: None,
             package,
             registry,
             scope: &mut scope,
@@ -102,6 +125,7 @@ fn resolve_function(
     function: &mut Function,
     identifier: &Identifier,
     package: &str,
+    enclosing_type: Option<&str>,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -115,6 +139,7 @@ fn resolve_function(
         return;
     };
     let mut resolver = Resolver {
+        enclosing_type,
         package,
         registry,
         scope: &mut scope,
