@@ -36,9 +36,10 @@ use methods::{
     function_signature, infer_method_call_type_args, method_lookup_message,
 };
 
+use super::coercion::{Compatible, check_compatible, coercion_span};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
-use super::types::{display_resolution, types_equivalent, verify_bounds};
+use super::types::{display_resolution, verify_bounds};
 use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
@@ -130,7 +131,7 @@ pub(super) fn resolve_call(
             &sig.params,
             &callee_identifier,
             call_span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         sig.return_type.clone()
@@ -166,7 +167,7 @@ pub(super) fn resolve_call(
             &substituted_params,
             &callee_identifier,
             call_span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         substituted_return
@@ -257,7 +258,7 @@ pub(super) fn resolve_method_call(
             method_receiver.explicit_params(&sig.params),
             &method_identifier,
             call_span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         return sig.return_type.clone();
@@ -352,7 +353,7 @@ pub(super) fn resolve_method_call(
         method_receiver.explicit_params(&substituted_params),
         &method_identifier,
         call_span,
-        resolver.registry,
+        resolver,
         diagnostics,
     );
     substituted_return
@@ -615,13 +616,18 @@ fn partial_unify_method_call(
 }
 
 /// Check arg arity + per-position type compatibility. Diagnostics
-/// use the callee's fully-qualified [`Identifier`].
+/// use the callee's fully-qualified [`Identifier`]. Per-position
+/// equivalence runs through [`check_compatible`] so a numeric
+/// literal flowing into a narrow-int / narrow-float param coerces
+/// when its compile-time value fits the param's range; the
+/// recorded coercion lands on the resolver's program-wide table
+/// for IR lower to consume.
 fn validate_arg_signature(
     args: &[Arg],
     expected_params: &[ResolvedParam],
     callee: &Identifier,
     call_span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if args.len() != expected_params.len() {
@@ -642,16 +648,38 @@ fn validate_arg_signature(
         if !actual.is_resolved() {
             continue;
         }
-        if !types_equivalent(actual, &param.ty, registry) {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "argument `{}` to `{callee}` expects `{}`, got `{}`",
-                    param.name,
-                    display_resolution(&param.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                arg.span,
-            ));
+        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver.coercions.insert(coercion_span(&arg.value), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    arg.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee}` expects `{}`, got `{}`",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    arg.span,
+                ));
+            }
         }
     }
 }
@@ -697,7 +725,7 @@ fn resolve_local_call(
         &expected_params,
         name,
         call_span,
-        resolver.registry,
+        resolver,
         diagnostics,
     );
     (**ret).clone()
@@ -720,16 +748,16 @@ fn synthesize_local_call_params(fn_params: &[FnParam]) -> Vec<ResolvedParam> {
 }
 
 /// Local-call counterpart to [`validate_arg_signature`]. Same
-/// invariants (arity match + per-position type match) but uses a
-/// bare `&str` callee label (the local's surface name) so the
-/// diagnostic doesn't fabricate a fully-qualified identifier the
-/// user never wrote.
+/// invariants (arity match + per-position type match plus the
+/// literal-fit coercion fallback) but uses a bare `&str` callee
+/// label (the local's surface name) so the diagnostic doesn't
+/// fabricate a fully-qualified identifier the user never wrote.
 fn validate_local_call_signature(
     args: &[Arg],
     expected_params: &[ResolvedParam],
     callee_label: &str,
     call_span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if args.len() != expected_params.len() {
@@ -749,16 +777,38 @@ fn validate_local_call_signature(
         if !actual.is_resolved() {
             continue;
         }
-        if !types_equivalent(actual, &param.ty, registry) {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "argument `{}` to `{callee_label}` expects `{}`, got `{}`",
-                    param.name,
-                    display_resolution(&param.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                arg.span,
-            ));
+        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver.coercions.insert(coercion_span(&arg.value), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee_label}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    arg.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument `{}` to `{callee_label}` expects `{}`, got `{}`",
+                        param.name,
+                        display_resolution(&param.ty, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    arg.span,
+                ));
+            }
         }
     }
 }

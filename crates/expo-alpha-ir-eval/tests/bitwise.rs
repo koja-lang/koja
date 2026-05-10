@@ -12,18 +12,19 @@
 //! on the receiver type (`Int.bsr` arithmetic, `UInt*.bsr`
 //! logical). The unsigned-shift divergence isn't asserted at the
 //! eval layer today: every integer width collapses to i64 in
-//! [`Value`] and there's no surface coercion for an unsigned
-//! literal, so `UInt*.bsr` and `Int.bsr` agree on every value
-//! representable as a non-negative i64. The divergence is pinned
-//! at the LLVM emitter layer (`tests/intrinsics.rs`) where the
-//! emitted `lshr` vs `ashr` is observable.
+//! [`Value`] and the narrow widths only show up via literal
+//! coercion at typed param / return slots, so `UInt*.bsr` and
+//! `Int.bsr` agree on every value representable as a non-negative
+//! i64. The divergence is pinned at the LLVM emitter layer
+//! (`tests/intrinsics.rs`) where the emitted `lshr` vs `ashr` is
+//! observable.
 
 use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
 
 mod common;
 
-use common::evaluate_script;
+use common::{evaluate_program, evaluate_script};
 
 fn run_int(source: &str) -> i64 {
     match evaluate_script(&dedent(source)).unwrap() {
@@ -80,4 +81,75 @@ fn int_bsr_positive_value_matches_arithmetic_shift() {
     // logical shift since there's no sign bit to propagate.
     let v = run_int("16.bsr(2)");
     assert_eq!(v, 4);
+}
+
+// ---------------------------------------------------------------------------
+// Narrow-width receivers: the narrow `Bitwise` impls (`UInt8` /
+// `Int32` / etc.) only become reachable from a script body via the
+// literal-fit coercion at sized param / return slots. Dispatching
+// through a typed wrapper exercises both the recorded coercion at
+// IR lower time AND the narrow-typed bitwise dispatch at eval time.
+// Eval flattens every integer width to `Value::Int(i64)`, so the
+// asserted result mirrors the operator's mathematical semantics.
+// ---------------------------------------------------------------------------
+//
+// Driven through the wrapper rather than `0xFF.band(0x0F)` so the
+// receiver actually flows through a `UInt8` slot instead of `Int`.
+
+fn run_program_int(source: &str) -> i64 {
+    match evaluate_program(&dedent(source)).unwrap() {
+        Value::Int(v) => v,
+        other => panic!("expected Value::Int, got {other:?}"),
+    }
+}
+
+#[test]
+fn uint8_band_dispatches_through_narrow_impl() {
+    let v = run_program_int(
+        "
+        fn band_u8(x: UInt8, y: UInt8) -> UInt8
+          x.band(y)
+        end
+
+        fn main
+          band_u8(0xFF, 0x0F)
+        end
+        ",
+    );
+    assert_eq!(v, 0x0F);
+}
+
+#[test]
+fn int8_negative_literal_folds_through_narrow_band() {
+    // `-1: Int8` flows in via the `-1` literal-fit coercion (typecheck
+    // records the negation fold at the call-site span); pinned here
+    // through a narrow-typed wrapper.
+    let v = run_program_int(
+        "
+        fn band_i8(x: Int8, y: Int8) -> Int8
+          x.band(y)
+        end
+
+        fn main
+          band_i8(-1, 5)
+        end
+        ",
+    );
+    assert_eq!(v, 5);
+}
+
+#[test]
+fn int32_bsl_dispatches_through_narrow_impl() {
+    let v = run_program_int(
+        "
+        fn shifted(x: Int32) -> Int32
+          x.bsl(8)
+        end
+
+        fn main
+          shifted(1)
+        end
+        ",
+    );
+    assert_eq!(v, 256);
 }

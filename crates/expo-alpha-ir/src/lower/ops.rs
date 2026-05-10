@@ -14,24 +14,28 @@
 //!   inference: comparisons / boolean logic always produce `Bool`,
 //!   arithmetic and `Neg` preserve operand width.
 
+use expo_alpha_typecheck::NumericLiteralWidth;
 use expo_ast::ast::{BinOp, Diagnostic, Literal, UnaryOp};
 use expo_ast::span::Span;
 
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp};
 
+/// Lower a literal AST node to a [`ConstValue`]. `target` is the
+/// typecheck-recorded coercion width when the literal flows into a
+/// narrower-than-default sized slot (struct field, call arg, return
+/// type, etc.); `None` keeps the default `Int64` / `Float64` head.
+/// Numeric out-of-range / parse failures push a diagnostic and
+/// return `Err(())`; non-numeric literals ignore `target`.
 pub(super) fn lower_literal(
     value: &Literal,
     span: Span,
+    target: Option<NumericLiteralWidth>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Result<ConstValue, ()> {
     match value {
         Literal::Bool(b) => Ok(ConstValue::Bool(*b)),
-        // Slice scope: every Float literal lowers to the 64-bit
-        // variant (matches v1's `Float == Float64` alias). Width
-        // inference for `f: Float32 = 3.14`-style coercion lands
-        // with the annotation pass.
         Literal::Float(text) => match text.parse::<f64>() {
-            Ok(parsed) => Ok(ConstValue::Float64(parsed)),
+            Ok(parsed) => Ok(float_const_at_width(parsed, target)),
             Err(err) => {
                 diagnostics.push(Diagnostic::error(
                     format!("invalid Float literal `{text}`: {err}"),
@@ -40,12 +44,8 @@ pub(super) fn lower_literal(
                 Err(())
             }
         },
-        // Slice scope: every Int literal lowers to the 64-bit signed
-        // variant. Once stdlib stubs grow `Int8`..`UInt64` and literal
-        // width inference lands, this match grows arms (or threads
-        // expected width through from typecheck).
         Literal::Int(text) => match parse_int_literal(text) {
-            Ok(parsed) => Ok(ConstValue::Int64(parsed)),
+            Ok(parsed) => Ok(int_const_at_width(parsed as i128, target)),
             Err(detail) => {
                 diagnostics.push(Diagnostic::error(
                     format!("invalid Int literal `{text}`: {detail}"),
@@ -61,13 +61,54 @@ pub(super) fn lower_literal(
     }
 }
 
+/// Build a [`ConstValue`] integer at the typecheck-recorded width.
+/// Falls back to `Int64` when `target` is `None` (no coercion at
+/// the site). Wider-than-64-bit values can't reach this helper —
+/// the lexer parses to `i64`, and `parse_int_literal_text` fits
+/// the result into `i128` for the typecheck range check; here we
+/// truncate-and-cast, which is safe because the typecheck pass
+/// already rejected out-of-range literals before recording the
+/// coercion.
+pub(super) fn int_const_at_width(value: i128, target: Option<NumericLiteralWidth>) -> ConstValue {
+    match target {
+        None | Some(NumericLiteralWidth::Int64) => ConstValue::Int64(value as i64),
+        Some(NumericLiteralWidth::Int8) => ConstValue::Int8(value as i8),
+        Some(NumericLiteralWidth::Int16) => ConstValue::Int16(value as i16),
+        Some(NumericLiteralWidth::Int32) => ConstValue::Int32(value as i32),
+        Some(NumericLiteralWidth::UInt8) => ConstValue::UInt8(value as u8),
+        Some(NumericLiteralWidth::UInt16) => ConstValue::UInt16(value as u16),
+        Some(NumericLiteralWidth::UInt32) => ConstValue::UInt32(value as u32),
+        Some(NumericLiteralWidth::UInt64) => ConstValue::UInt64(value as u64),
+        // Numeric coercion routes int literals only into integer
+        // widths. A `Float*` recorded coercion against an `Int`
+        // literal is a typecheck bug — surface as a default fallback
+        // rather than panicking; a follow-up surface diagnostic
+        // already would have fired.
+        Some(NumericLiteralWidth::Float32) | Some(NumericLiteralWidth::Float64) => {
+            ConstValue::Int64(value as i64)
+        }
+    }
+}
+
+/// Build a [`ConstValue`] float at the typecheck-recorded width.
+/// `Float32` truncates the source `f64` (typecheck already
+/// round-trip-checked the literal value, so the cast is lossless).
+fn float_const_at_width(value: f64, target: Option<NumericLiteralWidth>) -> ConstValue {
+    match target {
+        None | Some(NumericLiteralWidth::Float64) => ConstValue::Float64(value),
+        Some(NumericLiteralWidth::Float32) => ConstValue::Float32(value as f32),
+        // Same fallback rationale as [`int_const_at_width`].
+        _ => ConstValue::Float64(value),
+    }
+}
+
 /// Parse an `IntLit` token's raw text into `i64`. The lexer
 /// preserves prefixes (`0x` / `0b`) and underscore separators
 /// verbatim, but `i64::from_str` is decimal-only and rejects both —
 /// strip underscores first, then dispatch to the right radix based
 /// on the prefix. `0X` / `0B` are accepted to match the lexer,
 /// which treats them identically to the lowercase forms.
-fn parse_int_literal(text: &str) -> Result<i64, String> {
+pub(super) fn parse_int_literal(text: &str) -> Result<i64, String> {
     let cleaned: String = text.chars().filter(|c| *c != '_').collect();
     if let Some(hex) = cleaned
         .strip_prefix("0x")

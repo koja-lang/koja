@@ -115,15 +115,7 @@ alpha crates.
 
 ### Blockers — without these the stdlib does not type-check
 
-- **Numeric coercion at struct-literal sites (narrow-int widths only)** —
-  `io.expo` writes `const STDOUT: Fd = Fd{descriptor: 1}` where `1` is
-  `Int` and `Fd.descriptor: Int32`. Strict-equality is the alpha
-  policy; the `Int ≡ Int64` (and `Float ≡ Float64`) half of this is
-  already absorbed by `types_equivalent` (stdlib slice 1), so what
-  remains is genuine narrow-int coercion: `Int → Int8`/`Int16`/`Int32`
-  and the unsigned widths. Mirror v1's `numeric_compatible` /
-  `record_coercion`; flag the coercion in IR as an explicit
-  `IRInstruction::Cast`.
+_None outstanding._
 
 ### Significant — required for non-trivial stdlib pieces
 
@@ -332,18 +324,25 @@ output and standalone tests, per northstar.
 
 Small; can land in any order or batched into one PR each.
 
-- **Numeric coercion at struct-literal sites (narrow-int widths).**
-  `Int ≡ Int64` and `Float ≡ Float64` already collapse via
-  `types_equivalent` (stdlib slice 1). What's left: narrower fits
-  — `Int` literal → `Int8` / `Int16` / `Int32` field, and the
-  unsigned variants. Mirror v1's `numeric_compatible` /
-  `record_coercion`; flag the coercion in IR as an explicit
-  `IRInstruction::Cast` (per northstar's coercion rule). Unblocks
-  the stdlib's `const Fd{descriptor: …}` constants and lets
-  driver/eval tests construct narrow-width values from int
-  literals (currently a gap noted in
+- ~~**Numeric coercion at struct-literal sites (narrow-int widths).**~~
+  Shipped. The literal-fit slice landed: a span-keyed
+  `Coercions` table populated at the six type-equality sites + const
+  initializers tells IR lower to mint `ConstValue::Int*` /
+  `ConstValue::Float*` at the recorded width (with negated-literal
+  fold for `-N` shapes). Out-of-range literals surface a precise
+  narrow-int diagnostic; non-literal narrowing (variable → narrow
+  slot) still falls through to a strict type-mismatch and waits on
+  a runtime-conversion slice. The candidate user-facing surface for
+  that slice is a `.to_int8()` / `.to_uint16()` / etc. method
+  family per numeric type, mirroring stdlib's existing
+  `.to_string()`-style API. Unblocks the stdlib's
+  `const Fd{descriptor: …}` constants and lets driver/eval tests
+  construct narrow-width values from int literals (the
+  previously-removed narrow-width arms in
   `expo-alpha-ir-eval/tests/bitwise.rs` and
-  `expo-alpha-ir-llvm/tests/bitwise.rs`).
+  `expo-alpha-ir-llvm/tests/bitwise.rs` are restored, plus
+  `crates/expo-alpha-typecheck/tests/literal_coercion.rs` pins the
+  fit/overflow/sign-mismatch matrix end-to-end).
 - ~~**`move` parameters in typecheck signatures.**~~ **Shipped.**
   `lift_signatures` propagates the surface `PassMode` verbatim
   onto `ResolvedParam::mode`; the IR's `ownership_for_param`
@@ -591,14 +590,16 @@ What's shipped since the last audit:
 The roadmap's original Phase 1 (loops) and Phase 2 (closures)
 are closed; the strings/binary/bits slice closed the Phase 3
 string-related items, the alpha move/drop foundation slice
-closed `move` in typecheck, and the stdlib slice 1 closed the
-auto-import substrate plus the first two `Global.*` files. The
-surviving critical-path work is narrow-int coercion at
-struct-literal sites (the `Int → Int32`/`Int8`/etc. half of the
-Phase 3 numeric-coercion item — the `Int ≡ Int64` half is now
-`types_equivalent`'d), the next slice of stdlib intrinsics
-(building toward `cptr` / `kernel` / etc.), and the optional
-Phase 4 concurrency slice (`spawn` / `receive`); after those,
+closed `move` in typecheck, the stdlib slice 1 closed the
+auto-import substrate plus the first two `Global.*` files, and
+the literal-fit narrow-int slice closed the Phase 3 numeric
+coercion item end-to-end (typecheck → IR lower → eval / LLVM /
+driver). The surviving critical-path work is the deferred
+runtime narrowing slice (likely a `.to_int8()` /
+`.to_uint16()` method family on each numeric type, mirroring
+`.to_string()`), the next slice of stdlib intrinsics (building
+toward `cptr` / `kernel` / etc.), and the optional Phase 4
+concurrency slice (`spawn` / `receive`); after those,
 `expo alpha check expo/lib/global/src/*.expo` should be fully
 green.
 

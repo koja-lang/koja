@@ -9,16 +9,12 @@
 //! - one representative cell per op on `Int` (= `Int64`),
 //!   demonstrating the LLVM instruction the emitter chose (`and`,
 //!   `or`, `xor`, `xor ... -1` for `bnot`, `shl`, `ashr`).
-//!
-//! What's *not* pinned here yet (alpha typecheck gap):
-//! - The seven non-`Int` widths (`Int8`/`Int16`/`Int32` and
-//!   `UInt8`..`UInt64`) all flow through the same emitter, but
-//!   alpha lacks integer-literal width coercion, so there's no
-//!   surface today for tests to mint a `UInt8` / `Int32` / etc.
-//!   value. Once a coercion or narrow-int literal lands, add cells
-//!   covering: `lshr` for unsigned `bsr`, the `trunc i64 %n to i8`
-//!   for shift-count narrowing, and the operand-typed `and i8 %0,
-//!   %1` shape on a narrower-than-`Int` receiver.
+//! - narrow-receiver cells for `UInt8.band` (`and i8`), `UInt8.bsr`
+//!   (`lshr i8` — the unsigned-vs-signed shift divergence visible
+//!   only at the LLVM layer), and `Int32.bsl` (operand-typed
+//!   `shl i32` plus the shift-count `trunc` from the `Int = i64`
+//!   second arg). Reachable since literal-fit coercion lets the
+//!   user mint `UInt8` / `Int32` values from a literal.
 
 use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
@@ -96,4 +92,66 @@ fn int_bsr_signed_receiver_emits_arithmetic_shift() {
     let body = emit_intrinsic_body("(-8).bsr(1)", "Global.Int.bsr");
     assert_contains(&body, "ashr i64 %0, %1");
     assert_contains(&body, "ret i64 %bsr");
+}
+
+// ---------------------------------------------------------------------------
+// Narrow-receiver cells. Reachable from a script body via the
+// literal-fit coercion at sized param slots. Wrapper-typed call
+// args force the literal through the narrow `Bitwise` impl so the
+// emitter actually picks the operand-typed instruction.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn uint8_band_emits_and_i8() {
+    // Narrow-receiver `band` lowers to `and i8 %0, %1`; the literal
+    // `0xFF` flows in as `Const i8 -1`, exercising the typecheck
+    // coercion record at lower time.
+    let source = "
+        fn band_u8(x: UInt8, y: UInt8) -> UInt8
+          x.band(y)
+        end
+
+        band_u8(0xFF, 0x0F)
+    ";
+    let body = emit_intrinsic_body(source, "Global.UInt8.band");
+    assert_contains(&body, "and i8 %0, %1");
+    assert_contains(&body, "ret i8 %band");
+}
+
+#[test]
+fn uint8_bsr_emits_logical_shift() {
+    // Unsigned-receiver `bsr` lowers to `lshr` (logical right
+    // shift), the divergence from signed `Int.bsr` (which lowers
+    // to `ashr`). Pinned through a `UInt8`-typed wrapper so the
+    // shift actually reaches the unsigned-emitter branch.
+    let source = "
+        fn shifted(x: UInt8, n: Int) -> UInt8
+          x.bsr(n)
+        end
+
+        shifted(0xFF, 1)
+    ";
+    let body = emit_intrinsic_body(source, "Global.UInt8.bsr");
+    assert_contains(&body, "lshr i8");
+    assert_contains(&body, "ret i8 %bsr");
+}
+
+#[test]
+fn int32_bsl_emits_shl_with_truncated_shift_count() {
+    // `Int32.bsl` takes its receiver as `i32` and its shift count
+    // as `Int = i64`; the emitter must `trunc i64 %n to i32`
+    // before feeding the count into `shl`. Pinned here so a
+    // regression in the count-narrowing path fails this case.
+    let source = "
+        fn shifted(x: Int32) -> Int32
+          x.bsl(8)
+        end
+
+        shifted(1)
+    ";
+    let body = emit_intrinsic_body(source, "Global.Int32.bsl");
+    assert_contains(&body, "trunc i64");
+    assert_contains(&body, "to i32");
+    assert_contains(&body, "shl i32");
+    assert_contains(&body, "ret i32 %bsl");
 }

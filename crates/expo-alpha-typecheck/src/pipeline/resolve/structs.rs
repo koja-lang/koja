@@ -13,9 +13,10 @@ use expo_ast::span::Span;
 use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
+use super::coercion::{Compatible, check_compatible, coercion_span};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
-use super::types::{display_resolution, types_equivalent, verify_bounds};
+use super::types::{display_resolution, verify_bounds};
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init
@@ -86,7 +87,7 @@ pub(super) fn resolve_struct_construction(
             &definition.fields,
             fields,
             span,
-            resolver.registry,
+            resolver,
             diagnostics,
         );
         return ResolvedType::leaf(Resolution::Global(struct_id));
@@ -118,7 +119,7 @@ pub(super) fn resolve_struct_construction(
         &substituted_fields,
         fields,
         span,
-        resolver.registry,
+        resolver,
         diagnostics,
     );
     let type_args = subst
@@ -214,7 +215,7 @@ pub(super) fn validate_named_fields(
     declared: &[ResolvedStructField],
     fields: &[FieldInit],
     span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut seen: Vec<bool> = vec![false; declared.len()];
@@ -242,16 +243,40 @@ pub(super) fn validate_named_fields(
         if !actual.is_resolved() {
             continue;
         }
-        if !types_equivalent(actual, &declared_field.ty, registry) {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "field `{}` of `{owner_label}` expects `{}`, got `{}`",
-                    field.name,
-                    display_resolution(&declared_field.ty, registry),
-                    display_resolution(actual, registry),
-                ),
-                field.span,
-            ));
+        match check_compatible(&field.value, actual, &declared_field.ty, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver
+                    .coercions
+                    .insert(coercion_span(&field.value), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "field `{}` of `{owner_label}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        field.name,
+                        display_resolution(&declared_field.ty, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    field.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "field `{}` of `{owner_label}` expects `{}`, got `{}`",
+                        field.name,
+                        display_resolution(&declared_field.ty, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    field.span,
+                ));
+            }
         }
     }
     for (index, present) in seen.iter().enumerate() {

@@ -1671,6 +1671,83 @@ fn alpha_run_interpreter_script_bitwise_and_prints_eight() {
     );
 }
 
+/// Script-mode fixture exercising literal-fit coercion at a struct
+/// field site end-to-end. `Fd{descriptor: 1}` flows the `1` literal
+/// into the `descriptor: UInt8` slot — typecheck records a `UInt8`
+/// coercion, IR lower mints `Const UInt8(1)`, both backends store
+/// the byte in the struct slot and project it through `.descriptor`.
+/// Stdout is `1\n` (eval flattens to `i64`; LLVM zero-extends the
+/// `i8` for the auto-print wrapper). Pins the narrow-int struct-
+/// field coercion across the whole pipeline.
+const NARROW_INT_STRUCT_FIELD_SCRIPT_SOURCE: &str = "
+    struct Fd
+      descriptor: UInt8
+    end
+
+    Fd{descriptor: 1}.descriptor
+";
+
+#[test]
+fn alpha_run_llvm_script_narrow_int_struct_field_prints_one() {
+    assert_script_prints(
+        "run_llvm_narrow_int_struct_field",
+        NARROW_INT_STRUCT_FIELD_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "1",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_narrow_int_struct_field_prints_one() {
+    assert_script_prints(
+        "run_interpreter_narrow_int_struct_field",
+        NARROW_INT_STRUCT_FIELD_SCRIPT_SOURCE,
+        None,
+        "1",
+    );
+}
+
+/// Script-mode fixture pinning the bitwise-on-narrow-int path
+/// end-to-end. `band_u8(0xFF, 0x0F) = 15`. Forces both literals
+/// through `UInt8` slots (call args), the narrow `Bitwise.band`
+/// dispatch fires, and both backends print `15\n`. Pins:
+///
+/// - typecheck: `UInt8` coercion at both arg sites + at the
+///   wrapper's return slot;
+/// - IR lower: narrow `Const UInt8(...)` instructions + dispatch
+///   through `Global.UInt8.band`;
+/// - LLVM emit: `and i8 %0, %1` + zero-extension at the call site
+///   for the printer;
+/// - eval: dispatch through the eval-side narrow-`band` cell
+///   (collapses to `Value::Int` for printing).
+const NARROW_INT_BITWISE_SCRIPT_SOURCE: &str = "
+    fn band_u8(x: UInt8, y: UInt8) -> UInt8
+      x.band(y)
+    end
+
+    band_u8(0xFF, 0x0F)
+";
+
+#[test]
+fn alpha_run_llvm_script_narrow_int_bitwise_prints_fifteen() {
+    assert_script_prints(
+        "run_llvm_narrow_int_bitwise",
+        NARROW_INT_BITWISE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "15",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_narrow_int_bitwise_prints_fifteen() {
+    assert_script_prints(
+        "run_interpreter_narrow_int_bitwise",
+        NARROW_INT_BITWISE_SCRIPT_SOURCE,
+        None,
+        "15",
+    );
+}
+
 /// Script-mode fixture exercising the pure-Expo half of the
 /// auto-imported `Global.time` stdlib file. `Duration.from_secs(3)`
 /// constructs a `Duration{millis: 3000}` and `.millis()` projects

@@ -27,6 +27,7 @@ mod program;
 mod registry;
 
 pub use error::CheckFailure;
+pub use pipeline::resolve::coercion::{Coercions, NumericLiteralWidth};
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
     ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,

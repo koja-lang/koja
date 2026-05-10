@@ -13,9 +13,11 @@
 
 use expo_ast::ast::{Diagnostic, Function, Statement};
 
-use crate::registry::{FunctionSignature, GlobalRegistry};
+use crate::registry::FunctionSignature;
 
-use super::types::{display_resolution, is_primitive, types_equivalent};
+use super::coercion::{Compatible, check_compatible, coercion_span};
+use super::ctx::ResolverEnv;
+use super::types::{display_resolution, is_primitive};
 
 /// Diagnose any mismatch between the function's declared return type
 /// and the type produced by its trailing expression.
@@ -31,14 +33,14 @@ use super::types::{display_resolution, is_primitive, types_equivalent};
 pub(super) fn check_return_type(
     function: &Function,
     signature: &FunctionSignature,
-    registry: &GlobalRegistry,
+    env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(body) = function.body.as_ref() else {
         return;
     };
     let declared = &signature.return_type;
-    if !declared.is_resolved() || is_primitive(declared, registry, "Unit") {
+    if !declared.is_resolved() || is_primitive(declared, env.registry, "Unit") {
         return;
     }
     let Some(last) = body.last() else {
@@ -46,7 +48,7 @@ pub(super) fn check_return_type(
             format!(
                 "return type mismatch on `{}`: expected `{}`, found empty body",
                 function.name,
-                display_resolution(declared, registry),
+                display_resolution(declared, env.registry),
             ),
             function.span,
         ));
@@ -58,7 +60,7 @@ pub(super) fn check_return_type(
                 "return type mismatch on `{}`: expected `{}`, found a non-expression \
                  trailing statement",
                 function.name,
-                display_resolution(declared, registry),
+                display_resolution(declared, env.registry),
             ),
             statement_span(last),
         ));
@@ -75,19 +77,40 @@ pub(super) fn check_return_type(
     // or once `Kernel.panic` lands, a bare `panic()` call) satisfies
     // any non-`Never` declared return type without ever actually
     // returning a value.
-    if is_primitive(actual, registry, "Never") {
+    if is_primitive(actual, env.registry, "Never") {
         return;
     }
-    if !types_equivalent(actual, declared, registry) {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "return type mismatch on `{}`: expected `{}`, found `{}`",
-                function.name,
-                display_resolution(declared, registry),
-                display_resolution(actual, registry),
-            ),
-            trailing.span,
-        ));
+    match check_compatible(trailing, actual, declared, env.registry) {
+        Compatible::Strict => {}
+        Compatible::Coerced(width) => {
+            env.coercions.insert(coercion_span(trailing), width);
+        }
+        Compatible::OutOfRange {
+            rendered_value,
+            width,
+        } => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "return value `{rendered_value}` does not fit `{}`'s declared \
+                     return type `{}` (range {})",
+                    function.name,
+                    width.label(),
+                    width.range_label(),
+                ),
+                trailing.span,
+            ));
+        }
+        Compatible::Incompatible => {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "return type mismatch on `{}`: expected `{}`, found `{}`",
+                    function.name,
+                    display_resolution(declared, env.registry),
+                    display_resolution(actual, env.registry),
+                ),
+                trailing.span,
+            ));
+        }
     }
 }
 

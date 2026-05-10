@@ -26,10 +26,11 @@ use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
+use super::coercion::{Compatible, check_compatible, coercion_span};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::structs::{lookup_type, validate_named_fields};
-use super::types::{display_resolution, types_equivalent, verify_bounds};
+use super::types::{display_resolution, verify_bounds};
 
 pub(super) fn resolve_enum_construction(
     type_path: &[String],
@@ -88,14 +89,7 @@ pub(super) fn resolve_enum_construction(
     };
 
     if type_params.is_empty() {
-        validate_variant_payload(
-            &enum_label,
-            variant_def,
-            data,
-            span,
-            resolver.registry,
-            diagnostics,
-        );
+        validate_variant_payload(&enum_label, variant_def, data, span, resolver, diagnostics);
         return ResolvedType::leaf(Resolution::Global(enum_id));
     }
 
@@ -128,14 +122,7 @@ pub(super) fn resolve_enum_construction(
         diagnostics,
     );
     let substituted = substitute_variant(variant_def, &subst, enum_id);
-    validate_variant_payload(
-        &enum_label,
-        &substituted,
-        data,
-        span,
-        resolver.registry,
-        diagnostics,
-    );
+    validate_variant_payload(&enum_label, &substituted, data, span, resolver, diagnostics);
     let type_args = subst
         .into_iter()
         .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
@@ -308,7 +295,7 @@ fn validate_variant_payload(
     variant: &ResolvedEnumVariant,
     data: &EnumConstructionData,
     span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let variant_label = format!("{enum_label}.{}", variant.name);
@@ -319,7 +306,7 @@ fn validate_variant_payload(
                 declared,
                 fields,
                 span,
-                registry,
+                resolver,
                 diagnostics,
             );
         }
@@ -329,7 +316,7 @@ fn validate_variant_payload(
                 element_types,
                 exprs,
                 span,
-                registry,
+                resolver,
                 diagnostics,
             );
         }
@@ -352,7 +339,7 @@ fn validate_tuple_payload(
     element_types: &[ResolvedType],
     exprs: &[Expr],
     span: Span,
-    registry: &GlobalRegistry,
+    resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if exprs.len() != element_types.len() {
@@ -372,16 +359,38 @@ fn validate_tuple_payload(
         if !actual.is_resolved() {
             continue;
         }
-        if !types_equivalent(actual, declared, registry) {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "argument {} of `{variant_label}` expects `{}`, got `{}`",
-                    index + 1,
-                    display_resolution(declared, registry),
-                    display_resolution(actual, registry),
-                ),
-                expr.span,
-            ));
+        match check_compatible(expr, actual, declared, resolver.registry) {
+            Compatible::Strict => {}
+            Compatible::Coerced(width) => {
+                resolver.coercions.insert(coercion_span(expr), width);
+            }
+            Compatible::OutOfRange {
+                rendered_value,
+                width,
+            } => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument {} of `{variant_label}` expects `{}`: value \
+                         `{rendered_value}` does not fit in `{}` (range {})",
+                        index + 1,
+                        display_resolution(declared, resolver.registry),
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    expr.span,
+                ));
+            }
+            Compatible::Incompatible => {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "argument {} of `{variant_label}` expects `{}`, got `{}`",
+                        index + 1,
+                        display_resolution(declared, resolver.registry),
+                        display_resolution(actual, resolver.registry),
+                    ),
+                    expr.span,
+                ));
+            }
         }
     }
 }

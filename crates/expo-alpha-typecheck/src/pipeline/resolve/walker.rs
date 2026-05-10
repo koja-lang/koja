@@ -28,7 +28,8 @@ use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
-use super::ctx::Resolver;
+use super::coercion::Coercions;
+use super::ctx::{Resolver, ResolverEnv};
 use super::expr::resolve_expr;
 use super::return_type::check_return_type;
 use super::statements::{resolve_assignment, resolve_compound_assignment};
@@ -37,38 +38,46 @@ pub(crate) fn resolve_file(
     file: &mut File,
     package: &str,
     registry: &GlobalRegistry,
+    coercions: &mut Coercions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    let mut env = ResolverEnv {
+        coercions,
+        package,
+        registry,
+    };
     for item in &mut file.items {
         match item {
             Item::Function(function) => {
-                let identifier = Identifier::new(package, vec![function.name.clone()]);
-                resolve_function(function, &identifier, package, None, registry, diagnostics);
+                let identifier = Identifier::new(env.package, vec![function.name.clone()]);
+                resolve_function(function, &identifier, None, &mut env, diagnostics);
             }
             Item::Struct(decl) => {
                 for function in &mut decl.functions {
-                    let identifier =
-                        Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+                    let identifier = Identifier::new(
+                        env.package,
+                        vec![decl.name.clone(), function.name.clone()],
+                    );
                     resolve_function(
                         function,
                         &identifier,
-                        package,
                         Some(&decl.name),
-                        registry,
+                        &mut env,
                         diagnostics,
                     );
                 }
             }
             Item::Enum(decl) => {
                 for function in &mut decl.functions {
-                    let identifier =
-                        Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+                    let identifier = Identifier::new(
+                        env.package,
+                        vec![decl.name.clone(), function.name.clone()],
+                    );
                     resolve_function(
                         function,
                         &identifier,
-                        package,
                         Some(&decl.name),
-                        registry,
+                        &mut env,
                         diagnostics,
                     );
                 }
@@ -90,15 +99,14 @@ pub(crate) fn resolve_file(
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(function) = member {
                         let identifier = Identifier::new(
-                            package,
+                            env.package,
                             vec![target_name.clone(), function.name.clone()],
                         );
                         resolve_function(
                             function,
                             &identifier,
-                            package,
                             Some(&target_name),
-                            registry,
+                            &mut env,
                             diagnostics,
                         );
                     }
@@ -109,12 +117,7 @@ pub(crate) fn resolve_file(
     }
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
-        let mut resolver = Resolver {
-            enclosing_type: None,
-            package,
-            registry,
-            scope: &mut scope,
-        };
+        let mut resolver = env.make_resolver(None, &mut scope);
         for stmt in body.iter_mut() {
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
@@ -124,12 +127,11 @@ pub(crate) fn resolve_file(
 fn resolve_function(
     function: &mut Function,
     identifier: &Identifier,
-    package: &str,
     enclosing_type: Option<&str>,
-    registry: &GlobalRegistry,
+    env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let signature = lifted_signature(identifier, registry).cloned();
+    let signature = lifted_signature(identifier, env.registry).cloned();
     let mut scope = LocalScope::new();
     if let Some(signature) = &signature {
         seed_scope_with_params(function, signature, &mut scope);
@@ -138,18 +140,15 @@ fn resolve_function(
     let Some(body) = function.body.as_mut() else {
         return;
     };
-    let mut resolver = Resolver {
-        enclosing_type,
-        package,
-        registry,
-        scope: &mut scope,
-    };
-    for stmt in body.iter_mut() {
-        resolve_statement(stmt, &mut resolver, diagnostics);
+    {
+        let mut resolver = env.make_resolver(enclosing_type, &mut scope);
+        for stmt in body.iter_mut() {
+            resolve_statement(stmt, &mut resolver, diagnostics);
+        }
     }
 
     if let Some(signature) = signature {
-        check_return_type(function, &signature, registry, diagnostics);
+        check_return_type(function, &signature, env, diagnostics);
     }
 }
 

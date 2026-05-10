@@ -58,9 +58,12 @@ pub(crate) fn lower_package(
         for item in &file.items {
             match item {
                 Item::Constant(constant) => {
-                    if let Some((symbol, value)) =
-                        lower_constant_pool_entry(constant, &pkg.package, registry)
-                    {
+                    if let Some((symbol, value)) = lower_constant_pool_entry(
+                        constant,
+                        &pkg.package,
+                        registry,
+                        &output.coercions,
+                    ) {
                         constants.insert(symbol, value);
                     }
                 }

@@ -7,8 +7,8 @@
 //! [`super::calls`] — only the dispatcher entries here, which fan
 //! out to it.
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
-use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, StringPart};
+use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, NumericLiteralWidth};
+use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, UnaryOp};
 use expo_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
@@ -32,8 +32,8 @@ use super::enums::lower_enum_construction;
 use super::loops::lower_while;
 use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
-    bin_op_result_type, const_value_type, lower_bin_op, lower_literal, lower_unary_op,
-    unary_op_result_type,
+    bin_op_result_type, const_value_type, int_const_at_width, lower_bin_op, lower_literal,
+    lower_unary_op, parse_int_literal, unary_op_result_type,
 };
 use super::package::resolved_type_to_ir_type;
 use super::structs::{lower_field_access, lower_struct_construction};
@@ -194,7 +194,8 @@ pub(super) fn lower_expr(
             )
         }
         ExprKind::Literal { value } => {
-            let const_value = lower_literal(value, expr.span, &mut output.diagnostics)?;
+            let target = output.coercions.get(&expr.span).copied();
+            let const_value = lower_literal(value, expr.span, target, &mut output.diagnostics)?;
             let ty = const_value_type(&const_value);
             let dest = ctx.fresh_value(ty);
             ctx.cfg.append(
@@ -264,6 +265,27 @@ pub(super) fn lower_expr(
             )
         }
         ExprKind::Unary { op, operand } => {
+            // `-N` against a narrow target folds to a single typed
+            // `Const` at the recorded width — the typecheck pass
+            // stamps a coercion on the *outer* `Unary`'s span when
+            // the negated literal flows into a sized slot. Without
+            // a coercion record (or against a non-literal operand)
+            // we fall through to the regular UnaryOp emission.
+            if matches!(op, UnaryOp::Neg)
+                && let Some(target) = output.coercions.get(&expr.span).copied()
+                && let Some(folded) = fold_negated_literal_const(operand, target)
+            {
+                let ty = const_value_type(&folded);
+                let dest = ctx.fresh_value(ty);
+                ctx.cfg.append(
+                    block,
+                    IRInstruction::Const {
+                        dest,
+                        value: folded,
+                    },
+                );
+                return Ok((dest, block));
+            }
             let (operand, block) = lower_expr(operand, ctx, block, registry, output)?;
             let ir_op = lower_unary_op(*op);
             let result_ty = unary_op_result_type(ir_op, ctx.type_of(operand));
@@ -390,13 +412,14 @@ fn lower_constant_ident(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let value = constant_value_from_registry(constant_id, registry).unwrap_or_else(|| {
-        panic!(
-            "alpha IR lower: constant `{name}` (id {constant_id}) reaches lower without a \
-             stamped definition or with an unsupported RHS shape — typecheck seal must \
-             have rejected this",
-        );
-    });
+    let value = constant_value_from_registry(constant_id, registry, &output.coercions)
+        .unwrap_or_else(|| {
+            panic!(
+                "alpha IR lower: constant `{name}` (id {constant_id}) reaches lower \
+                     without a stamped definition or with an unsupported RHS shape — \
+                     typecheck seal must have rejected this",
+            );
+        });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
         panic!("alpha IR lower: constant id {constant_id} missing from registry — seal violation",)
     });
@@ -470,6 +493,33 @@ fn lower_fn_as_value(
         },
     );
     (dest, block)
+}
+
+/// Fold a literal-arg to `UnaryOp::Neg` directly into a typed
+/// `ConstValue` at the recorded coercion width. Returns `None` for
+/// shapes the typecheck pass would never have stamped a coercion
+/// on — non-literal operand, group-wrapped non-literal, etc. —
+/// letting the caller fall back to the regular runtime negate.
+/// Hex / binary literals reach this helper through `parse_int_literal`
+/// for the unsigned escape hatch (`-1: UInt8` is rejected at
+/// typecheck so it never reaches here, but `0xFF: Int8` does).
+fn fold_negated_literal_const(operand: &Expr, target: NumericLiteralWidth) -> Option<ConstValue> {
+    match &operand.kind {
+        ExprKind::Group { expr } => fold_negated_literal_const(expr, target),
+        ExprKind::Literal {
+            value: Literal::Int(text),
+        } => parse_int_literal(text)
+            .ok()
+            .and_then(|n| (n as i128).checked_neg())
+            .map(|neg| int_const_at_width(neg, Some(target))),
+        ExprKind::Literal {
+            value: Literal::Float(text),
+        } => text.parse::<f64>().ok().map(|f| match target {
+            NumericLiteralWidth::Float32 => ConstValue::Float32(-f as f32),
+            _ => ConstValue::Float64(-f),
+        }),
+        _ => None,
+    }
 }
 
 /// Pick the [`ConcatKind`] that matches a `<>` operand's IR type.
