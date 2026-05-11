@@ -8,6 +8,7 @@
 
 use std::path::PathBuf;
 
+use crate::coercion::LiteralCoercion;
 use crate::identifier::{LocalId, Resolution, ResolvedType, TypeIdentifier};
 use crate::span::Span;
 use crate::types::Type;
@@ -683,27 +684,35 @@ pub enum EnumConstructionData {
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
-    pub span: Span,
-    /// Legacy v1 type annotation. `None` before v1 typecheck runs.
-    /// Alpha does not populate this field.
-    pub resolved_type: Option<Type>,
+    /// Per-expression coercion annotation. Stamped by alpha typecheck
+    /// at literal-fit sites (e.g. `5: UInt8`); read by alpha IR
+    /// lowering to mint the matching narrow `Const` opcode. `None`
+    /// for every other position. See [`crate::coercion`] for the
+    /// full design rationale (annotation vs value-conversion
+    /// families).
+    pub literal_coercion: Option<LiteralCoercion>,
     /// Northstar-aligned type annotation. Default is
     /// [`ResolvedType::unresolved`]; alpha resolve populates it with
     /// a registry-pointing shape, and seal asserts
     /// `resolution.is_resolved()` on every non-excluded node.
     pub resolution: ResolvedType,
+    /// Legacy v1 type annotation. `None` before v1 typecheck runs.
+    /// Alpha does not populate this field.
+    pub resolved_type: Option<Type>,
+    pub span: Span,
 }
 
 impl Expr {
-    /// Convenience constructor: wraps a kind + span with both type
-    /// annotations defaulted (legacy `resolved_type: None`,
-    /// northstar `resolution: Unresolved`).
+    /// Convenience constructor: wraps a kind + span with every
+    /// annotation slot defaulted (no coercion, legacy
+    /// `resolved_type: None`, northstar `resolution: Unresolved`).
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Self {
             kind,
-            span,
-            resolved_type: None,
+            literal_coercion: None,
             resolution: ResolvedType::unresolved(),
+            resolved_type: None,
+            span,
         }
     }
 }
@@ -950,8 +959,16 @@ pub struct FieldPattern {
 pub enum Pattern {
     /// A wildcard that matches anything: `_`.
     Wildcard { span: Span },
-    /// A literal match: `42`, `true`.
-    Literal { value: Literal, span: Span },
+    /// A literal match: `42`, `true`. `literal_coercion` mirrors
+    /// the same field on [`Expr`]: stamped by typecheck when the
+    /// pattern's value fits a narrower numeric subject type so the
+    /// IR can mint a matching narrow `Const` for the equality
+    /// comparison.
+    Literal {
+        literal_coercion: Option<LiteralCoercion>,
+        span: Span,
+        value: Literal,
+    },
     /// A binary/bitstring pattern: `<<header::8, payload::16 big>>`.
     Binary {
         segments: Vec<BinarySegment>,

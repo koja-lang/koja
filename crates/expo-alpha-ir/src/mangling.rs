@@ -84,6 +84,7 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Int16 => "Int16".to_string(),
         IRType::Int32 => "Int32".to_string(),
         IRType::Int64 => "Int64".to_string(),
+        IRType::List(inner) => format!("List_${}$", mangle_type(inner)),
         IRType::String => "String".to_string(),
         IRType::UInt8 => "UInt8".to_string(),
         IRType::UInt16 => "UInt16".to_string(),

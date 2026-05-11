@@ -56,6 +56,9 @@ pub(crate) fn ir_int_type<'ctx>(
         IRType::Int16 | IRType::UInt16 => Ok(context.i16_type()),
         IRType::Int32 | IRType::UInt32 => Ok(context.i32_type()),
         IRType::Int64 | IRType::UInt64 => Ok(context.i64_type()),
+        IRType::List(_) => Err(LlvmError::Codegen(format!(
+            "expected an integer or Bool IRType, got `{ty:?}`"
+        ))),
         IRType::String => Err(LlvmError::Codegen(
             "expected an integer or Bool IRType, got `String`".to_string(),
         )),
@@ -95,10 +98,11 @@ pub(crate) fn ir_basic_type<'ctx>(
             Ok(ctx.context.ptr_type(AddressSpace::default()).into())
         }
         IRType::CPtr(_) => Ok(ctx.context.ptr_type(AddressSpace::default()).into()),
-        IRType::Enum(symbol) => Ok(ctx.layouts.enum_outer_type(symbol.mangled()).into()),
+        IRType::Enum(symbol) => Ok(ctx.enum_outer_type(symbol.mangled()).into()),
         IRType::Float32 => Ok(ctx.context.f32_type().into()),
         IRType::Float64 => Ok(ctx.context.f64_type().into()),
         IRType::Function { .. } => Ok(closure_fat_ptr_type(ctx).into()),
+        IRType::List(_) => Ok(list_value_type(ctx).into()),
         IRType::Struct(symbol) => Ok(ctx.layouts.struct_type(symbol.mangled()).into()),
         IRType::Unit => Err(LlvmError::Codegen(
             "expected a value-level IRType, got `Unit`".to_string(),
@@ -143,6 +147,18 @@ pub(crate) fn closure_fat_ptr_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     ctx.context
         .struct_type(&[ptr_ty.into(), ptr_ty.into()], false)
+}
+
+/// `List<T>` value shape: `{ buf_ptr: i8*, len: i64, cap: i64 }`.
+/// Anonymous (literal) struct so every `IRType::List(_)` shares a
+/// single LLVM type regardless of element type — the element type
+/// only enters when an emitter computes byte offsets. Element
+/// storage lives on the heap behind `buf_ptr`.
+pub(crate) fn list_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    ctx.context
+        .struct_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false)
 }
 
 /// LLVM `FunctionType` for a closure body's signature. Prepends an

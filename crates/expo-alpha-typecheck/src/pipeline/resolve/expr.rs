@@ -8,11 +8,10 @@
 
 use expo_ast::ast::{Diagnostic, Expr, ExprKind};
 use expo_ast::identifier::ResolvedType;
-
 use expo_ast::labels::expr_kind_label;
 
 use super::binary_literal::resolve_binary_literal;
-use super::calls::{resolve_call, resolve_method_call};
+use super::calls::{CallSite, resolve_call, resolve_method_call};
 use super::closures::{resolve_closure, resolve_short_closure};
 use super::control_flow::{
     resolve_cond, resolve_if, resolve_ternary, resolve_unless, resolve_while,
@@ -20,6 +19,7 @@ use super::control_flow::{
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
+use super::list_literal::resolve_list_literal;
 use super::match_expr::resolve_match;
 use super::ops::{binary_type, literal_type, unary_type};
 use super::strings::resolve_string;
@@ -57,7 +57,17 @@ pub(super) fn resolve_expr_with_expected(
             callee,
             args,
             type_args,
-        } => resolve_call(callee, args, type_args, expr.span, resolver, diagnostics),
+        } => resolve_call(
+            callee,
+            args,
+            CallSite {
+                out_type_args: type_args,
+                expected,
+                span: expr.span,
+            },
+            resolver,
+            diagnostics,
+        ),
         ExprKind::Closure {
             params,
             return_type,
@@ -128,8 +138,11 @@ pub(super) fn resolve_expr_with_expected(
             receiver,
             method,
             args,
-            type_args,
-            expr.span,
+            CallSite {
+                out_type_args: type_args,
+                expected,
+                span: expr.span,
+            },
             resolver,
             diagnostics,
         ),
@@ -154,6 +167,9 @@ pub(super) fn resolve_expr_with_expected(
             resolver,
             diagnostics,
         ),
+        ExprKind::List { elements } => {
+            resolve_list_literal(elements, expected, expr.span, resolver, diagnostics)
+        }
         ExprKind::Unary { op, operand } => {
             resolve_expr(operand, resolver, diagnostics);
             unary_type(*op, operand, expr.span, resolver.registry, diagnostics)

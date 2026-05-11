@@ -117,7 +117,7 @@ fn tuple_variant_with_string_payload_carries_string_value() {
     assert_eq!(tag.0, 1);
     assert_eq!(
         payload,
-        EnumPayload::Tuple(vec![Value::String("boom".to_string())]),
+        EnumPayload::Tuple(vec![Value::String("boom".into())]),
     );
 }
 

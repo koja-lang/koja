@@ -4,18 +4,27 @@
 //! for intra-or-pattern overlap detection.
 
 use expo_ast::ast::{Diagnostic, Literal};
+use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::ResolvedType;
 use expo_ast::span::Span;
 
+use super::super::coercion::{
+    float_value_fits, int_value_fits, narrow_numeric_target, parse_int_literal_text,
+};
 use super::super::ctx::Resolver;
 use super::super::ops::literal_type;
-use super::super::types::display_resolution;
+use super::super::types::{display_resolution, is_primitive};
 
-/// Diagnose when a `Pattern::Literal`'s value doesn't agree with
-/// the subject type. No coercion — strict equality, matching the
-/// rest of alpha's literal-vs-subject contract.
+/// Check that a `Pattern::Literal`'s value agrees with the subject
+/// type. Strict equality on the literal's default head, with one
+/// allowance: if the subject is a sized numeric primitive and the
+/// pattern's literal value fits the subject's range, stamp the
+/// pattern's `literal_coercion` so IR-side equality lowering mints
+/// a matching narrow `Const`. Out-of-range literals diagnose with
+/// the same `OutOfRange` shape used at expression-coercion sites.
 pub(super) fn check_literal_matches_subject(
     value: &Literal,
+    coercion_slot: &mut Option<LiteralCoercion>,
     subject_ty: &ResolvedType,
     span: Span,
     resolver: &Resolver<'_>,
@@ -27,6 +36,46 @@ pub(super) fn check_literal_matches_subject(
     let lit_ty = literal_type(value, resolver.registry);
     if &lit_ty == subject_ty {
         return;
+    }
+    if let Some(width) = narrow_numeric_target(subject_ty, resolver.registry) {
+        if is_primitive(&lit_ty, resolver.registry, "Int")
+            && let Literal::Int(text) = value
+            && let Some(int_value) = parse_int_literal_text(text)
+        {
+            if int_value_fits(int_value, width) {
+                *coercion_slot = Some(LiteralCoercion::NumericLiteralWidth(width));
+            } else {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "match literal `{int_value}` does not fit subject type `{}` \
+                         (range {})",
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    span,
+                ));
+            }
+            return;
+        }
+        if is_primitive(&lit_ty, resolver.registry, "Float")
+            && let Literal::Float(text) = value
+            && let Ok(float_value) = text.parse::<f64>()
+        {
+            if float_value_fits(float_value, width) {
+                *coercion_slot = Some(LiteralCoercion::NumericLiteralWidth(width));
+            } else {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "match literal `{float_value}` does not fit subject type `{}` \
+                         (range {})",
+                        width.label(),
+                        width.range_label(),
+                    ),
+                    span,
+                ));
+            }
+            return;
+        }
     }
     diagnostics.push(Diagnostic::error(
         format!(

@@ -19,6 +19,16 @@ use expo_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 use super::substitute_resolved_type;
 
+fn substitute_in_statements(
+    body: &mut [Statement],
+    args: &[ResolvedType],
+    owner: GlobalRegistryId,
+) {
+    for stmt in body {
+        substitute_in_statement(stmt, args, owner);
+    }
+}
+
 /// Substitute every [`ResolvedType`] reachable from `function`'s body
 /// in place. Caller is responsible for cloning before substituting if
 /// the original needs to stay intact (mono always clones).
@@ -30,9 +40,7 @@ pub(super) fn substitute_in_function(
     let Some(body) = function.body.as_mut() else {
         return;
     };
-    for stmt in body {
-        substitute_in_statement(stmt, args, owner);
-    }
+    substitute_in_statements(body, args, owner);
 }
 
 /// Clone `signature` with every `params[].ty` and `return_type`
@@ -89,6 +97,14 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             substitute_in_expr(left, args, owner);
             substitute_in_expr(right, args, owner);
         }
+        ExprKind::BinaryLiteral { segments } => {
+            for segment in segments {
+                substitute_in_expr(&mut segment.value, args, owner);
+                if let Some(size) = segment.size.as_mut() {
+                    substitute_in_expr(size, args, owner);
+                }
+            }
+        }
         ExprKind::Call {
             callee,
             args: call_args,
@@ -100,6 +116,16 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             }
             for ty in type_args {
                 *ty = substitute_resolved_type(ty, args, owner);
+            }
+        }
+        ExprKind::Closure { body, .. } => substitute_in_statements(body, args, owner),
+        ExprKind::Cond { arms, else_body } => {
+            for arm in arms {
+                substitute_in_expr(&mut arm.condition, args, owner);
+                substitute_in_statements(&mut arm.body, args, owner);
+            }
+            if let Some(else_body) = else_body {
+                substitute_in_statements(else_body, args, owner);
             }
         }
         ExprKind::EnumConstruction { data, .. } => match data {
@@ -116,6 +142,10 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             EnumConstructionData::Unit => {}
         },
         ExprKind::FieldAccess { receiver, .. } => substitute_in_expr(receiver, args, owner),
+        ExprKind::For { iterable, body, .. } => {
+            substitute_in_expr(iterable, args, owner);
+            substitute_in_statements(body, args, owner);
+        }
         ExprKind::Group { expr: inner } => substitute_in_expr(inner, args, owner),
         ExprKind::Ident { .. } | ExprKind::Literal { .. } | ExprKind::Self_ { .. } => {}
         ExprKind::If {
@@ -124,13 +154,36 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             else_body,
         } => {
             substitute_in_expr(condition, args, owner);
-            for stmt in then_body {
-                substitute_in_statement(stmt, args, owner);
-            }
+            substitute_in_statements(then_body, args, owner);
             if let Some(else_body) = else_body {
-                for stmt in else_body {
-                    substitute_in_statement(stmt, args, owner);
+                substitute_in_statements(else_body, args, owner);
+            }
+        }
+        ExprKind::List { elements } => {
+            for element in elements {
+                substitute_in_expr(element, args, owner);
+            }
+        }
+        ExprKind::Loop { body } => substitute_in_statements(body, args, owner),
+        ExprKind::Map { entries } => {
+            for (key, value) in entries {
+                substitute_in_expr(key, args, owner);
+                substitute_in_expr(value, args, owner);
+            }
+        }
+        ExprKind::Match { subject, arms } => {
+            // Supported patterns carry no `ResolvedType` slots
+            // (wildcards / literals / bindings / enum constructors
+            // / struct destructures are leaves or carry only paths
+            // and named-field patterns), so the pattern walk is a
+            // no-op; the subject, arm guards, and arm bodies need
+            // substitution.
+            substitute_in_expr(subject, args, owner);
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    substitute_in_expr(guard, args, owner);
                 }
+                substitute_in_statements(&mut arm.body, args, owner);
             }
         }
         ExprKind::MethodCall {
@@ -147,6 +200,24 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
                 *ty = substitute_resolved_type(ty, args, owner);
             }
         }
+        ExprKind::Receive {
+            arms,
+            after_timeout,
+            after_body,
+        } => {
+            for arm in arms {
+                if let Some(guard) = &mut arm.guard {
+                    substitute_in_expr(guard, args, owner);
+                }
+                substitute_in_statements(&mut arm.body, args, owner);
+            }
+            if let Some(timeout) = after_timeout.as_mut() {
+                substitute_in_expr(timeout, args, owner);
+            }
+            substitute_in_statements(after_body, args, owner);
+        }
+        ExprKind::ShortClosure { body, .. } => substitute_in_expr(body, args, owner),
+        ExprKind::Spawn { expr: inner } => substitute_in_expr(inner, args, owner),
         ExprKind::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {
@@ -157,36 +228,6 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         ExprKind::StructConstruction { fields, .. } => {
             for field in fields {
                 substitute_in_expr(&mut field.value, args, owner);
-            }
-        }
-        ExprKind::Cond { arms, else_body } => {
-            for arm in arms {
-                substitute_in_expr(&mut arm.condition, args, owner);
-                for stmt in &mut arm.body {
-                    substitute_in_statement(stmt, args, owner);
-                }
-            }
-            if let Some(else_body) = else_body {
-                for stmt in else_body {
-                    substitute_in_statement(stmt, args, owner);
-                }
-            }
-        }
-        ExprKind::Match { subject, arms } => {
-            // Supported patterns carry no `ResolvedType` slots
-            // (wildcards / literals / bindings / enum constructors
-            // / struct destructures are leaves or carry only paths
-            // and named-field patterns), so the pattern walk is a
-            // no-op; the subject, arm guards, and arm bodies need
-            // substitution.
-            substitute_in_expr(subject, args, owner);
-            for arm in arms {
-                if let Some(guard) = &mut arm.guard {
-                    substitute_in_expr(guard, args, owner);
-                }
-                for stmt in &mut arm.body {
-                    substitute_in_statement(stmt, args, owner);
-                }
             }
         }
         ExprKind::Ternary {
@@ -201,23 +242,11 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         ExprKind::Unary { operand, .. } => substitute_in_expr(operand, args, owner),
         ExprKind::Unless { condition, body } => {
             substitute_in_expr(condition, args, owner);
-            for stmt in body {
-                substitute_in_statement(stmt, args, owner);
-            }
+            substitute_in_statements(body, args, owner);
         }
-        // Feature gaps surface during lowering — no substitution needed
-        // for shapes the lowering pass refuses to translate. Listed
-        // explicitly so a future ExprKind addition is a compile error
-        // rather than a silent miss.
-        ExprKind::BinaryLiteral { .. }
-        | ExprKind::Closure { .. }
-        | ExprKind::For { .. }
-        | ExprKind::List { .. }
-        | ExprKind::Loop { .. }
-        | ExprKind::Map { .. }
-        | ExprKind::Receive { .. }
-        | ExprKind::ShortClosure { .. }
-        | ExprKind::Spawn { .. }
-        | ExprKind::While { .. } => {}
+        ExprKind::While { condition, body } => {
+            substitute_in_expr(condition, args, owner);
+            substitute_in_statements(body, args, owner);
+        }
     }
 }

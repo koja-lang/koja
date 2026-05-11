@@ -16,6 +16,7 @@
 //! - `CONCURRENCY.md` — tasks, actors, and runtime design
 
 pub mod ast;
+pub mod coercion;
 mod debug_print;
 pub mod identifier;
 pub mod labels;

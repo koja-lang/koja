@@ -12,10 +12,11 @@
 //! expected `X`, found `Y`") on both pipelines.
 
 use expo_ast::ast::{Diagnostic, Function, Statement};
+use expo_ast::coercion::LiteralCoercion;
 
 use crate::registry::FunctionSignature;
 
-use super::coercion::{Compatible, check_compatible, coercion_span};
+use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::ResolverEnv;
 use super::types::{display_resolution, is_primitive};
 
@@ -31,19 +32,19 @@ use super::types::{display_resolution, is_primitive};
 /// - Body is `None` (extern / intrinsic). Those declarations aren't
 ///   typechecked here.
 pub(super) fn check_return_type(
-    function: &Function,
+    function: &mut Function,
     signature: &FunctionSignature,
     env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(body) = function.body.as_ref() else {
+    let Some(body) = function.body.as_mut() else {
         return;
     };
     let declared = &signature.return_type;
     if !declared.is_resolved() || is_primitive(declared, env.registry, "Unit") {
         return;
     }
-    let Some(last) = body.last() else {
+    let Some(last) = body.last_mut() else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "return type mismatch on `{}`: expected `{}`, found empty body",
@@ -54,6 +55,7 @@ pub(super) fn check_return_type(
         ));
         return;
     };
+    let last_span = statement_span(last);
     let Statement::Expr(trailing) = last else {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -62,11 +64,11 @@ pub(super) fn check_return_type(
                 function.name,
                 display_resolution(declared, env.registry),
             ),
-            statement_span(last),
+            last_span,
         ));
         return;
     };
-    let actual = &trailing.resolution;
+    let actual = trailing.resolution.clone();
     if !actual.is_resolved() {
         // Trailing expression already triggered its own diagnostic;
         // skip to avoid pile-on noise.
@@ -77,13 +79,13 @@ pub(super) fn check_return_type(
     // or once `Kernel.panic` lands, a bare `panic()` call) satisfies
     // any non-`Never` declared return type without ever actually
     // returning a value.
-    if is_primitive(actual, env.registry, "Never") {
+    if is_primitive(&actual, env.registry, "Never") {
         return;
     }
-    match check_compatible(trailing, actual, declared, env.registry) {
+    match check_compatible(trailing, &actual, declared, env.registry) {
         Compatible::Strict => {}
         Compatible::Coerced(width) => {
-            env.coercions.insert(coercion_span(trailing), width);
+            *coercion_target_mut(trailing) = Some(LiteralCoercion::NumericLiteralWidth(width));
         }
         Compatible::OutOfRange {
             rendered_value,
@@ -106,7 +108,7 @@ pub(super) fn check_return_type(
                     "return type mismatch on `{}`: expected `{}`, found `{}`",
                     function.name,
                     display_resolution(declared, env.registry),
-                    display_resolution(actual, env.registry),
+                    display_resolution(&actual, env.registry),
                 ),
                 trailing.span,
             ));

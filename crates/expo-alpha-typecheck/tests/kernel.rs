@@ -6,9 +6,9 @@
 //! `Bits` conversion intrinsics) and that user code can call into
 //! them without the autoimport raising diagnostics.
 //!
-//! `Random` lives in `random.expo` and is intentionally outside
-//! `ALPHA_AUTOIMPORT` because its body chains `String.to_binary`,
-//! which `string.expo` won't be alpha-ready to provide for a while.
+//! `Random` lives in `random.expo` and is auto-imported alongside
+//! the rest of the alpha stdlib; surface coverage for it lives in
+//! [`random`].
 
 use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
@@ -100,14 +100,14 @@ fn option_result_pair_range_register_after_autoimport() {
 }
 
 #[test]
-fn random_is_not_autoimported_into_alpha() {
+fn random_registers_after_autoimport() {
     let checked = typecheck("fn main\n  1\nend\n");
     let id = Identifier::new("Global", vec!["Random".to_string()]);
     assert!(
-        checked.registry.lookup(&id).is_none(),
-        "`Random` lives in `random.expo` and stays out of `ALPHA_AUTOIMPORT` \
-         until `string.expo` (where `String.to_binary` is defined) becomes \
-         alpha-ready",
+        checked.registry.lookup(&id).is_some(),
+        "`Random` lives in `random.expo` and is auto-imported alongside the \
+         rest of the alpha stdlib; its `bytes` body resolves through \
+         `String.to_binary`, defined in `string.expo`",
     );
 }
 

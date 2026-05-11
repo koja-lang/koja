@@ -3,8 +3,15 @@
 //! an entry-block alloca, GEPs through the variant's complete
 //! struct (tag at field 0, payload at field 2), and reads or
 //! writes whichever slot the instruction targets.
+//!
+//! The lower-level [`build_enum_value`] is also `pub(crate)` so
+//! intrinsic emitters (`intrinsics/list.rs`, `intrinsics/string.rs`,
+//! `intrinsics/map.rs`) that need to mint an `Option::Some(_)` /
+//! `Option::None` / `Result::Ok(_)` / etc. go through the same
+//! layout-aware path the instruction emitter uses, instead of
+//! GEPing raw indices into an assumed-flat outer struct.
 
-use expo_alpha_ir::{EnumPayloadInit, IRSymbol, IRType, IRVariantTag, StructFieldInit, ValueId};
+use expo_alpha_ir::{EnumPayloadInit, IRSymbol, IRType, IRVariantTag, StructFieldInit};
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, PointerValue};
 
@@ -14,13 +21,11 @@ use crate::types::ir_basic_type;
 
 use super::{ValueMap, inkwell_err, lookup};
 
-/// Materialize an enum-variant literal: alloca the outer enum
-/// blob, GEP through the per-variant complete struct to write the
-/// `i8` tag, GEP further into the payload struct (when present) to
-/// write each payload field, then load the populated outer value
-/// out as the SSA result. Per-shape payload writes are split into
-/// [`emit_tuple_payload`] / [`emit_struct_payload`] so each arm
-/// stays small and the shape match here is one line.
+/// Materialize an enum-variant literal: resolve `payload` operands
+/// against `values`, then delegate to [`build_enum_value`] for the
+/// alloca/GEP/load dance. Tuple operands keep their declaration
+/// order; struct operands are re-keyed into field-index order so
+/// the helper sees one positional shape.
 pub(super) fn emit_enum_construct<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: &EnumPayloadInit,
@@ -28,30 +33,93 @@ pub(super) fn emit_enum_construct<'ctx>(
     ty: &IRSymbol,
     values: &ValueMap<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let outer = ctx.layouts.enum_outer_type(ty.mangled());
+    let payload_values: Vec<BasicValueEnum<'ctx>> = match payload {
+        EnumPayloadInit::Struct(fields) => resolve_struct_payload(fields, values)?,
+        EnumPayloadInit::Tuple(operands) => operands
+            .iter()
+            .map(|v| lookup(values, *v))
+            .collect::<Result<_, _>>()?,
+        EnumPayloadInit::Unit => Vec::new(),
+    };
+    build_enum_value(ctx, ty, tag, &payload_values)
+}
+
+/// Construct a variant value of enum `ty` at `tag` whose payload
+/// fields are positionally `payload_values`. The variant's payload
+/// must either be absent (`payload_values` empty) or be a tuple /
+/// struct whose arity matches `payload_values.len()`. The helper
+/// allocas the outer chunk-array struct, GEPs through the variant's
+/// `complete` (tag at field 0, payload at field 2 — see
+/// [`crate::layout::enums`]), writes each payload field, and loads
+/// the populated outer back out.
+pub(crate) fn build_enum_value<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    ty: &IRSymbol,
+    tag: IRVariantTag,
+    payload_values: &[BasicValueEnum<'ctx>],
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let outer = ctx.enum_outer_type(ty.mangled());
     let (complete, payload_type) = ctx.layouts.enum_variant_types(ty.mangled(), tag);
     let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_tmp"));
     write_variant_tag(ctx, ty, tag, complete, alloca)?;
-    if let (Some(payload_struct), payload_init) = (payload_type, payload) {
-        let payload_ptr = build_payload_gep(ctx, ty, complete, alloca)?;
-        match payload_init {
-            EnumPayloadInit::Tuple(operands) => {
-                emit_tuple_payload(ctx, ty, payload_struct, payload_ptr, operands, values)?;
-            }
-            EnumPayloadInit::Struct(fields) => {
-                emit_struct_payload(ctx, ty, payload_struct, payload_ptr, fields, values)?;
-            }
-            EnumPayloadInit::Unit => {
-                panic!(
-                    "alpha LLVM emit: enum `{ty}` variant has a payload type but the \
-                     instruction's payload is Unit — IR seal invariant violation",
-                );
-            }
+    match (payload_type, payload_values.is_empty()) {
+        (Some(payload_struct), false) => {
+            let payload_ptr = build_payload_gep(ctx, ty, complete, alloca)?;
+            write_payload_fields(ctx, ty, payload_struct, payload_ptr, payload_values)?;
         }
+        (None, true) => {}
+        (Some(_), true) => panic!(
+            "alpha LLVM emit: enum `{ty}` variant at tag {tag} declares a payload but \
+             build_enum_value was called with no payload values — caller mismatch",
+        ),
+        (None, false) => panic!(
+            "alpha LLVM emit: enum `{ty}` variant at tag {tag} is Unit but build_enum_value \
+             was called with {} payload value(s) — caller mismatch",
+            payload_values.len(),
+        ),
     }
     ctx.builder
         .build_load(outer, alloca, ty.mangled())
         .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` after EnumConstruct"), e))
+}
+
+fn resolve_struct_payload<'ctx>(
+    fields: &[StructFieldInit],
+    values: &ValueMap<'ctx>,
+) -> Result<Vec<BasicValueEnum<'ctx>>, LlvmError> {
+    let arity = fields
+        .iter()
+        .map(|f| f.index as usize + 1)
+        .max()
+        .unwrap_or(0);
+    let mut slots: Vec<Option<BasicValueEnum<'ctx>>> = vec![None; arity];
+    for field in fields {
+        let value = lookup(values, field.value)?;
+        let slot = slots.get_mut(field.index as usize).unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: struct payload field index {} out of bounds (arity {arity})",
+                field.index,
+            )
+        });
+        if slot.replace(value).is_some() {
+            panic!(
+                "alpha LLVM emit: struct payload field {} written twice — IR seal \
+                 invariant violation",
+                field.index,
+            );
+        }
+    }
+    slots
+        .into_iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            slot.ok_or_else(|| {
+                LlvmError::Codegen(format!(
+                    "struct payload missing field at index {i} — IR seal invariant violation",
+                ))
+            })
+        })
+        .collect()
 }
 
 /// Spill `value` to a fresh outer-typed alloca, GEP through the
@@ -66,7 +134,7 @@ pub(super) fn emit_enum_tag_get<'ctx>(
     ty: &IRSymbol,
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let outer = ctx.layouts.enum_outer_type(ty.mangled());
+    let outer = ctx.enum_outer_type(ty.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_tag_src"));
     ctx.builder
         .build_store(alloca, value)
@@ -97,7 +165,7 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
     ty: &IRSymbol,
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let outer = ctx.layouts.enum_outer_type(ty.mangled());
+    let outer = ctx.enum_outer_type(ty.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_payload_src"));
     ctx.builder.build_store(alloca, value).map_err(|e| {
         inkwell_err(
@@ -166,67 +234,31 @@ fn build_payload_gep<'ctx>(
         .map_err(|e| inkwell_err(format_args!("build_struct_gep for `{ty}` payload"), e))
 }
 
-fn emit_tuple_payload<'ctx>(
+fn write_payload_fields<'ctx>(
     ctx: &EmitContext<'ctx>,
     ty: &IRSymbol,
     payload_type: StructType<'ctx>,
     payload_ptr: PointerValue<'ctx>,
-    operands: &[ValueId],
-    values: &ValueMap<'ctx>,
+    values: &[BasicValueEnum<'ctx>],
 ) -> Result<(), LlvmError> {
-    for (index, operand) in operands.iter().enumerate() {
-        let value = lookup(values, *operand)?;
+    for (index, value) in values.iter().enumerate() {
         let field_ptr = ctx
             .builder
             .build_struct_gep(
                 payload_type,
                 payload_ptr,
                 index as u32,
-                &format!("{ty}_tuple_{index}"),
+                &format!("{ty}_payload_{index}"),
             )
             .map_err(|e| {
                 inkwell_err(
-                    format_args!("build_struct_gep for `{ty}` tuple element #{index}"),
+                    format_args!("build_struct_gep for `{ty}` payload field #{index}"),
                     e,
                 )
             })?;
-        ctx.builder.build_store(field_ptr, value).map_err(|e| {
+        ctx.builder.build_store(field_ptr, *value).map_err(|e| {
             inkwell_err(
-                format_args!("build_store for `{ty}` tuple element #{index}"),
-                e,
-            )
-        })?;
-    }
-    Ok(())
-}
-
-fn emit_struct_payload<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    ty: &IRSymbol,
-    payload_type: StructType<'ctx>,
-    payload_ptr: PointerValue<'ctx>,
-    fields: &[StructFieldInit],
-    values: &ValueMap<'ctx>,
-) -> Result<(), LlvmError> {
-    for field in fields {
-        let value = lookup(values, field.value)?;
-        let field_ptr = ctx
-            .builder
-            .build_struct_gep(
-                payload_type,
-                payload_ptr,
-                field.index,
-                &format!("{ty}_field_{}", field.index),
-            )
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("build_struct_gep for `{ty}` struct field #{}", field.index),
-                    e,
-                )
-            })?;
-        ctx.builder.build_store(field_ptr, value).map_err(|e| {
-            inkwell_err(
-                format_args!("build_store for `{ty}` struct field #{}", field.index),
+                format_args!("build_store for `{ty}` payload field #{index}"),
                 e,
             )
         })?;

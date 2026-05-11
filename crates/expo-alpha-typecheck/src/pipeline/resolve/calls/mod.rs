@@ -24,6 +24,7 @@ mod bounded;
 mod methods;
 
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
+use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
@@ -32,27 +33,44 @@ use expo_ast::span::Span;
 
 use bounded::{BoundedCall, resolve_bounded_method_call};
 use methods::{
-    MethodInferenceTarget, MethodReceiver, classify_receiver, dispatch_mismatch_message,
-    function_signature, infer_method_call_type_args, method_lookup_message,
+    MethodInferenceOutputs, MethodInferenceTarget, MethodReceiver, classify_receiver,
+    dispatch_mismatch_message, function_signature, infer_method_call_type_args,
+    method_lookup_message, seed_receiver_subst,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_span};
-use super::ctx::{Callee, Resolver};
-use super::expr::{resolve_expr, resolve_expr_with_expected};
-use super::types::{display_resolution, verify_bounds};
-use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
+use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
 
+use super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::ctx::{Callee, Resolver};
+use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
+use super::types::display_resolution;
+
+/// Co-traveling call-site context shared by [`resolve_call`] /
+/// [`resolve_method_call`] and the inner generic-inference helpers.
+/// Bundles the three slots that always thread together: the AST's
+/// `type_args` output vec, the surrounding expected return type
+/// (when bidirectional inference applies), and the call's span (for
+/// diagnostics). Inputs (receiver / method / args / sig) and the
+/// resolver/diagnostics env stay as separate params — these three
+/// just happen to always move as a group.
+pub(super) struct CallSite<'a> {
+    pub(super) out_type_args: &'a mut Vec<ResolvedType>,
+    pub(super) expected: Option<&'a ResolvedType>,
+    pub(super) span: Span,
+}
+
 pub(super) fn resolve_call(
     callee: &mut Expr,
     args: &mut [Arg],
-    type_args: &mut Vec<ResolvedType>,
-    call_span: Span,
+    site: CallSite<'_>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    let call_span = site.span;
     let ExprKind::Ident {
         name,
         resolution: ident_resolution,
@@ -142,26 +160,17 @@ pub(super) fn resolve_call(
             label: &callee_label,
             type_params: &callee_type_params,
         };
-        let partial_subst = partial_unify_call(callee, &sig, args, resolver.registry, diagnostics);
-        let partially_substituted_params = sig
+        let mut partial_subst = Substitution::single(callee.id, callee.type_params.len());
+        let partial_pairs = sig
             .params
             .iter()
-            .map(|p| ResolvedParam {
-                mode: p.mode,
-                name: p.name.clone(),
-                ty: substitute_resolved_type(&p.ty, &partial_subst, callee.id),
-            })
-            .collect::<Vec<_>>();
+            .zip(args.iter())
+            .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
+        unify_pairs(partial_pairs, &mut partial_subst, |_, _| {});
+        let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
         resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
-        let (substituted_params, substituted_return) = infer_call_type_args(
-            callee,
-            &sig,
-            args,
-            type_args,
-            call_span,
-            resolver.registry,
-            diagnostics,
-        );
+        let (substituted_params, substituted_return) =
+            infer_call_type_args(callee, &sig, args, site, resolver.registry, diagnostics);
         validate_arg_signature(
             args,
             &substituted_params,
@@ -182,11 +191,15 @@ pub(super) fn resolve_method_call(
     receiver: &mut Expr,
     method: &str,
     args: &mut [Arg],
-    out_type_args: &mut Vec<ResolvedType>,
-    call_span: Span,
+    site: CallSite<'_>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    let CallSite {
+        out_type_args,
+        expected,
+        span: call_span,
+    } = site;
     let Some(method_receiver) = classify_receiver(receiver, resolver, diagnostics) else {
         resolve_args(args, None, resolver, diagnostics);
         return ResolvedType::unresolved();
@@ -234,8 +247,8 @@ pub(super) fn resolve_method_call(
         }
     };
 
-    let expected = method_receiver.expected_dispatch();
-    if sig.dispatch != expected {
+    let expected_dispatch = method_receiver.expected_dispatch();
+    if sig.dispatch != expected_dispatch {
         diagnostics.push(Diagnostic::error(
             dispatch_mismatch_message(method_receiver, struct_entry, method_entry, method),
             call_span,
@@ -280,28 +293,20 @@ pub(super) fn resolve_method_call(
         type_params: &method_type_params,
     };
     resolve_non_closure_args(args, resolver, diagnostics);
-    let (partial_receiver_subst, partial_method_subst) = partial_unify_method_call(
-        receiver_callee,
-        method_callee,
-        method_receiver.explicit_params(&sig.params),
-        &receiver.resolution,
-        args,
+    let mut partial_subst = Substitution::dual(
+        receiver_callee.id,
+        receiver_callee.type_params.len(),
+        method_callee.id,
+        method_callee.type_params.len(),
     );
-    let partially_substituted_params = sig
-        .params
+    seed_receiver_subst(&mut partial_subst, receiver_callee.id, &receiver.resolution);
+    let explicit = method_receiver.explicit_params(&sig.params);
+    let partial_pairs = explicit
         .iter()
-        .map(|p| {
-            let with_method =
-                substitute_resolved_type(&p.ty, &partial_method_subst, method_callee.id);
-            let with_receiver =
-                substitute_resolved_type(&with_method, &partial_receiver_subst, receiver_callee.id);
-            ResolvedParam {
-                mode: p.mode,
-                name: p.name.clone(),
-                ty: with_receiver,
-            }
-        })
-        .collect::<Vec<_>>();
+        .zip(args.iter())
+        .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
+    unify_pairs(partial_pairs, &mut partial_subst, |_, _| {});
+    let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
     resolve_closure_args(
         args,
         method_receiver.explicit_params(&partially_substituted_params),
@@ -314,16 +319,32 @@ pub(super) fn resolve_method_call(
         method: method_callee,
         receiver_type: &receiver.resolution,
         explicit_params: method_receiver.explicit_params(&sig.params),
+        expected,
     };
+    let mut receiver_args_inferred: Vec<ResolvedType> = Vec::new();
     let (substituted_params, substituted_return) = infer_method_call_type_args(
         target,
         &sig,
         args,
-        out_type_args,
+        MethodInferenceOutputs {
+            method_type_args: out_type_args,
+            receiver_type_args: &mut receiver_args_inferred,
+        },
         call_span,
         resolver.registry,
         diagnostics,
     );
+    // Static dispatch's receiver.resolution starts as a bare leaf;
+    // stitch in the inferred type_args so IR lower can read them
+    // (instance dispatch already carries the value's full type).
+    if matches!(method_receiver, MethodReceiver::Static { .. })
+        && !receiver_args_inferred.is_empty()
+    {
+        receiver.resolution = ResolvedType::Named {
+            resolution: Resolution::Global(struct_id),
+            type_args: receiver_args_inferred,
+        };
+    }
     // "Extend"-style domain check: a method registered at
     // `[receiver_head, method]` only applies to receivers whose
     // full `ResolvedType` matches the method's substituted `self`
@@ -369,38 +390,46 @@ fn infer_call_type_args(
     callee: Callee<'_>,
     sig: &FunctionSignature,
     args: &[Arg],
-    out_type_args: &mut Vec<ResolvedType>,
-    call_span: Span,
+    site: CallSite<'_>,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> (Vec<ResolvedParam>, ResolvedType) {
-    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
-    for (param, arg) in sig.params.iter().zip(args.iter()) {
-        if !arg.value.resolution.is_resolved() {
-            continue;
-        }
-        if let Err(conflict) =
-            unify_resolved_type(&param.ty, &arg.value.resolution, callee.id, &mut subst)
-        {
-            emit_conflict(&callee, conflict, arg.span, registry, diagnostics);
-        }
+    let CallSite {
+        out_type_args,
+        expected,
+        span: call_span,
+    } = site;
+    let mut subst = Substitution::single(callee.id, callee.type_params.len());
+    let pairs = sig
+        .params
+        .iter()
+        .zip(args.iter())
+        .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
+    unify_pairs(pairs, &mut subst, |conflict, arg_span| {
+        emit_conflict(&callee, conflict, arg_span, registry, diagnostics);
+    });
+    if let Some(hint) = expected {
+        fill_from_expected(&sig.return_type, hint, &mut subst);
     }
-    diagnose_phantom_params(&callee, &subst, call_span, diagnostics);
-    verify_bounds(callee, &subst, call_span, registry, diagnostics);
+    finalize_inference(
+        &[callee],
+        &subst,
+        &PhantomContext::Arguments,
+        call_span,
+        registry,
+        diagnostics,
+    );
     let substituted_params = sig
         .params
         .iter()
         .map(|p| ResolvedParam {
             mode: p.mode,
             name: p.name.clone(),
-            ty: substitute_resolved_type(&p.ty, &subst, callee.id),
+            ty: substitute(&p.ty, &subst),
         })
         .collect();
-    let substituted_return = substitute_resolved_type(&sig.return_type, &subst, callee.id);
-    *out_type_args = subst
-        .into_iter()
-        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
-        .collect();
+    let substituted_return = substitute(&sig.return_type, &subst);
+    *out_type_args = subst.args(callee.id);
     (substituted_params, substituted_return)
 }
 
@@ -423,29 +452,6 @@ pub(super) fn emit_conflict(
         ),
         span,
     ));
-}
-
-/// Surface a "cannot infer" diagnostic for every type-param slot
-/// that stayed `None` after the unification walk. Shared by the
-/// bare-call and method-call inference paths.
-pub(super) fn diagnose_phantom_params(
-    callee: &Callee<'_>,
-    subst: &[Option<ResolvedType>],
-    span: Span,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    for (index, slot) in subst.iter().enumerate() {
-        if slot.is_none() {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck cannot infer type parameter `{}` of `{}` \
-                     from the supplied arguments",
-                    callee.type_params[index], callee.label,
-                ),
-                span,
-            ));
-        }
-    }
 }
 
 /// Resolve a bare call `name(...)`: prioritize the enclosing
@@ -546,73 +552,17 @@ fn is_closure_expr(kind: &ExprKind) -> bool {
     )
 }
 
-/// Run a single unification pass without diagnosing conflicts —
-/// used for partial inference before closure args resolve.
-/// Diagnostics for conflicts and phantom params still come from the
-/// final [`infer_call_type_args`] run after every arg has resolved.
-fn partial_unify_call(
-    callee: Callee<'_>,
-    sig: &FunctionSignature,
-    args: &[Arg],
-    _registry: &GlobalRegistry,
-    _diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<Option<ResolvedType>> {
-    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
-    for (param, arg) in sig.params.iter().zip(args.iter()) {
-        if !arg.value.resolution.is_resolved() {
-            continue;
-        }
-        let _ = unify_resolved_type(&param.ty, &arg.value.resolution, callee.id, &mut subst);
-    }
-    subst
-}
-
-/// Method-call counterpart to [`partial_unify_call`]. Seeds the
-/// receiver substitution from the receiver's resolved type-args
-/// (mirroring [`infer_method_call_type_args`]) and unifies each
-/// non-closure arg against its declared param under both the receiver
-/// and method scopes. Returns `(receiver_subst, method_subst)` for
-/// caller-driven substitution before closure args resolve.
-fn partial_unify_method_call(
-    receiver: Callee<'_>,
-    method: Callee<'_>,
-    explicit_params: &[ResolvedParam],
-    receiver_type: &ResolvedType,
-    args: &[Arg],
-) -> (Vec<Option<ResolvedType>>, Vec<Option<ResolvedType>>) {
-    let mut receiver_subst: Vec<Option<ResolvedType>> = vec![None; receiver.type_params.len()];
-    let receiver_args: &[ResolvedType] = match receiver_type {
-        ResolvedType::Named { type_args, .. } => type_args,
-        _ => &[],
-    };
-    for (slot, arg) in receiver_subst.iter_mut().zip(receiver_args.iter()) {
-        if arg.is_resolved() {
-            *slot = Some(arg.clone());
-        }
-    }
-    let mut method_subst: Vec<Option<ResolvedType>> = vec![None; method.type_params.len()];
-    for (param, arg) in explicit_params.iter().zip(args.iter()) {
-        if !arg.value.resolution.is_resolved() {
-            continue;
-        }
-        if !method.type_params.is_empty() {
-            let _ = unify_resolved_type(
-                &param.ty,
-                &arg.value.resolution,
-                method.id,
-                &mut method_subst,
-            );
-        }
-        if !receiver.type_params.is_empty() {
-            let _ = unify_resolved_type(
-                &param.ty,
-                &arg.value.resolution,
-                receiver.id,
-                &mut receiver_subst,
-            );
-        }
-    }
-    (receiver_subst, method_subst)
+/// Substitute `subst` into every param's declared type. Used to
+/// produce closure-arg expected types from a partial inference state.
+fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<ResolvedParam> {
+    params
+        .iter()
+        .map(|p| ResolvedParam {
+            mode: p.mode,
+            name: p.name.clone(),
+            ty: substitute(&p.ty, subst),
+        })
+        .collect()
 }
 
 /// Check arg arity + per-position type compatibility. Diagnostics
@@ -620,10 +570,10 @@ fn partial_unify_method_call(
 /// equivalence runs through [`check_compatible`] so a numeric
 /// literal flowing into a narrow-int / narrow-float param coerces
 /// when its compile-time value fits the param's range; the
-/// recorded coercion lands on the resolver's program-wide table
+/// resulting coercion stamps onto the arg's [`Expr::literal_coercion`]
 /// for IR lower to consume.
 fn validate_arg_signature(
-    args: &[Arg],
+    args: &mut [Arg],
     expected_params: &[ResolvedParam],
     callee: &Identifier,
     call_span: Span,
@@ -643,15 +593,16 @@ fn validate_arg_signature(
         return;
     }
 
-    for (arg, param) in args.iter().zip(expected_params.iter()) {
-        let actual = &arg.value.resolution;
+    for (arg, param) in args.iter_mut().zip(expected_params.iter()) {
+        let actual = arg.value.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+        match check_compatible(&arg.value, &actual, &param.ty, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver.coercions.insert(coercion_span(&arg.value), width);
+                *coercion_target_mut(&mut arg.value) =
+                    Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -675,7 +626,7 @@ fn validate_arg_signature(
                         "argument `{}` to `{callee}` expects `{}`, got `{}`",
                         param.name,
                         display_resolution(&param.ty, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     arg.span,
                 ));
@@ -753,7 +704,7 @@ fn synthesize_local_call_params(fn_params: &[FnParam]) -> Vec<ResolvedParam> {
 /// label (the local's surface name) so the diagnostic doesn't
 /// fabricate a fully-qualified identifier the user never wrote.
 fn validate_local_call_signature(
-    args: &[Arg],
+    args: &mut [Arg],
     expected_params: &[ResolvedParam],
     callee_label: &str,
     call_span: Span,
@@ -772,15 +723,16 @@ fn validate_local_call_signature(
         ));
         return;
     }
-    for (arg, param) in args.iter().zip(expected_params.iter()) {
-        let actual = &arg.value.resolution;
+    for (arg, param) in args.iter_mut().zip(expected_params.iter()) {
+        let actual = arg.value.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+        match check_compatible(&arg.value, &actual, &param.ty, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver.coercions.insert(coercion_span(&arg.value), width);
+                *coercion_target_mut(&mut arg.value) =
+                    Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -804,7 +756,7 @@ fn validate_local_call_signature(
                         "argument `{}` to `{callee_label}` expects `{}`, got `{}`",
                         param.name,
                         display_resolution(&param.ty, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     arg.span,
                 ));

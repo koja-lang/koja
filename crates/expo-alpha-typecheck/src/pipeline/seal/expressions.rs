@@ -53,9 +53,18 @@ pub(super) fn seal_expr(expr: &Expr) {
                 seal_statement(stmt);
             }
         }
-        ExprKind::ShortClosure { params, body } => {
-            seal_closure_params(params, expr);
-            seal_expr(body);
+        ExprKind::Cond { arms, else_body } => {
+            for arm in arms {
+                seal_expr(&arm.condition);
+                for stmt in &arm.body {
+                    seal_statement(stmt);
+                }
+            }
+            if let Some(else_body) = else_body {
+                for stmt in else_body {
+                    seal_statement(stmt);
+                }
+            }
         }
         ExprKind::EnumConstruction { data, .. } => match data {
             EnumConstructionData::Struct(fields) => {
@@ -71,6 +80,13 @@ pub(super) fn seal_expr(expr: &Expr) {
             EnumConstructionData::Unit => {}
         },
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver),
+        // `synthesize` rewrites statement-position fors and
+        // resolve diagnoses expression-position fors; seal should
+        // never see one.
+        ExprKind::For { .. } => seal_panic(
+            "alpha typecheck seal saw an `ExprKind::For` after synthesize",
+            expr.span,
+        ),
         ExprKind::Group { expr: inner } => seal_expr(inner),
         ExprKind::Ident { name, resolution } => {
             // `Resolution::Global` (struct names, callees) and
@@ -89,19 +105,6 @@ pub(super) fn seal_expr(expr: &Expr) {
                 ),
             }
         }
-        ExprKind::Cond { arms, else_body } => {
-            for arm in arms {
-                seal_expr(&arm.condition);
-                for stmt in &arm.body {
-                    seal_statement(stmt);
-                }
-            }
-            if let Some(else_body) = else_body {
-                for stmt in else_body {
-                    seal_statement(stmt);
-                }
-            }
-        }
         ExprKind::If {
             condition,
             then_body,
@@ -117,6 +120,11 @@ pub(super) fn seal_expr(expr: &Expr) {
                 }
             }
         }
+        ExprKind::List { elements } => {
+            for element in elements {
+                seal_expr(element);
+            }
+        }
         ExprKind::Literal { .. } => {}
         ExprKind::Match { subject, arms } => {
             seal_expr(subject);
@@ -130,7 +138,6 @@ pub(super) fn seal_expr(expr: &Expr) {
                 }
             }
         }
-        ExprKind::Self_ { .. } => {}
         ExprKind::MethodCall {
             receiver,
             args,
@@ -150,6 +157,11 @@ pub(super) fn seal_expr(expr: &Expr) {
             for ty in type_args {
                 seal_no_type_param(ty, expr.span);
             }
+        }
+        ExprKind::Self_ { .. } => {}
+        ExprKind::ShortClosure { params, body } => {
+            seal_closure_params(params, expr);
+            seal_expr(body);
         }
         ExprKind::String { parts, .. } => {
             for part in parts {
@@ -185,13 +197,6 @@ pub(super) fn seal_expr(expr: &Expr) {
                 seal_statement(stmt);
             }
         }
-        // `synthesize` rewrites statement-position fors and
-        // resolve diagnoses expression-position fors; seal should
-        // never see one.
-        ExprKind::For { .. } => seal_panic(
-            "alpha typecheck seal saw an `ExprKind::For` after synthesize",
-            expr.span,
-        ),
         other => seal_panic(
             &format!(
                 "alpha typecheck seal does not yet recognize expression kind `{}`",

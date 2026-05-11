@@ -53,7 +53,7 @@ mod calls;
 mod closures;
 mod concat;
 mod constants;
-mod enums;
+pub(crate) mod enums;
 mod instruction;
 mod locals;
 mod ops;

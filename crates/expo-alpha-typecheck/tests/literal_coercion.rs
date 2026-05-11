@@ -345,3 +345,72 @@ fn non_numeric_source_keeps_strict_type_mismatch() {
         "expected strict type-mismatch diagnostic, got {messages:?}",
     );
 }
+
+// ------------------------------------------------------------------
+// Pattern-literal site (`patterns/literals.rs::check_literal_matches_subject`).
+// A literal pattern matched against a sized-numeric subject coerces
+// when its value fits the subject's range; out-of-range literals
+// produce a precise narrow-int diagnostic instead of the generic
+// "type does not match subject type" one.
+// ------------------------------------------------------------------
+
+#[test]
+fn pattern_literal_uint8_fits_subject_uint8() {
+    let source = "
+        fn classify(x: UInt8) -> Int
+          match x
+            5 -> 1
+            _ -> 0
+          end
+        end
+
+        fn main -> Unit
+          classify(5)
+          ()
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn pattern_literal_uint8_out_of_range_diagnoses() {
+    let source = "
+        fn classify(x: UInt8) -> Int
+          match x
+            300 -> 1
+            _ -> 0
+          end
+        end
+
+        fn main -> Unit
+          classify(5)
+          ()
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("300") && m.contains("UInt8") && m.contains("0..=255")),
+        "expected pattern-literal range diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn pattern_literal_int8_negative_fits() {
+    let source = "
+        fn classify(x: Int8) -> Int
+          match x
+            -128 -> 1
+            _ -> 0
+          end
+        end
+
+        fn main -> Unit
+          classify(-1)
+          ()
+        end
+        ";
+    typecheck(&dedent(source));
+}

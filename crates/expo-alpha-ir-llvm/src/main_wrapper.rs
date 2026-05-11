@@ -277,6 +277,12 @@ fn emit_print_call<'ctx>(
                     .to_string(),
             ));
         }
+        IRType::List(element) => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM does not yet auto-print `List<{element:?}>` return values; \
+                 project a primitive (e.g. `.length()`) from the trailing expression",
+            )));
+        }
     };
     let printer = declare_runtime_printer(ctx, printer_symbol, argument_type);
     ctx.builder

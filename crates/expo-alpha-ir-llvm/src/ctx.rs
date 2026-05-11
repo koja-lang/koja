@@ -209,6 +209,26 @@ impl<'ctx> EmitContext<'ctx> {
         self.local_slots.borrow_mut().clear();
     }
 
+    /// Resolve the opaque outer `StructType` for an enum by its
+    /// mangled name. Outer types are minted (and so registered in the
+    /// LLVM context's name table) by [`crate::layout::enums::declare_enum_type`];
+    /// this accessor is a thin alias over [`Context::get_struct_type`]
+    /// so emission sites read with intent — "the enum outer for
+    /// `<symbol>`" rather than "named LLVM struct by string." Bodies
+    /// only land later in [`crate::layout::enums::define_enum_bodies`],
+    /// but the opaque handle is stable across both phases, which is
+    /// what struct field / enum payload positions need before the
+    /// body-define pass runs.
+    pub(crate) fn enum_outer_type(&self, mangled: &str) -> StructType<'ctx> {
+        self.context.get_struct_type(mangled).unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: enum outer `{mangled}` not declared — \
+                 declare_enum_type ordering violation (must run before \
+                 any struct/enum body references this symbol)",
+            )
+        })
+    }
+
     /// Build an alloca at the head of the current function's entry
     /// block, regardless of where the builder is currently
     /// positioned. Mirrors v1 codegen's `Compiler::build_entry_alloca`:

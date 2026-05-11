@@ -52,23 +52,23 @@ pub(super) fn resolve_closure(
 ) -> ResolvedType {
     let expected_params = expected_function_params(expected);
     let expected_return = expected_function_return(expected);
+    let annotated_return = resolve_return_annotation(return_type, resolver, diagnostics);
     let resolved_params = bind_closure_params(params, expected_params, span, resolver, diagnostics);
     let snapshot = resolver.scope.snapshot();
     declare_closure_params(params, &resolved_params, resolver);
 
+    let return_hint = annotated_return
+        .clone()
+        .or_else(|| expected_return.cloned());
+    let saved_return = std::mem::replace(&mut resolver.current_return_type, return_hint);
     for stmt in body.iter_mut() {
         resolve_statement(stmt, resolver, diagnostics);
     }
     let body_return_ty = trailing_expr_type(body);
+    resolver.current_return_type = saved_return;
     resolver.scope.restore(snapshot);
 
-    let ret = closure_return_type(
-        return_type,
-        body_return_ty,
-        expected_return,
-        resolver,
-        diagnostics,
-    );
+    let ret = closure_return_type(annotated_return, body_return_ty, expected_return);
     ResolvedType::Anonymous(AnonymousKind::Function {
         params: resolved_params,
         ret: Box::new(ret),
@@ -91,17 +91,14 @@ pub(super) fn resolve_short_closure(
     let snapshot = resolver.scope.snapshot();
     declare_closure_params(params, &resolved_params, resolver);
 
+    let saved_return =
+        std::mem::replace(&mut resolver.current_return_type, expected_return.cloned());
     resolve_expr_with_expected(body, expected_return, resolver, diagnostics);
     let body_return_ty = body.resolution.clone();
+    resolver.current_return_type = saved_return;
     resolver.scope.restore(snapshot);
 
-    let ret = closure_return_type(
-        &None,
-        Some(body_return_ty),
-        expected_return,
-        resolver,
-        diagnostics,
-    );
+    let ret = closure_return_type(None, Some(body_return_ty), expected_return);
     ResolvedType::Anonymous(AnonymousKind::Function {
         params: resolved_params,
         ret: Box::new(ret),
@@ -226,20 +223,12 @@ fn declare_closure_params(
 /// the body's trailing expression; else the expected return from
 /// context; else [`ResolvedType::Unresolved`].
 fn closure_return_type(
-    annotation: &Option<TypeExpr>,
+    annotation: Option<ResolvedType>,
     body_return: Option<ResolvedType>,
     expected: Option<&ResolvedType>,
-    resolver: &Resolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    if let Some(type_expr) = annotation {
-        return resolve_type_expr(
-            type_expr,
-            TypeParamScope::default(),
-            resolver.package,
-            resolver.registry,
-            diagnostics,
-        );
+    if let Some(ty) = annotation {
+        return ty;
     }
     if let Some(ty) = body_return
         && ty.is_resolved()
@@ -247,6 +236,24 @@ fn closure_return_type(
         return ty;
     }
     expected.cloned().unwrap_or_else(ResolvedType::unresolved)
+}
+
+/// Resolve the closure's `-> T` annotation eagerly so it can both
+/// seed `current_return_type` for body resolution and fall through
+/// as the closure's published return type.
+fn resolve_return_annotation(
+    annotation: &Option<TypeExpr>,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<ResolvedType> {
+    let type_expr = annotation.as_ref()?;
+    Some(resolve_type_expr(
+        type_expr,
+        TypeParamScope::default(),
+        resolver.package,
+        resolver.registry,
+        diagnostics,
+    ))
 }
 
 fn trailing_expr_type(body: &[Statement]) -> Option<ResolvedType> {

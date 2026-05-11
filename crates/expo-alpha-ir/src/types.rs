@@ -300,6 +300,13 @@ impl ConcatKind {
 /// `CPtr<UInt8>` from `CPtr<Float32>`. Pointee variants are
 /// themselves unrestricted — `CPtr<CPtr<T>>` is a valid shape.
 ///
+/// `List(element)` is the heap-backed dynamic array. Layout is
+/// `{ buf_ptr: i8*, length: i64, capacity: i64 }` regardless of
+/// `T`; the element type is preserved so backends can compute
+/// element size for indexed addressing. Like `CPtr`, `List` is
+/// modeled as a primitive (no `IRStructDecl` ever materializes)
+/// because all storage lives off-heap behind `buf_ptr`.
+///
 /// **Concrete-only**: every variant of `IRType` names a fully
 /// monomorphized type. There is no "generic parameter" variant —
 /// generic-decl bodies are never lowered to `IRType`; instead
@@ -327,6 +334,7 @@ pub enum IRType {
     Int16,
     Int32,
     Int64,
+    List(Box<IRType>),
     String,
     Struct(IRSymbol),
     UInt8,

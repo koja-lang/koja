@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use expo_ast::ast::{Diagnostic, Function, ImplBlock, ImplMember, ProtocolMethod, Visibility};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
-use crate::pipeline::unify::substitute_resolved_type;
+use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition, ResolvedProtocolMethod,
 };
@@ -35,11 +35,10 @@ use super::types::{
 struct ProtocolImplCtx<'a> {
     package: &'a str,
     protocol_identifier: &'a Identifier,
+    protocol_subst: &'a Substitution,
+    target: &'a ResolvedType,
     target_identifier: &'a Identifier,
     target_name: &'a str,
-    target: &'a ResolvedType,
-    protocol_id: GlobalRegistryId,
-    protocol_subst: &'a [Option<ResolvedType>],
 }
 
 pub(super) fn lift_impl(
@@ -128,15 +127,15 @@ pub(super) fn lift_impl(
 /// Resolved `target` + `trait_expr` for an `impl P for T` block,
 /// computed once in [`lift_impl`] and threaded through both
 /// conformance verification and protocol-impl-entry stamping. The
-/// `protocol_subst` field is the substitution vec passed to
-/// [`substitute_resolved_type`] when comparing impl methods against
-/// protocol methods: slot 0 (`Self`) is the resolved target, slots
-/// 1..N are the type-args the user wrote on `trait_expr`.
+/// `protocol_subst` field is the [`Substitution`] threaded through
+/// [`substitute`] when comparing impl methods against protocol
+/// methods: slot 0 (`Self`) is the resolved target, slots 1..N are
+/// the type-args the user wrote on `trait_expr`.
 struct ResolvedImplHeads {
-    target: ResolvedType,
     protocol: ResolvedType,
     protocol_id: GlobalRegistryId,
-    protocol_subst: Vec<Option<ResolvedType>>,
+    protocol_subst: Substitution,
+    target: ResolvedType,
 }
 
 /// Resolve the impl block's target type expression under a scope
@@ -251,18 +250,17 @@ fn resolve_protocol_impl_heads(
         ));
         return None;
     }
-    let mut subst: Vec<Option<ResolvedType>> = vec![None; protocol_arity];
-    if !subst.is_empty() {
-        subst[0] = Some(target.clone());
+    let mut args: Vec<ResolvedType> = Vec::with_capacity(protocol_arity);
+    if protocol_arity > 0 {
+        args.push(target.clone());
+        args.extend(protocol_args.iter().cloned());
     }
-    for (slot, arg) in subst.iter_mut().skip(1).zip(protocol_args.iter()) {
-        *slot = Some(arg.clone());
-    }
+    let protocol_subst = Substitution::from_args(protocol_id, &args);
     Some(ResolvedImplHeads {
-        target,
         protocol,
         protocol_id,
-        protocol_subst: subst,
+        protocol_subst,
+        target,
     })
 }
 
@@ -326,11 +324,10 @@ fn verify_and_synthesize_trait_impl(
     let ctx = ProtocolImplCtx {
         package,
         protocol_identifier: &protocol_identifier,
+        protocol_subst: &resolved.protocol_subst,
+        target: &resolved.target,
         target_identifier,
         target_name,
-        target: &resolved.target,
-        protocol_id,
-        protocol_subst: &resolved.protocol_subst,
     };
     verify_protocol_conformance(impl_block, &definition, ctx, registry, diagnostics);
     let declared: HashMap<String, ()> = impl_block
@@ -487,9 +484,8 @@ fn check_impl_method_signature(
     let ProtocolImplCtx {
         package,
         protocol_identifier,
-        target_name,
-        protocol_id,
         protocol_subst,
+        target_name,
         ..
     } = ctx;
     let method_identifier = Identifier::new(
@@ -538,7 +534,7 @@ fn check_impl_method_signature(
         .zip(actual_non_self.iter())
         .enumerate()
     {
-        let expected_ty = substitute_resolved_type(&want.ty, protocol_subst, protocol_id);
+        let expected_ty = substitute(&want.ty, protocol_subst);
         if expected_ty != got.ty {
             diagnostics.push(Diagnostic::error(
                 format!(
@@ -554,8 +550,7 @@ fn check_impl_method_signature(
             ));
         }
     }
-    let expected_return =
-        substitute_resolved_type(&expected.return_type, protocol_subst, protocol_id);
+    let expected_return = substitute(&expected.return_type, protocol_subst);
     if expected_return != actual.return_type {
         diagnostics.push(Diagnostic::error(
             format!(

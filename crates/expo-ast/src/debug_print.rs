@@ -745,7 +745,7 @@ impl<'a> Printer<'a> {
     fn pattern(&mut self, pat: &Pattern) {
         match pat {
             Pattern::Wildcard { span } => self.header("Wildcard", *span),
-            Pattern::Literal { value, span } => {
+            Pattern::Literal { value, span, .. } => {
                 self.header(&format!("Literal {}", format_literal(value)), *span);
             }
             Pattern::Binary { segments, span } => {

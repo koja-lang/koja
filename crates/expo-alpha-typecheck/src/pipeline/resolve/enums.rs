@@ -18,19 +18,21 @@
 //! stable.
 
 use expo_ast::ast::{Diagnostic, EnumConstructionData, Expr};
-use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
+use expo_ast::coercion::LiteralCoercion;
+use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
-use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
+use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_span};
+use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
+use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
 use super::structs::{lookup_type, validate_named_fields};
-use super::types::{display_resolution, verify_bounds};
+use super::types::display_resolution;
 
 pub(super) fn resolve_enum_construction(
     type_path: &[String],
@@ -94,29 +96,6 @@ pub(super) fn resolve_enum_construction(
         return ResolvedType::leaf(Resolution::Global(enum_id));
     }
 
-    let expected_type_args = expected_type_args_for(expected, enum_id, type_params.len());
-
-    if matches!(variant_def.data, ResolvedVariantData::Unit) {
-        if let Some(args) = expected_type_args {
-            return ResolvedType::Named {
-                resolution: Resolution::Global(enum_id),
-                type_args: args,
-            };
-        }
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck cannot infer type parameters of `{enum_label}` from \
-                 unit variant `{variant}` (no payload to constrain `{}`)",
-                type_params.join("`, `"),
-            ),
-            span,
-        ));
-        return ResolvedType::Named {
-            resolution: Resolution::Global(enum_id),
-            type_args: vec![ResolvedType::unresolved(); type_params.len()],
-        };
-    }
-
     let callee = Callee {
         id: enum_id,
         label: &enum_label,
@@ -126,141 +105,98 @@ pub(super) fn resolve_enum_construction(
         callee,
         variant_def,
         data,
-        expected_type_args.as_deref(),
+        expected,
         span,
         resolver.registry,
         diagnostics,
     );
-    let substituted = substitute_variant(variant_def, &subst, enum_id);
+    let substituted = substitute_variant(variant_def, &subst);
     validate_variant_payload(&enum_label, &substituted, data, span, resolver, diagnostics);
-    let type_args = subst
-        .into_iter()
-        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
-        .collect();
     ResolvedType::Named {
         resolution: Resolution::Global(enum_id),
-        type_args,
+        type_args: subst.args(enum_id),
     }
-}
-
-/// Pull a same-head expected type's `type_args` for use as an
-/// inference fallback. Returns `Some(args)` only when `expected` is a
-/// fully-resolved [`ResolvedType::Named`] pointing at `enum_id` with
-/// the right arity; any mismatch (different head, partial-resolved
-/// args, missing hint) returns `None` so the caller falls back to
-/// payload-only inference. Bidirectional inference is best-effort —
-/// when expected can't help, we keep the original diagnostic shape.
-fn expected_type_args_for(
-    expected: Option<&ResolvedType>,
-    enum_id: GlobalRegistryId,
-    arity: usize,
-) -> Option<Vec<ResolvedType>> {
-    let ResolvedType::Named {
-        resolution: Resolution::Global(expected_id),
-        type_args,
-    } = expected?
-    else {
-        return None;
-    };
-    if *expected_id != enum_id || type_args.len() != arity {
-        return None;
-    }
-    if !type_args.iter().all(|ty| ty.is_resolved()) {
-        return None;
-    }
-    Some(type_args.clone())
 }
 
 /// Infer concrete `type_args` for a generic enum construction by
 /// unifying each declared payload element's template against the
-/// resolved type of the supplied value. Mirrors the struct path:
-/// emits one diagnostic per [`Conflict`] and one per Phantom param.
+/// resolved type of the supplied value. Unit variants enter with no
+/// payload pairs and rely entirely on bidirectional fallback —
+/// emits one diagnostic per [`Conflict`] and one per phantom param.
 /// Shape-mismatched constructions skip inference and let
 /// [`validate_variant_payload`] surface the shape diagnostic.
 ///
-/// `expected_type_args` is the bidirectional fallback — slots that
-/// payload-driven inference can't pin (a `Result.Err(e)` whose `T`
-/// only the surrounding context knows) get filled from the
-/// surrounding expected type before the "cannot infer" diagnostic
-/// fires.
+/// `expected` is the bidirectional fallback — slots that payload-
+/// driven inference can't pin (a `Result.Err(e)` whose `T` only
+/// the surrounding context knows, or a unit `Maybe.None`) get
+/// filled from the surrounding expected type before the "cannot
+/// infer" diagnostic fires.
 fn infer_enum_type_args(
     callee: Callee<'_>,
     variant: &ResolvedEnumVariant,
     data: &EnumConstructionData,
-    expected_type_args: Option<&[ResolvedType]>,
+    expected: Option<&ResolvedType>,
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<Option<ResolvedType>> {
-    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
+) -> Substitution {
+    let mut subst = Substitution::single(callee.id, callee.type_params.len());
+    let on_conflict = &mut |conflict: Conflict, payload_span: Span| {
+        emit_conflict(
+            &callee,
+            &variant.name,
+            conflict,
+            payload_span,
+            registry,
+            diagnostics,
+        );
+    };
     match (&variant.data, data) {
         (ResolvedVariantData::Tuple(declared), EnumConstructionData::Tuple(exprs)) => {
-            for (declared_ty, expr) in declared.iter().zip(exprs.iter()) {
-                if !expr.resolution.is_resolved() {
-                    continue;
-                }
-                if let Err(conflict) =
-                    unify_resolved_type(declared_ty, &expr.resolution, callee.id, &mut subst)
-                {
-                    emit_conflict(
-                        &callee,
-                        &variant.name,
-                        conflict,
-                        expr.span,
-                        registry,
-                        diagnostics,
-                    );
-                }
-            }
+            let pairs = declared
+                .iter()
+                .zip(exprs.iter())
+                .map(|(declared_ty, expr)| (declared_ty, &expr.resolution, expr.span));
+            unify_pairs(pairs, &mut subst, on_conflict);
         }
         (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(inits)) => {
-            for init in inits {
-                let Some(declared_field) = declared.iter().find(|f| f.name == init.name) else {
-                    continue;
-                };
-                if !init.value.resolution.is_resolved() {
-                    continue;
-                }
-                if let Err(conflict) = unify_resolved_type(
-                    &declared_field.ty,
-                    &init.value.resolution,
-                    callee.id,
-                    &mut subst,
-                ) {
-                    emit_conflict(
-                        &callee,
-                        &variant.name,
-                        conflict,
-                        init.span,
-                        registry,
-                        diagnostics,
-                    );
-                }
-            }
+            let pairs = inits.iter().filter_map(|init| {
+                let declared_field = declared.iter().find(|f| f.name == init.name)?;
+                Some((&declared_field.ty, &init.value.resolution, init.span))
+            });
+            unify_pairs(pairs, &mut subst, on_conflict);
         }
         _ => {}
     }
-    if let Some(expected) = expected_type_args {
-        for (slot, expected_ty) in subst.iter_mut().zip(expected.iter()) {
-            if slot.is_none() {
-                *slot = Some(expected_ty.clone());
-            }
-        }
+    if let Some(hint) = expected {
+        let template = canonical_enum_template(callee.id, callee.type_params.len());
+        fill_from_expected(&template, hint, &mut subst);
     }
-    for (index, slot) in subst.iter().enumerate() {
-        if slot.is_none() {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck cannot infer type parameter `{}` of `{}` \
-                     from the supplied `{}` payload",
-                    callee.type_params[index], callee.label, variant.name,
-                ),
-                span,
-            ));
-        }
-    }
-    verify_bounds(callee, &subst, span, registry, diagnostics);
+    let context = match variant.data {
+        ResolvedVariantData::Unit => PhantomContext::UnitVariant(&variant.name),
+        _ => PhantomContext::Payload(&variant.name),
+    };
+    finalize_inference(&[callee], &subst, &context, span, registry, diagnostics);
     subst
+}
+
+/// Build the enum's canonical self-referential template
+/// `Named { Global(enum_id), [TypeParam(enum_id, 0..N)] }`. Used as the
+/// LHS of a [`fill_from_expected`] hint walk so an expected `Maybe<Int>`
+/// can populate `T → Int` without bespoke per-slot fill logic.
+fn canonical_enum_template(enum_id: GlobalRegistryId, arity: usize) -> ResolvedType {
+    ResolvedType::Named {
+        resolution: Resolution::Global(enum_id),
+        type_args: (0..arity)
+            .map(|index| ResolvedType::Named {
+                resolution: Resolution::TypeParam {
+                    owner: enum_id,
+                    index: TypeParamIndex::new(index as u32),
+                },
+                type_args: Vec::new(),
+            })
+            .collect(),
+    }
 }
 
 fn emit_conflict(
@@ -288,25 +224,18 @@ fn emit_conflict(
 /// of `variant`. Used to produce a concrete view of the variant for
 /// [`validate_variant_payload`] so user-facing diagnostics show the
 /// inferred concrete types rather than `T`.
-fn substitute_variant(
-    variant: &ResolvedEnumVariant,
-    subst: &[Option<ResolvedType>],
-    owner: GlobalRegistryId,
-) -> ResolvedEnumVariant {
+fn substitute_variant(variant: &ResolvedEnumVariant, subst: &Substitution) -> ResolvedEnumVariant {
     let data = match &variant.data {
         ResolvedVariantData::Unit => ResolvedVariantData::Unit,
-        ResolvedVariantData::Tuple(types) => ResolvedVariantData::Tuple(
-            types
-                .iter()
-                .map(|ty| substitute_resolved_type(ty, subst, owner))
-                .collect(),
-        ),
+        ResolvedVariantData::Tuple(types) => {
+            ResolvedVariantData::Tuple(types.iter().map(|ty| substitute(ty, subst)).collect())
+        }
         ResolvedVariantData::Struct(fields) => ResolvedVariantData::Struct(
             fields
                 .iter()
                 .map(|field| ResolvedStructField {
                     name: field.name.clone(),
-                    ty: substitute_resolved_type(&field.ty, subst, owner),
+                    ty: substitute(&field.ty, subst),
                 })
                 .collect(),
         ),
@@ -345,7 +274,7 @@ fn resolve_construction_data(
 fn validate_variant_payload(
     enum_label: &str,
     variant: &ResolvedEnumVariant,
-    data: &EnumConstructionData,
+    data: &mut EnumConstructionData,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -389,7 +318,7 @@ fn validate_variant_payload(
 fn validate_tuple_payload(
     variant_label: &str,
     element_types: &[ResolvedType],
-    exprs: &[Expr],
+    exprs: &mut [Expr],
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -406,15 +335,15 @@ fn validate_tuple_payload(
         ));
         return;
     }
-    for (index, (declared, expr)) in element_types.iter().zip(exprs.iter()).enumerate() {
-        let actual = &expr.resolution;
+    for (index, (declared, expr)) in element_types.iter().zip(exprs.iter_mut()).enumerate() {
+        let actual = expr.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(expr, actual, declared, resolver.registry) {
+        match check_compatible(expr, &actual, declared, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver.coercions.insert(coercion_span(expr), width);
+                *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -438,7 +367,7 @@ fn validate_tuple_payload(
                         "argument {} of `{variant_label}` expects `{}`, got `{}`",
                         index + 1,
                         display_resolution(declared, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     expr.span,
                 ));

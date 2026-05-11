@@ -1,29 +1,18 @@
 //! Resolver state threaded through every name-resolution recursion.
 
-use expo_ast::identifier::GlobalRegistryId;
+use expo_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::GlobalRegistry;
 
-use super::coercion::Coercions;
-
 /// File-level resolver inputs: the cross-function pieces every
 /// per-function [`Resolver`] reuses verbatim. Bundling them at the
 /// file level keeps the `walker::resolve_function` signature short
-/// (rather than threading `package` / `registry` / `coercions`
-/// positionally through every per-function call), and gives the
-/// per-function helper one place to mint a [`Resolver`] from the
-/// shared inputs plus its local-scope.
-///
-/// `coercions` is the program-wide span-keyed numeric-literal
-/// coercion table — populated by the type-equality leaves
-/// ([`super::structs::validate_named_fields`],
-/// [`super::calls::validate_arg_signature`] et al.) when a literal
-/// flows into a narrower-than-default sized target, consumed by
-/// `expo-alpha-ir`'s expression lowerer to mint the `Const`
-/// instruction at the recorded width.
+/// (rather than threading `package` / `registry` positionally
+/// through every per-function call), and gives the per-function
+/// helper one place to mint a [`Resolver`] from the shared inputs
+/// plus its local-scope.
 pub(super) struct ResolverEnv<'a> {
-    pub coercions: &'a mut Coercions,
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
 }
@@ -35,30 +24,30 @@ impl<'a> ResolverEnv<'a> {
     pub(super) fn make_resolver<'b>(
         &'b mut self,
         enclosing_type: Option<&'b str>,
+        type_param_owners: &'b [GlobalRegistryId],
         scope: &'b mut LocalScope,
     ) -> Resolver<'b> {
         Resolver {
-            coercions: &mut *self.coercions,
+            current_return_type: None,
             enclosing_type,
             package: self.package,
             registry: self.registry,
             scope,
+            type_param_owners,
         }
     }
 }
 
 /// State a name lookup consults: the in-scope package, the global
-/// registry, the per-function [`LocalScope`], the enclosing
-/// type's name when the function being resolved is a method, and
-/// the program-wide [`Coercions`] sink shared with siblings.
+/// registry, the per-function [`LocalScope`], and the enclosing
+/// type's name when the function being resolved is a method.
 ///
-/// Two mutable handles ride alongside the read-only state.
 /// `scope` is the per-function locals map (every walker may bind
-/// new ids and look existing ones up). `coercions` reaches every
-/// type-equality leaf so a literal-fit coercion can be recorded
-/// without fanning a `&mut Coercions` argument through every
-/// `resolve_expr` recursion; user-visible sinks (like diagnostics)
-/// stay positional so call signatures advertise that they emit.
+/// new ids and look existing ones up). User-visible sinks (like
+/// diagnostics) stay positional so call signatures advertise that
+/// they emit; literal-fit coercions stamp directly onto the AST
+/// node (`Expr.literal_coercion`) so no resolver-level sink is
+/// needed.
 ///
 /// `enclosing_type` is the unqualified name of the function's
 /// owner — `"DateTime"` for a method on `Global.DateTime`, `None`
@@ -79,11 +68,27 @@ impl<'a> ResolverEnv<'a> {
 /// for fields directly (`resolver.registry`, `resolver.scope`) so
 /// each callee is honest about what it actually uses.
 pub(super) struct Resolver<'a> {
-    pub coercions: &'a mut Coercions,
+    /// Return type of the innermost enclosing function-shape — the
+    /// outer `fn` initially, swapped to a closure's return when its
+    /// body resolves and restored on the way out. Threaded into
+    /// every `Statement::Return`'s value as the bidirectional hint
+    /// so things like `return Option.None` pick up the surrounding
+    /// `Option<T>` instead of bottoming out at `Option<?>`. Owned
+    /// (rather than `&'a ResolvedType`) so closure save/restore can
+    /// `mem::replace` without a borrowed-vs-owned mismatch.
+    pub current_return_type: Option<ResolvedType>,
     pub enclosing_type: Option<&'a str>,
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
     pub scope: &'a mut LocalScope,
+    /// Owner chain that any in-body type annotation resolves against
+    /// — innermost first (function's own id when it declares
+    /// type-params, then receiver). Mirrors
+    /// `lift_signatures::functions::type_param_owners`; populated
+    /// once per [`make_resolver`] call so statement-level helpers
+    /// can pass it straight to [`crate::pipeline::lift_signatures::TypeParamScope::new`]
+    /// without rebuilding the chain.
+    pub type_param_owners: &'a [GlobalRegistryId],
 }
 
 /// Registry-side metadata for one inference target — bundled so

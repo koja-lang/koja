@@ -142,9 +142,14 @@ pub(super) fn lower_pattern_check(
             let cond = enums::emit_enum_tag_eq(variant, &inputs, ctx, block, output);
             Ok(single_test(cond, block))
         }
-        Pattern::Literal { span, value } => {
+        Pattern::Literal {
+            literal_coercion,
+            span,
+            value,
+        } => {
             let cond = emit_literal_eq(
                 value,
+                literal_coercion.as_ref(),
                 *span,
                 inputs.subject,
                 ctx,

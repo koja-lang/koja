@@ -19,7 +19,7 @@ use super::super::structs::lookup_type;
 use super::super::types::display_resolution;
 use super::structs::{resolve_field_patterns_unbound, walk_field_patterns};
 use super::{PatternCoverage, resolve_pattern};
-use crate::pipeline::unify::substitute_resolved_type;
+use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData};
 
 pub(super) fn resolve_enum_unit_pattern(
@@ -178,10 +178,7 @@ fn resolve_enum_tuple_metadata(
         ));
     }
     let subst = build_enum_substitution(target.enum_id, subject_ty);
-    let element_types = declared
-        .iter()
-        .map(|ty| substitute_resolved_type(ty, &subst, target.enum_id))
-        .collect();
+    let element_types = declared.iter().map(|ty| substitute(ty, &subst)).collect();
     Some(EnumTuplePatternMetadata {
         element_types,
         label: target.label,
@@ -231,7 +228,7 @@ fn resolve_enum_struct_metadata(
         .iter()
         .map(|field| ResolvedStructField {
             name: field.name.clone(),
-            ty: substitute_resolved_type(&field.ty, &subst, target.enum_id),
+            ty: substitute(&field.ty, &subst),
         })
         .collect();
     Some(EnumStructPatternMetadata {
@@ -324,18 +321,18 @@ pub(super) fn lookup_pattern_enum<'a>(
 pub(super) fn build_enum_substitution(
     enum_id: GlobalRegistryId,
     subject_ty: &ResolvedType,
-) -> Vec<Option<ResolvedType>> {
+) -> Substitution {
     let ResolvedType::Named {
         resolution: Resolution::Global(id),
         type_args,
     } = subject_ty
     else {
-        return Vec::new();
+        return Substitution::empty();
     };
     if *id != enum_id {
-        return Vec::new();
+        return Substitution::empty();
     }
-    type_args.iter().cloned().map(Some).collect()
+    Substitution::from_args(enum_id, type_args)
 }
 
 fn is_named_global(ty: &ResolvedType, target: GlobalRegistryId) -> bool {

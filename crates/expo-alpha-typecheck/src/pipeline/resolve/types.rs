@@ -12,6 +12,7 @@ use expo_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use super::ctx::Callee;
+use crate::pipeline::unify::Substitution;
 use crate::registry::GlobalRegistry;
 
 /// Does `ty` resolve to the preloaded `Global.<name>` stdlib stub?
@@ -126,7 +127,7 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
 /// verbatim — keep this surface stable across slices that re-use it.
 pub(super) fn verify_bounds(
     callee: Callee<'_>,
-    subst: &[Option<ResolvedType>],
+    subst: &Substitution,
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
@@ -134,7 +135,10 @@ pub(super) fn verify_bounds(
     let Some(bounds) = registry.type_param_bounds(callee.id) else {
         return;
     };
-    for (index, slot) in subst.iter().enumerate() {
+    if !subst.owns(callee.id) {
+        return;
+    }
+    for (index, slot) in subst.slots(callee.id).iter().enumerate() {
         let Some(inferred) = slot else {
             continue;
         };

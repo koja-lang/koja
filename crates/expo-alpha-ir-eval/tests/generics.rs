@@ -52,7 +52,7 @@ fn generic_struct_construction_yields_value_struct_with_mangled_symbol() {
         panic!("expected Value::Struct, got {value:?}");
     };
     assert_eq!(symbol.mangled(), "TestApp.Pair_$Int64.String$");
-    assert_eq!(fields, vec![Value::Int(1), Value::String("x".to_string())],);
+    assert_eq!(fields, vec![Value::Int(1), Value::String("x".into())],);
 }
 
 #[test]
@@ -140,7 +140,7 @@ fn generic_enum_struct_variant_carries_named_payload_fields() {
         payload,
         EnumPayload::Struct(vec![
             ("a".to_string(), Value::Int(1)),
-            ("b".to_string(), Value::String("x".to_string())),
+            ("b".to_string(), Value::String("x".into())),
         ]),
     );
 }

@@ -52,24 +52,27 @@ impl Parser {
                 let start = self.current_span();
                 let lit = self.parse_literal_value();
                 Pattern::Literal {
-                    value: lit,
+                    literal_coercion: None,
                     span: self.span_from(start),
+                    value: lit,
                 }
             }
             TokenKind::True => {
                 let start = self.current_span();
                 self.advance();
                 Pattern::Literal {
-                    value: Literal::Bool(true),
+                    literal_coercion: None,
                     span: self.span_from(start),
+                    value: Literal::Bool(true),
                 }
             }
             TokenKind::False => {
                 let start = self.current_span();
                 self.advance();
                 Pattern::Literal {
-                    value: Literal::Bool(false),
+                    literal_coercion: None,
                     span: self.span_from(start),
+                    value: Literal::Bool(false),
                 }
             }
             TokenKind::StringStart => {
@@ -90,8 +93,9 @@ impl Parser {
                     }
                 }
                 Pattern::Literal {
-                    value: Literal::String(text),
+                    literal_coercion: None,
                     span: self.span_from(start),
+                    value: Literal::String(text),
                 }
             }
             TokenKind::TypeIdent(_) => self.parse_type_pattern(),
@@ -105,15 +109,17 @@ impl Parser {
                     TokenKind::IntLit(n) => {
                         self.advance();
                         Pattern::Literal {
-                            value: Literal::Int(format!("-{n}")),
+                            literal_coercion: None,
                             span: self.span_from(start),
+                            value: Literal::Int(format!("-{n}")),
                         }
                     }
                     TokenKind::FloatLit(n) => {
                         self.advance();
                         Pattern::Literal {
-                            value: Literal::Float(format!("-{n}")),
+                            literal_coercion: None,
                             span: self.span_from(start),
+                            value: Literal::Float(format!("-{n}")),
                         }
                     }
                     _ => {
@@ -266,8 +272,9 @@ impl Parser {
         self.skip_newlines();
         if self.eat(&TokenKind::RParen).is_some() {
             return Pattern::Literal {
-                value: Literal::Unit,
+                literal_coercion: None,
                 span: self.span_from(start),
+                value: Literal::Unit,
             };
         }
 

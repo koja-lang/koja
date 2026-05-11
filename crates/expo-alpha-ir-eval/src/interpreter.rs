@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use expo_alpha_ir::{
     BinaryEndian, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
     IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId,
-    IRProgram, IRScript, IRSymbol, IRTerminator, IRVariantPayload, IRVariantTag,
+    IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRVariantPayload, IRVariantTag,
     LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
 };
 
@@ -68,9 +68,10 @@ impl Frame {
 /// same trait so each `EnumConstruct` arm has a registry-equivalent
 /// handle for materializing the variant's `name` and (for struct
 /// payloads) per-field names.
-trait CallResolver {
+pub(crate) trait CallResolver {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
+    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl>;
     fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue>;
 }
 
@@ -81,6 +82,10 @@ impl CallResolver for IRProgram {
 
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRProgram::enum_decl(self, mangled)
+    }
+
+    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
+        IRProgram::struct_decl(self, mangled)
     }
 
     fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
@@ -95,6 +100,10 @@ impl CallResolver for IRScript {
 
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         IRScript::enum_decl(self, mangled)
+    }
+
+    fn struct_decl(&self, mangled: &str) -> Option<&IRStructDecl> {
+        IRScript::struct_decl(self, mangled)
     }
 
     fn constant_value(&self, mangled: &str) -> Option<&IRConstantValue> {
@@ -123,7 +132,7 @@ fn execute_function<R: CallResolver>(
     );
     match &function.kind {
         FunctionKind::Intrinsic(id) => {
-            return intrinsics::dispatch(id, &args);
+            return intrinsics::dispatch(id, function, &args, resolver);
         }
         FunctionKind::Extern(attrs) => {
             let c_symbol = attrs
@@ -701,9 +710,9 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
                     detail: format!("Concat<String> on `{left}` and `{right}`"),
                 });
             };
-            let mut out = String::with_capacity(l.len() + r.len());
-            out.push_str(l);
-            out.push_str(r);
+            let mut out = Vec::with_capacity(l.len() + r.len());
+            out.extend_from_slice(l);
+            out.extend_from_slice(r);
             Ok(Value::String(out))
         }
         ConcatKind::Binary => {
@@ -856,14 +865,13 @@ fn construct_binary_literal(
                 bit_offset,
             } => {
                 let resolved = lookup(&frame.values, *value)?;
-                let Value::String(text) = resolved else {
+                let Value::String(bytes) = resolved else {
                     return Err(RuntimeError::TypeMismatch {
                         detail: format!(
                             "binary literal string segment expected a String value; got {resolved}",
                         ),
                     });
                 };
-                let bytes = text.as_bytes();
                 debug_assert!(
                     bytes.len() as u64 >= *byte_length,
                     "interpreter: BinaryConstruct string segment carries byte_length {byte_length} \
@@ -957,7 +965,7 @@ fn materialize_const(value: &ConstValue) -> Value {
         ConstValue::Int16(v) => Value::Int(*v as i64),
         ConstValue::Int32(v) => Value::Int(*v as i64),
         ConstValue::Int64(v) => Value::Int(*v),
-        ConstValue::String(s) => Value::String(s.clone()),
+        ConstValue::String(s) => Value::String(s.as_bytes().to_vec()),
         ConstValue::UInt8(v) => Value::Int(*v as i64),
         ConstValue::UInt16(v) => Value::Int(*v as i64),
         ConstValue::UInt32(v) => Value::Int(*v as i64),

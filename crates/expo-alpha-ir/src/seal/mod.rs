@@ -129,6 +129,9 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         IRType::CPtr(inner) => {
             require_supported_type(inner, &|| format!("{} (CPtr pointee)", location()))
         }
+        IRType::List(inner) => {
+            require_supported_type(inner, &|| format!("{} (List element)", location()))
+        }
         IRType::Function { params, ret } => {
             for (idx, param) in params.iter().enumerate() {
                 require_supported_type(param, &|| {

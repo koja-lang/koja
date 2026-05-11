@@ -29,7 +29,7 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
 use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, TypeExpr};
-use expo_ast::identifier::Identifier;
+use expo_ast::identifier::{Identifier, ResolvedType};
 use expo_ast::labels::compound_op_label;
 use expo_ast::span::Span;
 
@@ -37,7 +37,7 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::registry::GlobalKind;
 
 use super::ctx::Resolver;
-use super::expr::resolve_expr;
+use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::types::{display_resolution, is_arithmetic_type};
 
 /// Resolve a `target = value` statement. Validates target shape,
@@ -51,7 +51,21 @@ pub(super) fn resolve_assignment(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    resolve_expr(value, resolver, diagnostics);
+    // Resolve the annotation up front so it can flow into the rhs as
+    // an expected type. Bidirectional inference uses this to drive
+    // shapes like `result: List<T> = List.new()` — the annotation's
+    // `T` constrains `List.new`'s otherwise-unconstrained type param.
+    let expected_ty: Option<ResolvedType> = type_annotation.and_then(|annotation| {
+        let resolved = resolve_type_expr(
+            annotation,
+            TypeParamScope::new(resolver.type_param_owners),
+            resolver.package,
+            resolver.registry,
+            diagnostics,
+        );
+        resolved.is_resolved().then_some(resolved)
+    });
+    resolve_expr_with_expected(value, expected_ty.as_ref(), resolver, diagnostics);
 
     let Some(name) = single_segment_target(target, span, diagnostics) else {
         return;
@@ -103,16 +117,9 @@ pub(super) fn resolve_assignment(
                 ));
                 return;
             }
-            let declared_ty = match type_annotation {
-                Some(annotation) => {
-                    let annotated = resolve_type_expr(
-                        annotation,
-                        TypeParamScope::default(),
-                        resolver.package,
-                        resolver.registry,
-                        diagnostics,
-                    );
-                    if value_ty.is_resolved() && annotated.is_resolved() && value_ty != annotated {
+            let declared_ty = match expected_ty {
+                Some(annotated) => {
+                    if value_ty.is_resolved() && value_ty != annotated {
                         diagnostics.push(Diagnostic::error(
                             format!(
                                 "type annotation on `{name}` says `{}`, but the right-hand side \

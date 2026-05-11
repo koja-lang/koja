@@ -59,12 +59,9 @@ pub(crate) fn lower_package(
         for item in &file.items {
             match item {
                 Item::Constant(constant) => {
-                    if let Some((symbol, value)) = lower_constant_pool_entry(
-                        constant,
-                        &pkg.package,
-                        registry,
-                        &output.coercions,
-                    ) {
+                    if let Some((symbol, value)) =
+                        lower_constant_pool_entry(constant, &pkg.package, registry)
+                    {
                         constants.insert(symbol, value);
                     }
                 }
@@ -460,9 +457,13 @@ pub(crate) fn resolved_type_to_ir_type(
             resolution: Resolution::Global(id),
             type_args,
         } => global_to_ir_type(*id, type_args, registry, instantiations),
-        ResolvedType::Named { resolution, .. } => panic!(
+        ResolvedType::Named {
+            resolution,
+            type_args,
+        } => panic!(
             "alpha IR lower: resolved_type_to_ir_type received a non-Global resolution \
-             ({resolution:?}) — every Param must be substituted before lowering",
+             ({resolution:?}) — every Param must be substituted before lowering \
+             (type_args: {type_args:?})",
         ),
         ResolvedType::Unresolved => {
             panic!("alpha IR lower: resolved_type_to_ir_type received Unresolved — seal violation",)
@@ -508,6 +509,23 @@ fn global_to_ir_type(
                 owner: id,
             });
             return IRType::CPtr(Box::new(pointee));
+        }
+        if last == "List" {
+            assert_eq!(
+                type_args.len(),
+                1,
+                "alpha IR lower: stdlib primitive `Global.List` requires exactly one type \
+                 argument; got {} ({type_args:?})",
+                type_args.len(),
+            );
+            let element = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
+            instantiations.push(Instantiation {
+                template: id,
+                args: type_args.to_vec(),
+                method_args: Vec::new(),
+                owner: id,
+            });
+            return IRType::List(Box::new(element));
         }
         let primitive = match last {
             "Binary" => Some(IRType::Binary),

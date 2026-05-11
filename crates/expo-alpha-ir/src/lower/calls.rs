@@ -319,13 +319,14 @@ pub(super) fn lower_method_call(
 /// for static dispatch the receiver is a bare type name with no
 /// type-args attached at the AST layer (alpha doesn't support
 /// turbofish-style invocation), so this is currently always empty.
-fn receiver_type_args(receiver: &Expr, dispatch: Dispatch) -> Vec<ResolvedType> {
-    match dispatch {
-        Dispatch::Static => Vec::new(),
-        Dispatch::Instance => match &receiver.resolution {
-            ResolvedType::Named { type_args, .. } => type_args.clone(),
-            _ => Vec::new(),
-        },
+fn receiver_type_args(receiver: &Expr, _dispatch: Dispatch) -> Vec<ResolvedType> {
+    // Static dispatch on a generic struct (`List.new()` against
+    // `List<Int>`) stitches the inferred type-args back onto
+    // `receiver.resolution` during typecheck, so the same shape
+    // covers both arms.
+    match &receiver.resolution {
+        ResolvedType::Named { type_args, .. } => type_args.clone(),
+        _ => Vec::new(),
     }
 }
 

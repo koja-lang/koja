@@ -60,7 +60,7 @@ fn while_with_string_concat_in_body_accumulates_heap_state() {
         ";
     assert_eq!(
         evaluate(&dedent(source)).unwrap(),
-        Value::String("xxx".to_string()),
+        Value::String("xxx".into()),
     );
 }
 
@@ -248,7 +248,7 @@ fn for_with_string_concat_in_body_accumulates_heap_state() {
     );
     assert_eq!(
         evaluate(&dedent(&source)).unwrap(),
-        Value::String("xxx".to_string()),
+        Value::String("xxx".into()),
     );
 }
 
