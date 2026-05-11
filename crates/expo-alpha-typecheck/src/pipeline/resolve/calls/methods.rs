@@ -12,10 +12,12 @@ use expo_ast::span::Span;
 
 use super::super::ctx::{Callee, Resolver};
 use super::super::expr::resolve_expr;
+use super::super::inference::{
+    PhantomContext, fill_from_expected, finalize_inference, unify_pairs,
+};
 use super::super::structs::lookup_type;
-use super::super::types::verify_bounds;
-use super::{diagnose_phantom_params, emit_conflict};
-use crate::pipeline::unify::{substitute_resolved_type, unify_resolved_type};
+use super::emit_conflict;
+use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
@@ -196,104 +198,65 @@ pub(super) fn infer_method_call_type_args(
         expected,
     } = target;
 
-    let mut receiver_subst: Vec<Option<ResolvedType>> = vec![None; receiver.type_params.len()];
-    let receiver_args: &[ResolvedType] = match receiver_type {
-        ResolvedType::Named { type_args, .. } => type_args,
-        _ => &[],
-    };
-    for (slot, arg) in receiver_subst.iter_mut().zip(receiver_args.iter()) {
-        if arg.is_resolved() {
-            *slot = Some(arg.clone());
-        }
+    let mut subst = Substitution::dual(
+        receiver.id,
+        receiver.type_params.len(),
+        method.id,
+        method.type_params.len(),
+    );
+    seed_receiver_subst(&mut subst, receiver.id, receiver_type);
+    let pairs = explicit_params
+        .iter()
+        .zip(args.iter())
+        .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
+    unify_pairs(pairs, &mut subst, |conflict, arg_span| {
+        let scope_callee = if conflict.owner == method.id {
+            &method
+        } else {
+            &receiver
+        };
+        emit_conflict(scope_callee, conflict, arg_span, registry, diagnostics);
+    });
+    if let Some(hint) = expected {
+        fill_from_expected(&sig.return_type, hint, &mut subst);
     }
-    let mut method_subst: Vec<Option<ResolvedType>> = vec![None; method.type_params.len()];
-    for (param, arg) in explicit_params.iter().zip(args.iter()) {
-        if !arg.value.resolution.is_resolved() {
-            continue;
-        }
-        if !method.type_params.is_empty()
-            && let Err(conflict) = unify_resolved_type(
-                &param.ty,
-                &arg.value.resolution,
-                method.id,
-                &mut method_subst,
-            )
-        {
-            emit_conflict(&method, conflict, arg.span, registry, diagnostics);
-        }
-        if !receiver.type_params.is_empty()
-            && let Err(conflict) = unify_resolved_type(
-                &param.ty,
-                &arg.value.resolution,
-                receiver.id,
-                &mut receiver_subst,
-            )
-        {
-            emit_conflict(&receiver, conflict, arg.span, registry, diagnostics);
-        }
-    }
-    // Expected return type unifies as a *hint* — fills only `None`
-    // slots so it can't conflict with already-inferred receiver /
-    // arg types (those bindings remain authoritative). Lets shapes
-    // like `result: List<T> = List.new()` flow the binding's `T`
-    // into the receiver scope without disturbing fully-determined
-    // contexts like `p.first()` against `Pair<Int, String>`.
-    if let Some(expected) = expected
-        && expected.is_resolved()
-    {
-        fill_remaining_from_expected(&sig.return_type, expected, method.id, &mut method_subst);
-        fill_remaining_from_expected(&sig.return_type, expected, receiver.id, &mut receiver_subst);
-    }
-    diagnose_phantom_params(&method, &method_subst, call_span, diagnostics);
-    diagnose_phantom_params(&receiver, &receiver_subst, call_span, diagnostics);
-    verify_bounds(method, &method_subst, call_span, registry, diagnostics);
-    verify_bounds(receiver, &receiver_subst, call_span, registry, diagnostics);
+    finalize_inference(
+        &[method, receiver],
+        &subst,
+        &PhantomContext::Arguments,
+        call_span,
+        registry,
+        diagnostics,
+    );
     let substituted_params: Vec<ResolvedParam> = sig
         .params
         .iter()
-        .map(|p| {
-            let with_method = substitute_resolved_type(&p.ty, &method_subst, method.id);
-            let with_receiver =
-                substitute_resolved_type(&with_method, &receiver_subst, receiver.id);
-            ResolvedParam {
-                mode: p.mode,
-                name: p.name.clone(),
-                ty: with_receiver,
-            }
+        .map(|p| ResolvedParam {
+            mode: p.mode,
+            name: p.name.clone(),
+            ty: substitute(&p.ty, &subst),
         })
         .collect();
-    let with_method_return = substitute_resolved_type(&sig.return_type, &method_subst, method.id);
-    let substituted_return =
-        substitute_resolved_type(&with_method_return, &receiver_subst, receiver.id);
-    *outputs.method_type_args = method_subst
-        .into_iter()
-        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
-        .collect();
-    *outputs.receiver_type_args = receiver_subst
-        .into_iter()
-        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
-        .collect();
+    let substituted_return = substitute(&sig.return_type, &subst);
+    *outputs.method_type_args = subst.args(method.id);
+    *outputs.receiver_type_args = subst.args(receiver.id);
     (substituted_params, substituted_return)
 }
 
-/// Try to fill `None` slots of `subst` (owned by `owner`) by unifying
-/// `template` (the callee's declared shape) against `actual` (the
-/// expected type from the surrounding context). On conflict, walks
-/// away — the expected type is only a hint; authoritative bindings
-/// from args / receiver are never overridden.
-fn fill_remaining_from_expected(
-    template: &ResolvedType,
-    actual: &ResolvedType,
-    owner: GlobalRegistryId,
-    subst: &mut [Option<ResolvedType>],
+/// Pre-fill the receiver scope with the receiver value's resolved
+/// type-args. Lets `Pair<Int, String>.first()` pin `T = Int` from the
+/// receiver alone, before any arg unification.
+pub(super) fn seed_receiver_subst(
+    subst: &mut Substitution,
+    receiver_id: GlobalRegistryId,
+    receiver_type: &ResolvedType,
 ) {
-    let mut scratch = subst.to_vec();
-    if unify_resolved_type(template, actual, owner, &mut scratch).is_err() {
+    let ResolvedType::Named { type_args, .. } = receiver_type else {
         return;
-    }
-    for (slot, filled) in subst.iter_mut().zip(scratch.into_iter()) {
-        if slot.is_none() {
-            *slot = filled;
+    };
+    for (index, arg) in type_args.iter().enumerate() {
+        if arg.is_resolved() {
+            let _ = subst.set(receiver_id, TypeParamIndex::new(index as u32), arg.clone());
         }
     }
 }

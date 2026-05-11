@@ -1,6 +1,6 @@
 //! Resolver state threaded through every name-resolution recursion.
 
-use expo_ast::identifier::GlobalRegistryId;
+use expo_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::GlobalRegistry;
@@ -40,6 +40,7 @@ impl<'a> ResolverEnv<'a> {
     ) -> Resolver<'b> {
         Resolver {
             coercions: &mut *self.coercions,
+            current_return_type: None,
             enclosing_type,
             package: self.package,
             registry: self.registry,
@@ -82,6 +83,15 @@ impl<'a> ResolverEnv<'a> {
 /// each callee is honest about what it actually uses.
 pub(super) struct Resolver<'a> {
     pub coercions: &'a mut Coercions,
+    /// Return type of the innermost enclosing function-shape — the
+    /// outer `fn` initially, swapped to a closure's return when its
+    /// body resolves and restored on the way out. Threaded into
+    /// every `Statement::Return`'s value as the bidirectional hint
+    /// so things like `return Option.None` pick up the surrounding
+    /// `Option<T>` instead of bottoming out at `Option<?>`. Owned
+    /// (rather than `&'a ResolvedType`) so closure save/restore can
+    /// `mem::replace` without a borrowed-vs-owned mismatch.
+    pub current_return_type: Option<ResolvedType>,
     pub enclosing_type: Option<&'a str>,
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,

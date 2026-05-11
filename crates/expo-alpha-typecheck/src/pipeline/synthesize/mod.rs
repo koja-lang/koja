@@ -2,12 +2,6 @@
 //! `resolve`. Today: the `for` loop desugar in [`for_desugar`].
 //! Future synthesizers (default `Debug` impl, async desugar, …)
 //! land as additional submodules.
-//!
-//! The list-literal rewrite lives in [`super::resolve::expr`]
-//! instead — `[a, b, c]` desugars to `List.new().append(a)...`
-//! with the chain's resolutions stamped from the elements' inferred
-//! types, which is only possible after resolve has seen the
-//! element expressions.
 
 mod for_desugar;
 

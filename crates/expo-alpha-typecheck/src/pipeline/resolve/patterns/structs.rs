@@ -17,7 +17,7 @@ use super::super::ctx::Resolver;
 use super::super::structs::lookup_type;
 use super::super::types::display_resolution;
 use super::{PatternCoverage, resolve_pattern};
-use crate::pipeline::unify::substitute_resolved_type;
+use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{GlobalKind, ResolvedStructField};
 
 pub(super) fn resolve_struct_pattern(
@@ -109,16 +109,16 @@ fn resolve_struct_metadata(
             span,
         ));
     }
-    let subst: Vec<Option<ResolvedType>> = match subject_args {
-        Some(args) => args.iter().cloned().map(Some).collect(),
-        None => Vec::new(),
+    let subst = match subject_args {
+        Some(args) => Substitution::from_args(struct_id, args),
+        None => Substitution::empty(),
     };
     let declared = definition
         .fields
         .iter()
         .map(|field| ResolvedStructField {
             name: field.name.clone(),
-            ty: substitute_resolved_type(&field.ty, &subst, struct_id),
+            ty: substitute(&field.ty, &subst),
         })
         .collect();
     Some(StructPatternMetadata {

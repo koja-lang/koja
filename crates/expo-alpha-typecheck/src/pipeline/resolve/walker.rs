@@ -30,7 +30,7 @@ use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
 use super::coercion::Coercions;
 use super::ctx::{Resolver, ResolverEnv};
-use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::expr::resolve_expr_with_expected;
 use super::return_type::check_return_type;
 use super::statements::{resolve_assignment, resolve_compound_assignment};
 
@@ -147,6 +147,7 @@ fn resolve_function(
             .as_ref()
             .filter(|sig| sig.return_type.is_resolved())
             .map(|sig| sig.return_type.clone());
+        resolver.current_return_type = expected.clone();
         resolve_body_with_expected(body, expected.as_ref(), &mut resolver, diagnostics);
     }
 
@@ -272,7 +273,8 @@ pub(super) fn resolve_statement_with_expected(
         }
         Statement::Return { value, .. } => {
             if let Some(value) = value {
-                resolve_expr(value, resolver, diagnostics);
+                let expected = resolver.current_return_type.clone();
+                resolve_expr_with_expected(value, expected.as_ref(), resolver, diagnostics);
             }
         }
     }

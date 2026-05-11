@@ -4,6 +4,9 @@
 //!   type as expected.
 //! - `match` / `if` / `cond` / `ternary` arm tails inherit the same
 //!   expected from the enclosing position.
+//! - `return expr` threads the enclosing function's declared return
+//!   type into `expr` so an early-return value gets the same
+//!   bidirectional treatment as the trailing tail.
 //! - Generic enum unit variants (`Option.None`) get their type args
 //!   from the expected type when payload-driven inference can't
 //!   constrain them.
@@ -164,6 +167,50 @@ fn nested_match_arm_inherits_outer_expected_type() {
 }
 
 #[test]
+fn return_value_inherits_function_return_type() {
+    let source = "
+        enum Maybe<T>
+          Some(T)
+          None
+        end
+
+        fn early_none<T>(flag: Bool) -> Maybe<T>
+          if flag
+            return Maybe.None
+          end
+          Maybe.None
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn return_inside_closure_uses_closure_return_type_not_outer_fn() {
+    // The outer `fn` returns `Maybe<Int>`; the inner closure returns
+    // `Maybe<String>`. The closure's `return Maybe.None` must pin the
+    // unit variant against `Maybe<String>` (the closure's return),
+    // not the outer fn's `Maybe<Int>`.
+    let source = "
+        enum Maybe<T>
+          Some(T)
+          None
+        end
+
+        fn outer(flag: Bool) -> Maybe<Int>
+          inner = fn (b: Bool) -> Maybe<String>
+            if b
+              return Maybe.None
+            end
+            Maybe.Some(\"x\")
+          end
+          inner(flag)
+          Maybe.Some(1)
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn unit_variant_without_expected_still_diagnoses() {
     use common::typecheck_file_fail as typecheck_fail;
 
@@ -183,8 +230,8 @@ fn unit_variant_without_expected_still_diagnoses() {
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
-        failure.to_string().contains("cannot infer type parameters"),
-        "expected `cannot infer type parameters` diagnostic; got {failure}",
+        failure.to_string().contains("cannot infer type parameter"),
+        "expected `cannot infer type parameter` diagnostic; got {failure}",
     );
 }
 
@@ -208,8 +255,8 @@ fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
-        failure.to_string().contains("cannot infer type parameters"),
-        "expected `cannot infer type parameters` diagnostic when expected type's \
+        failure.to_string().contains("cannot infer type parameter"),
+        "expected `cannot infer type parameter` diagnostic when expected type's \
          head differs from the unit variant's enum; got {failure}",
     );
 }

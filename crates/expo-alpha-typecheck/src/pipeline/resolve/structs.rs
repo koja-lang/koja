@@ -10,13 +10,14 @@ use expo_ast::ast::{Diagnostic, Expr, FieldInit};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-use crate::pipeline::unify::{Conflict, substitute_resolved_type, unify_resolved_type};
+use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
 use super::coercion::{Compatible, check_compatible, coercion_span};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
-use super::types::{display_resolution, verify_bounds};
+use super::inference::{PhantomContext, finalize_inference, unify_pairs};
+use super::types::display_resolution;
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init
@@ -111,7 +112,7 @@ pub(super) fn resolve_struct_construction(
         .iter()
         .map(|field| ResolvedStructField {
             name: field.name.clone(),
-            ty: substitute_resolved_type(&field.ty, &subst, struct_id),
+            ty: substitute(&field.ty, &subst),
         })
         .collect();
     validate_named_fields(
@@ -122,13 +123,9 @@ pub(super) fn resolve_struct_construction(
         resolver,
         diagnostics,
     );
-    let type_args = subst
-        .into_iter()
-        .map(|slot| slot.unwrap_or_else(ResolvedType::unresolved))
-        .collect();
     ResolvedType::Named {
         resolution: Resolution::Global(struct_id),
-        type_args,
+        type_args: subst.args(struct_id),
     }
 }
 
@@ -145,37 +142,23 @@ fn infer_struct_type_args(
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<Option<ResolvedType>> {
-    let mut subst: Vec<Option<ResolvedType>> = vec![None; callee.type_params.len()];
-    for field in fields {
-        let Some((_, declared_field)) = lookup_named_field(declared, &field.name) else {
-            continue;
-        };
-        if !field.value.resolution.is_resolved() {
-            continue;
-        }
-        if let Err(conflict) = unify_resolved_type(
-            &declared_field.ty,
-            &field.value.resolution,
-            callee.id,
-            &mut subst,
-        ) {
-            emit_conflict(&callee, conflict, field.span, registry, diagnostics);
-        }
-    }
-    for (index, slot) in subst.iter().enumerate() {
-        if slot.is_none() {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck cannot infer type parameter `{}` of `{}` \
-                     from the supplied fields",
-                    callee.type_params[index], callee.label,
-                ),
-                span,
-            ));
-        }
-    }
-    verify_bounds(callee, &subst, span, registry, diagnostics);
+) -> Substitution {
+    let mut subst = Substitution::single(callee.id, callee.type_params.len());
+    let pairs = fields.iter().filter_map(|field| {
+        let (_, declared_field) = lookup_named_field(declared, &field.name)?;
+        Some((&declared_field.ty, &field.value.resolution, field.span))
+    });
+    unify_pairs(pairs, &mut subst, |conflict, field_span| {
+        emit_conflict(&callee, conflict, field_span, registry, diagnostics);
+    });
+    finalize_inference(
+        &[callee],
+        &subst,
+        &PhantomContext::Fields,
+        span,
+        registry,
+        diagnostics,
+    );
     subst
 }
 
@@ -347,8 +330,8 @@ pub(super) fn resolve_field_access(
     // receivers (`self: Bag<TypeParam(Bag, 0)>` inside an inherent
     // method on `struct Bag<T>`) the field type's `TypeParam`
     // round-trips back to itself.
-    let subst: Vec<Option<ResolvedType>> = receiver_args.iter().cloned().map(Some).collect();
-    substitute_resolved_type(&declared.ty, &subst, struct_id)
+    let subst = Substitution::from_args(struct_id, receiver_args);
+    substitute(&declared.ty, &subst)
 }
 
 /// `Global.<name>` types whose values are produced exclusively by

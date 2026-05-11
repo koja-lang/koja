@@ -711,9 +711,10 @@ fn generic_enum_unit_variant_construction_diagnoses_phantom() {
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
     assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("cannot infer type parameters of `TestApp.Maybe`")),
+        messages.iter().any(|m| {
+            m.contains("cannot infer type parameter `T` of `TestApp.Maybe`")
+                && m.contains("unit variant `None`")
+        }),
         "expected unit-variant Phantom diagnostic, got {messages:?}",
     );
 }

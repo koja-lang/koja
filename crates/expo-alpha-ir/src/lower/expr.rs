@@ -29,6 +29,7 @@ use super::control_flow::{
 };
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
+use super::list_literal::lower_list_literal;
 use super::loops::lower_while;
 use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
@@ -305,6 +306,15 @@ pub(super) fn lower_expr(
         ExprKind::While { condition, body } => {
             lower_while(condition, body, ctx, block, registry, output)
         }
+        ExprKind::List { elements } => lower_list_literal(
+            elements,
+            &expr.resolution,
+            expr.span,
+            ctx,
+            block,
+            registry,
+            output,
+        ),
         other => {
             output.diagnostics.push(Diagnostic::error(
                 format!(
