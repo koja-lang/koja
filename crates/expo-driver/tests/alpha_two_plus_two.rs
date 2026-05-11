@@ -2041,6 +2041,131 @@ fn alpha_run_interpreter_script_int_parse_prints_value() {
     );
 }
 
+/// Script-mode fixture exercising the auto-imported `Global.map`
+/// stdlib end-to-end through the literal-desugar path.
+/// `["a": 1, "b": 2].length()` lowers at IR-construction time to
+/// `Map.new().put("a", 1).put("b", 2).length()`. The interpreter
+/// keeps the entries in a `Vec<(Value, Value)>` behind an
+/// `Rc<RefCell<_>>`, mirroring how lists are stored. The LLVM
+/// backend's hashtable port is still in flight — that side will
+/// flip on once the shared probe/resize emitters land.
+const MAP_LITERAL_LENGTH_SCRIPT_SOURCE: &str = "
+    [\"a\": 1, \"b\": 2].length()
+";
+
+#[test]
+fn alpha_run_llvm_script_map_literal_length_prints_two() {
+    assert_script_prints(
+        "run_llvm_map_literal_length",
+        MAP_LITERAL_LENGTH_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "2",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_map_literal_length_prints_two() {
+    assert_script_prints(
+        "run_interpreter_map_literal_length",
+        MAP_LITERAL_LENGTH_SCRIPT_SOURCE,
+        None,
+        "2",
+    );
+}
+
+/// Script-mode fixture pinning the `Map.new().put(...).get(...)`
+/// chain end-to-end on the interpreter. `Map<String, Int>` is
+/// inferred bidirectionally from the literal value flowing into
+/// `put`. `get` returns `Option<Int>`; `unwrap` projects the
+/// payload. Cross-references the eval interpreter's
+/// `MapMethod::{New, Put, Get}` dispatch — the LLVM port for the
+/// same chain is gated on the in-flight hashtable lift.
+const MAP_GET_UNWRAP_SCRIPT_SOURCE: &str = "
+    [\"hits\": 7, \"misses\": 3].get(\"hits\").unwrap()
+";
+
+#[test]
+fn alpha_run_llvm_script_map_get_unwrap_prints_seven() {
+    assert_script_prints(
+        "run_llvm_map_get_unwrap",
+        MAP_GET_UNWRAP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "7",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_map_get_unwrap_prints_seven() {
+    assert_script_prints(
+        "run_interpreter_map_get_unwrap",
+        MAP_GET_UNWRAP_SCRIPT_SOURCE,
+        None,
+        "7",
+    );
+}
+
+/// Script-mode fixture exercising the `ListLiteral<T>` carrier
+/// rewrite for `Set<T>`. The binding annotation `Set<Int>` flows
+/// into `resolve_list_literal`, which detects the `Set` carrier on
+/// the `Global.ListLiteral` protocol and rewrites
+/// `[1, 1, 2, 2, 3]` in-place into `Set.from_list([1, 1, 2, 2, 3])`.
+/// `Set.from_list` dedupes during construction; `.length()` returns
+/// `3` on the interpreter.
+const SET_LITERAL_DEDUP_SCRIPT_SOURCE: &str = "
+    s: Set<Int> = [1, 1, 2, 2, 3]
+    s.length()
+";
+
+#[test]
+fn alpha_run_llvm_script_set_literal_dedup_prints_three() {
+    assert_script_prints(
+        "run_llvm_set_literal_dedup",
+        SET_LITERAL_DEDUP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "3",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_set_literal_dedup_prints_three() {
+    assert_script_prints(
+        "run_interpreter_set_literal_dedup",
+        SET_LITERAL_DEDUP_SCRIPT_SOURCE,
+        None,
+        "3",
+    );
+}
+
+/// Script-mode fixture pinning `Set.has?` on the interpreter. The
+/// `Set<Int>` carrier is synthesized from the list-literal binding
+/// initializer; `has?` then runs a linear probe over the deduped
+/// element vec and returns `Bool`. The auto-print wrapper renders
+/// `true\n`.
+const SET_HAS_SCRIPT_SOURCE: &str = "
+    s: Set<Int> = [1, 2, 3]
+    s.has?(2)
+";
+
+#[test]
+fn alpha_run_llvm_script_set_has_prints_true() {
+    assert_script_prints(
+        "run_llvm_set_has",
+        SET_HAS_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "true",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_set_has_prints_true() {
+    assert_script_prints(
+        "run_interpreter_set_has",
+        SET_HAS_SCRIPT_SOURCE,
+        None,
+        "true",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

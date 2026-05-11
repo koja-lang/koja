@@ -24,10 +24,13 @@ pub(super) mod cptr;
 mod cstring;
 mod equality;
 mod hash;
+mod hashtable;
 mod kernel;
 mod list;
+mod map;
 mod parse;
 mod print;
+mod set;
 mod string;
 
 /// Synthesize the body of an `@intrinsic` function. Forwards each
@@ -55,8 +58,10 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
             kernel::emit_panic(ctx, function, llvm_function)
         }
         IRIntrinsicId::List(method) => list::emit_list(ctx, function, llvm_function, method),
+        IRIntrinsicId::Map(method) => map::emit_map(ctx, function, llvm_function, method),
         IRIntrinsicId::Parse(target) => parse::emit_parse(ctx, function, llvm_function, target),
         IRIntrinsicId::Print => print::emit_global_print(ctx, function, llvm_function),
+        IRIntrinsicId::Set(method) => set::emit_set(ctx, function, llvm_function, method),
         IRIntrinsicId::String(method) => string::emit_string(ctx, function, llvm_function, method),
     }
 }

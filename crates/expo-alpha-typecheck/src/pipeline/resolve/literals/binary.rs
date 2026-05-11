@@ -24,9 +24,9 @@ use expo_ast::ast::{
 use expo_ast::identifier::ResolvedType;
 use expo_ast::span::Span;
 
-use super::ctx::Resolver;
-use super::expr::resolve_expr;
-use super::types::is_primitive;
+use super::super::ctx::Resolver;
+use super::super::expr::resolve_expr;
+use super::super::types::is_primitive;
 use crate::registry::GlobalRegistry;
 
 /// Per-segment kind decided from the AST modifiers and the
@@ -63,7 +63,7 @@ struct SegmentInfo {
 /// byte-aligned) / `Global.Bits` (otherwise) as the literal's type.
 /// Returns `ResolvedType::unresolved()` when any per-segment check
 /// errors so the seal pass declines to descend.
-pub(super) fn resolve_binary_literal(
+pub(in super::super) fn resolve_binary_literal(
     segments: &mut [BinarySegment],
     span: Span,
     resolver: &mut Resolver<'_>,

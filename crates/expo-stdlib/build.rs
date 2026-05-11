@@ -116,6 +116,8 @@ fn main() {
         "Global.cstring",
         "Global.bitwise",
         "Global.list",
+        "Global.map",
+        "Global.set",
         "Global.string",
         "Global.time",
         // random comes last — calls into `String.to_binary`, so the string

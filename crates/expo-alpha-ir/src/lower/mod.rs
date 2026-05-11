@@ -61,6 +61,7 @@ mod enums;
 mod expr;
 mod list_literal;
 mod loops;
+mod map_literal;
 mod match_expr;
 mod ops;
 mod ownership;

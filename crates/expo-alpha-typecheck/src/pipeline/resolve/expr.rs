@@ -10,7 +10,6 @@ use expo_ast::ast::{Diagnostic, Expr, ExprKind};
 use expo_ast::identifier::ResolvedType;
 use expo_ast::labels::expr_kind_label;
 
-use super::binary_literal::resolve_binary_literal;
 use super::calls::{CallSite, resolve_call, resolve_method_call};
 use super::closures::{resolve_closure, resolve_short_closure};
 use super::control_flow::{
@@ -19,7 +18,7 @@ use super::control_flow::{
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
-use super::list_literal::resolve_list_literal;
+use super::literals::{resolve_binary_literal, resolve_list_literal, resolve_map_literal};
 use super::match_expr::resolve_match;
 use super::ops::{binary_type, literal_type, unary_type};
 use super::strings::resolve_string;
@@ -44,6 +43,23 @@ pub(super) fn resolve_expr_with_expected(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    // Pre-dispatch for AST-rewriting literal shapes. List / Map
+    // literals can rewrite the *outer* expression in place (e.g.
+    // `s: Set<Int> = [1, 2]` becomes `Set.from_list([1, 2])` post-
+    // resolve). The main `match &mut expr.kind` below holds a
+    // borrow on `expr.kind`, which forbids replacing the kind from
+    // inside an arm; lifting these two cases out lets their
+    // resolvers take `&mut Expr` and mutate the kind freely.
+    if matches!(expr.kind, ExprKind::List { .. }) {
+        let ty = resolve_list_literal(expr, expected, resolver, diagnostics);
+        expr.resolution = ty;
+        return;
+    }
+    if matches!(expr.kind, ExprKind::Map { .. }) {
+        let ty = resolve_map_literal(expr, expected, resolver, diagnostics);
+        expr.resolution = ty;
+        return;
+    }
     let ty = match &mut expr.kind {
         ExprKind::Binary { op, left, right } => {
             resolve_expr(left, resolver, diagnostics);
@@ -167,9 +183,6 @@ pub(super) fn resolve_expr_with_expected(
             resolver,
             diagnostics,
         ),
-        ExprKind::List { elements } => {
-            resolve_list_literal(elements, expected, expr.span, resolver, diagnostics)
-        }
         ExprKind::Unary { op, operand } => {
             resolve_expr(operand, resolver, diagnostics);
             unary_type(*op, operand, expr.span, resolver.registry, diagnostics)

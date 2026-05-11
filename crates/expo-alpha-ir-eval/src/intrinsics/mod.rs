@@ -26,8 +26,10 @@ mod hash;
 mod helpers;
 mod kernel;
 mod list;
+mod map;
 mod parse;
 mod print;
+mod set;
 mod string;
 
 /// Run the registered intrinsic `id` against `args`. `function` is
@@ -58,8 +60,10 @@ pub(crate) fn dispatch<R: CallResolver>(
         IRIntrinsicId::Hash(impl_) => hash::dispatch(impl_, args),
         IRIntrinsicId::Kernel(KernelMethod::Panic) => kernel::panic(args),
         IRIntrinsicId::List(method) => list::dispatch(method, function, args, resolver),
+        IRIntrinsicId::Map(method) => map::dispatch(method, function, args),
         IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args),
         IRIntrinsicId::Print => print::global_print(args),
+        IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
         IRIntrinsicId::String(method) => string::dispatch(method, function, args),
     }
 }

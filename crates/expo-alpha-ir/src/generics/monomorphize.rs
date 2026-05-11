@@ -305,18 +305,19 @@ fn enqueue_member_methods(
 }
 
 /// True for stdlib structs that lower to a primitive [`IRType`] —
-/// `Global.CPtr<T>` (becomes `IRType::CPtr(...)`) and
-/// `Global.List<T>` (becomes `IRType::List(...)`). Mono enqueues
-/// the struct's methods (so call sites can dispatch) but skips
-/// creating an `IRStructDecl` (the IR has no struct storage to
-/// describe; the pointer / `{buf, len, cap}` shape lives entirely
-/// inside the LLVM type lowering).
+/// `Global.CPtr<T>` (becomes `IRType::CPtr(...)`), `Global.List<T>`
+/// (becomes `IRType::List(...)`), `Global.Map<K, V>` (becomes
+/// `IRType::Map { ... }`), and `Global.Set<T>` (becomes
+/// `IRType::Set(...)`). Mono enqueues the struct's methods (so
+/// call sites can dispatch) but skips creating an `IRStructDecl`
+/// (the IR has no struct storage to describe; the pointer or hash-
+/// table shape lives entirely inside the LLVM type lowering).
 fn is_primitive_struct_template(identifier: &expo_ast::identifier::Identifier) -> bool {
     if identifier.package() != "Global" {
         return false;
     }
     let path = identifier.path();
-    path.len() == 1 && (path[0] == "CPtr" || path[0] == "List")
+    path.len() == 1 && matches!(path[0].as_str(), "CPtr" | "List" | "Map" | "Set")
 }
 
 fn assert_arity(

@@ -43,12 +43,14 @@ pub enum IRIntrinsicId {
     Hash(HashImpl),
     Kernel(KernelMethod),
     List(ListMethod),
+    Map(MapMethod),
     Parse(ParseTarget),
     /// Transitional. The script-mode test fixture's `@intrinsic fn
     /// print(s: String)` plus the project-mode auto-print of
     /// `main`'s tail value. Goes away when the `Debug` protocol
     /// displaces both.
     Print,
+    Set(SetMethod),
     String(StringMethod),
 }
 
@@ -103,6 +105,36 @@ pub enum ListMethod {
     Pop,
     ReplaceAt,
     Slice,
+}
+
+/// Methods on `Map<K, V>`. Like [`ListMethod`], the key + value
+/// types don't appear here — both ride the [`crate::IRFunction`]
+/// signature, and backends specialize layouts per `(K, V)` pair
+/// from there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MapMethod {
+    EmptyQ,
+    FromMap,
+    Get,
+    HasQ,
+    Length,
+    New,
+    Put,
+    Remove,
+}
+
+/// Methods on `Set<T>`. Same monomorphization story as
+/// [`ListMethod`] / [`MapMethod`] — the element type rides the
+/// [`crate::IRFunction`] signature.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SetMethod {
+    EmptyQ,
+    FromList,
+    HasQ,
+    Insert,
+    Length,
+    New,
+    Remove,
 }
 
 /// Methods on `String` flagged `@intrinsic` in
@@ -211,6 +243,12 @@ impl IRIntrinsicId {
         }
         if receiver == "List" {
             return ListMethod::from_source(method).map(Self::List);
+        }
+        if receiver == "Map" {
+            return MapMethod::from_source(method).map(Self::Map);
+        }
+        if receiver == "Set" {
+            return SetMethod::from_source(method).map(Self::Set);
         }
         if receiver == "String"
             && let Some(m) = StringMethod::from_source(method)
@@ -458,6 +496,62 @@ impl ListMethod {
     }
 }
 
+impl MapMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "empty?" => Self::EmptyQ,
+            "from_map" => Self::FromMap,
+            "get" => Self::Get,
+            "has?" => Self::HasQ,
+            "length" => Self::Length,
+            "new" => Self::New,
+            "put" => Self::Put,
+            "remove" => Self::Remove,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::EmptyQ => "empty?",
+            Self::FromMap => "from_map",
+            Self::Get => "get",
+            Self::HasQ => "has?",
+            Self::Length => "length",
+            Self::New => "new",
+            Self::Put => "put",
+            Self::Remove => "remove",
+        }
+    }
+}
+
+impl SetMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "empty?" => Self::EmptyQ,
+            "from_list" => Self::FromList,
+            "has?" => Self::HasQ,
+            "insert" => Self::Insert,
+            "length" => Self::Length,
+            "new" => Self::New,
+            "remove" => Self::Remove,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::EmptyQ => "empty?",
+            Self::FromList => "from_list",
+            Self::HasQ => "has?",
+            Self::Insert => "insert",
+            Self::Length => "length",
+            Self::New => "new",
+            Self::Remove => "remove",
+        }
+    }
+}
+
 impl ParseTarget {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
@@ -512,8 +606,10 @@ impl fmt::Display for IRIntrinsicId {
             Self::Hash(impl_) => write!(f, "{}.hash", impl_.segment()),
             Self::Kernel(m) => write!(f, "Kernel.{}", m.segment()),
             Self::List(m) => write!(f, "List.{}", m.segment()),
+            Self::Map(m) => write!(f, "Map.{}", m.segment()),
             Self::Parse(target) => write!(f, "{}.parse", target.segment()),
             Self::Print => f.write_str("print"),
+            Self::Set(m) => write!(f, "Set.{}", m.segment()),
             Self::String(m) => write!(f, "String.{}", m.segment()),
         }
     }
@@ -587,6 +683,45 @@ mod tests {
                 &["List", method],
                 IRIntrinsicId::List(variant),
                 &format!("List.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn map_methods_cover_the_full_surface() {
+        for (method, variant) in [
+            ("empty?", MapMethod::EmptyQ),
+            ("from_map", MapMethod::FromMap),
+            ("get", MapMethod::Get),
+            ("has?", MapMethod::HasQ),
+            ("length", MapMethod::Length),
+            ("new", MapMethod::New),
+            ("put", MapMethod::Put),
+            ("remove", MapMethod::Remove),
+        ] {
+            assert_round_trip(
+                &["Map", method],
+                IRIntrinsicId::Map(variant),
+                &format!("Map.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn set_methods_cover_the_full_surface() {
+        for (method, variant) in [
+            ("empty?", SetMethod::EmptyQ),
+            ("from_list", SetMethod::FromList),
+            ("has?", SetMethod::HasQ),
+            ("insert", SetMethod::Insert),
+            ("length", SetMethod::Length),
+            ("new", SetMethod::New),
+            ("remove", SetMethod::Remove),
+        ] {
+            assert_round_trip(
+                &["Set", method],
+                IRIntrinsicId::Set(variant),
+                &format!("Set.{method}"),
             );
         }
     }

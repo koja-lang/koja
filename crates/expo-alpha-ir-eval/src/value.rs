@@ -15,6 +15,18 @@ use std::rc::Rc;
 
 use expo_alpha_ir::{IRSymbol, IRVariantTag};
 
+/// `Map<K, V>` storage: `(key, value)` pairs in insertion order.
+/// Eval doesn't need a real hash table — linear probes over a Vec
+/// give the right semantics in tests' tiny working sets, and `Map`
+/// values are `Rc<RefCell<...>>` for the same in-place-mutation
+/// reasons as [`Value::List`] (every collection-mutating intrinsic
+/// is `move self`).
+pub type MapEntries = Rc<RefCell<Vec<(Value, Value)>>>;
+
+/// `Set<T>` storage: unique elements in insertion order. Same
+/// motivation as [`MapEntries`] for the `Rc<RefCell<...>>` shape.
+pub type SetEntries = Rc<RefCell<Vec<Value>>>;
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     /// Owned heap bytes; `bit_length` is implicitly `bytes.len() * 8`.
@@ -62,6 +74,15 @@ pub enum Value {
     /// behavior in practice (every alpha intrinsic that mutates
     /// consumes its receiver via `move self`).
     List(Rc<RefCell<Vec<Value>>>),
+    /// Heap-backed associative map keyed by [`Value`]. Eval uses
+    /// linear probes for `Eq` (matches Expo's `Equality` protocol's
+    /// `eq` shape — every key compared by value, no hashing). Same
+    /// `Rc<RefCell<…>>` motivation as [`Value::List`] for in-place
+    /// mutation.
+    Map(MapEntries),
+    /// Heap-backed unique-element set. Same shape rationale as
+    /// [`Value::Map`].
+    Set(SetEntries),
     /// Byte payload backing an Expo `String`. The runtime ABI
     /// doesn't enforce UTF-8 (every Expo string is "bytes that
     /// happen to render as UTF-8 most of the time"), so eval stores
@@ -193,6 +214,8 @@ impl fmt::Display for Value {
             Value::Float64(v) => write!(f, "{v:?}"),
             Value::Int(i) => write!(f, "{i}"),
             Value::List(items) => write_list_items(f, &items.borrow()),
+            Value::Map(entries) => write_map_entries(f, &entries.borrow()),
+            Value::Set(items) => write_set_items(f, &items.borrow()),
             Value::String(bytes) => f.write_str(&String::from_utf8_lossy(bytes)),
             Value::Struct { symbol, fields } => {
                 write!(f, "{symbol}(")?;
@@ -232,6 +255,38 @@ fn write_list_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result 
         write!(f, "{value}")?;
     }
     write!(f, "]")
+}
+
+/// Render a [`Value::Map`] as `[k1: v1, k2: v2]`. Empty maps render
+/// as `[:]` to disambiguate from an empty list literal — matches
+/// the source-level convention.
+fn write_map_entries(f: &mut fmt::Formatter<'_>, entries: &[(Value, Value)]) -> fmt::Result {
+    if entries.is_empty() {
+        return write!(f, "[:]");
+    }
+    write!(f, "[")?;
+    for (index, (key, value)) in entries.iter().enumerate() {
+        if index > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{key}: {value}")?;
+    }
+    write!(f, "]")
+}
+
+/// Render a [`Value::Set`] as `{a, b, c}`. Empty sets render as
+/// `{}`. Curly braces (vs the list literal's brackets) make the
+/// shape unambiguous in eval's debug output even though the source
+/// syntax for set literals reuses `[...]`.
+fn write_set_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result {
+    write!(f, "{{")?;
+    for (index, value) in items.iter().enumerate() {
+        if index > 0 {
+            write!(f, ", ")?;
+        }
+        write!(f, "{value}")?;
+    }
+    write!(f, "}}")
 }
 
 /// Render a [`Value::Binary`] as `<<0x48, 0x65>>`. Mirrors the LLVM

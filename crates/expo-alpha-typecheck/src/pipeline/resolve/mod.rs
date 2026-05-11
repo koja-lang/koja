@@ -21,6 +21,9 @@
 //! - [`calls`] — bare and method-style call resolution.
 //! - [`structs`] — struct-literal construction and field access.
 //! - [`idents`] — bare identifier and `self` resolution.
+//! - [`literals`] — literal-shaped expressions: list, map, binary.
+//!   Shares carrier-protocol mechanics across protocol-aware
+//!   literal families.
 //! - [`strings`] — string literal resolution.
 //! - [`control_flow`] — `if` / `unless` (Unit-typed; value-producing
 //!   forms land with locals).
@@ -34,7 +37,6 @@
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 //! [`ResolvedType`]: expo_ast::identifier::ResolvedType
 
-mod binary_literal;
 mod calls;
 mod closures;
 pub(crate) mod coercion;
@@ -44,7 +46,7 @@ mod enums;
 mod expr;
 mod idents;
 mod inference;
-mod list_literal;
+mod literals;
 mod match_expr;
 mod ops;
 mod patterns;

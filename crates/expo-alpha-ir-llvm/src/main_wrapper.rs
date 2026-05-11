@@ -283,6 +283,18 @@ fn emit_print_call<'ctx>(
                  project a primitive (e.g. `.length()`) from the trailing expression",
             )));
         }
+        IRType::Map { key, value } => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM does not yet auto-print `Map<{key:?}, {value:?}>` return values; \
+                 project a primitive (e.g. `.length()`) from the trailing expression",
+            )));
+        }
+        IRType::Set(element) => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM does not yet auto-print `Set<{element:?}>` return values; \
+                 project a primitive (e.g. `.length()`) from the trailing expression",
+            )));
+        }
     };
     let printer = declare_runtime_printer(ctx, printer_symbol, argument_type);
     ctx.builder

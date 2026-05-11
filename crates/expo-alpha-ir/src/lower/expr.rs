@@ -31,6 +31,7 @@ use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
 use super::list_literal::lower_list_literal;
 use super::loops::lower_while;
+use super::map_literal::lower_map_literal;
 use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
     bin_op_result_type, const_value_type, int_const_at_width, lower_bin_op, lower_literal,
@@ -308,6 +309,15 @@ pub(super) fn lower_expr(
         }
         ExprKind::List { elements } => lower_list_literal(
             elements,
+            &expr.resolution,
+            expr.span,
+            ctx,
+            block,
+            registry,
+            output,
+        ),
+        ExprKind::Map { entries } => lower_map_literal(
+            entries,
             &expr.resolution,
             expr.span,
             ctx,

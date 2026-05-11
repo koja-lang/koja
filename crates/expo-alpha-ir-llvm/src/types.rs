@@ -56,7 +56,7 @@ pub(crate) fn ir_int_type<'ctx>(
         IRType::Int16 | IRType::UInt16 => Ok(context.i16_type()),
         IRType::Int32 | IRType::UInt32 => Ok(context.i32_type()),
         IRType::Int64 | IRType::UInt64 => Ok(context.i64_type()),
-        IRType::List(_) => Err(LlvmError::Codegen(format!(
+        IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => Err(LlvmError::Codegen(format!(
             "expected an integer or Bool IRType, got `{ty:?}`"
         ))),
         IRType::String => Err(LlvmError::Codegen(
@@ -103,6 +103,7 @@ pub(crate) fn ir_basic_type<'ctx>(
         IRType::Float64 => Ok(ctx.context.f64_type().into()),
         IRType::Function { .. } => Ok(closure_fat_ptr_type(ctx).into()),
         IRType::List(_) => Ok(list_value_type(ctx).into()),
+        IRType::Map { .. } | IRType::Set(_) => Ok(hashtable_value_type(ctx).into()),
         IRType::Struct(symbol) => Ok(ctx.layouts.struct_type(symbol.mangled()).into()),
         IRType::Unit => Err(LlvmError::Codegen(
             "expected a value-level IRType, got `Unit`".to_string(),
@@ -159,6 +160,25 @@ pub(crate) fn list_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx>
     let i64_ty = ctx.context.i64_type();
     ctx.context
         .struct_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false)
+}
+
+/// Shared `Map<K, V>` / `Set<T>` value shape:
+/// `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`.
+/// Open-addressed hash table with linear probing; `entries_ptr` is
+/// `[Entry; capacity]` (a `Map` entry is a key-value pair, a `Set`
+/// entry is just the element), `states_ptr` is `[u8; capacity]`
+/// (`0` empty / `1` occupied / `2` tombstone). Both buffers live
+/// off the GC-rooted heap. The struct itself is anonymous so every
+/// `IRType::Map { .. }` and `IRType::Set(_)` shares a single LLVM
+/// type — element / entry size only enters when an emitter
+/// computes byte offsets.
+pub(crate) fn hashtable_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    ctx.context.struct_type(
+        &[ptr_ty.into(), ptr_ty.into(), i64_ty.into(), i64_ty.into()],
+        false,
+    )
 }
 
 /// LLVM `FunctionType` for a closure body's signature. Prepends an

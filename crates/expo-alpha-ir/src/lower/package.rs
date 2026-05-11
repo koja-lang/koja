@@ -527,6 +527,44 @@ fn global_to_ir_type(
             });
             return IRType::List(Box::new(element));
         }
+        if last == "Map" {
+            assert_eq!(
+                type_args.len(),
+                2,
+                "alpha IR lower: stdlib primitive `Global.Map` requires exactly two type \
+                 arguments; got {} ({type_args:?})",
+                type_args.len(),
+            );
+            let key = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
+            let value = resolved_type_to_ir_type(&type_args[1], registry, instantiations);
+            instantiations.push(Instantiation {
+                template: id,
+                args: type_args.to_vec(),
+                method_args: Vec::new(),
+                owner: id,
+            });
+            return IRType::Map {
+                key: Box::new(key),
+                value: Box::new(value),
+            };
+        }
+        if last == "Set" {
+            assert_eq!(
+                type_args.len(),
+                1,
+                "alpha IR lower: stdlib primitive `Global.Set` requires exactly one type \
+                 argument; got {} ({type_args:?})",
+                type_args.len(),
+            );
+            let element = resolved_type_to_ir_type(&type_args[0], registry, instantiations);
+            instantiations.push(Instantiation {
+                template: id,
+                args: type_args.to_vec(),
+                method_args: Vec::new(),
+                owner: id,
+            });
+            return IRType::Set(Box::new(element));
+        }
         let primitive = match last {
             "Binary" => Some(IRType::Binary),
             "Bits" => Some(IRType::Bits),

@@ -132,6 +132,13 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         IRType::List(inner) => {
             require_supported_type(inner, &|| format!("{} (List element)", location()))
         }
+        IRType::Map { key, value } => {
+            require_supported_type(key, &|| format!("{} (Map key)", location()));
+            require_supported_type(value, &|| format!("{} (Map value)", location()));
+        }
+        IRType::Set(inner) => {
+            require_supported_type(inner, &|| format!("{} (Set element)", location()))
+        }
         IRType::Function { params, ret } => {
             for (idx, param) in params.iter().enumerate() {
                 require_supported_type(param, &|| {

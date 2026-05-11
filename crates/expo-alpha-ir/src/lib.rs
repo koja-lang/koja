@@ -39,7 +39,7 @@ mod generics;
 mod intrinsic_id;
 mod local;
 mod lower;
-mod mangling;
+pub mod mangling;
 mod merge;
 mod ownership;
 mod package;
@@ -59,7 +59,8 @@ pub use function::{
 };
 pub use intrinsic_id::{
     BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, EqualityImpl, HashImpl,
-    IRIntrinsicId, IntType, KernelMethod, ListMethod, ParseTarget, StringMethod,
+    IRIntrinsicId, IntType, KernelMethod, ListMethod, MapMethod, ParseTarget, SetMethod,
+    StringMethod,
 };
 pub use local::IRLocalId;
 pub use ownership::Ownership;

@@ -14,6 +14,8 @@
 //! the helpers below own all string concatenation so `IRSymbol`
 //! stays opaque outside this module.
 
+use expo_ast::identifier::Identifier;
+
 use crate::function::IRSymbol;
 use crate::types::IRType;
 
@@ -47,7 +49,7 @@ pub(crate) fn mangled_function_name(symbol: &IRSymbol, args: &[IRType]) -> IRSym
 /// single helper so the symbols agree by construction. With empty
 /// `receiver_args` *and* empty `method_args` the result is just
 /// `struct_template.derived(".{method_name}")`.
-pub(crate) fn mangled_method_name(
+pub fn mangled_method_name(
     struct_template: &IRSymbol,
     receiver_args: &[IRType],
     method_name: &str,
@@ -60,6 +62,17 @@ pub(crate) fn mangled_method_name(
         format!(".{method_name}{}", render_type_args(method_args))
     };
     receiver.derived(&suffix)
+}
+
+/// Mint the `IRSymbol` rooted at `Global.<receiver>` for a stdlib
+/// primitive receiver like `Bool`, `Int`, `String`. Stamped to the
+/// same shape the lift pass produces for the corresponding `impl
+/// <Receiver> { @intrinsic fn <method> }` decl in the `Global`
+/// package, so cross-crate callers (LLVM/eval intrinsic emitters)
+/// can look up `<Type>.hash` / `<Type>.eq` by `IRSymbol` without
+/// reaching into [`IRSymbol`]'s private constructors.
+pub fn global_primitive_symbol(receiver: &str) -> IRSymbol {
+    IRSymbol::from_identifier(&Identifier::new("Global", vec![receiver.to_string()]))
 }
 
 fn render_type_args(args: &[IRType]) -> String {
@@ -85,6 +98,10 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Int32 => "Int32".to_string(),
         IRType::Int64 => "Int64".to_string(),
         IRType::List(inner) => format!("List_${}$", mangle_type(inner)),
+        IRType::Map { key, value } => {
+            format!("Map_${}.{}$", mangle_type(key), mangle_type(value))
+        }
+        IRType::Set(inner) => format!("Set_${}$", mangle_type(inner)),
         IRType::String => "String".to_string(),
         IRType::UInt8 => "UInt8".to_string(),
         IRType::UInt16 => "UInt16".to_string(),
