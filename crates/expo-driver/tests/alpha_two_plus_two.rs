@@ -1953,15 +1953,16 @@ fn alpha_run_interpreter_script_string_length_prints_five() {
     );
 }
 
-/// Script-mode fixture exercising the `Random.int` LLVM path
-/// end-to-end. `Random.int(7, 7)` collapses to the inclusive single-
+/// Script-mode fixture exercising `Random.int` end-to-end on both
+/// backends. `Random.int(7, 7)` collapses to the inclusive single-
 /// value range — both `min` and `max` are `7`, so the value
 /// `expo_random_int` returns is always `7`. Pins the alpha
-/// pipeline's auto-import of `Global.random` + the extern wire-up
-/// to `expo-runtime::system::expo_random_int`. Eval can't link the
-/// extern (it surfaces as `RuntimeError::ExternNotSupported`), so
-/// only the LLVM backend is exercised here; the eval contract is
-/// pinned separately in `expo-alpha-ir-eval/tests`.
+/// pipeline's auto-import of `Global.random` and the
+/// `expo_random_int` extern wire-up: LLVM links the runtime
+/// `expo-runtime::system::expo_random_int`; eval routes through
+/// the curated extern dispatch table in `expo-alpha-ir-eval`'s
+/// `externs/random.rs`, which calls the same C symbol from the
+/// host process.
 const RANDOM_INT_FIXED_SCRIPT_SOURCE: &str = "
     Random.int(7, 7)
 ";
@@ -1973,6 +1974,70 @@ fn alpha_run_llvm_script_random_int_fixed_prints_seven() {
         RANDOM_INT_FIXED_SCRIPT_SOURCE,
         Some("--backend=llvm"),
         "7",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_random_int_fixed_prints_seven() {
+    assert_script_prints(
+        "run_interpreter_random_int_fixed",
+        RANDOM_INT_FIXED_SCRIPT_SOURCE,
+        None,
+        "7",
+    );
+}
+
+/// Script-mode fixture exercising `Random.bytes(N).byte_size()`
+/// end-to-end on both backends. The chain runs
+/// `expo_random_bytes -> CPtr<UInt8>.to_string -> String.to_binary
+/// -> Binary.byte_size`, pinning the cross-backend FFI wire-up:
+/// LLVM calls the runtime and zero-cost flows the pointer through
+/// the type system; eval calls the runtime through its extern
+/// table, copies the bytes out via the length-prefixed Expo string
+/// ABI, and frees the source header chunk.
+const RANDOM_BYTES_SIZE_SCRIPT_SOURCE: &str = "
+    Random.bytes(32).byte_size()
+";
+
+#[test]
+fn alpha_run_llvm_script_random_bytes_size_prints_thirtytwo() {
+    assert_script_prints(
+        "run_llvm_random_bytes_size",
+        RANDOM_BYTES_SIZE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "32",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_random_bytes_size_prints_thirtytwo() {
+    assert_script_prints(
+        "run_interpreter_random_bytes_size",
+        RANDOM_BYTES_SIZE_SCRIPT_SOURCE,
+        None,
+        "32",
+    );
+}
+
+/// Script-mode fixture pinning `Int.parse` end-to-end on both
+/// backends — the `Result<Int, String>` enum is constructed via
+/// receiver-symbol resolution off `function.return_type` on the
+/// eval side and via the runtime helper on the LLVM side. Both
+/// backends print `123` after matching on the `Ok` arm.
+const INT_PARSE_SCRIPT_SOURCE: &str = "
+    match Int.parse(\"123\")
+      Ok(v) -> v
+      Err(_) -> -1
+    end
+";
+
+#[test]
+fn alpha_run_interpreter_script_int_parse_prints_value() {
+    assert_script_prints(
+        "run_interpreter_int_parse",
+        INT_PARSE_SCRIPT_SOURCE,
+        None,
+        "123",
     );
 }
 

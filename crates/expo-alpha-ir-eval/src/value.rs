@@ -27,6 +27,14 @@ pub enum Value {
         bit_length: u64,
     },
     Bool(bool),
+    /// Raw C pointer — backs `CPtr<T>` and the `@extern "C"` shims
+    /// in [`crate::externs`] that traffic in pointers. Eval is
+    /// single-threaded and in-process, so the pointer is valid for
+    /// the duration of its referent — same memory the LLVM backend
+    /// would observe. The element type `T` is type-level only;
+    /// intrinsic emitters consult `function.params[0].ty` /
+    /// `function.return_type` when they need its size.
+    CPtr(*mut u8),
     /// First-class closure value. `body` resolves through the
     /// interpreter's call resolver to a `FunctionKind::Closure`
     /// `IRFunction`; `captures` is the env array indexed by every
@@ -54,7 +62,14 @@ pub enum Value {
     /// behavior in practice (every alpha intrinsic that mutates
     /// consumes its receiver via `move self`).
     List(Rc<RefCell<Vec<Value>>>),
-    String(String),
+    /// Byte payload backing an Expo `String`. The runtime ABI
+    /// doesn't enforce UTF-8 (every Expo string is "bytes that
+    /// happen to render as UTF-8 most of the time"), so eval stores
+    /// raw bytes here too — matches v1's permissive treatment.
+    /// Chains like `Random.bytes(n).to_string().to_binary()` rely
+    /// on flowing arbitrary bytes through a `String` value without
+    /// the interpreter rejecting non-UTF-8 payloads.
+    String(Vec<u8>),
     Struct {
         symbol: IRSymbol,
         fields: Vec<Value>,
@@ -96,9 +111,24 @@ impl Value {
         }
     }
 
+    /// Borrow the bytes backing a [`Value::String`]. Use this when
+    /// the operation is byte-oriented (concat, byte length, FFI
+    /// passthrough) — it sidesteps the UTF-8 validity question
+    /// entirely.
+    pub fn as_string_bytes(&self) -> Option<&[u8]> {
+        match self {
+            Value::String(bytes) => Some(bytes.as_slice()),
+            _ => None,
+        }
+    }
+
+    /// Borrow a [`Value::String`] as `&str` when its bytes are
+    /// valid UTF-8. Returns `None` for non-string values or when
+    /// the payload isn't valid UTF-8 — callers that need codepoint
+    /// semantics surface a clean error in the latter case.
     pub fn as_string(&self) -> Option<&str> {
         match self {
-            Value::String(s) => Some(s.as_str()),
+            Value::String(bytes) => std::str::from_utf8(bytes).ok(),
             _ => None,
         }
     }
@@ -110,6 +140,7 @@ impl fmt::Display for Value {
             Value::Binary(bytes) => write_binary_bytes(f, bytes),
             Value::Bits { bytes, bit_length } => write_bits_bytes(f, bytes, *bit_length),
             Value::Bool(b) => write!(f, "{b}"),
+            Value::CPtr(ptr) => write_cptr(f, *ptr),
             Value::Closure { body, captures } => {
                 write!(f, "<closure {body}")?;
                 if !captures.is_empty() {
@@ -162,7 +193,7 @@ impl fmt::Display for Value {
             Value::Float64(v) => write!(f, "{v:?}"),
             Value::Int(i) => write!(f, "{i}"),
             Value::List(items) => write_list_items(f, &items.borrow()),
-            Value::String(s) => f.write_str(s),
+            Value::String(bytes) => f.write_str(&String::from_utf8_lossy(bytes)),
             Value::Struct { symbol, fields } => {
                 write!(f, "{symbol}(")?;
                 for (index, field) in fields.iter().enumerate() {
@@ -175,6 +206,17 @@ impl fmt::Display for Value {
             }
             Value::Unit => write!(f, "()"),
         }
+    }
+}
+
+/// Render a [`Value::CPtr`] as `<cptr null>` or `<cptr 0x...>`.
+/// Mirrors the LLVM runtime printer's shape so eval / native produce
+/// byte-identical stdout when a pointer leaks into `print`.
+fn write_cptr(f: &mut fmt::Formatter<'_>, ptr: *mut u8) -> fmt::Result {
+    if ptr.is_null() {
+        write!(f, "<cptr null>")
+    } else {
+        write!(f, "<cptr 0x{:x}>", ptr as usize)
     }
 }
 

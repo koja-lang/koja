@@ -710,9 +710,9 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
                     detail: format!("Concat<String> on `{left}` and `{right}`"),
                 });
             };
-            let mut out = String::with_capacity(l.len() + r.len());
-            out.push_str(l);
-            out.push_str(r);
+            let mut out = Vec::with_capacity(l.len() + r.len());
+            out.extend_from_slice(l);
+            out.extend_from_slice(r);
             Ok(Value::String(out))
         }
         ConcatKind::Binary => {
@@ -865,14 +865,13 @@ fn construct_binary_literal(
                 bit_offset,
             } => {
                 let resolved = lookup(&frame.values, *value)?;
-                let Value::String(text) = resolved else {
+                let Value::String(bytes) = resolved else {
                     return Err(RuntimeError::TypeMismatch {
                         detail: format!(
                             "binary literal string segment expected a String value; got {resolved}",
                         ),
                     });
                 };
-                let bytes = text.as_bytes();
                 debug_assert!(
                     bytes.len() as u64 >= *byte_length,
                     "interpreter: BinaryConstruct string segment carries byte_length {byte_length} \
@@ -966,7 +965,7 @@ fn materialize_const(value: &ConstValue) -> Value {
         ConstValue::Int16(v) => Value::Int(*v as i64),
         ConstValue::Int32(v) => Value::Int(*v as i64),
         ConstValue::Int64(v) => Value::Int(*v),
-        ConstValue::String(s) => Value::String(s.clone()),
+        ConstValue::String(s) => Value::String(s.as_bytes().to_vec()),
         ConstValue::UInt8(v) => Value::Int(*v as i64),
         ConstValue::UInt16(v) => Value::Int(*v as i64),
         ConstValue::UInt32(v) => Value::Int(*v as i64),

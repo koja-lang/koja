@@ -27,7 +27,7 @@ pub(super) fn dispatch(impl_: HashImpl, args: &[Value]) -> Result<Value, Runtime
     let mixed = match (impl_, arg) {
         (HashImpl::Bool, Value::Bool(b)) => splitmix64(*b as u64),
         (HashImpl::Int(_), Value::Int(v)) => splitmix64(*v as u64),
-        (HashImpl::String, Value::String(s)) => fnv1a(s.as_bytes()),
+        (HashImpl::String, Value::String(bytes)) => fnv1a(bytes),
         (_, other) => {
             return Err(RuntimeError::TypeMismatch {
                 detail: format!(

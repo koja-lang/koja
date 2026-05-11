@@ -10,7 +10,7 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 
 pub(super) fn panic(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::String(message)] = args else {
+    let [Value::String(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
                 "Kernel.panic expects a single String argument; got {} arg(s): {args:?}",
@@ -19,6 +19,6 @@ pub(super) fn panic(args: &[Value]) -> Result<Value, RuntimeError> {
         });
     };
     Err(RuntimeError::Panicked {
-        message: message.clone(),
+        message: String::from_utf8_lossy(bytes).into_owned(),
     })
 }

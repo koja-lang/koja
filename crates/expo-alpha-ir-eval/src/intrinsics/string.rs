@@ -1,17 +1,21 @@
 //! `String` method intrinsics. Eval-side codepoint walking goes
 //! through Rust's `str` primitives so semantics match v1 byte-for-
-//! byte. `to_cstring` errors with [`RuntimeError::Unsupported`] —
-//! eval has no `CPtr` value variant (mirrors
-//! [`crate::intrinsics::cstring::to_string`]), so the conversion is
-//! LLVM-only.
+//! byte. `to_cstring` allocates a null-terminated `malloc` copy of
+//! the receiver and bundles the pointer + byte length into a
+//! [`Value::Struct`] matching the `CString` decl — callers free it
+//! through `CString.free` (which routes to `CPtr.free`).
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, StringMethod};
+use std::ptr;
+
+use expo_alpha_ir::{IRFunction, IRSymbol, IRType, StringMethod};
 
 use crate::error::RuntimeError;
-use crate::value::{EnumPayload, Value};
+use crate::intrinsics::helpers;
+use crate::value::Value;
 
-const SOME_TAG: IRVariantTag = IRVariantTag(0);
-const NONE_TAG: IRVariantTag = IRVariantTag(1);
+unsafe extern "C" {
+    fn malloc(size: usize) -> *mut u8;
+}
 
 pub(super) fn dispatch(
     method: StringMethod,
@@ -24,50 +28,63 @@ pub(super) fn dispatch(
         StringMethod::Length => length(args),
         StringMethod::Slice => slice(args),
         StringMethod::ToBinary => to_binary(args),
-        StringMethod::ToCstring => to_cstring(),
+        StringMethod::ToCstring => to_cstring(function, args),
     }
 }
 
 fn byte_length(args: &[Value]) -> Result<Value, RuntimeError> {
-    let s = expect_string(args, 0, "String.byte_length")?;
-    Ok(Value::Int(s.len() as i64))
+    let bytes = expect_string_bytes(args, 0, "String.byte_length")?;
+    Ok(Value::Int(bytes.len() as i64))
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {
-    let s = expect_string(args, 0, "String.length")?;
+    let s = expect_string_utf8(args, 0, "String.length")?;
     Ok(Value::Int(s.chars().count() as i64))
 }
 
 fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
-    let s = expect_string(args, 0, "String.to_binary")?;
-    Ok(Value::String(s.to_string()))
+    let bytes = expect_string_bytes(args, 0, "String.to_binary")?;
+    Ok(Value::Binary(bytes.to_vec()))
 }
 
-fn to_cstring() -> Result<Value, RuntimeError> {
-    Err(RuntimeError::Unsupported {
-        detail: "`String.to_cstring` is not implemented in the eval interpreter — \
-             CString carries a CPtr<UInt8> with no in-process \
-             representation. Use `--backend=llvm`."
-            .to_string(),
+fn to_cstring(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let bytes = expect_string_bytes(args, 0, "String.to_cstring")?;
+    let cstring_symbol = struct_return_symbol(function, "String.to_cstring")?;
+    let total = bytes.len() + 1; // null terminator
+    let buf = unsafe { malloc(total) };
+    if buf.is_null() {
+        return Err(RuntimeError::Unsupported {
+            detail: "String.to_cstring: malloc returned null".to_string(),
+        });
+    }
+    unsafe {
+        if !bytes.is_empty() {
+            ptr::copy_nonoverlapping(bytes.as_ptr(), buf, bytes.len());
+        }
+        *buf.add(bytes.len()) = 0;
+    }
+    Ok(Value::Struct {
+        symbol: cstring_symbol,
+        fields: vec![Value::CPtr(buf), Value::Int(bytes.len() as i64)],
     })
 }
 
 fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
-    let s = expect_string(args, 0, "String.get")?;
+    let s = expect_string_utf8(args, 0, "String.get")?;
     let index = expect_int(args, 1, "String.get")?;
-    let option_symbol = enum_return_symbol(function, "String.get")?;
+    let option_symbol = helpers::enum_return_symbol(function, "String.get")?;
     let value = if index < 0 {
         None
     } else {
         s.chars()
             .nth(index as usize)
-            .map(|c| Value::String(c.to_string()))
+            .map(|c| Value::String(c.to_string().into_bytes()))
     };
-    Ok(option_value(option_symbol, value))
+    Ok(helpers::option_value(option_symbol, value))
 }
 
 fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
-    let s = expect_string(args, 0, "String.slice")?;
+    let s = expect_string_utf8(args, 0, "String.slice")?;
     let range = expect_range(args, 1, "String.slice")?;
     let len = s.chars().count();
     let start = (range.0.max(0) as usize).min(len);
@@ -85,7 +102,7 @@ fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
             .map(|(i, _)| i)
             .unwrap_or(s.len())
     };
-    Ok(Value::String(s[byte_start..byte_end].to_string()))
+    Ok(Value::String(s.as_bytes()[byte_start..byte_end].to_vec()))
 }
 
 fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Value, RuntimeError> {
@@ -94,17 +111,38 @@ fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Va
     })
 }
 
-fn expect_string<'a>(
+fn expect_string_bytes<'a>(
     args: &'a [Value],
     index: usize,
     label: &str,
-) -> Result<&'a str, RuntimeError> {
+) -> Result<&'a [u8], RuntimeError> {
     match expect_arg(args, index, label)? {
-        Value::String(s) => Ok(s.as_str()),
+        Value::String(bytes) => Ok(bytes.as_slice()),
         other => Err(RuntimeError::TypeMismatch {
             detail: format!("{label} arg #{index} expected String, got `{other}`"),
         }),
     }
+}
+
+/// Borrow a String arg as `&str`. Surfaces a clean
+/// [`RuntimeError::Unsupported`] when the payload isn't valid
+/// UTF-8 — codepoint-walking methods (`length`, `get`, `slice`)
+/// can't behave sensibly without it. Byte-oriented methods
+/// (`byte_length`, `to_binary`, `to_cstring`) read raw bytes via
+/// [`expect_string_bytes`] instead.
+fn expect_string_utf8<'a>(
+    args: &'a [Value],
+    index: usize,
+    label: &str,
+) -> Result<&'a str, RuntimeError> {
+    let bytes = expect_string_bytes(args, index, label)?;
+    std::str::from_utf8(bytes).map_err(|err| RuntimeError::Unsupported {
+        detail: format!(
+            "{label} arg #{index}: String contents are not valid UTF-8 \
+             (invalid at byte {}): {err}",
+            err.valid_up_to(),
+        ),
+    })
 }
 
 fn expect_int(args: &[Value], index: usize, label: &str) -> Result<i64, RuntimeError> {
@@ -146,28 +184,11 @@ fn expect_range(args: &[Value], index: usize, label: &str) -> Result<(i64, i64),
     }
 }
 
-fn enum_return_symbol(function: &IRFunction, label: &str) -> Result<IRSymbol, RuntimeError> {
+fn struct_return_symbol(function: &IRFunction, label: &str) -> Result<IRSymbol, RuntimeError> {
     match &function.return_type {
-        IRType::Enum(symbol) => Ok(symbol.clone()),
+        IRType::Struct(symbol) => Ok(symbol.clone()),
         other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} expected Enum return type, got `{other:?}`"),
+            detail: format!("{label} expected Struct return type, got `{other:?}`"),
         }),
-    }
-}
-
-fn option_value(symbol: IRSymbol, value: Option<Value>) -> Value {
-    match value {
-        Some(v) => Value::Enum {
-            name: "Some".into(),
-            payload: EnumPayload::Tuple(vec![v]),
-            symbol,
-            tag: SOME_TAG,
-        },
-        None => Value::Enum {
-            name: "None".into(),
-            payload: EnumPayload::Unit,
-            symbol,
-            tag: NONE_TAG,
-        },
     }
 }

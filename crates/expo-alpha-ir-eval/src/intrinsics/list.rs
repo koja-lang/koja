@@ -15,14 +15,12 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ListMethod};
+use expo_alpha_ir::{IRFunction, IRSymbol, IRType, ListMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
-use crate::value::{EnumPayload, Value};
-
-const SOME_TAG: IRVariantTag = IRVariantTag(0);
-const NONE_TAG: IRVariantTag = IRVariantTag(1);
+use crate::intrinsics::helpers;
+use crate::value::Value;
 
 pub(super) fn dispatch<R: CallResolver>(
     method: ListMethod,
@@ -81,14 +79,14 @@ fn concat(args: &[Value]) -> Result<Value, RuntimeError> {
 fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let list = expect_list(args, 0, "List.get")?;
     let index = expect_int(args, 1, "List.get")?;
-    let option_symbol = enum_return_symbol(function, "List.get")?;
+    let option_symbol = helpers::enum_return_symbol(function, "List.get")?;
     let items = list.borrow();
     let value = if index < 0 {
         None
     } else {
         items.get(index as usize).cloned()
     };
-    Ok(option_value(option_symbol, value))
+    Ok(helpers::option_value(option_symbol, value))
 }
 
 fn pop<R: CallResolver>(
@@ -100,7 +98,7 @@ fn pop<R: CallResolver>(
     let pair_symbol = struct_return_symbol(function, "List.pop")?;
     let option_symbol = pair_first_option_symbol(&pair_symbol, resolver)?;
     let popped = list.borrow_mut().pop();
-    let option = option_value(option_symbol, popped);
+    let option = helpers::option_value(option_symbol, popped);
     let remainder = Value::List(list);
     Ok(Value::Struct {
         symbol: pair_symbol,
@@ -162,15 +160,6 @@ fn expect_int(args: &[Value], index: usize, label: &str) -> Result<i64, RuntimeE
     }
 }
 
-fn enum_return_symbol(function: &IRFunction, label: &str) -> Result<IRSymbol, RuntimeError> {
-    match &function.return_type {
-        IRType::Enum(symbol) => Ok(symbol.clone()),
-        other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} expected Enum return type, got `{other:?}`"),
-        }),
-    }
-}
-
 fn struct_return_symbol(function: &IRFunction, label: &str) -> Result<IRSymbol, RuntimeError> {
     match &function.return_type {
         IRType::Struct(symbol) => Ok(symbol.clone()),
@@ -207,22 +196,5 @@ fn pair_first_option_symbol<R: CallResolver>(
         other => Err(RuntimeError::TypeMismatch {
             detail: format!("List.pop: Pair `first` expected Enum (Option), got `{other:?}`",),
         }),
-    }
-}
-
-fn option_value(symbol: IRSymbol, value: Option<Value>) -> Value {
-    match value {
-        Some(v) => Value::Enum {
-            name: "Some".into(),
-            payload: EnumPayload::Tuple(vec![v]),
-            symbol,
-            tag: SOME_TAG,
-        },
-        None => Value::Enum {
-            name: "None".into(),
-            payload: EnumPayload::Unit,
-            symbol,
-            tag: NONE_TAG,
-        },
     }
 }

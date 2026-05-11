@@ -783,6 +783,76 @@ What's shipped since the last audit:
   deferred typed-local / runtime narrowing slice still holds
   (`p: CPtr<UInt8> = CPtr.alloc(8)` won't infer `T`).
 
+- **Stdlib slice 4: eval-side C FFI for the autoimported externs.**
+  The runtime extern surface and the `CPtr<T>` / `CString` /
+  `Random` / `Int.parse` / `Float.parse` / `Binary.to_string` /
+  `Bits.to_binary` intrinsics now execute under
+  `--backend=interpreter` (eval) as well as `--backend=llvm`, so
+  the alpha shell can call `Random.bytes(32)` /
+  `Int.parse("42")` / `"hi".to_cstring().to_string()` /
+  `Binary.to_string(...)` end-to-end. The compiler-side wiring:
+  - **`Value::CPtr(*mut u8)`** lands as a first-class eval value
+    variant. Eval is single-threaded and in-process so the
+    pointer is valid for the lifetime of its referent (the same
+    memory the LLVM backend would observe). Element type `T`
+    stays type-level — intrinsic emitters consult
+    `function.params[0].ty` / `function.return_type` when they
+    need `size_of::<T>()`. `Display` renders as
+    `<cptr 0x{addr:x}>` / `<cptr null>` to match the runtime
+    printer's shape.
+  - **`Value::String(Vec<u8>)`** replaces the old
+    `Value::String(String)` so eval can carry the same arbitrary
+    byte payloads v1's String type allows. `Random.bytes`'s
+    `expo_random_bytes(count).to_string().to_binary()` chain
+    flows raw entropy through a `String` value without the
+    interpreter rejecting non-UTF-8 payloads — codepoint-walking
+    methods (`length`, `get`, `slice`, `parse`) validate UTF-8
+    on demand and surface `RuntimeError::Unsupported` for
+    malformed input. Byte-oriented methods (`byte_length`,
+    `to_binary`, `to_cstring`, `Concat<String>`) work
+    unconditionally.
+  - **Per-stdlib-file extern modules.**
+    `expo-alpha-ir-eval/src/externs/` now matches the
+    `lib/global/src/*.expo` layout one-to-one
+    (`cptr.rs` ↔ `cptr.expo`'s `strlen`; `kernel.rs` ↔
+    `kernel.expo`'s `expo_kernel_exit`; `random.rs` ↔
+    `random.expo`'s `expo_random_bytes` + `expo_random_int`;
+    `time.rs` ↔ `time.expo`'s `expo_time_now_millis`). Each
+    handler `unsafe extern "C"`-declares its C symbol and calls
+    straight into `expo-runtime` (or libc for `strlen` / `malloc`
+    / `free`), giving eval byte-equivalent behaviour to the
+    LLVM backend for the auto-imported externs.
+  - **CPtr intrinsic family lands end-to-end on eval.**
+    `CPtr.{null, null?, alloc, free, offset, read, write,
+    to_binary, to_string}` are all implemented; `alloc` /
+    `offset` / `read` / `write` consult
+    `helpers::size_of_primitive` (mapping `IRType` to byte
+    width) for element-aware pointer arithmetic. `CPtr<UInt8>.to_string`
+    reads the v1 length-prefixed `[i64 bit_length][payload…]`
+    ABI, copies the payload into a `Value::String(Vec<u8>)`,
+    and frees the source header chunk — matches the LLVM
+    backend's move-self ownership transfer.
+  - **`String.to_cstring` + `CString.to_string`** round-trip
+    through `malloc` / `memcpy` like the LLVM backend (the
+    `RuntimeError::Unsupported` stubs are gone). `Binary.ptr`
+    allocates a length-prefixed Expo-string buffer the caller
+    owns; `Binary.to_string` / `Bits.to_binary` /
+    `Int.parse` / `Float.parse` construct `Result<T, E>` /
+    `Option<T>` values via the new
+    `intrinsics::helpers::{option_value, result_value,
+    enum_return_symbol}` shared helpers (deduped from the
+    earlier list / string handlers).
+
+  Pinned by
+  `crates/expo-alpha-ir-eval/tests/{cptr,parse,random}.rs` and
+  the `*_random_int_fixed_*` / `*_random_bytes_size_*` /
+  `*_int_parse_*` driver tests in
+  `crates/expo-driver/tests/alpha_two_plus_two.rs`. **Out**:
+  the LLVM-side `Int.parse` / `Float.parse` runtime helpers
+  still trap (eval is ahead of the LLVM backend here); the
+  `Map<K, V>` / `Set<T>` slice still owns the next intrinsic
+  bring-up.
+
 The roadmap's original Phase 1 (loops) and Phase 2 (closures)
 are closed; the strings/binary/bits slice closed the Phase 3
 string-related items, the alpha move/drop foundation slice
@@ -795,15 +865,18 @@ driver), stdlib slice 2 closed `kernel` / `cptr` / `cstring`
 bidirectional inference for generic enum construction), and
 stdlib slice 3 closed `list` / `string` / `random` (with
 `IRType::List`, list-literal desugar, typed `IRIntrinsicId`
-dispatch, and the shared `build_enum_value` helper). The
-surviving critical-path work is the deferred typed-local /
-runtime narrowing slice (`p: CPtr<UInt8> = CPtr.alloc(8)` →
-drive bidirectional inference through typed-local annotations
-+ a `.to_int8()` / `.to_uint16()` method family on each
-numeric type), the next slice of stdlib intrinsics (building
-toward `map` / `set` / `io` / `fd` / `system`), and the
-optional Phase 4 concurrency slice (`spawn` / `receive`);
-after those,
+dispatch, and the shared `build_enum_value` helper), and
+stdlib slice 4 closed the eval-side C FFI surface (so
+`Random.bytes(32)`, `Int.parse(...)`, and the `CPtr` /
+`CString` family all run in the alpha shell, not just under
+`--backend=llvm`). The surviving critical-path work is the
+deferred typed-local / runtime narrowing slice
+(`p: CPtr<UInt8> = CPtr.alloc(8)` → drive bidirectional
+inference through typed-local annotations + a `.to_int8()` /
+`.to_uint16()` method family on each numeric type), the next
+slice of stdlib intrinsics (building toward `map` / `set` /
+`io` / `fd` / `system`), and the optional Phase 4 concurrency
+slice (`spawn` / `receive`); after those,
 `expo alpha check expo/lib/global/src/*.expo` should be fully
 green.
 

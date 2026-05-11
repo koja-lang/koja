@@ -1,7 +1,9 @@
-//! `@extern "C" fn expo_kernel_exit(code: Int64)` — terminates the
-//! host process. Calls straight into [`expo_runtime`]'s
-//! `expo_kernel_exit` over the C ABI so eval observes the same
-//! `std::process::exit` the LLVM backend would.
+//! Externs declared in `lib/global/src/kernel.expo`.
+//!
+//! - `@extern "C" fn expo_kernel_exit(code: Int64)` — terminates the
+//!   host process. Calls straight into [`expo_runtime`]'s
+//!   `expo_kernel_exit` over the C ABI so eval observes the same
+//!   `std::process::exit` the LLVM backend would.
 
 use crate::error::RuntimeError;
 use crate::value::Value;
