@@ -14,10 +14,11 @@ use expo_ast::ast::{
     Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal, StringPart,
     UnaryOp,
 };
+use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-use crate::pipeline::resolve::coercion::{Coercions, Compatible, check_compatible, coercion_span};
+use crate::pipeline::resolve::coercion::{Compatible, check_compatible, coercion_target_mut};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -27,11 +28,11 @@ use super::types::{TypeParamScope, render_resolved, resolve_type_expr};
 /// Constant-pass walk inputs. Bundles the read-only registry view
 /// (constant initializers don't need the `&mut` registry surface
 /// — that mutation happens at the [`lift_constant`] entry point
-/// after the walk produces the resolved value), the package-scope
-/// hint used for unqualified type lookups, and the program-wide
-/// numeric-literal coercion sink shared with the resolve pass.
+/// after the walk produces the resolved value) plus the package
+/// scope used for unqualified type lookups. Literal-fit coercions
+/// stamp directly on the `Expr` AST node via
+/// [`coercion_target_mut`] — no separate sink to thread through.
 struct ConstCtx<'a> {
-    coercions: &'a mut Coercions,
     package: &'a str,
     registry: &'a GlobalRegistry,
 }
@@ -40,7 +41,6 @@ pub(super) fn lift_constant(
     constant: &mut Constant,
     package: &str,
     registry: &mut GlobalRegistry,
-    coercions: &mut Coercions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let identifier = Identifier::new(package, vec![constant.name.clone()]);
@@ -60,11 +60,7 @@ pub(super) fn lift_constant(
         .as_ref()
         .map(|type_expr| resolve_type_expr(type_expr, scope, package, registry, diagnostics));
 
-    let mut ctx = ConstCtx {
-        coercions,
-        package,
-        registry,
-    };
+    let mut ctx = ConstCtx { package, registry };
     let inferred = resolve_constant_value(
         &mut constant.value,
         annotated.as_ref(),
@@ -145,7 +141,7 @@ fn resolve_constant_value(
         match check_compatible(expr, &ty, expected, ctx.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                ctx.coercions.insert(coercion_span(expr), width);
+                *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,

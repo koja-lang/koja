@@ -24,6 +24,7 @@ mod bounded;
 mod methods;
 
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
+use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
@@ -37,15 +38,16 @@ use methods::{
     method_lookup_message, seed_receiver_subst,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_span};
-use super::ctx::{Callee, Resolver};
-use super::expr::{resolve_expr, resolve_expr_with_expected};
-use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
-use super::types::display_resolution;
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
+
+use super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::ctx::{Callee, Resolver};
+use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
+use super::types::display_resolution;
 
 /// Co-traveling call-site context shared by [`resolve_call`] /
 /// [`resolve_method_call`] and the inner generic-inference helpers.
@@ -568,10 +570,10 @@ fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<Reso
 /// equivalence runs through [`check_compatible`] so a numeric
 /// literal flowing into a narrow-int / narrow-float param coerces
 /// when its compile-time value fits the param's range; the
-/// recorded coercion lands on the resolver's program-wide table
+/// resulting coercion stamps onto the arg's [`Expr::literal_coercion`]
 /// for IR lower to consume.
 fn validate_arg_signature(
-    args: &[Arg],
+    args: &mut [Arg],
     expected_params: &[ResolvedParam],
     callee: &Identifier,
     call_span: Span,
@@ -591,15 +593,16 @@ fn validate_arg_signature(
         return;
     }
 
-    for (arg, param) in args.iter().zip(expected_params.iter()) {
-        let actual = &arg.value.resolution;
+    for (arg, param) in args.iter_mut().zip(expected_params.iter()) {
+        let actual = arg.value.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+        match check_compatible(&arg.value, &actual, &param.ty, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver.coercions.insert(coercion_span(&arg.value), width);
+                *coercion_target_mut(&mut arg.value) =
+                    Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -623,7 +626,7 @@ fn validate_arg_signature(
                         "argument `{}` to `{callee}` expects `{}`, got `{}`",
                         param.name,
                         display_resolution(&param.ty, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     arg.span,
                 ));
@@ -701,7 +704,7 @@ fn synthesize_local_call_params(fn_params: &[FnParam]) -> Vec<ResolvedParam> {
 /// label (the local's surface name) so the diagnostic doesn't
 /// fabricate a fully-qualified identifier the user never wrote.
 fn validate_local_call_signature(
-    args: &[Arg],
+    args: &mut [Arg],
     expected_params: &[ResolvedParam],
     callee_label: &str,
     call_span: Span,
@@ -720,15 +723,16 @@ fn validate_local_call_signature(
         ));
         return;
     }
-    for (arg, param) in args.iter().zip(expected_params.iter()) {
-        let actual = &arg.value.resolution;
+    for (arg, param) in args.iter_mut().zip(expected_params.iter()) {
+        let actual = arg.value.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, actual, &param.ty, resolver.registry) {
+        match check_compatible(&arg.value, &actual, &param.ty, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver.coercions.insert(coercion_span(&arg.value), width);
+                *coercion_target_mut(&mut arg.value) =
+                    Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -752,7 +756,7 @@ fn validate_local_call_signature(
                         "argument `{}` to `{callee_label}` expects `{}`, got `{}`",
                         param.name,
                         display_resolution(&param.ty, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     arg.span,
                 ));

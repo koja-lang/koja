@@ -56,9 +56,19 @@ fn emit_or_alternative(
 ) -> ValueId {
     match pattern {
         Pattern::EnumUnit { variant, .. } => emit_enum_tag_eq(variant, inputs, ctx, block, output),
-        Pattern::Literal { span, value } => {
-            emit_literal_eq_or_panic(value, *span, inputs.subject, ctx, block, output)
-        }
+        Pattern::Literal {
+            literal_coercion,
+            span,
+            value,
+        } => emit_literal_eq_or_panic(
+            value,
+            literal_coercion.as_ref(),
+            *span,
+            inputs.subject,
+            ctx,
+            block,
+            output,
+        ),
         other => panic!(
             "alpha IR lower: or-alternative `{}` reached lowering — \
              typecheck-resolve admits only Literal / EnumUnit alternatives",

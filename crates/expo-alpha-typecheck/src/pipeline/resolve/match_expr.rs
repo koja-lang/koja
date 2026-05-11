@@ -111,7 +111,8 @@ pub(super) fn resolve_match(
     {
         diagnostics.push(Diagnostic::error(
             "alpha typecheck does not yet admit literal `match` patterns against \
-             non-primitive subjects (supported subjects: `Bool` / `Int` / `Float` / `String`)",
+             non-primitive subjects (supported subjects: `Bool` / `String` / numeric \
+             primitives)",
             subject.span,
         ));
     }

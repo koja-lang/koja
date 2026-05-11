@@ -117,9 +117,14 @@ pub(super) fn resolve_pattern(
             resolver,
             diagnostics,
         ),
-        Pattern::Literal { span, value } => {
+        Pattern::Literal {
+            literal_coercion,
+            span,
+            value,
+        } => {
             literals::check_literal_matches_subject(
                 value,
+                literal_coercion,
                 subject_ty,
                 *span,
                 resolver,
@@ -180,10 +185,13 @@ pub(super) fn is_match_subject_primitive(
     subject_ty: &ResolvedType,
     registry: &GlobalRegistry,
 ) -> bool {
-    is_primitive(subject_ty, registry, "Bool")
-        || is_primitive(subject_ty, registry, "Float")
-        || is_primitive(subject_ty, registry, "Int")
-        || is_primitive(subject_ty, registry, "String")
+    const PRIMITIVES: &[&str] = &[
+        "Bool", "Float", "Float32", "Float64", "Int", "Int16", "Int32", "Int64", "Int8", "String",
+        "UInt16", "UInt32", "UInt64", "UInt8",
+    ];
+    PRIMITIVES
+        .iter()
+        .any(|name| is_primitive(subject_ty, registry, name))
 }
 
 /// Lookup the [`EnumDefinition`] whose `Global(id)` head matches

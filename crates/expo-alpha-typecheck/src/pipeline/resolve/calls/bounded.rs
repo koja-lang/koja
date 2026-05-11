@@ -11,25 +11,27 @@
 //! lookup picks up the impl method.
 
 use expo_ast::ast::{Arg, Diagnostic, Expr};
+use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{GlobalRegistryId, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
-use super::super::coercion::{Compatible, check_compatible, coercion_span};
+use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
+
+use super::super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::super::ctx::Resolver;
 use super::super::types::display_resolution;
-use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
 
 /// Inputs to [`resolve_bounded_method_call`]. Bundles every
 /// `recv.method(args)` shard so the helper stays under
 /// `too_many_arguments` and reads as a structured site rather than
 /// a positional argument soup.
 pub(super) struct BoundedCall<'a> {
-    pub(super) receiver: &'a Expr,
-    pub(super) owner: GlobalRegistryId,
+    pub(super) args: &'a mut [Arg],
+    pub(super) call_span: Span,
     pub(super) index: TypeParamIndex,
     pub(super) method: &'a str,
-    pub(super) args: &'a [Arg],
-    pub(super) call_span: Span,
+    pub(super) owner: GlobalRegistryId,
+    pub(super) receiver: &'a Expr,
 }
 
 pub(super) fn resolve_bounded_method_call(
@@ -156,11 +158,11 @@ fn collect_bound_providers(
 /// args, the resolved protocol method's signature, and the call
 /// expression's source span. Mirrors [`BoundedCall`]'s shape.
 pub(super) struct BoundedArgsSite<'a> {
+    pub(super) args: &'a mut [Arg],
+    pub(super) call_span: Span,
     pub(super) method: &'a str,
     pub(super) param_name: &'a str,
-    pub(super) args: &'a [Arg],
     pub(super) protocol_method: &'a ResolvedProtocolMethod,
-    pub(super) call_span: Span,
 }
 
 /// Check arity + per-position type compatibility for a bounded
@@ -195,15 +197,16 @@ fn validate_bounded_args(
         ));
         return;
     }
-    for (arg, expected) in args.iter().zip(protocol_method.non_self_params.iter()) {
-        let actual = &arg.value.resolution;
+    for (arg, expected) in args.iter_mut().zip(protocol_method.non_self_params.iter()) {
+        let actual = arg.value.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, actual, &expected.ty, resolver.registry) {
+        match check_compatible(&arg.value, &actual, &expected.ty, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver.coercions.insert(coercion_span(&arg.value), width);
+                *coercion_target_mut(&mut arg.value) =
+                    Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -227,7 +230,7 @@ fn validate_bounded_args(
                         "argument `{}` to `{method}` expects `{}`, got `{}`",
                         expected.name,
                         display_resolution(&expected.ty, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     arg.span,
                 ));

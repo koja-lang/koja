@@ -142,7 +142,7 @@ impl IRProgram {
 /// 5. Entry-point existence check — surfaces `EntryPointNotFound`.
 /// 6. `seal` — assert sealed-IRProgram invariants. Panics on violation.
 pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRProgram, LowerError> {
-    let mut output = LowerOutput::with_coercions(checked.coercions.clone());
+    let mut output = LowerOutput::default();
     let mut packages = Vec::with_capacity(checked.packages.len() + 1);
     packages.push(empty_global_stdlib_package());
     for pkg in &checked.packages {

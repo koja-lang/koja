@@ -28,7 +28,6 @@ use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
-use super::coercion::Coercions;
 use super::ctx::{Resolver, ResolverEnv};
 use super::expr::resolve_expr_with_expected;
 use super::return_type::check_return_type;
@@ -38,14 +37,9 @@ pub(crate) fn resolve_file(
     file: &mut File,
     package: &str,
     registry: &GlobalRegistry,
-    coercions: &mut Coercions,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut env = ResolverEnv {
-        coercions,
-        package,
-        registry,
-    };
+    let mut env = ResolverEnv { package, registry };
     for item in &mut file.items {
         match item {
             Item::Function(function) => {

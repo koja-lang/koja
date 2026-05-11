@@ -1,10 +1,11 @@
-//! Span-keyed numeric literal coercion table. Populated alongside
-//! `types_equivalent` checks at the six type-equality sites
-//! (struct fields, three call-arg flavors, return type, enum tuple
-//! payloads) plus the const-initializer pass; consumed by
-//! `expo-alpha-ir`'s expression lowerer at [`Literal`] and
-//! [`UnaryOp::Neg(Literal)`] sites to mint the `Const` instruction
-//! at the recorded width.
+//! Numeric literal-fit checking shared across every type-equality
+//! site (struct fields, the three call-arg flavors, return type,
+//! enum tuple payloads, const initializers). Each site asks
+//! [`check_compatible`] whether the actual expression's resolved
+//! type flows into the declared slot, and on a [`Compatible::Coerced`]
+//! result stamps `expr.literal_coercion` via [`coercion_target_mut`]
+//! so `expo-alpha-ir`'s lowerer mints the matching narrow `Const`
+//! opcode.
 //!
 //! The rule: a numeric literal coerces to a sized target type iff
 //! its compile-time value fits the target's range. `Int` ≡ `Int64`
@@ -19,85 +20,19 @@
 //! positive and negative literals uniformly. Hex / binary literals
 //! (`0xFF`, `0b1010`) parse to positive integers — the bit-pattern
 //! escape hatch for unsigned targets where `-1: UInt8` is rejected.
-//!
-//! [`Literal`]: expo_ast::ast::Literal
-//! [`UnaryOp::Neg(Literal)`]: expo_ast::ast::UnaryOp::Neg
-
-use std::collections::HashMap;
 
 use expo_ast::ast::{Expr, ExprKind, Literal, UnaryOp};
+use expo_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
 use expo_ast::identifier::ResolvedType;
-use expo_ast::span::Span;
 
 use super::types::{is_primitive, types_equivalent};
 use crate::registry::GlobalRegistry;
 
-/// Backend-stable target width for a coerced numeric literal.
-/// Translated to `expo_alpha_ir::IRType` at lowering time without
-/// crossing the typecheck → IR crate boundary on `IRType` itself.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum NumericLiteralWidth {
-    Float32,
-    Float64,
-    Int8,
-    Int16,
-    Int32,
-    Int64,
-    UInt8,
-    UInt16,
-    UInt32,
-    UInt64,
-}
-
-impl NumericLiteralWidth {
-    /// Short label used in diagnostics: `"Int8"`, `"UInt32"`, etc.
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Float32 => "Float32",
-            Self::Float64 => "Float64",
-            Self::Int8 => "Int8",
-            Self::Int16 => "Int16",
-            Self::Int32 => "Int32",
-            Self::Int64 => "Int64",
-            Self::UInt8 => "UInt8",
-            Self::UInt16 => "UInt16",
-            Self::UInt32 => "UInt32",
-            Self::UInt64 => "UInt64",
-        }
-    }
-
-    /// Inclusive range rendered for out-of-range diagnostics. Floats
-    /// label by representable shape rather than range bounds.
-    pub fn range_label(self) -> &'static str {
-        match self {
-            Self::Float32 => "f32-representable values",
-            Self::Float64 => "f64-representable values",
-            Self::Int8 => "-128..=127",
-            Self::Int16 => "-32_768..=32_767",
-            Self::Int32 => "-2_147_483_648..=2_147_483_647",
-            Self::Int64 => "-9_223_372_036_854_775_808..=9_223_372_036_854_775_807",
-            Self::UInt8 => "0..=255",
-            Self::UInt16 => "0..=65_535",
-            Self::UInt32 => "0..=4_294_967_295",
-            Self::UInt64 => "0..=18_446_744_073_709_551_615",
-        }
-    }
-}
-
-/// Span-keyed map of expression spans to the IR-time numeric width
-/// the lowerer should mint for them. Spans key the *outer*
-/// expression the lowerer materializes — for negated literals
-/// (`UnaryOp::Neg(Literal::Int)`), the `Unary`'s span, which the
-/// lowerer reads to fold the negation into a single `Const`. For
-/// bare literals (or hex / binary literals), the literal's own
-/// span. `Group { expr: inner }` peels are handled at recording
-/// time so the recorded span lands on the materialized expression.
-pub type Coercions = HashMap<Span, NumericLiteralWidth>;
-
 /// Outcome of comparing an actual expression's resolved type
 /// against an expected type with literal-fit coercion considered.
 /// The four arms map 1:1 to caller behavior at each check site:
-/// `Strict` proceeds; `Coerced` records into the coercion table;
+/// `Strict` proceeds; `Coerced` stamps `expr.literal_coercion` via
+/// [`coercion_target_mut`] (so IR-lower picks up the width);
 /// `OutOfRange` emits a precise narrow-int diagnostic;
 /// `Incompatible` falls through to the existing type-mismatch
 /// diagnostic.
@@ -107,8 +42,8 @@ pub(crate) enum Compatible {
     /// needed.
     Strict,
     /// The actual expression is a numeric literal whose value fits
-    /// the expected type's range. Caller records the span (via
-    /// [`coercion_span`]) in the coercion table and proceeds.
+    /// the expected type's range. Caller stamps the AST node via
+    /// [`coercion_target_mut`] and proceeds.
     Coerced(NumericLiteralWidth),
     /// The actual expression is a numeric literal whose value does
     /// NOT fit the expected type's range. Caller emits a precise
@@ -122,14 +57,16 @@ pub(crate) enum Compatible {
     Incompatible,
 }
 
-/// Pick the span the lowerer will see when materializing this
-/// expression — peels through [`ExprKind::Group`] so a coercion
-/// recorded on `(1)` lands on the inner literal where the lowerer
-/// will read it.
-pub fn coercion_span(expr: &Expr) -> Span {
-    match &expr.kind {
-        ExprKind::Group { expr: inner } => coercion_span(inner),
-        _ => expr.span,
+/// Mutable handle to the AST node that owns the coercion annotation
+/// for `expr`. Peels through [`ExprKind::Group`] so a coercion
+/// recorded on `(1)` lands on the inner literal where the IR
+/// lowerer will read it; bare literals stamp on themselves;
+/// `Unary { Neg, .. }` stamps on the outer unary so the negated-
+/// literal fold finds it on the materialized expression.
+pub(crate) fn coercion_target_mut(expr: &mut Expr) -> &mut Option<LiteralCoercion> {
+    match &mut expr.kind {
+        ExprKind::Group { expr: inner } => coercion_target_mut(inner),
+        _ => &mut expr.literal_coercion,
     }
 }
 
@@ -299,7 +236,10 @@ pub(crate) fn check_compatible(
     Compatible::Incompatible
 }
 
-fn parse_int_literal_text(text: &str) -> Option<i128> {
+/// Parse a numeric literal's source text — decimal, hex (`0xFF`),
+/// or binary (`0b1010`), with `_` separators stripped — into a
+/// signed `i128`. Returns `None` on overflow or malformed input.
+pub(crate) fn parse_int_literal_text(text: &str) -> Option<i128> {
     let cleaned: String = text.chars().filter(|c| *c != '_').collect();
     if let Some(hex) = cleaned
         .strip_prefix("0x")

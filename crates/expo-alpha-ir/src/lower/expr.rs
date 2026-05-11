@@ -7,7 +7,7 @@
 //! [`super::calls`] — only the dispatcher entries here, which fan
 //! out to it.
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, NumericLiteralWidth};
+use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, UnaryOp};
 use expo_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
@@ -195,7 +195,7 @@ pub(super) fn lower_expr(
             )
         }
         ExprKind::Literal { value } => {
-            let target = output.coercions.get(&expr.span).copied();
+            let target = literal_width(expr);
             let const_value = lower_literal(value, expr.span, target, &mut output.diagnostics)?;
             let ty = const_value_type(&const_value);
             let dest = ctx.fresh_value(ty);
@@ -272,7 +272,7 @@ pub(super) fn lower_expr(
             // a coercion record (or against a non-literal operand)
             // we fall through to the regular UnaryOp emission.
             if matches!(op, UnaryOp::Neg)
-                && let Some(target) = output.coercions.get(&expr.span).copied()
+                && let Some(target) = literal_width(expr)
                 && let Some(folded) = fold_negated_literal_const(operand, target)
             {
                 let ty = const_value_type(&folded);
@@ -421,14 +421,13 @@ fn lower_constant_ident(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
-    let value = constant_value_from_registry(constant_id, registry, &output.coercions)
-        .unwrap_or_else(|| {
-            panic!(
-                "alpha IR lower: constant `{name}` (id {constant_id}) reaches lower \
-                     without a stamped definition or with an unsupported RHS shape — \
-                     typecheck seal must have rejected this",
-            );
-        });
+    let value = constant_value_from_registry(constant_id, registry).unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: constant `{name}` (id {constant_id}) reaches lower \
+                 without a stamped definition or with an unsupported RHS shape — \
+                 typecheck seal must have rejected this",
+        );
+    });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
         panic!("alpha IR lower: constant id {constant_id} missing from registry — seal violation",)
     });
@@ -512,6 +511,17 @@ fn lower_fn_as_value(
 /// Hex / binary literals reach this helper through `parse_int_literal`
 /// for the unsigned escape hatch (`-1: UInt8` is rejected at
 /// typecheck so it never reaches here, but `0xFF: Int8` does).
+/// Pull the typecheck-stamped numeric width off `expr`'s
+/// `literal_coercion` slot, when present. Reserved for the leaf
+/// sites that emit a typed `Const` opcode (literal, negated-literal
+/// fold, pattern-equality) — every other position ignores the
+/// annotation.
+fn literal_width(expr: &Expr) -> Option<NumericLiteralWidth> {
+    expr.literal_coercion
+        .as_ref()
+        .and_then(LiteralCoercion::numeric_width)
+}
+
 fn fold_negated_literal_const(operand: &Expr, target: NumericLiteralWidth) -> Option<ConstValue> {
     match &operand.kind {
         ExprKind::Group { expr } => fold_negated_literal_const(expr, target),

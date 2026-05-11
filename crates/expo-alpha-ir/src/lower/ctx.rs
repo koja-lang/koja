@@ -21,7 +21,6 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_typecheck::Coercions;
 use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::LocalId;
 
@@ -33,29 +32,19 @@ use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
 /// Per-package write-back bag threaded through every `lower_*`
-/// helper. Bundling these two sinks keeps helper signatures under
-/// the clippy `too_many_arguments` threshold and makes the
-/// "what flows back upward" group explicit. Read-only inputs
-/// (the typecheck registry) stay separate args — they have a
-/// different direction of flow and don't share lifetime scope.
+/// helper. Bundling these sinks keeps helper signatures under the
+/// clippy `too_many_arguments` threshold and makes the "what flows
+/// back upward" group explicit. Read-only inputs (the typecheck
+/// registry) stay separate args — they have a different direction
+/// of flow and don't share lifetime scope.
 ///
 /// `lower_program` / `lower_script` construct one [`LowerOutput`]
-/// up front (seeding `coercions` from the typecheck output), thread
-/// `&mut output` through the per-package walks, then destructure
-/// it: `diagnostics` short-circuits with
+/// up front, thread `&mut output` through the per-package walks,
+/// then destructure it: `diagnostics` short-circuits with
 /// [`crate::error::LowerError::Diagnostics`] and `instantiations`
 /// feeds [`crate::generics::instantiate`].
-///
-/// `coercions` is a clone of `expo_alpha_typecheck::CheckedProgram::coercions`
-/// — the program-wide span-keyed numeric-literal width sink the
-/// expression / constant lowering helpers consult to mint
-/// `ConstValue::Int*` / `ConstValue::Float*` at the typecheck-
-/// recorded target width instead of the default 64-bit form. Read
-/// here, never written; clone (rather than borrow) sidesteps the
-/// otherwise-required lifetime parameter on `LowerOutput`.
 #[derive(Default)]
 pub(crate) struct LowerOutput {
-    pub(crate) coercions: Coercions,
     pub(crate) diagnostics: Vec<Diagnostic>,
     /// Cache of fn-as-value adapter wrappers, keyed by the wrapped
     /// function's symbol. One wrapper per named fn used as a value;
@@ -67,21 +56,6 @@ pub(crate) struct LowerOutput {
     /// expression lowering. `lower_package` drains this and merges
     /// into [`crate::IRPackage::functions`].
     pub(crate) synthesized_functions: Vec<IRFunction>,
-}
-
-impl LowerOutput {
-    /// Construct a [`LowerOutput`] seeded with the typecheck's
-    /// numeric-literal coercion table. Use over `Self::default()`
-    /// at the entry points (`lower_program` / `lower_script`); the
-    /// monomorphization driver and other in-flight consumers stick
-    /// with the default constructor since they don't see literals
-    /// outside the seeded entry walk.
-    pub(crate) fn with_coercions(coercions: Coercions) -> Self {
-        Self {
-            coercions,
-            ..Self::default()
-        }
-    }
 }
 
 /// The shape every `lower_*` helper returns. `Open` carries the

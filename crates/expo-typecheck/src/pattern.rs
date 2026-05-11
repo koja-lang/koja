@@ -475,7 +475,7 @@ pub(crate) fn check_pattern(
             }
         }
 
-        Pattern::Literal { value, span } => {
+        Pattern::Literal { value, span, .. } => {
             let lit_type = match value {
                 Literal::Bool(_) => Type::Primitive(Primitive::Bool),
                 Literal::Float(_) => Type::Primitive(Primitive::F64),

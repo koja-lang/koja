@@ -765,6 +765,54 @@ fn match_struct_destructure_acts_as_catch_all_in_chain() {
 }
 
 #[test]
+fn match_literal_against_narrow_subject_mints_narrow_const() {
+    // Pattern-literal coercion: a match against a `UInt8` subject
+    // should mint `Const UInt8(5)` for the literal arm, not the
+    // default `Const Int64(5)`. Pins that
+    // `patterns/literals.rs::emit_literal_eq` reads
+    // `Pattern::Literal.literal_coercion`.
+    let source = "
+        fn classify(x: UInt8) -> Int
+          match x
+            5 -> 1
+            _ -> 0
+          end
+        end
+
+        fn main
+          classify(5)
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let classify = function(&program, "classify");
+
+    let has_uint8_const = classify
+        .blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .any(|i| {
+            matches!(
+                i,
+                IRInstruction::Const {
+                    value: ConstValue::UInt8(5),
+                    ..
+                }
+            )
+        });
+    assert!(
+        has_uint8_const,
+        "pattern literal `5` matched against `UInt8` should mint `Const UInt8(5)`; \
+         got {:?}",
+        classify
+            .blocks
+            .iter()
+            .flat_map(|b| b.instructions.iter())
+            .collect::<Vec<_>>(),
+    );
+}
+
+#[test]
 fn lower_match_constructor_tuple_emits_enum_tuple_shape() {
     let source = "
         enum Box

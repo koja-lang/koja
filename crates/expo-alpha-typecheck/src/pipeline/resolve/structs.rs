@@ -7,13 +7,14 @@
 //! enum module imports rather than duplicating.
 
 use expo_ast::ast::{Diagnostic, Expr, FieldInit};
+use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
-use super::coercion::{Compatible, check_compatible, coercion_span};
+use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, finalize_inference, unify_pairs};
@@ -196,13 +197,13 @@ fn emit_conflict(
 pub(super) fn validate_named_fields(
     owner_label: &str,
     declared: &[ResolvedStructField],
-    fields: &[FieldInit],
+    fields: &mut [FieldInit],
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let mut seen: Vec<bool> = vec![false; declared.len()];
-    for field in fields {
+    for field in fields.iter_mut() {
         let Some((index, declared_field)) = lookup_named_field(declared, &field.name) else {
             diagnostics.push(Diagnostic::error(
                 format!("`{owner_label}` has no field `{}`", field.name),
@@ -229,9 +230,8 @@ pub(super) fn validate_named_fields(
         match check_compatible(&field.value, actual, &declared_field.ty, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver
-                    .coercions
-                    .insert(coercion_span(&field.value), width);
+                *coercion_target_mut(&mut field.value) =
+                    Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,

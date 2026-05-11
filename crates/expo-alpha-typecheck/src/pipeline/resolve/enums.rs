@@ -18,6 +18,7 @@
 //! stable.
 
 use expo_ast::ast::{Diagnostic, EnumConstructionData, Expr};
+use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
@@ -26,7 +27,7 @@ use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_span};
+use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -273,7 +274,7 @@ fn resolve_construction_data(
 fn validate_variant_payload(
     enum_label: &str,
     variant: &ResolvedEnumVariant,
-    data: &EnumConstructionData,
+    data: &mut EnumConstructionData,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -317,7 +318,7 @@ fn validate_variant_payload(
 fn validate_tuple_payload(
     variant_label: &str,
     element_types: &[ResolvedType],
-    exprs: &[Expr],
+    exprs: &mut [Expr],
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -334,15 +335,15 @@ fn validate_tuple_payload(
         ));
         return;
     }
-    for (index, (declared, expr)) in element_types.iter().zip(exprs.iter()).enumerate() {
-        let actual = &expr.resolution;
+    for (index, (declared, expr)) in element_types.iter().zip(exprs.iter_mut()).enumerate() {
+        let actual = expr.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(expr, actual, declared, resolver.registry) {
+        match check_compatible(expr, &actual, declared, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
-                resolver.coercions.insert(coercion_span(expr), width);
+                *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -366,7 +367,7 @@ fn validate_tuple_payload(
                         "argument {} of `{variant_label}` expects `{}`, got `{}`",
                         index + 1,
                         display_resolution(declared, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     expr.span,
                 ));
