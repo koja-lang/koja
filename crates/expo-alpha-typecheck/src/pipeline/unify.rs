@@ -17,6 +17,9 @@ use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
 
+use crate::pipeline::resolve::types::types_equivalent;
+use crate::registry::GlobalRegistry;
+
 /// A type parameter unified to two distinct concrete types across two
 /// construction-site values. Mapped by callers into a "type parameter
 /// `T` cannot be both `A` and `B`" diagnostic.
@@ -114,14 +117,26 @@ impl Substitution {
     }
 
     /// Set a slot. Returns `Err(Conflict)` if the slot was already
-    /// filled with a *different* value; `Ok(())` on a fresh fill or a
-    /// re-fill with the same value. Out-of-scope owners and out-of-
-    /// range indices are silent no-ops.
+    /// filled with a value that isn't [`types_equivalent`] to `value`;
+    /// `Ok(())` on a fresh fill or a compatible re-fill. Out-of-scope
+    /// owners and out-of-range indices are silent no-ops.
+    ///
+    /// The compatibility check (rather than strict `prev == value`)
+    /// matters most for the `fill_from_expected` path: a payload-
+    /// driven bind of `T → Int64` followed by an expected-type fill
+    /// of `T → Int` must not roll back the entire substitution and
+    /// strand sibling slots (`E` etc.) unbound, since `Int` and
+    /// `Int64` are the same type. Today that's the alias rule;
+    /// when `Int` becomes a union over its sized variants the same
+    /// predicate generalizes — `T → Int64` then `T → Int` still
+    /// resolves cleanly because `Int64` is a member of the `Int`
+    /// union.
     pub(crate) fn set(
         &mut self,
         owner: GlobalRegistryId,
         index: TypeParamIndex,
         value: ResolvedType,
+        registry: &GlobalRegistry,
     ) -> Result<(), Conflict> {
         let Some(scope) = self.scope_mut(owner) else {
             return Ok(());
@@ -130,7 +145,7 @@ impl Substitution {
             return Ok(());
         };
         match slot {
-            Some(prev) if *prev != value => Err(Conflict {
+            Some(prev) if !types_equivalent(prev, &value, registry) => Err(Conflict {
                 actual: value,
                 owner,
                 param_index: index.as_u32() as usize,
@@ -191,6 +206,7 @@ pub(crate) fn unify_into(
     template: &ResolvedType,
     actual: &ResolvedType,
     subst: &mut Substitution,
+    registry: &GlobalRegistry,
 ) -> Result<(), Conflict> {
     if matches!(actual, ResolvedType::Unresolved) {
         return Ok(());
@@ -204,7 +220,7 @@ pub(crate) fn unify_into(
             _,
         ) => {
             if subst.owns(*owner) {
-                subst.set(*owner, *index, actual.clone())
+                subst.set(*owner, *index, actual.clone(), registry)
             } else {
                 Ok(())
             }
@@ -223,7 +239,7 @@ pub(crate) fn unify_into(
                 return Ok(());
             }
             for (sub_template, sub_actual) in template_args.iter().zip(actual_args) {
-                unify_into(sub_template, sub_actual, subst)?;
+                unify_into(sub_template, sub_actual, subst, registry)?;
             }
             Ok(())
         }
@@ -241,9 +257,9 @@ pub(crate) fn unify_into(
                 return Ok(());
             }
             for (template_param, actual_param) in template_params.iter().zip(actual_params) {
-                unify_into(&template_param.ty, &actual_param.ty, subst)?;
+                unify_into(&template_param.ty, &actual_param.ty, subst, registry)?;
             }
-            unify_into(template_ret, actual_ret, subst)
+            unify_into(template_ret, actual_ret, subst, registry)
         }
         _ => Ok(()),
     }

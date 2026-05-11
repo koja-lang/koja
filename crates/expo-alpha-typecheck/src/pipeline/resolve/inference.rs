@@ -55,8 +55,12 @@ impl PhantomContext<'_> {
 /// `label`, letting each call site thread per-pair diagnostic data
 /// (typically a [`Span`]) through to its own conflict-message shape.
 /// Sites without per-pair labels can pass `()`.
-pub(super) fn unify_pairs<'a, T, I, F>(pairs: I, subst: &mut Substitution, mut on_conflict: F)
-where
+pub(super) fn unify_pairs<'a, T, I, F>(
+    pairs: I,
+    subst: &mut Substitution,
+    registry: &GlobalRegistry,
+    mut on_conflict: F,
+) where
     I: IntoIterator<Item = (&'a ResolvedType, &'a ResolvedType, T)>,
     F: FnMut(Conflict, T),
 {
@@ -64,7 +68,7 @@ where
         if !actual.is_resolved() {
             continue;
         }
-        if let Err(conflict) = unify_into(template, actual, subst) {
+        if let Err(conflict) = unify_into(template, actual, subst, registry) {
             on_conflict(conflict, label);
         }
     }
@@ -79,12 +83,13 @@ pub(super) fn fill_from_expected(
     template: &ResolvedType,
     actual: &ResolvedType,
     subst: &mut Substitution,
+    registry: &GlobalRegistry,
 ) {
     if !actual.is_resolved() {
         return;
     }
     let mut scratch = subst.clone();
-    if unify_into(template, actual, &mut scratch).is_ok() {
+    if unify_into(template, actual, &mut scratch, registry).is_ok() {
         *subst = scratch;
     }
 }

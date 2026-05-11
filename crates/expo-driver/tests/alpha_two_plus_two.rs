@@ -2166,6 +2166,161 @@ fn alpha_run_interpreter_script_set_has_prints_true() {
     );
 }
 
+/// Script-mode fixture exercising the auto-imported `Global.io`
+/// surface end-to-end. `IO.puts("hello world")` desugars through
+/// `STDOUT.write(...)` twice (once for the message, once for the
+/// trailing newline), each `Fd.write` calls `expo_fd_write` against
+/// fd 1. The script trails with `()` so both backends' auto-print
+/// wrappers are no-ops (the LLVM wrapper checks the IR return
+/// type, the eval wrapper inspects the runtime value); stdout is
+/// exactly `hello world\n`. Pins the `expo_fd_write` extern
+/// dispatch on both backends — the LLVM emit links it through
+/// `expo-runtime::fs::expo_fd_write`, the eval side routes through
+/// `expo-alpha-ir-eval::externs::fd::fd_write` over the same C ABI
+/// symbol.
+const IO_PUTS_SCRIPT_SOURCE: &str = "
+    IO.puts(\"hello world\")
+    ()
+";
+
+#[test]
+fn alpha_run_llvm_script_io_puts_writes_to_stdout() {
+    let scratch = scratch_dir("run_llvm_io_puts");
+    let fixture = write_fixture(&scratch, "io_puts.exps", &dedent(IO_PUTS_SCRIPT_SOURCE));
+
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (IO.puts) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello world\n",
+        "expected LLVM backend to write `hello world\\n` via IO.puts, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_io_puts_writes_to_stdout() {
+    let scratch = scratch_dir("run_interpreter_io_puts");
+    let fixture = write_fixture(&scratch, "io_puts.exps", &dedent(IO_PUTS_SCRIPT_SOURCE));
+
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, IO.puts) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello world\n",
+        "expected interpreter to write `hello world\\n` via IO.puts, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Assert a `File.write -> File.read` round-trip through the
+/// auto-imported `Global.fd` surface returns the exact payload that
+/// was written. Both backends route the file I/O through the
+/// runtime's `expo_file_write_all` / `expo_file_read_all` helpers
+/// over the same C ABI; the LLVM emit links the runtime, the eval
+/// side dispatches through `expo-alpha-ir-eval::externs::fd::file_*`.
+/// Pins the cross-backend equivalence of file-path I/O and the
+/// `Result<String, String>` chain through `match` end-to-end.
+fn assert_file_round_trip_prints_payload(label: &str, backend: Option<&str>) {
+    let scratch = scratch_dir(label);
+    let data_path = scratch.join("payload.txt");
+    let source = format!(
+        "
+        _ = File.write(\"{path}\", \"round-trip-payload\")
+        match File.read(\"{path}\")
+          Result.Ok(s) -> s
+          Result.Err(e) -> e
+        end
+        ",
+        path = data_path.display(),
+    );
+    let fixture = write_fixture(&scratch, "file_round_trip.exps", &dedent(&source));
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` (file round-trip) to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "round-trip-payload",
+        "expected stdout to echo the round-tripped payload, got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_file_round_trip_prints_payload() {
+    assert_file_round_trip_prints_payload("run_llvm_file_round_trip", Some("--backend=llvm"));
+}
+
+#[test]
+fn alpha_run_interpreter_script_file_round_trip_prints_payload() {
+    assert_file_round_trip_prints_payload("run_interpreter_file_round_trip", None);
+}
+
+/// Assert `System.set_env -> System.get_env` round-trips a value
+/// through the host environment on both backends. The fixture sets
+/// `EXPO_ALPHA_TEST_KEY=marker` then immediately looks the same key
+/// back up; an `Option.Some` arm projects the value, an
+/// `Option.None` arm returns a sentinel that fails the assertion.
+/// Pins the four `Global.system` externs (`expo_set_env` /
+/// `expo_get_env`, plus the `to_cstring` round-trip) end-to-end —
+/// the LLVM backend links runtime symbols directly, the eval side
+/// dispatches through `expo-alpha-ir-eval::externs::system::*`.
+const SYSTEM_ENV_ROUND_TRIP_SCRIPT_SOURCE: &str = "
+    System.set_env(\"EXPO_ALPHA_TEST_KEY\", \"marker\")
+    match System.get_env(\"EXPO_ALPHA_TEST_KEY\")
+      Option.Some(v) -> v
+      Option.None -> \"missing\"
+    end
+";
+
+#[test]
+fn alpha_run_llvm_script_system_env_round_trip_prints_marker() {
+    assert_script_prints(
+        "run_llvm_system_env_round_trip",
+        SYSTEM_ENV_ROUND_TRIP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "marker",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_system_env_round_trip_prints_marker() {
+    assert_script_prints(
+        "run_interpreter_system_env_round_trip",
+        SYSTEM_ENV_ROUND_TRIP_SCRIPT_SOURCE,
+        None,
+        "marker",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

@@ -259,3 +259,58 @@ fn mixed_int_float_arith_diagnoses() {
         failure.diagnostics[0].message,
     );
 }
+
+// ------------------------------------------------------------------
+// `Int ≡ Int64` / `Float ≡ Float64` aliases at binary-op sites.
+// Today the registry keeps these as distinct primitives papered over
+// by `types_equivalent` (LANGUAGE.md primitives table); future Expo
+// will promote `Int` to a real union over its sized variants. Both
+// arithmetic and comparison must accept the alias mix today so FFI
+// signatures returning `Int64` (or anything user-spelled as `Int64`)
+// flow through naturally without forcing the caller to qualify.
+// ------------------------------------------------------------------
+
+fn use_alias_int(extra: &str) -> String {
+    let extern_decl = "@extern \"C\"\nfn produce_int64() -> Int64\n\n";
+    format!("{extern_decl}fn main\n  result = produce_int64()\n  {extra}\nend\n")
+}
+
+fn use_alias_float(extra: &str) -> String {
+    let extern_decl = "@extern \"C\"\nfn produce_float64() -> Float64\n\n";
+    format!("{extern_decl}fn main\n  result = produce_float64()\n  {extra}\nend\n")
+}
+
+#[test]
+fn int_alias_arith_resolves_to_int() {
+    let checked = typecheck(&use_alias_int("result + 1"));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn int_alias_comparison_resolves_to_bool() {
+    for source in [
+        use_alias_int("result == 0"),
+        use_alias_int("result != 0"),
+        use_alias_int("result < 0"),
+        use_alias_int("result >= 0"),
+    ] {
+        let checked = typecheck(&source);
+        assert_eq!(
+            trailing_resolution(&checked),
+            bool_type(&checked),
+            "source = {source:?}",
+        );
+    }
+}
+
+#[test]
+fn float_alias_arith_resolves_to_float() {
+    let checked = typecheck(&use_alias_float("result + 1.0"));
+    assert_eq!(trailing_resolution(&checked), float_type(&checked));
+}
+
+#[test]
+fn float_alias_comparison_resolves_to_bool() {
+    let checked = typecheck(&use_alias_float("result >= 0.0"));
+    assert_eq!(trailing_resolution(&checked), bool_type(&checked));
+}

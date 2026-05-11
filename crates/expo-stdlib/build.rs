@@ -115,10 +115,13 @@ fn main() {
         "Global.cptr",
         "Global.cstring",
         "Global.bitwise",
+        "Global.fd",
+        "Global.io",
         "Global.list",
         "Global.map",
         "Global.set",
         "Global.string",
+        "Global.system",
         "Global.time",
         // random comes last — calls into `String.to_binary`, so the string
         // module must be lowered before this module's bodies can resolve.

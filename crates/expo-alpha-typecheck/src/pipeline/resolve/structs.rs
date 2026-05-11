@@ -149,7 +149,7 @@ fn infer_struct_type_args(
         let (_, declared_field) = lookup_named_field(declared, &field.name)?;
         Some((&declared_field.ty, &field.value.resolution, field.span))
     });
-    unify_pairs(pairs, &mut subst, |conflict, field_span| {
+    unify_pairs(pairs, &mut subst, registry, |conflict, field_span| {
         emit_conflict(&callee, conflict, field_span, registry, diagnostics);
     });
     finalize_inference(

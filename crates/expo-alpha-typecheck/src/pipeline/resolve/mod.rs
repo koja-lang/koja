@@ -54,7 +54,7 @@ mod return_type;
 mod statements;
 mod strings;
 mod structs;
-mod types;
+pub(crate) mod types;
 mod walker;
 
 pub(crate) use walker::resolve_file;
