@@ -1,19 +1,17 @@
-//! Typecheck coverage for string literal resolution. Plain strings
-//! type as `Global.String`; interpolation surfaces a feature-gap
-//! diagnostic but the resolver still walks the interpolated
-//! expressions so seal sees a populated tree.
+//! Typecheck coverage for string literal resolution. Plain and
+//! interpolated strings both resolve to `Global.String`; the
+//! resolver walks each interpolated expression so seal sees a
+//! populated tree before IR-lower folds the parts into chained
+//! `IRInstruction::Concat`s.
 
 use expo_alpha_typecheck::CheckedProgram;
-use expo_ast::ast::{Expr, ExprKind, Function, Item, Statement};
+use expo_ast::ast::{Expr, ExprKind, Function, Item, Statement, StringPart};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 
 mod common;
 
-use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
-};
+use common::{PACKAGE, typecheck_file as typecheck};
 
 fn find_function<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Function {
     let pkg = checked
@@ -71,17 +69,28 @@ fn string_literal_resolves_to_global_string() {
 }
 
 #[test]
-fn string_interpolation_diagnoses() {
+fn string_interpolation_resolves_to_global_string() {
     let source = "
         fn greeting -> String
-          \"hello #{1}\"
+          \"hello #{1.format()}\"
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages.iter().any(|m| m.contains("string interpolation")),
-        "expected interpolation diagnostic, got {messages:?}",
-    );
+    let checked = typecheck(&dedent(source));
+    let string = global_leaf(&checked, "String");
+    let greeting = find_function(&checked, "greeting");
+    let trailing = trailing_expr(greeting);
+    assert_eq!(trailing.resolution, string);
+    let ExprKind::String { parts, .. } = &trailing.kind else {
+        panic!("expected ExprKind::String, got {:?}", trailing.kind);
+    };
+    let interpolated_resolutions: Vec<_> = parts
+        .iter()
+        .filter_map(|p| match p {
+            StringPart::Interpolation { expr, .. } => Some(expr.resolution.clone()),
+            StringPart::Literal { .. } => None,
+        })
+        .collect();
+    assert_eq!(interpolated_resolutions.len(), 1);
+    assert_eq!(interpolated_resolutions[0], string);
 }

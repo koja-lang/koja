@@ -19,37 +19,78 @@
 
 use std::io::{self, Write};
 
+use crate::format::{expo_format_bool, expo_format_f32, expo_format_f64, expo_format_i64};
+
+/// Read the `i64 bit_length` header from `payload - 8` and return
+/// the rendered bytes. Shared by every wrapper that delegates to
+/// an `expo_format_*` helper.
+///
+/// # Safety
+///
+/// `payload` must point at the body of an alpha-emitted heap-string
+/// payload — i.e. the byte right after the `i64 bit_length` header.
+unsafe fn payload_bytes<'a>(payload: *const u8) -> &'a [u8] {
+    let header = unsafe { payload.offset(-8).cast::<i64>() };
+    let byte_length = (unsafe { *header } / 8) as usize;
+    unsafe { std::slice::from_raw_parts(payload, byte_length) }
+}
+
+/// Print the bytes of an Expo-format string `payload` followed by
+/// a newline. The wrappers below all compose `expo_format_*` →
+/// `print_payload_line` for byte-exact symmetry with the eval
+/// interpreter's `Value::Display` output.
+///
+/// # Safety
+///
+/// `payload` must point at an alpha heap-string body; see
+/// [`payload_bytes`].
+unsafe fn print_payload_line(payload: *const u8) {
+    let bytes = unsafe { payload_bytes(payload) };
+    let mut stdout = io::stdout().lock();
+    let _ = stdout.write_all(bytes);
+    let _ = stdout.write_all(b"\n");
+}
+
 /// Print an `Int`-flavored body value followed by a newline.
 /// Narrower widths are sign- or zero-extended to `i64` at the LLVM
-/// call site so this is the single integer ABI.
+/// call site so this is the single integer ABI. Routes through
+/// [`expo_format_i64`] so `Debug.format` and the auto-print wrapper
+/// share one rendering path.
+///
+/// Leaks the formatted string — the wrapper is transitional
+/// (called once at the tail of `main`), and the process exit
+/// reclaims the heap.
 #[unsafe(no_mangle)]
 pub extern "C" fn __expo_alpha_print_i64(value: i64) {
-    let _ = writeln!(io::stdout(), "{value}");
+    let payload = expo_format_i64(value);
+    unsafe { print_payload_line(payload) };
 }
 
 /// Print a `Bool`-flavored body value followed by a newline. The
 /// LLVM lowering zext's the body's `i1` to `i64` before calling, so
-/// any non-zero argument prints `true`.
+/// any non-zero argument prints `true`. Routes through
+/// [`expo_format_bool`] for the same single-source-of-truth reason
+/// as the integer wrapper.
 #[unsafe(no_mangle)]
 pub extern "C" fn __expo_alpha_print_bool(value: i64) {
-    let rendered = if value != 0 { "true" } else { "false" };
-    let _ = writeln!(io::stdout(), "{rendered}");
+    let payload = expo_format_bool(value);
+    unsafe { print_payload_line(payload) };
 }
 
 /// Print a `Float32`-flavored body value followed by a newline.
-/// Uses Rust's `{:?}` so `1.0` round-trips as `"1.0"` (vs `{}`'s
-/// `"1"`); pairs with `Value::Float32`'s `Display` in
-/// `expo-alpha-ir-eval` for byte-exact backend symmetry.
+/// Routes through [`expo_format_f32`].
 #[unsafe(no_mangle)]
 pub extern "C" fn __expo_alpha_print_f32(value: f32) {
-    let _ = writeln!(io::stdout(), "{value:?}");
+    let payload = expo_format_f32(value);
+    unsafe { print_payload_line(payload) };
 }
 
 /// Print a `Float64`-flavored body value followed by a newline.
-/// Same `{:?}` round-trip rule as the f32 printer.
+/// Routes through [`expo_format_f64`].
 #[unsafe(no_mangle)]
 pub extern "C" fn __expo_alpha_print_f64(value: f64) {
-    let _ = writeln!(io::stdout(), "{value:?}");
+    let payload = expo_format_f64(value);
+    unsafe { print_payload_line(payload) };
 }
 
 /// Concatenate two `Bits` values produced by alpha LLVM. Reads

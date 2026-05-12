@@ -333,18 +333,28 @@ fn run_script_compiled(path: &Path, args: &[String]) -> ! {
 }
 
 /// Run the `.exps` script at `path` through the interpreter and
-/// print the trailing value (suppressing [`Value::Unit`] so void
-/// scripts don't print `()`). Any pipeline failure prints
+/// print the trailing value via the `Debug.format` instance for
+/// its static type — `value.print()` semantics, so the auto-print
+/// surface matches what user code would see writing
+/// `IO.puts(value.format())`. [`Value::Unit`] suppresses the print
+/// so void scripts don't render `()`. Any pipeline failure prints
 /// `error: <details>` and exits 1; success exits 0. The LLVM
-/// backend matches this contract (print + exit 0) via the
-/// auto-print wrapper in `expo-runtime/src/alpha.rs`. Used by
-/// `cmd_run` when the user picks the interpreter backend.
+/// backend matches this contract via the auto-print wrapper in
+/// `expo-runtime/src/alpha.rs`. Used by `cmd_run` when the user
+/// picks the interpreter backend.
 fn run_script_interpreted(path: &Path) {
     let source = read_source_or_exit(path);
     let package = derive_package(path);
     match run_script_pipeline(source, &package, path.to_path_buf()) {
-        Ok(Value::Unit) => {}
-        Ok(value) => println!("{value}"),
+        Ok((_, Value::Unit)) => {}
+        Ok((script, value)) => match Interpreter::format_via_debug(&script, value.clone()) {
+            Ok(Some(bytes)) => println!("{}", String::from_utf8_lossy(&bytes)),
+            Ok(None) => println!("{value}"),
+            Err(error) => {
+                eprintln!("error: {error}");
+                process::exit(1);
+            }
+        },
         Err(error) => {
             eprintln!("error: {error}");
             process::exit(1);
@@ -492,10 +502,16 @@ fn resolve_output_name(output: Option<String>, path: &Path) -> String {
 }
 
 /// Run one source file end-to-end through the script-mode alpha
-/// pipeline. Returns the script body's trailing value on success,
-/// or a formatted error string covering parse / typecheck / lower /
-/// runtime failures.
-fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<Value, String> {
+/// pipeline. Returns the sealed [`IRScript`] alongside the trailing
+/// value so the caller can dispatch follow-up helpers (e.g.
+/// `Debug.format` auto-print) without re-lowering the source. On
+/// failure returns a formatted error string covering parse /
+/// typecheck / lower / runtime failures.
+fn run_script_pipeline(
+    source: String,
+    package: &str,
+    path: PathBuf,
+) -> Result<(IRScript, Value), String> {
     let parsed = parse_program(
         bundle_with_autoimport(SourceFile {
             package: package.to_string(),
@@ -506,7 +522,8 @@ fn run_script_pipeline(source: String, package: &str, path: PathBuf) -> Result<V
     );
     let checked = check_program(parsed).map_err(format_check_failure)?;
     let script = lower_script(&checked).map_err(|err| err.to_string())?;
-    Interpreter::run_script(script).map_err(|err| err.to_string())
+    let value = Interpreter::run_script(&script).map_err(|err| err.to_string())?;
+    Ok((script, value))
 }
 
 /// Parse + typecheck one source file in the requested parse mode.

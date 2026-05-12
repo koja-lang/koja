@@ -22,6 +22,7 @@ mod binary;
 mod bitwise;
 pub(super) mod cptr;
 mod cstring;
+mod debug;
 mod equality;
 mod hash;
 mod hashtable;
@@ -52,6 +53,7 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         }
         IRIntrinsicId::CPtr(method) => cptr::emit_cptr(ctx, function, llvm_function, method),
         IRIntrinsicId::CString(_) => cstring::emit_to_string(ctx, function, llvm_function),
+        IRIntrinsicId::Debug(impl_) => debug::emit_format(ctx, function, llvm_function, impl_),
         IRIntrinsicId::Equality(impl_) => equality::emit_eq(ctx, function, llvm_function, impl_),
         IRIntrinsicId::Hash(impl_) => hash::emit_hash(ctx, function, llvm_function, impl_),
         IRIntrinsicId::Kernel(KernelMethod::Panic) => {

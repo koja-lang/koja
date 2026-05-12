@@ -58,7 +58,7 @@ pub use function::{
     IRInstruction, IRSymbol, IRTerminator,
 };
 pub use intrinsic_id::{
-    BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, EqualityImpl, HashImpl,
+    BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, DebugImpl, EqualityImpl, HashImpl,
     IRIntrinsicId, IntType, KernelMethod, ListMethod, MapMethod, ParseTarget, SetMethod,
     StringMethod,
 };

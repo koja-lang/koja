@@ -240,9 +240,7 @@ pub(super) fn lower_expr(
             registry,
             output,
         ),
-        ExprKind::String { parts, .. } => {
-            lower_string(parts, expr.span, ctx, block, &mut output.diagnostics)
-        }
+        ExprKind::String { parts, .. } => lower_string(parts, ctx, block, registry, output),
         ExprKind::StructConstruction { fields, .. } => {
             lower_struct_construction(fields, &expr.resolution, ctx, block, registry, output)
         }
@@ -567,27 +565,74 @@ fn concat_kind_from_operand(ty: IRType) -> Option<ConcatKind> {
     }
 }
 
+/// Lower a (possibly interpolated) string literal into a single
+/// `String`-typed value.
+///
+/// Strategy: each part lowers to its own `String` value
+/// ([`emit_string_const`] for literals, recursive [`lower_expr`] for
+/// interpolations — the typecheck synthesizer wraps every
+/// interpolated expression in `.format()` so it's already
+/// `String`-typed by the time we see it). N parts then fold into
+/// N-1 chained binary [`IRInstruction::Concat`] instructions; empty
+/// parts produces a single empty-string const.
+///
+/// Single-part fast paths preserve byte-for-byte the prior shape:
+/// a lone literal emits one `Const`, a lone interpolation emits no
+/// `Concat` at all.
 fn lower_string(
     parts: &[StringPart],
-    span: Span,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
-    diagnostics: &mut Vec<Diagnostic>,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let [StringPart::Literal { value, .. }] = parts else {
-        diagnostics.push(Diagnostic::error(
-            "alpha IR does not yet lower string interpolation",
-            span,
-        ));
-        return Err(());
-    };
+    if parts.is_empty() {
+        return Ok((emit_string_const(String::new(), ctx, block), block));
+    }
+    let mut iter = parts.iter();
+    let first = iter.next().expect("non-empty parts");
+    let (mut acc, mut block) = lower_string_part(first, ctx, block, registry, output)?;
+    for part in iter {
+        let (next_value, next_block) = lower_string_part(part, ctx, block, registry, output)?;
+        block = next_block;
+        let dest = ctx.fresh_value(IRType::String);
+        ctx.cfg.append(
+            block,
+            IRInstruction::Concat {
+                dest,
+                kind: ConcatKind::String,
+                lhs: acc,
+                rhs: next_value,
+            },
+        );
+        acc = dest;
+    }
+    Ok((acc, block))
+}
+
+fn lower_string_part(
+    part: &StringPart,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(ValueId, IRBlockId), ()> {
+    match part {
+        StringPart::Literal { value, .. } => {
+            Ok((emit_string_const(value.clone(), ctx, block), block))
+        }
+        StringPart::Interpolation { expr, .. } => lower_expr(expr, ctx, block, registry, output),
+    }
+}
+
+fn emit_string_const(value: String, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
     let dest = ctx.fresh_value(IRType::String);
     ctx.cfg.append(
         block,
         IRInstruction::Const {
             dest,
-            value: ConstValue::String(value.clone()),
+            value: ConstValue::String(value),
         },
     );
-    Ok((dest, block))
+    dest
 }

@@ -8,6 +8,7 @@
 
 mod alpha;
 mod ffi;
+mod format;
 mod fs;
 mod panic;
 mod reactor;

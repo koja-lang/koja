@@ -97,7 +97,12 @@ fn bounded_method_call_resolves_protocol_return_type() {
 #[test]
 fn bounded_method_call_with_no_bound_diagnoses() {
     // `T` has no bound; calling `value.greet()` is an error rather
-    // than a silent dispatch failure.
+    // than a silent dispatch failure. The universal-`Debug` fallback
+    // augments every type parameter's bound list with the universal
+    // protocols ([`registry::UNIVERSAL_PROTOCOLS`]), so the
+    // diagnostic surface is `no bound provides it` (Debug is in
+    // scope; greet is not on Debug) rather than the older
+    // `no bounds declared` shape.
     let source = "
         fn show<T>(value: T) -> String
           value.greet()
@@ -109,8 +114,8 @@ fn bounded_method_call_with_no_bound_diagnoses() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("greet") && m.contains("no bounds declared")),
-        "expected `no bounds declared` diagnostic, got {messages:?}",
+            .any(|m| m.contains("greet") && m.contains("no bound provides it")),
+        "expected `no bound provides it` diagnostic, got {messages:?}",
     );
 }
 

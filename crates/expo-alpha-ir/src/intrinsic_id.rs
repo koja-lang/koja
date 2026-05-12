@@ -39,6 +39,7 @@ pub enum IRIntrinsicId {
     },
     CPtr(CPtrMethod),
     CString(CStringMethod),
+    Debug(DebugImpl),
     Equality(EqualityImpl),
     Hash(HashImpl),
     Kernel(KernelMethod),
@@ -151,6 +152,24 @@ pub enum StringMethod {
     ToCstring,
 }
 
+/// Receiver shape for `Debug.format` impls. Mirrors
+/// [`EqualityImpl`] / [`HashImpl`]'s flat-enum-with-`Int(IntType)`
+/// pattern: `Bool` and `Float` / `Float32` are siblings rather than
+/// folded into a catch-all "primitive" enum because each variant
+/// has its own emitter cell (boolean rendering, integer
+/// `format("{}")`, IEEE-754 `format("{}")` with f32/f64 width).
+///
+/// `String` isn't here — `String.format` ships a pure-Expo body
+/// (`"\"" <> self.escape_debug() <> "\""` in
+/// `lib/global/src/debug.expo`) instead of an intrinsic.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DebugImpl {
+    Bool,
+    Float,
+    Float32,
+    Int(IntType),
+}
+
 /// Receiver shape for `Equality.eq` impls. `Bool` and `String` are
 /// siblings (each their own variant) rather than wrapped in a
 /// catch-all "integral" enum — the LLVM and eval emitters dispatch
@@ -258,6 +277,9 @@ impl IRIntrinsicId {
         if method == "eq" {
             return EqualityImpl::from_receiver(receiver).map(Self::Equality);
         }
+        if method == "format" {
+            return DebugImpl::from_receiver(receiver).map(Self::Debug);
+        }
         if method == "hash" {
             return HashImpl::from_receiver(receiver).map(Self::Hash);
         }
@@ -303,6 +325,32 @@ impl IntType {
             Self::UInt16 => "UInt16",
             Self::UInt32 => "UInt32",
             Self::UInt64 => "UInt64",
+        }
+    }
+}
+
+impl DebugImpl {
+    /// Map a receiver-type name (`"Bool"`, `"Int"`, `"Float"`,
+    /// `"Float32"`, `"Int8"`, …) to the matching impl cell.
+    /// Returns `None` for receivers outside the four families
+    /// (e.g. `String`, struct types) — `String.format` is pure
+    /// Expo and user types route through the synthesized
+    /// `impl Debug` blocks.
+    pub fn from_receiver(receiver: &str) -> Option<Self> {
+        Some(match receiver {
+            "Bool" => Self::Bool,
+            "Float" => Self::Float,
+            "Float32" => Self::Float32,
+            other => Self::Int(IntType::from_source(other)?),
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Bool => "Bool",
+            Self::Float => "Float",
+            Self::Float32 => "Float32",
+            Self::Int(ty) => ty.segment(),
         }
     }
 }
@@ -602,6 +650,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Bitwise { ty, op } => write!(f, "{}.{}", ty.segment(), op.segment()),
             Self::CPtr(m) => write!(f, "CPtr.{}", m.segment()),
             Self::CString(m) => write!(f, "CString.{}", m.segment()),
+            Self::Debug(impl_) => write!(f, "{}.format", impl_.segment()),
             Self::Equality(impl_) => write!(f, "{}.eq", impl_.segment()),
             Self::Hash(impl_) => write!(f, "{}.hash", impl_.segment()),
             Self::Kernel(m) => write!(f, "Kernel.{}", m.segment()),
@@ -742,6 +791,43 @@ mod tests {
                 &format!("String.{method}"),
             );
         }
+    }
+
+    #[test]
+    fn debug_format_covers_bool_float_int_and_int_widths() {
+        for ty_str in [
+            "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
+        ] {
+            let ty = IntType::from_source(ty_str).unwrap();
+            assert_round_trip(
+                &[ty_str, "format"],
+                IRIntrinsicId::Debug(DebugImpl::Int(ty)),
+                &format!("{ty_str}.format"),
+            );
+        }
+        assert_round_trip(
+            &["Bool", "format"],
+            IRIntrinsicId::Debug(DebugImpl::Bool),
+            "Bool.format",
+        );
+        assert_round_trip(
+            &["Float", "format"],
+            IRIntrinsicId::Debug(DebugImpl::Float),
+            "Float.format",
+        );
+        assert_round_trip(
+            &["Float32", "format"],
+            IRIntrinsicId::Debug(DebugImpl::Float32),
+            "Float32.format",
+        );
+    }
+
+    #[test]
+    fn debug_excludes_string_receiver() {
+        assert!(
+            IRIntrinsicId::from_identifier(&id(&["String", "format"])).is_none(),
+            "String.format ships a pure-Expo body, not an intrinsic",
+        );
     }
 
     #[test]

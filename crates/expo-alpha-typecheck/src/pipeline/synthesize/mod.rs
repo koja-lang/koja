@@ -1,16 +1,25 @@
-//! Surface-shape AST rewrites between `lift_signatures` and
-//! `resolve`. Today: the `for` loop desugar in [`for_desugar`].
-//! Future synthesizers (default `Debug` impl, async desugar, …)
-//! land as additional submodules.
+//! Surface-shape AST rewrites that ride alongside the typecheck
+//! pipeline. Two phases:
+//!
+//! - [`derive_debug::derive_debug`] runs **pre-collect** (called
+//!   from [`crate::check_program`]) so the new `impl Debug for T`
+//!   blocks land before name binding sees them.
+//! - [`synthesize_program`] runs **post-lift** and only mutates
+//!   function bodies — today: the `for` loop desugar in
+//!   [`for_desugar`]. Item-introducing rewrites can't live here
+//!   without re-running collect / lift on the new items.
 
+pub(crate) mod derive_debug;
 mod for_desugar;
 
 use expo_ast::ast::{Function, ImplMember, Item};
 
 use crate::program::CheckedPackage;
 
-/// Apply every registered synthesizer to every fn body across
-/// `packages`.
+/// Apply every body-mutating synthesizer to every fn body across
+/// `packages`. Item-introducing synthesizers (e.g.
+/// [`derive_debug::derive_debug`]) run earlier in the pipeline; see
+/// the module-level doc.
 pub(crate) fn synthesize_program(packages: &mut [CheckedPackage]) {
     for pkg in packages.iter_mut() {
         for file in &mut pkg.files {

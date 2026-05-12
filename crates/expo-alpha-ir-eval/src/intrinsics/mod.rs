@@ -21,6 +21,7 @@ mod binary;
 mod bitwise;
 mod cptr;
 mod cstring;
+mod debug;
 mod equality;
 mod hash;
 mod helpers;
@@ -56,6 +57,7 @@ pub(crate) fn dispatch<R: CallResolver>(
         IRIntrinsicId::Bitwise { ty, op } => bitwise::dispatch(ty, op, args),
         IRIntrinsicId::CPtr(method) => cptr::dispatch(method, function, args),
         IRIntrinsicId::CString(_) => cstring::to_string(args),
+        IRIntrinsicId::Debug(impl_) => debug::dispatch(impl_, args),
         IRIntrinsicId::Equality(impl_) => equality::dispatch(impl_, args),
         IRIntrinsicId::Hash(impl_) => hash::dispatch(impl_, args),
         IRIntrinsicId::Kernel(KernelMethod::Panic) => kernel::panic(args),

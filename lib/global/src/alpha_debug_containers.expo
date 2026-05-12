@@ -1,0 +1,81 @@
+impl Debug for Pair<A, B>
+  @doc """
+  Renders the pair as `(first, second)`, with each side rendered
+  through its own `Debug.format`.
+  """
+  fn format(self) -> String
+    "(" <> self.first.format() <> ", " <> self.second.format() <> ")"
+  end
+end
+
+impl Debug for Option<T>
+  @doc """
+  Renders `Option.Some(v)` as `Some(<v.format()>)` and
+  `Option.None` as `None`.
+  """
+  fn format(self) -> String
+    match self
+      Option.Some(value) -> "Some(" <> value.format() <> ")"
+      Option.None -> "None"
+    end
+  end
+end
+
+impl Debug for Result<T, E>
+  @doc """
+  Renders `Result.Ok(v)` as `Ok(<v.format()>)` and
+  `Result.Err(e)` as `Err(<e.format()>)`.
+  """
+  fn format(self) -> String
+    match self
+      Result.Ok(value) -> "Ok(" <> value.format() <> ")"
+      Result.Err(error) -> "Err(" <> error.format() <> ")"
+    end
+  end
+end
+
+impl Debug for List<T>
+  @doc """
+  Renders the list as `[a, b, c]`, with each element rendered through
+  its own `Debug.format`. Empty lists render as `[]`.
+  """
+  fn format(self) -> String
+    result = "["
+    first = true
+
+    for item in self
+      if first
+        result = result <> item.format()
+        first = false
+      else
+        result = result <> ", " <> item.format()
+      end
+    end
+
+    result <> "]"
+  end
+end
+
+impl Debug for Map<K, V>
+  @doc """
+  Renders the map as `Map{N entries}` where `N` is the entry count.
+  Iteration-based `["k": v, ...]` rendering waits on a `Map.entries`
+  intrinsic; until then, this gives every map a usable `format`
+  without dragging in the iteration story.
+  """
+  fn format(self) -> String
+    "Map{" <> self.length().format() <> " entries}"
+  end
+end
+
+impl Debug for Set<T>
+  @doc """
+  Renders the set as `Set{N elements}` where `N` is the element
+  count. Iteration-based `{a, b}` rendering waits on a `Set.to_list`
+  intrinsic; until then, this gives every set a usable `format`
+  without dragging in the iteration story.
+  """
+  fn format(self) -> String
+    "Set{" <> self.length().format() <> " elements}"
+  end
+end

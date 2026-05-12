@@ -2321,6 +2321,250 @@ fn alpha_run_interpreter_script_system_env_round_trip_prints_marker() {
     );
 }
 
+/// Script-mode fixtures driving `Debug.format` end-to-end across
+/// the alpha pipeline. Each fixture prints the formatted string via
+/// `IO.puts` so the asserted stdout is the exact `format` output.
+/// Pins the universal-Debug fallback, the synthesizer's struct +
+/// enum body shapes, the hand-written stdlib container impls
+/// (`Pair`, `Option`, `Result`, `List`, `Map`, `Set`), and the
+/// primitive `@intrinsic` Debug emitters end-to-end on both
+/// backends.
+const DEBUG_INT_SCRIPT_SOURCE: &str = "
+    IO.puts(42.format())
+    ()
+";
+
+const DEBUG_BOOL_SCRIPT_SOURCE: &str = "
+    IO.puts(true.format())
+    ()
+";
+
+const DEBUG_STRUCT_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    IO.puts(Point{x: 1, y: 2}.format())
+    ()
+";
+
+const DEBUG_ENUM_TUPLE_SCRIPT_SOURCE: &str = "
+    enum Shape
+      Tag(Int)
+    end
+
+    IO.puts(Shape.Tag(7).format())
+    ()
+";
+
+const DEBUG_LIST_SCRIPT_SOURCE: &str = "
+    IO.puts([1, 2, 3].format())
+    ()
+";
+
+const DEBUG_OPTION_SOME_SCRIPT_SOURCE: &str = "
+    IO.puts(Option.Some(5).format())
+    ()
+";
+
+const DEBUG_OPTION_NONE_SCRIPT_SOURCE: &str = "
+    target: Option<Int> = Option.None
+    IO.puts(target.format())
+    ()
+";
+
+const DEBUG_RESULT_OK_SCRIPT_SOURCE: &str = "
+    target: Result<Int, String> = Result.Ok(7)
+    IO.puts(target.format())
+    ()
+";
+
+const DEBUG_PAIR_SCRIPT_SOURCE: &str = "
+    IO.puts(Pair.new(1, 2).format())
+    ()
+";
+
+#[test]
+fn alpha_run_llvm_script_debug_int_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_llvm_debug_int",
+        DEBUG_INT_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "42",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_int_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_interpreter_debug_int",
+        DEBUG_INT_SCRIPT_SOURCE,
+        None,
+        "42",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_bool_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_llvm_debug_bool",
+        DEBUG_BOOL_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "true",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_bool_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_interpreter_debug_bool",
+        DEBUG_BOOL_SCRIPT_SOURCE,
+        None,
+        "true",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_struct_prints_synthesized_body() {
+    assert_script_prints(
+        "run_llvm_debug_struct",
+        DEBUG_STRUCT_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Point{x: 1, y: 2}",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_struct_prints_synthesized_body() {
+    assert_script_prints(
+        "run_interpreter_debug_struct",
+        DEBUG_STRUCT_SCRIPT_SOURCE,
+        None,
+        "Point{x: 1, y: 2}",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_enum_tuple_prints_synthesized_body() {
+    assert_script_prints(
+        "run_llvm_debug_enum_tuple",
+        DEBUG_ENUM_TUPLE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Tag(7)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_enum_tuple_prints_synthesized_body() {
+    assert_script_prints(
+        "run_interpreter_debug_enum_tuple",
+        DEBUG_ENUM_TUPLE_SCRIPT_SOURCE,
+        None,
+        "Tag(7)",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_list_prints_bracket_form() {
+    assert_script_prints(
+        "run_llvm_debug_list",
+        DEBUG_LIST_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "[1, 2, 3]",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_list_prints_bracket_form() {
+    assert_script_prints(
+        "run_interpreter_debug_list",
+        DEBUG_LIST_SCRIPT_SOURCE,
+        None,
+        "[1, 2, 3]",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_option_some_prints_some_value() {
+    assert_script_prints(
+        "run_llvm_debug_option_some",
+        DEBUG_OPTION_SOME_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Some(5)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_option_some_prints_some_value() {
+    assert_script_prints(
+        "run_interpreter_debug_option_some",
+        DEBUG_OPTION_SOME_SCRIPT_SOURCE,
+        None,
+        "Some(5)",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_option_none_prints_none() {
+    assert_script_prints(
+        "run_llvm_debug_option_none",
+        DEBUG_OPTION_NONE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "None",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_option_none_prints_none() {
+    assert_script_prints(
+        "run_interpreter_debug_option_none",
+        DEBUG_OPTION_NONE_SCRIPT_SOURCE,
+        None,
+        "None",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_result_ok_prints_ok_value() {
+    assert_script_prints(
+        "run_llvm_debug_result_ok",
+        DEBUG_RESULT_OK_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Ok(7)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_result_ok_prints_ok_value() {
+    assert_script_prints(
+        "run_interpreter_debug_result_ok",
+        DEBUG_RESULT_OK_SCRIPT_SOURCE,
+        None,
+        "Ok(7)",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_pair_prints_paren_pair() {
+    assert_script_prints(
+        "run_llvm_debug_pair",
+        DEBUG_PAIR_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "(1, 2)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_pair_prints_paren_pair() {
+    assert_script_prints(
+        "run_interpreter_debug_pair",
+        DEBUG_PAIR_SCRIPT_SOURCE,
+        None,
+        "(1, 2)",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");
