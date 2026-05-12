@@ -16,6 +16,7 @@ editors/vscode/out
 # Misc
 .DS_Store
 justfile
+.rules
 
 # Stub-retirement diagnostics (regen via stub/regenerate.sh)
 /stub/*.log

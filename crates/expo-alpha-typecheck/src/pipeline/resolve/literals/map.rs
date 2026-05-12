@@ -26,7 +26,8 @@ use super::super::ctx::Resolver;
 use super::super::expr::resolve_expr_with_expected;
 use super::axis::{AxisLabel, infer_axis};
 use super::carrier::{
-    CarrierSpec, dispatch_via_carrier, lookup_global_id, missing_root_diagnostic, pick_carrier,
+    CarrierSpec, Dispatch, dispatch_via_carrier, lookup_global_id, missing_root_diagnostic,
+    pick_carrier,
 };
 
 const SPEC: CarrierSpec = CarrierSpec {
@@ -108,9 +109,11 @@ pub(in super::super) fn resolve_map_literal(
         expr,
         ExprKind::Map { entries },
         map_ty,
-        expected,
-        carrier,
-        &SPEC,
+        &Dispatch {
+            expected,
+            carrier,
+            spec: &SPEC,
+        },
         resolver,
         diagnostics,
     )

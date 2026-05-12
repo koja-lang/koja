@@ -121,6 +121,14 @@ pub(super) fn pick_carrier(
     }
 }
 
+/// Data needed to dispatch a literal through a carrier. Bundles
+/// the expected type, carrier selection result, and protocol spec.
+pub(super) struct Dispatch<'a> {
+    pub expected: Option<&'a ResolvedType>,
+    pub carrier: LiteralCarrier,
+    pub spec: &'a CarrierSpec,
+}
+
 /// Drop the canonical inner literal back into `expr` (for the
 /// default carrier) or synthesize a `<conformer>.<from_method>(<canonical>)`
 /// MethodCall on `expr` and resolve it (for a non-default
@@ -135,13 +143,16 @@ pub(super) fn dispatch_via_carrier(
     expr: &mut Expr,
     inner_kind: ExprKind,
     inner_resolution: ResolvedType,
-    expected: Option<&ResolvedType>,
-    carrier: LiteralCarrier,
-    spec: &CarrierSpec,
+    ctx: &Dispatch<'_>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let span = expr.span;
+    let Dispatch {
+        expected,
+        carrier,
+        spec,
+    } = ctx;
     match carrier {
         LiteralCarrier::Default => {
             expr.kind = inner_kind;
@@ -152,10 +163,10 @@ pub(super) fn dispatch_via_carrier(
             inner.resolution = inner_resolution;
             let receiver = Expr::new(
                 ExprKind::Ident {
-                    name,
+                    name: name.clone(),
                     resolution: Resolution::Unresolved,
                 },
-                ident_span,
+                *ident_span,
             );
             expr.kind = ExprKind::MethodCall {
                 receiver: Box::new(receiver),
@@ -189,7 +200,7 @@ pub(super) fn dispatch_via_carrier(
                 args,
                 CallSite {
                     out_type_args: type_args,
-                    expected,
+                    expected: *expected,
                     span,
                 },
                 resolver,
