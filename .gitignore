@@ -13,6 +13,12 @@
 editors/vscode/node_modules
 editors/vscode/out
 
+# Zed extension build artifacts
+editors/zed/expo/Cargo.lock
+editors/zed/expo/extension.wasm
+editors/zed/expo/grammars/
+editors/zed/expo/target/
+
 # Misc
 .DS_Store
 justfile

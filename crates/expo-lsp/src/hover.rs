@@ -8,7 +8,7 @@ use tower_lsp_server::ls_types::*;
 
 use expo_ast::ast::File;
 use expo_ast::identifier::TypeIdentifier;
-use expo_typecheck::context::VariantData;
+use expo_typecheck::context::{FunctionSig, TypeContext, VariantData};
 
 use crate::backend::{Backend, DocumentState};
 use crate::lookup::{self, SymbolInfo};
@@ -36,6 +36,16 @@ impl Backend {
 
         let hover_text = match &symbol {
             SymbolInfo::Function { name } => build_function_hover(name, state, &self.stdlib_files),
+            SymbolInfo::Method {
+                type_name,
+                method_name,
+            } => build_method_hover(
+                type_name,
+                method_name,
+                state,
+                &self.stdlib_ctx,
+                &self.stdlib_files,
+            ),
             SymbolInfo::Struct { name } => build_struct_hover(name, state, &self.stdlib_files),
             SymbolInfo::Constant { name } => build_constant_hover(name, state, &self.stdlib_files),
             SymbolInfo::Enum { name } => build_enum_hover(name, state, &self.stdlib_files),
@@ -88,6 +98,41 @@ fn build_function_hover(
     stdlib_files: &[File],
 ) -> Option<String> {
     let sig = state.ctx.functions.get(name)?;
+    let signature = format_function_signature(name, sig);
+    let doc = resolve_doc(name, state, stdlib_files);
+    Some(format_hover(&signature, doc.as_deref()))
+}
+
+/// Renders hover for a method call. The signature comes from the
+/// type's `TypeInfo.functions` entry (methods are never stored in
+/// `ctx.functions` directly), and the doc comes from the mangled
+/// `Type_method` form, falling back to the bare method name for
+/// protocol default methods that share annotations across impls.
+fn build_method_hover(
+    type_name: &str,
+    method_name: &str,
+    state: &DocumentState,
+    stdlib_ctx: &TypeContext,
+    stdlib_files: &[File],
+) -> Option<String> {
+    let sig = state
+        .ctx
+        .find_type(type_name)
+        .and_then(|ti| ti.functions.get(method_name))
+        .or_else(|| {
+            stdlib_ctx
+                .find_type(type_name)
+                .and_then(|ti| ti.functions.get(method_name))
+        })?;
+    let display_name = format!("{type_name}.{method_name}");
+    let signature = format_function_signature(&display_name, sig);
+    let mangled = format!("{type_name}_{method_name}");
+    let doc = resolve_doc(&mangled, state, stdlib_files)
+        .or_else(|| resolve_doc(method_name, state, stdlib_files));
+    Some(format_hover(&signature, doc.as_deref()))
+}
+
+fn format_function_signature(display_name: &str, sig: &FunctionSig) -> String {
     let params_str: Vec<String> = sig
         .params
         .iter()
@@ -110,16 +155,14 @@ fn build_function_hover(
                 .join(", ")
         )
     };
-    let signature = format!(
+    format!(
         "{} {}{}({}) -> {}",
         vis,
-        name,
+        display_name,
         tp,
         params_str.join(", "),
         sig.return_type.display()
-    );
-    let doc = resolve_doc(name, state, stdlib_files);
-    Some(format_hover(&signature, doc.as_deref()))
+    )
 }
 
 fn build_struct_hover(name: &str, state: &DocumentState, stdlib_files: &[File]) -> Option<String> {

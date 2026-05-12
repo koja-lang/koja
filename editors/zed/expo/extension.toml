@@ -1,0 +1,18 @@
+id = "expo"
+name = "Expo"
+description = "Syntax highlighting and language-server support for the Expo programming language."
+version = "0.1.0"
+authors = ["Henry Popp <hello@hpopp.dev>"]
+schema_version = 1
+
+# The grammar lives in a sibling repository. During development we
+# point at the local checkout; once `tree-sitter-expo` is published
+# this should switch to a public `https://...` URL with the same
+# pinned commit.
+[grammars.expo]
+repository = "file:///Users/hpopp/Work/expo-lang/tree-sitter-expo"
+commit = "54e3666037e41df5e27167123dee80cea95ec02a"
+
+[language_servers.expo-lsp]
+name = "Expo LSP"
+languages = ["Expo"]
