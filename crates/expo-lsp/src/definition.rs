@@ -91,6 +91,7 @@ impl Backend {
             None => return Ok(None),
         };
 
+        let owned_name;
         let name = match &symbol {
             SymbolInfo::Function { name }
             | SymbolInfo::Struct { name }
@@ -98,6 +99,13 @@ impl Backend {
             | SymbolInfo::Constant { name }
             | SymbolInfo::Protocol { name }
             | SymbolInfo::TypeAlias { name } => name.as_str(),
+            SymbolInfo::Method {
+                type_name,
+                method_name,
+            } => {
+                owned_name = format!("{type_name}_{method_name}");
+                owned_name.as_str()
+            }
             SymbolInfo::Variable { .. } => return Ok(None),
         };
 

@@ -289,20 +289,14 @@ fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<S
                 if let Some(info) = find_in_expr(receiver, line, col, ctx) {
                     return Some(info);
                 }
-                if let ExprKind::Ident { .. } = &receiver.kind {
-                    let method_start = receiver.span.end.column + 2;
-                    let method_end = method_start + method.len() as u32;
-                    if line == receiver.span.end.line
-                        && col >= method_start
-                        && col <= method_end
-                        && let Some(mangled) = resolve_method_name(receiver, method, ctx)
-                    {
-                        return Some(SymbolInfo::Function { name: mangled });
-                    }
-                } else if let Some(mangled) = resolve_method_name(receiver, method, ctx)
-                    && cursor_on_method(receiver, method, &expr.span, line, col)
+                if cursor_on_method(receiver, method, &expr.span, line, col)
+                    && let Some((type_name, method_name)) =
+                        resolve_method_name(receiver, method, ctx)
                 {
-                    return Some(SymbolInfo::Function { name: mangled });
+                    return Some(SymbolInfo::Method {
+                        type_name,
+                        method_name,
+                    });
                 }
                 for arg in args {
                     if let Some(info) = find_in_expr(&arg.value, line, col, ctx) {
@@ -1022,18 +1016,44 @@ fn compute_active_param(args: &[Arg], line: u32, col: u32) -> usize {
 
 /// Resolves the mangled function name for a method call using the
 /// receiver's `resolved_type` (e.g. `Int_band` for `5.band(3)`).
-fn resolve_method_name(receiver: &Expr, method: &str, ctx: &TypeContext) -> Option<String> {
-    let resolved = receiver.resolved_type.as_ref()?;
-    let type_name = resolved.display();
-    let mangled = format!("{type_name}_{method}");
-    if ctx.functions.contains_key(&mangled) {
-        return Some(mangled);
+/// Resolves the owning type for a method call so hover/go-to-definition
+/// can locate the right `FunctionSig` on a `TypeInfo`. Methods are
+/// stored on `TypeInfo.functions`, never on `ctx.functions`, so the
+/// LSP must walk the receiver's type to find them.
+fn resolve_method_name(
+    receiver: &Expr,
+    method: &str,
+    ctx: &TypeContext,
+) -> Option<(String, String)> {
+    // Instance call: the receiver is a value with a resolved type;
+    // its `display()` matches the type's name in the type registry.
+    if let Some(resolved) = receiver.resolved_type.as_ref() {
+        let type_name = resolved.display();
+        if let Some(ti) = ctx.find_type(&type_name)
+            && ti.functions.contains_key(method)
+        {
+            return Some((type_name, method.to_string()));
+        }
+    }
+    // Static call (`IO.puts`, `List.new`): typecheck doesn't stamp a
+    // `resolved_type` on the type-as-namespace receiver, but the
+    // identifier itself names a known type. Walk that type's methods
+    // so hover still reaches the right function.
+    if let ExprKind::Ident { name, .. } = &receiver.kind
+        && let Some(ti) = ctx.find_type(name)
+        && ti.functions.contains_key(method)
+    {
+        return Some((name.clone(), method.to_string()));
     }
     None
 }
 
 /// Returns true if the cursor is positioned on the method name portion of a
 /// method call (after the `.`), not on the receiver or arguments.
+///
+/// Spans use end-exclusive columns (the column *after* the last character),
+/// so the method identifier begins at `receiver.span.end.column + 1` —
+/// one column past the `.` separator.
 fn cursor_on_method(receiver: &Expr, method: &str, span: &Span, line: u32, col: u32) -> bool {
     let recv_end = match &receiver.kind {
         ExprKind::Literal { .. }
@@ -1044,7 +1064,7 @@ fn cursor_on_method(receiver: &Expr, method: &str, span: &Span, line: u32, col: 
         | ExprKind::FieldAccess { .. } => receiver.span.end.column,
         _ => return span_contains(span, line, col),
     };
-    let method_start = recv_end + 2;
+    let method_start = recv_end + 1;
     let method_end = method_start + method.len() as u32;
-    line == span.start.line && col >= method_start && col <= method_end
+    line == receiver.span.end.line && col >= method_start && col < method_end
 }

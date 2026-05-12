@@ -27,6 +27,14 @@ pub(crate) enum SymbolInfo {
     Function {
         name: String,
     },
+    /// A method on a struct, enum, or protocol. Carries both the
+    /// owning type's name and the bare method name so the hover can
+    /// look up the function signature on the type's `TypeInfo` and
+    /// the doc string under the mangled `Type_method` form.
+    Method {
+        type_name: String,
+        method_name: String,
+    },
     Protocol {
         name: String,
     },
@@ -217,7 +225,15 @@ fn find_in_inline_functions(
 }
 
 /// Searches a file's items for the `@doc` annotation on the item
-/// named `name`.
+/// named `name`. Handles three families of names:
+///
+/// * Top-level declarations (`fn`, `struct`, `enum`, `const`,
+///   `protocol`, `type`).
+/// * Inline methods on `struct` / `enum` declarations: matches both
+///   the bare name (`puts`) and the mangled `Type_method` form used
+///   by static-call hovers (`IO_puts`).
+/// * Methods inside `impl` blocks (same dual form) and default
+///   methods on `protocol` declarations.
 pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
     for item in &file.items {
         match item {
@@ -225,43 +241,69 @@ pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
             Item::Function(f) if f.name == name => {
                 return span::annotation_doc(&f.annotations);
             }
-            Item::Struct(s) if s.name == name => {
-                return span::annotation_doc(&s.annotations);
+            Item::Struct(s) => {
+                if s.name == name {
+                    return span::annotation_doc(&s.annotations);
+                }
+                if let Some(doc) = doc_in_methods(&s.functions, &s.name, name) {
+                    return Some(doc);
+                }
             }
-            Item::Enum(e) if e.name == name => {
-                return span::annotation_doc(&e.annotations);
+            Item::Enum(e) => {
+                if e.name == name {
+                    return span::annotation_doc(&e.annotations);
+                }
+                if let Some(doc) = doc_in_methods(&e.functions, &e.name, name) {
+                    return Some(doc);
+                }
             }
             Item::Constant(c) if c.name == name => {
                 return span::annotation_doc(&c.annotations);
             }
-            Item::Protocol(p) if p.name == name => {
-                return span::annotation_doc(&p.annotations);
+            Item::Protocol(p) => {
+                if p.name == name {
+                    return span::annotation_doc(&p.annotations);
+                }
+                for method in &p.methods {
+                    if method.name == name || format!("{}_{}", p.name, method.name) == name {
+                        return span::annotation_doc(&method.annotations);
+                    }
+                }
             }
             Item::TypeAlias(t) if t.name == name => {
                 return span::annotation_doc(&t.annotations);
             }
             Item::Impl(imp) => {
+                let impl_type_name = match &imp.target {
+                    TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
+                        path.last().map(|s| s.as_str())
+                    }
+                    _ => None,
+                };
                 for member in &imp.members {
-                    if let ImplMember::Function(f) = member {
-                        if f.name == name {
-                            return span::annotation_doc(&f.annotations);
-                        }
-                        let impl_type_name = match &imp.target {
-                            TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
-                                path.last().map(|s| s.as_str())
-                            }
-                            _ => None,
-                        };
-                        let mangled = impl_type_name
-                            .map(|t| format!("{t}_{}", f.name))
-                            .unwrap_or_default();
-                        if mangled == name {
-                            return span::annotation_doc(&f.annotations);
-                        }
+                    if let ImplMember::Function(f) = member
+                        && (f.name == name
+                            || impl_type_name
+                                .map(|t| format!("{t}_{}", f.name) == name)
+                                .unwrap_or(false))
+                    {
+                        return span::annotation_doc(&f.annotations);
                     }
                 }
             }
             _ => {}
+        }
+    }
+    None
+}
+
+/// Helper for `find_doc_for`: looks up a function inside a list of
+/// inline methods on a struct or enum, matching either the bare
+/// method name or the mangled `Type_method` form.
+fn doc_in_methods(functions: &[Function], type_name: &str, name: &str) -> Option<String> {
+    for f in functions {
+        if f.name == name || format!("{type_name}_{}", f.name) == name {
+            return span::annotation_doc(&f.annotations);
         }
     }
     None
@@ -304,5 +346,108 @@ pub(crate) fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo>
             name: name.to_string(),
             type_display: None,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use expo_ast::util::dedent;
+    use expo_parser::{ParseMode, parse};
+
+    fn parse_source(source: &str) -> File {
+        let result = parse(&dedent(source), ParseMode::File);
+        assert!(
+            result.errors.is_empty(),
+            "parse errors: {:?}",
+            result.errors
+        );
+        result.ast
+    }
+
+    #[test]
+    fn finds_doc_on_top_level_function() {
+        let file = parse_source(
+            r#"
+            @doc """
+            Adds two numbers.
+            """
+            fn add(a: I32, b: I32) -> I32
+              a + b
+            end
+            "#,
+        );
+        assert!(
+            find_doc_for(&file, "add")
+                .unwrap()
+                .contains("Adds two numbers.")
+        );
+    }
+
+    #[test]
+    fn finds_doc_on_inline_struct_method_via_mangled_name() {
+        let file = parse_source(
+            r#"
+            struct Greeter
+              @doc """
+              Says hello.
+              """
+              fn hello()
+              end
+            end
+            "#,
+        );
+        assert!(
+            find_doc_for(&file, "Greeter_hello")
+                .unwrap()
+                .contains("Says hello.")
+        );
+    }
+
+    #[test]
+    fn finds_doc_on_protocol_default_method() {
+        let file = parse_source(
+            r#"
+            protocol Greet
+              @doc """
+              Greeting verb.
+              """
+              fn hello(self) -> String
+            end
+            "#,
+        );
+        assert!(
+            find_doc_for(&file, "Greet_hello")
+                .unwrap()
+                .contains("Greeting verb.")
+        );
+        assert!(
+            find_doc_for(&file, "hello")
+                .unwrap()
+                .contains("Greeting verb.")
+        );
+    }
+
+    #[test]
+    fn finds_doc_on_impl_method_via_mangled_name() {
+        let file = parse_source(
+            r#"
+            struct Counter
+            end
+
+            impl Counter
+              @doc """
+              Increments the counter.
+              """
+              fn bump(self)
+              end
+            end
+            "#,
+        );
+        assert!(
+            find_doc_for(&file, "Counter_bump")
+                .unwrap()
+                .contains("Increments the counter.")
+        );
     }
 }
