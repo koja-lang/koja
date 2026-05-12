@@ -414,3 +414,127 @@ fn pattern_literal_int8_negative_fits() {
         ";
     typecheck(&dedent(source));
 }
+
+// ------------------------------------------------------------------
+// Binary-op comparison site (`ops::numeric_comparison_compatible`).
+// A sized-numeric operand paired with a fitting `Int` / `Float`
+// literal stamps the matching coercion on the literal so IR lower
+// mints the narrow `Const` opcode at the comparison's bit width.
+// Mirrors the pattern-literal arm above: same `check_compatible` /
+// `coercion_target_mut` plumbing, just invoked at one more site.
+// ------------------------------------------------------------------
+
+#[test]
+fn binary_eq_int8_with_int_literal_fits() {
+    let source = "
+        fn check(x: Int8) -> Bool
+          x == 0
+        end
+
+        fn main -> Unit
+          check(1)
+          ()
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn binary_gte_int32_with_int_literal_fits() {
+    let source = "
+        fn nonneg(fd: Int32) -> Bool
+          fd >= 0
+        end
+
+        fn main -> Unit
+          nonneg(1)
+          ()
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn binary_eq_uint8_with_int_literal_out_of_range_diagnoses() {
+    let source = "
+        fn check(x: UInt8) -> Bool
+          x == 256
+        end
+
+        fn main -> Unit
+          check(1)
+          ()
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("Bool") || (m.contains("UInt8") && m.contains("Int"))),
+        "expected mismatch diagnostic for out-of-range literal at comparison site, \
+         got {messages:?}",
+    );
+}
+
+#[test]
+fn binary_gt_float32_with_float_literal_fits() {
+    let source = "
+        fn check(x: Float32) -> Bool
+          x > 1.5
+        end
+
+        fn main -> Unit
+          check(2.0)
+          ()
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+// ------------------------------------------------------------------
+// Comparison-site alias-mix: a sized-numeric operand against a value
+// of the aliased default type should typecheck without coercion. This
+// is the `Substitution::set` cascade case under the hood — `T` binds
+// to `Int64` from the payload and the expected-type fill picks `Int`,
+// which `types_equivalent` accepts as the same type.
+// ------------------------------------------------------------------
+
+#[test]
+fn binary_gte_int64_with_int_literal_aliases() {
+    let source = "
+        @extern \"C\"
+        fn ext_returns_int64() -> Int64
+
+        fn check() -> Bool
+          result = ext_returns_int64()
+          result >= 0
+        end
+
+        fn main -> Unit
+          ()
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn result_ok_payload_int64_unifies_with_expected_int() {
+    // Function declares `Result<Int, String>`; payload binding T sees
+    // `Int64`; the bidirectional fill must find `E = String` even
+    // though `T` was bound to `Int64` and the template says `Int`.
+    let source = "
+        @extern \"C\"
+        fn ext_returns_int64() -> Int64
+
+        fn write() -> Result<Int, String>
+          result = ext_returns_int64()
+          result >= 0 ? Result.Ok(result) : Result.Err(\"failed\")
+        end
+
+        fn main -> Unit
+          ()
+        end
+        ";
+    typecheck(&dedent(source));
+}

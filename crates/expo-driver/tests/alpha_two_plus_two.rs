@@ -2041,6 +2041,530 @@ fn alpha_run_interpreter_script_int_parse_prints_value() {
     );
 }
 
+/// Script-mode fixture exercising the auto-imported `Global.map`
+/// stdlib end-to-end through the literal-desugar path.
+/// `["a": 1, "b": 2].length()` lowers at IR-construction time to
+/// `Map.new().put("a", 1).put("b", 2).length()`. The interpreter
+/// keeps the entries in a `Vec<(Value, Value)>` behind an
+/// `Rc<RefCell<_>>`, mirroring how lists are stored. The LLVM
+/// backend's hashtable port is still in flight — that side will
+/// flip on once the shared probe/resize emitters land.
+const MAP_LITERAL_LENGTH_SCRIPT_SOURCE: &str = "
+    [\"a\": 1, \"b\": 2].length()
+";
+
+#[test]
+fn alpha_run_llvm_script_map_literal_length_prints_two() {
+    assert_script_prints(
+        "run_llvm_map_literal_length",
+        MAP_LITERAL_LENGTH_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "2",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_map_literal_length_prints_two() {
+    assert_script_prints(
+        "run_interpreter_map_literal_length",
+        MAP_LITERAL_LENGTH_SCRIPT_SOURCE,
+        None,
+        "2",
+    );
+}
+
+/// Script-mode fixture pinning the `Map.new().put(...).get(...)`
+/// chain end-to-end on the interpreter. `Map<String, Int>` is
+/// inferred bidirectionally from the literal value flowing into
+/// `put`. `get` returns `Option<Int>`; `unwrap` projects the
+/// payload. Cross-references the eval interpreter's
+/// `MapMethod::{New, Put, Get}` dispatch — the LLVM port for the
+/// same chain is gated on the in-flight hashtable lift.
+const MAP_GET_UNWRAP_SCRIPT_SOURCE: &str = "
+    [\"hits\": 7, \"misses\": 3].get(\"hits\").unwrap()
+";
+
+#[test]
+fn alpha_run_llvm_script_map_get_unwrap_prints_seven() {
+    assert_script_prints(
+        "run_llvm_map_get_unwrap",
+        MAP_GET_UNWRAP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "7",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_map_get_unwrap_prints_seven() {
+    assert_script_prints(
+        "run_interpreter_map_get_unwrap",
+        MAP_GET_UNWRAP_SCRIPT_SOURCE,
+        None,
+        "7",
+    );
+}
+
+/// Script-mode fixture exercising the `ListLiteral<T>` carrier
+/// rewrite for `Set<T>`. The binding annotation `Set<Int>` flows
+/// into `resolve_list_literal`, which detects the `Set` carrier on
+/// the `Global.ListLiteral` protocol and rewrites
+/// `[1, 1, 2, 2, 3]` in-place into `Set.from_list([1, 1, 2, 2, 3])`.
+/// `Set.from_list` dedupes during construction; `.length()` returns
+/// `3` on the interpreter.
+const SET_LITERAL_DEDUP_SCRIPT_SOURCE: &str = "
+    s: Set<Int> = [1, 1, 2, 2, 3]
+    s.length()
+";
+
+#[test]
+fn alpha_run_llvm_script_set_literal_dedup_prints_three() {
+    assert_script_prints(
+        "run_llvm_set_literal_dedup",
+        SET_LITERAL_DEDUP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "3",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_set_literal_dedup_prints_three() {
+    assert_script_prints(
+        "run_interpreter_set_literal_dedup",
+        SET_LITERAL_DEDUP_SCRIPT_SOURCE,
+        None,
+        "3",
+    );
+}
+
+/// Script-mode fixture pinning `Set.has?` on the interpreter. The
+/// `Set<Int>` carrier is synthesized from the list-literal binding
+/// initializer; `has?` then runs a linear probe over the deduped
+/// element vec and returns `Bool`. The auto-print wrapper renders
+/// `true\n`.
+const SET_HAS_SCRIPT_SOURCE: &str = "
+    s: Set<Int> = [1, 2, 3]
+    s.has?(2)
+";
+
+#[test]
+fn alpha_run_llvm_script_set_has_prints_true() {
+    assert_script_prints(
+        "run_llvm_set_has",
+        SET_HAS_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "true",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_set_has_prints_true() {
+    assert_script_prints(
+        "run_interpreter_set_has",
+        SET_HAS_SCRIPT_SOURCE,
+        None,
+        "true",
+    );
+}
+
+/// Script-mode fixture exercising the auto-imported `Global.io`
+/// surface end-to-end. `IO.puts("hello world")` desugars through
+/// `STDOUT.write(...)` twice (once for the message, once for the
+/// trailing newline), each `Fd.write` calls `expo_fd_write` against
+/// fd 1. The script trails with `()` so both backends' auto-print
+/// wrappers are no-ops (the LLVM wrapper checks the IR return
+/// type, the eval wrapper inspects the runtime value); stdout is
+/// exactly `hello world\n`. Pins the `expo_fd_write` extern
+/// dispatch on both backends — the LLVM emit links it through
+/// `expo-runtime::fs::expo_fd_write`, the eval side routes through
+/// `expo-alpha-ir-eval::externs::fd::fd_write` over the same C ABI
+/// symbol.
+const IO_PUTS_SCRIPT_SOURCE: &str = "
+    IO.puts(\"hello world\")
+    ()
+";
+
+#[test]
+fn alpha_run_llvm_script_io_puts_writes_to_stdout() {
+    let scratch = scratch_dir("run_llvm_io_puts");
+    let fixture = write_fixture(&scratch, "io_puts.exps", &dedent(IO_PUTS_SCRIPT_SOURCE));
+
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (IO.puts) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello world\n",
+        "expected LLVM backend to write `hello world\\n` via IO.puts, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_io_puts_writes_to_stdout() {
+    let scratch = scratch_dir("run_interpreter_io_puts");
+    let fixture = write_fixture(&scratch, "io_puts.exps", &dedent(IO_PUTS_SCRIPT_SOURCE));
+
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, IO.puts) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"hello world\n",
+        "expected interpreter to write `hello world\\n` via IO.puts, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Assert a `File.write -> File.read` round-trip through the
+/// auto-imported `Global.fd` surface returns the exact payload that
+/// was written. Both backends route the file I/O through the
+/// runtime's `expo_file_write_all` / `expo_file_read_all` helpers
+/// over the same C ABI; the LLVM emit links the runtime, the eval
+/// side dispatches through `expo-alpha-ir-eval::externs::fd::file_*`.
+/// Pins the cross-backend equivalence of file-path I/O and the
+/// `Result<String, String>` chain through `match` end-to-end.
+fn assert_file_round_trip_prints_payload(label: &str, backend: Option<&str>) {
+    let scratch = scratch_dir(label);
+    let data_path = scratch.join("payload.txt");
+    let source = format!(
+        "
+        _ = File.write(\"{path}\", \"round-trip-payload\")
+        match File.read(\"{path}\")
+          Result.Ok(s) -> s
+          Result.Err(e) -> e
+        end
+        ",
+        path = data_path.display(),
+    );
+    let fixture = write_fixture(&scratch, "file_round_trip.exps", &dedent(&source));
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` (file round-trip) to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "round-trip-payload",
+        "expected stdout to echo the round-tripped payload, got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_file_round_trip_prints_payload() {
+    assert_file_round_trip_prints_payload("run_llvm_file_round_trip", Some("--backend=llvm"));
+}
+
+#[test]
+fn alpha_run_interpreter_script_file_round_trip_prints_payload() {
+    assert_file_round_trip_prints_payload("run_interpreter_file_round_trip", None);
+}
+
+/// Assert `System.set_env -> System.get_env` round-trips a value
+/// through the host environment on both backends. The fixture sets
+/// `EXPO_ALPHA_TEST_KEY=marker` then immediately looks the same key
+/// back up; an `Option.Some` arm projects the value, an
+/// `Option.None` arm returns a sentinel that fails the assertion.
+/// Pins the four `Global.system` externs (`expo_set_env` /
+/// `expo_get_env`, plus the `to_cstring` round-trip) end-to-end —
+/// the LLVM backend links runtime symbols directly, the eval side
+/// dispatches through `expo-alpha-ir-eval::externs::system::*`.
+const SYSTEM_ENV_ROUND_TRIP_SCRIPT_SOURCE: &str = "
+    System.set_env(\"EXPO_ALPHA_TEST_KEY\", \"marker\")
+    match System.get_env(\"EXPO_ALPHA_TEST_KEY\")
+      Option.Some(v) -> v
+      Option.None -> \"missing\"
+    end
+";
+
+#[test]
+fn alpha_run_llvm_script_system_env_round_trip_prints_marker() {
+    assert_script_prints(
+        "run_llvm_system_env_round_trip",
+        SYSTEM_ENV_ROUND_TRIP_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "marker",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_system_env_round_trip_prints_marker() {
+    assert_script_prints(
+        "run_interpreter_system_env_round_trip",
+        SYSTEM_ENV_ROUND_TRIP_SCRIPT_SOURCE,
+        None,
+        "marker",
+    );
+}
+
+/// Script-mode fixtures driving `Debug.format` end-to-end across
+/// the alpha pipeline. Each fixture prints the formatted string via
+/// `IO.puts` so the asserted stdout is the exact `format` output.
+/// Pins the universal-Debug fallback, the synthesizer's struct +
+/// enum body shapes, the hand-written stdlib container impls
+/// (`Pair`, `Option`, `Result`, `List`, `Map`, `Set`), and the
+/// primitive `@intrinsic` Debug emitters end-to-end on both
+/// backends.
+const DEBUG_INT_SCRIPT_SOURCE: &str = "
+    IO.puts(42.format())
+    ()
+";
+
+const DEBUG_BOOL_SCRIPT_SOURCE: &str = "
+    IO.puts(true.format())
+    ()
+";
+
+const DEBUG_STRUCT_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    IO.puts(Point{x: 1, y: 2}.format())
+    ()
+";
+
+const DEBUG_ENUM_TUPLE_SCRIPT_SOURCE: &str = "
+    enum Shape
+      Tag(Int)
+    end
+
+    IO.puts(Shape.Tag(7).format())
+    ()
+";
+
+const DEBUG_LIST_SCRIPT_SOURCE: &str = "
+    IO.puts([1, 2, 3].format())
+    ()
+";
+
+const DEBUG_OPTION_SOME_SCRIPT_SOURCE: &str = "
+    IO.puts(Option.Some(5).format())
+    ()
+";
+
+const DEBUG_OPTION_NONE_SCRIPT_SOURCE: &str = "
+    target: Option<Int> = Option.None
+    IO.puts(target.format())
+    ()
+";
+
+const DEBUG_RESULT_OK_SCRIPT_SOURCE: &str = "
+    target: Result<Int, String> = Result.Ok(7)
+    IO.puts(target.format())
+    ()
+";
+
+const DEBUG_PAIR_SCRIPT_SOURCE: &str = "
+    IO.puts(Pair.new(1, 2).format())
+    ()
+";
+
+#[test]
+fn alpha_run_llvm_script_debug_int_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_llvm_debug_int",
+        DEBUG_INT_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "42",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_int_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_interpreter_debug_int",
+        DEBUG_INT_SCRIPT_SOURCE,
+        None,
+        "42",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_bool_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_llvm_debug_bool",
+        DEBUG_BOOL_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "true",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_bool_prints_intrinsic_format() {
+    assert_script_prints(
+        "run_interpreter_debug_bool",
+        DEBUG_BOOL_SCRIPT_SOURCE,
+        None,
+        "true",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_struct_prints_synthesized_body() {
+    assert_script_prints(
+        "run_llvm_debug_struct",
+        DEBUG_STRUCT_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Point{x: 1, y: 2}",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_struct_prints_synthesized_body() {
+    assert_script_prints(
+        "run_interpreter_debug_struct",
+        DEBUG_STRUCT_SCRIPT_SOURCE,
+        None,
+        "Point{x: 1, y: 2}",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_enum_tuple_prints_synthesized_body() {
+    assert_script_prints(
+        "run_llvm_debug_enum_tuple",
+        DEBUG_ENUM_TUPLE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Tag(7)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_enum_tuple_prints_synthesized_body() {
+    assert_script_prints(
+        "run_interpreter_debug_enum_tuple",
+        DEBUG_ENUM_TUPLE_SCRIPT_SOURCE,
+        None,
+        "Tag(7)",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_list_prints_bracket_form() {
+    assert_script_prints(
+        "run_llvm_debug_list",
+        DEBUG_LIST_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "[1, 2, 3]",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_list_prints_bracket_form() {
+    assert_script_prints(
+        "run_interpreter_debug_list",
+        DEBUG_LIST_SCRIPT_SOURCE,
+        None,
+        "[1, 2, 3]",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_option_some_prints_some_value() {
+    assert_script_prints(
+        "run_llvm_debug_option_some",
+        DEBUG_OPTION_SOME_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Some(5)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_option_some_prints_some_value() {
+    assert_script_prints(
+        "run_interpreter_debug_option_some",
+        DEBUG_OPTION_SOME_SCRIPT_SOURCE,
+        None,
+        "Some(5)",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_option_none_prints_none() {
+    assert_script_prints(
+        "run_llvm_debug_option_none",
+        DEBUG_OPTION_NONE_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "None",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_option_none_prints_none() {
+    assert_script_prints(
+        "run_interpreter_debug_option_none",
+        DEBUG_OPTION_NONE_SCRIPT_SOURCE,
+        None,
+        "None",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_result_ok_prints_ok_value() {
+    assert_script_prints(
+        "run_llvm_debug_result_ok",
+        DEBUG_RESULT_OK_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "Ok(7)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_result_ok_prints_ok_value() {
+    assert_script_prints(
+        "run_interpreter_debug_result_ok",
+        DEBUG_RESULT_OK_SCRIPT_SOURCE,
+        None,
+        "Ok(7)",
+    );
+}
+
+#[test]
+fn alpha_run_llvm_script_debug_pair_prints_paren_pair() {
+    assert_script_prints(
+        "run_llvm_debug_pair",
+        DEBUG_PAIR_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "(1, 2)",
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_debug_pair_prints_paren_pair() {
+    assert_script_prints(
+        "run_interpreter_debug_pair",
+        DEBUG_PAIR_SCRIPT_SOURCE,
+        None,
+        "(1, 2)",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

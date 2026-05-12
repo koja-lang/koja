@@ -7,32 +7,24 @@ use expo_ast::span::Span;
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
 
-/// Resolve a string literal. Pure (non-interpolated) strings type as
-/// `Global.String`. Interpolation is a feature gap: the diagnostic
-/// fires up front, but the interpolated expressions are still walked
-/// so [`super::super::seal`] sees populated resolutions on the way
-/// down — keeps gap reporting consistent with how other unsupported
-/// shapes still recurse.
+/// Resolve a string literal — pure or interpolated. Both shapes
+/// type as `Global.String`. Interpolation segments are walked so
+/// each inner expression's `resolution` is populated before
+/// [`super::super::seal`] enforces the seal contract; IR-lower
+/// folds the parts into a chain of `IRInstruction::Concat` over
+/// per-part `String` values (the synthesizer wraps every
+/// interpolated expression in `.format()` so it's already
+/// `String`-typed by the time IR sees it).
 pub(super) fn resolve_string(
     parts: &mut [StringPart],
-    span: Span,
+    _span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    if parts
-        .iter()
-        .any(|part| matches!(part, StringPart::Interpolation { .. }))
-    {
-        diagnostics.push(Diagnostic::error(
-            "alpha typecheck does not yet support string interpolation",
-            span,
-        ));
-        for part in parts.iter_mut() {
-            if let StringPart::Interpolation { expr, .. } = part {
-                resolve_expr(expr, resolver, diagnostics);
-            }
+    for part in parts.iter_mut() {
+        if let StringPart::Interpolation { expr, .. } = part {
+            resolve_expr(expr, resolver, diagnostics);
         }
-        return ResolvedType::unresolved();
     }
     resolver.registry.primitive("String")
 }

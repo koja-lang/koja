@@ -15,8 +15,14 @@ use inkwell::values::FunctionValue;
 use crate::ctx::EmitContext;
 
 pub(crate) const CONCAT_BITS_SYMBOL: &str = "__expo_alpha_concat_bits";
+pub(crate) const FORMAT_BOOL_SYMBOL: &str = "expo_format_bool";
+pub(crate) const FORMAT_F32_SYMBOL: &str = "expo_format_f32";
+pub(crate) const FORMAT_F64_SYMBOL: &str = "expo_format_f64";
+pub(crate) const FORMAT_I64_SYMBOL: &str = "expo_format_i64";
+pub(crate) const FORMAT_U64_SYMBOL: &str = "expo_format_u64";
 pub(crate) const FREE_SYMBOL: &str = "free";
 pub(crate) const MALLOC_SYMBOL: &str = "malloc";
+pub(crate) const MEMSET_SYMBOL: &str = "memset";
 pub(crate) const REALLOC_SYMBOL: &str = "realloc";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_alpha_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__expo_alpha_panic";
@@ -44,6 +50,27 @@ pub(crate) fn declare_runtime_printer<'ctx>(
         return existing;
     }
     let signature = ctx.context.void_type().fn_type(&[argument_type], false);
+    ctx.module
+        .add_function(symbol, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) one of the `expo_format_*` runtime helpers
+/// used by `Debug.format` primitive intrinsics. Signature:
+/// `i8* expo_format_<ty>(<argument_type> value)`. Each helper
+/// formats `value` into a freshly-allocated length-prefixed Expo
+/// string and returns the payload pointer (8 bytes past the
+/// `i64 bit_length` header). Single source of truth — the
+/// auto-print wrapper calls these too.
+pub(crate) fn declare_runtime_format<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    symbol: &str,
+    argument_type: BasicMetadataTypeEnum<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(symbol) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[argument_type], false);
     ctx.module
         .add_function(symbol, signature, Some(Linkage::External))
 }
@@ -76,6 +103,22 @@ pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
     let signature = ptr_ty.fn_type(&[i64_ty.into()], false);
     ctx.module
         .add_function(MALLOC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the libc `memset` extern. The hashtable
+/// `new` emitter calls this to zero-clear the freshly-malloc'd
+/// `states` buffer (so every slot starts as `EMPTY`). Signature:
+/// `i8* memset(i8* dst, i32 value, i64 n)`.
+pub(crate) fn declare_memset_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(MEMSET_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let i32_ty = ctx.context.i32_type();
+    let signature = ptr_ty.fn_type(&[ptr_ty.into(), i32_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function(MEMSET_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the libc `realloc` extern. The list

@@ -204,12 +204,12 @@ pub(super) fn infer_method_call_type_args(
         method.id,
         method.type_params.len(),
     );
-    seed_receiver_subst(&mut subst, receiver.id, receiver_type);
+    seed_receiver_subst(&mut subst, receiver.id, receiver_type, registry);
     let pairs = explicit_params
         .iter()
         .zip(args.iter())
         .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
-    unify_pairs(pairs, &mut subst, |conflict, arg_span| {
+    unify_pairs(pairs, &mut subst, registry, |conflict, arg_span| {
         let scope_callee = if conflict.owner == method.id {
             &method
         } else {
@@ -218,7 +218,7 @@ pub(super) fn infer_method_call_type_args(
         emit_conflict(scope_callee, conflict, arg_span, registry, diagnostics);
     });
     if let Some(hint) = expected {
-        fill_from_expected(&sig.return_type, hint, &mut subst);
+        fill_from_expected(&sig.return_type, hint, &mut subst, registry);
     }
     finalize_inference(
         &[method, receiver],
@@ -250,13 +250,19 @@ pub(super) fn seed_receiver_subst(
     subst: &mut Substitution,
     receiver_id: GlobalRegistryId,
     receiver_type: &ResolvedType,
+    registry: &GlobalRegistry,
 ) {
     let ResolvedType::Named { type_args, .. } = receiver_type else {
         return;
     };
     for (index, arg) in type_args.iter().enumerate() {
         if arg.is_resolved() {
-            let _ = subst.set(receiver_id, TypeParamIndex::new(index as u32), arg.clone());
+            let _ = subst.set(
+                receiver_id,
+                TypeParamIndex::new(index as u32),
+                arg.clone(),
+                registry,
+            );
         }
     }
 }

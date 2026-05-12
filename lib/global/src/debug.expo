@@ -79,3 +79,26 @@ impl Debug for String
     "\"" <> self.escape_debug() <> "\""
   end
 end
+
+impl Debug for Binary
+  @doc """
+  Renders `Binary` as an opaque `<binary>` placeholder so generic
+  containers carrying it (`Result<Binary, _>`, `Option<Binary>`, …)
+  have a usable `format` without committing to a byte-level
+  rendering. A future slice can swap in a hex / base64 /
+  `<N bytes>` shape once binary debugging needs warrant it.
+  """
+  fn format(self) -> String
+    "<binary>"
+  end
+end
+
+impl Debug for Bits
+  @doc """
+  Renders `Bits` as an opaque `<bits>` placeholder. See
+  `Debug for Binary` for the rationale.
+  """
+  fn format(self) -> String
+    "<bits>"
+  end
+end

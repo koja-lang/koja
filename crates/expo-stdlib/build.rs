@@ -13,8 +13,9 @@ fn main() {
     // a stdlib project. Its package name comes from the `name = "..."` field
     // in expo.toml (Elixir-style: directory is snake_case, package is
     // PascalCase, the auto-imported package is `Global`).
-    let mut global_entries: Vec<(String, String)> = Vec::new(); // (module_name, const_name)
-    let mut qualified: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    // (module_name, const_name, alpha_only)
+    let mut global_entries: Vec<(String, String, bool)> = Vec::new();
+    let mut qualified: BTreeMap<String, Vec<(String, String, bool)>> = BTreeMap::new();
 
     let mut dirs: Vec<_> = fs::read_dir(&lib_dir)
         .unwrap_or_else(|e| panic!("cannot read {}: {e}", lib_dir.display()))
@@ -23,6 +24,12 @@ fn main() {
         .collect();
     dirs.sort_by_key(|d| d.file_name());
 
+    // Files whose stem starts with `alpha_` are auto-generated /
+    // alpha-pipeline-only (e.g. hand-written Debug impls for stdlib
+    // generic containers). They land in `ALPHA_AUTOIMPORT` and the
+    // master `SRC_*` constant table, but never in `SOURCES` —
+    // which is the v1 path's source list and lacks the
+    // universal-Debug fallback the alpha pipeline relies on.
     let mut consts = Vec::new(); // (const_name, absolute_path)
     let mut const_idx = 0usize;
 
@@ -60,14 +67,16 @@ fn main() {
 
             let const_name = format!("SRC_{const_idx}");
             consts.push((const_name.clone(), file_path.display().to_string()));
+            let alpha_only = stem.starts_with("alpha_");
 
             if package_name == "Global" {
-                global_entries.push((module_name, const_name));
+                global_entries.push((module_name, const_name, alpha_only));
             } else {
-                qualified
-                    .entry(package_name.clone())
-                    .or_default()
-                    .push((module_name, const_name));
+                qualified.entry(package_name.clone()).or_default().push((
+                    module_name,
+                    const_name,
+                    alpha_only,
+                ));
             }
 
             const_idx += 1;
@@ -88,11 +97,17 @@ fn main() {
     code.push_str("/// then qualified packages in alphabetical order.\n");
     code.push_str("pub const SOURCES: &[(&str, &str)] = &[\n");
 
-    for (module_name, const_name) in &global_entries {
+    for (module_name, const_name, alpha_only) in &global_entries {
+        if *alpha_only {
+            continue;
+        }
         code.push_str(&format!("    (\"{module_name}\", {const_name}),\n"));
     }
     for files in qualified.values() {
-        for (module_name, const_name) in files {
+        for (module_name, const_name, alpha_only) in files {
+            if *alpha_only {
+                continue;
+            }
             code.push_str(&format!("    (\"{module_name}\", {const_name}),\n"));
         }
     }
@@ -115,8 +130,25 @@ fn main() {
         "Global.cptr",
         "Global.cstring",
         "Global.bitwise",
+        "Global.fd",
+        "Global.io",
         "Global.list",
+        "Global.map",
+        "Global.set",
         "Global.string",
+        // debug after string (uses `String.escape_debug` in `Debug for
+        // String`) and io (`Debug.print` calls `IO.puts`).
+        "Global.debug",
+        // alpha_debug_containers ships hand-written `Debug` impls for
+        // the stdlib generic containers (Pair / Option / Result /
+        // List / Map / Set). Lives in an `alpha_*.expo` file so the
+        // v1 path doesn't see it (v1's synthesizer produces no-op
+        // Debug bodies for generics; the alpha pipeline's
+        // universal-Debug fallback makes proper bodies legal). Must
+        // come after `Global.debug` and `Global.list` etc. so the
+        // protocol decl + container types are already in scope.
+        "Global.alpha_debug_containers",
+        "Global.system",
         "Global.time",
         // random comes last — calls into `String.to_binary`, so the string
         // module must be lowered before this module's bodies can resolve.
@@ -128,8 +160,8 @@ fn main() {
     for module in alpha_modules {
         let const_name = global_entries
             .iter()
-            .find(|(name, _)| name == module)
-            .map(|(_, c)| c.as_str())
+            .find(|(name, _, _)| name == module)
+            .map(|(_, c, _)| c.as_str())
             .unwrap_or_else(|| {
                 panic!("ALPHA_AUTOIMPORT module `{module}` not found in discovered Global sources")
             });

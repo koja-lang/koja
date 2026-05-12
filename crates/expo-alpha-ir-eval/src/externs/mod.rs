@@ -27,8 +27,10 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 
 mod cptr;
+mod fd;
 mod kernel;
 mod random;
+mod system;
 mod time;
 
 /// Run the registered extern under C symbol `link_name` against
@@ -36,9 +38,25 @@ mod time;
 /// caller can surface [`RuntimeError::ExternNotSupported`].
 pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, RuntimeError>> {
     match link_name {
+        "expo_cwd" => Some(system::cwd(args)),
+        "expo_fd_close" => Some(fd::fd_close(args)),
+        "expo_fd_read" => Some(fd::fd_read(args)),
+        "expo_fd_write" => Some(fd::fd_write(args)),
+        "expo_file_delete" => Some(fd::file_delete(args)),
+        "expo_file_exists" => Some(fd::file_exists(args)),
+        "expo_file_open" => Some(fd::file_open(args)),
+        "expo_file_read_all" => Some(fd::file_read_all(args)),
+        "expo_file_rename" => Some(fd::file_rename(args)),
+        "expo_file_write_all" => Some(fd::file_write_all(args)),
+        "expo_get_env" => Some(system::get_env(args)),
+        "expo_hostname" => Some(system::hostname(args)),
+        "expo_io_block" => Some(fd::io_block(args)),
         "expo_kernel_exit" => Some(kernel::exit(args)),
         "expo_random_bytes" => Some(random::bytes(args)),
         "expo_random_int" => Some(random::int(args)),
+        "expo_rt_unwatch_fd" => Some(fd::rt_unwatch_fd(args)),
+        "expo_rt_watch_fd" => Some(fd::rt_watch_fd(args)),
+        "expo_set_env" => Some(system::set_env(args)),
         "expo_time_now_millis" => Some(time::now_millis(args)),
         "strlen" => Some(cptr::strlen_(args)),
         _ => None,

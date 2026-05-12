@@ -307,6 +307,13 @@ impl ConcatKind {
 /// modeled as a primitive (no `IRStructDecl` ever materializes)
 /// because all storage lives off-heap behind `buf_ptr`.
 ///
+/// `Map(key, value)` and `Set(element)` are the heap-backed
+/// hash-tables. Both share a common 4-field layout —
+/// `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }` —
+/// regardless of the inner types; backends specialize entry-stride
+/// per `(K, V)` / `T` instantiation. Same primitive treatment as
+/// `List`: no `IRStructDecl` materializes; storage lives off-heap.
+///
 /// **Concrete-only**: every variant of `IRType` names a fully
 /// monomorphized type. There is no "generic parameter" variant —
 /// generic-decl bodies are never lowered to `IRType`; instead
@@ -335,6 +342,11 @@ pub enum IRType {
     Int32,
     Int64,
     List(Box<IRType>),
+    Map {
+        key: Box<IRType>,
+        value: Box<IRType>,
+    },
+    Set(Box<IRType>),
     String,
     Struct(IRSymbol),
     UInt8,

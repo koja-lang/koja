@@ -29,10 +29,82 @@ impl Interpreter {
     }
 
     /// Execute the script-mode implicit body and return its trailing
-    /// value.
-    pub fn run_script(script: IRScript) -> Result<Value, RuntimeError> {
+    /// value. Borrows `script` so the caller can dispatch follow-up
+    /// helper calls (e.g. [`Self::format_via_debug`] for inspect-style
+    /// auto-print) without re-lowering.
+    pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
         let mut frame = Frame::new();
-        execute_blocks(&script.blocks, &mut frame, &script)
+        execute_blocks(&script.blocks, &mut frame, script)
+    }
+
+    /// Dispatch the `Debug.format` instance for `value` against the
+    /// auto-print path, returning the rendered UTF-8 bytes. Mirrors
+    /// the symbol the alpha IR lower pass would emit for
+    /// `value.format()`, so the caller's output matches what a
+    /// user-side `IO.puts(value.format())` would produce.
+    ///
+    /// Drives off the runtime [`Value`] shape rather than the
+    /// caller's static IR type, because the script's
+    /// [`IRScript::return_type`] tracks the trailing expression's
+    /// declared return — which is `Unit` for any method whose
+    /// signature elides `-> T` (e.g. `Debug.print`), even when the
+    /// body's actual trailing expression hands back a richer value
+    /// like `Result<Int, String>`. Routing off the live value
+    /// resolves this static / dynamic mismatch.
+    ///
+    /// Returns `None` for shapes where the runtime [`Display`] of
+    /// [`Value`] already matches the LLVM auto-print contract —
+    /// primitive scalars and the first-class container shapes
+    /// ([`Value::List`] / [`Value::Map`] / [`Value::Set`]) whose
+    /// `Display` recurses through nested values' own `Display`. For
+    /// the container shapes specifically, this means a
+    /// `List<Result<Int, String>>` falls back to the runtime
+    /// `Display`'s `[Global.Result_$..$.Ok(1)]` rendering — improving
+    /// that requires plumbing the element type through to the
+    /// auto-print site, a follow-up.
+    pub fn format_via_debug(
+        script: &IRScript,
+        value: Value,
+    ) -> Result<Option<Vec<u8>>, RuntimeError> {
+        let symbol = match &value {
+            Value::Enum { symbol, .. } | Value::Struct { symbol, .. } => {
+                expo_alpha_ir::mangling::debug_format_for_symbol(symbol)
+            }
+            Value::Binary(_)
+            | Value::Bits { .. }
+            | Value::Bool(_)
+            | Value::CPtr(_)
+            | Value::Closure { .. }
+            | Value::Float32(_)
+            | Value::Float64(_)
+            | Value::Int(_)
+            | Value::List(_)
+            | Value::Map(_)
+            | Value::Set(_)
+            | Value::String(_)
+            | Value::Unit => return Ok(None),
+        };
+        let function =
+            script
+                .function(symbol.mangled())
+                .ok_or_else(|| RuntimeError::TypeMismatch {
+                    detail: format!(
+                        "auto-print: `Debug.format` instance `{}` is not in the IR \
+                         — the script's monomorphizer did not specialize it",
+                        symbol.mangled(),
+                    ),
+                })?;
+        let result = execute_function(function, vec![value], script)?;
+        match result {
+            Value::String(bytes) => Ok(Some(bytes)),
+            other => Err(RuntimeError::TypeMismatch {
+                detail: format!(
+                    "auto-print: `{}` returned non-String value `{other}` — Debug.format \
+                     contract violation",
+                    symbol.mangled(),
+                ),
+            }),
+        }
     }
 }
 

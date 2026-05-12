@@ -10,9 +10,14 @@ mod common;
 
 use common::{PACKAGE, lower_program_source};
 
+/// Counts `LoadConst` instructions in the test package only.
+/// Stdlib autoimport packages (e.g. `Global.io`'s `STDIN`/`STDOUT`/
+/// `STDERR` struct constants) emit their own `LoadConst`s on field
+/// access — those would inflate the count and obscure what these
+/// tests are actually asserting about user-package lowering.
 fn count_load_const(program: &IRProgram) -> usize {
     let mut count = 0;
-    for pkg in &program.packages {
+    for pkg in program.packages.iter().filter(|p| p.package == PACKAGE) {
         for function in pkg.functions.values() {
             for block in &function.blocks {
                 count += block
@@ -26,8 +31,15 @@ fn count_load_const(program: &IRProgram) -> usize {
     count
 }
 
+/// Pooled-constant count for the test package only — same scoping
+/// rationale as [`count_load_const`].
 fn pooled_constants_len(program: &IRProgram) -> usize {
-    program.packages.iter().map(|p| p.constants.len()).sum()
+    program
+        .packages
+        .iter()
+        .filter(|p| p.package == PACKAGE)
+        .map(|p| p.constants.len())
+        .sum()
 }
 
 #[test]

@@ -166,7 +166,12 @@ pub(super) fn resolve_call(
             .iter()
             .zip(args.iter())
             .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
-        unify_pairs(partial_pairs, &mut partial_subst, |_, _| {});
+        unify_pairs(
+            partial_pairs,
+            &mut partial_subst,
+            resolver.registry,
+            |_, _| {},
+        );
         let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
         resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
         let (substituted_params, substituted_return) =
@@ -299,13 +304,23 @@ pub(super) fn resolve_method_call(
         method_callee.id,
         method_callee.type_params.len(),
     );
-    seed_receiver_subst(&mut partial_subst, receiver_callee.id, &receiver.resolution);
+    seed_receiver_subst(
+        &mut partial_subst,
+        receiver_callee.id,
+        &receiver.resolution,
+        resolver.registry,
+    );
     let explicit = method_receiver.explicit_params(&sig.params);
     let partial_pairs = explicit
         .iter()
         .zip(args.iter())
         .map(|(p, a)| (&p.ty, &a.value.resolution, ()));
-    unify_pairs(partial_pairs, &mut partial_subst, |_, _| {});
+    unify_pairs(
+        partial_pairs,
+        &mut partial_subst,
+        resolver.registry,
+        |_, _| {},
+    );
     let partially_substituted_params = substitute_params(&sig.params, &partial_subst);
     resolve_closure_args(
         args,
@@ -405,11 +420,11 @@ fn infer_call_type_args(
         .iter()
         .zip(args.iter())
         .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
-    unify_pairs(pairs, &mut subst, |conflict, arg_span| {
+    unify_pairs(pairs, &mut subst, registry, |conflict, arg_span| {
         emit_conflict(&callee, conflict, arg_span, registry, diagnostics);
     });
     if let Some(hint) = expected {
-        fill_from_expected(&sig.return_type, hint, &mut subst);
+        fill_from_expected(&sig.return_type, hint, &mut subst, registry);
     }
     finalize_inference(
         &[callee],

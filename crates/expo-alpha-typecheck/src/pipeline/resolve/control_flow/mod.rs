@@ -22,7 +22,7 @@ use expo_ast::span::Span;
 
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
-use super::types::{display_resolution, is_primitive};
+use super::types::{display_resolution, is_primitive, types_equivalent};
 use super::walker::{resolve_body_with_expected, resolve_statement};
 use crate::registry::GlobalRegistry;
 
@@ -186,7 +186,7 @@ fn join_two_arms(
     if else_never {
         return then_ty.clone();
     }
-    if then_ty == else_ty {
+    if types_equivalent(then_ty, else_ty, registry) {
         return then_ty.clone();
     }
     diagnostics.push(Diagnostic::error(
@@ -222,7 +222,7 @@ pub(super) fn join_arm_tails(
         }
         match joined {
             None => joined = Some((label, ty)),
-            Some((_, expected)) if expected == ty => {}
+            Some((_, expected)) if types_equivalent(expected, ty, registry) => {}
             Some((expected_label, expected)) => {
                 diagnostics.push(Diagnostic::error(
                     format!(

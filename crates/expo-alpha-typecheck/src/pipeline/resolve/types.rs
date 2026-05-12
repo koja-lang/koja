@@ -42,12 +42,26 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
 }
 
 /// Two resolved types interchangeable at struct-field / call-arg /
-/// return-type checks. Strict equality plus the `Int ≡ Int64` and
-/// `Float ≡ Float64` aliases — `Int` and `Int64` map to the same
-/// `IRType::Int64` and have the same v1 semantics; `Float` and
-/// `Float64` similarly. Wider numeric coercion (`Int → Int32` etc.)
-/// is a separate slice — see `ALPHA-ROADMAP.md`'s "numeric coercion
-/// at struct-literal sites" entry.
+/// return-type / type-parameter-binding / arm-join checks. Strict
+/// structural equality plus the `Int ≡ Int64` and `Float ≡ Float64`
+/// aliases applied recursively at every leaf — so
+/// `Result<Int, String>` and `Result<Int64, String>` are equivalent,
+/// `fn (Int) -> Int64` and `fn (Int64) -> Int` are equivalent, etc.
+///
+/// The alias arm is the early-bound stand-in for future union
+/// membership: per `LANGUAGE.md`'s primitives table, `Int` is on
+/// track to become an `Int8 | Int16 | Int32 | Int64` union, and
+/// `Float` likewise. Today the registry keeps `Int` and `Int64` as
+/// distinct `Identifier`s (so they remain distinct ids when one
+/// becomes the union and the other its member); this function
+/// papers over that with a hardcoded pair check. When unions land
+/// the alias arm generalizes to a registry-backed
+/// "is `a` a member of `b`'s union (or vice versa)?" check; every
+/// caller of `types_equivalent` keeps working unchanged.
+///
+/// Wider numeric coercion (`Int → Int32` etc.) is a separate
+/// concept — that's literal-fit coercion at type-equality sites,
+/// handled by [`super::coercion::check_compatible`].
 pub(crate) fn types_equivalent(
     a: &ResolvedType,
     b: &ResolvedType,
@@ -56,6 +70,52 @@ pub(crate) fn types_equivalent(
     if a == b {
         return true;
     }
+    match (a, b) {
+        (
+            ResolvedType::Named {
+                resolution: a_head,
+                type_args: a_args,
+            },
+            ResolvedType::Named {
+                resolution: b_head,
+                type_args: b_args,
+            },
+        ) => {
+            if a_head == b_head && a_args.len() == b_args.len() {
+                return a_args
+                    .iter()
+                    .zip(b_args)
+                    .all(|(x, y)| types_equivalent(x, y, registry));
+            }
+            // Different heads: only the alias arm applies, and only
+            // when both sides are bare leaves (no type-args).
+            a_args.is_empty() && b_args.is_empty() && primitive_aliases(a, b, registry)
+        }
+        (
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: a_params,
+                ret: a_ret,
+            }),
+            ResolvedType::Anonymous(AnonymousKind::Function {
+                params: b_params,
+                ret: b_ret,
+            }),
+        ) => {
+            a_params.len() == b_params.len()
+                && a_params
+                    .iter()
+                    .zip(b_params)
+                    .all(|(x, y)| x.mode == y.mode && types_equivalent(&x.ty, &y.ty, registry))
+                && types_equivalent(a_ret, b_ret, registry)
+        }
+        _ => false,
+    }
+}
+
+/// Top-level alias check: `a` is `Int` and `b` is `Int64` (or vice
+/// versa), or the same for `Float` / `Float64`. Callers are
+/// responsible for the structural recursion.
+fn primitive_aliases(a: &ResolvedType, b: &ResolvedType, registry: &GlobalRegistry) -> bool {
     is_primitive_pair(a, b, registry, "Int", "Int64")
         || is_primitive_pair(a, b, registry, "Float", "Float64")
 }

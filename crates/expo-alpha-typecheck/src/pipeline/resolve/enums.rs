@@ -157,20 +157,20 @@ fn infer_enum_type_args(
                 .iter()
                 .zip(exprs.iter())
                 .map(|(declared_ty, expr)| (declared_ty, &expr.resolution, expr.span));
-            unify_pairs(pairs, &mut subst, on_conflict);
+            unify_pairs(pairs, &mut subst, registry, on_conflict);
         }
         (ResolvedVariantData::Struct(declared), EnumConstructionData::Struct(inits)) => {
             let pairs = inits.iter().filter_map(|init| {
                 let declared_field = declared.iter().find(|f| f.name == init.name)?;
                 Some((&declared_field.ty, &init.value.resolution, init.span))
             });
-            unify_pairs(pairs, &mut subst, on_conflict);
+            unify_pairs(pairs, &mut subst, registry, on_conflict);
         }
         _ => {}
     }
     if let Some(hint) = expected {
         let template = canonical_enum_template(callee.id, callee.type_params.len());
-        fill_from_expected(&template, hint, &mut subst);
+        fill_from_expected(&template, hint, &mut subst, registry);
     }
     let context = match variant.data {
         ResolvedVariantData::Unit => PhantomContext::UnitVariant(&variant.name),

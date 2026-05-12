@@ -33,7 +33,7 @@ use std::io::{self, BufRead, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process;
 
-use expo_alpha_ir::lower_script;
+use expo_alpha_ir::{IRScript, lower_script};
 use expo_alpha_ir_eval::{Interpreter, Value};
 use expo_alpha_typecheck::{CheckFailure, check_program};
 use expo_ast::ast::Diagnostic;
@@ -132,8 +132,8 @@ pub fn run() {
         }
         let input = std::mem::take(&mut buffer);
         match session.try_eval(input.trim()) {
-            Ok(Some(value)) => {
-                println!("{value}");
+            Ok(Some(rendered)) => {
+                println!("\x1b[90m{rendered}\x1b[0m");
                 session.bump_counter();
             }
             Ok(None) => {
@@ -191,15 +191,24 @@ impl Session {
     /// Evaluate `input` against this session, mutating it on success
     /// (the input gets appended to the statement list) and rolling
     /// back on failure (the session is left exactly as it was before
-    /// the call). `Ok(Some(value))` carries the trailing expression's
-    /// value; `Ok(None)` covers `Value::Unit` so the REPL can
-    /// suppress the trailing print line for void inputs.
-    fn try_eval(&mut self, input: &str) -> Result<Option<Value>, String> {
+    /// the call). `Ok(Some(rendered))` carries the trailing
+    /// expression's `Debug.format` output (or its runtime [`Display`]
+    /// fallback for types without a Debug impl); `Ok(None)` covers
+    /// [`Value::Unit`] so the REPL suppresses the trailing print
+    /// line for void inputs.
+    fn try_eval(&mut self, input: &str) -> Result<Option<String>, String> {
         let snapshot = self.statements.len();
         self.statements.push(input.to_string());
         match self.run() {
-            Ok(Value::Unit) => Ok(None),
-            Ok(value) => Ok(Some(value)),
+            Ok((_, Value::Unit)) => Ok(None),
+            Ok((script, value)) => match Interpreter::format_via_debug(&script, value.clone()) {
+                Ok(Some(bytes)) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
+                Ok(None) => Ok(Some(value.to_string())),
+                Err(error) => {
+                    self.statements.truncate(snapshot);
+                    Err(error.to_string())
+                }
+            },
             Err(error) => {
                 self.statements.truncate(snapshot);
                 Err(error)
@@ -208,8 +217,10 @@ impl Session {
     }
 
     /// Synthesize the full session source and drive it through the
-    /// alpha pipeline.
-    fn run(&self) -> Result<Value, String> {
+    /// alpha pipeline. Returns both the sealed [`IRScript`] and the
+    /// trailing value so the caller can dispatch follow-up helpers
+    /// (e.g. `Debug.format` auto-print) without re-lowering.
+    fn run(&self) -> Result<(IRScript, Value), String> {
         let source = self.synthesize();
         let path = PathBuf::from(format!("{SESSION_PACKAGE}.expo"));
         run_pipeline(source, SESSION_PACKAGE, path)
@@ -225,9 +236,11 @@ impl Session {
 }
 
 /// Run one source string end-to-end through the script-mode alpha
-/// pipeline. Returns the script body's trailing value on success,
-/// or a formatted error string covering parse / typecheck / lower /
-/// runtime failures.
+/// pipeline. Returns the sealed [`IRScript`] alongside the trailing
+/// value so the caller can dispatch follow-up helpers (e.g.
+/// `Debug.format` auto-print) without re-lowering. On failure
+/// returns a formatted error string covering parse / typecheck /
+/// lower / runtime failures.
 ///
 /// Always parses in [`ParseMode::Script`]: the REPL treats top-level
 /// statements as first-class. Helper `fn` items land on
@@ -238,7 +251,7 @@ impl Session {
 /// sees the same `Global.*` prelude the driver and alpha tests do —
 /// `Duration.from_secs(3).millis()` and `0b1100.band(0b1010)` work
 /// at the prompt without any imports.
-fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<Value, String> {
+fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<(IRScript, Value), String> {
     let mut sources = expo_stdlib::alpha_autoimport_sources();
     sources.push(SourceFile {
         package: package.to_string(),
@@ -248,7 +261,8 @@ fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<Value, S
     let parsed = parse_program(sources, ParseMode::Script);
     let checked = check_program(parsed).map_err(format_check_failure)?;
     let script = lower_script(&checked).map_err(|err| err.to_string())?;
-    Interpreter::run_script(script).map_err(|err| err.to_string())
+    let value = Interpreter::run_script(&script).map_err(|err| err.to_string())?;
+    Ok((script, value))
 }
 
 /// True when `source` (the accumulated multiline buffer) is a

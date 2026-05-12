@@ -252,7 +252,7 @@ pub(super) fn lower_method_call(
             (Some(recv_id), next_block)
         }
     };
-    let struct_id = receiver_struct_id(receiver, dispatch);
+    let struct_id = canonical_receiver_id(receiver_struct_id(receiver, dispatch), registry);
 
     let struct_entry = registry.get(struct_id).unwrap_or_else(|| {
         panic!(
@@ -356,6 +356,39 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
         return Dispatch::Static;
     }
     Dispatch::Instance
+}
+
+/// Collapse `Global.Int64` / `Global.Float64` onto `Global.Int` /
+/// `Global.Float` for method lookup. The typecheck pass treats these
+/// pairs as alias-equivalent (see
+/// [`expo_alpha_typecheck::pipeline::resolve::types::types_equivalent`])
+/// — until `Int` and `Float` become proper unions over their sized
+/// variants, methods registered on the unsized canonical (e.g.
+/// `Debug.format`, `Equality.eq`, `Hash.hash`) need to be reachable
+/// through an `Int64`-resolved receiver too. Other primitive widths
+/// (`Int8`, `UInt32`, etc.) keep their own ids — they're distinct
+/// types in the alias rule, not collapsed.
+fn canonical_receiver_id(id: GlobalRegistryId, registry: &GlobalRegistry) -> GlobalRegistryId {
+    let Some(entry) = registry.get(id) else {
+        return id;
+    };
+    if entry.identifier.package() != "Global" {
+        return id;
+    }
+    let path = entry.identifier.path();
+    if path.len() != 1 {
+        return id;
+    }
+    let canonical = match path[0].as_str() {
+        "Float64" => "Float",
+        "Int64" => "Int",
+        _ => return id,
+    };
+    let canonical_ident = Identifier::new("Global", vec![canonical.to_string()]);
+    registry
+        .lookup(&canonical_ident)
+        .map(|(id, _)| id)
+        .unwrap_or(id)
 }
 
 /// Pull the struct's `GlobalRegistryId` off a method-call receiver.

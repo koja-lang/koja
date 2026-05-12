@@ -126,6 +126,12 @@ pub(super) fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::Map { entries } => {
+            for (key, value) in entries {
+                seal_expr(key);
+                seal_expr(value);
+            }
+        }
         ExprKind::Match { subject, arms } => {
             seal_expr(subject);
             for arm in arms {

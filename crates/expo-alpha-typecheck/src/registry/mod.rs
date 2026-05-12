@@ -565,7 +565,29 @@ impl GlobalRegistry {
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
     }
+
+    /// Resolve [`UNIVERSAL_PROTOCOLS`] to their `GlobalRegistryId`s.
+    /// A name that isn't registered yet (e.g. before `Global.debug`
+    /// has been collected) is silently skipped — callers should only
+    /// observe a non-empty list once the stdlib has loaded. Order
+    /// follows the source-order of [`UNIVERSAL_PROTOCOLS`].
+    pub fn universal_protocol_ids(&self) -> Vec<GlobalRegistryId> {
+        UNIVERSAL_PROTOCOLS
+            .iter()
+            .filter_map(|name| {
+                let identifier = Identifier::new("Global", vec![(*name).to_string()]);
+                self.lookup(&identifier).map(|(id, _)| id)
+            })
+            .collect()
+    }
 }
+
+/// Protocols that every type implicitly satisfies — the synthesizer
+/// (or hand-written stdlib impls) guarantee a `Debug` impl exists
+/// for every concrete monomorphization, so a bare type-parameter
+/// `T.format()` can resolve as if `T: Debug` were declared. Equality
+/// / Hash join this list once they're auto-derived.
+pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Debug"];
 
 /// Seed a primitive struct stub under `Global.<name>` with an empty
 /// `StructDefinition` (no fields, no conformances). The empty

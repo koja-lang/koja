@@ -49,15 +49,18 @@ pub struct CheckedProgram {
 ///    `.Unit`/`.Float`/`.String` are registered as structs before any
 ///    user decl. Temporary; once the real stdlib compiles as a
 ///    package these entries land through `collect`.
-/// 1. `collect` — register every top-level decl. Function signatures
+/// 1. `synthesize::derive_debug` — append `impl Debug for T` blocks
+///    for every user struct / enum that doesn't already have one.
+///    Runs pre-collect so the new items land before name binding.
+/// 2. `collect` — register every top-level decl. Function signatures
 ///    land in the `Function(None)` state.
-/// 2. `lift_signatures` — resolve each function's `TypeExpr` params +
+/// 3. `lift_signatures` — resolve each function's `TypeExpr` params +
 ///    return into `ResolvedType`s and upgrade the registry entry to
 ///    `Function(Some(signature))`.
-/// 3. `synthesize` — surface-shape AST rewrites (today: `for` desugar).
-/// 4. `resolve` — walk every body and populate `Resolution` +
+/// 4. `synthesize` — surface-shape AST rewrites (today: `for` desugar).
+/// 5. `resolve` — walk every body and populate `Resolution` +
 ///    `Expr.resolution`.
-/// 5. `seal` — assert sealed-AST invariants. Panics on violation.
+/// 6. `seal` — assert sealed-AST invariants. Panics on violation.
 ///
 /// Future sub-passes (`strip_cfg`, `check`, `annotate`) land between
 /// these when the work they do becomes load-bearing.
@@ -73,6 +76,21 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     let mut registry = GlobalRegistry::with_stdlib_stubs();
 
     let mut packages = into_packages(parsed);
+
+    // Pre-collect synthesis: append `impl Debug for T` blocks so
+    // they're present when collect / lift register items. Has to
+    // run before collect because the synthesizer introduces new
+    // top-level items, unlike the post-lift `synthesize_program`
+    // pass which only mutates function bodies.
+    //
+    // The "existing impls" set is collected per-package across all
+    // files first so a hand-written `impl Debug for List<T>` in
+    // `alpha_debug_containers.expo` suppresses synthesis in
+    // `list.expo` (and vice versa) — without the cross-file scan
+    // we'd get duplicate impls.
+    for pkg in &mut packages {
+        synthesize::derive_debug::derive_debug_package(pkg);
+    }
 
     for pkg in &packages {
         for file in &pkg.files {

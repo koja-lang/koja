@@ -64,5 +64,5 @@ pub fn evaluate_script(source: &str) -> Result<Value, RuntimeError> {
 pub fn evaluate_script_in(package: &str, source: &str) -> Result<Value, RuntimeError> {
     let checked = typecheck_in(package, source, ParseMode::Script);
     let script = lower_script(&checked).expect("alpha script lowering should succeed");
-    Interpreter::run_script(script)
+    Interpreter::run_script(&script)
 }

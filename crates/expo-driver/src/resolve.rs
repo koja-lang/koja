@@ -186,6 +186,13 @@ pub fn insert_stdlib(source_files: &mut Vec<SourceFile>, skip_package: Option<&s
 /// Scans directories for `.expo` files and adds each as a [`SourceFile`].
 /// Files already present in `source_files` (matched by `path`) are skipped,
 /// so overlapping roots / repeat scans don't double-count.
+///
+/// Files whose stem starts with `alpha_` are skipped: they are
+/// alpha-pipeline-only sources (e.g. `lib/global/src/alpha_debug_containers.expo`)
+/// that depend on alpha-pipeline-only features like the universal-Debug
+/// fallback. The v1 type checker, which drives every code path in this
+/// module, would reject them. The alpha pipeline reaches them directly via
+/// [`expo_stdlib::ALPHA_AUTOIMPORT`].
 fn scan_directories(
     project_name: &str,
     roots: &[PathBuf],
@@ -200,6 +207,9 @@ fn scan_directories(
             if source_files.iter().any(|f| f.path == file_path) {
                 continue;
             }
+            if is_alpha_only_path(&file_path) {
+                continue;
+            }
             let source = fs::read_to_string(&file_path)
                 .map_err(|e| format!("error reading {}: {e}", file_path.display()))?;
             source_files.push(SourceFile {
@@ -210,6 +220,12 @@ fn scan_directories(
         }
     }
     Ok(())
+}
+
+fn is_alpha_only_path(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|stem| stem.starts_with("alpha_"))
 }
 
 /// Builds a [`SourceSet`] + file vector for running tests.

@@ -47,17 +47,18 @@ pub(super) fn resolve_bounded_method_call(
         args,
         call_span,
     } = site;
-    let bounds = resolver
+    let declared_bounds: Vec<GlobalRegistryId> = resolver
         .registry
         .type_param_bounds(owner)
         .and_then(|all| all.get(index.as_u32() as usize))
-        .map(|v| v.as_slice())
-        .unwrap_or(&[]);
+        .cloned()
+        .unwrap_or_default();
     let param_name = resolver
         .registry
         .type_param_name(owner, index)
         .unwrap_or("?")
         .to_string();
+    let bounds = effective_bounds(&declared_bounds, resolver.registry);
     if bounds.is_empty() {
         diagnostics.push(Diagnostic::error(
             format!("no method `{method}` on type parameter `{param_name}` (no bounds declared)",),
@@ -65,7 +66,7 @@ pub(super) fn resolve_bounded_method_call(
         ));
         return ResolvedType::unresolved();
     }
-    let providers = collect_bound_providers(bounds, method, resolver.registry);
+    let providers = collect_bound_providers(&bounds, method, resolver.registry);
     if providers.is_empty() {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -126,6 +127,29 @@ pub(super) fn resolve_bounded_method_call(
     // return type passes through unchanged.
     let _ = receiver;
     protocol_method.return_type
+}
+
+/// Augment a type-parameter's declared bounds with the universal
+/// protocols ([`crate::registry::UNIVERSAL_PROTOCOLS`]) so callers
+/// like `T.format()` resolve on bare type parameters without an
+/// explicit `T: Debug` annotation. The synthesizer / hand-written
+/// stdlib impls guarantee every concrete monomorphization carries a
+/// `Debug` impl, so the universal fallback is sound after
+/// monomorphization.
+///
+/// Universal ids are appended in [`crate::registry::UNIVERSAL_PROTOCOLS`]
+/// order, deduped against any duplicate the user already declared.
+fn effective_bounds(
+    declared: &[GlobalRegistryId],
+    registry: &GlobalRegistry,
+) -> Vec<GlobalRegistryId> {
+    let mut bounds = declared.to_vec();
+    for id in registry.universal_protocol_ids() {
+        if !bounds.contains(&id) {
+            bounds.push(id);
+        }
+    }
+    bounds
 }
 
 /// Walk a type-param's bound list and collect every protocol that
