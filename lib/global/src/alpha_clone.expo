@@ -1,0 +1,34 @@
+@doc """
+Explicit value duplication for heap-typed primitives.
+
+`clone` produces a fresh, independently-owned copy of `self`. The
+source stays live (`self` borrows by default), so callers can keep
+the original alongside the new copy — the canonical use is paying
+for an extra owned slot when the move-by-default lattice would
+otherwise consume the source (e.g. storing the same `String` into
+two different struct fields).
+
+For value-typed primitives (`Int`, `Float`, `Bool`, …) the move
+lattice already permits free reuse, so they don't need a `Clone`
+impl. Generic containers (`List<T>`, `Map<K, V>`, …) get their
+hand-written impls in a follow-up slice; until then,
+`.clone()` is only defined for the heap primitives below.
+"""
+protocol Clone
+  fn clone(self) -> Self
+end
+
+impl Clone for String
+  @intrinsic
+  fn clone(self) -> Self
+end
+
+impl Clone for Binary
+  @intrinsic
+  fn clone(self) -> Self
+end
+
+impl Clone for Bits
+  @intrinsic
+  fn clone(self) -> Self
+end

@@ -61,46 +61,46 @@ The full list of "not yet" diagnostics lives in:
 Cataloguing what the stdlib actually reaches for. Counts are
 approximate — the point is which files use a given construct.
 
-| Construct                               | Files / examples                                                                      |
-| --------------------------------------- | ------------------------------------------------------------------------------------- |
-| `struct` / `enum` / `protocol`          | every file                                                                            |
-| Inherent `impl Type`                    | every file                                                                            |
-| Trait `impl Protocol for Type`          | `kernel` (Equality, Hash for primitives), `debug`, `string`, `set`, `map`, `list`     |
-| Generic types (`<T>`, `<K,V>`, `<U>`)   | `kernel`, `list`, `map`, `set`, `process` (shipped end-to-end)                        |
-| Generic impl target (`impl Pair<A,B>`)  | `kernel` (Pair, Option, Result), `list`, `map`, `set`, `process` (shipped end-to-end) |
-| `Self` type in signatures               | `bitwise`, `debug`, `set`, `map`, `list`                                              |
-| `move` parameter mode                   | `process` (8x), `list` (8x), `map` (5x), `cptr`, `cstring`, `set`, `string` (already shipped) |
-| `priv` visibility                       | every FFI-wrapping file                                                               |
-| `@intrinsic` / `@extern "C"` / `@doc`   | every file (we shipped `@extern`/`@link`/`AnnotationKind`)                            |
-| Closure parameter types (`fn (T) -> U`) | `kernel` (Option/Result map/then), `list` (filter/find/all?/map/reduce), `process` (already shipped) |
+| Construct                               | Files / examples                                                                                                   |
+| --------------------------------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `struct` / `enum` / `protocol`          | every file                                                                                                         |
+| Inherent `impl Type`                    | every file                                                                                                         |
+| Trait `impl Protocol for Type`          | `kernel` (Equality, Hash for primitives), `debug`, `string`, `set`, `map`, `list`                                  |
+| Generic types (`<T>`, `<K,V>`, `<U>`)   | `kernel`, `list`, `map`, `set`, `process` (shipped end-to-end)                                                     |
+| Generic impl target (`impl Pair<A,B>`)  | `kernel` (Pair, Option, Result), `list`, `map`, `set`, `process` (shipped end-to-end)                              |
+| `Self` type in signatures               | `bitwise`, `debug`, `set`, `map`, `list`                                                                           |
+| `move` parameter mode                   | `process` (8x), `list` (8x), `map` (5x), `cptr`, `cstring`, `set`, `string` (already shipped)                      |
+| `priv` visibility                       | every FFI-wrapping file                                                                                            |
+| `@intrinsic` / `@extern "C"` / `@doc`   | every file (we shipped `@extern`/`@link`/`AnnotationKind`)                                                         |
+| Closure parameter types (`fn (T) -> U`) | `kernel` (Option/Result map/then), `list` (filter/find/all?/map/reduce), `process` (already shipped)               |
 | Closure expressions (block & short)     | none in stdlib bodies — shipped for user code; named fns auto-wrap as closure values when needed (already shipped) |
-| `match` expression                      | `kernel` (12x — Option/Result), `string` (8x), `process` (7x), `list`, `io`, `fd`     |
-| OR pattern (`"a" \| "b" \| ...`)        | `string` (alpha?, digit?, escape_debug, trim\_\*, whitespace?, upcase, downcase)      |
-| Tuple pattern (`Some(val)`, `Ok(v)`)    | every match-using file                                                                |
-| Wildcard pattern (`_`)                  | every match-using file                                                                |
-| **`for` loop**                          | `string` (codepoints, digit?, alpha?, …), `list` (filter/find/all?/any?/map/reduce)   |
-| **`while` loop**                        | `string` (10+), `list` (reverse)                                                      |
-| `return` statement                      | `string`, `list`                                                                      |
-| `break` (in `loop`)                     | none in stdlib                                                                        |
-| `unless`                                | `list` (`all?`)                                                                       |
-| `if`/`else` value-producing             | `system`, `fd`, `cptr`, `string` (already shipped)                                    |
-| `cond`                                  | `string` (alpha?, contains?, ends_with?, starts_with?) (already shipped)              |
-| Ternary `cond ? a : b`                  | `fd` (5+), `system` (already shipped)                                                 |
-| String concat `<>`                      | `string` (heavy — upcase/downcase/escape_debug), `debug` (`format` for `String`) (already shipped) |
-| Compound assign (`+=`, `-=`)            | `string` (15+), `list` (`reverse`) (already shipped)                                  |
-| String literal in IR                    | `kernel` (`Kernel.panic("…")`), `string`, `io`, `fd`, `system` — pervasive (already shipped) |
-| String interpolation `#{…}`             | none — stdlib avoids it intentionally                                                 |
-| **`const` declarations**                | `io` (STDIN, STDOUT, STDERR — struct-literal initializers)                            |
-| Numeric coercion (`Int` → `Int32` etc.) | `io` (`Fd{descriptor: 2}`), `fd` (CPtr ops with mixed widths), `time`                 |
-| `spawn`                                 | `process` (`Task.async`)                                                              |
-| `receive` / `receive ... after`         | `process` (`run` loops)                                                               |
-| List / Map / Set literal syntax         | none in stdlib bodies (collections are constructed via `.new()` + `.append`/`.put`)   |
-| Bitstring / `<<…>>` literals            | none in stdlib (alpha ships them anyway — gates Phase 7 of the match plan) (already shipped) |
-| Nested `MyApp.Config` types             | none in stdlib                                                                        |
-| Type unions (`A \| B`)                  | none in stdlib                                                                        |
-| `type` aliases inside `impl`            | none in stdlib                                                                        |
-| Free functions (no `impl`)              | none — every fn lives in an `impl`                                                    |
-| Default field values                    | none in stdlib                                                                        |
+| `match` expression                      | `kernel` (12x — Option/Result), `string` (8x), `process` (7x), `list`, `io`, `fd`                                  |
+| OR pattern (`"a" \| "b" \| ...`)        | `string` (alpha?, digit?, escape_debug, trim\_\*, whitespace?, upcase, downcase)                                   |
+| Tuple pattern (`Some(val)`, `Ok(v)`)    | every match-using file                                                                                             |
+| Wildcard pattern (`_`)                  | every match-using file                                                                                             |
+| **`for` loop**                          | `string` (codepoints, digit?, alpha?, …), `list` (filter/find/all?/any?/map/reduce)                                |
+| **`while` loop**                        | `string` (10+), `list` (reverse)                                                                                   |
+| `return` statement                      | `string`, `list`                                                                                                   |
+| `break` (in `loop`)                     | none in stdlib                                                                                                     |
+| `unless`                                | `list` (`all?`)                                                                                                    |
+| `if`/`else` value-producing             | `system`, `fd`, `cptr`, `string` (already shipped)                                                                 |
+| `cond`                                  | `string` (alpha?, contains?, ends_with?, starts_with?) (already shipped)                                           |
+| Ternary `cond ? a : b`                  | `fd` (5+), `system` (already shipped)                                                                              |
+| String concat `<>`                      | `string` (heavy — upcase/downcase/escape_debug), `debug` (`format` for `String`) (already shipped)                 |
+| Compound assign (`+=`, `-=`)            | `string` (15+), `list` (`reverse`) (already shipped)                                                               |
+| String literal in IR                    | `kernel` (`Kernel.panic("…")`), `string`, `io`, `fd`, `system` — pervasive (already shipped)                       |
+| String interpolation `#{…}`             | none — stdlib avoids it intentionally                                                                              |
+| **`const` declarations**                | `io` (STDIN, STDOUT, STDERR — struct-literal initializers)                                                         |
+| Numeric coercion (`Int` → `Int32` etc.) | `io` (`Fd{descriptor: 2}`), `fd` (CPtr ops with mixed widths), `time`                                              |
+| `spawn`                                 | `process` (`Task.async`)                                                                                           |
+| `receive` / `receive ... after`         | `process` (`run` loops)                                                                                            |
+| List / Map / Set literal syntax         | none in stdlib bodies (collections are constructed via `.new()` + `.append`/`.put`)                                |
+| Bitstring / `<<…>>` literals            | none in stdlib (alpha ships them anyway — gates Phase 7 of the match plan) (already shipped)                       |
+| Nested `MyApp.Config` types             | none in stdlib                                                                                                     |
+| Type unions (`A \| B`)                  | none in stdlib                                                                                                     |
+| `type` aliases inside `impl`            | none in stdlib                                                                                                     |
+| Free functions (no `impl`)              | none — every fn lives in an `impl`                                                                                 |
+| Default field values                    | none in stdlib                                                                                                     |
 
 The "none in stdlib" rows are useful negative space: those features are
 **not** alpha blockers for the stdlib effort, no matter how much they
@@ -153,10 +153,10 @@ _None outstanding._
   captures `MoveOutLocal` into the closure's env at the
   construction site, stack-typed captures copy. The IR vocabulary
   is `IRType::Function`, `IRInstruction::{MakeClosure, CallClosure,
-  LoadCapture}`, and `FunctionKind::Closure { env_layout }` for
+LoadCapture}`, and `FunctionKind::Closure { env_layout }` for
   synthesized bodies. Named top-level functions used in a
   closure-typed context auto-wrap as `<fn>__as_closure` adapters
-  (captureless, env_ptr is null). Closure-typed local variables
+  (captureless, env*ptr is null). Closure-typed local variables
   used as callees dispatch through `CallClosure` rather than the
   symbol-keyed `Call` form. LLVM ABI: closure values are
   `{fn_ptr, env_ptr}` fat pointers; closure bodies declare an
@@ -169,8 +169,8 @@ _None outstanding._
   `crates/expo-alpha-ir/tests/lower_closures.rs`,
   `crates/expo-alpha-ir-eval/tests/closures.rs`,
   `crates/expo-alpha-ir-llvm/tests/closures.rs`, and the
-  `*_closure_*` / `*_higher_order_*` / `*_fn_as_value_*` driver
-  tests in `crates/expo-driver/tests/alpha_two_plus_two.rs`.
+  `\*\_closure*_`/`__higher_order__`/`__fn_as_value_\*`driver
+tests in`crates/expo-driver/tests/alpha_two_plus_two.rs`.
   **Out**: recursive drops of nested heap captures inside the
   env block (the env itself frees, but heap-typed captures inside
   it leak today — alpha milestone trade-off for a simpler ABI; a
@@ -212,7 +212,7 @@ _None outstanding._
 - **`String` / `Binary` / `Bits` — full surface, end-to-end.**
   String literals lower to `[i64 bit_length][payload bytes][\0]`
   heap globals; `Binary` and `Bits` share the same `[i64
-  bit_length][payload]` layout (no NUL, ceil-rounded bytes for
+bit_length][payload]` layout (no NUL, ceil-rounded bytes for
   `Bits`). The polymorphic `<>` concat operator typechecks against
   any of the three (same-type operands, same-type result), with
   `String`/`Binary` lowering to inline `malloc` + `memcpy` and
@@ -419,9 +419,42 @@ of these, that's the trigger to revisit — not before.
 
 ---
 
-## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits, post-loops, post-closures, post-concurrency-primitives, post-alias-imports)
+## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits, post-loops, post-closures, post-concurrency-primitives, post-alias-imports, post-Clone-heap-primitives)
 
 What's shipped since the last audit:
+
+- **Clone protocol — heap primitives.** New `Global.clone` autoimport
+  (sits immediately after `Global.kernel` so future Clone impls can
+  reach for `Result` / `Option`). Shape mirrors `Debug`: a single
+  `protocol Clone { fn clone(self) -> Self }` decl plus three
+  `@intrinsic impl Clone for {String,Binary,Bits}` blocks against
+  the shared `[i64 bit_length][payload]` heap layout. Backend
+  implementations live in `expo-alpha-ir-llvm/src/intrinsics/heap_clone.rs`
+  (one shared `emit_payload_clone` keyed on `(with_nul,
+ceil_byte_count)` — `String` writes a trailing `\0`, `Bits`
+  rounds the byte count up via `(bits + 7) >> 3` to keep the
+  trailing partial byte) and `expo-alpha-ir-eval/src/intrinsics/{string,binary}.rs`
+  (`Vec<u8>::clone` for the runtime values). New
+  `IRIntrinsicId::{String,Binary,Bits}(_::Clone)` variants in
+  `expo-alpha-ir/src/intrinsic_id.rs` keep the typed dispatch
+  exhaustive on both backends. Pinned by
+  `crates/expo-alpha-typecheck/tests/clone.rs`,
+  `crates/expo-alpha-ir/tests/lower_clone.rs`,
+  `crates/expo-alpha-ir-eval/tests/clone.rs`,
+  `crates/expo-alpha-ir-llvm/tests/clone.rs`, and the
+  `alpha_run_{llvm,interpreter}_script_string_clone_independent_buffers`
+  driver tests (clone + concat + reuse the source — observable
+  proof of independent buffers). **Out**: the universal-Clone
+  synthesizer (`derive_clone.rs`), value-primitive impls
+  (`Int.clone()` and friends), `CPtr.clone()`, and hand-written
+  generic-container impls (`List<T>` / `Map<K,V>` / `Set<T>` /
+  `Option<T>` / `Result<T,E>` / `Pair<A,B>`) all queue for
+  **PR2 — universal Clone slice**. Also queued for PR2: extending
+  `lower::ownership::ownership_for_expr` so `s.clone()`'s
+  destination slot stamps `Owned` end-to-end (today the slot is
+  `Unowned`, the same gap every fresh-allocating helper —
+  `String.upcase`, `String.replace`, … — already has; not a Clone
+  regression).
 
 - **Alias imports — `alias Pkg.Type [as Local]`, end-to-end with
   shadow-as-error.** `expo-alpha-typecheck/src/pipeline/aliases.rs`
@@ -473,7 +506,7 @@ What's shipped since the last audit:
   discrimination on receive arms), through `expo-alpha-ir`
   (`IRInstruction::{Spawn, Receive}`,
   `FunctionKind::SpawnWrapper`, the `IRIntrinsicId::{Ref,
-  ReplyTo}` typed dispatch family, and the `lower/process.rs`
+ReplyTo}` typed dispatch family, and the `lower/process.rs`
   lowering that synthesizes a wrapper body per spawned state
   type), and through `expo-alpha-ir-llvm` (`emit/process.rs`
   emits `expo_rt_spawn` / `expo_rt_receive` /
@@ -482,7 +515,7 @@ What's shipped since the last audit:
   `<state>.start`, branches on the `Result` enum's tag, and
   chains into `<state>.run` on `Ok`; `intrinsics/process.rs`
   handles `Ref.{self_ref, cast, signal, kill, alive?,
-  send_after}` + `ReplyTo.send` against the corresponding
+send_after}` + `ReplyTo.send` against the corresponding
   `expo_rt_*` externs declared in `runtime.rs`). Eval stubs
   every concurrency intrinsic as `RuntimeError::Unsupported` —
   alpha-eval is single-threaded and in-process; the LLVM
@@ -504,7 +537,6 @@ What's shipped since the last audit:
   `receive_lifecycle` end-to-end driver tests originally
   scoped to this slice (gated on the `main_done` wiring and
   the autoimport flip).
-
 
 - **Generics — full feature, end-to-end (~6 kLOC).** Generic types
   (`<T>`, `<K, V>`), generic functions, generic impls (concrete
@@ -608,9 +640,9 @@ What's shipped since the last audit:
   deduplicates free locals by encounter order, and routes heap
   captures through `MoveOutLocal` so the env owns its captures.
   IR vocabulary: `IRType::Function`, `IRInstruction::{MakeClosure,
-  CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
+CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
   Named functions used in a closure-typed context auto-wrap as
-  `<fn>__as_closure` adapters (captureless, null env_ptr); local
+  `<fn>__as_closure` adapters (captureless, null env*ptr); local
   variables of closure type dispatch via `CallClosure` rather than
   the symbol-keyed `Call`. Eval carries a
   `Value::Closure { body, captures }` runtime shape; LLVM uses a
@@ -621,8 +653,7 @@ What's shipped since the last audit:
   (`seal/closures.rs`). Move story is "closures never borrow" —
   heap captures move; closure values themselves are `Owned`.
   Pinned by `resolve_closures.rs`, `lower_closures.rs`,
-  `eval/closures.rs`, `llvm/closures.rs`, and the `*_closure_*` /
-  `*_higher_order_*` / `*_fn_as_value_*` driver tests. **Out**:
+  `eval/closures.rs`, `llvm/closures.rs`, and the `\*\_closure*_`/`__higher_order__`/`__fn_as_value_\*` driver tests. **Out**:
   recursive drops of nested heap captures inside the env (env
   frees at scope exit, but heap-typed captures inside it leak
   today — alpha trade-off for a simpler ABI).
@@ -661,7 +692,7 @@ What's shipped since the last audit:
   (struct fields / enum variants / two call-arg paths /
   bounded-method args / return types) via a single
   `types_equivalent` helper — narrows the surviving "numeric
-  coercion at struct-literal sites" blocker to *narrower-than-Int*
+  coercion at struct-literal sites" blocker to _narrower-than-Int_
   widths only; (2) bare-call resolution prioritizes the enclosing
   struct/enum scope before falling back to package scope, so
   sibling `priv fn`s call by their bare name without
@@ -698,7 +729,7 @@ What's shipped since the last audit:
     the new structured `mangled_method_name` helper — `IRSymbol`
     stays opaque end-to-end, no string parsing at call sites. The
     monomorphizer enqueues triples `(struct_id, struct_args,
-    method_args)` so each cell mints exactly once. Pinned by
+method_args)` so each cell mints exactly once. Pinned by
     `crates/expo-alpha-ir/tests/method_generics.rs`.
   - **Preload stubs for `Option<T>` / `CPtr<T>`** dropped — the
     autoimport's source definitions are now the canonical surface
@@ -736,7 +767,7 @@ What's shipped since the last audit:
     `kernel.expo` / `cptr.expo` / `cstring.expo` introduce —
     `Equality.eq` × 9 widths, `Hash.hash` × 9 widths,
     `Kernel.panic`, `CPtr.{alloc,free,null,offset,read,write,
-    null?,to_binary,to_string}`, `CString.to_string`,
+null?,to_binary,to_string}`, `CString.to_string`,
     `Binary.{byte_size,ptr,to_bits,to_string}`, `Bits.to_binary`,
     `Int.parse` / `Float.parse` — register in both backends.
     LLVM emitters mirror the v1 inline-IR shapes (SplitMix64 for
@@ -833,7 +864,7 @@ What's shipped since the last audit:
     broken under alpha's alignment-correct chunk-array outer +
     per-variant `complete` struct. The new
     `pub(crate) emit::enums::build_enum_value(symbol, tag,
-    payload_values)` helper allocas the outer, GEPs through the
+payload_values)` helper allocas the outer, GEPs through the
     variant's `complete` (tag at field 0, payload at field 2),
     writes each payload field, and loads the populated outer
     back out — the same path `emit_enum_construct` uses for
@@ -872,7 +903,7 @@ What's shipped since the last audit:
     `RuntimeError::ExternNotSupported`.
 
   Pinned by `crates/expo-alpha-typecheck/tests/{string,random,
-  list_literal,kernel}.rs`,
+list_literal,kernel}.rs`,
   `crates/expo-alpha-ir/tests/lower_list.rs`,
   `crates/expo-alpha-ir-llvm/tests/intrinsics.rs`
   (option/pair-aware GEP shape under chunked-outer enum layout),
@@ -924,7 +955,7 @@ What's shipped since the last audit:
     LLVM backend for the auto-imported externs.
   - **CPtr intrinsic family lands end-to-end on eval.**
     `CPtr.{null, null?, alloc, free, offset, read, write,
-    to_binary, to_string}` are all implemented; `alloc` /
+to_binary, to_string}` are all implemented; `alloc` /
     `offset` / `read` / `write` consult
     `helpers::size_of_primitive` (mapping `IRType` to byte
     width) for element-aware pointer arithmetic. `CPtr<UInt8>.to_string`
@@ -940,7 +971,7 @@ What's shipped since the last audit:
     `Int.parse` / `Float.parse` construct `Result<T, E>` /
     `Option<T>` values via the new
     `intrinsics::helpers::{option_value, result_value,
-    enum_return_symbol}` shared helpers (deduped from the
+enum_return_symbol}` shared helpers (deduped from the
     earlier list / string handlers).
 
   Pinned by

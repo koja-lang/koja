@@ -109,6 +109,23 @@ const STRING_LITERAL_SCRIPT_SOURCE: &str = "
     \"hello\"
 ";
 
+/// Script-mode fixture pinning that `String.clone()` produces an
+/// independent heap buffer end-to-end. Clones `"abc"`, mutates the
+/// clone via `<>` concat (which allocates a fresh block from the
+/// `[i64 bit_length][payload + NUL]` source) and concatenates the
+/// untouched original after the mutated copy. If the clone aliased
+/// the source's payload, the `<>` would corrupt the source's bytes
+/// (or, more likely, double-free under DropLocal). The expected
+/// stdout is `abc!abc\n` — the mutated copy first, then the
+/// pristine original, separated by no delimiter so the
+/// concatenation boundary is observable in the output.
+const STRING_CLONE_INDEPENDENT_BUFFERS_SCRIPT_SOURCE: &str = "
+    source = \"abc\"
+    copy = source.clone()
+    mutated = copy <> \"!\"
+    mutated <> source
+";
+
 /// Script-mode fixture exercising the float-literal slice through
 /// arithmetic. `2.0 + 2.0` lowers to two `Const(Float64)` ops + an
 /// `IRBinOp::Add`; LLVM emits `fadd double` and the auto-print
@@ -633,6 +650,69 @@ fn alpha_run_llvm_script_string_literal_prints_hello() {
         output.stdout,
         b"hello\n",
         "expected LLVM backend to print `hello\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_string_clone_independent_buffers() {
+    let scratch = scratch_dir("run_llvm_string_clone");
+    let fixture = write_fixture(
+        &scratch,
+        "string_clone.exps",
+        &dedent(STRING_CLONE_INDEPENDENT_BUFFERS_SCRIPT_SOURCE),
+    );
+
+    // End-to-end gate for `String.clone`: the cloned slot must be a
+    // fresh heap allocation, so concat'ing into it (which produces
+    // yet another fresh block) leaves the source `"abc"` untouched.
+    // If the clone aliased the source payload, the trailing `<>
+    // source` would either corrupt the original bytes or trip a
+    // double-free at scope exit. Stdout `abc!abc\n` proves both
+    // halves stay live and independent.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (string clone) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"abc!abc\n",
+        "expected LLVM backend to print `abc!abc\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_string_clone_independent_buffers() {
+    let scratch = scratch_dir("run_interpreter_string_clone");
+    let fixture = write_fixture(
+        &scratch,
+        "string_clone.exps",
+        &dedent(STRING_CLONE_INDEPENDENT_BUFFERS_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above. The interpreter
+    // clones via `Vec<u8>::clone`, so mutating the resulting
+    // `Value::String` cannot affect the original. Stdout matches
+    // the LLVM path byte-for-byte.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, string clone) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"abc!abc\n",
+        "expected interpreter to print `abc!abc\\n`, got stdout:\n{}",
         String::from_utf8_lossy(&output.stdout),
     );
 

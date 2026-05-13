@@ -17,6 +17,7 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::intrinsics::cptr::declare_memcpy_extern;
+use crate::intrinsics::heap_clone;
 use crate::runtime::{
     declare_malloc_extern, declare_string_get_extern, declare_string_length_extern,
     declare_string_slice_extern,
@@ -42,6 +43,9 @@ pub(super) fn emit_string<'ctx>(
     ctx.builder.position_at_end(entry);
     match method {
         StringMethod::ByteLength => emit_byte_length(ctx, function, llvm_function),
+        StringMethod::Clone => {
+            heap_clone::emit_payload_clone(ctx, function, llvm_function, true, false)
+        }
         StringMethod::Get => emit_get(ctx, function, llvm_function),
         StringMethod::Length => emit_length(ctx, function, llvm_function),
         StringMethod::Slice => emit_slice(ctx, function, llvm_function),

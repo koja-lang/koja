@@ -92,6 +92,7 @@ pub enum CStringMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryMethod {
     ByteSize,
+    Clone,
     Ptr,
     ToBits,
     ToString,
@@ -99,6 +100,7 @@ pub enum BinaryMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitsMethod {
+    Clone,
     ToBinary,
 }
 
@@ -181,6 +183,7 @@ pub enum ReplyToMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StringMethod {
     ByteLength,
+    Clone,
     Get,
     Length,
     Slice,
@@ -521,6 +524,7 @@ impl BinaryMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "byte_size" => Self::ByteSize,
+            "clone" => Self::Clone,
             "ptr" => Self::Ptr,
             "to_bits" => Self::ToBits,
             "to_string" => Self::ToString,
@@ -531,6 +535,7 @@ impl BinaryMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::ByteSize => "byte_size",
+            Self::Clone => "clone",
             Self::Ptr => "ptr",
             Self::ToBits => "to_bits",
             Self::ToString => "to_string",
@@ -541,6 +546,7 @@ impl BinaryMethod {
 impl BitsMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
+            "clone" => Self::Clone,
             "to_binary" => Self::ToBinary,
             _ => return None,
         })
@@ -548,6 +554,7 @@ impl BitsMethod {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::Clone => "clone",
             Self::ToBinary => "to_binary",
         }
     }
@@ -705,6 +712,7 @@ impl StringMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "byte_length" => Self::ByteLength,
+            "clone" => Self::Clone,
             "get" => Self::Get,
             "length" => Self::Length,
             "slice" => Self::Slice,
@@ -717,6 +725,7 @@ impl StringMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::ByteLength => "byte_length",
+            Self::Clone => "clone",
             Self::Get => "get",
             Self::Length => "length",
             Self::Slice => "slice",

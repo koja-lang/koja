@@ -11,7 +11,7 @@
 //! `pub(super) fn <handler>`, and wire its arm in [`dispatch`]. The
 //! exhaustive match makes the wiring step compiler-checked.
 
-use expo_alpha_ir::{BitsMethod, IRFunction, IRIntrinsicId, KernelMethod};
+use expo_alpha_ir::{IRFunction, IRIntrinsicId, KernelMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
@@ -52,9 +52,7 @@ pub(crate) fn dispatch<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     match *id {
         IRIntrinsicId::Binary(method) => binary::binary(method, function, args),
-        IRIntrinsicId::Bits(BitsMethod::ToBinary) => {
-            binary::bits(BitsMethod::ToBinary, function, args)
-        }
+        IRIntrinsicId::Bits(method) => binary::bits(method, function, args),
         IRIntrinsicId::Bitwise { ty, op } => bitwise::dispatch(ty, op, args),
         IRIntrinsicId::CPtr(method) => cptr::dispatch(method, function, args),
         IRIntrinsicId::CString(_) => cstring::to_string(args),

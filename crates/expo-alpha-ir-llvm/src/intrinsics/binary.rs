@@ -19,6 +19,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::intrinsics::heap_clone;
 
 pub(super) fn emit_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -31,6 +32,9 @@ pub(super) fn emit_binary<'ctx>(
 
     match method {
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
+        BinaryMethod::Clone => {
+            heap_clone::emit_payload_clone(ctx, function, llvm_function, false, false)
+        }
         BinaryMethod::Ptr | BinaryMethod::ToBits => {
             emit_self_passthrough(ctx, function, llvm_function)
         }
@@ -48,6 +52,9 @@ pub(super) fn emit_bits<'ctx>(
     ctx.builder.position_at_end(entry);
 
     match method {
+        BitsMethod::Clone => {
+            heap_clone::emit_payload_clone(ctx, function, llvm_function, false, true)
+        }
         BitsMethod::ToBinary => emit_unimplemented_result(ctx, function),
     }
 }

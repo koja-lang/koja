@@ -127,6 +127,13 @@ fn main() {
     let alpha_modules: &[&str] = &[
         // kernel first — defines Option/Result/Pair referenced downstream
         "Global.kernel",
+        // alpha_clone after kernel so future Clone impls can reach for
+        // Result / Option in their bodies; ahead of every other file
+        // so a stdlib `.clone()` call always finds the protocol. Lives
+        // in an `alpha_*.expo` file because v1 codegen doesn't know how
+        // to dispatch the new `String.clone` / `Binary.clone` /
+        // `Bits.clone` intrinsic ids — alpha is the only consumer.
+        "Global.alpha_clone",
         "Global.cptr",
         "Global.cstring",
         "Global.bitwise",

@@ -12,7 +12,7 @@
 //! and pin a 1-1 test in `tests/intrinsics.rs`. The exhaustive match
 //! makes the wiring step compiler-checked.
 
-use expo_alpha_ir::{BitsMethod, IRFunction, IRIntrinsicId, KernelMethod};
+use expo_alpha_ir::{IRFunction, IRIntrinsicId, KernelMethod};
 use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
@@ -26,6 +26,7 @@ mod debug;
 mod equality;
 mod hash;
 mod hashtable;
+mod heap_clone;
 mod kernel;
 mod list;
 mod map;
@@ -46,9 +47,7 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
 ) -> Result<(), LlvmError> {
     match *id {
         IRIntrinsicId::Binary(method) => binary::emit_binary(ctx, function, llvm_function, method),
-        IRIntrinsicId::Bits(BitsMethod::ToBinary) => {
-            binary::emit_bits(ctx, function, llvm_function, BitsMethod::ToBinary)
-        }
+        IRIntrinsicId::Bits(method) => binary::emit_bits(ctx, function, llvm_function, method),
         IRIntrinsicId::Bitwise { ty, op } => {
             bitwise::emit_bitwise(ctx, function, llvm_function, ty, op)
         }
