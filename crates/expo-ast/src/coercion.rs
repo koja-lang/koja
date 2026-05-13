@@ -1,19 +1,28 @@
-//! Per-`Expr` coercion annotations.
+//! Per-`Expr` coercion annotations. Two parallel families — they
+//! live on separate `Expr` slots because their downstream contracts
+//! differ.
 //!
-//! Today's only family is **literal-fit width** — a numeric literal
-//! expression flowing into a sized-numeric slot whose value fits the
-//! slot's range. Typecheck stamps [`Expr::literal_coercion`] on the
-//! literal (or the outer `Unary { Neg, .. }` for `-N`); the IR lowerer
-//! reads the field and mints `Const u8 = 5` instead of the default
-//! `Const i64 = 5`. There is no IR opcode — the coercion only changes
-//! the leaf's materialized width.
+//! **Literal-fit width** ([`LiteralCoercion`], stamped on
+//! `Expr::literal_coercion`). A numeric literal flowing into a
+//! sized-numeric slot whose value fits the slot's range. The IR
+//! lowerer reads the field and mints `Const u8 = 5` instead of the
+//! default `Const i64 = 5`. **No paired IR instruction** — the
+//! annotation only changes which `Const` opcode is minted at the
+//! literal leaf.
 //!
-//! Future *value-conversion* coercions (fn-as-closure, `UnionWiden`,
+//! **Value-conversion** ([`Coercion`], stamped on `Expr::coercion`).
+//! A value of type `T` flowing into a slot of type `U ≠ T` where
+//! the conversion needs runtime work — `UnionWiden` boxes a member
+//! into a tagged union, future variants will cover fn-as-closure,
 //! `Display` in interpolation, list/map `from_list`, generic phi
-//! widening) need a real `IRInstruction::*` because source type
-//! != target type at runtime. Those will land as a dedicated
-//! `ExprKind::Coercion { inner, kind: CoercionKind }` wrapper, not
-//! as another arm of [`LiteralCoercion`].
+//! widening. Per `COMPILER-NORTHSTAR.md`'s coercion contract, every
+//! `Coercion::*` variant pairs 1:1 with an `IRInstruction::*`
+//! variant that the lowerer emits at the exact site (today
+//! `Coercion::UnionWiden` ↔ `IRInstruction::UnionWrap`). Adding a
+//! new `Coercion` variant requires adding the paired
+//! `IRInstruction` and lowerer emitter in the same change.
+
+use crate::identifier::ResolvedType;
 
 /// Backend-stable target width for a coerced numeric literal.
 /// Translated to the IR's typed `Const` opcode at lowering time
@@ -87,4 +96,18 @@ impl LiteralCoercion {
         let Self::NumericLiteralWidth(width) = self;
         Some(*width)
     }
+}
+
+/// Per-expression value-conversion coercion. Each variant pairs
+/// 1:1 with an `IRInstruction::*` variant that the alpha IR lowerer
+/// emits at the annotated site. See module doc for the full design
+/// contract (annotation vs literal-fit width).
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub enum Coercion {
+    /// Member `M` flowing into union slot `M | ...`. The carried
+    /// `ResolvedType` is the *target union as declared at the slot*,
+    /// preserved verbatim so an alias-named target keeps its name
+    /// in diagnostics and the IR lowerer can peel it once when
+    /// shaping the `UnionWrap`. Lowers to `IRInstruction::UnionWrap`.
+    UnionWiden(ResolvedType),
 }

@@ -46,6 +46,14 @@ impl IRSymbol {
         Self(name)
     }
 
+    /// Mint an `IRSymbol` from a fully mangled name that has no
+    /// surface-AST identifier root — used for synthesized types
+    /// like `IRType::Union` whose mangled symbol is computed from
+    /// the canonical member set.
+    pub(crate) fn synthetic(mangled: String) -> Self {
+        Self(mangled)
+    }
+
     /// The mangled symbol name. Backends pass this directly to LLVM
     /// or to any other linker-aware lookup.
     pub fn mangled(&self) -> &str {
@@ -509,6 +517,41 @@ pub enum IRInstruction {
         dest: ValueId,
         result_type: IRType,
     },
+    /// `dest = <ty>.wrap(value)` — box `value` (typed `member_type`,
+    /// statically a member of `ty`) into a tagged union value of
+    /// type `ty`. `member_index` is the 0-based offset of
+    /// `member_type` in the union's canonical (sorted) member list,
+    /// used as the runtime tag byte. Lowered from the typecheck-
+    /// stamped [`expo_ast::coercion::Coercion::UnionWiden`] at every
+    /// member→union flow site (assignments, struct fields, args,
+    /// returns).
+    UnionWrap {
+        dest: ValueId,
+        member_index: u8,
+        member_type: IRType,
+        ty: IRType,
+        value: ValueId,
+    },
+    /// `dest = <value>.tag` (`Int8`). Match-arm CFG compares this
+    /// against the constant member-index for each union arm —
+    /// counterpart of [`Self::EnumTagGet`] for the union family.
+    UnionTagGet {
+        dest: ValueId,
+        ty: IRType,
+        value: ValueId,
+    },
+    /// `dest = <value>.payload as <member_type>`. Only well-defined
+    /// on the success edge of a preceding tag-eq gate; seal
+    /// validates `member_index`/`member_type` against the union
+    /// decl. Counterpart of [`Self::EnumPayloadFieldGet`] for the
+    /// union family.
+    UnionPayloadGet {
+        dest: ValueId,
+        member_index: u8,
+        member_type: IRType,
+        ty: IRType,
+        value: ValueId,
+    },
 }
 
 /// One arm of an [`IRInstruction::Receive`]. `tag` selects which
@@ -581,7 +624,10 @@ impl IRInstruction {
             | IRInstruction::Receive { dest, .. }
             | IRInstruction::Spawn { dest, .. }
             | IRInstruction::StructInit { dest, .. }
-            | IRInstruction::UnaryOp { dest, .. } => Some(*dest),
+            | IRInstruction::UnaryOp { dest, .. }
+            | IRInstruction::UnionPayloadGet { dest, .. }
+            | IRInstruction::UnionTagGet { dest, .. }
+            | IRInstruction::UnionWrap { dest, .. } => Some(*dest),
             IRInstruction::DropLocal { .. }
             | IRInstruction::DropValue { .. }
             | IRInstruction::LocalDecl { .. }
@@ -610,6 +656,21 @@ pub enum IRTerminator {
     },
     /// Exit the function with `value` (or `Unit` when `None`).
     Return { value: Option<ValueId> },
+    /// Reinvoke `callee` with `args`, reusing the current frame's
+    /// stack. Stamped by the post-merge [`crate::lower::tail_calls`]
+    /// pass on call-then-return shapes where `callee` matches the
+    /// enclosing function's symbol — i.e. self-recursive tail calls.
+    /// Backends turn this into in-frame state rebinding plus a jump:
+    /// LLVM stores each `arg` into the matching parameter slot and
+    /// branches to the function's loop header; the interpreter
+    /// signals its trampoline to restart the body with `args` as the
+    /// new bindings. Cross-function tail calls aren't admitted yet —
+    /// extending here is a one-line drop of the self-callee check
+    /// in the rewrite pass plus a backend musttail emit.
+    TailCall {
+        args: Vec<ValueId>,
+        callee: IRSymbol,
+    },
     /// Statically unreachable. Lowering emits this on the failure
     /// edge of an exhaustive `match` so the CFG stays well-formed
     /// even when typecheck has guaranteed every runtime value is

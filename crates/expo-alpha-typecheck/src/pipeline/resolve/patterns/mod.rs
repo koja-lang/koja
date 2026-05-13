@@ -38,7 +38,8 @@ use expo_ast::identifier::{Resolution, ResolvedType};
 use expo_ast::labels::pattern_span;
 
 use super::ctx::Resolver;
-use super::types::is_primitive;
+use super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
+use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::registry::{EnumDefinition, GlobalKind, GlobalRegistry};
 
 use literals::literal_repr;
@@ -52,6 +53,10 @@ pub(super) enum PatternCoverage {
     /// `EnumUnit` / `EnumTuple` (or an `Or` of those) — admits
     /// exactly the listed variant tags.
     Variants(Vec<u32>),
+    /// `TypedBinding` matched against a union subject — admits
+    /// values whose runtime tag corresponds to `member`. Drives
+    /// union exhaustiveness in [`super::match_expr::resolve_match`].
+    UnionMember(ResolvedType),
     /// Literal patterns and `Or`s of literals. The arm fires for a
     /// specific runtime value but does not contribute to enum
     /// exhaustiveness; primitive subjects use the strict
@@ -165,13 +170,59 @@ pub(super) fn resolve_pattern(
             ));
             PatternCoverage::Other
         }
-        Pattern::TypedBinding { .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support typed-binding patterns (blocked on \
-                 surface unions)",
-                pattern_span(pat),
-            ));
-            PatternCoverage::Other
+        Pattern::TypedBinding {
+            local_id,
+            name,
+            resolved_type,
+            type_expr,
+            span,
+        } => {
+            let resolved = resolve_type_expr(
+                type_expr,
+                TypeParamScope::new(resolver.type_param_owners),
+                resolver.resolution_scope(),
+                diagnostics,
+            );
+            if !resolved.is_resolved() {
+                return PatternCoverage::Other;
+            }
+            let peeled_subject = peel_alias(subject_ty, resolver.registry);
+            match &peeled_subject {
+                ResolvedType::Union(members) => {
+                    if !members
+                        .iter()
+                        .any(|m| types_equivalent(m, &resolved, resolver.registry))
+                    {
+                        diagnostics.push(Diagnostic::error(
+                            format!(
+                                "type `{}` is not a member of union `{}`",
+                                display_resolution(&resolved, resolver.registry),
+                                display_resolution(subject_ty, resolver.registry),
+                            ),
+                            *span,
+                        ));
+                        return PatternCoverage::Other;
+                    }
+                }
+                _ if subject_ty.is_resolved()
+                    && !types_equivalent(subject_ty, &resolved, resolver.registry) =>
+                {
+                    diagnostics.push(Diagnostic::error(
+                        format!(
+                            "typed-binding pattern requires a union subject; \
+                             got `{}`",
+                            display_resolution(subject_ty, resolver.registry),
+                        ),
+                        *span,
+                    ));
+                    return PatternCoverage::Other;
+                }
+                _ => {}
+            }
+            let id = resolver.scope.declare(name, resolved.clone());
+            *local_id = Some(id);
+            *resolved_type = Some(resolved.clone());
+            PatternCoverage::UnionMember(resolved)
         }
     }
 }

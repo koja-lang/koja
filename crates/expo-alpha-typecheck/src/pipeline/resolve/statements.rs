@@ -51,9 +51,11 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::GlobalKind;
 
+use super::coercion::{Compatible, check_compatible, coercion_annotation_mut};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::types::{display_resolution, is_arithmetic_type};
+use expo_ast::coercion::Coercion;
 
 /// Resolve a `target = value` statement. Validates target shape,
 /// resolves the rhs, applies declaration-vs-reassignment rules, and
@@ -156,16 +158,25 @@ pub(super) fn resolve_assignment(
             }
             let declared_ty = match expected_ty {
                 Some(annotated) => {
-                    if value_ty.is_resolved() && value_ty != annotated {
-                        diagnostics.push(Diagnostic::error(
-                            format!(
-                                "type annotation on `{name}` says `{}`, but the right-hand side \
-                                 has type `{}`",
-                                display_resolution(&annotated, resolver.registry),
-                                display_resolution(&value_ty, resolver.registry),
-                            ),
-                            span,
-                        ));
+                    if value_ty.is_resolved() {
+                        match check_compatible(value, &value_ty, &annotated, resolver.registry) {
+                            Compatible::Strict | Compatible::Coerced(_) => {}
+                            Compatible::UnionWiden { target } => {
+                                *coercion_annotation_mut(value) =
+                                    Some(Coercion::UnionWiden(target));
+                            }
+                            Compatible::Incompatible | Compatible::OutOfRange { .. } => {
+                                diagnostics.push(Diagnostic::error(
+                                    format!(
+                                        "type annotation on `{name}` says `{}`, but the \
+                                         right-hand side has type `{}`",
+                                        display_resolution(&annotated, resolver.registry),
+                                        display_resolution(&value_ty, resolver.registry),
+                                    ),
+                                    span,
+                                ));
+                            }
+                        }
                     }
                     annotated
                 }

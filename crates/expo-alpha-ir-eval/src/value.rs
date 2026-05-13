@@ -95,6 +95,17 @@ pub enum Value {
         symbol: IRSymbol,
         fields: Vec<Value>,
     },
+    /// Tagged union value. `tag` is the 0-based member index (the
+    /// position of the wrapped member in the union's canonical
+    /// member list); `payload` is the boxed value the user wrote.
+    /// `symbol` is the union's mangled name, kept for debug
+    /// rendering and for sanity-checking against the IR's
+    /// `IRType::Union { mangled }`.
+    Union {
+        payload: Box<Value>,
+        symbol: IRSymbol,
+        tag: u8,
+    },
     Unit,
 }
 
@@ -227,6 +238,11 @@ impl fmt::Display for Value {
                 }
                 write!(f, ")")
             }
+            Value::Union {
+                payload,
+                symbol,
+                tag,
+            } => write!(f, "{symbol}#{tag}({payload})"),
             Value::Unit => write!(f, "()"),
         }
     }

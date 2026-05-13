@@ -19,7 +19,7 @@ use crate::function::{BranchTarget, IRBlockId, IRTerminator};
 use crate::types::{IRType, ValueId};
 
 use super::arms::{emit_unit, lower_arm_into, lower_expr_arm_into};
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::{FnLowerCtx, LowerOutput, SlotStateSnapshot};
 use super::expr::lower_expr;
 
 /// AST-side inputs to [`lower_if`]. Bundled so the helper signature
@@ -87,6 +87,9 @@ pub(super) fn lower_if(
         },
     );
 
+    let entry_snapshot = ctx.snapshot_slot_states();
+    let mut post_states: Vec<SlotStateSnapshot> = Vec::with_capacity(2);
+
     lower_arm_into(
         then_body,
         ctx,
@@ -96,7 +99,10 @@ pub(super) fn lower_if(
         registry,
         output,
     )?;
+    post_states.push(ctx.snapshot_slot_states());
+
     if let (Some(else_body), Some(else_block)) = (else_body, else_block) {
+        ctx.restore_slot_states(entry_snapshot.clone());
         lower_arm_into(
             else_body,
             ctx,
@@ -106,7 +112,14 @@ pub(super) fn lower_if(
             registry,
             output,
         )?;
+        post_states.push(ctx.snapshot_slot_states());
+    } else {
+        // No `else` arm: the cond=false edge bypasses the body
+        // straight to the merge, so the "else" post-state is the
+        // entry snapshot (no slot writes occur on that path).
+        post_states.push(entry_snapshot);
     }
+    ctx.merge_slot_states(post_states);
     Ok((result_id, merge_block))
 }
 
@@ -137,6 +150,7 @@ pub(super) fn lower_unless(
             then_target: BranchTarget::with_args(merge_block, vec![bypass_unit]),
         },
     );
+    let entry_snapshot = ctx.snapshot_slot_states();
     lower_arm_into(
         body,
         ctx,
@@ -146,6 +160,11 @@ pub(super) fn lower_unless(
         registry,
         output,
     )?;
+    let body_post = ctx.snapshot_slot_states();
+    // Merge the body-arm post-state with the bypass-arm post-state
+    // (= entry snapshot, since the cond=true path skips the body
+    // and writes no slots).
+    ctx.merge_slot_states(vec![body_post, entry_snapshot]);
     Ok((result_id, merge_block))
 }
 
@@ -193,6 +212,10 @@ pub(super) fn lower_cond(
         .collect();
     let else_block = else_body.map(|_| ctx.fresh_block("cond_else"));
 
+    let entry_snapshot = ctx.snapshot_slot_states();
+    let arm_count = arms.len() + usize::from(else_body.is_some());
+    let mut post_states: Vec<SlotStateSnapshot> = Vec::with_capacity(arm_count);
+
     let mut current_test = block;
     for (index, arm) in arms.iter().enumerate() {
         let (cond_value, after_cond) =
@@ -219,6 +242,7 @@ pub(super) fn lower_cond(
                 then_target: BranchTarget::to(body_block),
             },
         );
+        ctx.restore_slot_states(entry_snapshot.clone());
         lower_arm_into(
             &arm.body,
             ctx,
@@ -228,12 +252,14 @@ pub(super) fn lower_cond(
             registry,
             output,
         )?;
+        post_states.push(ctx.snapshot_slot_states());
         if let Some(next) = next_test {
             current_test = next;
         }
     }
 
     if let (Some(else_body), Some(else_block)) = (else_body, else_block) {
+        ctx.restore_slot_states(entry_snapshot.clone());
         lower_arm_into(
             else_body,
             ctx,
@@ -243,6 +269,17 @@ pub(super) fn lower_cond(
             registry,
             output,
         )?;
+        post_states.push(ctx.snapshot_slot_states());
+    } else if !arms.is_empty() {
+        // No else and parser-produced cond: contribute the
+        // entry-snapshot to the merge so a slot that some arm
+        // writes (and others don't) doesn't get over-promoted.
+        post_states.push(entry_snapshot.clone());
+    }
+    if post_states.is_empty() {
+        ctx.restore_slot_states(entry_snapshot);
+    } else {
+        ctx.merge_slot_states(post_states);
     }
     Ok((result_id, merge_block))
 }
@@ -294,6 +331,8 @@ pub(super) fn lower_ternary(
         },
     );
 
+    let entry_snapshot = ctx.snapshot_slot_states();
+
     lower_expr_arm_into(
         then_expr,
         ctx,
@@ -303,6 +342,8 @@ pub(super) fn lower_ternary(
         registry,
         output,
     )?;
+    let then_post = ctx.snapshot_slot_states();
+    ctx.restore_slot_states(entry_snapshot);
     lower_expr_arm_into(
         else_expr,
         ctx,
@@ -312,5 +353,7 @@ pub(super) fn lower_ternary(
         registry,
         output,
     )?;
+    let else_post = ctx.snapshot_slot_states();
+    ctx.merge_slot_states(vec![then_post, else_post]);
     Ok((result_id, merge_block))
 }

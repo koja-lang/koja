@@ -61,6 +61,9 @@ mod locals;
 mod ops;
 pub(crate) mod process;
 mod structs;
+mod unions;
+
+pub(crate) use instruction::emit_instruction as emit_instruction_external;
 
 /// Per-function SSA index. The migration to [`BasicValueEnum`] (from
 /// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`
@@ -160,7 +163,9 @@ fn terminator_successors(term: &IRTerminator) -> Vec<IRBlockId> {
             then_target,
             ..
         } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } | IRTerminator::Unreachable => Vec::new(),
+        IRTerminator::Return { .. } | IRTerminator::TailCall { .. } | IRTerminator::Unreachable => {
+            Vec::new()
+        }
     }
 }
 
@@ -200,7 +205,7 @@ pub(crate) fn emit_block<'ctx>(
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     for instr in &block.instructions {
-        instruction::emit_instruction(ctx, instr, values)?;
+        emit_instruction_external(ctx, instr, values)?;
     }
     // `IRInstruction::Receive` is a self-terminating instruction —
     // the dispatcher in [`process::emit_receive`] ends the host
@@ -279,7 +284,7 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
 ) -> Result<(ValueMap<'ctx>, &'block IRTerminator), LlvmError> {
     let mut values = seed;
     for instr in &block.instructions {
-        instruction::emit_instruction(ctx, instr, &mut values)?;
+        emit_instruction_external(ctx, instr, &mut values)?;
     }
     // Same self-terminating-Receive guard as [`emit_block`]; the
     // caller's terminator handling (today: `emit_main_return`)
@@ -355,12 +360,58 @@ pub(crate) fn emit_terminator_default<'ctx>(
                     .map_err(|e| inkwell_err("build_return", e))
             }
         }
+        IRTerminator::TailCall { args, .. } => emit_tail_call(ctx, args, values),
         IRTerminator::Unreachable => ctx
             .builder
             .build_unreachable()
             .map(|_| ())
             .map_err(|e| inkwell_err("build_unreachable", e)),
     }
+}
+
+/// Lower an [`IRTerminator::TailCall`] to the per-function TCO
+/// scheme: store each `args[i]` into the matching parameter's
+/// local slot, then branch back to the synthesized `tco_loop`
+/// header staged on [`EmitContext::tco_frame`] by
+/// [`crate::function::define_function`]. Reuses the already-
+/// allocated entry-block alloca so there's no per-iteration stack
+/// growth — the CFG just loops back through the same slots and
+/// the body re-runs against fresh values.
+///
+/// The seal pass guarantees `args.len()` matches the function's
+/// param arity; missing the TCO frame here is a compiler bug
+/// (define_function should have staged it whenever any block in
+/// the function carries a `TailCall`).
+fn emit_tail_call<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    args: &[ValueId],
+    values: &ValueMap<'ctx>,
+) -> Result<(), LlvmError> {
+    let frame = ctx.tco_frame().unwrap_or_else(|| {
+        panic!(
+            "alpha LLVM emit: TailCall terminator emitted without a staged TCO frame — \
+             define_function ordering violation",
+        )
+    });
+    if args.len() != frame.param_slots.len() {
+        panic!(
+            "alpha LLVM emit: TailCall passes {} arg(s) but the function declares {} param(s) — \
+             seal invariant violation",
+            args.len(),
+            frame.param_slots.len(),
+        );
+    }
+    for (arg, (local, _ty)) in args.iter().zip(frame.param_slots.iter()) {
+        let value = lookup(values, *arg)?;
+        let slot = ctx.local_slot(*local);
+        ctx.builder
+            .build_store(slot, value)
+            .map_err(|e| inkwell_err(format_args!("TailCall store into `{local}`"), e))?;
+    }
+    ctx.builder
+        .build_unconditional_branch(frame.loop_block)
+        .map(|_| ())
+        .map_err(|e| inkwell_err("TailCall back-edge to tco_loop", e))
 }
 
 /// For each non-`None` phi, look up the matching branch arg's LLVM

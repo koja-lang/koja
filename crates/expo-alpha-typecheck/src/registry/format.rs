@@ -52,6 +52,10 @@ fn format_kind(kind: &GlobalKind, registry: &GlobalRegistry) -> String {
         GlobalKind::Protocol(Some(def)) => format_protocol(def, registry),
         GlobalKind::Struct(None) => "struct".to_string(),
         GlobalKind::Struct(Some(def)) => format_struct(def, registry),
+        GlobalKind::TypeAlias(None) => "type alias <unlifted>".to_string(),
+        GlobalKind::TypeAlias(Some(expansion)) => {
+            format!("type = {}", format_resolved(expansion, registry))
+        }
     }
 }
 
@@ -227,6 +231,11 @@ fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
                 format!("{head}<{args}>")
             }
         }
+        ResolvedType::Union(members) => members
+            .iter()
+            .map(|m| format_resolved(m, registry))
+            .collect::<Vec<_>>()
+            .join(" | "),
         ResolvedType::Unresolved => "<unresolved>".to_string(),
     }
 }

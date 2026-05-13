@@ -80,6 +80,32 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
                 seal_pattern(&field.pattern);
             }
         }
+        Pattern::TypedBinding {
+            local_id,
+            name,
+            resolved_type,
+            span,
+            ..
+        } => {
+            if local_id.is_none() {
+                seal_panic(
+                    &format!(
+                        "typed-binding pattern `{name}` carries no LocalId; resolver should \
+                         have stamped it on the success path",
+                    ),
+                    *span,
+                );
+            }
+            if resolved_type.is_none() {
+                seal_panic(
+                    &format!(
+                        "typed-binding pattern `{name}` carries no resolved_type; resolver \
+                         should have stamped it on the success path",
+                    ),
+                    *span,
+                );
+            }
+        }
         other => seal_panic(
             &format!(
                 "alpha typecheck seal does not yet recognize pattern kind `{}`",

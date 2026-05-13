@@ -218,6 +218,131 @@ fn unconsumed_move_param_drops_at_fn_exit() {
 }
 
 #[test]
+fn match_arms_writing_owned_emit_no_droplocal_when_pre_state_unowned() {
+    // The escape_debug repro: `result = ""` (Unowned literal) then a
+    // `match` whose arms each `result = result <> "..."` (Owned).
+    // Before the slot-state snapshot/restore fix, lowering arm 2 saw
+    // arm 1's post-state (`Owned`) and synthesized a `DropLocal` at
+    // arm 2's body block — but arm 2's body only executes when arm 1
+    // did not, so at runtime the slot still holds the literal "" and
+    // the `free` SIGABRTs on a rodata pointer.
+    //
+    // After the fix: every arm starts from the construct-entry
+    // snapshot, so no arm sees the slot as `Owned`, and no
+    // `DropLocal` is emitted inside any arm body block.
+    let source = "
+        fn render(c: String) -> String
+          result = \"\"
+          match c
+            \"a\" -> result = result <> \"A\"
+            \"b\" -> result = result <> \"B\"
+            _ -> result = result <> c
+          end
+          result
+        end
+
+        fn main
+          render(\"a\")
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let render = function(&program, "render");
+
+    // No block carries a DropLocal — neither inside any match arm
+    // body nor as the function-exit drop, because the trailing
+    // `result` move-out marks the slot moved before fn-exit drop
+    // emission runs.
+    for block in &render.blocks {
+        for inst in &block.instructions {
+            assert!(
+                !matches!(inst, IRInstruction::DropLocal { .. }),
+                "function `render` should have no DropLocal after the slot-state \
+                 snapshot/restore fix; got {inst:?} in block `{}`",
+                block.label,
+            );
+        }
+    }
+}
+
+#[test]
+fn cond_arms_writing_owned_emit_no_stale_droplocal() {
+    // `cond` mirrors `match`'s arm-merge shape: same potential for a
+    // cross-arm slot-state leak, same fix applies. Pin that `cond`
+    // arms that all promote a slot to `Owned` don't synthesize a
+    // stale `DropLocal` against the pre-cond Unowned literal.
+    let source = "
+        fn classify(n: Int) -> String
+          result = \"\"
+          cond
+            n < 0 -> result = result <> \"neg\"
+            n > 0 -> result = result <> \"pos\"
+            else -> result = result <> \"zero\"
+          end
+          result
+        end
+
+        fn main
+          classify(0)
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let classify = function(&program, "classify");
+
+    for block in &classify.blocks {
+        for inst in &block.instructions {
+            assert!(
+                !matches!(inst, IRInstruction::DropLocal { .. }),
+                "function `classify` should have no DropLocal after the slot-state \
+                 snapshot/restore fix; got {inst:?} in block `{}`",
+                block.label,
+            );
+        }
+    }
+}
+
+#[test]
+fn match_arms_writing_owned_merge_to_owned_when_every_arm_agrees() {
+    // After lowering `result = ""; match c { ... -> result = result <> X }`
+    // the merge should adopt `Owned` because every reachable arm
+    // wrote an Owned value. The fn body then returns `result`, which
+    // moves out via `MoveOutLocal` (the substitution depends on the
+    // merged state being `Owned`). Pin that an explicit Return of
+    // the slot finds a `MoveOutLocal` in the return block — proves
+    // the merge promoted the slot to `Owned`.
+    let source = "
+        fn render(c: String) -> String
+          result = \"\"
+          match c
+            \"a\" -> result = result <> \"A\"
+            _ -> result = result <> c
+          end
+          result
+        end
+
+        fn main
+          render(\"a\")
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let render = function(&program, "render");
+
+    let move_outs: usize = render
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|inst| matches!(inst, IRInstruction::MoveOutLocal { .. }))
+        .count();
+    assert_eq!(
+        move_outs, 1,
+        "expected one MoveOutLocal on `result`'s return path (proving the merged \
+         post-match state is `Owned`); got {move_outs}",
+    );
+}
+
+#[test]
 fn no_owned_slots_means_no_droplocal_or_moveoutlocal() {
     // Smoke regression: existing alpha programs without `move`
     // params or heap-typed assignments should produce zero

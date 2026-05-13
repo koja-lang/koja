@@ -29,6 +29,8 @@ use crate::generics;
 use crate::lower::LowerOutput;
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
+use crate::tail_calls::rewrite_tail_calls;
+use crate::union_decl::{IRUnionDecl, discover_unions};
 use crate::{lower, merge, seal};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
@@ -86,6 +88,14 @@ impl IRProgram {
     /// `IRSymbol: Borrow<str>` impl.
     pub fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl> {
         self.packages.iter().find_map(|pkg| pkg.enums.get(mangled))
+    }
+
+    /// Lookup a union declaration across every package by its
+    /// mangled symbol. Mirrors [`Self::struct_decl`]; backends pass
+    /// the `&IRSymbol` carried on `IRType::Union { mangled }`
+    /// directly through the `IRSymbol: Borrow<str>` impl.
+    pub fn union_decl(&self, mangled: &str) -> Option<&IRUnionDecl> {
+        self.packages.iter().find_map(|pkg| pkg.unions.get(mangled))
     }
 
     /// Lookup a pooled constant value across every package by its
@@ -169,6 +179,8 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
     let entry_symbol = IRSymbol::from_identifier(&entry);
     let mut program = merge::merge(packages, entry_symbol);
     program.link_libraries = collect_link_libraries(program.packages.iter());
+    discover_unions(&mut program.packages);
+    rewrite_tail_calls(&mut program.packages);
 
     if program.function(program.entry_point.mangled()).is_none() {
         return Err(LowerError::EntryPointNotFound { identifier: entry });
@@ -187,6 +199,7 @@ pub(crate) fn empty_global_stdlib_package() -> IRPackage {
         functions: BTreeMap::new(),
         package: "Global".to_string(),
         structs: BTreeMap::new(),
+        unions: BTreeMap::new(),
     }
 }
 

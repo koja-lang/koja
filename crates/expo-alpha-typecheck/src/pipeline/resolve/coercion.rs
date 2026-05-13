@@ -22,10 +22,10 @@
 //! escape hatch for unsigned targets where `-1: UInt8` is rejected.
 
 use expo_ast::ast::{Expr, ExprKind, Literal, UnaryOp};
-use expo_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
+use expo_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
 use expo_ast::identifier::ResolvedType;
 
-use super::types::{is_primitive, types_equivalent};
+use super::types::{is_primitive, peel_alias, types_equivalent};
 use crate::registry::GlobalRegistry;
 
 /// Outcome of comparing an actual expression's resolved type
@@ -45,6 +45,14 @@ pub(crate) enum Compatible {
     /// the expected type's range. Caller stamps the AST node via
     /// [`coercion_target_mut`] and proceeds.
     Coerced(NumericLiteralWidth),
+    /// The actual expression's type is one member of the expected
+    /// union. Caller stamps `expr.coercion =
+    /// Some(Coercion::UnionWiden(target))` so IR lowering emits a
+    /// `UnionWrap` against the target union shape. `target` is the
+    /// (possibly aliased) union expected type as declared at the
+    /// slot — preserved verbatim so diagnostics and downstream IR
+    /// see the user's name when an alias was used.
+    UnionWiden { target: ResolvedType },
     /// The actual expression is a numeric literal whose value does
     /// NOT fit the expected type's range. Caller emits a precise
     /// out-of-range diagnostic.
@@ -67,6 +75,18 @@ pub(crate) fn coercion_target_mut(expr: &mut Expr) -> &mut Option<LiteralCoercio
     match &mut expr.kind {
         ExprKind::Group { expr: inner } => coercion_target_mut(inner),
         _ => &mut expr.literal_coercion,
+    }
+}
+
+/// Mutable handle to the AST node that owns the value-conversion
+/// [`Coercion`] annotation for `expr`. Same `Group` peel as
+/// [`coercion_target_mut`] so a coercion recorded on `(x)` lands on
+/// the inner expression that IR lowering actually emits a value
+/// for.
+pub(crate) fn coercion_annotation_mut(expr: &mut Expr) -> &mut Option<Coercion> {
+    match &mut expr.kind {
+        ExprKind::Group { expr: inner } => coercion_annotation_mut(inner),
+        _ => &mut expr.coercion,
     }
 }
 
@@ -205,6 +225,15 @@ pub(crate) fn check_compatible(
 ) -> Compatible {
     if types_equivalent(actual_ty, expected_ty, registry) {
         return Compatible::Strict;
+    }
+    if let ResolvedType::Union(members) = peel_alias(expected_ty, registry)
+        && members
+            .iter()
+            .any(|m| types_equivalent(actual_ty, m, registry))
+    {
+        return Compatible::UnionWiden {
+            target: expected_ty.clone(),
+        };
     }
     let Some(target_width) = narrow_numeric_target(expected_ty, registry) else {
         return Compatible::Incompatible;

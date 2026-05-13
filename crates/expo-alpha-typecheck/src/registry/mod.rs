@@ -69,6 +69,15 @@ pub enum GlobalKind {
     Function(Option<FunctionSignature>),
     Protocol(Option<ProtocolDefinition>),
     Struct(Option<StructDefinition>),
+    /// `type X = ...` declared at top level. The `Option` mirrors
+    /// other lifecycle-payload variants: `None` after collect,
+    /// `Some(expansion)` after `lift_type_aliases` resolves the RHS.
+    /// The expansion is the canonical [`ResolvedType`] the alias
+    /// stands for; for the surface-aliasing case
+    /// (`type Pet = Cat | Dog | Fish`) that's typically a
+    /// canonical [`ResolvedType::Union`], but any `ResolvedType`
+    /// shape is permissible.
+    TypeAlias(Option<ResolvedType>),
 }
 
 impl GlobalKind {
@@ -79,6 +88,7 @@ impl GlobalKind {
             GlobalKind::Function(_) => "function",
             GlobalKind::Protocol(_) => "protocol",
             GlobalKind::Struct(_) => "struct",
+            GlobalKind::TypeAlias(_) => "type alias",
         }
     }
 }
@@ -208,6 +218,16 @@ impl GlobalRegistry {
         type_params: Vec<String>,
     ) -> InsertOutcome<'_> {
         self.insert(identifier, GlobalKind::Struct(None), span, type_params)
+    }
+
+    /// Register a `type X = ...` alias in the `TypeAlias(None)`
+    /// state. The expansion is stamped in later by
+    /// [`Self::set_type_alias_definition`]. Aliases don't take
+    /// generic params today, so callers always pass an empty vec —
+    /// generic aliases are tracked as a future language extension
+    /// in the v1-parity plan.
+    pub fn insert_type_alias(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
+        self.insert(identifier, GlobalKind::TypeAlias(None), span, Vec::new())
     }
 
     /// Stamp a resolved variant roster onto an enum entry. Panics
@@ -422,6 +442,79 @@ impl GlobalRegistry {
                     other.label(),
                 );
             }
+        }
+    }
+
+    /// Stamp a resolved expansion onto a type-alias entry. Panics
+    /// unless the entry's kind is exactly `TypeAlias(None)`.
+    pub fn set_type_alias_definition(&mut self, id: GlobalRegistryId, expansion: ResolvedType) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!(
+                "set_type_alias_definition on missing registry id {id} — \
+                 collect invariant violation"
+            )
+        });
+        match &entry.kind {
+            GlobalKind::TypeAlias(None) => {
+                entry.kind = GlobalKind::TypeAlias(Some(expansion));
+            }
+            GlobalKind::TypeAlias(Some(_)) => {
+                panic!(
+                    "set_type_alias_definition called twice on `{}` — \
+                     lift_type_aliases must stamp each alias exactly once",
+                    entry.identifier,
+                );
+            }
+            other => {
+                panic!(
+                    "set_type_alias_definition called on non-alias entry `{}` ({}) — \
+                     only TypeAlias entries carry expansions",
+                    entry.identifier,
+                    other.label(),
+                );
+            }
+        }
+    }
+
+    /// Look up a registered alias's expansion. `None` if `id` is
+    /// not a `TypeAlias` entry, or if it is but the lift pass
+    /// hasn't stamped its expansion yet (mid-lift state).
+    /// [`super::pipeline::resolve::types::peel_alias`] uses this to
+    /// follow `Named { Global(alias_id) }` to the underlying type.
+    pub fn alias_expansion(&self, id: GlobalRegistryId) -> Option<ResolvedType> {
+        match self.entries.get(&id)?.kind {
+            GlobalKind::TypeAlias(Some(ref expansion)) => Some(expansion.clone()),
+            _ => None,
+        }
+    }
+
+    /// Overwrite an alias's expansion regardless of its current
+    /// stamp state. Used by `lift_type_aliases`'s cycle sweep to
+    /// rewrite cycling aliases to `ResolvedType::unresolved` so
+    /// downstream peels short-circuit cleanly. Panics if `id` is
+    /// not a `TypeAlias` entry — only the cycle pass should call
+    /// this.
+    pub fn set_type_alias_definition_force(
+        &mut self,
+        id: GlobalRegistryId,
+        expansion: ResolvedType,
+    ) {
+        let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
+            panic!(
+                "set_type_alias_definition_force on missing registry id {id} — \
+                 lift invariant violation"
+            )
+        });
+        match &entry.kind {
+            GlobalKind::TypeAlias(_) => {
+                entry.kind = GlobalKind::TypeAlias(Some(expansion));
+            }
+            other => panic!(
+                "set_type_alias_definition_force called on non-alias entry `{}` ({}) — \
+                 only TypeAlias entries support force-stamp",
+                entry.identifier,
+                other.label(),
+            ),
         }
     }
 

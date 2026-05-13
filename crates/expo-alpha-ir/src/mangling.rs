@@ -119,6 +119,23 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::UInt16 => "UInt16".to_string(),
         IRType::UInt32 => "UInt32".to_string(),
         IRType::UInt64 => "UInt64".to_string(),
+        IRType::Union { mangled, .. } => mangled.mangled().to_string(),
         IRType::Unit => "Unit".to_string(),
     }
+}
+
+/// Build the canonical mangled [`IRSymbol`] for a union with the
+/// given (already mangled) member set. The `members` slice is
+/// expected in canonical (sorted) order — alpha typecheck's
+/// `canonical_union` guarantees that — so any two surface unions
+/// with the same canonical member set yield the exact same
+/// `IRSymbol`. Backends look up `IRUnionDecl` entries by this
+/// symbol via [`crate::IRProgram::union_decl`].
+///
+/// Mirrors [`mangled_type_name`] / [`mangled_method_name`] in
+/// returning an `IRSymbol` directly so call sites never have to
+/// hand-wrap the underlying `String`.
+pub(crate) fn union_mangle(members: &[IRType]) -> IRSymbol {
+    let parts: Vec<String> = members.iter().map(mangle_type).collect();
+    IRSymbol::synthetic(format!("Union_{}", parts.join("_or_")))
 }

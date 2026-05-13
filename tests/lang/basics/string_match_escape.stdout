@@ -1,0 +1,5 @@
+"hello\\tworld"
+"quote\\\"in\\\"middle"
+"no_escape"
+"hello\\tworld"
+"LineInfo{number: 1, raw: \"hello\\tworld\"}"

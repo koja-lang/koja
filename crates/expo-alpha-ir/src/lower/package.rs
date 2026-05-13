@@ -23,7 +23,7 @@ use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, 
 use crate::generics::Instantiation;
 use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
-use crate::mangling::mangled_type_name;
+use crate::mangling::{mangled_type_name, union_mangle};
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
@@ -125,6 +125,7 @@ pub(crate) fn lower_package(
         functions,
         package: pkg.package.clone(),
         structs,
+        unions: BTreeMap::new(),
     }
 }
 
@@ -465,6 +466,16 @@ pub(crate) fn resolved_type_to_ir_type(
              ({resolution:?}) — every Param must be substituted before lowering \
              (type_args: {type_args:?})",
         ),
+        ResolvedType::Union(members) => {
+            let ir_members: Vec<IRType> = members
+                .iter()
+                .map(|m| resolved_type_to_ir_type(m, registry, instantiations))
+                .collect();
+            IRType::Union {
+                mangled: union_mangle(&ir_members),
+                members: ir_members,
+            }
+        }
         ResolvedType::Unresolved => {
             panic!("alpha IR lower: resolved_type_to_ir_type received Unresolved — seal violation",)
         }
@@ -480,6 +491,20 @@ fn global_to_ir_type(
     let entry = registry.get(id).unwrap_or_else(|| {
         panic!("alpha IR lower: ResolvedType id {id} missing from registry — seal violation",)
     });
+    // Peel through `type X = ...` aliases first. Aliases stay as
+    // `Named { Global(alias_id) }` in the typecheck output to keep
+    // diagnostics reading `X`, not the expansion. At IR-lower time
+    // we have to follow them so backends see the underlying shape.
+    if let GlobalKind::TypeAlias(Some(expansion)) = &entry.kind {
+        assert!(
+            type_args.is_empty(),
+            "alpha IR lower: parameterized type aliases not yet supported \
+             (alias `{}` was given {} type arg(s))",
+            entry.identifier,
+            type_args.len(),
+        );
+        return resolved_type_to_ir_type(expansion, registry, instantiations);
+    }
     // Stdlib *primitive* `Struct(_)` stubs (scalars, `CPtr<T>`) need
     // fixed-shape lowering; user-style stdlib structs (`DateTime`,
     // `Duration`, etc. from auto-imported `Global.*` files) and

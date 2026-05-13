@@ -18,7 +18,7 @@
 //! stable.
 
 use expo_ast::ast::{Diagnostic, EnumConstructionData, Expr};
-use expo_ast::coercion::LiteralCoercion;
+use expo_ast::coercion::{Coercion, LiteralCoercion};
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
@@ -27,7 +27,7 @@ use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -343,6 +343,9 @@ fn validate_tuple_payload(
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
                 *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
+            }
+            Compatible::UnionWiden { target } => {
+                *coercion_annotation_mut(expr) = Some(Coercion::UnionWiden(target));
             }
             Compatible::OutOfRange {
                 rendered_value,

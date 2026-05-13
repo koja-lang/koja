@@ -23,7 +23,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use expo_alpha_ir::{IRBlockId, IRLocalId, IRSymbol};
+use expo_alpha_ir::{IRBlockId, IRLocalId, IRSymbol, IRType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -88,6 +88,29 @@ pub(crate) struct EmitContext<'ctx> {
     /// `Unreachable` terminator). Non-Receive emit sites continue to
     /// take `block_map` by parameter through the existing seam.
     current_block_map: RefCell<Option<BTreeMap<IRBlockId, BasicBlock<'ctx>>>>,
+    /// Per-function tail-call-optimization frame, set by
+    /// [`crate::function::define_function`] for any function whose
+    /// IR carries an [`expo_alpha_ir::IRTerminator::TailCall`].
+    /// Carries the synthesized loop-header LLVM block and the
+    /// per-param `(local_id, type)` slots the
+    /// [`expo_alpha_ir::IRTerminator::TailCall`] terminator emitter
+    /// stores its new args into before branching back to the
+    /// header. `None` for non-TCO functions; the terminator emitter
+    /// panics if it ever fires without a frame staged.
+    tco_frame: RefCell<Option<TcoFrame<'ctx>>>,
+}
+
+/// Per-function tail-call frame staged by
+/// [`crate::function::define_function`] when its IR carries a
+/// [`expo_alpha_ir::IRTerminator::TailCall`]. `loop_block` is the
+/// header reached by every back-edge; `param_slots[i]` is the
+/// `(local_id, type)` of the function's i-th parameter — the
+/// terminator emitter rebuilds the slot's `store` keyed at
+/// `local_id` against the value held by the i-th tail-call arg.
+#[derive(Clone)]
+pub(crate) struct TcoFrame<'ctx> {
+    pub(crate) loop_block: BasicBlock<'ctx>,
+    pub(crate) param_slots: Vec<(IRLocalId, IRType)>,
 }
 
 /// Borrowed env handle used by the closure-body emit path.
@@ -123,7 +146,36 @@ impl<'ctx> EmitContext<'ctx> {
             declared_functions: RefCell::new(BTreeMap::new()),
             closure_frame: RefCell::new(None),
             current_block_map: RefCell::new(None),
+            tco_frame: RefCell::new(None),
         }
+    }
+
+    /// Stage the per-function [`TcoFrame`] for the body currently
+    /// being defined. Pairs with [`Self::clear_tco_frame`]; calling
+    /// twice without a clear in between panics so the per-function
+    /// scope stays explicit.
+    pub(crate) fn set_tco_frame(&self, frame: TcoFrame<'ctx>) {
+        let mut slot = self.tco_frame.borrow_mut();
+        if slot.is_some() {
+            panic!(
+                "alpha LLVM emit: nested TCO frame set without clearing the previous one — \
+                 caller must clear before re-entering",
+            );
+        }
+        *slot = Some(frame);
+    }
+
+    pub(crate) fn clear_tco_frame(&self) {
+        *self.tco_frame.borrow_mut() = None;
+    }
+
+    /// Active TCO frame for the body being emitted, or `None` for
+    /// non-TCO bodies. The [`expo_alpha_ir::IRTerminator::TailCall`]
+    /// terminator emitter calls into this; the seal pass guarantees
+    /// any function carrying a `TailCall` block is set up with a
+    /// frame here before its body is walked.
+    pub(crate) fn tco_frame(&self) -> Option<TcoFrame<'ctx>> {
+        self.tco_frame.borrow().clone()
     }
 
     /// Stage the per-function `IRBlockId -> BasicBlock` map for

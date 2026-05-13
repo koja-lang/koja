@@ -377,10 +377,10 @@ fn static_method_returning_enum_emits_outer_typed_signature() {
 
 #[test]
 fn script_can_emit_enum_construct_from_non_trailing_assignment() {
-    // Trailing expression is `1`, so the script's return type is
-    // `Int` and auto-print uses `__expo_alpha_print_i64`. The
-    // `c = Color.Red` assignment exercises EnumConstruct + a local
-    // slot typed `IRType::Enum(_)`.
+    // The `c = Color.Red` assignment exercises EnumConstruct + a
+    // local slot typed `IRType::Enum(_)` even though the trailing
+    // expression discards it. Pins the alloca / tag-store shape
+    // for the enum-typed slot.
     let source = "
         enum Color
           Red
@@ -398,5 +398,4 @@ fn script_can_emit_enum_construct_from_non_trailing_assignment() {
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "alloca %TestApp.Color");
     assert_contains(&ir_text, "store i8 0");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64");
 }

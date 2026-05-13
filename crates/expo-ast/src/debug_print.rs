@@ -987,6 +987,11 @@ fn format_resolved_type(ty: &ResolvedType) -> String {
                 format!("{head}<{}>", args.join(", "))
             }
         }
+        ResolvedType::Union(members) => members
+            .iter()
+            .map(format_resolved_type)
+            .collect::<Vec<_>>()
+            .join(" | "),
         ResolvedType::Unresolved => String::from("?"),
     }
 }

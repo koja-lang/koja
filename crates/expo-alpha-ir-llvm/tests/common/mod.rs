@@ -75,12 +75,19 @@ pub fn assert_contains(ir_text: &str, needle: &str) {
 }
 
 /// Pin the wrapper invariants every emitted alpha module must satisfy:
-/// `define i64 @main()`, the `expo_rt_main_done()` runtime hand-off
-/// that boots the worker pool for spawned processes, `ret i64 0`,
-/// and the `@__expo_app_name` global that `expo-runtime`'s panic.rs
-/// links against.
+///
+/// - `define void @__expo_user_main(ptr)` carrying the user body
+///   (always returns `ret void`; the trailing expression's value is
+///   computed for side effects and discarded);
+/// - `define i64 @main()` trampoline that hands the user body to
+///   the runtime as PID 1 via `expo_rt_spawn`, blocks on
+///   `expo_rt_main_done`, and returns `ret i64 0`;
+/// - `@__expo_app_name` global that `expo-runtime`'s panic handler
+///   links against.
 pub fn assert_main_shape(ir_text: &str) {
+    assert_contains(ir_text, "define void @__expo_user_main(ptr");
     assert_contains(ir_text, "define i64 @main()");
+    assert_contains(ir_text, "call i64 @expo_rt_spawn(");
     assert_contains(ir_text, "call void @expo_rt_main_done()");
     assert_contains(ir_text, "ret i64 0");
     assert_contains(ir_text, "@__expo_app_name");

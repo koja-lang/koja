@@ -254,6 +254,17 @@ pub enum ResolvedType {
         type_args: Vec<ResolvedType>,
     },
 
+    /// Anonymous union of two or more types: `A | B`. Members are
+    /// kept in canonical order (sorted by display, deduped, with
+    /// nested unions and aliases peeled and flattened) by the
+    /// `canonical_union` constructor in alpha typecheck — the
+    /// invariant lets equality compare member vectors elementwise.
+    /// A named alias `type Pet = ...` is *not* this variant; it
+    /// stays as `Named { Global(alias_id), [] }` and only peels to
+    /// the underlying union at equivalence / widening / IR-lower
+    /// time, so diagnostics keep the user's chosen name.
+    Union(Vec<ResolvedType>),
+
     /// In-flight placeholder before resolve runs.
     #[default]
     Unresolved,
@@ -289,6 +300,7 @@ impl ResolvedType {
                 resolution,
                 type_args,
             } => resolution.is_resolved() && type_args.iter().all(Self::is_resolved),
+            Self::Union(members) => members.iter().all(Self::is_resolved),
             Self::Unresolved => false,
         }
     }

@@ -37,6 +37,8 @@ use expo_ast::ast::{Diagnostic, Pattern};
 use expo_ast::identifier::{GlobalRegistryId, LocalId, ResolvedType};
 use expo_ast::labels::{pattern_kind_label, pattern_span};
 
+use crate::types::{ConstValue, IRBinOp};
+
 use super::arms::lower_result_ty;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::package::resolved_type_to_ir_type;
@@ -101,7 +103,9 @@ pub(super) struct PayloadBind {
 
 /// Where a [`PayloadBind`] reads its value from. `EnumPayload`
 /// emits `EnumPayloadFieldGet` (tag-gated extraction); `StructField`
-/// emits `FieldGet` (no tag — the subject is already a struct).
+/// emits `FieldGet` (no tag — the subject is already a struct);
+/// `UnionPayload` emits `UnionPayloadGet` (tag-gated extraction
+/// against a tagged union member).
 pub(super) enum BindSource {
     EnumPayload {
         enum_symbol: IRSymbol,
@@ -112,6 +116,51 @@ pub(super) enum BindSource {
         field_index: u32,
         struct_symbol: IRSymbol,
     },
+    UnionPayload {
+        member_index: u8,
+        member_type: IRType,
+        union_type: IRType,
+    },
+}
+
+/// Emit `UnionTagGet(subject) == const(member_index)` and return
+/// the resulting `Bool` value. Counterpart of
+/// [`enums::emit_enum_tag_eq`] for the union family.
+fn emit_union_tag_eq(
+    subject: ValueId,
+    subject_ir: &IRType,
+    member_index: u8,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+) -> ValueId {
+    let tag_value = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::UnionTagGet {
+            dest: tag_value,
+            ty: subject_ir.clone(),
+            value: subject,
+        },
+    );
+    let const_dest = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest: const_dest,
+            value: ConstValue::Int8(member_index as i8),
+        },
+    );
+    let cond = ctx.fresh_value(IRType::Bool);
+    ctx.cfg.append(
+        block,
+        IRInstruction::BinaryOp {
+            dest: cond,
+            lhs: tag_value,
+            op: IRBinOp::Eq,
+            rhs: const_dest,
+        },
+    );
+    cond
 }
 
 pub(super) fn lower_pattern_check(
@@ -165,6 +214,61 @@ pub(super) fn lower_pattern_check(
             structs::lower_struct_check(fields, &inputs, ctx, output),
             block,
         )),
+        Pattern::TypedBinding {
+            local_id,
+            name,
+            resolved_type,
+            ..
+        } => {
+            let resolved = resolved_type.as_ref().unwrap_or_else(|| {
+                panic!(
+                    "alpha IR lower: typed-binding pattern `{name}` reaches lower without a \
+                     resolved_type — typecheck-resolve invariant violation",
+                );
+            });
+            let member_ir =
+                resolved_type_to_ir_type(resolved, inputs.registry, &mut output.instantiations);
+            let subject_ir = ctx.type_of(inputs.subject).clone();
+            let IRType::Union { members, .. } = &subject_ir else {
+                panic!(
+                    "alpha IR lower: typed-binding pattern `{name}` reaches lower with \
+                     non-Union subject `{subject_ir:?}` — typecheck-resolve invariant \
+                     violation",
+                );
+            };
+            let member_index = members
+                .iter()
+                .position(|m| m == &member_ir)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "alpha IR lower: typed-binding pattern `{name}` member \
+                         `{member_ir:?}` is not in subject union `{subject_ir:?}` — \
+                         typecheck-resolve invariant violation",
+                    )
+                }) as u8;
+            let cond = emit_union_tag_eq(inputs.subject, &subject_ir, member_index, ctx, block);
+            let local = require_local(*local_id, name);
+            ensure_local_declared(local, &member_ir, ctx);
+            let bind = PayloadBind {
+                field_type: member_ir.clone(),
+                local,
+                source: BindSource::UnionPayload {
+                    member_index,
+                    member_type: member_ir,
+                    union_type: subject_ir,
+                },
+            };
+            Ok((
+                PatternCheck::Tests {
+                    payload_binds: vec![bind],
+                    steps: vec![TestStep {
+                        cond,
+                        test_block: block,
+                    }],
+                },
+                block,
+            ))
+        }
         Pattern::Wildcard { .. } => Ok((PatternCheck::CatchAll { binds: Vec::new() }, block)),
         other => {
             output.diagnostics.push(Diagnostic::error(

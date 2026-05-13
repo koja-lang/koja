@@ -145,7 +145,8 @@ enum Command {
 /// `.exps` files are scripts (top-level expressions, no project
 /// context); `.expo` files are project members. Omitting the file
 /// argument falls back to discovering an `expo.toml` in the current
-/// directory; project-mode pipelines themselves are stubbed today.
+/// directory; project mode runs the full alpha pipeline through
+/// [`expo_alpha_ir_llvm::compile_program`].
 ///
 /// Backend selection: `run` and `build` accept
 /// `--backend={interpreter,llvm}` (see [`alpha::Backend`]). `run`
@@ -155,7 +156,7 @@ enum Command {
 /// future WASM backend slots in here as a third variant.
 #[derive(Subcommand)]
 enum AlphaCommand {
-    /// Compile a source file through the alpha pipeline to a native binary (`.exps` scripts today; project mode stubbed)
+    /// Compile a source file through the alpha pipeline to a native binary (`.exps` scripts and `expo.toml` projects)
     Build {
         /// Source file (omit to use `expo.toml` in the current directory)
         file: Option<String>,

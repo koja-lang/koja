@@ -12,7 +12,12 @@
 //!   index on [`expo_alpha_ir_llvm::ctx::EmitContext`], so
 //!   `relay(x: Float32) -> Float32 = cosf(x)` emits
 //!   `call float @cos(...)` against the aliased name even though
-//!   the IR call carries the alpha-internal symbol.
+//!   the IR call carries the alpha-internal symbol;
+//! - `CPtr<T>` lowers to an opaque LLVM `ptr` in both parameter
+//!   and return position with no marshaling shim, so an
+//!   `@extern "C" fn write(buf: CPtr<UInt8>, len: UInt64) ->
+//!   Int32` declaration matches the C ABI directly and call
+//!   sites pass `CPtr` SSA values straight through.
 
 use expo_alpha_ir::IRScript;
 use expo_alpha_ir_llvm::emit_script_llvm_ir;
@@ -123,4 +128,52 @@ fn cptr_param_lowers_to_opaque_pointer() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "declare ptr @malloc(i64)");
+}
+
+#[test]
+fn extern_with_cptr_arg_declares_pointer_param() {
+    // `CPtr<T>` in argument position lowers to an opaque LLVM
+    // `ptr` — same shape as the return-position case above and
+    // ABI-compatible with C `void*` for any T.
+    let source = "
+        @extern \"C\"
+        @link \"ffi_helper\"
+        fn write_byte(buf: CPtr<UInt8>, value: UInt8) -> Int32
+        ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "declare i32 @write_byte(ptr, i8)");
+}
+
+#[test]
+fn call_to_extern_passes_cptr_as_ptr_with_no_marshaling() {
+    // The call site for an extern fn taking a `CPtr<T>` argument
+    // must hand the SSA `ptr` straight through — no per-call
+    // marshaling shim, no allocas around the ptr value.
+    let source = "
+        @extern \"C\"
+        @link \"c\"
+        fn malloc(size: UInt64) -> CPtr<UInt8>
+
+        @extern \"C\"
+        @link \"c\"
+        fn free(p: CPtr<UInt8>)
+
+        fn alloc_and_drop(size: UInt64) -> Unit
+          buf = malloc(size)
+          free(buf)
+        end
+        ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "declare void @free(ptr)");
+    assert_contains(&ir_text, "call ptr @malloc(i64");
+    assert_contains(&ir_text, "call void @free(ptr");
 }

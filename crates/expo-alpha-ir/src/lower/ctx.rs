@@ -24,6 +24,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::LocalId;
 
+/// Snapshot of the per-slot [`SlotState`] map captured at a
+/// control-flow construct's entry. Used by `match` / `cond` / `if`
+/// / `unless` / ternary lowering to reset per-arm state and to
+/// merge post-arm states into a joined post-construct state. See
+/// [`FnLowerCtx::snapshot_slot_states`].
+pub(crate) type SlotStateSnapshot = BTreeMap<IRLocalId, SlotState>;
+
 use crate::cfg::CFGBuilder;
 use crate::function::{IRBasicBlock, IRBlockId, IRFunction, IRSymbol};
 use crate::generics::Instantiation;
@@ -350,6 +357,82 @@ impl FnLowerCtx {
         if let Some(state) = self.locals.get_mut(&local) {
             state.moved = true;
         }
+    }
+
+    /// Clone the entire `local -> SlotState` map. Control-flow
+    /// lowering (`match`, `cond`, `if`/`else`, `unless`, ternary)
+    /// captures this at the construct's entry so each arm can be
+    /// lowered from a fresh baseline rather than inheriting the
+    /// previous arm's post-state. Pairs with
+    /// [`Self::restore_slot_states`] and [`Self::merge_slot_states`].
+    pub(crate) fn snapshot_slot_states(&self) -> SlotStateSnapshot {
+        self.locals.clone()
+    }
+
+    /// Reset the slot-state map to `snapshot`. Discards any
+    /// per-arm mutations stamped on top of the entry-snapshot.
+    pub(crate) fn restore_slot_states(&mut self, snapshot: SlotStateSnapshot) {
+        self.locals = snapshot;
+    }
+
+    /// Merge per-arm post-state snapshots into the live slot map.
+    /// Conservative join: a slot's merged `ownership` adopts the
+    /// per-arm stamp only when every branch agreed on it, else
+    /// falls back to [`Ownership::Unowned`]; `moved` is the AND
+    /// across branches (only carry the moved flag through when
+    /// every branch consumed the slot).
+    ///
+    /// This avoids both failure modes of the previous flat
+    /// tracking: an over-promoted `Owned` would synthesize a
+    /// drop on an Unowned literal at function exit (SIGABRT),
+    /// while an under-promoted `Unowned` would skip a needed drop
+    /// when the slot definitely holds heap storage. Slots present
+    /// only in some branches stay absent in the merged map; new
+    /// declarations inside one arm don't leak past the join.
+    pub(crate) fn merge_slot_states(&mut self, branches: Vec<SlotStateSnapshot>) {
+        if branches.is_empty() {
+            return;
+        }
+        let mut merged: BTreeMap<IRLocalId, SlotState> = BTreeMap::new();
+        let locals: BTreeSet<IRLocalId> = branches
+            .iter()
+            .flat_map(|snapshot| snapshot.keys().copied())
+            .collect();
+        for local in locals {
+            let mut per_arm: Vec<&SlotState> = Vec::with_capacity(branches.len());
+            let mut present_in_all = true;
+            for snapshot in &branches {
+                match snapshot.get(&local) {
+                    Some(state) => per_arm.push(state),
+                    None => {
+                        present_in_all = false;
+                        break;
+                    }
+                }
+            }
+            if !present_in_all {
+                continue;
+            }
+            let first = per_arm[0];
+            let ownership = if per_arm
+                .iter()
+                .all(|state| state.ownership == first.ownership)
+            {
+                first.ownership
+            } else {
+                Ownership::Unowned
+            };
+            let moved = per_arm.iter().all(|state| state.moved);
+            merged.insert(
+                local,
+                SlotState {
+                    moved,
+                    ownership,
+                    ty: first.ty.clone(),
+                },
+            );
+        }
+        self.locals = merged;
     }
 
     /// Iterator over every Live & Owned slot, paired with its

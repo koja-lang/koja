@@ -8,6 +8,7 @@ use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
 use crate::function::{IRFunction, IRSymbol};
 use crate::struct_decl::IRStructDecl;
+use crate::union_decl::IRUnionDecl;
 
 /// Per-package IR fragment exposed to backends. Holds only
 /// fully-monomorphized concrete decls — generic templates and the
@@ -46,4 +47,10 @@ pub struct IRPackage {
     /// declared field layout for `IRType::Struct(symbol)` /
     /// `IRInstruction::StructInit` / `IRInstruction::FieldGet`.
     pub structs: BTreeMap<IRSymbol, IRStructDecl>,
+    /// Union declarations discovered during this package's lower —
+    /// one entry per distinct mangled `IRType::Union { mangled }`
+    /// referenced anywhere in the package. Backends consult
+    /// `max_payload_size` to size the trailing `[N x i8]` payload
+    /// in the `{ i8, [N x i8] }` LLVM struct layout.
+    pub unions: BTreeMap<IRSymbol, IRUnionDecl>,
 }

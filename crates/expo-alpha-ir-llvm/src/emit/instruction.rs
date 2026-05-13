@@ -11,9 +11,11 @@ use crate::error::LlvmError;
 
 use super::binary_construct::emit_binary_construct;
 use super::process::{emit_receive, emit_spawn};
-use super::{ValueMap, calls, closures, concat, constants, enums, locals, lookup, ops, structs};
+use super::{
+    ValueMap, calls, closures, concat, constants, enums, locals, lookup, ops, structs, unions,
+};
 
-pub(super) fn emit_instruction<'ctx>(
+pub(crate) fn emit_instruction<'ctx>(
     ctx: &EmitContext<'ctx>,
     instr: &IRInstruction,
     values: &mut ValueMap<'ctx>,
@@ -215,5 +217,35 @@ pub(super) fn emit_instruction<'ctx>(
             dest,
             result_type,
         } => emit_receive(ctx, after.as_ref(), arms, *dest, result_type, values),
+        IRInstruction::UnionWrap {
+            dest,
+            member_index,
+            member_type,
+            ty,
+            value,
+        } => {
+            let payload = lookup(values, *value)?;
+            let result = unions::emit_union_wrap(ctx, *member_index, member_type, ty, payload)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::UnionTagGet { dest, ty, value } => {
+            let base = lookup(values, *value)?;
+            let result = unions::emit_union_tag_get(ctx, ty, base)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::UnionPayloadGet {
+            dest,
+            member_index: _,
+            member_type,
+            ty,
+            value,
+        } => {
+            let base = lookup(values, *value)?;
+            let result = unions::emit_union_payload_get(ctx, member_type, ty, base)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
     }
 }

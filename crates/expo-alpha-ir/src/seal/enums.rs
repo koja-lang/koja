@@ -312,6 +312,7 @@ mod tests {
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),
             structs: BTreeMap::new(),
+            unions: BTreeMap::new(),
         }
     }
 
@@ -353,6 +354,7 @@ mod tests {
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),
             structs: BTreeMap::new(),
+            unions: BTreeMap::new(),
         };
         seal_enum_decls(&pkg);
     }

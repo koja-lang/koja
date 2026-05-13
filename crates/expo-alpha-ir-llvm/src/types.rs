@@ -65,6 +65,9 @@ pub(crate) fn ir_int_type<'ctx>(
         IRType::Struct(_) => Err(LlvmError::Codegen(format!(
             "expected an integer or Bool IRType, got `{ty:?}`",
         ))),
+        IRType::Union { .. } => Err(LlvmError::Codegen(format!(
+            "expected an integer or Bool IRType, got `{ty:?}`",
+        ))),
         IRType::Unit => Err(LlvmError::Codegen(
             "expected an integer or Bool IRType, got `Unit`".to_string(),
         )),
@@ -105,6 +108,7 @@ pub(crate) fn ir_basic_type<'ctx>(
         IRType::List(_) => Ok(list_value_type(ctx).into()),
         IRType::Map { .. } | IRType::Set(_) => Ok(hashtable_value_type(ctx).into()),
         IRType::Struct(symbol) => Ok(ctx.layouts.struct_type(symbol.mangled()).into()),
+        IRType::Union { mangled, .. } => Ok(ctx.layouts.union_outer(mangled.mangled()).0.into()),
         IRType::Unit => Err(LlvmError::Codegen(
             "expected a value-level IRType, got `Unit`".to_string(),
         )),

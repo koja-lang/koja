@@ -8,6 +8,7 @@ use expo_ast::identifier::{
 use expo_ast::span::Span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
+use crate::pipeline::resolve::types::canonical_union;
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry};
 
 /// Read-only name-resolution inputs threaded through type-expression
@@ -120,12 +121,12 @@ pub(crate) fn resolve_type_expr(
             resolve_named(path, *span, type_params, scope, diagnostics)
         }
         TypeExpr::Self_ { span } => resolve_self(*span, type_params, scope.registry, diagnostics),
-        TypeExpr::Union { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support union type annotations".to_string(),
-                *span,
-            ));
-            ResolvedType::unresolved()
+        TypeExpr::Union { types, .. } => {
+            let members = types
+                .iter()
+                .map(|t| resolve_type_expr(t, type_params, scope, diagnostics))
+                .collect::<Vec<_>>();
+            canonical_union(members, scope.registry)
         }
         TypeExpr::Unit { .. } => scope.registry.primitive("Unit"),
     }
@@ -160,7 +161,9 @@ fn resolve_self(
             GlobalKind::Struct(_) | GlobalKind::Enum(_) => {
                 return concrete_self_type(owner, registry);
             }
-            GlobalKind::Constant(_) | GlobalKind::Function(_) => continue,
+            GlobalKind::Constant(_) | GlobalKind::Function(_) | GlobalKind::TypeAlias(_) => {
+                continue;
+            }
         }
     }
     diagnostics.push(Diagnostic::error(
@@ -449,5 +452,10 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
             ..
         }
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
+        ResolvedType::Union(members) => members
+            .iter()
+            .map(|m| render_resolved(m, registry))
+            .collect::<Vec<_>>()
+            .join(" | "),
     }
 }

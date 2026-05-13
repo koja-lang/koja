@@ -303,6 +303,7 @@ mod tests {
             functions: map,
             package: "TestApp".to_string(),
             structs: BTreeMap::new(),
+            unions: BTreeMap::new(),
         }
     }
 

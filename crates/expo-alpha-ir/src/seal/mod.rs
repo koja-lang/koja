@@ -147,6 +147,11 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
             }
             require_supported_type(ret, &|| format!("{} (Function return)", location()));
         }
+        IRType::Union { members, .. } => {
+            for (idx, member) in members.iter().enumerate() {
+                require_supported_type(member, &|| format!("{} (Union member[{idx}])", location()));
+            }
+        }
     }
 }
 
@@ -220,6 +225,10 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::Spawn { config, .. } => vec![*config],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
+        IRInstruction::UnionPayloadGet { value, .. } | IRInstruction::UnionTagGet { value, .. } => {
+            vec![*value]
+        }
+        IRInstruction::UnionWrap { value, .. } => vec![*value],
     }
 }
 
@@ -239,6 +248,7 @@ pub(super) fn terminator_operands(term: &IRTerminator) -> Vec<ValueId> {
             operands
         }
         IRTerminator::Return { value } => value.iter().copied().collect(),
+        IRTerminator::TailCall { args, .. } => args.clone(),
         IRTerminator::Unreachable => vec![],
     }
 }
@@ -251,7 +261,9 @@ pub(super) fn terminator_targets(term: &IRTerminator) -> Vec<IRBlockId> {
             else_target,
             ..
         } => vec![then_target.block, else_target.block],
-        IRTerminator::Return { .. } | IRTerminator::Unreachable => vec![],
+        IRTerminator::Return { .. } | IRTerminator::TailCall { .. } | IRTerminator::Unreachable => {
+            vec![]
+        }
     }
 }
 

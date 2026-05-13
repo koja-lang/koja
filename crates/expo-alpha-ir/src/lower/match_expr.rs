@@ -40,7 +40,7 @@ use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
 use super::arms::lower_arm_into;
-use super::ctx::{FnLowerCtx, LowerOutput};
+use super::ctx::{FnLowerCtx, LowerOutput, SlotStateSnapshot};
 use super::expr::lower_expr;
 use super::patterns::{
     BindSource, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
@@ -72,6 +72,9 @@ pub(super) fn lower_match(
     let merge_block = ctx.fresh_block("match_merge");
     let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
 
+    let entry_snapshot = ctx.snapshot_slot_states();
+    let mut arm_post_states: Vec<SlotStateSnapshot> = Vec::with_capacity(arms.len());
+
     let mut current_test = block;
     let mut closed_chain = false;
     let mut trap_block: Option<IRBlockId> = None;
@@ -82,6 +85,14 @@ pub(super) fn lower_match(
         } else {
             body_block
         };
+        // Reset slot states to the construct-entry snapshot so the
+        // arm body lowers from the runtime-accurate baseline (every
+        // arm enters with the slot state that held before the
+        // match). Without this, a prior arm's per-write ownership
+        // stamp would bleed into this arm's reassignment-drop
+        // emission and synthesize a `DropLocal` against runtime
+        // values that the prior arm never produced.
+        ctx.restore_slot_states(entry_snapshot.clone());
         let inputs = PatternInputs {
             registry,
             subject: subject_value,
@@ -147,12 +158,25 @@ pub(super) fn lower_match(
             registry,
             output,
         )?;
+        arm_post_states.push(ctx.snapshot_slot_states());
         if let Some(next) = next_arm {
             current_test = next;
         }
         if closed_chain {
             break;
         }
+    }
+
+    // Join per-arm post-states into the merged post-match state.
+    // Slots that every reachable arm agrees on keep their stamp;
+    // disagreements fall back to `Unowned` (conservative — no
+    // function-exit drop for a slot whose runtime ownership is
+    // ambiguous). Empty `arm_post_states` falls back to the entry
+    // snapshot, preserving the pre-match slot states untouched.
+    if arm_post_states.is_empty() {
+        ctx.restore_slot_states(entry_snapshot);
+    } else {
+        ctx.merge_slot_states(arm_post_states);
     }
 
     Ok((result_id, merge_block))
@@ -218,6 +242,22 @@ fn emit_payload_binds(
                         field_index: *field_index,
                         field_type: bind.field_type.clone(),
                         struct_symbol: struct_symbol.clone(),
+                    },
+                );
+            }
+            BindSource::UnionPayload {
+                member_index,
+                member_type,
+                union_type,
+            } => {
+                ctx.cfg.append(
+                    body_block,
+                    IRInstruction::UnionPayloadGet {
+                        dest,
+                        member_index: *member_index,
+                        member_type: member_type.clone(),
+                        ty: union_type.clone(),
+                        value: subject,
                     },
                 );
             }

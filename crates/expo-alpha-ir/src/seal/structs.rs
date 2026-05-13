@@ -164,7 +164,10 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::MoveOutLocal { .. }
             | IRInstruction::Receive { .. }
             | IRInstruction::Spawn { .. }
-            | IRInstruction::UnaryOp { .. } => {}
+            | IRInstruction::UnaryOp { .. }
+            | IRInstruction::UnionPayloadGet { .. }
+            | IRInstruction::UnionTagGet { .. }
+            | IRInstruction::UnionWrap { .. } => {}
         }
     }
 }
@@ -306,6 +309,7 @@ mod tests {
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),
             structs,
+            unions: BTreeMap::new(),
         }
     }
 
@@ -349,6 +353,7 @@ mod tests {
             functions: BTreeMap::new(),
             package: "TestApp".to_string(),
             structs,
+            unions: BTreeMap::new(),
         };
         seal_struct_decls(&pkg);
     }

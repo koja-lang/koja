@@ -353,6 +353,19 @@ pub enum IRType {
     UInt16,
     UInt32,
     UInt64,
+    /// Tagged union of two or more member types. `mangled` is the
+    /// canonical symbol (`Union_<m1>_or_<m2>...`) shared across
+    /// every distinct surface union with the same canonical
+    /// member set, so backends key their cached layout off it.
+    /// `members` is the canonical (sorted) member type vector
+    /// inherited from the surface `ResolvedType::Union`. Backends
+    /// look up `mangled` in the program-level `UnionDecl` registry
+    /// to discover `max_payload_size` for the `{ i8, [N x i8] }`
+    /// LLVM struct layout.
+    Union {
+        mangled: IRSymbol,
+        members: Vec<IRType>,
+    },
     Unit,
 }
 

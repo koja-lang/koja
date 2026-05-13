@@ -1,97 +1,19 @@
-//! Temporary scaffolding for the alpha LLVM backend's auto-print
-//! `main` wrapper. [`expo_alpha_ir_llvm`]'s `Compiler::emit_as_main`
-//! ends every emitted `main` with a call to one of the printers below
-//! — picked by the body's [`expo_alpha_ir::IRType`] — followed by
-//! `ret i64 0`. That gives `expo alpha run --backend=llvm` the same
-//! observable behavior (`print value, exit 0`) as the eval
-//! interpreter while the language has no user-level prints.
+//! Runtime helpers for the alpha LLVM backend that don't have a
+//! natural home in `scheduler.rs` (concurrency) or `format.rs`
+//! (number → string rendering):
 //!
-//! Both printers format to match `expo_alpha_ir_eval::Value`'s
-//! `Display`: integers as decimal digits, bools as `true` / `false`,
-//! trailing `\n`.
-//!
-//! When `IO.puts` (or equivalent stdlib print primitive) lands:
-//!
-//! 1. Drop this module.
-//! 2. Drop the `mod alpha;` line in [`crate`]'s `lib.rs`.
-//! 3. Strip the wrapper from `Compiler::emit_as_main` so the body's
-//!    `IRTerminator::Return` flows directly to `main`'s `ret`.
+//! - [`__expo_alpha_print_string`] — the runtime body of the
+//!   [`Global.print`](../../expo-alpha-ir-llvm/src/intrinsics/print.rs)
+//!   intrinsic. Writes the bytes of an alpha-emitted heap string
+//!   followed by a newline.
+//! - [`__expo_alpha_panic`] — the runtime body of `Kernel.panic`.
+//!   Writes `panic: <message>\n` to stderr and aborts.
+//! - [`__expo_alpha_concat_bits`] / [`__expo_alpha_pack_bits`] —
+//!   helpers for the LLVM emitter's bit-packing paths; emitting
+//!   the sub-byte alignment logic is far cleaner in Rust than in
+//!   LLVM IR.
 
 use std::io::{self, Write};
-
-use crate::format::{expo_format_bool, expo_format_f32, expo_format_f64, expo_format_i64};
-
-/// Read the `i64 bit_length` header from `payload - 8` and return
-/// the rendered bytes. Shared by every wrapper that delegates to
-/// an `expo_format_*` helper.
-///
-/// # Safety
-///
-/// `payload` must point at the body of an alpha-emitted heap-string
-/// payload — i.e. the byte right after the `i64 bit_length` header.
-unsafe fn payload_bytes<'a>(payload: *const u8) -> &'a [u8] {
-    let header = unsafe { payload.offset(-8).cast::<i64>() };
-    let byte_length = (unsafe { *header } / 8) as usize;
-    unsafe { std::slice::from_raw_parts(payload, byte_length) }
-}
-
-/// Print the bytes of an Expo-format string `payload` followed by
-/// a newline. The wrappers below all compose `expo_format_*` →
-/// `print_payload_line` for byte-exact symmetry with the eval
-/// interpreter's `Value::Display` output.
-///
-/// # Safety
-///
-/// `payload` must point at an alpha heap-string body; see
-/// [`payload_bytes`].
-unsafe fn print_payload_line(payload: *const u8) {
-    let bytes = unsafe { payload_bytes(payload) };
-    let mut stdout = io::stdout().lock();
-    let _ = stdout.write_all(bytes);
-    let _ = stdout.write_all(b"\n");
-}
-
-/// Print an `Int`-flavored body value followed by a newline.
-/// Narrower widths are sign- or zero-extended to `i64` at the LLVM
-/// call site so this is the single integer ABI. Routes through
-/// [`expo_format_i64`] so `Debug.format` and the auto-print wrapper
-/// share one rendering path.
-///
-/// Leaks the formatted string — the wrapper is transitional
-/// (called once at the tail of `main`), and the process exit
-/// reclaims the heap.
-#[unsafe(no_mangle)]
-pub extern "C" fn __expo_alpha_print_i64(value: i64) {
-    let payload = expo_format_i64(value);
-    unsafe { print_payload_line(payload) };
-}
-
-/// Print a `Bool`-flavored body value followed by a newline. The
-/// LLVM lowering zext's the body's `i1` to `i64` before calling, so
-/// any non-zero argument prints `true`. Routes through
-/// [`expo_format_bool`] for the same single-source-of-truth reason
-/// as the integer wrapper.
-#[unsafe(no_mangle)]
-pub extern "C" fn __expo_alpha_print_bool(value: i64) {
-    let payload = expo_format_bool(value);
-    unsafe { print_payload_line(payload) };
-}
-
-/// Print a `Float32`-flavored body value followed by a newline.
-/// Routes through [`expo_format_f32`].
-#[unsafe(no_mangle)]
-pub extern "C" fn __expo_alpha_print_f32(value: f32) {
-    let payload = expo_format_f32(value);
-    unsafe { print_payload_line(payload) };
-}
-
-/// Print a `Float64`-flavored body value followed by a newline.
-/// Routes through [`expo_format_f64`].
-#[unsafe(no_mangle)]
-pub extern "C" fn __expo_alpha_print_f64(value: f64) {
-    let payload = expo_format_f64(value);
-    unsafe { print_payload_line(payload) };
-}
 
 /// Concatenate two `Bits` values produced by alpha LLVM. Reads
 /// `bit_length` from each operand's `payload - 8` header,
@@ -285,83 +207,4 @@ pub unsafe extern "C" fn __expo_alpha_print_string(payload: *const u8) {
     let mut stdout = io::stdout().lock();
     let _ = stdout.write_all(bytes);
     let _ = stdout.write_all(b"\n");
-}
-
-/// Print a `Binary`-flavored body value as `<<0x48, 0x65>>` followed
-/// by a newline. Reads the `i64` bit-length from the `payload-8`
-/// header and walks `bit_length / 8` bytes (the layout invariant
-/// guarantees byte alignment). Mirrors the eval interpreter's
-/// [`Value::Binary` Display impl](../../expo-alpha-ir-eval/src/value.rs)
-/// so eval and native produce byte-identical stdout.
-///
-/// # Safety
-///
-/// `payload` must point at the body of an alpha-emitted Binary heap
-/// block (i.e. the byte right after the `i64 bit_length` header).
-/// Calling with any other pointer is undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __expo_alpha_print_binary(payload: *const u8) {
-    let header = unsafe { payload.offset(-8).cast::<i64>() };
-    let bit_length = unsafe { *header } as u64;
-    let byte_length = (bit_length / 8) as usize;
-    let bytes = unsafe { std::slice::from_raw_parts(payload, byte_length) };
-    let mut stdout = io::stdout().lock();
-    let _ = stdout.write_all(b"<<");
-    for (index, byte) in bytes.iter().enumerate() {
-        if index > 0 {
-            let _ = stdout.write_all(b", ");
-        }
-        let _ = write!(stdout, "0x{byte:02X}");
-    }
-    let _ = stdout.write_all(b">>\n");
-}
-
-/// Print a `Bits`-flavored body value as `<<0x48, 0b101::3>>` (or the
-/// byte-aligned shape when `bit_length % 8 == 0`) followed by a
-/// newline. Reads the `i64` bit-length from the `payload-8` header,
-/// walks the full bytes, and renders any trailing partial byte as a
-/// width-suffixed binary literal. Mirrors the eval interpreter's
-/// [`Value::Bits` Display impl](../../expo-alpha-ir-eval/src/value.rs)
-/// so eval and native produce byte-identical stdout.
-///
-/// # Safety
-///
-/// `payload` must point at the body of an alpha-emitted Bits heap
-/// block (i.e. the byte right after the `i64 bit_length` header).
-/// Calling with any other pointer is undefined behavior.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __expo_alpha_print_bits(payload: *const u8) {
-    let header = unsafe { payload.offset(-8).cast::<i64>() };
-    let bit_length = unsafe { *header } as u64;
-    let total_bytes = bit_length.div_ceil(8) as usize;
-    let bytes = unsafe { std::slice::from_raw_parts(payload, total_bytes) };
-    let trailing_bits = (bit_length % 8) as u8;
-    let mut stdout = io::stdout().lock();
-    let _ = stdout.write_all(b"<<");
-    if trailing_bits == 0 {
-        for (index, byte) in bytes.iter().enumerate() {
-            if index > 0 {
-                let _ = stdout.write_all(b", ");
-            }
-            let _ = write!(stdout, "0x{byte:02X}");
-        }
-    } else {
-        let full_bytes = total_bytes.saturating_sub(1);
-        for (index, byte) in bytes.iter().take(full_bytes).enumerate() {
-            if index > 0 {
-                let _ = stdout.write_all(b", ");
-            }
-            let _ = write!(stdout, "0x{byte:02X}");
-        }
-        if full_bytes > 0 {
-            let _ = stdout.write_all(b", ");
-        }
-        let tail = bytes.last().copied().unwrap_or(0) >> (8 - trailing_bits);
-        let _ = write!(
-            stdout,
-            "0b{tail:0>width$b}::{trailing_bits}",
-            width = trailing_bits as usize,
-        );
-    }
-    let _ = stdout.write_all(b">>\n");
 }

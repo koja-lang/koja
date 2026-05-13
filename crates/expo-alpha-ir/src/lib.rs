@@ -47,7 +47,9 @@ mod program;
 mod script;
 mod seal;
 mod struct_decl;
+mod tail_calls;
 mod types;
+mod union_decl;
 
 pub use constant::IRConstantValue;
 pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
@@ -68,7 +70,9 @@ pub use package::IRPackage;
 pub use program::{IRProgram, lower_program};
 pub use script::{IRScript, lower_script};
 pub use struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
+pub use tail_calls::function_has_tail_call;
 pub use types::{
     BinaryEndian, BinarySign, ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp,
     LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
 };
+pub use union_decl::{IRUnionDecl, size_in_bytes};
