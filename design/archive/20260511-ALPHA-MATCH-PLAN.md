@@ -3,7 +3,7 @@
 Design + sequencing for `match` in the alpha pipeline.
 
 `match` is the highest-priority stdlib blocker per
-[ALPHA-ROADMAP.md](ALPHA-ROADMAP.md): every `Option`/`Result`-flavored stdlib
+[20260511-ALPHA-ROADMAP.md](20260511-ALPHA-ROADMAP.md): every `Option`/`Result`-flavored stdlib
 file (`kernel.expo`, `process.expo`, `list.expo`, `io.expo`, `fd.expo`,
 `string.expo`) reaches for it. The good news is that **the AST is already
 fully fleshed out** (`Pattern` enum, `MatchArm`, `ExprKind::Match`,
@@ -287,8 +287,9 @@ construct) — exactly the same ergonomics LANGUAGE.md describes.
 
 v1 carries a `Direct` vs `UnionWrap` strategy on the resolved match type
 to handle heterogeneous arms wrapped in the surrounding fn's union return.
-Alpha doesn't have unions yet (per ALPHA-ROADMAP.md they come with
-binary/concat/string-builder support), so `UnionWrap` is dead surface
+Alpha doesn't have unions yet (per V1-PARITY.md they're sequenced after
+field assignment, dotted type names, string interpolation, and `loop`),
+so `UnionWrap` is dead surface
 today. Implement only `Direct` — the same model `if`/`else`'s
 `join_two_arms` already uses. Add `UnionWrap` when union types arrive.
 
@@ -468,7 +469,7 @@ After this phase, `Option`/`Result`/`Step`/`StopReason`/`Lifecycle` matches
 all execute end-to-end through both backends; the remaining gaps in the
 stdlib are unrelated alpha typecheck work (function-typed annotations,
 type-arg inference from payload patterns, multi-file imports — see
-ALPHA-ROADMAP.md).
+20260511-ALPHA-ROADMAP.md).
 
 ### Phase 3 — Guards ✓
 

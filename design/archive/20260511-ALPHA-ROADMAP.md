@@ -207,7 +207,7 @@ tests in`crates/expo-driver/tests/alpha_two_plus_two.rs`.
   `crates/expo-alpha-ir-eval/tests/interpreter.rs`,
   `crates/expo-alpha-ir-llvm/tests/control_flow.rs`. **Out**:
   `Pattern::Binary` (gated on binary literals; tracked as Phase 7
-  of [ALPHA-MATCH-PLAN.md](ALPHA-MATCH-PLAN.md)).
+  of [20260511-ALPHA-MATCH-PLAN.md](20260511-ALPHA-MATCH-PLAN.md)).
 
 - **`String` / `Binary` / `Bits` — full surface, end-to-end.**
   String literals lower to `[i64 bit_length][payload bytes][\0]`
@@ -241,7 +241,7 @@ bit_length][payload]` layout (no NUL, ceil-rounded bytes for
   conversion methods (`String.to_binary`, `Binary.to_string`,
   `Bits.to_binary`, `String.to_cstring`, `CPtr.to_binary`),
   `Equality` / `Hash` on `Binary` / `Bits`, `Pattern::Binary` in
-  `match` (Phase 7 of [ALPHA-MATCH-PLAN.md](ALPHA-MATCH-PLAN.md),
+  `match` (Phase 7 of [20260511-ALPHA-MATCH-PLAN.md](20260511-ALPHA-MATCH-PLAN.md),
   unblocked by this slice), `<<x::n>>` with runtime-int widths,
   and `Debug.format` rendering (gated on `Debug` protocol synthesis,
   not on the alpha critical path).

@@ -55,7 +55,7 @@ pub(super) fn binary_type(
             // sides must agree on `Int` or `Float`. Cross-numeric
             // mixing (`1 + 1.0`) and sized-numeric arithmetic
             // (`Int8 + Int8`) are deferred per `LANGUAGE.md` /
-            // `ALPHA-ROADMAP.md`. The alias rule still applies, so
+            // `V1-PARITY.md`. The alias rule still applies, so
             // `Int + Int64` is valid and produces `Int` — same
             // predicate that will accept `Int8 + Int8` once `Int`
             // becomes a real union over its sized variants.
@@ -221,7 +221,7 @@ fn both(lhs: &ResolvedType, rhs: &ResolvedType, registry: &GlobalRegistry, name:
 /// members of `Int` / `Float` today, so they flow through
 /// [`numeric_comparison_compatible`] at comparison sites via the
 /// literal-coercion path. Arithmetic against them is deferred per
-/// `ALPHA-ROADMAP.md`.
+/// `V1-PARITY.md`.
 fn both_aliased(
     lhs: &ResolvedType,
     rhs: &ResolvedType,
