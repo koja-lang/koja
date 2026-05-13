@@ -9,8 +9,8 @@ use std::collections::BTreeMap;
 use expo_alpha_ir::{
     BinaryEndian, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
     IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId,
-    IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRVariantPayload, IRVariantTag,
-    LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
+    IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
+    IRVariantTag, LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
 };
 
 use crate::error::RuntimeError;
@@ -30,18 +30,25 @@ impl Interpreter {
 
     /// Execute the script-mode implicit body and return its trailing
     /// value. Borrows `script` so the caller can dispatch follow-up
-    /// helper calls (e.g. [`Self::format_via_debug`] for inspect-style
-    /// auto-print) without re-lowering.
+    /// helper calls (e.g. [`Self::format_via_debug`] for the REPL's
+    /// inspect-style print) without re-lowering.
     pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
         let mut frame = Frame::new();
-        execute_blocks(&script.blocks, &mut frame, script)
+        match execute_blocks(&script.blocks, &mut frame, script)? {
+            BlockOutcome::Done(value) => Ok(value),
+            BlockOutcome::TailRestart(_) => panic!(
+                "interpreter: script body produced a `TailCall` terminator — \
+                 tail-call rewrite never targets the implicit script body",
+            ),
+        }
     }
 
-    /// Dispatch the `Debug.format` instance for `value` against the
-    /// auto-print path, returning the rendered UTF-8 bytes. Mirrors
-    /// the symbol the alpha IR lower pass would emit for
-    /// `value.format()`, so the caller's output matches what a
-    /// user-side `IO.puts(value.format())` would produce.
+    /// Dispatch the `Debug.format` instance for `value`, returning
+    /// the rendered UTF-8 bytes. Mirrors the symbol the alpha IR
+    /// lower pass would emit for `value.format()`, so the caller's
+    /// output matches what a user-side `IO.puts(value.format())`
+    /// would produce. Today's only caller is
+    /// [`expo_alpha_shell`]'s REPL inspect line.
     ///
     /// Drives off the runtime [`Value`] shape rather than the
     /// caller's static IR type, because the script's
@@ -53,15 +60,14 @@ impl Interpreter {
     /// resolves this static / dynamic mismatch.
     ///
     /// Returns `None` for shapes where the runtime [`Display`] of
-    /// [`Value`] already matches the LLVM auto-print contract —
-    /// primitive scalars and the first-class container shapes
-    /// ([`Value::List`] / [`Value::Map`] / [`Value::Set`]) whose
-    /// `Display` recurses through nested values' own `Display`. For
-    /// the container shapes specifically, this means a
-    /// `List<Result<Int, String>>` falls back to the runtime
-    /// `Display`'s `[Global.Result_$..$.Ok(1)]` rendering — improving
-    /// that requires plumbing the element type through to the
-    /// auto-print site, a follow-up.
+    /// [`Value`] is the right rendering — primitive scalars and the
+    /// first-class container shapes ([`Value::List`] / [`Value::Map`]
+    /// / [`Value::Set`]) whose `Display` recurses through nested
+    /// values' own `Display`. For the container shapes specifically,
+    /// this means a `List<Result<Int, String>>` falls back to the
+    /// runtime `Display`'s `[Global.Result_$..$.Ok(1)]` rendering —
+    /// improving that requires plumbing the element type through to
+    /// the caller's render site, a follow-up.
     pub fn format_via_debug(
         script: &IRScript,
         value: Value,
@@ -82,6 +88,7 @@ impl Interpreter {
             | Value::Map(_)
             | Value::Set(_)
             | Value::String(_)
+            | Value::Union { .. }
             | Value::Unit => return Ok(None),
         };
         let function =
@@ -89,7 +96,7 @@ impl Interpreter {
                 .function(symbol.mangled())
                 .ok_or_else(|| RuntimeError::TypeMismatch {
                     detail: format!(
-                        "auto-print: `Debug.format` instance `{}` is not in the IR \
+                        "format_via_debug: `Debug.format` instance `{}` is not in the IR \
                          — the script's monomorphizer did not specialize it",
                         symbol.mangled(),
                     ),
@@ -99,8 +106,8 @@ impl Interpreter {
             Value::String(bytes) => Ok(Some(bytes)),
             other => Err(RuntimeError::TypeMismatch {
                 detail: format!(
-                    "auto-print: `{}` returned non-String value `{other}` — Debug.format \
-                     contract violation",
+                    "format_via_debug: `{}` returned non-String value `{other}` — \
+                     Debug.format contract violation",
                     symbol.mangled(),
                 ),
             }),
@@ -183,15 +190,33 @@ impl CallResolver for IRScript {
     }
 }
 
+/// Outcome of one pass through a function body. `Done` carries the
+/// `Return`'s value; `TailRestart` carries the new positional args
+/// for the surrounding [`execute_function`] trampoline to rebind
+/// before re-walking the body. Surfacing tail restarts as a
+/// distinct [`Result::Ok`] payload (rather than a special
+/// [`RuntimeError`]) keeps the control-flow signal off the error
+/// channel and out of any `?` propagation site.
+enum BlockOutcome {
+    Done(Value),
+    TailRestart(Vec<Value>),
+}
+
 /// Run `function` in a fresh frame with `args` positionally bound to
 /// its param `ValueId`s. Param promotion (entry-block `LocalDecl` +
 /// `LocalWrite`) means the body reads from the slot, not the raw
 /// param id; seeding `frame.values` keeps the promotion's
 /// `LocalWrite { value: param.id }` resolvable. `@intrinsic`-tagged
 /// functions route to [`crate::intrinsics`].
+///
+/// Wraps the body walk in a tail-call trampoline: an
+/// [`IRTerminator::TailCall`] surfaces from `execute_blocks` as
+/// `BlockOutcome::TailRestart(new_args)`, which we re-seed the
+/// frame with and re-enter the same body, keeping host-stack
+/// usage flat across any number of recursive tail calls.
 fn execute_function<R: CallResolver>(
     function: &IRFunction,
-    args: Vec<Value>,
+    mut args: Vec<Value>,
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     debug_assert_eq!(
@@ -234,12 +259,18 @@ fn execute_function<R: CallResolver>(
         }
         FunctionKind::Regular => {}
     }
-    let mut frame = Frame::new();
-    for (param, value) in function.params.iter().zip(args.into_iter()) {
-        frame.values.insert(param.id, value);
+    loop {
+        let mut frame = Frame::new();
+        for (param, value) in function.params.iter().zip(args.into_iter()) {
+            frame.values.insert(param.id, value);
+        }
+        match execute_blocks(&function.blocks, &mut frame, resolver)? {
+            BlockOutcome::Done(value) => return Ok(value),
+            BlockOutcome::TailRestart(new_args) => {
+                args = new_args;
+            }
+        }
     }
-
-    execute_blocks(&function.blocks, &mut frame, resolver)
 }
 
 /// Dispatch a [`FunctionKind::Closure`] body with its captured
@@ -280,7 +311,14 @@ fn execute_closure_function<R: CallResolver>(
     for (param, value) in function.params.iter().zip(args.into_iter()) {
         frame.values.insert(param.id, value);
     }
-    execute_blocks(&function.blocks, &mut frame, resolver)
+    match execute_blocks(&function.blocks, &mut frame, resolver)? {
+        BlockOutcome::Done(value) => Ok(value),
+        BlockOutcome::TailRestart(_) => panic!(
+            "interpreter: closure body `{}` produced a `TailCall` terminator — \
+             tail-call rewrite is not enabled for closures yet",
+            function.symbol,
+        ),
+    }
 }
 
 /// Drive a function body starting at `blocks[0]` until a `Return`
@@ -296,7 +334,7 @@ fn execute_blocks<R: CallResolver>(
     blocks: &[IRBasicBlock],
     frame: &mut Frame,
     resolver: &R,
-) -> Result<Value, RuntimeError> {
+) -> Result<BlockOutcome, RuntimeError> {
     let mut current = blocks
         .first()
         .expect("sealed function has at least one basic block")
@@ -326,8 +364,17 @@ fn execute_blocks<R: CallResolver>(
                 bind_block_params(chosen, blocks, &mut frame.values)?;
                 current = chosen.block;
             }
-            IRTerminator::Return { value: None } => return Ok(Value::Unit),
-            IRTerminator::Return { value: Some(id) } => return lookup(&frame.values, *id),
+            IRTerminator::Return { value: None } => return Ok(BlockOutcome::Done(Value::Unit)),
+            IRTerminator::Return { value: Some(id) } => {
+                return lookup(&frame.values, *id).map(BlockOutcome::Done);
+            }
+            IRTerminator::TailCall { args, .. } => {
+                let mut arg_values = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_values.push(lookup(&frame.values, *arg)?);
+                }
+                return Ok(BlockOutcome::TailRestart(arg_values));
+            }
             IRTerminator::Unreachable => return Err(RuntimeError::UnreachableExecuted),
         }
     }
@@ -701,6 +748,67 @@ fn execute_instruction<R: CallResolver>(
                  lives in the LLVM runtime"
                 .to_string(),
         }),
+        IRInstruction::UnionWrap {
+            dest,
+            member_index,
+            member_type: _,
+            ty,
+            value,
+        } => {
+            let payload = lookup(&frame.values, *value)?;
+            let IRType::Union { mangled, .. } = ty else {
+                panic!(
+                    "interpreter: UnionWrap target IRType is not Union (got `{ty:?}`) — \
+                     IR seal invariant violation",
+                );
+            };
+            frame.values.insert(
+                *dest,
+                Value::Union {
+                    payload: Box::new(payload),
+                    symbol: mangled.clone(),
+                    tag: *member_index,
+                },
+            );
+            Ok(())
+        }
+        IRInstruction::UnionTagGet { dest, ty: _, value } => {
+            let base = lookup(&frame.values, *value)?;
+            let Value::Union { tag, .. } = base else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("UnionTagGet expects a Union receiver; got {base}"),
+                });
+            };
+            frame.values.insert(*dest, Value::Int(i64::from(tag)));
+            Ok(())
+        }
+        IRInstruction::UnionPayloadGet {
+            dest,
+            member_index,
+            member_type: _,
+            ty: _,
+            value,
+        } => {
+            let base = lookup(&frame.values, *value)?;
+            let Value::Union {
+                payload,
+                tag: actual_tag,
+                ..
+            } = base
+            else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("UnionPayloadGet expects a Union receiver; got {base}"),
+                });
+            };
+            if actual_tag != *member_index {
+                panic!(
+                    "interpreter: UnionPayloadGet expected member-index {member_index} but value \
+                     carries tag {actual_tag} — match driver should have gated on a tag check first",
+                );
+            }
+            frame.values.insert(*dest, *payload);
+            Ok(())
+        }
     }
 }
 

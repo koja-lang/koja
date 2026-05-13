@@ -194,12 +194,14 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     }
 
     let link_libraries = collect_link_libraries(packages.iter());
-    let script = IRScript {
+    let mut script = IRScript {
         blocks,
         link_libraries,
         packages,
         return_type,
     };
+    crate::union_decl::discover_unions(&mut script.packages);
+    crate::tail_calls::rewrite_tail_calls(&mut script.packages);
     seal::seal_script(&script);
     Ok(script)
 }

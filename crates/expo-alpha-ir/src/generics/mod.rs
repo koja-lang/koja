@@ -252,6 +252,12 @@ pub(crate) fn substitute_resolved_type(
                 ret: Box::new(substitute_resolved_type(ret, args, owner)),
             })
         }
+        ResolvedType::Union(members) => ResolvedType::Union(
+            members
+                .iter()
+                .map(|m| substitute_resolved_type(m, args, owner))
+                .collect(),
+        ),
         ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
 }

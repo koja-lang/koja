@@ -30,6 +30,7 @@ mod functions;
 mod impls;
 mod protocols;
 mod structs;
+mod type_aliases;
 mod types;
 
 pub(crate) use types::{ResolutionScope, TypeParamScope, impl_target_name, resolve_type_expr};
@@ -136,6 +137,12 @@ pub(crate) fn lift_signatures(
     // file's bounds resolve against its own aliases so an aliased
     // protocol name can be used as a bound (`<T: AliasedProtocol>`).
     resolve_all_bounds(packages, registry, diagnostics);
+    // Pass 1b': type aliases. Resolves each `type X = ...` RHS and
+    // stamps the canonical `ResolvedType` onto the alias entry so
+    // struct / enum / function signatures in pass 1c can reference
+    // aliases by name. Cycle detection runs as a follow-up sweep
+    // inside `lift_type_aliases`.
+    type_aliases::lift_type_aliases(packages, registry, diagnostics);
     // Pass 1c: structs, enums, top-level functions. Order doesn't
     // matter inside this pass — every signature resolution either
     // hits a protocol (already lifted) or another struct/enum

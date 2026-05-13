@@ -15,7 +15,7 @@ use super::super::expr::resolve_expr;
 use super::super::inference::{
     PhantomContext, fill_from_expected, finalize_inference, unify_pairs,
 };
-use super::super::types::lookup_type;
+use super::super::types::{display_resolution, lookup_type, peel_alias};
 use super::emit_conflict;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
@@ -127,6 +127,17 @@ pub(super) fn classify_receiver(
     resolve_expr(receiver, resolver, diagnostics);
     if !receiver.resolution.is_resolved() {
         // Receiver already triggered its own diagnostic.
+        return None;
+    }
+    if let ResolvedType::Union(_) = peel_alias(&receiver.resolution, resolver.registry) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot call method on union type `{}`; \
+                 match the union first to bind a specific variant",
+                display_resolution(&receiver.resolution, resolver.registry),
+            ),
+            receiver.span,
+        ));
         return None;
     }
     match &receiver.resolution {

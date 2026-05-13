@@ -8,18 +8,18 @@
 //! type predicates.
 
 use expo_ast::ast::{Diagnostic, Expr, FieldInit};
-use expo_ast::coercion::LiteralCoercion;
+use expo_ast::coercion::{Coercion, LiteralCoercion};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
 
-use super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, finalize_inference, unify_pairs};
-use super::types::{display_resolution, lookup_type};
+use super::types::{display_resolution, lookup_type, peel_alias};
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init
@@ -233,6 +233,9 @@ pub(super) fn validate_named_fields(
                 *coercion_target_mut(&mut field.value) =
                     Some(LiteralCoercion::NumericLiteralWidth(width));
             }
+            Compatible::UnionWiden { target } => {
+                *coercion_annotation_mut(&mut field.value) = Some(Coercion::UnionWiden(target));
+            }
             Compatible::OutOfRange {
                 rendered_value,
                 width,
@@ -294,6 +297,17 @@ pub(super) fn resolve_field_access(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(receiver, resolver, diagnostics);
+    if let ResolvedType::Union(_) = peel_alias(&receiver.resolution, resolver.registry) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "cannot access field `{field}` on union type `{}`; \
+                 match the union first to bind a specific variant",
+                display_resolution(&receiver.resolution, resolver.registry),
+            ),
+            span,
+        ));
+        return ResolvedType::unresolved();
+    }
     let ResolvedType::Named {
         resolution: Resolution::Global(struct_id),
         type_args: receiver_args,

@@ -47,9 +47,8 @@ pub enum IRIntrinsicId {
     Map(MapMethod),
     Parse(ParseTarget),
     /// Transitional. The script-mode test fixture's `@intrinsic fn
-    /// print(s: String)` plus the project-mode auto-print of
-    /// `main`'s tail value. Goes away when the `Debug` protocol
-    /// displaces both.
+    /// print(s: String)`. Goes away when the `Debug` protocol
+    /// displaces it.
     Print,
     /// `@intrinsic` methods on `Ref<M, R>` from
     /// [`expo/lib/global/src/process.expo`]. The `M` / `R` type

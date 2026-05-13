@@ -13,12 +13,14 @@
 use expo_ast::ast::{
     Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, StringPart, UnaryOp,
 };
-use expo_ast::coercion::LiteralCoercion;
+use expo_ast::coercion::{Coercion, LiteralCoercion};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
-use crate::pipeline::resolve::coercion::{Compatible, check_compatible, coercion_target_mut};
+use crate::pipeline::resolve::coercion::{
+    Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut,
+};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -132,6 +134,9 @@ fn resolve_constant_value(
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
                 *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
+            }
+            Compatible::UnionWiden { target } => {
+                *coercion_annotation_mut(expr) = Some(Coercion::UnionWiden(target));
             }
             Compatible::OutOfRange {
                 rendered_value,
@@ -348,7 +353,7 @@ fn lookup_constant_type_identifier(
 
 fn render_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
     match ty {
-        ResolvedType::Anonymous(_) => render_resolved(ty, registry),
+        ResolvedType::Anonymous(_) | ResolvedType::Union(_) => render_resolved(ty, registry),
         ResolvedType::Named {
             resolution: Resolution::Global(id),
             ..

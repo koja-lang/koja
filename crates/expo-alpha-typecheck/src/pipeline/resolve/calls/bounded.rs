@@ -11,13 +11,15 @@
 //! lookup picks up the impl method.
 
 use expo_ast::ast::{Arg, Diagnostic, Expr};
-use expo_ast::coercion::LiteralCoercion;
+use expo_ast::coercion::{Coercion, LiteralCoercion};
 use expo_ast::identifier::{GlobalRegistryId, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
 
-use super::super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::super::coercion::{
+    Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut,
+};
 use super::super::ctx::Resolver;
 use super::super::types::display_resolution;
 
@@ -231,6 +233,9 @@ fn validate_bounded_args(
             Compatible::Coerced(width) => {
                 *coercion_target_mut(&mut arg.value) =
                     Some(LiteralCoercion::NumericLiteralWidth(width));
+            }
+            Compatible::UnionWiden { target } => {
+                *coercion_annotation_mut(&mut arg.value) = Some(Coercion::UnionWiden(target));
             }
             Compatible::OutOfRange {
                 rendered_value,

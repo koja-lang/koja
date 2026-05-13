@@ -155,7 +155,10 @@ fn check_target_exists(
         return false;
     };
     match entry.kind {
-        GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_) => true,
+        GlobalKind::Enum(_)
+        | GlobalKind::Protocol(_)
+        | GlobalKind::Struct(_)
+        | GlobalKind::TypeAlias(_) => true,
         GlobalKind::Constant(_) | GlobalKind::Function(_) => {
             diagnostics.push(Diagnostic::error(
                 format!(

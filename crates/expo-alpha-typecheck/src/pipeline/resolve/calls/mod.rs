@@ -24,7 +24,7 @@ mod bounded;
 mod methods;
 
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
-use expo_ast::coercion::LiteralCoercion;
+use expo_ast::coercion::{Coercion, LiteralCoercion};
 use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
@@ -43,7 +43,7 @@ use crate::registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -763,6 +763,9 @@ fn validate_arg_signature(
                 *coercion_target_mut(&mut arg.value) =
                     Some(LiteralCoercion::NumericLiteralWidth(width));
             }
+            Compatible::UnionWiden { target } => {
+                *coercion_annotation_mut(&mut arg.value) = Some(Coercion::UnionWiden(target));
+            }
             Compatible::OutOfRange {
                 rendered_value,
                 width,
@@ -892,6 +895,9 @@ fn validate_local_call_signature(
             Compatible::Coerced(width) => {
                 *coercion_target_mut(&mut arg.value) =
                     Some(LiteralCoercion::NumericLiteralWidth(width));
+            }
+            Compatible::UnionWiden { target } => {
+                *coercion_annotation_mut(&mut arg.value) = Some(Coercion::UnionWiden(target));
             }
             Compatible::OutOfRange {
                 rendered_value,

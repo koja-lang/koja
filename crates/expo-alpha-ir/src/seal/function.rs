@@ -106,6 +106,41 @@ fn seal_function(function: &IRFunction) {
     }
     seal_ssa(&function.blocks, &owner, &parameter_value_ids);
     seal_locals(function, &owner);
+    seal_tail_calls(function, &owner);
+}
+
+/// Validate every [`IRTerminator::TailCall`] in `function` against
+/// the self-recursion contract: callee must equal the enclosing
+/// function's symbol, and arg arity must match `function.params`.
+/// Per-arg type matching against the param's type requires a global
+/// value-type index this seal walk doesn't build (mirrors the
+/// branch-arg arity-only check in [`require_branch_target_arity`]);
+/// LLVM emission catches arg-type drift via inkwell's `build_store`
+/// type check.
+fn seal_tail_calls(function: &IRFunction, owner: &str) {
+    let expected_arity = function.params.len();
+    for block in &function.blocks {
+        let IRTerminator::TailCall { args, callee } = &block.terminator else {
+            continue;
+        };
+        if callee != &function.symbol {
+            seal_panic(&format!(
+                "{owner} block {} has TailCall to `{callee}` but the enclosing function is \
+                 `{}` — cross-function tail calls are not admitted yet",
+                block.id, function.symbol,
+            ));
+        }
+        if args.len() != expected_arity {
+            seal_panic(&format!(
+                "{owner} block {} TailCall passes {} arg{} but the function declares {} param{}",
+                block.id,
+                args.len(),
+                if args.len() == 1 { "" } else { "s" },
+                expected_arity,
+                if expected_arity == 1 { "" } else { "s" },
+            ));
+        }
+    }
 }
 
 /// Per-function index of every block's [`crate::function::BlockParam`]
@@ -338,7 +373,8 @@ fn seal_branch_target_arities(
             require_branch_target_arity(then_target, pred, owner, block_params);
             require_branch_target_arity(else_target, pred, owner, block_params);
         }
-        IRTerminator::Return { .. } | IRTerminator::Unreachable => {}
+        IRTerminator::Return { .. } | IRTerminator::TailCall { .. } | IRTerminator::Unreachable => {
+        }
     }
 }
 

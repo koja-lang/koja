@@ -85,14 +85,9 @@ fn field_get_lowers_to_gep_then_load() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     // FieldGet always projects through alloca → store-receiver →
-    // GEP → load (mirroring v1 codegen's `emit_field_load`). The
-    // load result is passed to the auto-print runtime by register,
-    // so we don't pin the literal `5` at the print call site —
-    // that would over-constrain the assertion to a particular SSA
-    // numbering inkwell happens to assign today.
+    // GEP → load (mirroring v1 codegen's `emit_field_load`).
     assert_contains(&ir_text, "getelementptr inbounds %TestApp.Point");
     assert_contains(&ir_text, "load i64");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64");
 }
 
 #[test]
@@ -116,7 +111,6 @@ fn struct_with_mixed_field_types_emits_each_llvm_type() {
     assert_contains(&ir_text, "%TestApp.Profile = type { i64, i1 }");
     assert_contains(&ir_text, "store i64 30");
     assert_contains(&ir_text, "store i1 true");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64");
 }
 
 #[test]
@@ -147,7 +141,6 @@ fn nested_struct_emits_inner_type_inside_outer_field_layout() {
     // resolves the inner type by symbol when sizing Outer's field
     // list.
     assert_contains(&ir_text, "store %TestApp.Inner");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64");
 }
 
 // ---------------------------------------------------------------------------

@@ -34,7 +34,6 @@ fn local_decl_emits_alloca_store_load_for_i64_slot() {
     assert_contains(&ir_text, "alloca i64");
     assert_contains(&ir_text, "store i64 7");
     assert_contains(&ir_text, "load i64");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 ");
 }
 
 #[test]
@@ -51,15 +50,15 @@ fn reassignment_emits_a_second_store_into_the_same_slot() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    let main_body = extract_function_body(&ir_text, "main");
-    let alloca_count = main_body.matches("alloca i64").count();
+    let user_main = extract_function_body(&ir_text, "__expo_user_main");
+    let alloca_count = user_main.matches("alloca i64").count();
     assert_eq!(
         alloca_count, 1,
         "expected exactly one alloca for the slot — reassignment reuses it.\n\
-         main body:\n{main_body}\n\nfull IR:\n{ir_text}",
+         user_main body:\n{user_main}\n\nfull IR:\n{ir_text}",
     );
-    assert_contains(main_body, "store i64 1");
-    assert_contains(main_body, "store i64 9");
+    assert_contains(user_main, "store i64 1");
+    assert_contains(user_main, "store i64 9");
 }
 
 #[test]
@@ -113,13 +112,13 @@ fn local_inside_if_arm_still_uses_a_single_alloca() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    let main_body = extract_function_body(&ir_text, "main");
-    let alloca_count = main_body.matches("alloca i64").count();
+    let user_main = extract_function_body(&ir_text, "__expo_user_main");
+    let alloca_count = user_main.matches("alloca i64").count();
     assert_eq!(
         alloca_count, 1,
         "expected exactly one alloca even with an if-arm reassignment.\n\
-         main body:\n{main_body}\n\nfull IR:\n{ir_text}",
+         user_main body:\n{user_main}\n\nfull IR:\n{ir_text}",
     );
-    assert_contains(main_body, "store i64 0");
-    assert_contains(main_body, "store i64 1");
+    assert_contains(user_main, "store i64 0");
+    assert_contains(user_main, "store i64 1");
 }

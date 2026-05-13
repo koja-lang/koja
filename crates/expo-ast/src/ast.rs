@@ -8,7 +8,7 @@
 
 use std::path::PathBuf;
 
-use crate::coercion::LiteralCoercion;
+use crate::coercion::{Coercion, LiteralCoercion};
 use crate::identifier::{LocalId, Resolution, ResolvedType, TypeIdentifier};
 use crate::span::Span;
 use crate::types::Type;
@@ -698,6 +698,16 @@ pub struct Expr {
     /// full design rationale (annotation vs value-conversion
     /// families).
     pub literal_coercion: Option<LiteralCoercion>,
+    /// Per-expression value-conversion coercion. Stamped by alpha
+    /// typecheck when the expression's value needs runtime work to
+    /// flow into its consumer (member→union widening today; future
+    /// fn-as-closure, generic phi widening, etc.). Each
+    /// [`Coercion`] variant pairs 1:1 with an `IRInstruction::*`
+    /// variant the lowerer emits at this exact site. Lives
+    /// alongside `literal_coercion` as a parallel coercion family
+    /// — see [`crate::coercion`]'s module doc for the full
+    /// rationale.
+    pub coercion: Option<Coercion>,
     /// Northstar-aligned type annotation. Default is
     /// [`ResolvedType::unresolved`]; alpha resolve populates it with
     /// a registry-pointing shape, and seal asserts
@@ -717,6 +727,7 @@ impl Expr {
         Self {
             kind,
             literal_coercion: None,
+            coercion: None,
             resolution: ResolvedType::unresolved(),
             resolved_type: None,
             span,

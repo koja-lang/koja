@@ -11,16 +11,19 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRType};
+use expo_alpha_ir::{
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRType,
+    function_has_tail_call,
+};
 use inkwell::AddressSpace;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 
-use crate::ctx::{ClosureFrame, EmitContext};
+use crate::ctx::{ClosureFrame, EmitContext, TcoFrame};
 use crate::emit::process::emit_spawn_wrapper_body;
-use crate::emit::{self, BlockMap, ValueMap};
+use crate::emit::{self, BlockMap, ValueMap, inkwell_err};
 use crate::error::LlvmError;
 use crate::intrinsics;
 use crate::types::{closure_body_signature, env_struct_type, ir_basic_type};
@@ -157,6 +160,19 @@ pub(crate) fn define_function<'ctx>(
         });
     }
     ctx.set_block_map(block_map.clone());
+    let tco_active = function_has_tail_call(function);
+    if tco_active {
+        let loop_block = ctx.context.append_basic_block(llvm_function, "tco_loop");
+        let param_slots = function
+            .params
+            .iter()
+            .map(|p| (p.local_id, p.ty.clone()))
+            .collect();
+        ctx.set_tco_frame(TcoFrame {
+            loop_block,
+            param_slots,
+        });
+    }
     // Blocks unreachable from the entry block (e.g. the merge of a
     // value-producing `if`/`else` whose arms both diverge) get
     // `unreachable` instead of their natural terminator. The
@@ -171,15 +187,106 @@ pub(crate) fn define_function<'ctx>(
             }
             let llvm_block = block_map[&block.id];
             ctx.builder.position_at_end(llvm_block);
-            emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
+            if tco_active && block.id == function.blocks[0].id {
+                emit_entry_with_tco_split(ctx, function, block, &block_map, &phi_map, &mut values)?;
+            } else {
+                emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
+            }
         }
         Ok(())
     })();
     if env_layout.is_some() {
         ctx.clear_closure_frame();
     }
+    if tco_active {
+        ctx.clear_tco_frame();
+    }
     ctx.clear_block_map();
     result
+}
+
+/// Emit the IR entry block with a tail-call-optimization split.
+/// Param promotion (the leading `LocalDecl` + `LocalWrite` per
+/// parameter, in order) stays in the LLVM entry block so each
+/// function entry runs the param-init exactly once. Then the
+/// builder branches to the per-function `tco_loop` header, the
+/// rest of the IR entry's instructions emit into that header, and
+/// the natural terminator caps it. Subsequent
+/// [`IRTerminator::TailCall`] terminators in any block then store
+/// fresh args into the matching param slots and branch back to
+/// the same `tco_loop` header — a constant-stack iteration.
+///
+/// Param-promotion length is exactly `2 * function.params.len()`
+/// instructions; lower always emits each param's
+/// [`IRInstruction::LocalDecl`] + [`IRInstruction::LocalWrite`]
+/// pair before any body work. A mismatch would indicate a lower
+/// invariant break and panics with a clear message.
+fn emit_entry_with_tco_split<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    block: &IRBasicBlock,
+    block_map: &BlockMap<'ctx>,
+    phi_map: &emit::PhiMap<'ctx>,
+    values: &mut ValueMap<'ctx>,
+) -> Result<(), LlvmError> {
+    let promotion_len = 2 * function.params.len();
+    if block.instructions.len() < promotion_len {
+        panic!(
+            "alpha LLVM emit: TCO entry block on `{}` is shorter ({}) than the expected \
+             promotion sequence ({}) — lower invariant violation",
+            function.symbol,
+            block.instructions.len(),
+            promotion_len,
+        );
+    }
+    debug_assert_promotion_shape(&block.instructions[..promotion_len], function);
+    for instruction in &block.instructions[..promotion_len] {
+        emit::emit_instruction_external(ctx, instruction, values)?;
+    }
+    let frame = ctx.tco_frame().expect("TCO frame must be staged");
+    ctx.builder
+        .build_unconditional_branch(frame.loop_block)
+        .map_err(|e| inkwell_err("TCO entry branch to tco_loop", e))?;
+    ctx.builder.position_at_end(frame.loop_block);
+    for instruction in &block.instructions[promotion_len..] {
+        emit::emit_instruction_external(ctx, instruction, values)?;
+    }
+    if let Some(insert_block) = ctx.builder.get_insert_block()
+        && insert_block.get_terminator().is_some()
+    {
+        return Ok(());
+    }
+    emit::emit_terminator_default(ctx, block.id, &block.terminator, values, block_map, phi_map)
+}
+
+/// Sanity-check that the leading `2 * params.len()` instructions
+/// of the entry block are the canonical `LocalDecl` + `LocalWrite`
+/// pairs lower emits during parameter promotion. The check is
+/// `debug_assert!`-style: a violation here indicates a lower
+/// invariant break that would otherwise corrupt the back-edge
+/// slot writes.
+fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction) {
+    debug_assert_eq!(prefix.len(), 2 * function.params.len());
+    for (index, param) in function.params.iter().enumerate() {
+        match (&prefix[index * 2], &prefix[index * 2 + 1]) {
+            (
+                IRInstruction::LocalDecl { local: decl, .. },
+                IRInstruction::LocalWrite {
+                    local: write,
+                    value,
+                    ..
+                },
+            ) => {
+                debug_assert_eq!(*decl, param.local_id);
+                debug_assert_eq!(*write, param.local_id);
+                debug_assert_eq!(*value, param.id);
+            }
+            other => panic!(
+                "alpha LLVM emit: unexpected promotion shape on `{}` at param #{index}: {other:?}",
+                function.symbol,
+            ),
+        }
+    }
 }
 
 fn closure_env_ptr<'ctx>(

@@ -298,6 +298,9 @@ pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType
             resolution: *resolution,
             type_args: type_args.iter().map(|arg| substitute(arg, subst)).collect(),
         },
+        ResolvedType::Union(members) => {
+            ResolvedType::Union(members.iter().map(|m| substitute(m, subst)).collect())
+        }
         ResolvedType::Unresolved => ResolvedType::Unresolved,
     }
 }

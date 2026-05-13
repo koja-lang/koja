@@ -1,10 +1,9 @@
-//! Runtime-symbol declarations shared between [`crate::main_wrapper`]
-//! (which calls them from the auto-print scaffolding) and
-//! [`crate::intrinsics`] (which calls them from compiler-synthesized
-//! `@intrinsic` bodies).
+//! Runtime-symbol declarations for [`crate::intrinsics`] (which
+//! calls them from compiler-synthesized `@intrinsic` bodies) and
+//! [`crate::main_wrapper`]'s spawn / main-done hand-off.
 //!
 //! Each runtime helper lives in `expo-runtime/src/alpha.rs`; this
-//! module owns the LLVM-side declarations so the two callers stamp
+//! module owns the LLVM-side declarations so the callers stamp
 //! exactly one `module.get_function` lookup per symbol.
 
 use inkwell::AddressSpace;
@@ -26,12 +25,6 @@ pub(crate) const MEMSET_SYMBOL: &str = "memset";
 pub(crate) const REALLOC_SYMBOL: &str = "realloc";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_alpha_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__expo_alpha_panic";
-pub(crate) const PRINT_BINARY_SYMBOL: &str = "__expo_alpha_print_binary";
-pub(crate) const PRINT_BITS_SYMBOL: &str = "__expo_alpha_print_bits";
-pub(crate) const PRINT_BOOL_SYMBOL: &str = "__expo_alpha_print_bool";
-pub(crate) const PRINT_F32_SYMBOL: &str = "__expo_alpha_print_f32";
-pub(crate) const PRINT_F64_SYMBOL: &str = "__expo_alpha_print_f64";
-pub(crate) const PRINT_INT_SYMBOL: &str = "__expo_alpha_print_i64";
 pub(crate) const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
 pub(crate) const STRCMP_SYMBOL: &str = "strcmp";
 pub(crate) const STRING_GET_SYMBOL: &str = "expo_string_get";
@@ -55,6 +48,8 @@ pub(crate) const RT_SPAWN_SYMBOL: &str = "expo_rt_spawn";
 /// Get the existing declaration for `symbol` or stamp a fresh
 /// `void(arg_type)` external one. Idempotent so callers can declare
 /// the same printer from multiple emit sites without duplicating.
+/// Today's only caller is the `Global.print(s: String)` intrinsic
+/// body in [`crate::intrinsics::print`].
 pub(crate) fn declare_runtime_printer<'ctx>(
     ctx: &EmitContext<'ctx>,
     symbol: &str,
@@ -73,8 +68,7 @@ pub(crate) fn declare_runtime_printer<'ctx>(
 /// `i8* expo_format_<ty>(<argument_type> value)`. Each helper
 /// formats `value` into a freshly-allocated length-prefixed Expo
 /// string and returns the payload pointer (8 bytes past the
-/// `i64 bit_length` header). Single source of truth — the
-/// auto-print wrapper calls these too.
+/// `i64 bit_length` header).
 pub(crate) fn declare_runtime_format<'ctx>(
     ctx: &EmitContext<'ctx>,
     symbol: &str,

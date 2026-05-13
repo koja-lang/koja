@@ -12,11 +12,11 @@
 //! expected `X`, found `Y`") on both pipelines.
 
 use expo_ast::ast::{Diagnostic, Function, Statement};
-use expo_ast::coercion::LiteralCoercion;
+use expo_ast::coercion::{Coercion, LiteralCoercion};
 
 use crate::registry::FunctionSignature;
 
-use super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
 use super::ctx::ResolverEnv;
 use super::types::{display_resolution, is_primitive};
 
@@ -86,6 +86,9 @@ pub(super) fn check_return_type(
         Compatible::Strict => {}
         Compatible::Coerced(width) => {
             *coercion_target_mut(trailing) = Some(LiteralCoercion::NumericLiteralWidth(width));
+        }
+        Compatible::UnionWiden { target } => {
+            *coercion_annotation_mut(trailing) = Some(Coercion::UnionWiden(target));
         }
         Compatible::OutOfRange {
             rendered_value,

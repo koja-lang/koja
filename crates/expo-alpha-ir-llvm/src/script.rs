@@ -1,8 +1,8 @@
 //! Compile a sealed [`IRScript`] into the borrowed [`EmitContext`]'s
 //! module: pre-emit every package's struct types, emit the
 //! runtime-name global, declare every helper, synthesize the script
-//! body as `main` (with the auto-print wrapper), then define each
-//! helper's body.
+//! body as `main` (the spawn-driven trampoline in
+//! [`crate::main_wrapper`]), then define each helper's body.
 //!
 //! Same shape as [`crate::program::compile_program`] minus the
 //! "skip the entry function" step — script-mode has no `fn main`
@@ -15,6 +15,7 @@ use crate::error::LlvmError;
 use crate::function::{declare_function, define_function};
 use crate::layout::enums::{declare_enum_type, define_enum_bodies};
 use crate::layout::structs::{declare_struct_type, define_struct_body};
+use crate::layout::unions::{declare_union_type, define_union_body};
 use crate::main_wrapper::{emit_app_name_global, emit_as_main};
 
 pub(crate) fn compile_script(
@@ -26,6 +27,9 @@ pub(crate) fn compile_script(
         &script.packages,
     ));
     for package in &script.packages {
+        for decl in package.unions.values() {
+            declare_union_type(ctx, decl);
+        }
         for decl in package.structs.values() {
             declare_struct_type(ctx, decl);
         }
@@ -34,6 +38,9 @@ pub(crate) fn compile_script(
         }
     }
     for package in &script.packages {
+        for decl in package.unions.values() {
+            define_union_body(ctx, decl);
+        }
         for decl in package.structs.values() {
             define_struct_body(ctx, decl)?;
         }
@@ -48,7 +55,7 @@ pub(crate) fn compile_script(
             declared.push((function, declare_function(ctx, function)?));
         }
     }
-    emit_as_main(ctx, &script.blocks, &script.return_type)?;
+    emit_as_main(ctx, &script.blocks)?;
     for (function, llvm_function) in declared {
         define_function(ctx, function, llvm_function).map_err(|e| {
             LlvmError::Codegen(format!("while defining `{}`: {e:?}", function.symbol))

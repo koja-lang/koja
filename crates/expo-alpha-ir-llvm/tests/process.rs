@@ -50,6 +50,11 @@ const PROCESS_STUB: &str = "
       Shutdown
     end
 
+    enum CallError
+      Timeout
+      ProcessDown
+    end
+
     enum Step<S>
       Continue(S)
       Done(StopReason)
@@ -86,6 +91,9 @@ const PROCESS_STUB: &str = "
 
       @intrinsic
       fn send_after(self, msg: M, delay_ms: Int)
+
+      @intrinsic
+      fn call(self, msg: M, timeout_ms: Int) -> Result<R, CallError>
     end
 
     protocol Process<C, M, R>
@@ -308,7 +316,7 @@ fn ref_signal_loads_lifecycle_variant_byte_and_calls_send_lifecycle() {
 }
 
 #[test]
-fn ref_cast_serializes_message_and_calls_expo_rt_send() {
+fn ref_cast_emits_pair_envelope_with_none_reply_to_and_calls_expo_rt_send() {
     let mut source = String::from(COUNTER_PROCESS);
     source.push_str(
         "
@@ -322,7 +330,14 @@ fn ref_cast_serializes_message_and_calls_expo_rt_send() {
 
     assert_contains(&ir_text, "declare void @expo_rt_send(i64, ptr, i64)");
     assert_contains(&ir_text, "call void @expo_rt_send(i64");
-    assert_contains(&ir_text, "cast_msg");
+    assert_contains(&ir_text, "cast_envelope");
+    assert_contains(&ir_text, "pair_msg");
+    assert_contains(&ir_text, "pair_option");
+    // The Pair envelope packs `Option::None` as `[i64 1, i64 0]`
+    // (tag byte = 1 in little-endian first lane, padding word
+    // zero), independent of `R`. Pinning the literal here
+    // catches accidental tag-flip regressions.
+    assert_contains(&ir_text, "[2 x i64] [i64 1, i64 0]");
 }
 
 #[test]
@@ -360,7 +375,7 @@ fn ref_alive_compares_expo_rt_is_process_alive_against_zero() {
 }
 
 #[test]
-fn ref_send_after_serializes_message_and_passes_delay_to_runtime() {
+fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
     let mut source = String::from(COUNTER_PROCESS);
     source.push_str(
         "
@@ -378,4 +393,55 @@ fn ref_send_after_serializes_message_and_passes_delay_to_runtime() {
     );
     assert_contains(&ir_text, "call void @expo_rt_send_after(i64");
     assert_contains(&ir_text, "i64 250");
+    // Same `Pair<M, Option<ReplyTo<R>>>` envelope as `Ref.cast`,
+    // with `Option::None` in the reply slot (the runtime delivers
+    // the message into the same mailbox the receive arm reads).
+    assert_contains(&ir_text, "send_after_envelope");
+    assert_contains(&ir_text, "[2 x i64] [i64 1, i64 0]");
+}
+
+#[test]
+fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
+    let mut source = String::from(COUNTER_PROCESS);
+    source.push_str(
+        "
+        fn main
+          handle = spawn Counter.start(0)
+          reply = handle.call(7, 100)
+        end
+        ",
+    );
+    let ir_text = emit(&source);
+
+    // Writer side: the call envelope is the same `Pair<M,
+    // Option<ReplyTo<R>>>` shape as cast / send_after, but the
+    // reply slot is `Option::Some(ReplyTo { id: caller_pid })`
+    // — caller pid sourced from `expo_rt_self`, packed as the
+    // second word of the option payload. inkwell folds the initial
+    // tag insert into the array literal, leaving only the runtime
+    // pid insert as a named SSA value.
+    assert_contains(&ir_text, "declare i64 @expo_rt_self()");
+    assert_contains(&ir_text, "call i64 @expo_rt_self()");
+    assert_contains(&ir_text, "call_envelope");
+    assert_contains(&ir_text, "[2 x i64] [i64 0, i64 undef]");
+    assert_contains(&ir_text, "opt_pid");
+    assert_contains(&ir_text, "call void @expo_rt_send(i64");
+
+    // Reader side: paired `expo_rt_receive_timeout` against the
+    // caller's own mailbox. Three-way dispatch on the result
+    // (timeout / process-down / Ok) feeds a single phi that
+    // returns `Result<R, CallError>`.
+    assert_contains(&ir_text, "declare ptr @expo_rt_receive_timeout(i64)");
+    // The literal `100` is consumed at the `.call` call site;
+    // inside the intrinsic body the timeout flows through `%2`
+    // (the third parameter).
+    assert_contains(&ir_text, "call ptr @expo_rt_receive_timeout(i64 %2)");
+    assert_contains(&ir_text, "reply_is_null");
+    assert_contains(&ir_text, "call_timeout_check:");
+    assert_contains(&ir_text, "call_got_reply:");
+    assert_contains(&ir_text, "call_build_timeout:");
+    assert_contains(&ir_text, "call_build_down:");
+    assert_contains(&ir_text, "call_merge:");
+    assert_contains(&ir_text, "target_alive");
+    assert_contains(&ir_text, "reply_value");
 }

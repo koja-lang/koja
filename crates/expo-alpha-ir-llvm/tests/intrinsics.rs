@@ -6,13 +6,12 @@
 //!   @__expo_alpha_print_string(ptr ...); ret void }` shape;
 //! - the script body's call site routes through `call void
 //!   @"Global.print"(ptr ...)`;
-//! - `Unit`-typed trailings (a script body whose last expression
-//!   returns `Unit`, e.g. `print("hello")`) compile cleanly with
-//!   `ret i64 0` and no auto-print call from
-//!   [`crate::main_wrapper::emit_print_call`].
+//! - the spawn-driven main trampoline lands `ret i64 0` after the
+//!   user body completes, regardless of the trailing expression's
+//!   value (scripts always exit 0 on normal completion).
 //!
-//! Byte-for-byte stdout coverage lives in the `expo-driver` e2e
-//! suite; here we pin the static IR shape.
+//! Byte-for-byte stdout coverage lives in the lang golden suite;
+//! here we pin the static IR shape.
 
 use expo_alpha_ir::IRScript;
 use expo_alpha_ir_llvm::emit_script_llvm_ir;
@@ -64,13 +63,14 @@ fn print_intrinsic_call_site_emits_void_call() {
 }
 
 #[test]
-fn unit_typed_trailing_skips_auto_print_in_main() {
-    // Script body trailing is a `Unit`-typed `print(...)` call. The
-    // emit_as_main path detects `IRType::Unit` and skips the
-    // auto-print call entirely; `main` should carry exactly one
-    // `ret i64 0` and no `__expo_alpha_print_*` call directly
-    // inside `@main` (the printer is invoked from inside
-    // `Global.print` instead).
+fn user_main_runs_print_intrinsic_then_returns_void() {
+    // The script body is a `Unit`-typed `print(...)` call. With
+    // auto-print removed, `__expo_user_main` is the spawn thunk
+    // carrying the user body; it should invoke `Global.print` and
+    // cap with `ret void`. The trampoline `@main` separately holds
+    // `ret i64 0` and never invokes `__expo_alpha_print_*` directly
+    // — the runtime printer is called only from inside
+    // `Global.print`'s synthesized body.
     let source = "
         @intrinsic
         fn print(s: String)
@@ -85,14 +85,26 @@ fn unit_typed_trailing_skips_auto_print_in_main() {
     assert_contains(&ir_text, "define i64 @main()");
     assert_contains(&ir_text, "ret i64 0");
 
-    // Pull the `@main` body out and assert the auto-print
-    // scaffolding (calls to `__expo_alpha_print_*`) is absent. The
-    // `Global.print` body itself contains the `__expo_alpha_print_string`
-    // call, which lives outside `@main`.
-    let main_body = extract_function_body(&ir_text, "main");
+    let user_main_body = extract_function_body(&ir_text, "__expo_user_main");
     assert!(
-        !main_body.contains("__expo_alpha_print_"),
-        "expected `@main` body to skip auto-print on Unit trailing; got:\n{main_body}",
+        user_main_body.contains("call void @Global.print(ptr"),
+        "expected `__expo_user_main` to call `Global.print`; got:\n{user_main_body}",
+    );
+    assert!(
+        user_main_body.contains("ret void"),
+        "expected `__expo_user_main` to end with `ret void`; got:\n{user_main_body}",
+    );
+    // The runtime printer must NOT appear directly in
+    // `__expo_user_main` — it's reached only via `Global.print`.
+    assert!(
+        !user_main_body.contains("__expo_alpha_print_"),
+        "expected `__expo_user_main` not to call the runtime printer directly; got:\n{user_main_body}",
+    );
+
+    let trampoline_body = extract_function_body(&ir_text, "main");
+    assert!(
+        !trampoline_body.contains("__expo_alpha_print_"),
+        "expected `@main` trampoline not to call the runtime printer directly; got:\n{trampoline_body}",
     );
 }
 

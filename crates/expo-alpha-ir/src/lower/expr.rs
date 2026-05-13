@@ -9,6 +9,7 @@
 
 use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, UnaryOp};
+use expo_ast::coercion::Coercion;
 use expo_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
@@ -42,6 +43,70 @@ use super::process::{lower_receive, lower_spawn};
 use super::structs::{lower_field_access, lower_struct_construction};
 
 pub(super) fn lower_expr(
+    expr: &Expr,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let (value, block) = lower_expr_inner(expr, ctx, block, registry, output)?;
+    Ok(apply_value_coercion(
+        expr, value, ctx, block, registry, output,
+    ))
+}
+
+/// Apply `expr.coercion` (if any) to a freshly lowered value. Each
+/// [`Coercion`] variant pairs 1:1 with an `IRInstruction::*`
+/// emission per the northstar coercion contract; today the only
+/// variant is [`Coercion::UnionWiden`] → [`IRInstruction::UnionWrap`].
+fn apply_value_coercion(
+    expr: &Expr,
+    value: ValueId,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> (ValueId, IRBlockId) {
+    let Some(coercion) = &expr.coercion else {
+        return (value, block);
+    };
+    match coercion {
+        Coercion::UnionWiden(target) => {
+            let target_ir = resolved_type_to_ir_type(target, registry, &mut output.instantiations);
+            let IRType::Union { members, .. } = &target_ir else {
+                panic!(
+                    "alpha IR lower: Coercion::UnionWiden target lowered to non-Union \
+                     `{target_ir:?}` — typecheck invariant violation",
+                );
+            };
+            let member_type = ctx.type_of(value).clone();
+            let member_index = members
+                .iter()
+                .position(|m| m == &member_type)
+                .unwrap_or_else(|| {
+                    panic!(
+                        "alpha IR lower: Coercion::UnionWiden source type `{member_type:?}` \
+                         is not a member of target union `{target_ir:?}` — typecheck \
+                         invariant violation",
+                    )
+                }) as u8;
+            let dest = ctx.fresh_value(target_ir.clone());
+            ctx.cfg.append(
+                block,
+                IRInstruction::UnionWrap {
+                    dest,
+                    member_index,
+                    member_type,
+                    ty: target_ir,
+                    value,
+                },
+            );
+            (dest, block)
+        }
+    }
+}
+
+fn lower_expr_inner(
     expr: &Expr,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,

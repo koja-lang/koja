@@ -17,7 +17,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{IRSymbol, IRType, IRVariantTag};
+use expo_alpha_ir::{IRSymbol, IRType, IRVariantPayload, IRVariantTag};
 use inkwell::OptimizationLevel;
 use inkwell::module::Module;
 use inkwell::targets::{
@@ -27,6 +27,7 @@ use inkwell::types::StructType;
 
 pub(crate) mod enums;
 pub(crate) mod structs;
+pub(crate) mod unions;
 
 /// LLVM layout of a single enum decl. `variants` is indexed by
 /// [`IRVariantTag`].0 so construction can recover the per-variant
@@ -46,6 +47,16 @@ pub(crate) struct VariantLayout<'ctx> {
     pub(crate) payload: Option<StructType<'ctx>>,
 }
 
+/// LLVM layout of a single union decl. `outer` is the
+/// `{ i8 tag, [N x i8] payload }` named struct; `payload_size`
+/// is `N` (the byte width of the largest member, cached on
+/// [`expo_alpha_ir::IRUnionDecl::max_payload_size`]). See
+/// [`unions`] for layout details.
+pub(crate) struct UnionLayout<'ctx> {
+    pub(crate) outer: StructType<'ctx>,
+    pub(crate) payload_size: u32,
+}
+
 /// Type-layout registry held as [`crate::ctx::EmitContext::layouts`].
 /// `target_data` is `pub(crate)` because [`enums::define_enum_bodies`]
 /// and [`crate::types`] consult it directly; the registries stay
@@ -60,6 +71,14 @@ pub(crate) struct TypeLayouts<'ctx> {
     /// the role `enum_layouts` plays for enum-shaped data.
     struct_fields: RefCell<BTreeMap<IRSymbol, Vec<IRType>>>,
     enum_layouts: RefCell<BTreeMap<IRSymbol, EnumLayout<'ctx>>>,
+    /// IR-level per-variant payload shapes for every declared enum,
+    /// indexed by the same symbol as `enum_layouts`. Retained
+    /// post-layout so intrinsic emitters can resolve "the `Ok`
+    /// variant's first field of `Result_$R.E$` is `R`" without
+    /// reaching back into the program-level [`expo_alpha_ir::IREnumDecl`]
+    /// registry. Mirrors `struct_fields` for struct-shaped data.
+    enum_variant_payloads: RefCell<BTreeMap<IRSymbol, Vec<IRVariantPayload>>>,
+    union_layouts: RefCell<BTreeMap<IRSymbol, UnionLayout<'ctx>>>,
 }
 
 impl<'ctx> TypeLayouts<'ctx> {
@@ -69,6 +88,8 @@ impl<'ctx> TypeLayouts<'ctx> {
             struct_types: RefCell::new(BTreeMap::new()),
             struct_fields: RefCell::new(BTreeMap::new()),
             enum_layouts: RefCell::new(BTreeMap::new()),
+            enum_variant_payloads: RefCell::new(BTreeMap::new()),
+            union_layouts: RefCell::new(BTreeMap::new()),
         }
     }
 
@@ -137,6 +158,46 @@ impl<'ctx> TypeLayouts<'ctx> {
         }
     }
 
+    pub(crate) fn register_enum_variant_payloads(
+        &self,
+        symbol: IRSymbol,
+        payloads: Vec<IRVariantPayload>,
+    ) {
+        let mut map = self.enum_variant_payloads.borrow_mut();
+        if map.insert(symbol.clone(), payloads).is_some() {
+            panic!(
+                "alpha LLVM emit: enum variant payloads for `{symbol}` registered twice — \
+                 lower / merge invariant violation",
+            );
+        }
+    }
+
+    /// IR-level payload of `enum_symbol`'s variant at `tag`. Panics
+    /// on unregistered symbol / out-of-range tag — both indicate a
+    /// pre-emit ordering or IR-seal violation upstream.
+    pub(crate) fn enum_variant_payload(
+        &self,
+        enum_symbol: &IRSymbol,
+        tag: IRVariantTag,
+    ) -> IRVariantPayload {
+        let map = self.enum_variant_payloads.borrow();
+        let payloads = map.get(enum_symbol).unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: enum variant payloads for `{enum_symbol}` not registered — \
+                 pre-emit ordering violation",
+            )
+        });
+        payloads
+            .get(usize::from(tag.0))
+            .cloned()
+            .unwrap_or_else(|| {
+                panic!(
+                    "alpha LLVM emit: enum `{enum_symbol}` has no variant at tag {tag} — \
+                     IR seal invariant violation",
+                )
+            })
+    }
+
     /// Closure-borrow over the `RefCell` so callers can't hold a
     /// long-lived `Ref` across other emit operations.
     pub(crate) fn with_enum_layout<R>(
@@ -171,6 +232,30 @@ impl<'ctx> TypeLayouts<'ctx> {
             });
             (variant.complete, variant.payload)
         })
+    }
+
+    pub(crate) fn register_union_layout(&self, symbol: IRSymbol, layout: UnionLayout<'ctx>) {
+        let mut map = self.union_layouts.borrow_mut();
+        if map.insert(symbol.clone(), layout).is_some() {
+            panic!(
+                "alpha LLVM emit: union layout `{symbol}` registered twice — \
+                 lower / merge invariant violation",
+            );
+        }
+    }
+
+    /// `(outer, payload_size)` for the union at `mangled`. Copies
+    /// out so the caller can build allocas / GEPs without holding
+    /// the `RefCell` open.
+    pub(crate) fn union_outer(&self, mangled: &str) -> (StructType<'ctx>, u32) {
+        let map = self.union_layouts.borrow();
+        let layout = map.get(mangled).unwrap_or_else(|| {
+            panic!(
+                "alpha LLVM emit: union layout `{mangled}` not registered — \
+                 pre-emit ordering violation",
+            )
+        });
+        (layout.outer, layout.payload_size)
     }
 }
 

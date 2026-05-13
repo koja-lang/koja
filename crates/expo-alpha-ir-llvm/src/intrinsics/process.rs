@@ -8,37 +8,49 @@
 //! - [`emit_ref`] dispatches each [`RefMethod`] to its emitter:
 //!   - `SelfRef` → `expo_rt_self()` wrapped in the `Ref<M, R>`
 //!     struct shape.
-//!   - `Cast` → serialize `msg`, call `expo_rt_send(pid, blob,
-//!     size)`. Today's emit serializes the raw message; the full
-//!     `Pair<M, Option<ReplyTo<R>>>` envelope wrapping (matching
-//!     the receive-side Business arm protocol) is a follow-up
-//!     once the Pair monomorphization is auto-driven from `cast`
-//!     call sites.
+//!   - `Cast` → wrap `msg` in a `Pair<M, Option<ReplyTo<R>>>`
+//!     envelope with the second field set to `Option::None`,
+//!     then `expo_rt_send(pid, blob, sizeof(envelope))`. The
+//!     receive-side `pair: Pair<M, Option<ReplyTo<R>>> ->` arm
+//!     in the `Process.run` default body reads the same shape.
 //!   - `Signal` → `expo_rt_send_lifecycle(pid, variant)` reading
 //!     the `Lifecycle` enum tag byte.
 //!   - `Kill` → `expo_rt_kill(pid)`.
 //!   - `AliveQ` → `expo_rt_is_process_alive(pid) != 0` truncated
 //!     back down to `i1`.
-//!   - `SendAfter` → serialize `msg`, call
-//!     `expo_rt_send_after(pid, blob, size, delay_ms)`.
-//!   - `Call` → still a [`LlvmError::Codegen`] today; needs the
-//!     Pair envelope + a paired `expo_rt_receive_timeout` reply
-//!     loop returning `Result<R, CallError>`.
+//!   - `SendAfter` → wrap `msg` in the same `Pair` envelope as
+//!     `Cast` (`Option::None` reply slot), then call
+//!     `expo_rt_send_after(pid, blob, sizeof(envelope), delay_ms)`.
+//!   - `Call` → wrap `msg` in `Pair<M, Option::Some(ReplyTo {
+//!     id: caller_pid })>`, call `expo_rt_send`, then
+//!     `expo_rt_receive_timeout(timeout)`. Three-way dispatch
+//!     on the result: non-null envelope → deserialize `R` →
+//!     `Result.Ok(R)`; null envelope + target alive → `Result.Err(
+//!     CallError.Timeout)`; null envelope + target dead →
+//!     `Result.Err(CallError.ProcessDown)`.
 //! - [`emit_reply_to`] dispatches the single [`ReplyToMethod::Send`]
-//!   to a serializer + `expo_rt_send`. Same Pair-wrapping caveat
-//!   as `Cast`.
+//!   to a serializer + `expo_rt_send`. The reply payload is the
+//!   bare `R` value (no `Pair` envelope) — the call-side
+//!   `expo_rt_receive_timeout` reader pulls `R` straight off the
+//!   envelope's `+8` payload offset.
 
-use expo_alpha_ir::{IRFunction, IRType, RefMethod, ReplyToMethod};
-use inkwell::IntPredicate;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
+use expo_alpha_ir::mangling::global_primitive_symbol;
+use expo_alpha_ir::{
+    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, RefMethod, ReplyToMethod,
+};
+use inkwell::types::{BasicType, BasicTypeEnum, StructType};
+use inkwell::values::{ArrayValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
+use inkwell::{AddressSpace, IntPredicate};
 
 use crate::ctx::EmitContext;
+use crate::emit::enums::build_enum_value;
 use crate::emit::inkwell_err;
 use crate::emit::process::serialize_to_stack;
 use crate::error::LlvmError;
 use crate::runtime::{
-    declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_self_extern,
-    declare_rt_send_after_extern, declare_rt_send_extern, declare_rt_send_lifecycle_extern,
+    declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_receive_timeout_extern,
+    declare_rt_self_extern, declare_rt_send_after_extern, declare_rt_send_extern,
+    declare_rt_send_lifecycle_extern,
 };
 use crate::types::ir_basic_type;
 
@@ -50,11 +62,7 @@ pub(super) fn emit_ref<'ctx>(
 ) -> Result<(), LlvmError> {
     match method {
         RefMethod::AliveQ => emit_alive(ctx, function, llvm_function),
-        RefMethod::Call => Err(LlvmError::Codegen(format!(
-            "`Ref.call` (function `{}`) is not yet wired — needs the Pair<M, Option<ReplyTo<R>>> \
-             envelope + paired expo_rt_receive_timeout reply loop returning Result<R, CallError>",
-            function.symbol,
-        ))),
+        RefMethod::Call => emit_call(ctx, function, llvm_function),
         RefMethod::Cast => emit_cast(ctx, function, llvm_function),
         RefMethod::Kill => emit_kill(ctx, function, llvm_function),
         RefMethod::SelfRef => emit_self_ref(ctx, function, llvm_function),
@@ -118,9 +126,11 @@ fn emit_self_ref<'ctx>(
         .map_err(|e| inkwell_err("build_return self_ref", e))
 }
 
-/// `Ref.cast(self, msg: M)` — serialize `msg` into a stack alloca,
-/// pull the pid out of `self`, and call
-/// `expo_rt_send(pid, blob, size)`.
+/// `Ref.cast(self, msg: M)` — wrap `msg` in a `Pair<M, Option<
+/// ReplyTo<R>>>` envelope with the second field set to `Option::
+/// None`, then route through `expo_rt_send`. The receive-side
+/// `pair: Pair<M, Option<ReplyTo<R>>> ->` arm in the `Process.run`
+/// default body reads the same shape.
 fn emit_cast<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -132,11 +142,17 @@ fn emit_cast<'ctx>(
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
-    let (msg_ptr, msg_len) = serialize_to_stack(ctx, "cast_msg", msg_llvm, msg_value)?;
+    let none_payload = option_none_payload(ctx);
+    let (envelope_ptr, envelope_size) =
+        build_pair_envelope_alloca(ctx, "cast_envelope", msg_llvm, msg_value, none_payload)?;
 
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
-        .build_call(send_fn, &[pid.into(), msg_ptr.into(), msg_len.into()], "")
+        .build_call(
+            send_fn,
+            &[pid.into(), envelope_ptr.into(), envelope_size.into()],
+            "",
+        )
         .map_err(|e| inkwell_err("build_call expo_rt_send (cast)", e))?;
     ctx.builder
         .build_return(None)
@@ -144,9 +160,10 @@ fn emit_cast<'ctx>(
         .map_err(|e| inkwell_err("build_return cast", e))
 }
 
-/// `Ref.send_after(self, msg: M, delay_ms: Int)` — serialize `msg`
-/// and route through `expo_rt_send_after`. Symmetric with
-/// [`emit_cast`], plus the trailing delay parameter.
+/// `Ref.send_after(self, msg: M, delay_ms: Int)` — same `Pair<M,
+/// Option<ReplyTo<R>>>` envelope as [`emit_cast`] (`Option::None`
+/// reply slot), routed through `expo_rt_send_after` with the
+/// trailing delay parameter.
 fn emit_send_after<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -159,14 +176,26 @@ fn emit_send_after<'ctx>(
     let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
     let (delay_value, _) = nth_param(function, llvm_function, 2)?;
     let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
-    let (msg_ptr, msg_len) = serialize_to_stack(ctx, "send_after_msg", msg_llvm, msg_value)?;
+    let none_payload = option_none_payload(ctx);
+    let (envelope_ptr, envelope_size) = build_pair_envelope_alloca(
+        ctx,
+        "send_after_envelope",
+        msg_llvm,
+        msg_value,
+        none_payload,
+    )?;
 
     let delay = delay_value.into_int_value();
     let send_after_fn = declare_rt_send_after_extern(ctx);
     ctx.builder
         .build_call(
             send_after_fn,
-            &[pid.into(), msg_ptr.into(), msg_len.into(), delay.into()],
+            &[
+                pid.into(),
+                envelope_ptr.into(),
+                envelope_size.into(),
+                delay.into(),
+            ],
             "",
         )
         .map_err(|e| inkwell_err("build_call expo_rt_send_after", e))?;
@@ -174,6 +203,201 @@ fn emit_send_after<'ctx>(
         .build_return(None)
         .map(|_| ())
         .map_err(|e| inkwell_err("build_return send_after", e))
+}
+
+/// `Ref.call(self, msg: M, timeout: Int) -> Result<R, CallError>`
+/// — the synchronous request/reply primitive.
+///
+/// Build a `Pair<M, Option<ReplyTo<R>>>` envelope with the second
+/// field set to `Option::Some(ReplyTo { id: caller_pid })` (the
+/// caller's pid serves as the one-shot reply mailbox), `expo_rt_
+/// send` it to the target, then `expo_rt_receive_timeout(timeout)`
+/// against the caller's mailbox. Three-way dispatch on the result:
+///
+/// - non-null envelope → load `R` from `envelope + 8` →
+///   `Result.Ok(R)`.
+/// - null envelope + target alive → `Result.Err(CallError.Timeout)`.
+/// - null envelope + target dead → `Result.Err(CallError.ProcessDown)`.
+fn emit_call<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry_bb);
+
+    let target_pid = pid_from_self(ctx, llvm_function, function)?;
+    let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
+    let (timeout_value, _) = nth_param(function, llvm_function, 2)?;
+    let timeout = timeout_value.into_int_value();
+    let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
+
+    let result_symbol = match &function.return_type {
+        IRType::Enum(symbol) => symbol.clone(),
+        other => {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM emit: `Ref.call` returns `{other:?}` (expected Enum) — \
+                 IR seal invariant violation",
+            )));
+        }
+    };
+    let reply_ir_type = ok_payload_field_type(ctx, &result_symbol)?;
+    let reply_llvm = ir_basic_type(ctx, &reply_ir_type)?;
+    let call_error_symbol = global_primitive_symbol("CallError");
+
+    let self_fn = declare_rt_self_extern(ctx);
+    let caller_pid = ctx
+        .builder
+        .build_call(self_fn, &[], "caller_pid")
+        .map_err(|e| inkwell_err("build_call expo_rt_self (call)", e))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| LlvmError::Codegen("expo_rt_self did not produce a value".to_string()))?
+        .into_int_value();
+    let some_payload = option_some_payload(ctx, caller_pid)?;
+    let (envelope_ptr, envelope_size) =
+        build_pair_envelope_alloca(ctx, "call_envelope", msg_llvm, msg_value, some_payload)?;
+    let send_fn = declare_rt_send_extern(ctx);
+    ctx.builder
+        .build_call(
+            send_fn,
+            &[target_pid.into(), envelope_ptr.into(), envelope_size.into()],
+            "",
+        )
+        .map_err(|e| inkwell_err("build_call expo_rt_send (call)", e))?;
+
+    let receive_fn = declare_rt_receive_timeout_extern(ctx);
+    let reply_envelope = ctx
+        .builder
+        .build_call(receive_fn, &[timeout.into()], "reply_envelope")
+        .map_err(|e| inkwell_err("build_call expo_rt_receive_timeout (call)", e))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen("expo_rt_receive_timeout did not produce a value".to_string())
+        })?
+        .into_pointer_value();
+
+    let timeout_check_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "call_timeout_check");
+    let got_reply_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "call_got_reply");
+    let build_timeout_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "call_build_timeout");
+    let build_down_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "call_build_down");
+    let merge_bb = ctx.context.append_basic_block(llvm_function, "call_merge");
+
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let null_ptr = ptr_ty.const_null();
+    let is_null = ctx
+        .builder
+        .build_int_compare(IntPredicate::EQ, reply_envelope, null_ptr, "reply_is_null")
+        .map_err(|e| inkwell_err("build_int_compare reply_is_null", e))?;
+    ctx.builder
+        .build_conditional_branch(is_null, timeout_check_bb, got_reply_bb)
+        .map_err(|e| inkwell_err("build_conditional_branch reply_is_null", e))?;
+
+    ctx.builder.position_at_end(timeout_check_bb);
+    let alive_fn = declare_rt_is_process_alive_extern(ctx);
+    let alive_i64 = ctx
+        .builder
+        .build_call(alive_fn, &[target_pid.into()], "target_alive_i64")
+        .map_err(|e| inkwell_err("build_call expo_rt_is_process_alive (call)", e))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen("expo_rt_is_process_alive did not produce a value".to_string())
+        })?
+        .into_int_value();
+    let zero_i64 = ctx.context.i64_type().const_int(0, false);
+    let target_alive = ctx
+        .builder
+        .build_int_compare(IntPredicate::NE, alive_i64, zero_i64, "target_alive")
+        .map_err(|e| inkwell_err("build_int_compare target_alive", e))?;
+    ctx.builder
+        .build_conditional_branch(target_alive, build_timeout_bb, build_down_bb)
+        .map_err(|e| inkwell_err("build_conditional_branch target_alive", e))?;
+
+    ctx.builder.position_at_end(build_timeout_bb);
+    let timeout_result = build_call_error_result(
+        ctx,
+        &result_symbol,
+        &call_error_symbol,
+        CALL_ERROR_TIMEOUT_TAG,
+    )?;
+    ctx.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|e| inkwell_err("build_unconditional_branch call_timeout merge", e))?;
+    let timeout_block = ctx.builder.get_insert_block().expect(
+        "EmitContext::emit_call lost the build_timeout insertion block before the merge phi",
+    );
+
+    ctx.builder.position_at_end(build_down_bb);
+    let down_result = build_call_error_result(
+        ctx,
+        &result_symbol,
+        &call_error_symbol,
+        CALL_ERROR_PROCESS_DOWN_TAG,
+    )?;
+    ctx.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|e| inkwell_err("build_unconditional_branch call_down merge", e))?;
+    let down_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("EmitContext::emit_call lost the build_down insertion block before the merge phi");
+
+    ctx.builder.position_at_end(got_reply_bb);
+    let i8_ty = ctx.context.i8_type();
+    let payload_offset = i8_ty.const_int(ENVELOPE_PAYLOAD_OFFSET, false);
+    let payload_ptr = unsafe {
+        ctx.builder
+            .build_gep(
+                i8_ty,
+                reply_envelope,
+                &[payload_offset],
+                "reply_payload_ptr",
+            )
+            .map_err(|e| inkwell_err("build_gep reply_payload_ptr", e))?
+    };
+    let reply_value = ctx
+        .builder
+        .build_load(reply_llvm, payload_ptr, "reply_value")
+        .map_err(|e| inkwell_err("build_load reply_value", e))?;
+    let ok_result = build_enum_value(
+        ctx,
+        &result_symbol,
+        IRVariantTag(RESULT_OK_TAG),
+        &[reply_value],
+    )?;
+    ctx.builder
+        .build_unconditional_branch(merge_bb)
+        .map_err(|e| inkwell_err("build_unconditional_branch call_ok merge", e))?;
+    let ok_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("EmitContext::emit_call lost the got_reply insertion block before the merge phi");
+
+    ctx.builder.position_at_end(merge_bb);
+    let result_outer = ctx.enum_outer_type(result_symbol.mangled());
+    let result_phi = ctx
+        .builder
+        .build_phi(result_outer, "call_result")
+        .map_err(|e| inkwell_err("build_phi call_result", e))?;
+    result_phi.add_incoming(&[
+        (&timeout_result, timeout_block),
+        (&down_result, down_block),
+        (&ok_result, ok_block),
+    ]);
+    ctx.builder
+        .build_return(Some(&result_phi.as_basic_value()))
+        .map(|_| ())
+        .map_err(|e| inkwell_err("build_return call result", e))
 }
 
 /// `Ref.signal(self, event: Lifecycle)` — pull the lifecycle
@@ -273,8 +497,11 @@ fn emit_alive<'ctx>(
 
 // ----- ReplyTo method emitters --------------------------------------------
 
-/// `ReplyTo.send(self, reply: R)` — serialize `reply` and route
-/// through `expo_rt_send` to the originating caller's pid.
+/// `ReplyTo.send(self, reply: R)` — serialize `reply` (bare `R`,
+/// no `Pair` envelope) and route through `expo_rt_send` to the
+/// originating caller's pid. The call-side `expo_rt_receive_timeout`
+/// reader pulls `R` straight off the envelope's `+8` payload offset
+/// in [`emit_call`].
 fn emit_reply_send<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -300,6 +527,164 @@ fn emit_reply_send<'ctx>(
         .build_return(None)
         .map(|_| ())
         .map_err(|e| inkwell_err("build_return reply send", e))
+}
+
+// ----- envelope construction ----------------------------------------------
+
+/// Byte offset of the payload inside an envelope buffer the
+/// runtime hands back from `expo_rt_receive_timeout`. Mirrors the
+/// constant of the same name in [`crate::emit::process`] and
+/// `TAG_HEADER_SIZE` in `expo-runtime/src/scheduler.rs` — the
+/// runtime allocates 8 bytes for the tag (with padding) before the
+/// payload.
+const ENVELOPE_PAYLOAD_OFFSET: u64 = 8;
+
+/// `enum Option<T>` variant tags (declaration order in
+/// `expo/lib/global/src/kernel.expo`).
+const OPTION_SOME_TAG: u64 = 0;
+const OPTION_NONE_TAG: u64 = 1;
+
+/// `enum Result<T, E>` variant tag for `Ok(T)`.
+const RESULT_OK_TAG: u8 = 0;
+/// `enum Result<T, E>` variant tag for `Err(E)`.
+const RESULT_ERR_TAG: u8 = 1;
+
+/// `enum CallError` variant tags (declaration order in
+/// `expo/lib/global/src/process.expo`).
+const CALL_ERROR_TIMEOUT_TAG: u8 = 0;
+const CALL_ERROR_PROCESS_DOWN_TAG: u8 = 1;
+
+/// Synthesized LLVM type for the second field of a `Pair<M, Option
+/// <ReplyTo<R>>>` envelope. `R` has no LLVM-side influence —
+/// `ReplyTo<R>` always lays out as `{ i64 }`, so `Option<ReplyTo<
+/// R>>` is `{ i8 tag, [7 x i8] padding, i64 reply_id }` = 16 bytes
+/// regardless of `R`. We pack it into `[2 x i64]` so the writer
+/// side doesn't need the receive-side's pre-emit Pair / Option
+/// registry lookup; binary layout matches the receiver's typed
+/// load by construction.
+fn option_reply_to_payload_ty<'ctx>(ctx: &EmitContext<'ctx>) -> BasicTypeEnum<'ctx> {
+    ctx.context.i64_type().array_type(2).into()
+}
+
+/// `[OPTION_NONE_TAG, 0]` — the second-field bytes for an
+/// `Option::None` reply slot (`Ref.cast` / `Ref.send_after`).
+fn option_none_payload<'ctx>(ctx: &EmitContext<'ctx>) -> ArrayValue<'ctx> {
+    let i64_ty = ctx.context.i64_type();
+    i64_ty.const_array(&[
+        i64_ty.const_int(OPTION_NONE_TAG, false),
+        i64_ty.const_int(0, false),
+    ])
+}
+
+/// `[OPTION_SOME_TAG, reply_pid]` — the second-field bytes for an
+/// `Option::Some(ReplyTo { id: reply_pid })` reply slot
+/// (`Ref.call`). On little-endian hosts the tag byte sits in the
+/// low byte of the first `i64`, with the trailing 7 padding bytes
+/// zeroed; the reply pid occupies the second `i64`. SSA-built
+/// because `reply_pid` is an `IntValue` SSA result of
+/// `expo_rt_self()`.
+fn option_some_payload<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    reply_pid: IntValue<'ctx>,
+) -> Result<ArrayValue<'ctx>, LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let undef = i64_ty.array_type(2).get_undef();
+    let with_tag = ctx
+        .builder
+        .build_insert_value(
+            undef,
+            i64_ty.const_int(OPTION_SOME_TAG, false),
+            0,
+            "opt_tag",
+        )
+        .map_err(|e| inkwell_err("build_insert_value option some tag", e))?;
+    Ok(ctx
+        .builder
+        .build_insert_value(with_tag, reply_pid, 1, "opt_pid")
+        .map_err(|e| inkwell_err("build_insert_value option some pid", e))?
+        .into_array_value())
+}
+
+/// Stack-allocate a `Pair<M, Option<ReplyTo<R>>>` envelope with
+/// `msg_value` in the first field and `option_payload` in the
+/// second, then return `(envelope_ptr, abi_size)` ready for an
+/// `expo_rt_send` / `expo_rt_send_after` call.
+fn build_pair_envelope_alloca<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    label: &str,
+    msg_ty: BasicTypeEnum<'ctx>,
+    msg_value: BasicValueEnum<'ctx>,
+    option_payload: ArrayValue<'ctx>,
+) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), LlvmError> {
+    let envelope_ty: StructType<'ctx> = ctx
+        .context
+        .struct_type(&[msg_ty, option_reply_to_payload_ty(ctx)], false);
+    let alloca = ctx.build_entry_alloca(envelope_ty, label);
+    let undef = envelope_ty.get_undef();
+    let with_msg = ctx
+        .builder
+        .build_insert_value(undef, msg_value, 0, "pair_msg")
+        .map_err(|e| inkwell_err("build_insert_value pair msg", e))?
+        .into_struct_value();
+    let envelope = ctx
+        .builder
+        .build_insert_value(with_msg, option_payload, 1, "pair_option")
+        .map_err(|e| inkwell_err("build_insert_value pair option", e))?
+        .into_struct_value();
+    ctx.builder
+        .build_store(alloca, envelope)
+        .map_err(|e| inkwell_err("build_store pair envelope", e))?;
+    let abi_size = ctx
+        .layouts
+        .target_data
+        .get_abi_size(&envelope_ty.as_basic_type_enum());
+    let size = ctx.context.i64_type().const_int(abi_size, false);
+    Ok((alloca, size))
+}
+
+/// Recover the `R` IR type from `Result<R, CallError>`'s `Ok(R)`
+/// variant by walking the enum-variant payload registry. Surfaces
+/// IR-seal violations as [`LlvmError::Codegen`]: `Ref.call`'s
+/// return type must be a binary-shaped `Result` (typecheck enforces
+/// this) and the `Ok` variant must carry exactly one positional
+/// payload field of type `R`.
+fn ok_payload_field_type(
+    ctx: &EmitContext<'_>,
+    result_symbol: &IRSymbol,
+) -> Result<IRType, LlvmError> {
+    let payload = ctx
+        .layouts
+        .enum_variant_payload(result_symbol, IRVariantTag(RESULT_OK_TAG));
+    match payload {
+        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types.into_iter().next().unwrap()),
+        IRVariantPayload::Struct(fields) if fields.len() == 1 => {
+            Ok(fields.into_iter().next().unwrap().ir_type)
+        }
+        other => Err(LlvmError::Codegen(format!(
+            "alpha LLVM emit: `Ref.call` return `{result_symbol}` Ok variant has unexpected \
+             payload `{other:?}` (expected single-field) — IR seal invariant violation",
+        ))),
+    }
+}
+
+/// Build a `Result.Err(CallError.<variant>)` SSA value. Two enum
+/// constructions: the inner `CallError` variant first (no payload),
+/// then the outer `Result.Err(call_error_value)`. Both go through
+/// [`build_enum_value`] so layouts agree with the rest of emit.
+fn build_call_error_result<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    result_symbol: &IRSymbol,
+    call_error_symbol: &IRSymbol,
+    call_error_tag: u8,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let call_error_value =
+        build_enum_value(ctx, call_error_symbol, IRVariantTag(call_error_tag), &[])?;
+    build_enum_value(
+        ctx,
+        result_symbol,
+        IRVariantTag(RESULT_ERR_TAG),
+        &[call_error_value],
+    )
 }
 
 // ----- shared helpers -----------------------------------------------------

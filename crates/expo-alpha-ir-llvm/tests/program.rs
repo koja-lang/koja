@@ -6,11 +6,15 @@
 //! fixture and asserts substrings of the produced module text. No
 //! linking, no subprocess — driver e2e tests cover that path.
 //!
-//! Every emitted `main` returns `i64 0`; the body's value is fed to
-//! a runtime printer first (temporary scaffolding, see
-//! [`expo-runtime/src/alpha.rs`](../../../expo-runtime/src/alpha.rs)).
-//! The substrings pinned here are: which printer fires, what value
-//! lands in the call, and that `main` exits 0.
+//! Every emitted module pins the spawn-driven main shape: a
+//! `define void @__expo_user_main(ptr)` carrying the user body
+//! (always returns `ret void`; the trailing expression's value is
+//! computed for side effects and discarded), and a `define i64
+//! @main()` trampoline that hands `__expo_user_main` to the
+//! runtime as PID 1 via `expo_rt_spawn`, blocks on
+//! `expo_rt_main_done`, and returns `0`. Scripts and programs
+//! always exit `0` on normal completion; user code calls
+//! `IO.puts` / `.print()` explicitly for output.
 //!
 //! Substring (not full-text) assertions because inkwell may adjust
 //! attribute ordering between LLVM patch versions.
@@ -23,21 +27,20 @@ use expo_ast::util::dedent;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower};
+use common::{
+    APP_NAME, assert_contains, assert_main_shape, extract_function_body,
+    lower_program_source as lower,
+};
 
 // ---------------------------------------------------------------------------
-// `<>` concat (Phase B): String/Binary go inline (`malloc + memcpy`),
-// Bits routes through the `__expo_alpha_concat_bits` runtime helper.
-// Print routing for Binary/Bits is Phase D; until then we pin the
-// helper-fn IR shape rather than driving the value through `main`.
+// `<>` concat: String/Binary go inline (`malloc + memcpy`), Bits
+// routes through the `__expo_alpha_concat_bits` runtime helper.
 // ---------------------------------------------------------------------------
 
 #[test]
 fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
     // Same inline shape as String concat (no trailing NUL though —
-    // `with_nul=false` for `Binary`). Emitted in a non-`main` fn
-    // because Binary isn't yet routable through the auto-print
-    // wrapper (see Phase D).
+    // `with_nul=false` for `Binary`).
     let source = "
         fn join(move a: Binary, move b: Binary) -> Binary
           a <> b
@@ -146,10 +149,16 @@ fn bits_concat_helper_routes_through_runtime() {
 
 // ---------------------------------------------------------------------------
 // `fn main` body: literals, arithmetic, boolean, comparison
+//
+// With auto-print removed, these tests pin that the body compiles
+// cleanly into `__expo_user_main` and that the surrounding spawn
+// trampoline holds the expected shape. The trailing value is
+// discarded (no `__expo_alpha_print_*` calls), so there's no value-
+// side substring to anchor on.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn fn_main_two_plus_two_prints_four() {
+fn fn_main_two_plus_two_emits_user_main_ret_void() {
     let source = "
         fn main -> Int
           2 + 2
@@ -160,13 +169,15 @@ fn fn_main_two_plus_two_prints_four() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "declare void @__expo_alpha_print_i64(i64)");
-    // inkwell folds `2 + 2` to `i64 4` at const-emission time.
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 4)");
+    let user_body = extract_function_body(&ir_text, "__expo_user_main");
+    assert!(
+        user_body.contains("ret void"),
+        "expected `__expo_user_main` to end with `ret void`, got:\n{user_body}",
+    );
 }
 
 #[test]
-fn large_int_literal_prints_i64_constant() {
+fn large_int_literal_compiles_cleanly() {
     let source = "
         fn main -> Int
           5000000000
@@ -177,14 +188,10 @@ fn large_int_literal_prints_i64_constant() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(
-        &ir_text,
-        "call void @__expo_alpha_print_i64(i64 5000000000)",
-    );
 }
 
 #[test]
-fn neg_unary_prints_negative_int() {
+fn neg_unary_compiles_cleanly() {
     let source = "
         fn main -> Int
           -7
@@ -195,11 +202,10 @@ fn neg_unary_prints_negative_int() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call void @__expo_alpha_print_i64(i64 -7)");
 }
 
 #[test]
-fn logical_and_prints_false() {
+fn logical_and_compiles_cleanly() {
     let source = "
         fn main -> Bool
           true and false
@@ -210,12 +216,10 @@ fn logical_and_prints_false() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "declare void @__expo_alpha_print_bool(i64)");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 0)");
 }
 
 #[test]
-fn logical_or_prints_true() {
+fn logical_or_compiles_cleanly() {
     let source = "
         fn main -> Bool
           true or false
@@ -226,11 +230,10 @@ fn logical_or_prints_true() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
 }
 
 #[test]
-fn not_unary_prints_false() {
+fn not_unary_compiles_cleanly() {
     let source = "
         fn main -> Bool
           not true
@@ -241,11 +244,10 @@ fn not_unary_prints_false() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 0)");
 }
 
 #[test]
-fn int_lt_prints_true() {
+fn int_lt_compiles_cleanly() {
     let source = "
         fn main -> Bool
           1 < 2
@@ -256,11 +258,10 @@ fn int_lt_prints_true() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
 }
 
 #[test]
-fn int_eq_prints_true() {
+fn int_eq_compiles_cleanly() {
     let source = "
         fn main -> Bool
           1 == 1
@@ -271,19 +272,18 @@ fn int_eq_prints_true() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "call void @__expo_alpha_print_bool(i64 1)");
 }
 
 // ---------------------------------------------------------------------------
 // Helper-function definition + call coverage
 //
-// Pin three things per scenario:
+// Pin two things per scenario:
 //   1. The helper's `define` line — confirms the IR's
 //      [`expo_alpha_ir::IRSymbol::mangled`] flows directly through
 //      `add_function`.
 //   2. The body's `call ...` line — confirms callee lookup and
 //      argument plumbing.
-//   3. The trailing print-then-exit-0 shape via `assert_main_shape`.
+//   3. The spawn-driven main shape via `assert_main_shape`.
 //
 // Param refs from inside a body are still a typecheck feature gap,
 // so the helpers below all return constants. The call site is what
@@ -307,11 +307,13 @@ fn zero_arg_call_emits_helper_define_and_call() {
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @TestApp.answer()");
-    assert_contains(&ir_text, "call i64 @TestApp.answer()");
-    // Helper's body folds to `ret i64 42`; main's call result is fed
-    // straight to the int printer.
+    // Helper's body folds to `ret i64 42`.
     assert_contains(&ir_text, "ret i64 42");
-    assert_contains(&ir_text, "@__expo_alpha_print_i64");
+    let user_body = extract_function_body(&ir_text, "__expo_user_main");
+    assert!(
+        user_body.contains("call i64 @TestApp.answer()"),
+        "expected `__expo_user_main` to call `TestApp.answer`:\n{user_body}",
+    );
 }
 
 #[test]
@@ -335,7 +337,11 @@ fn one_arg_call_threads_int_through_helper_signature() {
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @TestApp.id(i64");
-    assert_contains(&ir_text, "call i64 @TestApp.id(i64 7)");
+    let user_body = extract_function_body(&ir_text, "__expo_user_main");
+    assert!(
+        user_body.contains("call i64 @TestApp.id(i64 7)"),
+        "expected `__expo_user_main` to call `TestApp.id` with `i64 7`:\n{user_body}",
+    );
 }
 
 #[test]
@@ -355,5 +361,9 @@ fn multi_arg_call_threads_each_int_in_declared_order() {
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @TestApp.pair(i64");
-    assert_contains(&ir_text, "call i64 @TestApp.pair(i64 2, i64 3)");
+    let user_body = extract_function_body(&ir_text, "__expo_user_main");
+    assert!(
+        user_body.contains("call i64 @TestApp.pair(i64 2, i64 3)"),
+        "expected `__expo_user_main` to call `TestApp.pair`:\n{user_body}",
+    );
 }

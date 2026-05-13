@@ -25,10 +25,9 @@
 use expo_ast::ast::{
     Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File,
     Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl,
-    StructField, TypeExpr, TypeParam,
+    StructField, TypeAlias, TypeExpr, TypeParam,
 };
 use expo_ast::identifier::Identifier;
-use expo_ast::labels::{item_label, item_span};
 use expo_ast::span::Span;
 
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome};
@@ -74,17 +73,15 @@ pub(crate) fn collect_file(
             // [`super::aliases::validate_aliases`]; collect just
             // skips it here.
             Item::Alias(_) => {}
-            // Other Item variants land as alpha grows. Reject them
-            // explicitly so unsupported shapes diagnose instead of
-            // round-tripping silently.
-            Item::TypeAlias(_) => {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "alpha typecheck does not yet support `{}` items",
-                        item_label(item)
-                    ),
-                    item_span(item),
-                ));
+            // `type X = ...` is a package-wide global like a struct or
+            // constant — it lives in the registry as a TypeAlias entry
+            // so cross-file (same package) and cross-package (`Pkg.X`)
+            // lookups go through the same machinery. The RHS
+            // `ResolvedType` is stamped later by lift's
+            // `lift_type_aliases` pass, after structs/enums/protocols
+            // are registered so the RHS can reference them.
+            Item::TypeAlias(alias) => {
+                register_type_alias(alias, package, registry, diagnostics);
             }
         }
     }
@@ -376,6 +373,53 @@ fn register_constant(
                 existing.span.start.line
             ),
             constant.span,
+        ));
+    }
+}
+
+/// Register a `type X = ...` alias with the package-qualified
+/// identifier `<package>.<name>`. Only flag unsupported annotations
+/// here; the RHS `TypeExpr` is resolved later by lift's
+/// `lift_type_aliases` pass and the resulting `ResolvedType` is
+/// stamped via `set_type_alias_definition`.
+fn register_type_alias(
+    alias: &TypeAlias,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnose_alias_annotations(&alias.name, &alias.annotations, diagnostics);
+    let identifier = Identifier::new(package, vec![alias.name.clone()]);
+    if let InsertOutcome::Collision { existing } =
+        registry.insert_type_alias(identifier, alias.span)
+    {
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("`{}` is already defined", existing.identifier),
+            format!(
+                "previous {} definition is at line {}",
+                existing.kind.label(),
+                existing.span.start.line
+            ),
+            alias.span,
+        ));
+    }
+}
+
+fn diagnose_alias_annotations(
+    alias_name: &str,
+    annotations: &[Annotation],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for annotation in annotations {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+            continue;
+        }
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "alpha typecheck does not yet support `@{}` on type alias `{alias_name}`",
+                annotation.name,
+            ),
+            annotation.span,
         ));
     }
 }

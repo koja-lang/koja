@@ -1,8 +1,8 @@
 //! Compile a sealed [`IRProgram`] into the borrowed [`EmitContext`]'s
 //! module: pre-emit every package's struct + enum types, emit the
 //! runtime-name global, declare every non-entry helper, synthesize
-//! the entry as `main` (with the auto-print wrapper), then define
-//! each helper's body.
+//! the entry as `main` (the spawn-driven trampoline in
+//! [`crate::main_wrapper`]), then define each helper's body.
 //!
 //! Struct + enum types are pre-emitted in two phases (declare
 //! opaque, then set body) across every package so a struct- or
@@ -25,6 +25,7 @@ use crate::error::LlvmError;
 use crate::function::{declare_function, define_function};
 use crate::layout::enums::{declare_enum_type, define_enum_bodies};
 use crate::layout::structs::{declare_struct_type, define_struct_body};
+use crate::layout::unions::{declare_union_type, define_union_body};
 use crate::main_wrapper::{emit_app_name_global, emit_as_main};
 
 pub(crate) fn compile_program(
@@ -36,6 +37,9 @@ pub(crate) fn compile_program(
         &program.packages,
     ));
     for package in &program.packages {
+        for decl in package.unions.values() {
+            declare_union_type(ctx, decl);
+        }
         for decl in package.structs.values() {
             declare_struct_type(ctx, decl);
         }
@@ -44,6 +48,9 @@ pub(crate) fn compile_program(
         }
     }
     for package in &program.packages {
+        for decl in package.unions.values() {
+            define_union_body(ctx, decl);
+        }
         for decl in package.structs.values() {
             define_struct_body(ctx, decl)?;
         }
@@ -62,7 +69,7 @@ pub(crate) fn compile_program(
         }
     }
     let entry = program.entry_function();
-    emit_as_main(ctx, &entry.blocks, &entry.return_type)?;
+    emit_as_main(ctx, &entry.blocks)?;
     for (function, llvm_function) in declared {
         define_function(ctx, function, llvm_function)?;
     }

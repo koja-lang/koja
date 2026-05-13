@@ -88,6 +88,62 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
     is_primitive(ty, registry, "Int") || is_primitive(ty, registry, "Float")
 }
 
+/// Build a canonical `ResolvedType::Union` from `members`. Steps:
+/// peel each member through aliases, flatten any `Union(_)` member
+/// into the outer vec, sort by `display_resolution`, dedup by the
+/// same key. Collapse 0 members to `Unit`, 1 member to itself, ≥2
+/// to `Union(...)`. The sort+dedup makes `A | B` and `B | A` and
+/// `A | A | B` all equal as `ResolvedType` values, so the existing
+/// derive-`PartialEq` on `ResolvedType` compares unions correctly.
+pub(crate) fn canonical_union(
+    members: Vec<ResolvedType>,
+    registry: &GlobalRegistry,
+) -> ResolvedType {
+    let mut flat = Vec::with_capacity(members.len());
+    for member in members {
+        match peel_alias(&member, registry) {
+            ResolvedType::Union(inner) => flat.extend(inner),
+            other => flat.push(other),
+        }
+    }
+    flat.sort_by_key(|m| display_resolution(m, registry));
+    flat.dedup_by_key(|m| display_resolution(m, registry));
+    match flat.len() {
+        0 => registry.primitive("Unit"),
+        1 => flat.into_iter().next().expect("flat.len() == 1"),
+        _ => ResolvedType::Union(flat),
+    }
+}
+
+/// Follow `Named { Global(id) }` through `GlobalKind::TypeAlias`
+/// expansions, returning the underlying type. Bare and non-alias
+/// types pass through unchanged. Cycles are bounded by a small
+/// recursion cap — `lift_type_aliases` rejects cycles up front, so
+/// hitting the cap here is a registry invariant violation.
+pub(crate) fn peel_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> ResolvedType {
+    peel_alias_capped(ty, registry, 32)
+}
+
+fn peel_alias_capped(ty: &ResolvedType, registry: &GlobalRegistry, fuel: usize) -> ResolvedType {
+    if fuel == 0 {
+        return ty.clone();
+    }
+    let ResolvedType::Named {
+        resolution: Resolution::Global(id),
+        type_args,
+    } = ty
+    else {
+        return ty.clone();
+    };
+    if !type_args.is_empty() {
+        return ty.clone();
+    }
+    let Some(expansion) = registry.alias_expansion(*id) else {
+        return ty.clone();
+    };
+    peel_alias_capped(&expansion, registry, fuel - 1)
+}
+
 /// Two resolved types interchangeable at struct-field / call-arg /
 /// return-type / type-parameter-binding / arm-join checks. Strict
 /// structural equality plus the `Int ≡ Int64` and `Float ≡ Float64`
@@ -117,7 +173,12 @@ pub(crate) fn types_equivalent(
     if a == b {
         return true;
     }
-    match (a, b) {
+    let a_peeled = peel_alias(a, registry);
+    let b_peeled = peel_alias(b, registry);
+    if a_peeled == b_peeled {
+        return true;
+    }
+    match (&a_peeled, &b_peeled) {
         (
             ResolvedType::Named {
                 resolution: a_head,
@@ -136,7 +197,9 @@ pub(crate) fn types_equivalent(
             }
             // Different heads: only the alias arm applies, and only
             // when both sides are bare leaves (no type-args).
-            a_args.is_empty() && b_args.is_empty() && primitive_aliases(a, b, registry)
+            a_args.is_empty()
+                && b_args.is_empty()
+                && primitive_aliases(&a_peeled, &b_peeled, registry)
         }
         (
             ResolvedType::Anonymous(AnonymousKind::Function {
@@ -154,6 +217,13 @@ pub(crate) fn types_equivalent(
                     .zip(b_params)
                     .all(|(x, y)| x.mode == y.mode && types_equivalent(&x.ty, &y.ty, registry))
                 && types_equivalent(a_ret, b_ret, registry)
+        }
+        (ResolvedType::Union(a_members), ResolvedType::Union(b_members)) => {
+            a_members.len() == b_members.len()
+                && a_members
+                    .iter()
+                    .zip(b_members)
+                    .all(|(x, y)| types_equivalent(x, y, registry))
         }
         _ => false,
     }
@@ -218,6 +288,11 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
             ..
         }
         | ResolvedType::Unresolved => "<unresolved>".to_string(),
+        ResolvedType::Union(members) => members
+            .iter()
+            .map(|m| display_resolution(m, registry))
+            .collect::<Vec<_>>()
+            .join(" | "),
     }
 }
 
