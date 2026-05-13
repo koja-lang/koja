@@ -175,6 +175,29 @@ fn main() {
     }
     code.push_str("];\n");
 
+    // Curated set of qualified packages alpha programs can `alias` into
+    // scope. Pragmatic stand-in for incremental package loading: each
+    // entry's full file roster is loaded eagerly so `lift_signatures` /
+    // `resolve` see its types when validating a user's `alias` decl.
+    // Retires once `IRPackage` caching + on-demand package loads land.
+    let alpha_qualified_packages: &[&str] = &["Crypto"];
+    code.push_str("\n/// Stdlib sources for qualified packages alpha programs can\n");
+    code.push_str("/// `alias` into scope. Loaded eagerly alongside `ALPHA_AUTOIMPORT`;\n");
+    code.push_str("/// pragmatic stand-in for on-demand `IRPackage` loading.\n");
+    code.push_str("pub const ALPHA_QUALIFIED: &[(&str, &str)] = &[\n");
+    for package in alpha_qualified_packages {
+        let entries = qualified.get(*package).unwrap_or_else(|| {
+            panic!("ALPHA_QUALIFIED package `{package}` not found in discovered qualified sources")
+        });
+        for (module_name, const_name, alpha_only) in entries {
+            if *alpha_only {
+                continue;
+            }
+            code.push_str(&format!("    (\"{module_name}\", {const_name}),\n"));
+        }
+    }
+    code.push_str("];\n");
+
     fs::write(out_dir.join("stdlib_gen.rs"), code).unwrap();
 }
 

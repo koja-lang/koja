@@ -11,7 +11,7 @@ use expo_ast::ast::{Diagnostic, File, Severity};
 use expo_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
-use crate::pipeline::{collect, lift_signatures, resolve, seal, synthesize};
+use crate::pipeline::{aliases, collect, lift_signatures, resolve, seal, synthesize};
 use crate::registry::GlobalRegistry;
 
 /// A package fragment of a [`CheckedProgram`].
@@ -54,6 +54,11 @@ pub struct CheckedProgram {
 ///    Runs pre-collect so the new items land before name binding.
 /// 2. `collect` — register every top-level decl. Function signatures
 ///    land in the `Function(None)` state.
+/// 2. `aliases::validate_aliases` — validate each file's `alias` decls
+///    against the now-populated registry (path length, target exists,
+///    no duplicates, no shadowing). Pure validation; the AST is not
+///    mutated. Lift / resolve consult the file's alias slice on demand
+///    via [`crate::pipeline::aliases::collect_file_aliases`].
 /// 3. `lift_signatures` — resolve each function's `TypeExpr` params +
 ///    return into `ResolvedType`s and upgrade the registry entry to
 ///    `Function(Some(signature))`.
@@ -97,6 +102,8 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
             collect::collect_file(file, &pkg.package, &mut registry, &mut diagnostics);
         }
     }
+
+    aliases::validate_aliases(&packages, &registry, &mut diagnostics);
 
     lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
 

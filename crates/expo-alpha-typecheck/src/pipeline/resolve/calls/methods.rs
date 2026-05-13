@@ -93,7 +93,7 @@ pub(super) fn classify_receiver(
     if let Some(receiver_name) = bare_ident_name(&receiver.kind) {
         let receiver_path = [receiver_name.to_string()];
         if let Some((struct_id, struct_entry)) =
-            lookup_type(&receiver_path, resolver.package, resolver.registry)
+            lookup_type(&receiver_path, resolver.resolution_scope())
             && matches!(
                 struct_entry.kind,
                 GlobalKind::Enum(_) | GlobalKind::Struct(_)

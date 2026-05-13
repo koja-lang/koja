@@ -2565,6 +2565,44 @@ fn alpha_run_interpreter_script_debug_pair_prints_paren_pair() {
     );
 }
 
+/// Script-mode fixture pinning the alpha alias-import slice
+/// end-to-end against a qualified stdlib package. The script
+/// aliases `Crypto.SHA256` (loaded eagerly via
+/// `expo_stdlib::ALPHA_QUALIFIED`), takes a digest of `"abc"`, and
+/// asks for its byte size — SHA-256 always produces 32 bytes, so
+/// stdout is exactly `32`. Pins the full chain end-to-end:
+///
+/// - `validate_aliases` accepts `alias Crypto.SHA256` and stamps no
+///   diagnostic;
+/// - `lift_signatures` resolves `SHA256.digest` through the alias
+///   to `Crypto.SHA256.digest`'s lifted signature;
+/// - `resolve` stamps the alias-target's `Identifier` on the call
+///   site;
+/// - IR lowering monomorphizes the SHA256 method and threads the
+///   `@extern "C" @link "crypto:SHA256"` declaration through;
+/// - the LLVM backend links the runtime-bundled BoringSSL
+///   (`libcrypto.a` is embedded via `EMBEDDED_CRYPTO`) so the
+///   produced binary calls into the real C symbol and prints `32`.
+///
+/// Eval has no FFI surface for the BoringSSL symbol, so this is
+/// LLVM-only; the typecheck side of alias resolution is covered by
+/// `expo-alpha-typecheck/tests/aliases.rs`.
+const CRYPTO_SHA256_DIGEST_SCRIPT_SOURCE: &str = "
+    alias Crypto.SHA256
+
+    SHA256.digest(\"abc\".to_binary()).byte_size()
+";
+
+#[test]
+fn alpha_run_llvm_script_aliased_crypto_sha256_digest_prints_thirtytwo() {
+    assert_script_prints(
+        "run_llvm_aliased_crypto_sha256_digest",
+        CRYPTO_SHA256_DIGEST_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "32",
+    );
+}
+
 #[test]
 fn alpha_run_in_project_returns_stub_error() {
     let scratch = scratch_dir("project_stub");

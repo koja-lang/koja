@@ -1,13 +1,37 @@
 //! Type-expression resolution + small label/span helpers shared by
 //! every other submodule under `lift_signatures/`.
 
-use expo_ast::ast::{Diagnostic, TypeExpr};
+use expo_ast::ast::{AliasDecl, Diagnostic, TypeExpr};
 use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
 use expo_ast::span::Span;
 
+use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry};
+
+/// Read-only name-resolution inputs threaded through type-expression
+/// resolution. `Copy` so callers pass it by value without ceremony.
+///
+/// **Do not grow this struct.** It exists to bundle the three
+/// pieces `resolve_type_expr` needs to map a `TypeExpr` to a
+/// `ResolvedType`: the file's alias slice (file-private), the
+/// current package (same-package lookups), and the global registry
+/// (everything else). `diagnostics` lives outside on purpose so
+/// every emit site is honest; if you find yourself wanting to add
+/// a `&mut` field here, you want a different abstraction (likely a
+/// separate sink arg, or lift the work out of resolve).
+///
+/// Sibling of [`TypeParamScope`]: that one models the lexical
+/// generic-decl scope (innermost-first stack of owners), this one
+/// models the file/package scope (alias roster + current package
+/// + global registry). Most resolve helpers take both.
+#[derive(Clone, Copy)]
+pub(crate) struct ResolutionScope<'a> {
+    pub aliases: &'a [AliasDecl],
+    pub package: &'a str,
+    pub registry: &'a GlobalRegistry,
+}
 
 /// Stack of generic-decl owners visible at this resolution site.
 /// Innermost first (e.g. `[fn_id, struct_id]` for an inline method
@@ -54,15 +78,18 @@ impl<'a> TypeParamScope<'a> {
 
 /// Resolve a [`TypeExpr`] against the registry. Single-segment
 /// `TypeExpr::Named` matching the surrounding scope resolves to
-/// [`Resolution::TypeParam`]; otherwise it resolves to a preloaded
-/// `Global.<name>` stub or a user struct/enum. `TypeExpr::Generic`
-/// recurses into its args. `scope` is empty outside generic-decl
-/// bodies (see [`TypeParamScope::default`]).
+/// [`Resolution::TypeParam`]; otherwise [`rewrite_through_aliases`]
+/// gets first crack (so an `alias`-bound name resolves to its
+/// target package), then we fall back to a preloaded `Global.<name>`
+/// stub or a same-package struct/enum. `TypeExpr::Generic` recurses
+/// into its args. `type_params` is empty outside generic-decl bodies
+/// (see [`TypeParamScope::default`]); `scope` carries the file's
+/// alias slice + current package + registry (see
+/// [`ResolutionScope`]).
 pub(crate) fn resolve_type_expr(
     type_expr: &TypeExpr,
-    scope: TypeParamScope<'_>,
-    package: &str,
-    registry: &GlobalRegistry,
+    type_params: TypeParamScope<'_>,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     match type_expr {
@@ -77,22 +104,22 @@ pub(crate) fn resolve_type_expr(
                 .zip(param_modes.iter().copied())
                 .map(|(param_ty, mode)| FnParam {
                     mode,
-                    ty: resolve_type_expr(param_ty, scope, package, registry, diagnostics),
+                    ty: resolve_type_expr(param_ty, type_params, scope, diagnostics),
                 })
                 .collect();
-            let ret = resolve_type_expr(return_type, scope, package, registry, diagnostics);
+            let ret = resolve_type_expr(return_type, type_params, scope, diagnostics);
             ResolvedType::Anonymous(AnonymousKind::Function {
                 params: resolved_params,
                 ret: Box::new(ret),
             })
         }
         TypeExpr::Generic { path, args, span } => {
-            resolve_generic(path, args, *span, scope, package, registry, diagnostics)
+            resolve_generic(path, args, *span, type_params, scope, diagnostics)
         }
         TypeExpr::Named { path, span } => {
-            resolve_named(path, *span, scope, package, registry, diagnostics)
+            resolve_named(path, *span, type_params, scope, diagnostics)
         }
-        TypeExpr::Self_ { span } => resolve_self(*span, scope, registry, diagnostics),
+        TypeExpr::Self_ { span } => resolve_self(*span, type_params, scope.registry, diagnostics),
         TypeExpr::Union { span, .. } => {
             diagnostics.push(Diagnostic::error(
                 "alpha typecheck does not yet support union type annotations".to_string(),
@@ -100,7 +127,7 @@ pub(crate) fn resolve_type_expr(
             ));
             ResolvedType::unresolved()
         }
-        TypeExpr::Unit { .. } => registry.primitive("Unit"),
+        TypeExpr::Unit { .. } => scope.registry.primitive("Unit"),
     }
 }
 
@@ -115,11 +142,11 @@ pub(crate) fn resolve_type_expr(
 /// enclosing struct/enum/impl.
 fn resolve_self(
     span: Span,
-    scope: TypeParamScope<'_>,
+    type_params: TypeParamScope<'_>,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    for &owner in scope.self_owner() {
+    for &owner in type_params.self_owner() {
         let Some(entry) = registry.get(owner) else {
             continue;
         };
@@ -173,19 +200,24 @@ pub(crate) fn concrete_self_type(
 }
 
 /// Resolve `Path<args...>`. Path resolution mirrors [`resolve_named`]
-/// for the head; type args lower recursively through the same scope.
-/// A type param shadows a global of the same name; `T<args>` is an
-/// error because type params are arity-0.
+/// for the head — type-param scope wins, then file aliases, then
+/// the same-package / `Global` fallthrough. Type args lower
+/// recursively through the same scope. A type param shadows a
+/// global of the same name; `T<args>` is an error because type
+/// params are arity-0. Aliases resolve straight to their target
+/// `Identifier`, sidestepping the dotted-path "no nested types"
+/// gate so `alias Some.Outer as O` followed by `O<Int>` works as
+/// soon as the registry carries the target — no movement here when
+/// nested-type lifting lands.
 fn resolve_generic(
     path: &[String],
     args: &[TypeExpr],
     span: Span,
-    scope: TypeParamScope<'_>,
-    package: &str,
-    registry: &GlobalRegistry,
+    type_params: TypeParamScope<'_>,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    if path.len() == 1 && scope.lookup(&path[0], registry).is_some() {
+    if path.len() == 1 && type_params.lookup(&path[0], scope.registry).is_some() {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck: type parameter `{}` cannot take type arguments",
@@ -195,7 +227,17 @@ fn resolve_generic(
         ));
         return ResolvedType::unresolved();
     }
-    if path.len() != 1 {
+    let head = if let Some(target) = rewrite_through_aliases(scope.aliases, path) {
+        if let Some((id, _)) = scope.registry.lookup(&target) {
+            Resolution::Global(id)
+        } else {
+            diagnostics.push(Diagnostic::error(
+                format!("alpha typecheck does not recognize the alias target `{target}`"),
+                span,
+            ));
+            return ResolvedType::unresolved();
+        }
+    } else if path.len() != 1 {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not yet support dotted type names (`{}`)",
@@ -204,38 +246,39 @@ fn resolve_generic(
             span,
         ));
         return ResolvedType::unresolved();
-    }
-    let name = &path[0];
-    let local = Identifier::new(package, vec![name.clone()]);
-    let head = if let Some((id, _)) = registry.lookup(&local) {
-        Resolution::Global(id)
     } else {
-        let candidate = Identifier::new("Global", vec![name.clone()]);
-        let Some((id, entry)) = registry.lookup(&candidate) else {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck does not recognize the type name `{name}` (no \
-                     same-package struct/enum or `Global.*` type registered)",
-                ),
-                span,
-            ));
-            return ResolvedType::unresolved();
-        };
-        if !entry.identifier.is_in_global() {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck only recognizes `Global.*` primitive type names; \
-                     got `{name}`",
-                ),
-                span,
-            ));
-            return ResolvedType::unresolved();
+        let name = &path[0];
+        let local = Identifier::new(scope.package, vec![name.clone()]);
+        if let Some((id, _)) = scope.registry.lookup(&local) {
+            Resolution::Global(id)
+        } else {
+            let candidate = Identifier::new("Global", vec![name.clone()]);
+            let Some((id, entry)) = scope.registry.lookup(&candidate) else {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "alpha typecheck does not recognize the type name `{name}` (no \
+                         same-package struct/enum or `Global.*` type registered)",
+                    ),
+                    span,
+                ));
+                return ResolvedType::unresolved();
+            };
+            if !entry.identifier.is_in_global() {
+                diagnostics.push(Diagnostic::error(
+                    format!(
+                        "alpha typecheck only recognizes `Global.*` primitive type names; \
+                         got `{name}`",
+                    ),
+                    span,
+                ));
+                return ResolvedType::unresolved();
+            }
+            Resolution::Global(id)
         }
-        Resolution::Global(id)
     };
     let resolved_args = args
         .iter()
-        .map(|arg| resolve_type_expr(arg, scope, package, registry, diagnostics))
+        .map(|arg| resolve_type_expr(arg, type_params, scope, diagnostics))
         .collect();
     ResolvedType::Named {
         resolution: head,
@@ -246,11 +289,25 @@ fn resolve_generic(
 fn resolve_named(
     path: &[String],
     span: Span,
-    scope: TypeParamScope<'_>,
-    package: &str,
-    registry: &GlobalRegistry,
+    type_params: TypeParamScope<'_>,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    if path.len() == 1
+        && let Some((owner, index)) = type_params.lookup(&path[0], scope.registry)
+    {
+        return ResolvedType::leaf(Resolution::TypeParam { owner, index });
+    }
+    if let Some(target) = rewrite_through_aliases(scope.aliases, path) {
+        if let Some((id, _)) = scope.registry.lookup(&target) {
+            return ResolvedType::leaf(Resolution::Global(id));
+        }
+        diagnostics.push(Diagnostic::error(
+            format!("alpha typecheck does not recognize the alias target `{target}`"),
+            span,
+        ));
+        return ResolvedType::unresolved();
+    }
     if path.len() != 1 {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -262,19 +319,16 @@ fn resolve_named(
         return ResolvedType::unresolved();
     }
     let name = &path[0];
-    if let Some((owner, index)) = scope.lookup(name, registry) {
-        return ResolvedType::leaf(Resolution::TypeParam { owner, index });
-    }
     // User-defined structs in the current package shadow stdlib
     // primitives by binding lookup order. The collect sub-pass has
     // already registered every user struct, so a same-package struct
     // entry takes precedence over a `Global.<name>` primitive.
-    let local = Identifier::new(package, vec![name.clone()]);
-    if let Some((id, _)) = registry.lookup(&local) {
+    let local = Identifier::new(scope.package, vec![name.clone()]);
+    if let Some((id, _)) = scope.registry.lookup(&local) {
         return ResolvedType::leaf(Resolution::Global(id));
     }
     let candidate = Identifier::new("Global", vec![name.clone()]);
-    let Some((id, entry)) = registry.lookup(&candidate) else {
+    let Some((id, entry)) = scope.registry.lookup(&candidate) else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not recognize the type name `{name}` (no \
@@ -327,19 +381,25 @@ pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
 }
 
 /// Resolve a `<T: Bound>` bound name to the protocol's registry id.
-/// Looks up `bound` first in `package` then under `Global`. Emits a
-/// diagnostic at `span` and returns `None` when the name doesn't
-/// resolve or names a non-protocol entry.
+/// Lookup order matches type-name resolution: file aliases first
+/// (so `<T: AliasedProtocol>` works), then `package`, then `Global`.
+/// Emits a diagnostic at `span` and returns `None` when the name
+/// doesn't resolve or names a non-protocol entry.
 pub(crate) fn resolve_bound_to_id(
     bound: &str,
     span: Span,
-    package: &str,
-    registry: &GlobalRegistry,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
-    let local = Identifier::new(package, vec![bound.to_string()]);
+    let path = [bound.to_string()];
+    let aliased = rewrite_through_aliases(scope.aliases, &path)
+        .and_then(|target| scope.registry.lookup(&target));
+    let local = Identifier::new(scope.package, vec![bound.to_string()]);
     let global = Identifier::new("Global", vec![bound.to_string()]);
-    let Some((id, entry)) = registry.lookup(&local).or_else(|| registry.lookup(&global)) else {
+    let Some((id, entry)) = aliased
+        .or_else(|| scope.registry.lookup(&local))
+        .or_else(|| scope.registry.lookup(&global))
+    else {
         diagnostics.push(Diagnostic::error(
             format!("type-parameter bound `{bound}` does not resolve to a known protocol"),
             span,

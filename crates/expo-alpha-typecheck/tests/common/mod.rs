@@ -73,6 +73,7 @@ pub fn typecheck_fail(source: &str, mode: ParseMode) -> CheckFailure {
 
 pub fn parse_and_check(source: &str, mode: ParseMode) -> Result<CheckedProgram, CheckFailure> {
     let mut sources = expo_stdlib::alpha_autoimport_sources();
+    sources.extend(expo_stdlib::alpha_qualified_sources());
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.expo"),

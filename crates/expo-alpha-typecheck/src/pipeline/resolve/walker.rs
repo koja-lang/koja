@@ -24,6 +24,7 @@
 use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
+use crate::pipeline::aliases::collect_file_aliases;
 use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
@@ -39,7 +40,12 @@ pub(crate) fn resolve_file(
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let mut env = ResolverEnv { package, registry };
+    let aliases = collect_file_aliases(file);
+    let mut env = ResolverEnv {
+        file_aliases: &aliases,
+        package,
+        registry,
+    };
     for item in &mut file.items {
         match item {
             Item::Function(function) => {

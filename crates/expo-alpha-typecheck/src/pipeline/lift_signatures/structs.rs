@@ -11,23 +11,25 @@ use std::collections::BTreeMap;
 use expo_ast::ast::{Diagnostic, StructDecl};
 use expo_ast::identifier::Identifier;
 
-use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField, StructDefinition};
+use crate::registry::{GlobalKind, ResolvedStructField, StructDefinition};
 
+use super::LiftScope;
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
 use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_struct(
     decl: &StructDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    lift_struct_definition(decl, package, registry, diagnostics);
-    let struct_identifier = Identifier::new(package, vec![decl.name.clone()]);
+    lift_struct_definition(decl, scope, diagnostics);
+    let struct_identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
     for function in &decl.functions {
-        let method_identifier =
-            Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+        let method_identifier = Identifier::new(
+            scope.package,
+            vec![decl.name.clone(), function.name.clone()],
+        );
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -35,8 +37,7 @@ pub(super) fn lift_struct(
                 receiver: &struct_identifier,
                 self_override: None,
             },
-            package,
-            registry,
+            scope,
             diagnostics,
         );
     }
@@ -44,12 +45,11 @@ pub(super) fn lift_struct(
 
 fn lift_struct_definition(
     decl: &StructDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    let Some((id, entry)) = registry.lookup(&identifier) else {
+    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures: struct `{identifier}` missing from registry — \
              collect invariant violation",
@@ -69,17 +69,22 @@ fn lift_struct_definition(
     } else {
         vec![id]
     };
-    let scope = TypeParamScope::new(&owners);
+    let type_params = TypeParamScope::new(&owners);
 
     let mut fields = Vec::with_capacity(decl.fields.len());
     for field in &decl.fields {
-        let ty = resolve_type_expr(&field.type_expr, scope, package, registry, diagnostics);
+        let ty = resolve_type_expr(
+            &field.type_expr,
+            type_params,
+            scope.resolution_scope(),
+            diagnostics,
+        );
         fields.push(ResolvedStructField {
             name: field.name.clone(),
             ty,
         });
     }
-    registry.set_struct_definition(
+    scope.registry.set_struct_definition(
         id,
         StructDefinition {
             fields,

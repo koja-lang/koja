@@ -17,6 +17,7 @@ use crate::registry::{
     Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition, ResolvedProtocolMethod,
 };
 
+use super::LiftScope;
 use super::ProtocolBodies;
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
@@ -25,14 +26,15 @@ use super::types::{
     type_expr_span,
 };
 
-/// Recurring args threaded through trait-impl handling. Pure data
-/// bundle; helpers take it by value (everything inside is a borrow).
+/// Read-only data bundle threaded through trait-impl conformance.
+/// `Copy` so helpers can take it by value (every field is a borrow).
+///
 /// `protocol_subst` maps the protocol's type-param slots to concrete
 /// types so conformance can compare apples to apples: slot 0 (`Self`)
 /// is the impl's resolved target type; slots 1..N are the type-args
 /// the user wrote on `trait_expr` (`Eq<String>` → `[String]`).
 #[derive(Clone, Copy)]
-struct ProtocolImplCtx<'a> {
+struct ProtocolImplScope<'a> {
     package: &'a str,
     protocol_identifier: &'a Identifier,
     protocol_subst: &'a Substitution,
@@ -43,17 +45,19 @@ struct ProtocolImplCtx<'a> {
 
 pub(super) fn lift_impl(
     impl_block: &mut ImplBlock,
-    package: &str,
     bodies: &ProtocolBodies,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let Some(target_name) = impl_target_name(&impl_block.target).map(str::to_string) else {
         return;
     };
-    let target_identifier = Identifier::new(package, vec![target_name.clone()]);
+    let target_identifier = Identifier::new(scope.package, vec![target_name.clone()]);
     if !matches!(
-        registry.lookup(&target_identifier).map(|(_, e)| &e.kind),
+        scope
+            .registry
+            .lookup(&target_identifier)
+            .map(|(_, e)| &e.kind),
         Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
     ) {
         // Collect already diagnosed; nothing was registered.
@@ -70,14 +74,13 @@ pub(super) fn lift_impl(
     // build — keeping the override always-on simplifies the
     // method-lift loop without changing behavior for the common
     // generic-aliased case.
-    let resolved_target = resolve_impl_target(impl_block, &target_identifier, registry);
+    let resolved_target = resolve_impl_target(impl_block, &target_identifier, scope);
     let resolved = if impl_block.trait_expr.is_some() {
         resolve_protocol_impl_heads(
             impl_block,
             &target_identifier,
             &resolved_target,
-            package,
-            registry,
+            scope,
             diagnostics,
         )
     } else {
@@ -88,8 +91,10 @@ pub(super) fn lift_impl(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier =
-            Identifier::new(package, vec![target_name.clone(), function.name.clone()]);
+        let method_identifier = Identifier::new(
+            scope.package,
+            vec![target_name.clone(), function.name.clone()],
+        );
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -97,8 +102,7 @@ pub(super) fn lift_impl(
                 receiver: &target_identifier,
                 self_override,
             },
-            package,
-            registry,
+            scope,
             diagnostics,
         );
     }
@@ -106,7 +110,8 @@ pub(super) fn lift_impl(
         let Some(resolved) = resolved else {
             return;
         };
-        let target_id = registry
+        let target_id = scope
+            .registry
             .lookup(&target_identifier)
             .expect("target entry was checked above")
             .0;
@@ -114,13 +119,18 @@ pub(super) fn lift_impl(
             impl_block,
             &target_name,
             &target_identifier,
-            package,
             &resolved,
             bodies,
-            registry,
+            scope,
             diagnostics,
         );
-        record_target_conformance(impl_block, target_id, &resolved, registry, diagnostics);
+        record_target_conformance(
+            impl_block,
+            target_id,
+            &resolved,
+            scope.registry,
+            diagnostics,
+        );
     }
 }
 
@@ -151,16 +161,15 @@ struct ResolvedImplHeads {
 fn resolve_impl_target(
     impl_block: &ImplBlock,
     target_identifier: &Identifier,
-    registry: &GlobalRegistry,
+    scope: &LiftScope<'_>,
 ) -> ResolvedType {
-    let owners = impl_target_owners(target_identifier, registry);
-    let scope = TypeParamScope::new(&owners);
+    let owners = impl_target_owners(target_identifier, scope.registry);
+    let type_params = TypeParamScope::new(&owners);
     let mut sink = Vec::new();
     resolve_type_expr(
         &impl_block.target,
-        scope,
-        target_identifier.package(),
-        registry,
+        type_params,
+        scope.resolution_scope(),
         &mut sink,
     )
 }
@@ -189,8 +198,7 @@ fn resolve_protocol_impl_heads(
     impl_block: &ImplBlock,
     target_identifier: &Identifier,
     target: &ResolvedType,
-    package: &str,
-    registry: &GlobalRegistry,
+    scope: &LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedImplHeads> {
     let trait_expr = impl_block
@@ -202,10 +210,15 @@ fn resolve_protocol_impl_heads(
     // method on `struct Bag<T>` would resolve `T`. The impl's free
     // type-params alias the receiver's slots; we don't allocate a
     // separate impl-anchored scope.
-    let owners = impl_target_owners(target_identifier, registry);
-    let scope = TypeParamScope::new(&owners);
+    let owners = impl_target_owners(target_identifier, scope.registry);
+    let type_params = TypeParamScope::new(&owners);
     let target = target.clone();
-    let protocol = resolve_type_expr(trait_expr, scope, package, registry, diagnostics);
+    let protocol = resolve_type_expr(
+        trait_expr,
+        type_params,
+        scope.resolution_scope(),
+        diagnostics,
+    );
     let ResolvedType::Named {
         resolution: Resolution::Global(protocol_id),
         type_args: protocol_args,
@@ -220,7 +233,7 @@ fn resolve_protocol_impl_heads(
         ));
         return None;
     };
-    let protocol_entry = registry.get(protocol_id)?;
+    let protocol_entry = scope.registry.get(protocol_id)?;
     if !matches!(protocol_entry.kind, GlobalKind::Protocol(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -232,7 +245,8 @@ fn resolve_protocol_impl_heads(
         ));
         return None;
     }
-    let protocol_arity = registry
+    let protocol_arity = scope
+        .registry
         .type_params(protocol_id)
         .map(<[String]>::len)
         .unwrap_or(0);
@@ -294,19 +308,17 @@ fn record_target_conformance(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn verify_and_synthesize_trait_impl(
     impl_block: &mut ImplBlock,
     target_name: &str,
     target_identifier: &Identifier,
-    package: &str,
     resolved: &ResolvedImplHeads,
     bodies: &ProtocolBodies,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let protocol_id = resolved.protocol_id;
-    let protocol_entry = registry.get(protocol_id).unwrap_or_else(|| {
+    let protocol_entry = scope.registry.get(protocol_id).unwrap_or_else(|| {
         panic!("verify_and_synthesize_trait_impl: protocol id {protocol_id} missing")
     });
     let protocol_identifier = protocol_entry.identifier.clone();
@@ -321,15 +333,21 @@ fn verify_and_synthesize_trait_impl(
         return;
     };
     let definition = definition.clone();
-    let ctx = ProtocolImplCtx {
-        package,
+    let impl_scope = ProtocolImplScope {
+        package: scope.package,
         protocol_identifier: &protocol_identifier,
         protocol_subst: &resolved.protocol_subst,
         target: &resolved.target,
         target_identifier,
         target_name,
     };
-    verify_protocol_conformance(impl_block, &definition, ctx, registry, diagnostics);
+    verify_protocol_conformance(
+        impl_block,
+        &definition,
+        impl_scope,
+        scope.registry,
+        diagnostics,
+    );
     let declared: HashMap<String, ()> = impl_block
         .members
         .iter()
@@ -358,7 +376,7 @@ fn verify_and_synthesize_trait_impl(
             ));
             continue;
         };
-        synthesize_default_method(impl_block, default_method, ctx, registry, diagnostics);
+        synthesize_default_method(impl_block, default_method, impl_scope, scope, diagnostics);
     }
 }
 
@@ -368,8 +386,8 @@ fn verify_and_synthesize_trait_impl(
 fn synthesize_default_method(
     impl_block: &mut ImplBlock,
     method: ProtocolMethod,
-    ctx: ProtocolImplCtx<'_>,
-    registry: &mut GlobalRegistry,
+    impl_scope: ProtocolImplScope<'_>,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     let function = Function {
@@ -383,8 +401,8 @@ fn synthesize_default_method(
         span: method.span,
     };
     let method_identifier = Identifier::new(
-        ctx.package,
-        vec![ctx.target_name.to_string(), function.name.clone()],
+        impl_scope.package,
+        vec![impl_scope.target_name.to_string(), function.name.clone()],
     );
     let type_params: Vec<String> = function
         .type_params
@@ -392,7 +410,9 @@ fn synthesize_default_method(
         .map(|p| p.name.clone())
         .collect();
     if !matches!(
-        registry.insert_function(method_identifier.clone(), function.span, type_params),
+        scope
+            .registry
+            .insert_function(method_identifier.clone(), function.span, type_params),
         InsertOutcome::Fresh(_)
     ) {
         return;
@@ -401,11 +421,10 @@ fn synthesize_default_method(
         &function,
         method_identifier,
         SelfContext::Receiver {
-            receiver: ctx.target_identifier,
-            self_override: Some(ctx.target),
+            receiver: impl_scope.target_identifier,
+            self_override: Some(impl_scope.target),
         },
-        ctx.package,
-        registry,
+        scope,
         diagnostics,
     );
     impl_block.members.push(ImplMember::Function(function));
@@ -414,7 +433,7 @@ fn synthesize_default_method(
 fn verify_protocol_conformance(
     impl_block: &ImplBlock,
     definition: &ProtocolDefinition,
-    ctx: ProtocolImplCtx<'_>,
+    impl_scope: ProtocolImplScope<'_>,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -426,15 +445,21 @@ fn verify_protocol_conformance(
             ImplMember::TypeAlias(_) => None,
         })
         .collect();
-    let ProtocolImplCtx {
+    let ProtocolImplScope {
         protocol_identifier,
         target_name,
         ..
-    } = ctx;
+    } = impl_scope;
     for method in &definition.methods {
         match declared.get(method.name.as_str()) {
             Some(impl_function) => {
-                check_impl_method_signature(method, impl_function, ctx, registry, diagnostics);
+                check_impl_method_signature(
+                    method,
+                    impl_function,
+                    impl_scope,
+                    registry,
+                    diagnostics,
+                );
             }
             None if !method.has_default => {
                 diagnostics.push(Diagnostic::error(
@@ -477,17 +502,17 @@ fn verify_protocol_conformance(
 fn check_impl_method_signature(
     expected: &ResolvedProtocolMethod,
     impl_function: &Function,
-    ctx: ProtocolImplCtx<'_>,
+    impl_scope: ProtocolImplScope<'_>,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let ProtocolImplCtx {
+    let ProtocolImplScope {
         package,
         protocol_identifier,
         protocol_subst,
         target_name,
         ..
-    } = ctx;
+    } = impl_scope;
     let method_identifier = Identifier::new(
         package,
         vec![target_name.to_string(), impl_function.name.clone()],

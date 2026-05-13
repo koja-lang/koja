@@ -11,6 +11,8 @@ use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
+use crate::pipeline::aliases::rewrite_through_aliases;
+use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
 
@@ -38,8 +40,7 @@ pub(super) fn resolve_struct_construction(
         resolve_expr(&mut field.value, resolver, diagnostics);
     }
 
-    let Some((struct_id, struct_entry)) =
-        lookup_type(type_path, resolver.package, resolver.registry)
+    let Some((struct_id, struct_entry)) = lookup_type(type_path, resolver.resolution_scope())
     else {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -367,24 +368,37 @@ fn is_unconstructable_primitive(identifier: &Identifier) -> bool {
 }
 
 /// Resolve a single-segment type path against the in-scope package,
-/// falling back to `Global` for stdlib stubs. Multi-segment paths
-/// and aliases are feature gaps.
+/// falling back to `Global` for stdlib stubs. File aliases get
+/// first crack so `alias Pkg.Type as Local` followed by
+/// `Local{...}` resolves through to the target package.
 ///
 /// Generalized from the struct-only `lookup_struct` so enum-variant
 /// construction (`Color.Red`) and static method dispatch on enums
 /// (`Color.method(...)`) can share the same path-resolution logic.
-/// Callers narrow on `entry.kind` if they care about kind.
-pub(super) fn lookup_type<'a>(
+/// Callers narrow on `entry.kind` if they care about kind. The
+/// `path.len() != 1` gate stays as the existing "no nested types
+/// yet" enforcement for non-alias paths; aliases sidestep it
+/// because they resolve straight to a constructed `Identifier`.
+/// When nested types land, this gate is the only thing to relax —
+/// the alias machinery doesn't move.
+pub(super) fn lookup_type<'r>(
     type_path: &[String],
-    package: &str,
-    registry: &'a GlobalRegistry,
-) -> Option<(GlobalRegistryId, &'a RegistryEntry)> {
+    scope: ResolutionScope<'r>,
+) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
+    if let Some(target) = rewrite_through_aliases(scope.aliases, type_path) {
+        return scope.registry.lookup(&target);
+    }
     if type_path.len() != 1 {
         return None;
     }
     let name = &type_path[0];
-    if let Some(found) = registry.lookup(&Identifier::new(package, vec![name.clone()])) {
+    if let Some(found) = scope
+        .registry
+        .lookup(&Identifier::new(scope.package, vec![name.clone()]))
+    {
         return Some(found);
     }
-    registry.lookup(&Identifier::new("Global", vec![name.clone()]))
+    scope
+        .registry
+        .lookup(&Identifier::new("Global", vec![name.clone()]))
 }

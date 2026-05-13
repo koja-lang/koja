@@ -16,25 +16,26 @@ use expo_ast::ast::{Diagnostic, EnumDecl, EnumVariantData};
 use expo_ast::identifier::Identifier;
 
 use crate::registry::{
-    EnumDefinition, GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField,
-    ResolvedVariantData,
+    EnumDefinition, GlobalKind, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
+use super::LiftScope;
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
 use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_enum(
     decl: &EnumDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    lift_enum_definition(decl, package, registry, diagnostics);
-    let enum_identifier = Identifier::new(package, vec![decl.name.clone()]);
+    lift_enum_definition(decl, scope, diagnostics);
+    let enum_identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
     for function in &decl.functions {
-        let method_identifier =
-            Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+        let method_identifier = Identifier::new(
+            scope.package,
+            vec![decl.name.clone(), function.name.clone()],
+        );
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -42,8 +43,7 @@ pub(super) fn lift_enum(
                 receiver: &enum_identifier,
                 self_override: None,
             },
-            package,
-            registry,
+            scope,
             diagnostics,
         );
     }
@@ -51,12 +51,11 @@ pub(super) fn lift_enum(
 
 fn lift_enum_definition(
     decl: &EnumDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    let Some((id, entry)) = registry.lookup(&identifier) else {
+    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures: enum `{identifier}` missing from registry — \
              collect invariant violation",
@@ -74,7 +73,7 @@ fn lift_enum_definition(
     } else {
         vec![id]
     };
-    let scope = TypeParamScope::new(&owners);
+    let type_params = TypeParamScope::new(&owners);
 
     let mut variants = Vec::with_capacity(decl.variants.len());
     for variant in &decl.variants {
@@ -92,8 +91,12 @@ fn lift_enum_definition(
                 }
                 let mut resolved = Vec::with_capacity(fields.len());
                 for field in fields {
-                    let ty =
-                        resolve_type_expr(&field.type_expr, scope, package, registry, diagnostics);
+                    let ty = resolve_type_expr(
+                        &field.type_expr,
+                        type_params,
+                        scope.resolution_scope(),
+                        diagnostics,
+                    );
                     resolved.push(ResolvedStructField {
                         name: field.name.clone(),
                         ty,
@@ -114,7 +117,9 @@ fn lift_enum_definition(
                 }
                 let resolved = types
                     .iter()
-                    .map(|ty| resolve_type_expr(ty, scope, package, registry, diagnostics))
+                    .map(|ty| {
+                        resolve_type_expr(ty, type_params, scope.resolution_scope(), diagnostics)
+                    })
                     .collect();
                 ResolvedVariantData::Tuple(resolved)
             }
@@ -125,7 +130,7 @@ fn lift_enum_definition(
             name: variant.name.clone(),
         });
     }
-    registry.set_enum_definition(
+    scope.registry.set_enum_definition(
         id,
         EnumDefinition {
             variants,

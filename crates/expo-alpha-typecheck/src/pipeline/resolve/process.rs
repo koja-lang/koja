@@ -216,8 +216,7 @@ fn bind_receive_pattern(
     let resolved = resolve_type_expr(
         type_expr,
         TypeParamScope::new(resolver.type_param_owners),
-        resolver.package,
-        resolver.registry,
+        resolver.resolution_scope(),
         diagnostics,
     );
     if !resolved.is_resolved() {

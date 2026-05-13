@@ -59,8 +59,7 @@ pub(super) fn resolve_assignment(
         let resolved = resolve_type_expr(
             annotation,
             TypeParamScope::new(resolver.type_param_owners),
-            resolver.package,
-            resolver.registry,
+            resolver.resolution_scope(),
             diagnostics,
         );
         resolved.is_resolved().then_some(resolved)

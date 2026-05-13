@@ -419,9 +419,51 @@ of these, that's the trigger to revisit — not before.
 
 ---
 
-## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits, post-loops, post-closures, post-concurrency-primitives)
+## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits, post-loops, post-closures, post-concurrency-primitives, post-alias-imports)
 
 What's shipped since the last audit:
+
+- **Alias imports — `alias Pkg.Type [as Local]`, end-to-end with
+  shadow-as-error.** `expo-alpha-typecheck/src/pipeline/aliases.rs`
+  validates each file's alias decls against the post-collect
+  registry (path length ≥ 2, target exists as struct/enum/protocol,
+  no duplicate local names, no shadowing of current-package or
+  `Global` bindings — with a redundant-self-alias carve-out that
+  allows `alias TestApp.Foo as Foo` when the alias and existing
+  binding resolve to the same identifier). The `rewrite_through_aliases`
+  helper is **path-length agnostic** so a future `alias Pkg.Outer as O`
+  resolves both `O` and `O.Inner` once nested-type lifting lands —
+  no movement here. Lookup precedence is type-param scope → file
+  aliases → current package → `Global`. Threaded through every
+  `lift_signatures/types.rs::resolve_type_expr` caller (functions,
+  structs, enums, protocols, impls, constants) plus the `resolve`
+  pass via `ResolverEnv` / `Resolver` (which now also carries
+  `current_file: &Path` as load-bearing infrastructure for the
+  upcoming `priv` slice). Pinned by
+  `crates/expo-alpha-typecheck/tests/aliases.rs` (13 tests
+  covering alias-to-Global, alias-as, default-local-name, unknown-
+  package / unknown-type, path-too-short, multi-segment-target
+  fall-through, duplicate-name, shadow-Global / shadow-current-
+  package, redundant-self-alias allowed, file-private isolation,
+  type-param-vs-alias precedence) and the
+  `alpha_run_llvm_script_aliased_crypto_sha256_digest_prints_thirtytwo`
+  driver test that aliases `Crypto.SHA256` and runs through the
+  LLVM backend.
+
+- **`ALPHA_QUALIFIED` — curated qualified stdlib subset.** Parallel
+  to `ALPHA_AUTOIMPORT`, lives in `expo-stdlib/build.rs` and is
+  re-exported via `alpha_qualified_sources()`. Seeded with the
+  `Crypto` package; `expo-driver/src/alpha.rs::bundle_with_autoimport`
+  and the alpha-typecheck test helper both prepend the qualified
+  set so any alpha pipeline can `alias Crypto.Type` without a
+  per-test stub. **Pragmatic stand-in for incremental package
+  loading**: retires once `IRPackage` caching + on-demand package
+  loads land, at which point qualified packages load lazily from
+  disk via the package graph and the curated list disappears.
+  Adding `Http` / `Json` / `Net` is a single-line edit to
+  `alpha_qualified_packages` once those packages typecheck cleanly
+  through alpha (the inventory of remaining gaps is the same one
+  this roadmap tracks).
 
 - **Concurrency primitives — `spawn` / `receive` + `Ref<M, R>` /
   `ReplyTo<R>` intrinsics, end-to-end through LLVM emit.**

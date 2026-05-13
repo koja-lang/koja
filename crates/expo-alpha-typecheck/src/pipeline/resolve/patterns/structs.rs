@@ -60,8 +60,7 @@ fn resolve_struct_metadata(
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<StructPatternMetadata> {
-    let Some((struct_id, entry)) = lookup_type(type_path, resolver.package, resolver.registry)
-    else {
+    let Some((struct_id, entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not recognize the struct type `{}`",
