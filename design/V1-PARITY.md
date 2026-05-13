@@ -61,7 +61,7 @@ The full list of "not yet" diagnostics lives in:
 - `expo-alpha-typecheck/src/pipeline/lift_signatures/{functions,types,constants}.rs`
 - `expo-alpha-typecheck/src/pipeline/resolve/{expr,statements,calls/mod,patterns/mod,literals/binary,closures,match_expr}.rs`
 - `expo-alpha-typecheck/src/pipeline/seal/{expressions,patterns}.rs`
-- `expo-alpha-ir/src/lower/{expr,ops,body,structs,enums,package,calls,closures}.rs`
+- `expo-alpha-ir/src/lower/{expr,ops,structs,enums,package,calls,closures}.rs`
 - `expo-alpha-ir-llvm/src/{emit/mod,emit/instruction,main_wrapper}.rs`
 
 ---
@@ -74,7 +74,6 @@ alpha can't compile today. **These are the hard parity blockers.**
 | Gap                                                                           | Golden tests                                                                                                                               | Alpha gate                                                                                                     |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | **Type unions** (`A \| B`, `type X = …`, typed-binding patterns `p: Post ->`) | `union_types`, `union_named`, `union_typed_binding`, `union_struct_field`, `process_union_msg`                                             | `lift_signatures/types.rs:125`, `resolve/patterns/mod.rs:170`                                                  |
-| **Infinite `loop`** (and `break`)                                             | `match_loop_return.expo` (`loop`), `ffi/src/main.expo` (`loop` + `break`)                                                                  | `ExprKind::Loop` falls into `resolve/expr.rs:220` "other"; `break` only allowed inside synthesized for-desugar |
 | **Tail-call optimization**                                                    | `tail_call.expo`, `tail_call_unit.expo` (100k-deep recursion)                                                                              | No `TailCall` in alpha-IR-LLVM — would stack-overflow even though it parses and typechecks                     |
 | **`@extern` / `@link` FFI** on inherent methods + `CPtr<T>` arg marshaling    | `ffi/src/main.expo`                                                                                                                        | Annotations parse; alpha-IR-LLVM doesn't emit the C-ABI bridge or marshal pointers                             |
 
@@ -158,6 +157,28 @@ alpha source tree, but golden coverage confirms them shipped:
   tests in `crates/expo-alpha-typecheck/tests/resolve_strings.rs`
   and the `*_string_interpolation_*` driver tests in
   `crates/expo-driver/tests/alpha_two_plus_two.rs`.
+- **Infinite `loop` + `break`** — shipped 2026-05-13. `Resolver`
+  threads a `loop_depth` counter and a `loop_break_seen: Vec<bool>`
+  stack; `resolve_loop` types the loop as `Never` when no targeted
+  `break` was seen (the body is divergent — only `return` / `panic`
+  paths) and `Unit` otherwise. `resolve_while` bumps the same
+  fields so its body's `break` is gated, but keeps its own `Unit`
+  return type (the cond can fall through). The walker gates
+  `Statement::Break` on `loop_depth > 0` with `"break outside of
+  loop"`. Closure boundaries save/restore both fields, so an inner
+  `break` can never bleed up to an outer-function loop. IR lowering
+  threads a `loop_exit: Vec<IRBlockId>` stack on `FnLowerCtx`;
+  `lower_loop` emits `loop_body` / `loop_exit` blocks with a self
+  back-edge, and `lower_break_stmt` terminates the open block with
+  a `Branch` to the innermost exit. The for-desugar's `__idx = __len`
+  exit hack was replaced with a real `Statement::Break`. Pinned by
+  the `loop_*` / `break_*` tests in
+  `crates/expo-alpha-typecheck/tests/resolve_loops.rs`,
+  `crates/expo-alpha-ir/tests/lower_loops.rs`,
+  `crates/expo-alpha-ir-eval/tests/loops.rs`,
+  `crates/expo-alpha-ir-llvm/tests/loops.rs`, and the
+  `*_loop_break_*` driver tests in
+  `crates/expo-driver/tests/alpha_two_plus_two.rs`.
 
 ---
 
@@ -200,12 +221,21 @@ the rest with zero backend changes. Unblocked the ~25 `tests/lang/`
 files that interpolate without manual `.format()` and removed the
 last alpha-side language gap from the `Json` package.
 
-### 4. Infinite `loop` + `break` / `continue`
+### 4. Infinite `loop` + `break` — shipped 2026-05-13
 
-Adds `ExprKind::Loop` to resolve / lower; threads `loop_depth`
-through the resolver context so `break` and `continue` are gated
-to loop bodies. Retires the `__idx_n = __len_n` hack in the
-for-desugar. **~2–3 days.**
+`ExprKind::Loop` resolves through `resolve_loop`, typing as `Never`
+when the body has no targeted `break` and `Unit` when at least one
+`break` fires (a syntactic check via the new `loop_break_seen`
+stack on `Resolver`). `break` is gated on `loop_depth > 0` with
+`"break outside of loop"`; closure boundaries reset both fields so
+an inner `break` can't reach an outer-function loop. IR lowering
+threads a `loop_exit` stack on `FnLowerCtx`; `lower_loop` emits
+`loop_body` / `loop_exit` blocks with a self back-edge, and
+`lower_break_stmt` terminates the open block with a `Branch` to
+the innermost exit. Backends needed zero changes. The for-desugar's
+`__idx = __len` exit hack was retired in favor of a real
+`Statement::Break`. `continue` is **not** in v1 either, so it
+isn't a parity gap — left as a future language extension.
 
 ### 5. Type unions (`A | B`, `type X = A | B`, typed-binding patterns)
 

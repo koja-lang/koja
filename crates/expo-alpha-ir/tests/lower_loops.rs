@@ -1,4 +1,4 @@
-//! Coverage for `while` lowering in `src/lower/loops.rs`.
+//! Coverage for `loop` and `while` lowering in `src/lower/loops.rs`.
 //!
 //! Pins the three-block CFG shape for `while`:
 //!
@@ -9,6 +9,16 @@
 //!   [`IRTerminator::Branch`] to the header.
 //! - Exit emits a fresh `Const::Unit` and continues the surrounding
 //!   flow.
+//!
+//! And the two-block CFG shape for `loop` (no header — there's no
+//! condition):
+//!
+//! - Open block branches unconditionally to `loop_body`.
+//! - Body emits a back-edge [`IRTerminator::Branch`] to itself.
+//!   `break` inside the body closes its own flow with a
+//!   `Branch(loop_exit)`.
+//! - Exit emits a fresh `Const::Unit` (only reachable when at least
+//!   one `break` fires).
 //!
 //! Loop-carried state lives in alloca slots
 //! ([`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`]) —
@@ -334,5 +344,181 @@ fn for_lowers_via_desugar_to_while_plus_match() {
         "for-desugar should produce a back-edge to `while_header` from \
          a match-arm tail block; got blocks {:?}",
         main.blocks.iter().map(|b| &b.label).collect::<Vec<_>>(),
+    );
+}
+
+#[test]
+fn loop_lowers_to_body_with_self_back_edge() {
+    // `loop end` (no break) emits an entry → loop_body branch and a
+    // back-edge from loop_body to itself. The exit block is
+    // synthesized but never reached at runtime — the IR still
+    // contains it (every `loop` produces both blocks unconditionally).
+    let source = "
+        fn main
+          loop
+          end
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let main = function(&program, "main");
+
+    let entry = &main.blocks[0];
+    let IRTerminator::Branch(BranchTarget { block: body_id, .. }) = &entry.terminator else {
+        panic!(
+            "entry should branch unconditionally to loop_body; got {:?}",
+            entry.terminator,
+        );
+    };
+
+    let body = main
+        .blocks
+        .iter()
+        .find(|b| b.id == *body_id)
+        .expect("loop_body block missing");
+    assert_eq!(body.label, "loop_body");
+    let IRTerminator::Branch(BranchTarget {
+        block: back_edge_target,
+        ..
+    }) = &body.terminator
+    else {
+        panic!(
+            "loop_body should terminate with back-edge Branch; got {:?}",
+            body.terminator,
+        );
+    };
+    assert_eq!(*back_edge_target, *body_id, "back-edge must target body");
+
+    main.blocks
+        .iter()
+        .find(|b| b.label == "loop_exit")
+        .expect("loop_exit block missing (always synthesized, even if unreachable)");
+}
+
+#[test]
+fn loop_with_break_lowers_break_as_branch_to_loop_exit() {
+    // The body's `break` closes the body's flow with a
+    // `Branch(loop_exit)`. The body block has no back-edge — its
+    // terminator IS the break branch — and the exit block contains
+    // a `Const::Unit`.
+    let source = "
+        fn main
+          loop
+            break
+          end
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let main = function(&program, "main");
+
+    let body = main
+        .blocks
+        .iter()
+        .find(|b| b.label == "loop_body")
+        .expect("loop_body missing");
+    let exit = main
+        .blocks
+        .iter()
+        .find(|b| b.label == "loop_exit")
+        .expect("loop_exit missing");
+
+    let IRTerminator::Branch(BranchTarget { block: target, .. }) = &body.terminator else {
+        panic!(
+            "body should terminate with break-branch; got {:?}",
+            body.terminator,
+        );
+    };
+    assert_eq!(
+        *target, exit.id,
+        "break should branch directly to loop_exit",
+    );
+    assert!(
+        exit.instructions.iter().any(|i| matches!(
+            i,
+            IRInstruction::Const {
+                value: expo_alpha_ir::ConstValue::Unit,
+                ..
+            }
+        )),
+        "loop_exit should emit Const::Unit; got {:?}",
+        exit.instructions,
+    );
+}
+
+#[test]
+fn nested_break_targets_innermost_loop_exit() {
+    // `loop loop break end end`: the inner `break` must branch to
+    // the *inner* loop_exit, not the outer one. The IR shows two
+    // pairs of (body, exit) blocks; the inner break-branch's target
+    // is the inner exit (the second loop_exit by creation order).
+    let source = "
+        fn main
+          loop
+            loop
+              break
+            end
+          end
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let main = function(&program, "main");
+
+    let exit_blocks: Vec<_> = main
+        .blocks
+        .iter()
+        .filter(|b| b.label == "loop_exit")
+        .collect();
+    assert_eq!(
+        exit_blocks.len(),
+        2,
+        "expected two loop_exit blocks (one per nested loop); got {} (labels: {:?})",
+        exit_blocks.len(),
+        main.blocks.iter().map(|b| &b.label).collect::<Vec<_>>(),
+    );
+    // `lower_loop` for the inner loop runs nested inside the outer
+    // — so by `fresh_block` order the outer's exit comes first
+    // (created during the outer's `lower_loop` setup), then the
+    // inner's exit. Bookkeeping mirrors v1's loop_exit stack push
+    // order; pin the outer-then-inner shape.
+    let outer_exit_id = exit_blocks[0].id;
+    let inner_exit_id = exit_blocks[1].id;
+
+    let body_blocks: Vec<_> = main
+        .blocks
+        .iter()
+        .filter(|b| b.label == "loop_body")
+        .collect();
+    assert_eq!(body_blocks.len(), 2, "expected two loop_body blocks");
+
+    // The inner body terminates with the break-branch to the inner
+    // exit (it never falls through to its own back-edge because the
+    // break is the only statement in the body).
+    let inner_body = body_blocks
+        .iter()
+        .find(|b| {
+            matches!(
+                &b.terminator,
+                IRTerminator::Branch(BranchTarget { block, .. }) if *block == inner_exit_id,
+            )
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected one loop_body to break to inner_exit ({inner_exit_id}); \
+                 got terminators {:?}",
+                body_blocks
+                    .iter()
+                    .map(|b| &b.terminator)
+                    .collect::<Vec<_>>(),
+            )
+        });
+    assert!(
+        !matches!(
+            &inner_body.terminator,
+            IRTerminator::Branch(BranchTarget { block, .. }) if *block == outer_exit_id,
+        ),
+        "inner break must NOT target outer exit; got {:?}",
+        inner_body.terminator,
     );
 }

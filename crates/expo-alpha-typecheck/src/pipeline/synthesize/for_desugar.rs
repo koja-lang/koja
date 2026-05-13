@@ -21,8 +21,10 @@
 //! - Slot ids are per-function-unique (`__it_0`, `__it_1`, …) so
 //!   nested / sibling fors don't collide via alpha's reassignment-
 //!   keeps-type rule.
-//! - The `None` arm exits via `__idx_n = __len_n` (not `break`)
-//!   because alpha IR doesn't lower `break` yet.
+//! - The `None` arm exits via [`Statement::Break`], which the
+//!   surrounding `while` resolves under (it pushes a
+//!   `loop_break_seen` slot) and IR-lower targets at the
+//!   `while_exit` block.
 //! - Only statement-position fors are rewritten; expression-
 //!   position fors fall through to resolve's feature-gap diagnostic.
 
@@ -271,7 +273,7 @@ fn build_for_desugar(
             resolved_type: None,
         },
         guard: None,
-        body: vec![assign_local(&idx_name, ident(&len_name, span), span)],
+        body: vec![Statement::Break { span }],
         span,
     };
     let match_subject = method_call(

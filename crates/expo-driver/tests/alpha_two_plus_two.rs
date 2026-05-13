@@ -242,6 +242,21 @@ const STRING_INTERPOLATION_SCRIPT_SOURCE: &str = "
     \"hello #{name}, count #{42}\"
 ";
 
+/// Script-mode fixture pinning `loop` + `break` end-to-end. The
+/// counter increments until it hits 5, then `break` exits the
+/// loop and the trailing `i` expression auto-prints `5\n`.
+/// Without `break`, the loop would run forever.
+const LOOP_BREAK_SCRIPT_SOURCE: &str = "
+    i = 0
+    loop
+      if i >= 5
+        break
+      end
+      i = i + 1
+    end
+    i
+";
+
 /// Script-mode fixture exercising the alpha static-method slice
 /// end-to-end with an inline-form declaration. `Point.origin()`
 /// dispatches to a method declared inside the struct body, the
@@ -1180,6 +1195,52 @@ fn alpha_run_interpreter_script_string_interpolation_prints_hello_world_count_42
         "run_interpreter_string_interpolation",
         None,
     );
+}
+
+/// Run the `loop` + `break` script through `expo alpha run` and
+/// assert its stdout trims to `5`. Shared between the LLVM /
+/// interpreter pair to keep each individual test case down to its
+/// distinguishing setup (which backend).
+fn assert_loop_break_script_prints_five(label: &str, backend: Option<&str>) {
+    let scratch = scratch_dir(label);
+    let fixture = write_fixture(
+        &scratch,
+        "loop_break.exps",
+        &dedent(LOOP_BREAK_SCRIPT_SOURCE),
+    );
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "5",
+        "expected stdout `5` (counter post-break), got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_loop_break_prints_five() {
+    assert_loop_break_script_prints_five("run_llvm_loop_break", Some("--backend=llvm"));
+}
+
+#[test]
+fn alpha_run_interpreter_script_loop_break_prints_five() {
+    assert_loop_break_script_prints_five("run_interpreter_loop_break", None);
 }
 
 /// Run the static-method script through `expo alpha run` and assert

@@ -230,18 +230,16 @@ fn extern_fn_lowers_with_empty_blocks_and_extern_kind() {
 /// the final [`LowerError::Diagnostics`] carries *only* the diagnostic
 /// from the function that actually failed. Pins the per-function
 /// fail-fast contract so a single bad function doesn't mask issues in
-/// other ones and doesn't spew spurious errors either. Uses `break`
-/// (still an IR-only feature gap that passes alpha typecheck) so
-/// `broken` trips at lower while `main` lowers cleanly.
+/// other ones and doesn't spew spurious errors either. Uses a
+/// bodyless `fn broken` (an IR-only feature gap that passes alpha
+/// typecheck and parse — see `decl.rs:485` — but which IR lower
+/// rejects with the bodyless-fn diagnostic in `package.rs:284`).
 #[test]
 fn partial_failure_reports_only_the_failing_function_diagnostic() {
     let source = "
+        fn broken
         fn main
           1
-        end
-
-        fn broken
-          break
         end
         ";
 
@@ -253,7 +251,7 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
         "expected a single diagnostic from the failing fn, got: {messages:?}",
     );
     assert!(
-        messages[0].contains("`break` statements"),
-        "expected break diagnostic from `broken`, got: {messages:?}",
+        messages[0].contains("bodyless fn") && messages[0].contains("broken"),
+        "expected bodyless-fn diagnostic mentioning `broken`, got: {messages:?}",
     );
 }

@@ -13,7 +13,7 @@ use expo_ast::labels::expr_kind_label;
 use super::calls::{CallSite, resolve_call, resolve_method_call_expr};
 use super::closures::{resolve_closure, resolve_short_closure};
 use super::control_flow::{
-    resolve_cond, resolve_if, resolve_ternary, resolve_unless, resolve_while,
+    resolve_cond, resolve_if, resolve_loop, resolve_ternary, resolve_unless, resolve_while,
 };
 use super::ctx::Resolver;
 use super::enums::resolve_enum_construction;
@@ -153,6 +153,7 @@ pub(super) fn resolve_expr_with_expected(
             diagnostics,
         ),
         ExprKind::Literal { value } => resolver.registry.literal_type(value),
+        ExprKind::Loop { body } => resolve_loop(body, resolver, diagnostics),
         ExprKind::Match { subject, arms } => {
             resolve_match(subject, arms, expected, expr.span, resolver, diagnostics)
         }

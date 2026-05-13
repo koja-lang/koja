@@ -61,10 +61,14 @@ pub(super) fn resolve_closure(
         .clone()
         .or_else(|| expected_return.cloned());
     let saved_return = std::mem::replace(&mut resolver.current_return_type, return_hint);
+    let saved_loop_depth = std::mem::replace(&mut resolver.loop_depth, 0);
+    let saved_loop_break_seen = std::mem::take(&mut resolver.loop_break_seen);
     for stmt in body.iter_mut() {
         resolve_statement(stmt, resolver, diagnostics);
     }
     let body_return_ty = trailing_expr_type(body);
+    resolver.loop_break_seen = saved_loop_break_seen;
+    resolver.loop_depth = saved_loop_depth;
     resolver.current_return_type = saved_return;
     resolver.scope.restore(snapshot);
 
@@ -93,8 +97,12 @@ pub(super) fn resolve_short_closure(
 
     let saved_return =
         std::mem::replace(&mut resolver.current_return_type, expected_return.cloned());
+    let saved_loop_depth = std::mem::replace(&mut resolver.loop_depth, 0);
+    let saved_loop_break_seen = std::mem::take(&mut resolver.loop_break_seen);
     resolve_expr_with_expected(body, expected_return, resolver, diagnostics);
     let body_return_ty = body.resolution.clone();
+    resolver.loop_break_seen = saved_loop_break_seen;
+    resolver.loop_depth = saved_loop_depth;
     resolver.current_return_type = saved_return;
     resolver.scope.restore(snapshot);
 

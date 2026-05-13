@@ -141,6 +141,12 @@ pub(crate) struct FnLowerCtx {
     locals: BTreeMap<IRLocalId, SlotState>,
     value_sources: BTreeMap<ValueId, IRLocalId>,
     closures: ClosureState,
+    /// Stack of pending loop-exit blocks — one entry per enclosing
+    /// `loop` / `while`. [`super::loops`] pushes the exit on entry
+    /// and pops on exit; [`super::body::lower_break_stmt`] peeks
+    /// the top to find the [`IRBlockId`] its `Branch` should
+    /// target. Mirrors v1's `FnLowerState::loop_exit` stack.
+    loop_exit: Vec<IRBlockId>,
 }
 
 /// Per-function closure bookkeeping. Two roles: outer fns mint
@@ -197,7 +203,30 @@ impl FnLowerCtx {
             locals: BTreeMap::new(),
             value_sources: BTreeMap::new(),
             closures: ClosureState::default(),
+            loop_exit: Vec::new(),
         }
+    }
+
+    /// Push an enclosing loop's exit block. Paired with
+    /// [`Self::pop_loop_exit`] by [`super::loops`].
+    pub(crate) fn push_loop_exit(&mut self, exit: IRBlockId) {
+        self.loop_exit.push(exit);
+    }
+
+    /// Pop the topmost loop-exit block. Panics on an empty stack —
+    /// every push has a matching pop in the same lowering scope.
+    pub(crate) fn pop_loop_exit(&mut self) {
+        self.loop_exit
+            .pop()
+            .expect("alpha IR lower: pop_loop_exit on empty stack — push/pop imbalance");
+    }
+
+    /// The innermost enclosing loop's exit block, if any. `break`
+    /// lowering consults this to pick its `Branch` target. `None`
+    /// means `break` was reached outside any loop — typecheck
+    /// should have already diagnosed; lowering panics.
+    pub(crate) fn current_loop_exit(&self) -> Option<IRBlockId> {
+        self.loop_exit.last().copied()
     }
 
     pub(crate) fn closures_mut(&mut self) -> &mut ClosureState {

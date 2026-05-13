@@ -128,6 +128,11 @@ pub(super) fn seal_expr(expr: &Expr) {
             }
         }
         ExprKind::Literal { .. } => {}
+        ExprKind::Loop { body } => {
+            for stmt in body {
+                seal_statement(stmt);
+            }
+        }
         ExprKind::Map { entries } => {
             for (key, value) in entries {
                 seal_expr(key);
@@ -221,13 +226,6 @@ pub(super) fn seal_expr(expr: &Expr) {
                 seal_statement(stmt);
             }
         }
-        other => seal_panic(
-            &format!(
-                "alpha typecheck seal does not yet recognize expression kind `{}`",
-                expr_kind_label(other)
-            ),
-            expr.span,
-        ),
     }
 }
 

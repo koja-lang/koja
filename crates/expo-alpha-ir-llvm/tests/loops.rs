@@ -1,8 +1,10 @@
-//! IR-text snapshot tests for `while` (and `for`, via the typecheck
-//! desugar) lowering through the LLVM emitter. Pins the loop's
-//! CFG-shape invariants in LLVM IR text: the three named blocks
-//! (`while_header`, `while_body`, `while_exit`) and the `br`
-//! instruction that forms the back-edge.
+//! IR-text snapshot tests for `loop`, `while`, and `for` (the
+//! typecheck for-desugar also funnels through `while`) lowering
+//! through the LLVM emitter. Pins the loop CFG-shape invariants
+//! in LLVM IR text: the named blocks (`while_header` / `while_body`
+//! / `while_exit` for `while`; `loop_body` / `loop_exit` for
+//! `loop`) and the `br` instructions that form back-edges and
+//! `break` exits.
 
 use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
@@ -96,4 +98,30 @@ fn while_with_string_concat_emits_alloca_for_loop_carried_slot() {
     assert_contains(&ir_text, "alloca");
     assert_contains(&ir_text, "store");
     assert_contains(&ir_text, "load");
+}
+
+#[test]
+fn loop_emits_loop_body_and_loop_exit_blocks_with_break_branch() {
+    // `loop ... break ... end` lowers to `loop_body` / `loop_exit`
+    // labeled blocks. The `break` becomes a `br label %loop_exit`
+    // (no condition — break is always-taken in alpha).
+    let source = "
+        fn main -> Int
+          i = 0
+          loop
+            if i >= 5
+              break
+            end
+            i = i + 1
+          end
+          i
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    assert_main_shape(&ir_text);
+    assert_contains(&ir_text, "loop_body");
+    assert_contains(&ir_text, "loop_exit");
+    // Unconditional branch to the exit — the break-branch.
+    assert_contains(&ir_text, "br label %loop_exit");
 }

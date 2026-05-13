@@ -140,11 +140,13 @@ pub(super) fn resolve_cond(
 }
 
 /// Resolve a `while cond ... end` loop. Condition must be `Bool`;
-/// the body resolves under the same scope as anywhere else (no new
-/// `loop_depth` field — alpha doesn't model break/continue yet, so
-/// no scope-tracked loop context is needed). Result type is `Unit`:
-/// `while` is statement-shaped in alpha, mirroring v1's
-/// "loops type as Unit" rule.
+/// the body resolves under the same scope as anywhere else, with
+/// `loop_depth` bumped and a fresh `loop_break_seen` slot pushed
+/// so any inner `break` is gated to this loop and doesn't bleed
+/// up to an outer enclosing loop. Result type is always `Unit`:
+/// the cond-false fall-through means a `while` exits without
+/// `break` even when the body contains one, so the divergent-
+/// `Never` shape `resolve_loop` enables doesn't apply.
 pub(super) fn resolve_while(
     condition: &mut Expr,
     body: &mut [Statement],
@@ -153,10 +155,42 @@ pub(super) fn resolve_while(
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("while", condition, resolver.registry, diagnostics);
+    resolver.loop_depth += 1;
+    resolver.loop_break_seen.push(false);
     for stmt in body.iter_mut() {
         resolve_statement(stmt, resolver, diagnostics);
     }
+    resolver.loop_break_seen.pop();
+    resolver.loop_depth -= 1;
     resolver.registry.primitive("Unit")
+}
+
+/// Resolve a `loop ... end`. Bumps `loop_depth` (so `break` is
+/// admitted) and pushes a fresh `loop_break_seen` slot. The result
+/// type is `Never` when no `break` targeted this loop (the body
+/// only exits via `return` / `panic` / not at all), and `Unit`
+/// when at least one targeted break fired (the loop yields control
+/// to its surroundings with no value at the break site).
+pub(super) fn resolve_loop(
+    body: &mut [Statement],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    resolver.loop_depth += 1;
+    resolver.loop_break_seen.push(false);
+    for stmt in body.iter_mut() {
+        resolve_statement(stmt, resolver, diagnostics);
+    }
+    let saw_break = resolver
+        .loop_break_seen
+        .pop()
+        .expect("loop_break_seen push/pop balanced");
+    resolver.loop_depth -= 1;
+    if saw_break {
+        resolver.registry.primitive("Unit")
+    } else {
+        resolver.registry.primitive("Never")
+    }
 }
 
 /// Join exactly two arm tails (`if`/`else`'s shape). Separated from

@@ -278,7 +278,17 @@ pub(super) fn resolve_statement_with_expected(
                 diagnostics,
             );
         }
-        Statement::Break { .. } => {}
+        Statement::Break { span } => {
+            if resolver.loop_depth == 0 {
+                diagnostics.push(Diagnostic::error_with_hint(
+                    "break outside of loop",
+                    "'break' can only be used inside 'loop' or 'while'",
+                    *span,
+                ));
+            } else if let Some(seen) = resolver.loop_break_seen.last_mut() {
+                *seen = true;
+            }
+        }
         Statement::CompoundAssign {
             target,
             op,

@@ -16,10 +16,13 @@
 use expo_alpha_typecheck::{
     GlobalKind, GlobalRegistry, StructDefinition, Substitution, substitute,
 };
-use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, Statement};
+use expo_ast::ast::{AssignTarget, CompoundOp, Expr, LValue, Statement};
 use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
+use expo_ast::span::Span;
 
-use crate::function::{IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator};
+use crate::function::{
+    BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator,
+};
 use crate::local::IRLocalId;
 use crate::ownership::Ownership;
 use crate::types::{IRBinOp, IRType, ValueId};
@@ -166,14 +169,29 @@ fn lower_statement(
         Statement::CompoundAssign {
             target, op, value, ..
         } => lower_compound_assignment(target, *op, value, ctx, block, registry, output),
-        Statement::Break { span } => {
-            output.diagnostics.push(Diagnostic::error(
-                "alpha IR does not yet lower `break` statements",
-                *span,
-            ));
-            Err(())
-        }
+        Statement::Break { span } => lower_break_statement(*span, ctx, block),
     }
+}
+
+/// Lower `break`: terminate the open block with a `Branch` to the
+/// innermost enclosing loop's exit block. Typecheck-resolve has
+/// already gated `break` on `loop_depth > 0`, so a missing exit on
+/// the lower side is a resolver bug — panic rather than ship a
+/// half-baked IR fragment.
+fn lower_break_statement(
+    span: Span,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+) -> Result<FlowResult, ()> {
+    let exit = ctx.current_loop_exit().unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: `break` reached lowering with no enclosing loop ({span:?}) — \
+             typecheck resolve invariant violation",
+        )
+    });
+    ctx.cfg
+        .set_terminator(block, IRTerminator::Branch(BranchTarget::to(exit)));
+    Ok(FlowResult::Closed)
 }
 
 /// Lower a `Statement::Assignment` to (optional) `LocalDecl` + `LocalWrite`,

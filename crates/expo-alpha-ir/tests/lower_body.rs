@@ -1,21 +1,17 @@
 //! Coverage for the statement-list driver in `src/lower/body.rs`:
+//! `Statement::Return` shape — both `return <expr>` and bare
+//! `return` (Unit) — pinning the terminator that gets stamped and
+//! the closed-flow contract; the empty-body Unit-return shape.
 //!
-//! - `Statement::Return` shape — both `return <expr>` and bare
-//!   `return` (Unit) — pinning the terminator that gets stamped and
-//!   the closed-flow contract;
-//! - per-function fail-fast within the body itself: an unsupported
-//!   `Statement::Assignment` halts the body walk after one
-//!   diagnostic, and a body that mixes feature-gaps emits exactly
-//!   one diagnostic for whichever gap trips first (no cascading).
+//! Per-function fail-fast within the body is exercised end-to-end
+//! by `lower_package.rs:partial_failure_reports_only_the_failing_function_diagnostic`.
 
 use expo_alpha_ir::{IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
 
 mod common;
 
-use common::{
-    expect_diagnostics, function, lower_program_err as lower_err, lower_program_source as lower,
-};
+use common::{function, lower_program_source as lower};
 
 #[test]
 fn explicit_return_with_value_terminates_block() {
@@ -60,32 +56,4 @@ fn empty_main_body_returns_unit_with_no_value() {
         block.instructions,
     );
     assert_eq!(block.terminator, IRTerminator::Return { value: None });
-}
-
-/// Multiple feature gaps inside a single function should emit *one*
-/// diagnostic — the first one seen — and abort walking that function.
-/// `break` still passes typecheck (no loop context check in alpha
-/// yet) but is an IR-level feature gap, so it's the lowest-friction
-/// way to trip the fail-fast contract through IR lower without
-/// short-circuiting at typecheck.
-#[test]
-fn fail_fast_within_function_emits_single_diagnostic() {
-    let source = "
-        fn main
-          break
-          break
-        end
-        ";
-
-    let program = dedent(source);
-    let messages = expect_diagnostics(lower_err(&program, "main"));
-    assert_eq!(
-        messages.len(),
-        1,
-        "expected fail-fast within a function, got: {messages:?}",
-    );
-    assert!(
-        messages[0].contains("`break` statements"),
-        "expected first diagnostic to be the break gap, got: {messages:?}",
-    );
 }

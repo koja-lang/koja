@@ -30,7 +30,7 @@ use super::control_flow::{
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
 use super::list_literal::lower_list_literal;
-use super::loops::lower_while;
+use super::loops::{lower_loop, lower_while};
 use super::map_literal::lower_map_literal;
 use super::match_expr::{MatchLowering, lower_match};
 use super::ops::{
@@ -315,6 +315,7 @@ pub(super) fn lower_expr(
             registry,
             output,
         ),
+        ExprKind::Loop { body } => lower_loop(body, ctx, block, registry, output),
         ExprKind::Map { entries } => lower_map_literal(
             entries,
             &expr.resolution,

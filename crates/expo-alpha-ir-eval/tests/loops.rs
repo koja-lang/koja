@@ -1,9 +1,10 @@
-//! Coverage for `while` execution in the eval interpreter.
+//! Coverage for `loop` and `while` execution in the eval interpreter.
 //!
 //! Pins runtime behavior: counter accumulator, loop-carried heap
 //! state (string concat in body), early `return` from inside loop,
-//! and the trailing-expression Unit shape that the surface
-//! expression takes on.
+//! the trailing-expression Unit shape `while` takes on, and the
+//! `break`-out-of-`loop` shape (a `loop` only exits via `break`,
+//! `return`, or `panic`).
 
 use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
@@ -296,4 +297,69 @@ fn while_with_if_inside_body_branches_each_iteration() {
         end
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(6));
+}
+
+#[test]
+fn loop_with_break_exits_after_counter_hits_five() {
+    // Counter loop terminates via `break` — the `loop` runs forever
+    // unless `break` fires. Exiting yields control to the trailing
+    // `i` expression, which reads the post-break value.
+    let source = "
+        fn main -> Int
+          i = 0
+          loop
+            if i >= 5
+              break
+            end
+            i = i + 1
+          end
+          i
+        end
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(5));
+}
+
+#[test]
+fn loop_with_return_inside_body_exits_function() {
+    // `return` from inside a `loop` short-circuits the whole
+    // function; no `break` needed.
+    let source = "
+        fn main -> Int
+          i = 0
+          loop
+            if i == 3
+              return i * 10
+            end
+            i = i + 1
+          end
+        end
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(30));
+}
+
+#[test]
+fn nested_loop_break_only_exits_inner() {
+    // The inner loop's `break` exits *only* the inner loop —
+    // control returns to the outer loop's body, which increments
+    // and continues. Stops when the outer counter hits 3.
+    let source = "
+        fn main -> Int
+          outer = 0
+          loop
+            if outer >= 3
+              break
+            end
+            inner = 0
+            loop
+              if inner >= 2
+                break
+              end
+              inner = inner + 1
+            end
+            outer = outer + 1
+          end
+          outer
+        end
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(3));
 }

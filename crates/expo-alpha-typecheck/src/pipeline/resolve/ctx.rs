@@ -38,6 +38,8 @@ impl<'a> ResolverEnv<'a> {
             current_return_type: None,
             enclosing_type,
             file_aliases: self.file_aliases,
+            loop_break_seen: Vec::new(),
+            loop_depth: 0,
             package: self.package,
             registry: self.registry,
             scope,
@@ -97,6 +99,19 @@ pub(super) struct Resolver<'a> {
     /// every type-name lookup before falling back to the current
     /// package and `Global` (the lookup precedence).
     pub file_aliases: &'a [AliasDecl],
+    /// One slot per enclosing `loop` / `while`, set to `true` by
+    /// the `break` gate when a break targets the innermost loop.
+    /// `resolve_loop` consults the popped slot to decide whether
+    /// the loop expression types as `Unit` (saw break) or `Never`
+    /// (no break — divergent). Closure boundaries replace this
+    /// stack with an empty one and restore on exit so an inner
+    /// `break` can never mark an outer-function loop.
+    pub loop_break_seen: Vec<bool>,
+    /// Nesting depth of enclosing `loop` / `while` bodies. `break`
+    /// is only legal when this is `> 0`. Closure boundaries reset
+    /// this to `0` and restore on exit so a `break` inside a
+    /// closure body must reference a loop _inside_ the closure.
+    pub loop_depth: u32,
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
     pub scope: &'a mut LocalScope,
