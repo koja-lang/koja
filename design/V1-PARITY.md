@@ -26,12 +26,14 @@ sequencing block at the bottom is a recommendation, not a contract.
 - **Qualified packages (`lib/<pkg>/src/`)**:
   - `Crypto` — parity. Wired into `ALPHA_QUALIFIED` and exercised by
     `alias Crypto.Sha256` in driver tests.
-  - `Json` — small gap. Needs string interpolation; no other
-    language feature missing (dotted type names shipped 20260513).
+  - `Json` — language-feature parity. String interpolation (shipped
+    20260513) was the last gap; ready to wire into `ALPHA_QUALIFIED`
+    once the source files clean-compile end-to-end.
   - `Http` — language-feature parity. `String.clone()` (shipped
-    20260512), field assignment (shipped 20260513), and dotted type
-    names (shipped 20260513) all landed; ready to wire into
-    `ALPHA_QUALIFIED` once the source files clean-compile end-to-end.
+    20260512), field assignment (shipped 20260513), dotted type
+    names (shipped 20260513), and string interpolation (shipped
+    20260513) all landed; ready to wire into `ALPHA_QUALIFIED` once
+    the source files clean-compile end-to-end.
   - `Net` — language-feature gap. Process message envelopes use
     type unions (`Tcp.In | Tcp.Out`); blocked until unions land.
 
@@ -57,7 +59,7 @@ The full list of "not yet" diagnostics lives in:
 
 - `expo-alpha-typecheck/src/pipeline/collect.rs`
 - `expo-alpha-typecheck/src/pipeline/lift_signatures/{functions,types,constants}.rs`
-- `expo-alpha-typecheck/src/pipeline/resolve/{expr,statements,strings,calls/mod,patterns/mod,literals/binary,closures,match_expr}.rs`
+- `expo-alpha-typecheck/src/pipeline/resolve/{expr,statements,calls/mod,patterns/mod,literals/binary,closures,match_expr}.rs`
 - `expo-alpha-typecheck/src/pipeline/seal/{expressions,patterns}.rs`
 - `expo-alpha-ir/src/lower/{expr,ops,body,structs,enums,package,calls,closures}.rs`
 - `expo-alpha-ir-llvm/src/{emit/mod,emit/instruction,main_wrapper}.rs`
@@ -74,7 +76,6 @@ alpha can't compile today. **These are the hard parity blockers.**
 | **Type unions** (`A \| B`, `type X = …`, typed-binding patterns `p: Post ->`) | `union_types`, `union_named`, `union_typed_binding`, `union_struct_field`, `process_union_msg`                                             | `lift_signatures/types.rs:125`, `resolve/patterns/mod.rs:170`                                                  |
 | **Infinite `loop`** (and `break`)                                             | `match_loop_return.expo` (`loop`), `ffi/src/main.expo` (`loop` + `break`)                                                                  | `ExprKind::Loop` falls into `resolve/expr.rs:220` "other"; `break` only allowed inside synthesized for-desugar |
 | **Tail-call optimization**                                                    | `tail_call.expo`, `tail_call_unit.expo` (100k-deep recursion)                                                                              | No `TailCall` in alpha-IR-LLVM — would stack-overflow even though it parses and typechecks                     |
-| **String interpolation** (`"hello #{x}"`)                                     | ~25 files — `structs`, `methods`, `inline_methods`, `cross_ref`, `match_loop_return`, every `protocols/*`, every `io/*`, every `process_*` | `resolve/strings.rs:27`                                                                                        |
 | **`@extern` / `@link` FFI** on inherent methods + `CPtr<T>` arg marshaling    | `ffi/src/main.expo`                                                                                                                        | Annotations parse; alpha-IR-LLVM doesn't emit the C-ABI bridge or marshal pointers                             |
 
 ---
@@ -143,6 +144,20 @@ alpha source tree, but golden coverage confirms them shipped:
   `crates/expo-alpha-typecheck/tests/aliases.rs` and the
   `dotted_type_in_signature_lifts_to_qualified_global` test in
   `crates/expo-alpha-typecheck/tests/lift_function_types.rs`.
+- **String interpolation** (`"hello #{x}"` for any Debug-conforming
+  `x`, no manual `.format()`) — shipped 2026-05-13. `resolve_string`
+  resolves each interpolation, and any inner expression that isn't
+  already `String`-typed is rewritten in place to
+  `<original>.format()` and dispatched through the normal method-call
+  resolver (mirroring the literal-carrier swap in
+  `resolve/literals/carrier.rs`). `String`-typed interpolations are
+  left bare to preserve the user's no-quote rendering (since
+  `String.format` is the Debug repr `"\"" <> self.escape_debug() <>
+  "\""`). IR lowering, eval, and LLVM all see only `String`-typed
+  parts and need zero changes. Pinned by the `string_interpolation_*`
+  tests in `crates/expo-alpha-typecheck/tests/resolve_strings.rs`
+  and the `*_string_interpolation_*` driver tests in
+  `crates/expo-driver/tests/alpha_two_plus_two.rs`.
 
 ---
 
@@ -171,11 +186,19 @@ then rewrites the receiver to a synthetic `Ident` for downstream
 lowering). Unblocked the `qualified_*` golden tests and removed
 every alpha-side language gap from the `Http` package.
 
-### 3. String interpolation (`"hello #{x}"`)
+### 3. String interpolation (`"hello #{x}"`) — shipped 2026-05-13
 
-Single resolver path that desugars into `<>` chains; eval and LLVM
-both already support `<>` end-to-end. Highest golden-test coverage
-per LOC of compiler change. **~1–2 days.**
+Single resolver patch in `resolve_string`: each `StringPart::Interpolation`
+gets its inner expression resolved, and anything that isn't already
+`String`-typed is wrapped in a synthetic `<original>.format()`
+MethodCall and dispatched through the normal method-call resolver.
+`String`-typed interps are left bare so `"hello #{name}"` renders
+`hello world`, not `hello "world"` (since `String.format` is the
+Debug repr that adds quotes). IR/eval/LLVM see only `String`-typed
+parts; the existing `lower_string` `Concat::String` chain handles
+the rest with zero backend changes. Unblocked the ~25 `tests/lang/`
+files that interpolate without manual `.format()` and removed the
+last alpha-side language gap from the `Json` package.
 
 ### 4. Infinite `loop` + `break` / `continue`
 

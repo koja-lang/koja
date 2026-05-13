@@ -230,6 +230,18 @@ const FIELD_ASSIGNMENT_SCRIPT_SOURCE: &str = "
     p.x
 ";
 
+/// Script-mode fixture pinning string interpolation end-to-end
+/// across both the no-wrap (`String`-typed) and wrap (`Int`-typed)
+/// arms in the resolver. The `name` interp stays a bare Ident so
+/// it renders as `world` (no quotes); the `42` interp gets wrapped
+/// in `.format()` so it renders as `42`. Both halves fold into a
+/// chain of `IRInstruction::Concat { String }` and the trailing
+/// expression auto-prints as `hello world, count 42\n`.
+const STRING_INTERPOLATION_SCRIPT_SOURCE: &str = "
+    name = \"world\"
+    \"hello #{name}, count #{42}\"
+";
+
 /// Script-mode fixture exercising the alpha static-method slice
 /// end-to-end with an inline-form declaration. `Point.origin()`
 /// dispatches to a method declared inside the struct body, the
@@ -1112,6 +1124,62 @@ fn alpha_run_interpreter_script_field_assignment_prints_ten() {
     );
 
     let _ = fs::remove_dir_all(&scratch);
+}
+
+/// Run the string-interpolation script through `expo alpha run` and
+/// assert its stdout trims to `hello world, count 42`. Shared
+/// between the LLVM / interpreter pair so each test case stays at
+/// just its distinguishing setup (which backend).
+fn assert_string_interpolation_script_prints_hello_world_count_42(
+    label: &str,
+    backend: Option<&str>,
+) {
+    let scratch = scratch_dir(label);
+    let fixture = write_fixture(
+        &scratch,
+        "string_interpolation.exps",
+        &dedent(STRING_INTERPOLATION_SCRIPT_SOURCE),
+    );
+
+    let mut args = vec!["alpha", "run"];
+    if let Some(backend) = backend {
+        args.push(backend);
+    }
+    args.push(fixture.to_str().unwrap());
+
+    let output = run_expo(&args);
+    assert!(
+        output.status.success(),
+        "expected `expo {}` to exit 0, got {:?}\nstderr:\n{}",
+        args.join(" "),
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "hello world, count 42",
+        "expected stdout `hello world, count 42` (String interp left bare, \
+         Int interp auto-formatted), got:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_string_interpolation_prints_hello_world_count_42() {
+    assert_string_interpolation_script_prints_hello_world_count_42(
+        "run_llvm_string_interpolation",
+        Some("--backend=llvm"),
+    );
+}
+
+#[test]
+fn alpha_run_interpreter_script_string_interpolation_prints_hello_world_count_42() {
+    assert_string_interpolation_script_prints_hello_world_count_42(
+        "run_interpreter_string_interpolation",
+        None,
+    );
 }
 
 /// Run the static-method script through `expo alpha run` and assert
