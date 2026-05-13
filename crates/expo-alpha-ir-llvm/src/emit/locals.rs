@@ -4,7 +4,7 @@
 //! header; closure-typed slots delegate to
 //! [`super::closures::emit_drop_closure_env`].
 
-use expo_alpha_ir::{IRLocalId, IRType};
+use expo_alpha_ir::{IRLocalId, IRType, ValueId};
 use inkwell::values::BasicValueEnum;
 
 use crate::ctx::EmitContext;
@@ -12,7 +12,7 @@ use crate::error::LlvmError;
 use crate::runtime::declare_free_extern;
 use crate::types::ir_basic_type;
 
-use super::{closures, inkwell_err};
+use super::{ValueMap, closures, inkwell_err, lookup};
 
 /// Materialize a `LocalDecl` as an entry-block `alloca`, stashed on
 /// the [`EmitContext`] keyed by [`IRLocalId`] for later `load` / `store`.
@@ -97,6 +97,45 @@ pub(super) fn emit_drop_local<'ctx>(
         _ => panic!(
             "alpha LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}` — \
              extend `emit_drop_local` when more heap types ship",
+        ),
+    }
+}
+
+/// Value-keyed analog of [`emit_drop_local`]: free the heap payload
+/// held by the SSA value `value`. Same `payload - 8` GEP + extern
+/// `free` shape, but the payload pointer comes from the value map
+/// rather than a slot alloca. Used by `FieldSet`-into-heap-leaf
+/// lowering to release the prior payload before the rebuild.
+pub(super) fn emit_drop_value<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    value: ValueId,
+    ty: &IRType,
+    values: &ValueMap<'ctx>,
+) -> Result<(), LlvmError> {
+    match ty {
+        IRType::Binary | IRType::Bits | IRType::String => {
+            let payload = lookup(values, value)?;
+            let payload_ptr = payload.into_pointer_value();
+            let i8_type = ctx.context.i8_type();
+            let i64_type = ctx.context.i64_type();
+            let block_base = unsafe {
+                ctx.builder.build_gep(
+                    i8_type,
+                    payload_ptr,
+                    &[i64_type.const_int((-8i64) as u64, true)],
+                    &format!("{value}.block_base"),
+                )
+            }
+            .map_err(|e| inkwell_err(format_args!("DropValue block-base GEP for `{value}`"), e))?;
+            let free = declare_free_extern(ctx);
+            ctx.builder
+                .build_call(free, &[block_base.into()], &format!("{value}.free"))
+                .map_err(|e| inkwell_err(format_args!("DropValue free call for `{value}`"), e))?;
+            Ok(())
+        }
+        _ => panic!(
+            "alpha LLVM emit: unsupported `IRInstruction::DropValue` type {ty:?} for value \
+             `{value}` — extend `emit_drop_value` when more heap types ship",
         ),
     }
 }

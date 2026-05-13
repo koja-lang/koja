@@ -1,7 +1,7 @@
 //! Statement-shape seal checks: assignment / compound-assign
 //! target shapes plus per-statement recursion into expressions.
-//! The resolver narrows assignment targets to single-segment
-//! [`expo_ast::ast::LValue`]s with stamped `LocalId`s; reaching
+//! The resolver narrows assignment targets to [`expo_ast::ast::LValue`]s
+//! with at least one segment and a stamped head `LocalId`; reaching
 //! seal with anything else is an upstream bug.
 
 use expo_ast::ast::{AssignTarget, LValue, Statement};
@@ -38,23 +38,16 @@ pub(super) fn seal_statement(stmt: &Statement) {
     }
 }
 
-/// Assignment targets must be single-segment [`AssignTarget::LValue`]s
-/// — the resolver rejected pattern destructuring and dotted lvalues
-/// upstream, so reaching seal with anything else is a compiler bug.
+/// Assignment targets must be [`AssignTarget::LValue`]s with at
+/// least one segment and a stamped head `LocalId`. Multi-segment
+/// targets (`p.x = …`) are a happy path past resolve — the head id
+/// keys the IR's `LocalRead` / `LocalWrite`; the IR lower walks the
+/// remaining segments itself. Pattern destructuring still bottoms
+/// out on the resolver's feature-gap diagnostic and never reaches
+/// seal.
 fn seal_assign_target(target: &AssignTarget, statement_span: Span) {
     match target {
-        AssignTarget::LValue(lvalue) => {
-            if lvalue.segments.len() != 1 {
-                seal_panic(
-                    &format!(
-                        "assignment target has {} segments; resolver rejects multi-segment \
-                         targets",
-                        lvalue.segments.len(),
-                    ),
-                    lvalue.span,
-                );
-            }
-        }
+        AssignTarget::LValue(lvalue) => seal_lvalue_shape(lvalue, "assignment", statement_span),
         AssignTarget::Pattern(_) => seal_panic(
             "assignment target is a destructuring pattern; resolver rejects this shape",
             statement_span,
@@ -62,28 +55,31 @@ fn seal_assign_target(target: &AssignTarget, statement_span: Span) {
     }
 }
 
-/// Compound-assign targets are bare `LValue`s (the AST shape only
-/// admits the single-segment case as a happy-path; the resolver
-/// rejects multi-segment forms and undeclared names). Past resolve,
-/// a compound-assign target must carry both single-segment shape
-/// *and* a stamped `local_id`.
+/// Compound-assign targets are bare `LValue`s (the parser only
+/// admits an `LValue` on the lhs of `+=` / `-=` / `*=` / `/=`). Past
+/// resolve, a compound-assign target must carry at least one segment
+/// *and* a stamped head `local_id`.
 fn seal_compound_target(target: &LValue, statement_span: Span) {
-    if target.segments.len() != 1 {
+    seal_lvalue_shape(target, "compound-assign", statement_span);
+}
+
+/// Shared seal for the two `LValue`-shaped assignment targets.
+/// Single-segment and multi-segment are both happy paths; only
+/// empty-segments and a missing head `local_id` indicate an
+/// upstream invariant break.
+fn seal_lvalue_shape(lvalue: &LValue, role: &str, statement_span: Span) {
+    if lvalue.segments.is_empty() {
         seal_panic(
-            &format!(
-                "compound-assign target has {} segments; resolver rejects multi-segment \
-                 targets",
-                target.segments.len(),
-            ),
-            target.span,
+            &format!("{role} target has zero segments; parser should reject this"),
+            lvalue.span,
         );
     }
-    if target.local_id.is_none() {
+    if lvalue.local_id.is_none() {
         seal_panic(
             &format!(
-                "compound-assign target `{}` carries no LocalId; resolver should have \
-                 stamped it on success or diagnosed otherwise",
-                target.segments[0],
+                "{role} target `{}` carries no LocalId; resolver should have stamped it on \
+                 success or diagnosed otherwise",
+                lvalue.segments.join("."),
             ),
             statement_span,
         );

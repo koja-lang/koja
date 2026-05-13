@@ -356,6 +356,24 @@ pub enum IRInstruction {
         field_type: IRType,
         struct_symbol: IRSymbol,
     },
+    /// `dest = base with field_index <- value`. SSA-pure: produces a
+    /// new struct value identical to `base` except the field at
+    /// `field_index` is replaced by `value`. Backends materialize
+    /// the rebuild in their own way — eval clones the field vec and
+    /// swaps one slot; LLVM `alloca`s the receiver, GEP-stores the
+    /// new field, and reloads. Heap-typed leaf overwrites are the
+    /// IR-lowerer's responsibility: it must emit a synthetic
+    /// `DropLocal`-style free of the previous payload before the
+    /// `FieldSet` (mirrors the local-reassignment overwrite drop in
+    /// [`crate::lower::body`]) so the new write doesn't leak.
+    FieldSet {
+        base: ValueId,
+        dest: ValueId,
+        field_index: u32,
+        field_type: IRType,
+        struct_symbol: IRSymbol,
+        value: ValueId,
+    },
     /// Free the heap storage currently held by `local`'s slot, if
     /// any. Emitted by the lowering layer at function exits (return,
     /// fall-through) for slots whose most-recent [`Self::LocalWrite`]
@@ -369,6 +387,15 @@ pub enum IRInstruction {
     /// `DropLocal` reaching a backend always indicates a slot the
     /// backend must free. Produces no value.
     DropLocal { local: IRLocalId, ty: IRType },
+    /// Free the heap storage held by `value`. Value-keyed analog of
+    /// [`Self::DropLocal`], used by [`Self::FieldSet`] lowering when
+    /// the leaf field is heap-typed: the field-write reads the old
+    /// payload via [`Self::FieldGet`] into an SSA value, drops it
+    /// with this instruction, then `FieldSet`s the new payload in.
+    /// Same `payload - 8` GEP + extern `free` shape as `DropLocal`,
+    /// just sourced from a register instead of a slot. Eval is a
+    /// no-op (the host GC reclaims). Produces no value.
+    DropValue { value: ValueId, ty: IRType },
     /// Declare a local-variable storage slot. Emitted exactly once
     /// per [`IRLocalId`] per function in the entry block (LLVM hoists
     /// the `alloca`; eval inserts a fresh hashmap entry). Produces no
@@ -545,6 +572,7 @@ impl IRInstruction {
             | IRInstruction::EnumPayloadFieldGet { dest, .. }
             | IRInstruction::EnumTagGet { dest, .. }
             | IRInstruction::FieldGet { dest, .. }
+            | IRInstruction::FieldSet { dest, .. }
             | IRInstruction::LoadCapture { dest, .. }
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
@@ -555,6 +583,7 @@ impl IRInstruction {
             | IRInstruction::StructInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => Some(*dest),
             IRInstruction::DropLocal { .. }
+            | IRInstruction::DropValue { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalWrite { .. } => None,
         }

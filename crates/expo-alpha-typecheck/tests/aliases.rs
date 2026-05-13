@@ -232,6 +232,61 @@ fn alias_is_file_private() {
 }
 
 #[test]
+fn dotted_static_call_resolves_without_alias() {
+    // Bare dotted static dispatch: `Crypto.SHA256.digest(...)` with
+    // no `alias` line. Pre-PR-B this hit the
+    // "alpha typecheck does not yet support dotted type names"
+    // gate; post-PR-B `classify_receiver` walks the FieldAccess
+    // chain and `lookup_type` finds the qualified entry directly.
+    let checked =
+        typecheck_file("fn run(data: Binary) -> Binary\n  Crypto.SHA256.digest(data)\nend\n");
+    assert!(
+        checked.diagnostics.is_empty(),
+        "expected no diagnostics, got {:?}",
+        checked.diagnostics,
+    );
+}
+
+#[test]
+fn dotted_type_in_signature_resolves_without_alias() {
+    // Dotted type in a parameter position: `crypto: Crypto.SHA256`
+    // with no `alias` line. Same gate as the static call above —
+    // `resolve_named` walks the path through `resolve_path_to_global`
+    // and finds `Crypto.SHA256` directly. Body just borrows the
+    // value, so the receiver is exercised purely as a type
+    // annotation.
+    let checked =
+        typecheck_file("fn touch(crypto: Crypto.SHA256) -> Crypto.SHA256\n  crypto\nend\n");
+    assert!(
+        checked.diagnostics.is_empty(),
+        "expected no diagnostics, got {:?}",
+        checked.diagnostics,
+    );
+}
+
+#[test]
+fn dotted_static_call_unknown_path_diagnoses() {
+    // Negative companion to the dotted static-call test above: a
+    // path with no registry entry should fall through with a clean
+    // "type not registered" diagnostic, *not* a feature-gap message
+    // about dotted names. Pinned so removing the dotted gate
+    // doesn't silently swallow real "you typo'd a package name"
+    // errors.
+    let failure = typecheck_file_fail("fn main\n  No.Such.Thing.foo()\nend\n");
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| !m.contains("does not yet support dotted type names")),
+        "diagnostic must not regress to the feature-gap message: {messages:?}",
+    );
+    assert!(
+        messages.iter().any(|m| m.contains("No")),
+        "expected a diagnostic mentioning the path head `No`, got: {messages:?}",
+    );
+}
+
+#[test]
 fn type_param_shadows_alias_inside_function() {
     // File-level `alias Crypto.SHA256 as T` is well-formed — `T` is
     // not a current-package or `Global` binding. Inside a function

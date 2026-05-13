@@ -14,8 +14,7 @@ use expo_ast::labels::{pattern_kind_label, pattern_span};
 use expo_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::structs::lookup_type;
-use super::super::types::display_resolution;
+use super::super::types::{display_resolution, lookup_type};
 use super::{PatternCoverage, resolve_pattern};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{GlobalKind, ResolvedStructField};

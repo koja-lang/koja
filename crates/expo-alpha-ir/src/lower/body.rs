@@ -13,7 +13,9 @@
 //! diagnostic propagates back to `lower_program` /
 //! `lower_script` via the shared `diagnostics` accumulator.
 
-use expo_alpha_typecheck::GlobalRegistry;
+use expo_alpha_typecheck::{
+    GlobalKind, GlobalRegistry, StructDefinition, Substitution, substitute,
+};
 use expo_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, Statement};
 use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 
@@ -27,6 +29,8 @@ use super::drops::emit_function_exit_drops;
 use super::expr::lower_expr;
 use super::ops::bin_op_result_type;
 use super::ownership::ownership_for_expr;
+use super::package::resolved_type_to_ir_type;
+use super::structs::resolved_struct_symbol;
 
 /// Lower a sequence of statements into a CFG fragment, starting in a
 /// fresh `entry` block. Used by [`crate::lower_script`] to lower a
@@ -172,17 +176,22 @@ fn lower_statement(
     }
 }
 
-/// Lower a `Statement::Assignment` to (optional) `LocalDecl` + `LocalWrite`.
-/// Typecheck-resolve has already stamped the target Ident with
-/// [`Resolution::Local`] (carrying the AST [`LocalId`]) and rejected
-/// every shape that doesn't fit a single-segment local name, so this
-/// helper assumes the well-typed shape and panics on deviation.
+/// Lower a `Statement::Assignment` to (optional) `LocalDecl` + `LocalWrite`,
+/// dispatching to [`lower_field_assignment`] for multi-segment field
+/// writes (`p.x = …`).
 ///
-/// First write of a local emits a `LocalDecl` into the function's
-/// entry block (regardless of which block the assignment statement
-/// surface-syntactically lives in) so backends see a single decl per
-/// slot at the canonical entry-block position. Subsequent writes
-/// just emit the `LocalWrite` in the currently-open block.
+/// Typecheck-resolve has already stamped the target with
+/// [`Resolution::Local`] on its head (`LValue::local_id`), the
+/// head's [`ResolvedType`] (`LValue::head_resolved_type`, multi-
+/// segment only), and rejected pattern destructuring. This helper
+/// assumes the well-typed shape and panics on deviation.
+///
+/// First write of a single-segment local emits a `LocalDecl` into
+/// the function's entry block (regardless of which block the
+/// assignment statement surface-syntactically lives in) so backends
+/// see a single decl per slot at the canonical entry-block position.
+/// Subsequent writes (and every multi-segment field write) just emit
+/// the rebuild in the currently-open block.
 ///
 /// Returns `Open { value: None, ... }` because assignment is
 /// statement-level vocabulary — its trailing value is the rhs's
@@ -199,7 +208,12 @@ fn lower_assignment(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
-    let local_id = single_segment_local(target);
+    let lvalue = expect_lvalue(target);
+    if lvalue.segments.len() >= 2 {
+        return lower_field_assignment(lvalue, value, ctx, block, registry, output);
+    }
+
+    let local_id = expect_local_id(lvalue);
     let ir_local = IRLocalId::from_local_id(local_id);
 
     let (value_id, current) = lower_expr(value, ctx, block, registry, output)?;
@@ -244,12 +258,231 @@ fn lower_assignment(
     })
 }
 
-/// Lower `target op= value` to `LocalRead + BinaryOp + LocalWrite`.
-/// Typecheck-resolve guarantees the local was already declared with
-/// an arithmetic type and that the rhs's type matches, so this
-/// helper assumes a well-typed shape and panics on deviation. Unlike
-/// [`lower_assignment`], we never emit a `LocalDecl` — compound
-/// assignment is reassignment-only.
+/// Lower `head.f1.f2 = value` (any depth `>= 2`) into the SSA-pure
+/// rebuild chain: `LocalRead` the head; `FieldGet` down each non-
+/// leaf segment; lower the rhs (with a synthetic drop on heap-typed
+/// leaf overwrite); `FieldSet` back up to the root; `LocalWrite` the
+/// new root into the head slot.
+///
+/// The walker derives each segment's struct decl + field index by
+/// substituting the previous level's `type_args` into the declared
+/// field type — same algorithm the resolver runs in
+/// `walk_field_segments`, just one layer down (we look at IRTypes
+/// for the actual `FieldGet` / `FieldSet` payloads).
+fn lower_field_assignment(
+    lvalue: &LValue,
+    value: &Expr,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<FlowResult, ()> {
+    let local_id = expect_local_id(lvalue);
+    let ir_local = IRLocalId::from_local_id(local_id);
+    let head_ty = lvalue.head_resolved_type.clone().unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: multi-segment assignment target `{}` carries no head \
+             ResolvedType — typecheck resolve invariant violation",
+            lvalue.segments.join("."),
+        )
+    });
+
+    let plan = build_field_chain(&head_ty, lvalue, registry, output);
+
+    let head_ir_type = resolved_type_to_ir_type(&head_ty, registry, &mut output.instantiations);
+    let root_value = ctx.fresh_value(head_ir_type.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::LocalRead {
+            dest: root_value,
+            local: ir_local,
+            ty: head_ir_type.clone(),
+        },
+    );
+
+    let mut parent_values = Vec::with_capacity(plan.len());
+    let mut current_parent = root_value;
+    for step in &plan[..plan.len().saturating_sub(1)] {
+        let dest = ctx.fresh_value(step.field_ir_type.clone());
+        ctx.cfg.append(
+            block,
+            IRInstruction::FieldGet {
+                base: current_parent,
+                dest,
+                field_index: step.field_index,
+                field_type: step.field_ir_type.clone(),
+                struct_symbol: step.struct_symbol.clone(),
+            },
+        );
+        parent_values.push(current_parent);
+        current_parent = dest;
+    }
+    parent_values.push(current_parent);
+
+    let leaf_step = plan
+        .last()
+        .expect("alpha IR lower: field-assignment plan is empty for a multi-segment lvalue");
+    let leaf_parent = parent_values[parent_values.len() - 1];
+
+    let (rhs_value, current) = lower_expr(value, ctx, block, registry, output)?;
+
+    if is_heap_owned(&leaf_step.field_ir_type) {
+        let stale_leaf = ctx.fresh_value(leaf_step.field_ir_type.clone());
+        ctx.cfg.append(
+            current,
+            IRInstruction::FieldGet {
+                base: leaf_parent,
+                dest: stale_leaf,
+                field_index: leaf_step.field_index,
+                field_type: leaf_step.field_ir_type.clone(),
+                struct_symbol: leaf_step.struct_symbol.clone(),
+            },
+        );
+        ctx.cfg.append(
+            current,
+            IRInstruction::DropValue {
+                value: stale_leaf,
+                ty: leaf_step.field_ir_type.clone(),
+            },
+        );
+    }
+
+    let mut new_value = rhs_value;
+    for (depth_from_leaf, step) in plan.iter().enumerate().rev() {
+        let parent = parent_values[depth_from_leaf];
+        let parent_ir_type = if depth_from_leaf == 0 {
+            head_ir_type.clone()
+        } else {
+            plan[depth_from_leaf - 1].field_ir_type.clone()
+        };
+        let dest = ctx.fresh_value(parent_ir_type);
+        ctx.cfg.append(
+            current,
+            IRInstruction::FieldSet {
+                base: parent,
+                dest,
+                field_index: step.field_index,
+                field_type: step.field_ir_type.clone(),
+                struct_symbol: step.struct_symbol.clone(),
+                value: new_value,
+            },
+        );
+        new_value = dest;
+    }
+
+    let head_ownership = ctx
+        .slot_state(ir_local)
+        .map(|state| state.ownership)
+        .unwrap_or(Ownership::Unowned);
+    ctx.cfg.append(
+        current,
+        IRInstruction::LocalWrite {
+            local: ir_local,
+            ownership: head_ownership,
+            value: new_value,
+        },
+    );
+    ctx.mark_local_written(ir_local, head_ownership);
+
+    Ok(FlowResult::Open {
+        value: None,
+        block: current,
+    })
+}
+
+/// One step in a field-assignment plan: the receiver struct's IR
+/// symbol, the field's positional index, and the substituted field
+/// IR type. Built by [`build_field_chain`] to bridge the resolver's
+/// type-level walk to the IR's struct-symbol-and-index encoding.
+struct FieldStep {
+    field_index: u32,
+    field_ir_type: IRType,
+    struct_symbol: IRSymbol,
+}
+
+/// Walk `lvalue.segments[1..]` against the registry, mirroring the
+/// resolver's `walk_field_segments` — at each step, look up the
+/// receiver's struct definition, substitute the receiver's type-args
+/// into the declared field type, and translate to an [`IRType`].
+/// Returns one [`FieldStep`] per non-head segment.
+fn build_field_chain(
+    head_ty: &ResolvedType,
+    lvalue: &LValue,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Vec<FieldStep> {
+    let mut steps = Vec::with_capacity(lvalue.segments.len().saturating_sub(1));
+    let mut current_ty = head_ty.clone();
+    for segment in &lvalue.segments[1..] {
+        let ResolvedType::Named {
+            resolution: Resolution::Global(struct_id),
+            type_args,
+        } = &current_ty
+        else {
+            panic!(
+                "alpha IR lower: field-assignment segment `{segment}` projects through a \
+                 non-struct receiver `{current_ty:?}` — typecheck resolve invariant \
+                 violation",
+            );
+        };
+        let struct_id = *struct_id;
+        let definition = registry_struct(registry, struct_id);
+        let (field_index, declared) = definition.lookup_field(segment).unwrap_or_else(|| {
+            panic!(
+                "alpha IR lower: field-assignment segment `{segment}` is not a declared \
+                 field on the receiver struct — typecheck resolve invariant violation",
+            )
+        });
+        let subst = Substitution::from_args(struct_id, type_args);
+        let substituted = substitute(&declared.ty, &subst);
+        let field_ir_type =
+            resolved_type_to_ir_type(&substituted, registry, &mut output.instantiations);
+        let struct_symbol =
+            resolved_struct_symbol(&current_ty, registry, &mut output.instantiations);
+        steps.push(FieldStep {
+            field_index,
+            field_ir_type,
+            struct_symbol,
+        });
+        current_ty = substituted;
+    }
+    steps
+}
+
+/// Look up a struct's lifted definition, panicking on every shape
+/// the resolver/seal already rejects upstream.
+fn registry_struct(
+    registry: &GlobalRegistry,
+    struct_id: expo_ast::identifier::GlobalRegistryId,
+) -> &StructDefinition {
+    let entry = registry.get(struct_id).unwrap_or_else(|| {
+        panic!("alpha IR lower: struct id {struct_id} missing from registry — seal violation",)
+    });
+    let GlobalKind::Struct(Some(definition)) = &entry.kind else {
+        panic!(
+            "alpha IR lower: registry id {struct_id} (`{}`) is not a struct with a lifted \
+             definition — typecheck resolve invariant violation",
+            entry.identifier,
+        );
+    };
+    definition
+}
+
+/// True when `ty` is a heap-allocated primitive whose `Owned` slot
+/// values must be `DropLocal`-freed before being overwritten. Mirrors
+/// the heap-typed leaf condition in the local-reassignment overwrite
+/// drop above.
+fn is_heap_owned(ty: &IRType) -> bool {
+    matches!(ty, IRType::String | IRType::Binary | IRType::Bits)
+}
+
+/// Lower `target op= value` to `LocalRead + (FieldGet*) + BinaryOp +
+/// (FieldSet*) + LocalWrite`. Typecheck-resolve guarantees the head
+/// local was already declared, the leaf field's type is arithmetic,
+/// and the rhs's type matches; this helper assumes a well-typed
+/// shape and panics on deviation. Unlike [`lower_assignment`], we
+/// never emit a `LocalDecl` — compound assignment is reassignment-
+/// only.
 fn lower_compound_assignment(
     target: &LValue,
     op: CompoundOp,
@@ -259,42 +492,151 @@ fn lower_compound_assignment(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
-    let local_id = single_segment_lvalue(target);
+    let local_id = expect_local_id(target);
     let ir_local = IRLocalId::from_local_id(local_id);
 
     let (rhs, current) = lower_expr(value, ctx, block, registry, output)?;
     let ty = ctx.type_of(rhs);
 
-    let read_dest = ctx.fresh_value(ty.clone());
+    if target.segments.len() == 1 {
+        let read_dest = ctx.fresh_value(ty.clone());
+        ctx.cfg.append(
+            current,
+            IRInstruction::LocalRead {
+                dest: read_dest,
+                local: ir_local,
+                ty: ty.clone(),
+            },
+        );
+        let ir_op = compound_to_ir(op);
+        let result = ctx.fresh_value(bin_op_result_type(ir_op, ty));
+        ctx.cfg.append(
+            current,
+            IRInstruction::BinaryOp {
+                dest: result,
+                lhs: read_dest,
+                op: ir_op,
+                rhs,
+            },
+        );
+        ctx.cfg.append(
+            current,
+            IRInstruction::LocalWrite {
+                local: ir_local,
+                ownership: Ownership::Unowned,
+                value: result,
+            },
+        );
+        ctx.mark_local_written(ir_local, Ownership::Unowned);
+        return Ok(FlowResult::Open {
+            value: None,
+            block: current,
+        });
+    }
+
+    let head_ty = target.head_resolved_type.clone().unwrap_or_else(|| {
+        panic!(
+            "alpha IR lower: multi-segment compound-assign target `{}` carries no head \
+             ResolvedType — typecheck resolve invariant violation",
+            target.segments.join("."),
+        )
+    });
+    let plan = build_field_chain(&head_ty, target, registry, output);
+    let head_ir_type = resolved_type_to_ir_type(&head_ty, registry, &mut output.instantiations);
+
+    let root_value = ctx.fresh_value(head_ir_type.clone());
     ctx.cfg.append(
         current,
         IRInstruction::LocalRead {
-            dest: read_dest,
+            dest: root_value,
             local: ir_local,
-            ty: ty.clone(),
+            ty: head_ir_type.clone(),
+        },
+    );
+
+    let mut parent_values = Vec::with_capacity(plan.len());
+    let mut current_parent = root_value;
+    for step in &plan[..plan.len().saturating_sub(1)] {
+        let dest = ctx.fresh_value(step.field_ir_type.clone());
+        ctx.cfg.append(
+            current,
+            IRInstruction::FieldGet {
+                base: current_parent,
+                dest,
+                field_index: step.field_index,
+                field_type: step.field_ir_type.clone(),
+                struct_symbol: step.struct_symbol.clone(),
+            },
+        );
+        parent_values.push(current_parent);
+        current_parent = dest;
+    }
+    parent_values.push(current_parent);
+
+    let leaf_step = plan
+        .last()
+        .expect("alpha IR lower: compound-assign plan is empty for a multi-segment lvalue");
+    let leaf_parent = parent_values[parent_values.len() - 1];
+    let leaf_value = ctx.fresh_value(leaf_step.field_ir_type.clone());
+    ctx.cfg.append(
+        current,
+        IRInstruction::FieldGet {
+            base: leaf_parent,
+            dest: leaf_value,
+            field_index: leaf_step.field_index,
+            field_type: leaf_step.field_ir_type.clone(),
+            struct_symbol: leaf_step.struct_symbol.clone(),
         },
     );
 
     let ir_op = compound_to_ir(op);
-    let result = ctx.fresh_value(bin_op_result_type(ir_op, ty));
+    let combined = ctx.fresh_value(bin_op_result_type(ir_op, leaf_step.field_ir_type.clone()));
     ctx.cfg.append(
         current,
         IRInstruction::BinaryOp {
-            dest: result,
-            lhs: read_dest,
+            dest: combined,
+            lhs: leaf_value,
             op: ir_op,
             rhs,
         },
     );
+
+    let mut new_value = combined;
+    for (depth_from_leaf, step) in plan.iter().enumerate().rev() {
+        let parent = parent_values[depth_from_leaf];
+        let parent_ir_type = if depth_from_leaf == 0 {
+            head_ir_type.clone()
+        } else {
+            plan[depth_from_leaf - 1].field_ir_type.clone()
+        };
+        let dest = ctx.fresh_value(parent_ir_type);
+        ctx.cfg.append(
+            current,
+            IRInstruction::FieldSet {
+                base: parent,
+                dest,
+                field_index: step.field_index,
+                field_type: step.field_ir_type.clone(),
+                struct_symbol: step.struct_symbol.clone(),
+                value: new_value,
+            },
+        );
+        new_value = dest;
+    }
+
+    let head_ownership = ctx
+        .slot_state(ir_local)
+        .map(|state| state.ownership)
+        .unwrap_or(Ownership::Unowned);
     ctx.cfg.append(
         current,
         IRInstruction::LocalWrite {
             local: ir_local,
-            ownership: Ownership::Unowned,
-            value: result,
+            ownership: head_ownership,
+            value: new_value,
         },
     );
-    ctx.mark_local_written(ir_local, Ownership::Unowned);
+    ctx.mark_local_written(ir_local, head_ownership);
 
     Ok(FlowResult::Open {
         value: None,
@@ -364,37 +706,31 @@ fn move_out_for_return(ctx: &mut FnLowerCtx, block: IRBlockId, value: ValueId) -
     dest
 }
 
-/// Pull the [`LocalId`] off a sealed assignment target. Typecheck
-/// rejects pattern destructuring, so by the time this runs the
-/// target is an [`AssignTarget::LValue`] whose [`LValue`] passes
-/// `single_segment_lvalue`'s checks.
-fn single_segment_local(target: &AssignTarget) -> LocalId {
+/// Pull the [`LValue`] off a sealed [`AssignTarget`]. Typecheck
+/// rejects pattern destructuring, so by the time lowering runs the
+/// target is always [`AssignTarget::LValue`] — anything else is an
+/// upstream invariant break.
+fn expect_lvalue(target: &AssignTarget) -> &LValue {
     let AssignTarget::LValue(lvalue) = target else {
         panic!(
             "alpha IR lower: assignment target must be an LValue after typecheck seal \
              (got {target:?})",
         );
     };
-    single_segment_lvalue(lvalue)
+    lvalue
 }
 
-/// Validate a sealed compound-assign / regular-assign LValue and
-/// return its [`LocalId`]. Single-segment shape and a stamped
-/// `local_id` are typecheck-seal invariants; deviation is an
-/// upstream bug.
-fn single_segment_lvalue(lvalue: &LValue) -> LocalId {
-    if lvalue.segments.len() != 1 {
-        panic!(
-            "alpha IR lower: assignment target must be single-segment after typecheck seal \
-             (got {} segments)",
-            lvalue.segments.len(),
-        );
-    }
+/// Read the head [`LocalId`] off a sealed [`LValue`]. Typecheck-
+/// resolve stamps both single-segment locals (`x`) and multi-segment
+/// field-write head locals (`p` in `p.x = …`), so by the time
+/// lowering runs the slot is non-`None` for every `LValue` that
+/// reaches a backend.
+fn expect_local_id(lvalue: &LValue) -> LocalId {
     lvalue.local_id.unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: single-segment assignment target `{}` carries no LocalId — \
-             typecheck resolve invariant violation",
-            lvalue.segments[0],
+            "alpha IR lower: assignment target `{}` carries no LocalId — typecheck \
+             resolve invariant violation",
+            lvalue.segments.join("."),
         )
     })
 }

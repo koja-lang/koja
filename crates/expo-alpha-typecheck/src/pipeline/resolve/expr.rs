@@ -20,7 +20,7 @@ use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
 use super::literals::{resolve_binary_literal, resolve_list_literal, resolve_map_literal};
 use super::match_expr::resolve_match;
-use super::ops::{binary_type, literal_type, unary_type};
+use super::ops::{binary_type, unary_type};
 use super::process::{resolve_receive, resolve_spawn};
 use super::strings::resolve_string;
 use super::structs::{resolve_field_access, resolve_struct_construction};
@@ -152,7 +152,7 @@ pub(super) fn resolve_expr_with_expected(
             resolver,
             diagnostics,
         ),
-        ExprKind::Literal { value } => literal_type(value, resolver.registry),
+        ExprKind::Literal { value } => resolver.registry.literal_type(value),
         ExprKind::Match { subject, arms } => {
             resolve_match(subject, arms, expected, expr.span, resolver, diagnostics)
         }

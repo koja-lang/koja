@@ -26,10 +26,12 @@ sequencing block at the bottom is a recommendation, not a contract.
 - **Qualified packages (`lib/<pkg>/src/`)**:
   - `Crypto` — parity. Wired into `ALPHA_QUALIFIED` and exercised by
     `alias Crypto.Sha256` in driver tests.
-  - `Json` — small gap. Needs string interpolation + dotted type
-    names + field assignment; no language feature missing.
-  - `Http` — small gap. Needs `String.clone()` (shipped),
-    field assignment, dotted type names.
+  - `Json` — small gap. Needs string interpolation; no other
+    language feature missing (dotted type names shipped 20260513).
+  - `Http` — language-feature parity. `String.clone()` (shipped
+    20260512), field assignment (shipped 20260513), and dotted type
+    names (shipped 20260513) all landed; ready to wire into
+    `ALPHA_QUALIFIED` once the source files clean-compile end-to-end.
   - `Net` — language-feature gap. Process message envelopes use
     type unions (`Tcp.In | Tcp.Out`); blocked until unions land.
 
@@ -70,8 +72,6 @@ alpha can't compile today. **These are the hard parity blockers.**
 | Gap                                                                           | Golden tests                                                                                                                               | Alpha gate                                                                                                     |
 | ----------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------- |
 | **Type unions** (`A \| B`, `type X = …`, typed-binding patterns `p: Post ->`) | `union_types`, `union_named`, `union_typed_binding`, `union_struct_field`, `process_union_msg`                                             | `lift_signatures/types.rs:125`, `resolve/patterns/mod.rs:170`                                                  |
-| **Field assignment** (`p.x = 10`)                                             | `structs.expo`                                                                                                                             | `resolve/statements.rs:271`                                                                                    |
-| **Dotted type names** (`HTTP.Headers` in type/expr position, no alias)        | `qualified_signature`, `qualified_static_call`                                                                                             | `lift_signatures/types.rs:243,314`                                                                             |
 | **Infinite `loop`** (and `break`)                                             | `match_loop_return.expo` (`loop`), `ffi/src/main.expo` (`loop` + `break`)                                                                  | `ExprKind::Loop` falls into `resolve/expr.rs:220` "other"; `break` only allowed inside synthesized for-desugar |
 | **Tail-call optimization**                                                    | `tail_call.expo`, `tail_call_unit.expo` (100k-deep recursion)                                                                              | No `TailCall` in alpha-IR-LLVM — would stack-overflow even though it parses and typechecks                     |
 | **String interpolation** (`"hello #{x}"`)                                     | ~25 files — `structs`, `methods`, `inline_methods`, `cross_ref`, `match_loop_return`, every `protocols/*`, every `io/*`, every `process_*` | `resolve/strings.rs:27`                                                                                        |
@@ -121,6 +121,28 @@ alpha source tree, but golden coverage confirms them shipped:
 - **`Clone` protocol** for heap primitives — shipped 2026-05-12;
   pinned by `crates/expo-alpha-typecheck/tests/clone.rs` and the
   `*_clone_*` driver tests in `alpha_two_plus_two.rs`.
+- **Field assignment** (`p.x = 10`, depth-N, `self.f = v` under `move
+  self`, `p.x += 1`) — shipped 2026-05-13. Resolver walks the
+  segment chain through nested struct definitions with type-arg
+  substitution; IR adds `FieldSet` (SSA-pure rebuild) and
+  `DropValue` (heap-leaf overwrite); both backends implement.
+  Pinned by `crates/expo-alpha-typecheck/tests/field_assignment.rs`,
+  `crates/expo-alpha-ir/tests/lower_field_assignment.rs`,
+  `crates/expo-alpha-ir-eval/tests/field_assignment.rs`,
+  `crates/expo-alpha-ir-llvm/tests/field_assignment.rs`, and the
+  `*_field_assignment_*` driver tests in `alpha_two_plus_two.rs`.
+- **Dotted type names** (`Crypto.SHA256` and `HTTP.Headers` in
+  signatures and as static-method receivers, without an `alias`
+  line) — shipped 2026-05-13. `resolve_path_to_global` walks the
+  full path through alias-rewrite → same-package → head-as-package
+  → `Global.*` lookup; `classify_receiver` collapses the parser's
+  `EnumConstruction Unit` shape, bare `Ident`, and `FieldAccess`
+  chain shapes onto the same dotted-path lookup and rewrites the
+  receiver to a synthetic `Ident` so IR lowering's existing static
+  path picks it up. Pinned by the `dotted_*` tests in
+  `crates/expo-alpha-typecheck/tests/aliases.rs` and the
+  `dotted_type_in_signature_lifts_to_qualified_global` test in
+  `crates/expo-alpha-typecheck/tests/lift_function_types.rs`.
 
 ---
 
@@ -130,16 +152,24 @@ Roughly cheapest → most expensive, weighted by what each step
 unblocks. Each step lands behind seal-asserted output and standalone
 tests, per northstar.
 
-### 1. Field assignment (`p.x = 10`)
+### 1. Field assignment (`p.x = 10`) — shipped 2026-05-13
 
-Single statement-resolve gap; multi-segment `LValue` already lifts.
-Unblocks `structs.expo` and the `Http` package. **~1 day.**
+Single statement-resolve gap; multi-segment `LValue` lifted via a
+new resolver chain walker plus a `FieldSet` IR instruction (SSA-
+pure rebuild) and a value-keyed `DropValue` for heap-leaf overwrite.
+Unblocked `structs.expo` and removed every alpha gap from the
+`Http` package except dotted type names (#2).
 
-### 2. Dotted type names in expr + type position
+### 2. Dotted type names in expr + type position — shipped 2026-05-13
 
-`Foo.Bar` and `Foo.Bar.method()` without forcing an `alias` first.
-Unblocks `qualified_*` golden tests and most `Http`/`Json` user
-code. **~1 day.**
+`Foo.Bar` in type annotations and `Foo.Bar.method()` as a static
+receiver, both without an `alias` line. Resolver gate widened in
+`resolve_path_to_global` (alias → same-package → head-as-package →
+`Global` precedence) and `classify_receiver` (collapses the
+parser's three receiver shapes onto a unified dotted-path lookup,
+then rewrites the receiver to a synthetic `Ident` for downstream
+lowering). Unblocked the `qualified_*` golden tests and removed
+every alpha-side language gap from the `Http` package.
 
 ### 3. String interpolation (`"hello #{x}"`)
 

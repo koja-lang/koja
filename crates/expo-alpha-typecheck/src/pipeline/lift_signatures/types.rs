@@ -227,54 +227,9 @@ fn resolve_generic(
         ));
         return ResolvedType::unresolved();
     }
-    let head = if let Some(target) = rewrite_through_aliases(scope.aliases, path) {
-        if let Some((id, _)) = scope.registry.lookup(&target) {
-            Resolution::Global(id)
-        } else {
-            diagnostics.push(Diagnostic::error(
-                format!("alpha typecheck does not recognize the alias target `{target}`"),
-                span,
-            ));
-            return ResolvedType::unresolved();
-        }
-    } else if path.len() != 1 {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck does not yet support dotted type names (`{}`)",
-                path.join("."),
-            ),
-            span,
-        ));
-        return ResolvedType::unresolved();
-    } else {
-        let name = &path[0];
-        let local = Identifier::new(scope.package, vec![name.clone()]);
-        if let Some((id, _)) = scope.registry.lookup(&local) {
-            Resolution::Global(id)
-        } else {
-            let candidate = Identifier::new("Global", vec![name.clone()]);
-            let Some((id, entry)) = scope.registry.lookup(&candidate) else {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "alpha typecheck does not recognize the type name `{name}` (no \
-                         same-package struct/enum or `Global.*` type registered)",
-                    ),
-                    span,
-                ));
-                return ResolvedType::unresolved();
-            };
-            if !entry.identifier.is_in_global() {
-                diagnostics.push(Diagnostic::error(
-                    format!(
-                        "alpha typecheck only recognizes `Global.*` primitive type names; \
-                         got `{name}`",
-                    ),
-                    span,
-                ));
-                return ResolvedType::unresolved();
-            }
-            Resolution::Global(id)
-        }
+    let head = match resolve_path_to_global(path, span, scope, diagnostics) {
+        Some(id) => Resolution::Global(id),
+        None => return ResolvedType::unresolved(),
     };
     let resolved_args = args
         .iter()
@@ -298,57 +253,88 @@ fn resolve_named(
     {
         return ResolvedType::leaf(Resolution::TypeParam { owner, index });
     }
+    match resolve_path_to_global(path, span, scope, diagnostics) {
+        Some(id) => ResolvedType::leaf(Resolution::Global(id)),
+        None => ResolvedType::unresolved(),
+    }
+}
+
+/// Resolve a (possibly multi-segment) type path to its registry id,
+/// emitting a diagnostic and returning `None` on miss. Lookup
+/// precedence:
+///
+/// 1. A file alias on the head segment that rewrites the whole path
+///    to a target [`Identifier`].
+/// 2. The current-package interpretation (`<package>.<segments…>`),
+///    so user-declared types take precedence over `Global` for any
+///    name they shadow.
+/// 3. For multi-segment paths only: the head-as-package
+///    interpretation (`<path[0]>.<path[1..]>`), so dotted names
+///    like `Crypto.SHA256` resolve to the entry registered as
+///    `Identifier { package: "Crypto", path: ["SHA256"] }` — i.e.
+///    the same identifier the alias-rewrite path constructs from
+///    `alias Crypto.SHA256 as Hasher`.
+/// 4. The `Global.<segments…>` interpretation (stdlib stubs +
+///    primitive types).
+///
+/// Multi-segment paths are accepted everywhere a single-segment
+/// path is — `HTTP.Headers` resolves identically to `Headers` one
+/// segment shallower, just against a different identifier shape.
+pub(crate) fn resolve_path_to_global(
+    path: &[String],
+    span: Span,
+    scope: ResolutionScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<GlobalRegistryId> {
     if let Some(target) = rewrite_through_aliases(scope.aliases, path) {
         if let Some((id, _)) = scope.registry.lookup(&target) {
-            return ResolvedType::leaf(Resolution::Global(id));
+            return Some(id);
         }
         diagnostics.push(Diagnostic::error(
             format!("alpha typecheck does not recognize the alias target `{target}`"),
             span,
         ));
-        return ResolvedType::unresolved();
+        return None;
     }
-    if path.len() != 1 {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck does not yet support dotted type names (`{}`)",
-                path.join("."),
-            ),
-            span,
-        ));
-        return ResolvedType::unresolved();
-    }
-    let name = &path[0];
-    // User-defined structs in the current package shadow stdlib
-    // primitives by binding lookup order. The collect sub-pass has
-    // already registered every user struct, so a same-package struct
-    // entry takes precedence over a `Global.<name>` primitive.
-    let local = Identifier::new(scope.package, vec![name.clone()]);
+    let local = Identifier::new(scope.package, path.to_vec());
     if let Some((id, _)) = scope.registry.lookup(&local) {
-        return ResolvedType::leaf(Resolution::Global(id));
+        return Some(id);
     }
-    let candidate = Identifier::new("Global", vec![name.clone()]);
-    let Some((id, entry)) = scope.registry.lookup(&candidate) else {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck does not recognize the type name `{name}` (no \
-                 same-package struct or `Global.*` primitive registered)",
-            ),
-            span,
-        ));
-        return ResolvedType::unresolved();
-    };
-    if !entry.identifier.is_in_global() {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "alpha typecheck only recognizes `Global.*` primitive type names; \
-                 got `{name}`",
-            ),
-            span,
-        ));
-        return ResolvedType::unresolved();
+    if path.len() >= 2 {
+        let head_as_pkg = Identifier::new(&path[0], path[1..].to_vec());
+        if let Some((id, _)) = scope.registry.lookup(&head_as_pkg) {
+            return Some(id);
+        }
     }
-    ResolvedType::leaf(Resolution::Global(id))
+    let candidate = Identifier::new("Global", path.to_vec());
+    if let Some((id, entry)) = scope.registry.lookup(&candidate) {
+        // Single-segment fallthrough into `Global.<name>` is reserved
+        // for the stdlib primitive stubs (`Int`, `String`, …) — those
+        // are the only `Global.*` entries a user-facing type
+        // expression can name without qualifying further. Multi-
+        // segment paths bypass this guard because the qualification
+        // is the user's intent.
+        if path.len() == 1 && !entry.identifier.is_in_global() {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alpha typecheck only recognizes `Global.*` primitive type names; got `{}`",
+                    path[0],
+                ),
+                span,
+            ));
+            return None;
+        }
+        return Some(id);
+    }
+    diagnostics.push(Diagnostic::error(
+        format!(
+            "alpha typecheck does not recognize the type name `{}` (no same-package or \
+             `Global.*` entry registered)",
+            path.join("."),
+        ),
+        span,
+    ));
+    None
 }
 
 pub(super) fn type_expr_span(type_expr: &TypeExpr) -> Span {

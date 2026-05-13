@@ -22,3 +22,5 @@ pub(crate) mod resolve;
 pub(crate) mod seal;
 pub(crate) mod synthesize;
 pub(crate) mod unify;
+
+pub use unify::{Substitution, substitute};

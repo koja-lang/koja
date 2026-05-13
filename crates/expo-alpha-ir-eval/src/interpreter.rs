@@ -543,10 +543,39 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, field);
             Ok(())
         }
+        IRInstruction::FieldSet {
+            base,
+            dest,
+            field_index,
+            field_type: _,
+            struct_symbol: _,
+            value,
+        } => {
+            let base_value = lookup(&frame.values, *base)?;
+            let Value::Struct { mut fields, symbol } = base_value else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("field_set expects a Struct receiver; got {base_value}",),
+                });
+            };
+            let new_field = lookup(&frame.values, *value)?;
+            let slot = fields.get_mut(*field_index as usize).unwrap_or_else(|| {
+                panic!(
+                    "interpreter: FieldSet index {field_index} out of range — seal invariant \
+                     violation",
+                )
+            });
+            *slot = new_field;
+            frame.values.insert(*dest, Value::Struct { fields, symbol });
+            Ok(())
+        }
         // Slot identity comes from `LocalWrite`; `LocalDecl` is a
         // no-op for the interpreter (the LLVM backend uses it to
         // emit an entry-block alloca).
         IRInstruction::DropLocal { .. } => Ok(()),
+        // Heap reclamation is handled by the host GC; the IR-level
+        // value-keyed drop is a no-op for the interpreter (mirrors
+        // [`IRInstruction::DropLocal`] above).
+        IRInstruction::DropValue { .. } => Ok(()),
         IRInstruction::LocalDecl { .. } => Ok(()),
         IRInstruction::LocalRead { dest, local, .. } => {
             let value = frame.locals.get(local).cloned().unwrap_or_else(|| {

@@ -21,7 +21,7 @@
 //! [`LiteralCoercion`] — same plumbing the four existing coercion
 //! sites use, just invoked at one more site.
 
-use expo_ast::ast::{BinOp, Diagnostic, Expr, Literal, UnaryOp};
+use expo_ast::ast::{BinOp, Diagnostic, Expr, UnaryOp};
 use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::ResolvedType;
 use expo_ast::labels::bin_op_label;
@@ -30,16 +30,6 @@ use expo_ast::span::Span;
 use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::types::{display_resolution, is_primitive, types_equivalent};
 use crate::registry::GlobalRegistry;
-
-pub(super) fn literal_type(value: &Literal, registry: &GlobalRegistry) -> ResolvedType {
-    match value {
-        Literal::Bool(_) => registry.primitive("Bool"),
-        Literal::Float(_) => registry.primitive("Float"),
-        Literal::Int(_) => registry.primitive("Int"),
-        Literal::String(_) => registry.primitive("String"),
-        Literal::Unit => registry.primitive("Unit"),
-    }
-}
 
 pub(super) fn binary_type(
     op: BinOp,

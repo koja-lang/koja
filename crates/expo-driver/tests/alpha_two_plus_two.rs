@@ -214,6 +214,22 @@ const STRUCT_FIELD_SCRIPT_SOURCE: &str = "
     Point{x: 5, y: 10}.x
 ";
 
+/// Script-mode fixture exercising multi-segment field assignment
+/// end-to-end (`p.x = 10` followed by `p.x.print()`). Drives the
+/// `LocalRead → FieldSet → LocalWrite` rebuild chain through both
+/// the LLVM and eval backends — the trailing print emits the
+/// post-assignment value (`10\n`).
+const FIELD_ASSIGNMENT_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    p = Point{x: 1, y: 2}
+    p.x = 10
+    p.x
+";
+
 /// Script-mode fixture exercising the alpha static-method slice
 /// end-to-end with an inline-form declaration. `Point.origin()`
 /// dispatches to a method declared inside the struct body, the
@@ -1031,6 +1047,68 @@ fn alpha_run_interpreter_script_struct_field_prints_five() {
         stdout.trim(),
         "5",
         "expected interpreter to print `5` (Point.x), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_field_assignment_prints_ten() {
+    let scratch = scratch_dir("run_llvm_field_assignment");
+    let fixture = write_fixture(
+        &scratch,
+        "field_assignment.exps",
+        &dedent(FIELD_ASSIGNMENT_SCRIPT_SOURCE),
+    );
+
+    // Drives the multi-segment assignment lowering through the LLVM
+    // backend end-to-end: the struct literal materializes through
+    // alloca + GEP + store-per-field, the `p.x = 10` write rebuilds
+    // the struct via FieldSet (alloca + GEP + store + load), the
+    // LocalWrite installs the new value into `p`'s slot, and the
+    // trailing `p.x` projection prints `10\n`.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (field assignment) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "10",
+        "expected LLVM backend to print `10` (post-assignment p.x), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_field_assignment_prints_ten() {
+    let scratch = scratch_dir("run_interpreter_field_assignment");
+    let fixture = write_fixture(
+        &scratch,
+        "field_assignment.exps",
+        &dedent(FIELD_ASSIGNMENT_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above: the interpreter
+    // clones the field vec, swaps slot 0 for the freshly-written
+    // `10`, writes the rebuilt `Value::Struct` into `p`'s frame
+    // entry, and the trailing `p.x` projection emits `10\n`.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, field assignment) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "10",
+        "expected interpreter to print `10` (post-assignment p.x), got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);

@@ -564,14 +564,21 @@ pub enum CompoundOp {
 /// A dotted lvalue path used in assignments: `x`, `point.x`, `self.name`.
 ///
 /// `local_id` is `None` after parse and stamped by typecheck-resolve
-/// when the segments resolve to a single-segment local binding (`x`,
-/// not `point.x`). The IR lower path keys its `LocalDecl` /
-/// `LocalWrite` instructions on the [`LocalId`] and never reaches
-/// back into [`Self::segments`] — keeps the seam clean and lets a
-/// future block-scoping slice rename via the id without the surface
-/// `String` going stale.
+/// for both single-segment locals (`x`) and multi-segment field
+/// writes (`point.x`) — the head segment is always a local, and IR
+/// lower keys its `LocalRead` / `LocalWrite` instructions on that
+/// [`LocalId`].
+///
+/// `head_resolved_type` is `None` after parse and stamped by
+/// typecheck-resolve for multi-segment paths (`segments.len() >= 2`)
+/// with the head local's [`ResolvedType`]. IR lower walks
+/// [`Self::segments`]`[1..]` against the registry starting from this
+/// type to derive each intermediate field's struct-id, field-index,
+/// and substituted field type. Single-segment writes leave it
+/// `None` — they don't need a chain walk.
 #[derive(Debug, Clone)]
 pub struct LValue {
+    pub head_resolved_type: Option<ResolvedType>,
     pub local_id: Option<LocalId>,
     pub segments: Vec<String>,
     pub span: Span,

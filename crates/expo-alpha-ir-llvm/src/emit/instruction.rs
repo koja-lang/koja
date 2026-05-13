@@ -122,6 +122,28 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
+        IRInstruction::FieldSet {
+            base,
+            dest,
+            field_index,
+            field_type,
+            struct_symbol,
+            value,
+        } => {
+            let base_value = lookup(values, *base)?;
+            let new_field = lookup(values, *value)?;
+            let result = structs::emit_field_set(
+                ctx,
+                base_value,
+                *field_index,
+                field_type,
+                struct_symbol,
+                new_field,
+            )?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::DropValue { value, ty } => locals::emit_drop_value(ctx, *value, ty, values),
         IRInstruction::LoadCapture {
             capture_index,
             dest,

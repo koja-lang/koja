@@ -11,8 +11,7 @@
 //! `Constant(Some(_))` without re-walking the AST.
 
 use expo_ast::ast::{
-    Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal, StringPart,
-    UnaryOp,
+    Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, StringPart, UnaryOp,
 };
 use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
@@ -96,7 +95,7 @@ fn resolve_constant_value(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let ty = match &mut expr.kind {
-        ExprKind::Literal { value } => literal_type(value, scope.registry),
+        ExprKind::Literal { value } => scope.registry.literal_type(value),
         ExprKind::String { parts, .. } => {
             string_literal_type(parts, expr.span, scope.registry, diagnostics)
         }
@@ -163,16 +162,6 @@ fn resolve_constant_value(
 
     expr.resolution = ty.clone();
     ty
-}
-
-fn literal_type(value: &Literal, registry: &GlobalRegistry) -> ResolvedType {
-    match value {
-        Literal::Bool(_) => registry.primitive("Bool"),
-        Literal::Float(_) => registry.primitive("Float"),
-        Literal::Int(_) => registry.primitive("Int"),
-        Literal::String(_) => registry.primitive("String"),
-        Literal::Unit => registry.primitive("Unit"),
-    }
 }
 
 fn string_literal_type(

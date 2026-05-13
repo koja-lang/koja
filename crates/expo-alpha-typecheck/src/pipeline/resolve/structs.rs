@@ -1,26 +1,25 @@
-//! Struct-literal construction and field-access resolution. Also
-//! owns `lookup_type` (used by [`super::calls`] for static dispatch
-//! and by [`super::enums`] for enum-variant construction) and
+//! Struct-literal construction and field-access resolution. Owns
 //! `validate_named_fields` (the shared name/type-checked field-init
 //! walk used by both struct construction and struct-variant
-//! construction). Structs own the "named field layout" concept; the
-//! enum module imports rather than duplicating.
+//! construction) — structs own the "named field layout" concept,
+//! and [`super::enums`] imports it rather than duplicating. The
+//! cross-cutting `lookup_type` registry helper lives one module
+//! over in [`super::types`] alongside the other registry-backed
+//! type predicates.
 
 use expo_ast::ast::{Diagnostic, Expr, FieldInit};
 use expo_ast::coercion::LiteralCoercion;
-use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-use crate::pipeline::aliases::rewrite_through_aliases;
-use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
-use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField};
+use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
 
 use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, finalize_inference, unify_pairs};
-use super::types::display_resolution;
+use super::types::{display_resolution, lookup_type};
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init
@@ -365,40 +364,4 @@ fn is_unconstructable_primitive(identifier: &Identifier) -> bool {
             | "UInt8"
             | "Unit"
     )
-}
-
-/// Resolve a single-segment type path against the in-scope package,
-/// falling back to `Global` for stdlib stubs. File aliases get
-/// first crack so `alias Pkg.Type as Local` followed by
-/// `Local{...}` resolves through to the target package.
-///
-/// Generalized from the struct-only `lookup_struct` so enum-variant
-/// construction (`Color.Red`) and static method dispatch on enums
-/// (`Color.method(...)`) can share the same path-resolution logic.
-/// Callers narrow on `entry.kind` if they care about kind. The
-/// `path.len() != 1` gate stays as the existing "no nested types
-/// yet" enforcement for non-alias paths; aliases sidestep it
-/// because they resolve straight to a constructed `Identifier`.
-/// When nested types land, this gate is the only thing to relax —
-/// the alias machinery doesn't move.
-pub(super) fn lookup_type<'r>(
-    type_path: &[String],
-    scope: ResolutionScope<'r>,
-) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
-    if let Some(target) = rewrite_through_aliases(scope.aliases, type_path) {
-        return scope.registry.lookup(&target);
-    }
-    if type_path.len() != 1 {
-        return None;
-    }
-    let name = &type_path[0];
-    if let Some(found) = scope
-        .registry
-        .lookup(&Identifier::new(scope.package, vec![name.clone()]))
-    {
-        return Some(found);
-    }
-    scope
-        .registry
-        .lookup(&Identifier::new("Global", vec![name.clone()]))
 }

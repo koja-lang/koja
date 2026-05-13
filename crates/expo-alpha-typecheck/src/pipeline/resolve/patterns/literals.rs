@@ -12,7 +12,6 @@ use super::super::coercion::{
     float_value_fits, int_value_fits, narrow_numeric_target, parse_int_literal_text,
 };
 use super::super::ctx::Resolver;
-use super::super::ops::literal_type;
 use super::super::types::{display_resolution, is_primitive};
 
 /// Check that a `Pattern::Literal`'s value agrees with the subject
@@ -33,7 +32,7 @@ pub(super) fn check_literal_matches_subject(
     if !subject_ty.is_resolved() {
         return;
     }
-    let lit_ty = literal_type(value, resolver.registry);
+    let lit_ty = resolver.registry.literal_type(value);
     if &lit_ty == subject_ty {
         return;
     }

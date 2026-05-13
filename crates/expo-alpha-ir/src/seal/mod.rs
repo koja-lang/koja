@@ -183,6 +183,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             vec![*value]
         }
         IRInstruction::FieldGet { base, .. } => vec![*base],
+        IRInstruction::FieldSet { base, value, .. } => vec![*base, *value],
         // `LoadCapture` reads from the enclosing closure's env, not
         // a `ValueId`; nothing to validate in the per-block walk.
         IRInstruction::LoadCapture { .. } => vec![],
@@ -204,6 +205,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         | IRInstruction::LocalDecl { .. }
         | IRInstruction::LocalRead { .. }
         | IRInstruction::MoveOutLocal { .. } => vec![],
+        IRInstruction::DropValue { value, .. } => vec![*value],
         IRInstruction::LocalWrite { value, .. } => vec![*value],
         IRInstruction::MakeClosure { captures, .. } => captures.clone(),
         // `Receive` consumes only the optional `after` timeout

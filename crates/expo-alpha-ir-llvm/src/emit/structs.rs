@@ -78,6 +78,47 @@ pub(super) fn emit_field_get<'ctx>(
         })
 }
 
+/// Produce a struct-typed SSA value identical to `base` except the
+/// field at `field_index` is replaced by `value`. Same alloca + GEP
+/// pattern as [`emit_field_get`]: copy the base struct into a scratch
+/// alloca, GEP-store the new field over its slot, then reload the
+/// whole struct as the instruction's SSA destination.
+pub(super) fn emit_field_set<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    base: BasicValueEnum<'ctx>,
+    field_index: u32,
+    field_type: &IRType,
+    struct_symbol: &IRSymbol,
+    value: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let _ = field_type;
+    let struct_type = ctx.layouts.struct_type(struct_symbol.mangled());
+    let struct_value = base.into_struct_value();
+    let alloca = ctx.build_entry_alloca(struct_type, "field_set_tmp");
+    ctx.builder
+        .build_store(alloca, struct_value)
+        .map_err(|e| inkwell_err("build_store for FieldSet base", e))?;
+    let label = format!("field_set_{field_index}");
+    let field_ptr = ctx
+        .builder
+        .build_struct_gep(struct_type, alloca, field_index, &label)
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_struct_gep for FieldSet field #{field_index}"),
+                e,
+            )
+        })?;
+    ctx.builder.build_store(field_ptr, value).map_err(|e| {
+        inkwell_err(
+            format_args!("build_store for FieldSet field #{field_index}"),
+            e,
+        )
+    })?;
+    ctx.builder
+        .build_load(struct_type, alloca, struct_symbol.mangled())
+        .map_err(|e| inkwell_err("build_load for FieldSet result", e))
+}
+
 fn build_field_gep<'ctx>(
     ctx: &EmitContext<'ctx>,
     struct_type: StructType<'ctx>,

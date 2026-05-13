@@ -28,6 +28,7 @@ mod registry;
 
 pub use error::CheckFailure;
 pub use expo_ast::coercion::{LiteralCoercion, NumericLiteralWidth};
+pub use pipeline::{Substitution, substitute};
 pub use program::{CheckedPackage, CheckedProgram, check_program};
 pub use registry::{
     ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry,

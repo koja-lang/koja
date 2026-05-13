@@ -8,12 +8,59 @@
 //! `resolve` produce them.
 
 use expo_ast::ast::Diagnostic;
-use expo_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
+use expo_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
 use super::ctx::Callee;
+use crate::pipeline::aliases::rewrite_through_aliases;
+use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::Substitution;
-use crate::registry::GlobalRegistry;
+use crate::registry::{GlobalRegistry, RegistryEntry};
+
+/// Resolve a (possibly multi-segment) type path against the
+/// in-scope package, falling back to `Global` for stdlib stubs.
+/// Cross-cutting registry helper used by every site that needs to
+/// turn a parsed type path into a [`RegistryEntry`]: struct
+/// construction, enum-variant construction, struct/enum patterns,
+/// and static method dispatch. File aliases get first crack so
+/// `alias Pkg.Type as Local` followed by `Local{...}` resolves
+/// through to the target package.
+///
+/// Multi-segment paths (`Crypto.SHA256`, `HTTP.Headers`) resolve
+/// directly against the registry, so callers can write the
+/// qualified name without an `alias`. Same precedence as
+/// [`super::super::lift_signatures::types::resolve_path_to_global`]:
+/// alias rewrite first, then `<package>.<segments…>`, then for
+/// multi-segment paths only the head-as-package interpretation
+/// (`<path[0]>.<path[1..]>` — what `alias`-rewrite would
+/// construct), and finally `Global.<segments…>`. Mismatches
+/// return `None` (no diagnostic); callers convert to errors with
+/// their own message — they have the kind context (struct vs enum
+/// vs static call).
+pub(crate) fn lookup_type<'r>(
+    type_path: &[String],
+    scope: ResolutionScope<'r>,
+) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
+    if let Some(target) = rewrite_through_aliases(scope.aliases, type_path) {
+        return scope.registry.lookup(&target);
+    }
+    if let Some(found) = scope
+        .registry
+        .lookup(&Identifier::new(scope.package, type_path.to_vec()))
+    {
+        return Some(found);
+    }
+    if type_path.len() >= 2
+        && let Some(found) = scope
+            .registry
+            .lookup(&Identifier::new(&type_path[0], type_path[1..].to_vec()))
+    {
+        return Some(found);
+    }
+    scope
+        .registry
+        .lookup(&Identifier::new("Global", type_path.to_vec()))
+}
 
 /// Does `ty` resolve to the preloaded `Global.<name>` stdlib stub?
 pub(super) fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &str) -> bool {

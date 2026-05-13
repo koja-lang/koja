@@ -319,6 +319,7 @@ fn append_increment(mut body: Vec<Statement>, idx_name: &str, span: Span) -> Vec
 fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
     Statement::Assignment {
         target: AssignTarget::LValue(LValue {
+            head_resolved_type: None,
             local_id: None,
             segments: vec![name.to_string()],
             span,

@@ -123,6 +123,32 @@ fn function_type_returning_function_type_nests() {
 }
 
 #[test]
+fn dotted_type_in_signature_lifts_to_qualified_global() {
+    // `fn touch(crypto: Crypto.SHA256) -> Crypto.SHA256` — without
+    // an `alias` line. The lifter should walk the dotted path
+    // through `resolve_path_to_global` and produce a
+    // `Resolution::Global(Crypto.SHA256)` leaf for both the
+    // parameter and the return type, identical to what the alias
+    // form (`alias Crypto.SHA256 as Hasher` then `: Hasher`)
+    // produces today.
+    let source = "
+        fn touch(crypto: Crypto.SHA256) -> Crypto.SHA256
+          crypto
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let signature = lookup_function_signature(&checked, PACKAGE, &["touch"]);
+    let (sha_id, _) = checked
+        .registry
+        .lookup(&Identifier::new("Crypto", vec!["SHA256".to_string()]))
+        .expect("`Crypto.SHA256` should be registered via ALPHA_QUALIFIED");
+    let expected = ResolvedType::leaf(Resolution::Global(sha_id));
+    assert_eq!(signature.params[0].ty, expected);
+    assert_eq!(signature.return_type, expected);
+}
+
+#[test]
 fn function_type_in_generic_context_carries_type_params() {
     // Mirrors stdlib `List<T>.map` / `Option<T>.then` etc.: the
     // closure parameter's `T` and `U` lift as `TypeParam` leaves with
