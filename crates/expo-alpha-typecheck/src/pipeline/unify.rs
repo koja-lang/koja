@@ -47,7 +47,7 @@ struct Scope {
 ///
 /// [`from_args`]: Substitution::from_args
 #[derive(Clone, Debug)]
-pub(crate) struct Substitution {
+pub struct Substitution {
     scopes: Vec<Scope>,
 }
 
@@ -96,7 +96,7 @@ impl Substitution {
     /// Used by pattern / trait-impl conformance code that has the
     /// receiver's concrete `type_args` in hand and just wants to
     /// substitute them into a declared template.
-    pub(crate) fn from_args(owner: GlobalRegistryId, args: &[ResolvedType]) -> Self {
+    pub fn from_args(owner: GlobalRegistryId, args: &[ResolvedType]) -> Self {
         Self {
             scopes: vec![Scope {
                 owner,
@@ -270,7 +270,7 @@ pub(crate) fn unify_into(
 /// Phantom slots substitute to [`ResolvedType::unresolved`]. Leaves
 /// owned by out-of-scope owners (e.g. an outer-fn type-param when the
 /// substitution only covers an inner call) round-trip unchanged.
-pub(crate) fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType {
+pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType {
     match template {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             ResolvedType::Anonymous(AnonymousKind::Function {

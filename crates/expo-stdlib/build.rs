@@ -127,6 +127,13 @@ fn main() {
     let alpha_modules: &[&str] = &[
         // kernel first — defines Option/Result/Pair referenced downstream
         "Global.kernel",
+        // alpha_clone after kernel so future Clone impls can reach for
+        // Result / Option in their bodies; ahead of every other file
+        // so a stdlib `.clone()` call always finds the protocol. Lives
+        // in an `alpha_*.expo` file because v1 codegen doesn't know how
+        // to dispatch the new `String.clone` / `Binary.clone` /
+        // `Bits.clone` intrinsic ids — alpha is the only consumer.
+        "Global.alpha_clone",
         "Global.cptr",
         "Global.cstring",
         "Global.bitwise",
@@ -150,6 +157,12 @@ fn main() {
         "Global.alpha_debug_containers",
         "Global.system",
         "Global.time",
+        // process needs `Task<R>.run`'s `self.work()` to typecheck via
+        // alpha-typecheck's field-as-callable dispatch (a struct's
+        // function-typed field called with method syntax desugars to
+        // `(self.field)(args)`). Order: after the leaf containers but
+        // before random, which has no dependency either way.
+        "Global.process",
         // random comes last — calls into `String.to_binary`, so the string
         // module must be lowered before this module's bodies can resolve.
         "Global.random",
@@ -166,6 +179,29 @@ fn main() {
                 panic!("ALPHA_AUTOIMPORT module `{module}` not found in discovered Global sources")
             });
         code.push_str(&format!("    (\"{module}\", {const_name}),\n"));
+    }
+    code.push_str("];\n");
+
+    // Curated set of qualified packages alpha programs can `alias` into
+    // scope. Pragmatic stand-in for incremental package loading: each
+    // entry's full file roster is loaded eagerly so `lift_signatures` /
+    // `resolve` see its types when validating a user's `alias` decl.
+    // Retires once `IRPackage` caching + on-demand package loads land.
+    let alpha_qualified_packages: &[&str] = &["Crypto"];
+    code.push_str("\n/// Stdlib sources for qualified packages alpha programs can\n");
+    code.push_str("/// `alias` into scope. Loaded eagerly alongside `ALPHA_AUTOIMPORT`;\n");
+    code.push_str("/// pragmatic stand-in for on-demand `IRPackage` loading.\n");
+    code.push_str("pub const ALPHA_QUALIFIED: &[(&str, &str)] = &[\n");
+    for package in alpha_qualified_packages {
+        let entries = qualified.get(*package).unwrap_or_else(|| {
+            panic!("ALPHA_QUALIFIED package `{package}` not found in discovered qualified sources")
+        });
+        for (module_name, const_name, alpha_only) in entries {
+            if *alpha_only {
+                continue;
+            }
+            code.push_str(&format!("    (\"{module_name}\", {const_name}),\n"));
+        }
     }
     code.push_str("];\n");
 

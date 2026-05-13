@@ -16,10 +16,11 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{
-    Diagnostic, EnumDecl, Function, Item, ProtocolDecl, ProtocolMethod, StructDecl,
+    AliasDecl, Diagnostic, EnumDecl, Function, Item, ProtocolDecl, ProtocolMethod, StructDecl,
 };
 use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
+use crate::pipeline::aliases::collect_file_aliases;
 use crate::program::CheckedPackage;
 use crate::registry::GlobalRegistry;
 
@@ -31,9 +32,45 @@ mod protocols;
 mod structs;
 mod types;
 
-pub(crate) use types::{TypeParamScope, impl_target_name, resolve_type_expr};
+pub(crate) use types::{ResolutionScope, TypeParamScope, impl_target_name, resolve_type_expr};
 
 use types::resolve_bound_to_id;
+
+/// Mutable counterpart to [`ResolutionScope`] used by every
+/// `lift_*` function: same name-resolution inputs (alias slice,
+/// current package, registry) but with a `&mut` registry so
+/// signature / definition stamps land on the right entries.
+///
+/// **Do not grow this struct.** It exists to bundle the four
+/// pieces every lifter needs to (a) look names up under the file's
+/// alias rules and (b) write lifted payloads onto the registry.
+/// `diagnostics` lives outside on purpose — see the doc on
+/// [`ResolutionScope`] for the rationale.
+///
+/// Use [`Self::resolution_scope`] to drop into read-only type
+/// resolution: it reborrows `registry` immutably for the duration
+/// of the call, so any subsequent `&mut` write through the lift
+/// scope is sequenced naturally by the borrow checker.
+pub(super) struct LiftScope<'a> {
+    pub aliases: &'a [AliasDecl],
+    pub package: &'a str,
+    pub registry: &'a mut GlobalRegistry,
+}
+
+impl<'a> LiftScope<'a> {
+    /// Reborrow this lift scope as the read-only [`ResolutionScope`]
+    /// expected by [`resolve_type_expr`] and friends. The aliases
+    /// and package projections naturally outlive `&self` (their
+    /// fields are `&'a`); the registry reborrow is `&'_`-scoped to
+    /// the call so subsequent `&mut self.registry` writes typecheck.
+    pub(super) fn resolution_scope(&self) -> ResolutionScope<'_> {
+        ResolutionScope {
+            aliases: self.aliases,
+            package: self.package,
+            registry: self.registry,
+        }
+    }
+}
 
 /// `protocol_id -> method_name -> protocol method with default body`.
 /// Local to one `lift_signatures` call.
@@ -77,9 +114,15 @@ pub(crate) fn lift_signatures(
     // conformance in pass 2.
     for pkg in packages.iter() {
         for file in &pkg.files {
+            let aliases = collect_file_aliases(file);
+            let mut scope = LiftScope {
+                aliases: &aliases,
+                package: &pkg.package,
+                registry,
+            };
             for item in &file.items {
                 if let Item::Protocol(decl) = item {
-                    protocols::lift_protocol(decl, &pkg.package, registry, diagnostics);
+                    protocols::lift_protocol(decl, &mut scope, diagnostics);
                 }
             }
         }
@@ -89,7 +132,9 @@ pub(crate) fn lift_signatures(
     // `RegistryEntry.type_param_bounds`. Runs after protocol lift so
     // bound names can refer to protocols declared anywhere in the
     // program; runs before struct / enum / function lift so their
-    // method signatures can already enforce bounds (slice 2.3).
+    // method signatures can already enforce bounds (slice 2.3). Each
+    // file's bounds resolve against its own aliases so an aliased
+    // protocol name can be used as a bound (`<T: AliasedProtocol>`).
     resolve_all_bounds(packages, registry, diagnostics);
     // Pass 1c: structs, enums, top-level functions. Order doesn't
     // matter inside this pass — every signature resolution either
@@ -97,25 +142,27 @@ pub(crate) fn lift_signatures(
     // (already registered with type_params at collect).
     for pkg in packages.iter() {
         for file in &pkg.files {
+            let aliases = collect_file_aliases(file);
+            let mut scope = LiftScope {
+                aliases: &aliases,
+                package: &pkg.package,
+                registry,
+            };
             for item in &file.items {
                 match item {
-                    Item::Enum(decl) => {
-                        enums::lift_enum(decl, &pkg.package, registry, diagnostics);
-                    }
+                    Item::Enum(decl) => enums::lift_enum(decl, &mut scope, diagnostics),
                     Item::Function(function) => {
-                        let identifier = Identifier::new(&pkg.package, vec![function.name.clone()]);
+                        let identifier =
+                            Identifier::new(scope.package, vec![function.name.clone()]);
                         functions::lift_function_with_identifier(
                             function,
                             identifier,
                             SelfContext::None,
-                            &pkg.package,
-                            registry,
+                            &mut scope,
                             diagnostics,
                         );
                     }
-                    Item::Struct(decl) => {
-                        structs::lift_struct(decl, &pkg.package, registry, diagnostics);
-                    }
+                    Item::Struct(decl) => structs::lift_struct(decl, &mut scope, diagnostics),
                     _ => {}
                 }
             }
@@ -131,9 +178,15 @@ pub(crate) fn lift_signatures(
     for pkg in packages.iter_mut() {
         let package = pkg.package.clone();
         for file in &mut pkg.files {
+            let aliases = collect_file_aliases(file);
+            let mut scope = LiftScope {
+                aliases: &aliases,
+                package: &package,
+                registry,
+            };
             for item in &mut file.items {
                 if let Item::Constant(constant) = item {
-                    constants::lift_constant(constant, &package, registry, diagnostics);
+                    constants::lift_constant(constant, &mut scope, diagnostics);
                 }
             }
         }
@@ -142,9 +195,15 @@ pub(crate) fn lift_signatures(
     for pkg in packages.iter_mut() {
         let package = pkg.package.clone();
         for file in &mut pkg.files {
+            let aliases = collect_file_aliases(file);
+            let mut scope = LiftScope {
+                aliases: &aliases,
+                package: &package,
+                registry,
+            };
             for item in &mut file.items {
                 if let Item::Impl(impl_block) = item {
-                    impls::lift_impl(impl_block, &package, &bodies, registry, diagnostics);
+                    impls::lift_impl(impl_block, &bodies, &mut scope, diagnostics);
                 }
             }
         }
@@ -163,32 +222,32 @@ fn resolve_all_bounds(
 ) {
     for pkg in packages {
         for file in &pkg.files {
+            let aliases = collect_file_aliases(file);
+            let mut scope = LiftScope {
+                aliases: &aliases,
+                package: &pkg.package,
+                registry,
+            };
             for item in &file.items {
                 match item {
-                    Item::Enum(decl) => {
-                        resolve_enum_bounds(decl, &pkg.package, registry, diagnostics)
-                    }
+                    Item::Enum(decl) => resolve_enum_bounds(decl, &mut scope, diagnostics),
                     Item::Function(function) => resolve_function_bounds(
                         function,
-                        Identifier::new(&pkg.package, vec![function.name.clone()]),
-                        &pkg.package,
-                        registry,
+                        Identifier::new(scope.package, vec![function.name.clone()]),
+                        &mut scope,
                         diagnostics,
                     ),
-                    Item::Protocol(decl) => {
-                        resolve_protocol_bounds(decl, &pkg.package, registry, diagnostics)
-                    }
+                    Item::Protocol(decl) => resolve_protocol_bounds(decl, &mut scope, diagnostics),
                     Item::Struct(decl) => {
-                        resolve_struct_bounds(decl, &pkg.package, registry, diagnostics);
+                        resolve_struct_bounds(decl, &mut scope, diagnostics);
                         for function in &decl.functions {
                             resolve_function_bounds(
                                 function,
                                 Identifier::new(
-                                    &pkg.package,
+                                    scope.package,
                                     vec![decl.name.clone(), function.name.clone()],
                                 ),
-                                &pkg.package,
-                                registry,
+                                &mut scope,
                                 diagnostics,
                             );
                         }
@@ -202,36 +261,36 @@ fn resolve_all_bounds(
 
 fn resolve_struct_bounds(
     decl: &StructDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    let Some((id, _)) = registry.lookup(&identifier) else {
+    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved = resolve_param_bounds(&decl.type_params, package, registry, diagnostics);
-    registry.set_type_param_bounds(id, resolved);
+    let resolved = resolve_param_bounds(&decl.type_params, scope.resolution_scope(), diagnostics);
+    scope.registry.set_type_param_bounds(id, resolved);
 }
 
 fn resolve_enum_bounds(
     decl: &EnumDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    let Some((id, _)) = registry.lookup(&identifier) else {
+    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved = resolve_param_bounds(&decl.type_params, package, registry, diagnostics);
-    registry.set_type_param_bounds(id, resolved);
+    let resolved = resolve_param_bounds(&decl.type_params, scope.resolution_scope(), diagnostics);
+    scope.registry.set_type_param_bounds(id, resolved);
     for function in &decl.functions {
         resolve_function_bounds(
             function,
-            Identifier::new(package, vec![decl.name.clone(), function.name.clone()]),
-            package,
-            registry,
+            Identifier::new(
+                scope.package,
+                vec![decl.name.clone(), function.name.clone()],
+            ),
+            scope,
             diagnostics,
         );
     }
@@ -239,12 +298,11 @@ fn resolve_enum_bounds(
 
 fn resolve_protocol_bounds(
     decl: &ProtocolDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    let Some((id, _)) = registry.lookup(&identifier) else {
+    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
     // Protocols register with `["Self", ...declared]`. Slot 0 is
@@ -262,25 +320,24 @@ fn resolve_protocol_bounds(
     let mut resolved = vec![Vec::new()];
     resolved.extend(resolve_param_bounds(
         &user_params,
-        package,
-        registry,
+        scope.resolution_scope(),
         diagnostics,
     ));
-    registry.set_type_param_bounds(id, resolved);
+    scope.registry.set_type_param_bounds(id, resolved);
 }
 
 fn resolve_function_bounds(
     function: &Function,
     identifier: Identifier,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some((id, _)) = registry.lookup(&identifier) else {
+    let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
-    let resolved = resolve_param_bounds(&function.type_params, package, registry, diagnostics);
-    registry.set_type_param_bounds(id, resolved);
+    let resolved =
+        resolve_param_bounds(&function.type_params, scope.resolution_scope(), diagnostics);
+    scope.registry.set_type_param_bounds(id, resolved);
 }
 
 /// Per-decl bound resolution shared by every owner kind: each AST
@@ -290,8 +347,7 @@ fn resolve_function_bounds(
 /// outcome).
 fn resolve_param_bounds(
     type_params: &[expo_ast::ast::TypeParam],
-    package: &str,
-    registry: &GlobalRegistry,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Vec<Vec<GlobalRegistryId>> {
     type_params
@@ -300,9 +356,7 @@ fn resolve_param_bounds(
             param
                 .bounds
                 .iter()
-                .filter_map(|bound| {
-                    resolve_bound_to_id(bound, param.span, package, registry, diagnostics)
-                })
+                .filter_map(|bound| resolve_bound_to_id(bound, param.span, scope, diagnostics))
                 .collect()
         })
         .collect()

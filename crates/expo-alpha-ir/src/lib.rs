@@ -55,12 +55,12 @@ pub use error::LowerError;
 pub use extern_attrs::IRExternAttrs;
 pub use function::{
     BlockParam, BranchTarget, FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam,
-    IRInstruction, IRSymbol, IRTerminator,
+    IRInstruction, IRSymbol, IRTerminator, ReceiveAfter, ReceiveArm, ReceiveTag,
 };
 pub use intrinsic_id::{
     BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, DebugImpl, EqualityImpl, HashImpl,
-    IRIntrinsicId, IntType, KernelMethod, ListMethod, MapMethod, ParseTarget, SetMethod,
-    StringMethod,
+    IRIntrinsicId, IntType, KernelMethod, ListMethod, MapMethod, ParseTarget, RefMethod,
+    ReplyToMethod, SetMethod, StringMethod,
 };
 pub use local::IRLocalId;
 pub use ownership::Ownership;

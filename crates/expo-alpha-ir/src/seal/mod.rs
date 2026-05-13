@@ -183,6 +183,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             vec![*value]
         }
         IRInstruction::FieldGet { base, .. } => vec![*base],
+        IRInstruction::FieldSet { base, value, .. } => vec![*base, *value],
         // `LoadCapture` reads from the enclosing closure's env, not
         // a `ValueId`; nothing to validate in the per-block walk.
         IRInstruction::LoadCapture { .. } => vec![],
@@ -204,8 +205,19 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         | IRInstruction::LocalDecl { .. }
         | IRInstruction::LocalRead { .. }
         | IRInstruction::MoveOutLocal { .. } => vec![],
+        IRInstruction::DropValue { value, .. } => vec![*value],
         IRInstruction::LocalWrite { value, .. } => vec![*value],
         IRInstruction::MakeClosure { captures, .. } => captures.clone(),
+        // `Receive` consumes only the optional `after` timeout
+        // value; arm payloads bind into pre-declared local slots
+        // that the surrounding function-level walk validates.
+        IRInstruction::Receive { after, .. } => {
+            after.as_ref().map(|a| vec![a.timeout]).unwrap_or_default()
+        }
+        // `Spawn` consumes the config value; the wrapper symbol
+        // resolves through the program's function index, validated
+        // by `seal_program_calls`.
+        IRInstruction::Spawn { config, .. } => vec![*config],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }

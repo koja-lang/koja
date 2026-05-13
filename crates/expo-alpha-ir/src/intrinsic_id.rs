@@ -51,6 +51,17 @@ pub enum IRIntrinsicId {
     /// `main`'s tail value. Goes away when the `Debug` protocol
     /// displaces both.
     Print,
+    /// `@intrinsic` methods on `Ref<M, R>` from
+    /// [`expo/lib/global/src/process.expo`]. The `M` / `R` type
+    /// parameters don't appear here — they ride the
+    /// [`crate::IRFunction`] signature, the same way `List<T>`'s
+    /// element type does.
+    Ref(RefMethod),
+    /// `@intrinsic` method on `ReplyTo<R>`. Single-method namespace
+    /// today (`send`); the wrapper enum keeps adding a sibling
+    /// method later a variant-add rather than a shape change, like
+    /// [`KernelMethod`] / [`BitsMethod`].
+    ReplyTo(ReplyToMethod),
     Set(SetMethod),
     String(StringMethod),
 }
@@ -81,6 +92,7 @@ pub enum CStringMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryMethod {
     ByteSize,
+    Clone,
     Ptr,
     ToBits,
     ToString,
@@ -88,6 +100,7 @@ pub enum BinaryMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitsMethod {
+    Clone,
     ToBinary,
 }
 
@@ -138,6 +151,31 @@ pub enum SetMethod {
     Remove,
 }
 
+/// `@intrinsic`-flagged methods on `Ref<M, R>` from
+/// [`expo/lib/global/src/process.expo`]. `Cast` / `Call` / `Signal` /
+/// `Kill` / `AliveQ` / `SendAfter` cover the public mailbox surface;
+/// `SelfRef` is the only zero-argument constructor (the others are
+/// receiver-bound).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefMethod {
+    AliveQ,
+    Call,
+    Cast,
+    Kill,
+    SelfRef,
+    SendAfter,
+    Signal,
+}
+
+/// `@intrinsic`-flagged method on `ReplyTo<R>`. Single-variant today
+/// (`send`); kept as a wrapper enum so adding a sibling later is a
+/// variant-add, not a shape change. Mirrors [`BitsMethod`] /
+/// [`KernelMethod`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReplyToMethod {
+    Send,
+}
+
 /// Methods on `String` flagged `@intrinsic` in
 /// [`crate::stdlib::string`]. Excludes `eq` / `hash`; those route
 /// through [`EqualityImpl::String`] / [`HashImpl::String`] alongside
@@ -145,6 +183,7 @@ pub enum SetMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StringMethod {
     ByteLength,
+    Clone,
     Get,
     Length,
     Slice,
@@ -265,6 +304,12 @@ impl IRIntrinsicId {
         }
         if receiver == "Map" {
             return MapMethod::from_source(method).map(Self::Map);
+        }
+        if receiver == "Ref" {
+            return RefMethod::from_source(method).map(Self::Ref);
+        }
+        if receiver == "ReplyTo" {
+            return ReplyToMethod::from_source(method).map(Self::ReplyTo);
         }
         if receiver == "Set" {
             return SetMethod::from_source(method).map(Self::Set);
@@ -479,6 +524,7 @@ impl BinaryMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "byte_size" => Self::ByteSize,
+            "clone" => Self::Clone,
             "ptr" => Self::Ptr,
             "to_bits" => Self::ToBits,
             "to_string" => Self::ToString,
@@ -489,6 +535,7 @@ impl BinaryMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::ByteSize => "byte_size",
+            Self::Clone => "clone",
             Self::Ptr => "ptr",
             Self::ToBits => "to_bits",
             Self::ToString => "to_string",
@@ -499,6 +546,7 @@ impl BinaryMethod {
 impl BitsMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
+            "clone" => Self::Clone,
             "to_binary" => Self::ToBinary,
             _ => return None,
         })
@@ -506,6 +554,7 @@ impl BitsMethod {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::Clone => "clone",
             Self::ToBinary => "to_binary",
         }
     }
@@ -573,6 +622,48 @@ impl MapMethod {
     }
 }
 
+impl RefMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "alive?" => Self::AliveQ,
+            "call" => Self::Call,
+            "cast" => Self::Cast,
+            "kill" => Self::Kill,
+            "self_ref" => Self::SelfRef,
+            "send_after" => Self::SendAfter,
+            "signal" => Self::Signal,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::AliveQ => "alive?",
+            Self::Call => "call",
+            Self::Cast => "cast",
+            Self::Kill => "kill",
+            Self::SelfRef => "self_ref",
+            Self::SendAfter => "send_after",
+            Self::Signal => "signal",
+        }
+    }
+}
+
+impl ReplyToMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "send" => Self::Send,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Send => "send",
+        }
+    }
+}
+
 impl SetMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
@@ -621,6 +712,7 @@ impl StringMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "byte_length" => Self::ByteLength,
+            "clone" => Self::Clone,
             "get" => Self::Get,
             "length" => Self::Length,
             "slice" => Self::Slice,
@@ -633,6 +725,7 @@ impl StringMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::ByteLength => "byte_length",
+            Self::Clone => "clone",
             Self::Get => "get",
             Self::Length => "length",
             Self::Slice => "slice",
@@ -658,6 +751,8 @@ impl fmt::Display for IRIntrinsicId {
             Self::Map(m) => write!(f, "Map.{}", m.segment()),
             Self::Parse(target) => write!(f, "{}.parse", target.segment()),
             Self::Print => f.write_str("print"),
+            Self::Ref(m) => write!(f, "Ref.{}", m.segment()),
+            Self::ReplyTo(m) => write!(f, "ReplyTo.{}", m.segment()),
             Self::Set(m) => write!(f, "Set.{}", m.segment()),
             Self::String(m) => write!(f, "String.{}", m.segment()),
         }
@@ -773,6 +868,40 @@ mod tests {
                 &format!("Set.{method}"),
             );
         }
+    }
+
+    #[test]
+    fn ref_methods_cover_the_full_surface() {
+        for (method, variant) in [
+            ("alive?", RefMethod::AliveQ),
+            ("call", RefMethod::Call),
+            ("cast", RefMethod::Cast),
+            ("kill", RefMethod::Kill),
+            ("self_ref", RefMethod::SelfRef),
+            ("send_after", RefMethod::SendAfter),
+            ("signal", RefMethod::Signal),
+        ] {
+            assert_round_trip(
+                &["Ref", method],
+                IRIntrinsicId::Ref(variant),
+                &format!("Ref.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn reply_to_send_round_trips() {
+        assert_round_trip(
+            &["ReplyTo", "send"],
+            IRIntrinsicId::ReplyTo(ReplyToMethod::Send),
+            "ReplyTo.send",
+        );
+    }
+
+    #[test]
+    fn unknown_ref_or_reply_to_methods_return_none() {
+        assert!(IRIntrinsicId::from_identifier(&id(&["Ref", "frobnicate"])).is_none());
+        assert!(IRIntrinsicId::from_identifier(&id(&["ReplyTo", "shout"])).is_none());
     }
 
     #[test]

@@ -37,7 +37,9 @@ impl Parser {
                     self.advance(); // :
                     let type_expr = self.parse_type_expr();
                     return Pattern::TypedBinding {
+                        local_id: None,
                         name,
+                        resolved_type: None,
                         type_expr,
                         span: self.span_from(start),
                     };

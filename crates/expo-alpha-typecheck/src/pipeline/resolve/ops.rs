@@ -21,7 +21,7 @@
 //! [`LiteralCoercion`] — same plumbing the four existing coercion
 //! sites use, just invoked at one more site.
 
-use expo_ast::ast::{BinOp, Diagnostic, Expr, Literal, UnaryOp};
+use expo_ast::ast::{BinOp, Diagnostic, Expr, UnaryOp};
 use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::ResolvedType;
 use expo_ast::labels::bin_op_label;
@@ -30,16 +30,6 @@ use expo_ast::span::Span;
 use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::types::{display_resolution, is_primitive, types_equivalent};
 use crate::registry::GlobalRegistry;
-
-pub(super) fn literal_type(value: &Literal, registry: &GlobalRegistry) -> ResolvedType {
-    match value {
-        Literal::Bool(_) => registry.primitive("Bool"),
-        Literal::Float(_) => registry.primitive("Float"),
-        Literal::Int(_) => registry.primitive("Int"),
-        Literal::String(_) => registry.primitive("String"),
-        Literal::Unit => registry.primitive("Unit"),
-    }
-}
 
 pub(super) fn binary_type(
     op: BinOp,
@@ -55,7 +45,7 @@ pub(super) fn binary_type(
             // sides must agree on `Int` or `Float`. Cross-numeric
             // mixing (`1 + 1.0`) and sized-numeric arithmetic
             // (`Int8 + Int8`) are deferred per `LANGUAGE.md` /
-            // `ALPHA-ROADMAP.md`. The alias rule still applies, so
+            // `V1-PARITY.md`. The alias rule still applies, so
             // `Int + Int64` is valid and produces `Int` — same
             // predicate that will accept `Int8 + Int8` once `Int`
             // becomes a real union over its sized variants.
@@ -221,7 +211,7 @@ fn both(lhs: &ResolvedType, rhs: &ResolvedType, registry: &GlobalRegistry, name:
 /// members of `Int` / `Float` today, so they flow through
 /// [`numeric_comparison_compatible`] at comparison sites via the
 /// literal-coercion path. Arithmetic against them is deferred per
-/// `ALPHA-ROADMAP.md`.
+/// `V1-PARITY.md`.
 fn both_aliased(
     lhs: &ResolvedType,
     rhs: &ResolvedType,

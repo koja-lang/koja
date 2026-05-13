@@ -31,7 +31,10 @@ pub(super) fn seal_closure_decls(pkg: &IRPackage) {
     for function in pkg.functions.values() {
         match &function.kind {
             FunctionKind::Closure { env_layout } => seal_closure_function(function, env_layout),
-            FunctionKind::Extern(_) | FunctionKind::Intrinsic(_) | FunctionKind::Regular => {
+            FunctionKind::Extern(_)
+            | FunctionKind::Intrinsic(_)
+            | FunctionKind::Regular
+            | FunctionKind::SpawnWrapper { .. } => {
                 forbid_loadcapture_in(function);
             }
         }
@@ -207,6 +210,7 @@ fn kind_label(kind: &FunctionKind) -> &'static str {
         FunctionKind::Extern(_) => "Extern",
         FunctionKind::Intrinsic(_) => "Intrinsic",
         FunctionKind::Regular => "Regular",
+        FunctionKind::SpawnWrapper { .. } => "SpawnWrapper",
     }
 }
 

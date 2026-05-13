@@ -118,23 +118,31 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
                 field_type,
                 struct_symbol,
             } => {
-                let decl = require_struct(lookup, struct_symbol, &owner);
-                let Some(declared) = decl.fields.get(*field_index as usize) else {
-                    seal_panic(&format!(
-                        "{owner}: FieldGet on `{struct_symbol}` references field index \
-                         {field_index}, but the decl only has {count} field(s)",
-                        count = decl.fields.len(),
-                    ));
-                };
-                if &declared.ir_type != field_type {
-                    seal_panic(&format!(
-                        "{owner}: FieldGet on `{struct_symbol}.{name}` carries field_type \
-                         `{got:?}` but the decl declares `{expected:?}`",
-                        name = declared.name,
-                        got = field_type,
-                        expected = declared.ir_type,
-                    ));
-                }
+                seal_field_projection(
+                    "FieldGet",
+                    lookup,
+                    struct_symbol,
+                    *field_index,
+                    field_type,
+                    &owner,
+                );
+            }
+            IRInstruction::FieldSet {
+                base: _,
+                dest: _,
+                field_index,
+                field_type,
+                struct_symbol,
+                value: _,
+            } => {
+                seal_field_projection(
+                    "FieldSet",
+                    lookup,
+                    struct_symbol,
+                    *field_index,
+                    field_type,
+                    &owner,
+                );
             }
             IRInstruction::BinaryConstruct { .. }
             | IRInstruction::BinaryOp { .. }
@@ -143,6 +151,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::Concat { .. }
             | IRInstruction::Const { .. }
             | IRInstruction::DropLocal { .. }
+            | IRInstruction::DropValue { .. }
             | IRInstruction::EnumConstruct { .. }
             | IRInstruction::EnumPayloadFieldGet { .. }
             | IRInstruction::EnumTagGet { .. }
@@ -153,8 +162,43 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::LocalWrite { .. }
             | IRInstruction::MakeClosure { .. }
             | IRInstruction::MoveOutLocal { .. }
+            | IRInstruction::Receive { .. }
+            | IRInstruction::Spawn { .. }
             | IRInstruction::UnaryOp { .. } => {}
         }
+    }
+}
+
+/// Shared per-field-projection invariant for `FieldGet` / `FieldSet`:
+/// the cited struct symbol resolves to a registered decl, the
+/// `field_index` lies in range, and the projected `field_type`
+/// equals the decl's `IRStructField::ir_type`. `op` is the caller's
+/// instruction label (`"FieldGet"` / `"FieldSet"`) used to frame
+/// panic messages.
+fn seal_field_projection<'decl>(
+    op: &str,
+    lookup: &impl Fn(&str) -> Option<&'decl IRStructDecl>,
+    struct_symbol: &IRSymbol,
+    field_index: u32,
+    field_type: &crate::types::IRType,
+    owner: &str,
+) {
+    let decl = require_struct(lookup, struct_symbol, owner);
+    let Some(declared) = decl.fields.get(field_index as usize) else {
+        seal_panic(&format!(
+            "{owner}: {op} on `{struct_symbol}` references field index {field_index}, but \
+             the decl only has {count} field(s)",
+            count = decl.fields.len(),
+        ));
+    };
+    if &declared.ir_type != field_type {
+        seal_panic(&format!(
+            "{owner}: {op} on `{struct_symbol}.{name}` carries field_type `{got:?}` but \
+             the decl declares `{expected:?}`",
+            name = declared.name,
+            got = field_type,
+            expected = declared.ir_type,
+        ));
     }
 }
 

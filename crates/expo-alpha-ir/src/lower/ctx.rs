@@ -19,7 +19,7 @@
 //!   this value" from "flow terminated already (e.g. via early
 //!   `return`)".
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use expo_ast::ast::Diagnostic;
 use expo_ast::identifier::LocalId;
@@ -52,9 +52,15 @@ pub(crate) struct LowerOutput {
     /// minting to keep the package's function table dedup'd.
     pub(crate) fn_as_closure_wrappers: BTreeMap<IRSymbol, IRSymbol>,
     pub(crate) instantiations: Vec<Instantiation>,
-    /// Closure bodies and fn-as-value adapters minted during
-    /// expression lowering. `lower_package` drains this and merges
-    /// into [`crate::IRPackage::functions`].
+    /// Dedupe set for [`crate::FunctionKind::SpawnWrapper`] symbols
+    /// minted during `spawn` lowering. Each state cell gets one
+    /// wrapper per [`super::process`] turn-around regardless of how
+    /// many `spawn S.start(...)` sites hit it; the IRPackage's
+    /// function table only sees one entry.
+    pub(crate) spawn_wrappers: BTreeSet<IRSymbol>,
+    /// Closure bodies, fn-as-value adapters, and spawn-wrapper
+    /// thunks minted during expression lowering. `lower_package`
+    /// drains this and merges into [`crate::IRPackage::functions`].
     pub(crate) synthesized_functions: Vec<IRFunction>,
 }
 

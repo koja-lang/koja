@@ -386,13 +386,18 @@ fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
 }
 
 /// Wrap one user-supplied [`SourceFile`] with the curated alpha
-/// stdlib auto-import (`Global.time`, `Global.bitwise`, …) so the
-/// driver, alpha test helpers, and `cmd_check` all feed the parser
-/// the same compilation unit. Stdlib sources lead so the registry
-/// sees `Global.*` declarations before any user code that references
-/// them; the user file is appended last.
+/// stdlib auto-import (`Global.time`, `Global.bitwise`, …) plus the
+/// curated qualified packages (`Crypto.*`, …) so the driver, alpha
+/// test helpers, and `cmd_check` all feed the parser the same
+/// compilation unit. Stdlib sources lead so the registry sees
+/// `Global.*` and qualified declarations before any user code that
+/// references them; the user file is appended last. Autoimports
+/// land first, qualified packages second, user file last — order
+/// is semantically irrelevant (every entry registers under its own
+/// `Identifier`) but keeps debug listings stable.
 fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
     let mut sources = expo_stdlib::alpha_autoimport_sources();
+    sources.extend(expo_stdlib::alpha_qualified_sources());
     sources.push(user);
     sources
 }

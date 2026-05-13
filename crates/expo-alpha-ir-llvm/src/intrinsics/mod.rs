@@ -12,7 +12,7 @@
 //! and pin a 1-1 test in `tests/intrinsics.rs`. The exhaustive match
 //! makes the wiring step compiler-checked.
 
-use expo_alpha_ir::{BitsMethod, IRFunction, IRIntrinsicId, KernelMethod};
+use expo_alpha_ir::{IRFunction, IRIntrinsicId, KernelMethod};
 use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
@@ -26,11 +26,13 @@ mod debug;
 mod equality;
 mod hash;
 mod hashtable;
+mod heap_clone;
 mod kernel;
 mod list;
 mod map;
 mod parse;
 mod print;
+mod process;
 mod set;
 mod string;
 
@@ -45,9 +47,7 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
 ) -> Result<(), LlvmError> {
     match *id {
         IRIntrinsicId::Binary(method) => binary::emit_binary(ctx, function, llvm_function, method),
-        IRIntrinsicId::Bits(BitsMethod::ToBinary) => {
-            binary::emit_bits(ctx, function, llvm_function, BitsMethod::ToBinary)
-        }
+        IRIntrinsicId::Bits(method) => binary::emit_bits(ctx, function, llvm_function, method),
         IRIntrinsicId::Bitwise { ty, op } => {
             bitwise::emit_bitwise(ctx, function, llvm_function, ty, op)
         }
@@ -63,6 +63,10 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         IRIntrinsicId::Map(method) => map::emit_map(ctx, function, llvm_function, method),
         IRIntrinsicId::Parse(target) => parse::emit_parse(ctx, function, llvm_function, target),
         IRIntrinsicId::Print => print::emit_global_print(ctx, function, llvm_function),
+        IRIntrinsicId::Ref(method) => process::emit_ref(ctx, function, llvm_function, method),
+        IRIntrinsicId::ReplyTo(method) => {
+            process::emit_reply_to(ctx, function, llvm_function, method)
+        }
         IRIntrinsicId::Set(method) => set::emit_set(ctx, function, llvm_function, method),
         IRIntrinsicId::String(method) => string::emit_string(ctx, function, llvm_function, method),
     }

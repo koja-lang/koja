@@ -28,6 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
+use expo_ast::ast::Literal;
 use expo_ast::identifier::{
     GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -469,11 +470,13 @@ impl GlobalRegistry {
     /// `Global.<name>` stdlib stub. Panics if the stub is missing —
     /// preload is a [`Self::with_stdlib_stubs`] invariant.
     ///
-    /// Used by `lift_signatures` (synthesizing parameter / return
-    /// types from `TypeExpr::Unit` and `TypeExpr::Named`) and by
-    /// `resolve` (stamping literal types). Both consumers want the
-    /// same panic-on-miss semantics, so the helper lives here rather
-    /// than being duplicated per pass.
+    /// Cross-pipeline helper: `lift_signatures` calls it when
+    /// synthesizing parameter / return types from `TypeExpr::Unit`
+    /// and `TypeExpr::Named`, and the resolve pass calls it
+    /// (directly and via [`Self::literal_type`]) when stamping
+    /// expressions. Both passes want the same panic-on-miss
+    /// semantics, so the lookup lives here rather than getting
+    /// duplicated per pass.
     pub(crate) fn primitive(&self, name: &str) -> ResolvedType {
         let ident = Identifier::new("Global", vec![name.to_string()]);
         let (id, _) = self.lookup(&ident).unwrap_or_else(|| {
@@ -483,6 +486,24 @@ impl GlobalRegistry {
             )
         });
         ResolvedType::leaf(Resolution::Global(id))
+    }
+
+    /// Build the [`ResolvedType`] for a primitive literal — the
+    /// `Literal` variants map one-to-one onto preloaded stdlib
+    /// stubs (`Bool`, `Float`, `Int`, `String`, `Unit`). Convenience
+    /// wrapper over [`Self::primitive`] used by the resolve pass
+    /// for `ExprKind::Literal` and pattern-vs-subject coercion, and
+    /// by `lift_signatures` when classifying constant initializers.
+    /// String *interpolation* (`ExprKind::String`) is a separate,
+    /// resolve-only path and stays out of this helper.
+    pub(crate) fn literal_type(&self, value: &Literal) -> ResolvedType {
+        match value {
+            Literal::Bool(_) => self.primitive("Bool"),
+            Literal::Float(_) => self.primitive("Float"),
+            Literal::Int(_) => self.primitive("Int"),
+            Literal::String(_) => self.primitive("String"),
+            Literal::Unit => self.primitive("Unit"),
+        }
     }
 
     /// Render the name of a type parameter by its anchored

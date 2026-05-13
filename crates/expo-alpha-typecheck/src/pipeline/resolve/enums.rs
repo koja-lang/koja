@@ -31,8 +31,8 @@ use super::coercion::{Compatible, check_compatible, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
-use super::structs::{lookup_type, validate_named_fields};
-use super::types::display_resolution;
+use super::structs::validate_named_fields;
+use super::types::{display_resolution, lookup_type};
 
 pub(super) fn resolve_enum_construction(
     type_path: &[String],
@@ -47,8 +47,7 @@ pub(super) fn resolve_enum_construction(
     // populated tree even if the enum or variant doesn't resolve.
     resolve_construction_data(data, resolver, diagnostics);
 
-    let Some((enum_id, enum_entry)) = lookup_type(type_path, resolver.package, resolver.registry)
-    else {
+    let Some((enum_id, enum_entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not recognize the enum type `{}`",

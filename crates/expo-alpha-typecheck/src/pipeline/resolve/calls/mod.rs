@@ -23,7 +23,7 @@
 mod bounded;
 mod methods;
 
-use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
+use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
 use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
@@ -188,10 +188,98 @@ pub(super) fn resolve_call(
     }
 }
 
+/// Either a normal method dispatch (return type only) or a
+/// field-as-callable fallback whose substituted fn-type +
+/// return type the caller uses to rewrite the AST.
+pub(super) enum MethodCallOutcome {
+    FieldCall {
+        callee_ty: ResolvedType,
+        return_ty: ResolvedType,
+    },
+    Method(ResolvedType),
+}
+
+/// `resolve_method_call` wrapper that performs the AST rewrite when
+/// the field-as-callable fallback fires. Lifted out of the main
+/// `resolve_expr` match so the rewrite has `&mut Expr` access.
+pub(super) fn resolve_method_call_expr(
+    expr: &mut Expr,
+    expected: Option<&ResolvedType>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let span = expr.span;
+    let outcome = match &mut expr.kind {
+        ExprKind::MethodCall {
+            args,
+            method,
+            receiver,
+            type_args,
+        } => resolve_method_call(
+            receiver,
+            method,
+            args,
+            CallSite {
+                expected,
+                out_type_args: type_args,
+                span,
+            },
+            resolver,
+            diagnostics,
+        ),
+        other => unreachable!(
+            "resolve_method_call_expr called with non-MethodCall ExprKind: {}",
+            expr_kind_label(other),
+        ),
+    };
+    match outcome {
+        MethodCallOutcome::FieldCall {
+            callee_ty,
+            return_ty,
+        } => {
+            rewrite_method_call_to_field_call(expr, callee_ty);
+            return_ty
+        }
+        MethodCallOutcome::Method(ty) => ty,
+    }
+}
+
+/// Stamp `expr.kind` as `Call { callee: FieldAccess(recv, method), args }`
+/// in place. `callee_ty` is the substituted fn-type the
+/// field-as-callable branch resolved against.
+fn rewrite_method_call_to_field_call(expr: &mut Expr, callee_ty: ResolvedType) {
+    let span = expr.span;
+    let stub = ExprKind::Literal {
+        value: Literal::Unit,
+    };
+    let ExprKind::MethodCall {
+        args,
+        method,
+        receiver,
+        ..
+    } = std::mem::replace(&mut expr.kind, stub)
+    else {
+        unreachable!("rewrite_method_call_to_field_call called on non-MethodCall ExprKind");
+    };
+    let mut callee = Expr::new(
+        ExprKind::FieldAccess {
+            field: method,
+            receiver,
+        },
+        span,
+    );
+    callee.resolution = callee_ty;
+    expr.kind = ExprKind::Call {
+        args,
+        callee: Box::new(callee),
+        type_args: Vec::new(),
+    };
+}
+
 /// Resolve a method-style call: classify the receiver, look up
-/// `<Type>.<method>`, check dispatch matches, then validate args.
-/// `out_type_args` is populated when the method or its enclosing
-/// type is generic so IR lower can spawn the right monomorphization.
+/// `<Type>.<method>`, check dispatch matches, validate args. On
+/// instance dispatch with no matching method, falls through to
+/// [`try_field_callable`] for the `recv.field(args)` shape.
 pub(super) fn resolve_method_call(
     receiver: &mut Expr,
     method: &str,
@@ -199,7 +287,7 @@ pub(super) fn resolve_method_call(
     site: CallSite<'_>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> ResolvedType {
+) -> MethodCallOutcome {
     let CallSite {
         out_type_args,
         expected,
@@ -207,7 +295,7 @@ pub(super) fn resolve_method_call(
     } = site;
     let Some(method_receiver) = classify_receiver(receiver, resolver, diagnostics) else {
         resolve_args(args, None, resolver, diagnostics);
-        return ResolvedType::unresolved();
+        return MethodCallOutcome::Method(ResolvedType::unresolved());
     };
 
     if let MethodReceiver::Bounded { owner, index } = method_receiver {
@@ -220,7 +308,7 @@ pub(super) fn resolve_method_call(
             args,
             call_span,
         };
-        return resolve_bounded_method_call(site, resolver, diagnostics);
+        return MethodCallOutcome::Method(resolve_bounded_method_call(site, resolver, diagnostics));
     }
 
     let struct_id = match method_receiver {
@@ -228,7 +316,7 @@ pub(super) fn resolve_method_call(
         MethodReceiver::Bounded { .. } => unreachable!("handled above"),
     };
     let Some(struct_entry) = resolver.registry.get(struct_id) else {
-        return ResolvedType::unresolved();
+        return MethodCallOutcome::Method(ResolvedType::unresolved());
     };
     let receiver_label = struct_entry.identifier.to_string();
     let receiver_type_params = struct_entry.type_params.clone();
@@ -237,18 +325,24 @@ pub(super) fn resolve_method_call(
     method_path.push(method.to_string());
     let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
     let Some((method_id, method_entry)) = resolver.registry.lookup(&method_identifier) else {
+        if matches!(method_receiver, MethodReceiver::Instance { .. })
+            && let Some(field_call) =
+                try_field_callable(struct_id, receiver, method, args, resolver, diagnostics)
+        {
+            return field_call;
+        }
         diagnostics.push(Diagnostic::error(
             method_lookup_message(method_receiver, struct_entry, method),
             call_span,
         ));
-        return ResolvedType::unresolved();
+        return MethodCallOutcome::Method(ResolvedType::unresolved());
     };
 
     let sig = match function_signature(method_entry) {
         Ok(sig) => sig.clone(),
         Err(diagnostic) => {
             diagnostics.push(diagnostic);
-            return ResolvedType::unresolved();
+            return MethodCallOutcome::Method(ResolvedType::unresolved());
         }
     };
 
@@ -258,7 +352,7 @@ pub(super) fn resolve_method_call(
             dispatch_mismatch_message(method_receiver, struct_entry, method_entry, method),
             call_span,
         ));
-        return sig.return_type.clone();
+        return MethodCallOutcome::Method(sig.return_type.clone());
     }
     let method_label = method_entry.identifier.to_string();
     let method_identifier = method_entry.identifier.clone();
@@ -279,7 +373,7 @@ pub(super) fn resolve_method_call(
             resolver,
             diagnostics,
         );
-        return sig.return_type.clone();
+        return MethodCallOutcome::Method(sig.return_type.clone());
     }
 
     // Static dispatch: `receiver.resolution` is the type-name's
@@ -382,7 +476,7 @@ pub(super) fn resolve_method_call(
             ),
             call_span,
         ));
-        return ResolvedType::unresolved();
+        return MethodCallOutcome::Method(ResolvedType::unresolved());
     }
     validate_arg_signature(
         args,
@@ -392,7 +486,57 @@ pub(super) fn resolve_method_call(
         resolver,
         diagnostics,
     );
-    substituted_return
+    MethodCallOutcome::Method(substituted_return)
+}
+
+/// Field-as-callable fallback for instance dispatch: if `struct_id`
+/// has a field named `method` whose substituted type is
+/// `fn (Ps...) -> R`, validate args against `Ps...` and return the
+/// shape the caller stamps onto the AST. Any other field type (or
+/// no field) bails to `None` so the caller emits the existing
+/// "no method" diagnostic.
+fn try_field_callable(
+    struct_id: GlobalRegistryId,
+    receiver: &mut Expr,
+    method: &str,
+    args: &mut [Arg],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<MethodCallOutcome> {
+    let entry = resolver.registry.get(struct_id)?;
+    let GlobalKind::Struct(Some(definition)) = &entry.kind else {
+        return None;
+    };
+    let (_, field) = definition.lookup_field(method)?;
+    let receiver_args = match &receiver.resolution {
+        ResolvedType::Named { type_args, .. } => type_args.clone(),
+        _ => return None,
+    };
+    let subst = Substitution::from_args(struct_id, &receiver_args);
+    let callee_ty = substitute(&field.ty, &subst);
+    let ResolvedType::Anonymous(AnonymousKind::Function {
+        params: fn_params,
+        ret,
+    }) = &callee_ty
+    else {
+        return None;
+    };
+    let expected = synthesize_local_call_params(fn_params);
+    let callee_label = format!("{}.{method}", entry.identifier);
+    resolve_args(args, Some(&expected), resolver, diagnostics);
+    validate_local_call_signature(
+        args,
+        &expected,
+        &callee_label,
+        receiver.span,
+        resolver,
+        diagnostics,
+    );
+    let return_ty = (**ret).clone();
+    Some(MethodCallOutcome::FieldCall {
+        callee_ty,
+        return_ty,
+    })
 }
 
 /// Drive call-site type inference for a generic callee. Unifies each

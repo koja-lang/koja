@@ -32,7 +32,7 @@ use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
-use super::super::calls::{CallSite, resolve_method_call};
+use super::super::calls::resolve_method_call_expr;
 use super::super::ctx::Resolver;
 
 /// Per-protocol metadata. Drives diagnostic phrasing,
@@ -178,15 +178,6 @@ pub(super) fn dispatch_via_carrier(
                 }],
                 type_args: Vec::new(),
             };
-            let ExprKind::MethodCall {
-                receiver,
-                args,
-                type_args,
-                ..
-            } = &mut expr.kind
-            else {
-                unreachable!("just stamped a MethodCall");
-            };
             // The synthesized call dispatches through the normal
             // method-call resolver: it populates the receiver's
             // resolution (`Global(id)` leaf, then upgraded with
@@ -194,18 +185,7 @@ pub(super) fn dispatch_via_carrier(
             // `<from_method>(move <param>: <DefaultCarrier>) -> Self`,
             // and returns the substituted `Self` (the carrier with
             // its slots filled in).
-            resolve_method_call(
-                receiver,
-                spec.from_method,
-                args,
-                CallSite {
-                    out_type_args: type_args,
-                    expected: *expected,
-                    span,
-                },
-                resolver,
-                diagnostics,
-            )
+            resolve_method_call_expr(expr, *expected, resolver, diagnostics)
         }
     }
 }

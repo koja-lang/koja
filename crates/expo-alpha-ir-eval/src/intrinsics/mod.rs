@@ -11,7 +11,7 @@
 //! `pub(super) fn <handler>`, and wire its arm in [`dispatch`]. The
 //! exhaustive match makes the wiring step compiler-checked.
 
-use expo_alpha_ir::{BitsMethod, IRFunction, IRIntrinsicId, KernelMethod};
+use expo_alpha_ir::{IRFunction, IRIntrinsicId, KernelMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
@@ -30,6 +30,7 @@ mod list;
 mod map;
 mod parse;
 mod print;
+mod process;
 mod set;
 mod string;
 
@@ -51,9 +52,7 @@ pub(crate) fn dispatch<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     match *id {
         IRIntrinsicId::Binary(method) => binary::binary(method, function, args),
-        IRIntrinsicId::Bits(BitsMethod::ToBinary) => {
-            binary::bits(BitsMethod::ToBinary, function, args)
-        }
+        IRIntrinsicId::Bits(method) => binary::bits(method, function, args),
         IRIntrinsicId::Bitwise { ty, op } => bitwise::dispatch(ty, op, args),
         IRIntrinsicId::CPtr(method) => cptr::dispatch(method, function, args),
         IRIntrinsicId::CString(_) => cstring::to_string(args),
@@ -65,6 +64,8 @@ pub(crate) fn dispatch<R: CallResolver>(
         IRIntrinsicId::Map(method) => map::dispatch(method, function, args),
         IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args),
         IRIntrinsicId::Print => print::global_print(args),
+        IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function),
+        IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, function),
         IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
         IRIntrinsicId::String(method) => string::dispatch(method, function, args),
     }

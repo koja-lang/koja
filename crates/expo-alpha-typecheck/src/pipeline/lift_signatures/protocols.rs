@@ -10,19 +10,19 @@ use expo_ast::ast::{Diagnostic, Param, ProtocolDecl, ProtocolMethod};
 use expo_ast::identifier::{GlobalRegistryId, Identifier};
 
 use crate::registry::{
-    Dispatch, GlobalKind, GlobalRegistry, ProtocolDefinition, ResolvedParam, ResolvedProtocolMethod,
+    Dispatch, GlobalKind, ProtocolDefinition, ResolvedParam, ResolvedProtocolMethod,
 };
 
+use super::LiftScope;
 use super::types::{TypeParamScope, resolve_type_expr};
 
 pub(super) fn lift_protocol(
     decl: &ProtocolDecl,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
-    let (id, already_lifted) = match registry.lookup(&identifier) {
+    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let (id, already_lifted) = match scope.registry.lookup(&identifier) {
         Some((id, entry)) => (id, matches!(entry.kind, GlobalKind::Protocol(Some(_)))),
         None => panic!(
             "lift_signatures: protocol `{identifier}` missing from registry — \
@@ -36,16 +36,17 @@ pub(super) fn lift_protocol(
     let methods = decl
         .methods
         .iter()
-        .map(|method| lift_protocol_method(method, id, package, registry, diagnostics))
+        .map(|method| lift_protocol_method(method, id, scope, diagnostics))
         .collect();
-    registry.set_protocol_definition(id, ProtocolDefinition { methods });
+    scope
+        .registry
+        .set_protocol_definition(id, ProtocolDefinition { methods });
 }
 
 fn lift_protocol_method(
     method: &ProtocolMethod,
     protocol_id: GlobalRegistryId,
-    package: &str,
-    registry: &GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedProtocolMethod {
     let dispatch = match method.params.first() {
@@ -53,7 +54,7 @@ fn lift_protocol_method(
         _ => Dispatch::Static,
     };
     let owners = [protocol_id];
-    let scope = TypeParamScope::new(&owners);
+    let type_params = TypeParamScope::new(&owners);
     let non_self_params = method
         .params
         .iter()
@@ -66,14 +67,24 @@ fn lift_protocol_method(
             } => Some(ResolvedParam {
                 mode: *mode,
                 name: name.clone(),
-                ty: resolve_type_expr(type_expr, scope, package, registry, diagnostics),
+                ty: resolve_type_expr(
+                    type_expr,
+                    type_params,
+                    scope.resolution_scope(),
+                    diagnostics,
+                ),
             }),
             Param::Self_ { .. } => None,
         })
         .collect();
     let return_type = match method.return_type.as_ref() {
-        Some(type_expr) => resolve_type_expr(type_expr, scope, package, registry, diagnostics),
-        None => registry.primitive("Unit"),
+        Some(type_expr) => resolve_type_expr(
+            type_expr,
+            type_params,
+            scope.resolution_scope(),
+            diagnostics,
+        ),
+        None => scope.registry.primitive("Unit"),
     };
     ResolvedProtocolMethod {
         dispatch,

@@ -1,7 +1,9 @@
 //! Resolver state threaded through every name-resolution recursion.
 
+use expo_ast::ast::{AliasDecl, PassMode};
 use expo_ast::identifier::{GlobalRegistryId, ResolvedType};
 
+use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::GlobalRegistry;
 
@@ -12,7 +14,11 @@ use crate::registry::GlobalRegistry;
 /// through every per-function call), and gives the per-function
 /// helper one place to mint a [`Resolver`] from the shared inputs
 /// plus its local-scope.
+///
+/// `file_aliases` is the per-file alias roster powering
+/// `alias`-prefixed type name resolution inside function bodies.
 pub(super) struct ResolverEnv<'a> {
+    pub file_aliases: &'a [AliasDecl],
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
 }
@@ -24,15 +30,18 @@ impl<'a> ResolverEnv<'a> {
     pub(super) fn make_resolver<'b>(
         &'b mut self,
         enclosing_type: Option<&'b str>,
+        self_pass_mode: Option<PassMode>,
         type_param_owners: &'b [GlobalRegistryId],
         scope: &'b mut LocalScope,
     ) -> Resolver<'b> {
         Resolver {
             current_return_type: None,
             enclosing_type,
+            file_aliases: self.file_aliases,
             package: self.package,
             registry: self.registry,
             scope,
+            self_pass_mode,
             type_param_owners,
         }
     }
@@ -66,7 +75,12 @@ impl<'a> ResolverEnv<'a> {
 ///
 /// Pure data bundle by convention: no `impl` block. Helpers reach
 /// for fields directly (`resolver.registry`, `resolver.scope`) so
-/// each callee is honest about what it actually uses.
+/// each callee is honest about what it actually uses. The one
+/// exception is [`Self::resolution_scope`] — bundling the three
+/// type-resolution inputs in one place keeps every
+/// `resolve_type_expr` / `lookup_type` call short and rules out
+/// "passed `package` from one resolver and `aliases` from
+/// another" mismatches at the call site.
 pub(super) struct Resolver<'a> {
     /// Return type of the innermost enclosing function-shape — the
     /// outer `fn` initially, swapped to a closure's return when its
@@ -78,9 +92,22 @@ pub(super) struct Resolver<'a> {
     /// `mem::replace` without a borrowed-vs-owned mismatch.
     pub current_return_type: Option<ResolvedType>,
     pub enclosing_type: Option<&'a str>,
+    /// In-scope alias roster for the current file, validated by
+    /// [`crate::pipeline::aliases::validate_aliases`]. Consulted by
+    /// every type-name lookup before falling back to the current
+    /// package and `Global` (the lookup precedence).
+    pub file_aliases: &'a [AliasDecl],
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
     pub scope: &'a mut LocalScope,
+    /// `PassMode` of the enclosing method's `self` receiver, when one
+    /// exists. `Some(PassMode::Move)` admits `self.field = …` mutation;
+    /// `Some(PassMode::Borrow | PassMode::Copy)` rejects it. `None`
+    /// outside any method (top-level fns, file body) — there's no
+    /// `self` in scope at all, so the field-assignment self-mutation
+    /// rule trivially doesn't apply (the head-local lookup already
+    /// fails, and the assignment diagnoses as "undeclared").
+    pub self_pass_mode: Option<PassMode>,
     /// Owner chain that any in-body type annotation resolves against
     /// — innermost first (function's own id when it declares
     /// type-params, then receiver). Mirrors
@@ -89,6 +116,23 @@ pub(super) struct Resolver<'a> {
     /// can pass it straight to [`crate::pipeline::lift_signatures::TypeParamScope::new`]
     /// without rebuilding the chain.
     pub type_param_owners: &'a [GlobalRegistryId],
+}
+
+impl<'a> Resolver<'a> {
+    /// Project the type-resolution inputs (alias slice + current
+    /// package + registry) into a [`ResolutionScope`] for handing
+    /// off to `resolve_type_expr` / `lookup_type`. Returns a scope
+    /// tied to the resolver's own lifetime `'a` (not `&self`'s
+    /// lifetime), so callers can hold the scope across subsequent
+    /// `&mut resolver` calls without tripping the borrow checker —
+    /// the inner field reborrows are always valid for `'a`.
+    pub(super) fn resolution_scope(&self) -> ResolutionScope<'a> {
+        ResolutionScope {
+            aliases: self.file_aliases,
+            package: self.package,
+            registry: self.registry,
+        }
+    }
 }
 
 /// Registry-side metadata for one inference target — bundled so

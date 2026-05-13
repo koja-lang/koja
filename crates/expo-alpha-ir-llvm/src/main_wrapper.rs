@@ -26,7 +26,7 @@ use crate::error::LlvmError;
 use crate::function::declare_blocks;
 use crate::runtime::{
     PRINT_BINARY_SYMBOL, PRINT_BITS_SYMBOL, PRINT_BOOL_SYMBOL, PRINT_F32_SYMBOL, PRINT_F64_SYMBOL,
-    PRINT_INT_SYMBOL, PRINT_STRING_SYMBOL, declare_runtime_printer,
+    PRINT_INT_SYMBOL, PRINT_STRING_SYMBOL, declare_rt_main_done_extern, declare_runtime_printer,
 };
 
 const APP_NAME_SYMBOL: &str = "__expo_app_name";
@@ -83,39 +83,58 @@ pub(crate) fn emit_as_main<'ctx>(
 
     let mut values: ValueMap<'ctx> = ValueMap::new();
     let phi_map = emit::declare_block_param_phis(ctx, blocks, &block_map, &mut values)?;
-    for block in blocks {
-        if !reachable.contains(&block.id) {
-            // Same boundary stand-in as `define_function`: blocks the
-            // CFG can't reach get `unreachable` so we never try to
-            // materialize their (impossible-to-reach) value reads.
-            emit::emit_unreachable_terminator(ctx, block.id, &block_map)?;
-            continue;
+    ctx.set_block_map(block_map.clone());
+    let result = (|| -> Result<(), LlvmError> {
+        for block in blocks {
+            if !reachable.contains(&block.id) {
+                // Same boundary stand-in as `define_function`: blocks the
+                // CFG can't reach get `unreachable` so we never try to
+                // materialize their (impossible-to-reach) value reads.
+                emit::emit_unreachable_terminator(ctx, block.id, &block_map)?;
+                continue;
+            }
+            let llvm_block = block_map[&block.id];
+            ctx.builder.position_at_end(llvm_block);
+            if block.id == return_block_id {
+                let (next_values, terminator) =
+                    emit::emit_instructions(ctx, block, std::mem::take(&mut values))?;
+                values = next_values;
+                emit_main_return(ctx, return_type, terminator, &values)?;
+            } else {
+                emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
+            }
         }
-        let llvm_block = block_map[&block.id];
-        ctx.builder.position_at_end(llvm_block);
-        if block.id == return_block_id {
-            let (next_values, terminator) =
-                emit::emit_instructions(ctx, block, std::mem::take(&mut values))?;
-            values = next_values;
-            emit_main_return(ctx, return_type, terminator, &values)?;
-        } else {
-            emit::emit_block(ctx, block, &block_map, &phi_map, &mut values)?;
-        }
-    }
-    Ok(())
+        Ok(())
+    })();
+    ctx.clear_block_map();
+    result
 }
 
-/// Auto-print + `ret i64 0` synthesis for the trailing block of
-/// `main`. `Unit` trailings skip the print call; everything else
-/// looks up the trailing value and routes through
-/// [`emit_print_call`]. Both paths finish with `ret i64 0` per the
-/// host-runtime contract.
+/// Auto-print + `expo_rt_main_done()` + `ret i64 0` synthesis for
+/// the trailing block of `main`. `Unit` trailings skip the print
+/// call; everything else looks up the trailing value and routes
+/// through [`emit_print_call`]. The runtime hand-off must happen
+/// after the body finishes — without it, spawned processes never
+/// execute (the runtime worker pool only boots inside
+/// `expo_rt_main_done`).
+///
+/// Skips the entire tail when the host block is already capped —
+/// `IRInstruction::Receive` ends the block with its dispatcher
+/// branch, so emitting `ret i64 0` after would be a duplicate
+/// terminator. Receive in the trailing block is itself a
+/// degenerate case (the body never returns to the host), so the
+/// main-done call would be unreachable anyway.
 fn emit_main_return<'ctx>(
     ctx: &EmitContext<'ctx>,
     return_type: &IRType,
     terminator: &IRTerminator,
     values: &ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
+    if let Some(insert_block) = ctx.builder.get_insert_block()
+        && insert_block.get_terminator().is_some()
+    {
+        return Ok(());
+    }
     let i64_type = ctx.context.i64_type();
     if !matches!(return_type, IRType::Unit) {
         let body_value = match terminator {
@@ -129,6 +148,10 @@ fn emit_main_return<'ctx>(
         };
         emit_print_call(ctx, return_type, body_value)?;
     }
+    let main_done = declare_rt_main_done_extern(ctx);
+    ctx.builder
+        .build_call(main_done, &[], "")
+        .map_err(|e| inkwell_err("call expo_rt_main_done", e))?;
     ctx.builder
         .build_return(Some(&i64_type.const_int(0, false)))
         .map(|_| ())

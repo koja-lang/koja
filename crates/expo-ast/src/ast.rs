@@ -564,14 +564,21 @@ pub enum CompoundOp {
 /// A dotted lvalue path used in assignments: `x`, `point.x`, `self.name`.
 ///
 /// `local_id` is `None` after parse and stamped by typecheck-resolve
-/// when the segments resolve to a single-segment local binding (`x`,
-/// not `point.x`). The IR lower path keys its `LocalDecl` /
-/// `LocalWrite` instructions on the [`LocalId`] and never reaches
-/// back into [`Self::segments`] — keeps the seam clean and lets a
-/// future block-scoping slice rename via the id without the surface
-/// `String` going stale.
+/// for both single-segment locals (`x`) and multi-segment field
+/// writes (`point.x`) — the head segment is always a local, and IR
+/// lower keys its `LocalRead` / `LocalWrite` instructions on that
+/// [`LocalId`].
+///
+/// `head_resolved_type` is `None` after parse and stamped by
+/// typecheck-resolve for multi-segment paths (`segments.len() >= 2`)
+/// with the head local's [`ResolvedType`]. IR lower walks
+/// [`Self::segments`]`[1..]` against the registry starting from this
+/// type to derive each intermediate field's struct-id, field-index,
+/// and substituted field type. Single-segment writes leave it
+/// `None` — they don't need a chain walk.
 #[derive(Debug, Clone)]
 pub struct LValue {
+    pub head_resolved_type: Option<ResolvedType>,
     pub local_id: Option<LocalId>,
     pub segments: Vec<String>,
     pub span: Span,
@@ -1028,9 +1035,24 @@ pub enum Pattern {
         resolved_type: Option<TypeIdentifier>,
     },
     /// A typed binding: `p: Post` -- matches a union member by type
-    /// and binds the unwrapped value.
+    /// and binds the unwrapped value. `local_id` is `None` after
+    /// parse and stamped by alpha typecheck-resolve when the binding
+    /// enters scope (today only inside `receive` arms; `match` arms
+    /// still reject typed bindings as a feature gap). The IR-side
+    /// translator reads it to thread the bound name through the same
+    /// `LocalRead` vocabulary as body-declared locals.
     TypedBinding {
+        local_id: Option<LocalId>,
         name: String,
+        /// Resolved type of the bound payload, stamped by typecheck-
+        /// resolve when the pattern is admitted (today: alpha
+        /// `receive` arms via
+        /// [`bind_receive_pattern`][resolver]). Lower passes consume
+        /// this directly so they don't have to re-walk `type_expr`
+        /// against the registry.
+        ///
+        /// [resolver]: https://docs.rs/expo-alpha-typecheck
+        resolved_type: Option<ResolvedType>,
         type_expr: TypeExpr,
         span: Span,
     },

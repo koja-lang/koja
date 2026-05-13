@@ -15,10 +15,12 @@
 //! registry of declared types.
 //!
 //! Today the supported surface is: top-level functions, structs, and
-//! static methods on structs (no `self`). Instance methods, generics,
-//! `priv`, default field values, trait impls, and impl-block type
-//! aliases all surface as feature-gap diagnostics here so later passes
-//! never see those shapes.
+//! static methods on structs (no `self`). Default field values and
+//! impl-block type aliases surface as feature-gap diagnostics here so
+//! later passes never see those shapes. `alias Pkg.Type` is accepted
+//! as a no-op at collect; [`super::aliases::validate_aliases`] runs
+//! immediately after to enforce path-len / target-exists / no-shadow
+//! rules.
 
 use expo_ast::ast::{
     Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File,
@@ -66,10 +68,16 @@ pub(crate) fn collect_file(
             Item::Constant(constant) => {
                 register_constant(constant, package, registry, diagnostics);
             }
+            // `alias Pkg.Type [as Local]` doesn't introduce a new
+            // global identifier — it binds a file-private local name
+            // to an existing one. Validation runs in
+            // [`super::aliases::validate_aliases`]; collect just
+            // skips it here.
+            Item::Alias(_) => {}
             // Other Item variants land as alpha grows. Reject them
             // explicitly so unsupported shapes diagnose instead of
             // round-tripping silently.
-            Item::Alias(_) | Item::TypeAlias(_) => {
+            Item::TypeAlias(_) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "alpha typecheck does not yet support `{}` items",

@@ -11,40 +11,28 @@
 //! `Constant(Some(_))` without re-walking the AST.
 
 use expo_ast::ast::{
-    Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal, StringPart,
-    UnaryOp,
+    Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, StringPart, UnaryOp,
 };
 use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
 
+use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::resolve::coercion::{Compatible, check_compatible, coercion_target_mut};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::types::{TypeParamScope, render_resolved, resolve_type_expr};
-
-/// Constant-pass walk inputs. Bundles the read-only registry view
-/// (constant initializers don't need the `&mut` registry surface
-/// — that mutation happens at the [`lift_constant`] entry point
-/// after the walk produces the resolved value) plus the package
-/// scope used for unqualified type lookups. Literal-fit coercions
-/// stamp directly on the `Expr` AST node via
-/// [`coercion_target_mut`] — no separate sink to thread through.
-struct ConstCtx<'a> {
-    package: &'a str,
-    registry: &'a GlobalRegistry,
-}
+use super::LiftScope;
+use super::types::{ResolutionScope, TypeParamScope, render_resolved, resolve_type_expr};
 
 pub(super) fn lift_constant(
     constant: &mut Constant,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(package, vec![constant.name.clone()]);
-    let Some((id, entry)) = registry.lookup(&identifier) else {
+    let identifier = Identifier::new(scope.package, vec![constant.name.clone()]);
+    let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures: constant `{identifier}` missing from registry — \
              collect invariant violation",
@@ -54,17 +42,21 @@ pub(super) fn lift_constant(
         return;
     }
 
-    let scope = TypeParamScope::new(&[]);
-    let annotated = constant
-        .type_annotation
-        .as_ref()
-        .map(|type_expr| resolve_type_expr(type_expr, scope, package, registry, diagnostics));
+    let type_params = TypeParamScope::new(&[]);
+    let annotated = constant.type_annotation.as_ref().map(|type_expr| {
+        resolve_type_expr(
+            type_expr,
+            type_params,
+            scope.resolution_scope(),
+            diagnostics,
+        )
+    });
 
-    let mut ctx = ConstCtx { package, registry };
+    let value_scope = scope.resolution_scope();
     let inferred = resolve_constant_value(
         &mut constant.value,
         annotated.as_ref(),
-        &mut ctx,
+        value_scope,
         diagnostics,
     );
 
@@ -75,7 +67,7 @@ pub(super) fn lift_constant(
     // registry should reflect the visible type. When no annotation
     // exists, the inferred head is the visible type.
     let ty = annotated.unwrap_or(inferred);
-    registry.set_constant_definition(
+    scope.registry.set_constant_definition(
         id,
         ConstantDefinition {
             ty,
@@ -90,39 +82,37 @@ pub(super) fn lift_constant(
 /// per-field type checking. When the inferred head and `expected`
 /// disagree, the literal-coercion path is consulted before falling
 /// through to a strict mismatch diagnostic.
+///
+/// `scope` is the read-only [`ResolutionScope`] for the file the
+/// constant is declared in (alias slice + current package +
+/// registry). The constant value walk never mutates the registry —
+/// definition stamping happens once at the [`lift_constant`] entry
+/// point after this returns, so `&` is the right shape here.
 fn resolve_constant_value(
     expr: &mut Expr,
     expected: Option<&ResolvedType>,
-    ctx: &mut ConstCtx<'_>,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let ty = match &mut expr.kind {
-        ExprKind::Literal { value } => literal_type(value, ctx.registry),
+        ExprKind::Literal { value } => scope.registry.literal_type(value),
         ExprKind::String { parts, .. } => {
-            string_literal_type(parts, expr.span, ctx.registry, diagnostics)
+            string_literal_type(parts, expr.span, scope.registry, diagnostics)
         }
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
-        } => negated_numeric_type(operand, ctx, diagnostics),
+        } => negated_numeric_type(operand, scope, diagnostics),
         ExprKind::EnumConstruction {
             type_path,
             variant,
             data,
-        } => enum_variant_type(
-            type_path,
-            variant,
-            data,
-            expr.span,
-            ctx.package,
-            ctx.registry,
-            diagnostics,
-        ),
+        } => enum_variant_type(type_path, variant, data, expr.span, scope, diagnostics),
         ExprKind::StructConstruction { type_path, fields } => {
-            struct_construction_type(type_path, fields, expr.span, ctx, diagnostics)
+            struct_construction_type(type_path, fields, expr.span, scope, diagnostics)
         }
         ExprKind::Group { expr: inner } => {
-            resolve_constant_value(inner, expected, ctx, diagnostics)
+            resolve_constant_value(inner, expected, scope, diagnostics)
         }
         _ => {
             diagnostics.push(Diagnostic::error(
@@ -138,7 +128,7 @@ fn resolve_constant_value(
         && ty.is_resolved()
         && expected.is_resolved()
     {
-        match check_compatible(expr, &ty, expected, ctx.registry) {
+        match check_compatible(expr, &ty, expected, scope.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
                 *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
@@ -161,8 +151,8 @@ fn resolve_constant_value(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "constant value type `{}` does not match annotation `{}`",
-                        render_type(&ty, ctx.registry),
-                        render_type(expected, ctx.registry),
+                        render_type(&ty, scope.registry),
+                        render_type(expected, scope.registry),
                     ),
                     expr.span,
                 ));
@@ -172,16 +162,6 @@ fn resolve_constant_value(
 
     expr.resolution = ty.clone();
     ty
-}
-
-fn literal_type(value: &Literal, registry: &GlobalRegistry) -> ResolvedType {
-    match value {
-        Literal::Bool(_) => registry.primitive("Bool"),
-        Literal::Float(_) => registry.primitive("Float"),
-        Literal::Int(_) => registry.primitive("Int"),
-        Literal::String(_) => registry.primitive("String"),
-        Literal::Unit => registry.primitive("Unit"),
-    }
 }
 
 fn string_literal_type(
@@ -205,15 +185,15 @@ fn string_literal_type(
 
 fn negated_numeric_type(
     operand: &mut Expr,
-    ctx: &mut ConstCtx<'_>,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    let ty = resolve_constant_value(operand, None, ctx, diagnostics);
+    let ty = resolve_constant_value(operand, None, scope, diagnostics);
     if !ty.is_resolved() {
         return ResolvedType::unresolved();
     }
-    let int = ctx.registry.primitive("Int");
-    let float = ctx.registry.primitive("Float");
+    let int = scope.registry.primitive("Int");
+    let float = scope.registry.primitive("Float");
     if ty == int || ty == float {
         ty
     } else {
@@ -230,16 +210,15 @@ fn enum_variant_type(
     variant: &str,
     data: &mut EnumConstructionData,
     span: Span,
-    package: &str,
-    registry: &GlobalRegistry,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let Some(name) = type_path.last().map(String::as_str) else {
         diagnostics.push(Diagnostic::error("missing enum name", span));
         return ResolvedType::unresolved();
     };
-    let identifier = Identifier::new(package, vec![name.to_string()]);
-    let Some((enum_id, entry)) = registry.lookup(&identifier) else {
+    let identifier = lookup_constant_type_identifier(type_path, name, scope);
+    let Some((enum_id, entry)) = scope.registry.lookup(&identifier) else {
         diagnostics.push(Diagnostic::error(format!("unknown enum `{name}`"), span));
         return ResolvedType::unresolved();
     };
@@ -279,15 +258,15 @@ fn struct_construction_type(
     type_path: &[String],
     fields: &mut [FieldInit],
     span: Span,
-    ctx: &mut ConstCtx<'_>,
+    scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let Some(name) = type_path.last().map(String::as_str) else {
         diagnostics.push(Diagnostic::error("missing struct name", span));
         return ResolvedType::unresolved();
     };
-    let identifier = Identifier::new(ctx.package, vec![name.to_string()]);
-    let Some((struct_id, entry)) = ctx.registry.lookup(&identifier) else {
+    let identifier = lookup_constant_type_identifier(type_path, name, scope);
+    let Some((struct_id, entry)) = scope.registry.lookup(&identifier) else {
         diagnostics.push(Diagnostic::error(format!("unknown struct `{name}`"), span));
         return ResolvedType::unresolved();
     };
@@ -314,7 +293,7 @@ fn struct_construction_type(
             .iter()
             .find(|f| f.name == field_init.name)
             .map(|f| f.ty.clone());
-        resolve_constant_value(&mut field_init.value, expected.as_ref(), ctx, diagnostics);
+        resolve_constant_value(&mut field_init.value, expected.as_ref(), scope, diagnostics);
     }
     ResolvedType::leaf(Resolution::Global(struct_id))
 }
@@ -346,6 +325,25 @@ fn validate_struct_fields(
         }
     }
     ok
+}
+
+/// Project a constant value's `type_path` (the full dotted path
+/// the user wrote on `Foo.Variant{...}` / `Foo{...}`) onto a
+/// registered [`Identifier`] under the constant scope's lookup
+/// rules: an alias-bound head wins; otherwise fall back to the
+/// current package. Constant value resolution today only accepts
+/// single-segment heads, so multi-segment alias targets simply
+/// won't resolve until nested-type lifting lands — same fall-through
+/// behavior as `resolve_named` in [`super::types`].
+fn lookup_constant_type_identifier(
+    type_path: &[String],
+    name: &str,
+    scope: ResolutionScope<'_>,
+) -> Identifier {
+    if let Some(target) = rewrite_through_aliases(scope.aliases, type_path) {
+        return target;
+    }
+    Identifier::new(scope.package, vec![name.to_string()])
 }
 
 fn render_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {

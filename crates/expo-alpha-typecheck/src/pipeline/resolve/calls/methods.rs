@@ -6,7 +6,7 @@
 //! diagnostic-shape helpers ([`function_signature`],
 //! [`method_lookup_message`], [`dispatch_mismatch_message`]).
 
-use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
+use expo_ast::ast::{Arg, Diagnostic, EnumConstructionData, Expr, ExprKind};
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
@@ -15,7 +15,7 @@ use super::super::expr::resolve_expr;
 use super::super::inference::{
     PhantomContext, fill_from_expected, finalize_inference, unify_pairs,
 };
-use super::super::structs::lookup_type;
+use super::super::types::lookup_type;
 use super::emit_conflict;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
@@ -85,30 +85,43 @@ impl MethodReceiver {
 /// Inspect the receiver and pick the dispatch path. Stamps both the
 /// inner `Ident` and outer `Expr` resolutions so seal sees a fully
 /// populated tree.
+///
+/// Static dispatch admits three receiver shapes, all collapsed to a
+/// dotted path by [`static_receiver_path`]:
+///
+/// - Bare `Ident` naming a same-package or `Global` type
+///   (`Color.foo()`).
+/// - `EnumConstruction` with `Unit` data and TypeIdent segments —
+///   the parser shape for `Pkg.Type.method(...)` because
+///   `Pkg.Type` reads as a unit-variant construction until the
+///   trailing method call disambiguates it. This is the parser
+///   shape for both `Crypto.SHA256.digest(...)` and
+///   `HTTP.Headers.new()`.
+/// - `FieldAccess` chain over `Ident`s — covers paths whose tail
+///   segment is a lowercase ident before a dotted method (rare, but
+///   semantically equivalent and cheap to support alongside the
+///   other shapes).
+///
+/// The receiver is rewritten to a synthetic `Ident { name:
+/// "<joined.path>", resolution: Global(struct_id) }` so the IR
+/// lowering's existing `Ident`-based static-receiver path picks it
+/// up without further branching, and seal accepts the rewritten
+/// node by virtue of its `Global` resolution.
 pub(super) fn classify_receiver(
     receiver: &mut Expr,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<MethodReceiver> {
-    if let Some(receiver_name) = bare_ident_name(&receiver.kind) {
-        let receiver_path = [receiver_name.to_string()];
-        if let Some((struct_id, struct_entry)) =
-            lookup_type(&receiver_path, resolver.package, resolver.registry)
-            && matches!(
-                struct_entry.kind,
-                GlobalKind::Enum(_) | GlobalKind::Struct(_)
-            )
-        {
-            if let ExprKind::Ident {
-                resolution: receiver_resolution,
-                ..
-            } = &mut receiver.kind
-            {
-                *receiver_resolution = Resolution::Global(struct_id);
-            }
-            receiver.resolution = ResolvedType::leaf(Resolution::Global(struct_id));
-            return Some(MethodReceiver::Static { struct_id });
-        }
+    if let Some(receiver_path) = static_receiver_path(&receiver.kind)
+        && let Some((struct_id, struct_entry)) =
+            lookup_type(&receiver_path, resolver.resolution_scope())
+        && matches!(
+            struct_entry.kind,
+            GlobalKind::Enum(_) | GlobalKind::Struct(_)
+        )
+    {
+        rewrite_to_static_ident(receiver, &receiver_path, struct_id);
+        return Some(MethodReceiver::Static { struct_id });
     }
 
     resolve_expr(receiver, resolver, diagnostics);
@@ -153,11 +166,69 @@ pub(super) fn classify_receiver(
     }
 }
 
-fn bare_ident_name(kind: &ExprKind) -> Option<&str> {
+/// Collapse a method-call receiver to its dotted type path when one
+/// of the static-dispatch shapes matches. Returns:
+///
+/// - `Some(["Color"])` for bare `Ident("Color")`.
+/// - `Some(["Crypto", "SHA256"])` for the parser's
+///   `EnumConstruction { type_path: ["Crypto"], variant: "SHA256",
+///   data: Unit }` shape — what `Crypto.SHA256.digest(...)` and
+///   `HTTP.Headers.new()` parse to before disambiguation.
+/// - `Some(["HTTP", "Headers"])` for an `Ident`-rooted
+///   `FieldAccess` chain `FieldAccess { receiver: Ident("HTTP"),
+///   field: "Headers" }`.
+/// - `None` for everything else (value receivers, parenthesized
+///   expressions, calls, etc.) — those flow through the
+///   instance-dispatch path.
+fn static_receiver_path(kind: &ExprKind) -> Option<Vec<String>> {
     match kind {
-        ExprKind::Ident { name, .. } => Some(name.as_str()),
+        ExprKind::EnumConstruction {
+            data: EnumConstructionData::Unit,
+            type_path,
+            variant,
+        } => {
+            let mut path = type_path.clone();
+            path.push(variant.clone());
+            Some(path)
+        }
+        ExprKind::Ident { .. } | ExprKind::FieldAccess { .. } => {
+            let mut path = Vec::new();
+            walk_dotted_path(kind, &mut path)?;
+            Some(path)
+        }
         _ => None,
     }
+}
+
+fn walk_dotted_path(kind: &ExprKind, out: &mut Vec<String>) -> Option<()> {
+    match kind {
+        ExprKind::Ident { name, .. } => {
+            out.push(name.clone());
+            Some(())
+        }
+        ExprKind::FieldAccess { receiver, field } => {
+            walk_dotted_path(&receiver.kind, out)?;
+            out.push(field.clone());
+            Some(())
+        }
+        _ => None,
+    }
+}
+
+/// Rewrite the receiver expression in place to a synthetic
+/// `Ident { name: "<joined.path>", resolution: Global(struct_id) }`
+/// so the IR lowering's existing `Ident`-based static-receiver
+/// path lands on a familiar shape regardless of whether the parser
+/// produced an `Ident`, an `EnumConstruction`, or a `FieldAccess`
+/// chain. The synthesized name is display-only; downstream type
+/// checks read the `Global(struct_id)` resolution off the inner
+/// node and the leaf [`ResolvedType`] off the outer `Expr`.
+fn rewrite_to_static_ident(receiver: &mut Expr, path: &[String], struct_id: GlobalRegistryId) {
+    receiver.kind = ExprKind::Ident {
+        name: path.join("."),
+        resolution: Resolution::Global(struct_id),
+    };
+    receiver.resolution = ResolvedType::leaf(Resolution::Global(struct_id));
 }
 
 /// Method-call inference. Splits the substitution into two owners:

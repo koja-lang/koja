@@ -444,7 +444,7 @@ fn compound_assign_non_arith_lhs_diagnoses() {
 }
 
 #[test]
-fn compound_assign_field_target_diagnoses_feature_gap() {
+fn compound_assign_on_field_target_typechecks() {
     let source = "
         struct Point
           x: Int
@@ -458,18 +458,11 @@ fn compound_assign_field_target_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("field assignment") && m.contains("p.x")),
-        "expected field-assignment gap diagnostic for compound assign, got {messages:?}",
-    );
+    typecheck(&dedent(source));
 }
 
 #[test]
-fn field_assignment_diagnoses_feature_gap() {
+fn field_assignment_typechecks_on_struct_field() {
     let source = "
         struct Point
           x: Int
@@ -483,14 +476,7 @@ fn field_assignment_diagnoses_feature_gap() {
         end
         ";
 
-    let failure = typecheck_fail(&dedent(source));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("field assignment") || m.contains("p.x")),
-        "expected field-assignment feature-gap diagnostic, got {messages:?}",
-    );
+    typecheck(&dedent(source));
 }
 
 #[test]

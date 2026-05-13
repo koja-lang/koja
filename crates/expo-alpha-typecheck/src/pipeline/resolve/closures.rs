@@ -154,8 +154,7 @@ fn resolve_closure_param(
             ty: resolve_type_expr(
                 type_expr,
                 TypeParamScope::default(),
-                resolver.package,
-                resolver.registry,
+                resolver.resolution_scope(),
                 diagnostics,
             ),
         },
@@ -250,8 +249,7 @@ fn resolve_return_annotation(
     Some(resolve_type_expr(
         type_expr,
         TypeParamScope::default(),
-        resolver.package,
-        resolver.registry,
+        resolver.resolution_scope(),
         diagnostics,
     ))
 }

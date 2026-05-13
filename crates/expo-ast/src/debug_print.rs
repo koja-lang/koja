@@ -834,6 +834,7 @@ impl<'a> Printer<'a> {
                 name,
                 type_expr,
                 span,
+                ..
             } => {
                 self.header(
                     &format!("TypedBinding {name}: {}", type_expr_inline(type_expr)),

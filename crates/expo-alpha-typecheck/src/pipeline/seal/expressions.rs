@@ -5,9 +5,11 @@
 //! first-class values yet, so the outer callee `Expr.resolution`
 //! stays `Unresolved` while the inner `Ident` carries `Global(_)`.
 
-use expo_ast::ast::{ClosureParam, EnumConstructionData, Expr, ExprKind, StringPart};
-use expo_ast::identifier::Resolution;
-use expo_ast::labels::expr_kind_label;
+use expo_ast::ast::{
+    ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm, Pattern, StringPart,
+};
+use expo_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
+use expo_ast::labels::{expr_kind_label, pattern_kind_label, pattern_span};
 
 use super::patterns::seal_pattern;
 use super::statements::seal_statement;
@@ -164,11 +166,27 @@ pub(super) fn seal_expr(expr: &Expr) {
                 seal_no_type_param(ty, expr.span);
             }
         }
+        ExprKind::Receive {
+            arms,
+            after_timeout,
+            after_body,
+        } => {
+            for arm in arms {
+                seal_receive_arm(arm);
+            }
+            if let Some(timeout) = after_timeout {
+                seal_expr(timeout);
+            }
+            for stmt in after_body {
+                seal_statement(stmt);
+            }
+        }
         ExprKind::Self_ { .. } => {}
         ExprKind::ShortClosure { params, body } => {
             seal_closure_params(params, expr);
             seal_expr(body);
         }
+        ExprKind::Spawn { expr: inner } => seal_expr(inner),
         ExprKind::String { parts, .. } => {
             for part in parts {
                 if let StringPart::Interpolation { expr, .. } = part {
@@ -213,6 +231,49 @@ pub(super) fn seal_expr(expr: &Expr) {
     }
 }
 
+/// Receive arms always carry a typed-binding pattern with `local_id`
+/// stamped by resolve. Validate the shape, then walk the body. The
+/// pattern's annotation `TypeExpr` does not need a separate
+/// type-param check — the `local_id`'s scope-recorded
+/// `ResolvedType` rides through the body's `Resolution::Local`
+/// references and is checked there.
+fn seal_receive_arm(arm: &MatchArm) {
+    match &arm.pattern {
+        Pattern::TypedBinding {
+            local_id,
+            name,
+            resolved_type,
+            ..
+        } => {
+            if local_id.is_none() {
+                seal_panic(
+                    &format!("receive arm binding `{name}` missing local_id after typecheck",),
+                    pattern_span(&arm.pattern),
+                );
+            }
+            if resolved_type.is_none() {
+                seal_panic(
+                    &format!("receive arm binding `{name}` missing resolved_type after typecheck",),
+                    pattern_span(&arm.pattern),
+                );
+            }
+        }
+        other => seal_panic(
+            &format!(
+                "alpha typecheck seal expected a typed-binding receive arm pattern, got `{}`",
+                pattern_kind_label(other),
+            ),
+            pattern_span(&arm.pattern),
+        ),
+    }
+    if let Some(guard) = &arm.guard {
+        seal_expr(guard);
+    }
+    for stmt in &arm.body {
+        seal_statement(stmt);
+    }
+}
+
 /// Each closure `Name` param must have its `local_id` stamped by
 /// resolve so IR lower can find the binding without re-walking. The
 /// AST type-expr annotation, if any, is enforced via the closure's
@@ -235,24 +296,39 @@ fn seal_closure_params(params: &[ClosureParam], outer: &Expr) {
     }
 }
 
-/// Seal the callee of a `Call`: the outer `Expr.resolution` stays
-/// `Unresolved` (function names aren't values yet); we check the inner
-/// `Ident` carries a `Global(_)` resolution so IR lowering has a
-/// concrete target.
+/// Seal the callee of a `Call`. Two shapes are accepted:
+/// - Bare `Ident { Global(_) | Local(_) }` — the outer
+///   `Expr.resolution` stays `Unresolved`; resolve carve-out for
+///   "function names aren't values yet".
+/// - `FieldAccess` with a fn-typed `Expr.resolution` — produced by
+///   the field-as-callable rewrite in `resolve_method_call_expr`.
 fn seal_call_callee(callee: &Expr) {
-    let ExprKind::Ident { name, resolution } = &callee.kind else {
-        seal_panic(
+    match &callee.kind {
+        ExprKind::Ident { name, resolution } => {
+            if matches!(resolution, Resolution::Unresolved) {
+                seal_panic(
+                    &format!("callee `{name}` has Unresolved resolution after typecheck"),
+                    callee.span,
+                );
+            }
+        }
+        ExprKind::FieldAccess { .. } => {
+            if !matches!(
+                callee.resolution,
+                ResolvedType::Anonymous(AnonymousKind::Function { .. }),
+            ) {
+                seal_panic(
+                    "field-access callee passed typecheck without a fn-typed resolution",
+                    callee.span,
+                );
+            }
+        }
+        other => seal_panic(
             &format!(
                 "call site has a non-identifier callee `{}` that passed typecheck",
-                expr_kind_label(&callee.kind),
+                expr_kind_label(other),
             ),
             callee.span,
-        );
-    };
-    if matches!(resolution, Resolution::Unresolved) {
-        seal_panic(
-            &format!("callee `{name}` has Unresolved resolution after typecheck"),
-            callee.span,
-        );
+        ),
     }
 }

@@ -10,6 +10,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
 use super::binary_construct::emit_binary_construct;
+use super::process::{emit_receive, emit_spawn};
 use super::{ValueMap, calls, closures, concat, constants, enums, locals, lookup, ops, structs};
 
 pub(super) fn emit_instruction<'ctx>(
@@ -121,6 +122,28 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
+        IRInstruction::FieldSet {
+            base,
+            dest,
+            field_index,
+            field_type,
+            struct_symbol,
+            value,
+        } => {
+            let base_value = lookup(values, *base)?;
+            let new_field = lookup(values, *value)?;
+            let result = structs::emit_field_set(
+                ctx,
+                base_value,
+                *field_index,
+                field_type,
+                struct_symbol,
+                new_field,
+            )?;
+            values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::DropValue { value, ty } => locals::emit_drop_value(ctx, *value, ty, values),
         IRInstruction::LoadCapture {
             capture_index,
             dest,
@@ -179,5 +202,18 @@ pub(super) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
+        IRInstruction::Spawn {
+            config,
+            config_type,
+            dest,
+            ref_type,
+            wrapper,
+        } => emit_spawn(ctx, *config, config_type, *dest, ref_type, wrapper, values),
+        IRInstruction::Receive {
+            after,
+            arms,
+            dest,
+            result_type,
+        } => emit_receive(ctx, after.as_ref(), arms, *dest, result_type, values),
     }
 }

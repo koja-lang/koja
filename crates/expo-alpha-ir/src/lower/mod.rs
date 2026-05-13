@@ -67,6 +67,7 @@ mod ops;
 mod ownership;
 pub(crate) mod package;
 mod patterns;
+mod process;
 mod structs;
 
 pub(crate) use body::lower_body_to_blocks;

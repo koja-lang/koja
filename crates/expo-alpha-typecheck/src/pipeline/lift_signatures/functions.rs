@@ -8,6 +8,7 @@ use expo_ast::span::Span;
 
 use crate::registry::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedParam};
 
+use super::LiftScope;
 use super::SelfContext;
 use super::types::{TypeParamScope, concrete_self_type, resolve_type_expr};
 
@@ -26,11 +27,10 @@ pub(super) fn lift_function_with_identifier(
     function: &Function,
     identifier: Identifier,
     self_context: SelfContext<'_>,
-    package: &str,
-    registry: &mut GlobalRegistry,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some((id, entry)) = registry.lookup(&identifier) else {
+    let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         // Collect rejected this function (e.g. `self` receiver on a
         // top-level fn, collision); nothing to stamp a signature on.
         return;
@@ -45,8 +45,8 @@ pub(super) fn lift_function_with_identifier(
         return;
     }
 
-    let owners = type_param_owners(id, function, self_context, &identifier, registry);
-    let scope = TypeParamScope::new(&owners);
+    let owners = type_param_owners(id, function, self_context, &identifier, scope.registry);
+    let type_params = TypeParamScope::new(&owners);
 
     let mut params = Vec::with_capacity(function.params.len());
     for param in &function.params {
@@ -54,18 +54,22 @@ pub(super) fn lift_function_with_identifier(
             param,
             &identifier,
             self_context,
+            type_params,
             scope,
-            package,
-            registry,
             diagnostics,
         ));
     }
 
     let declared_return_type = match function.return_type.as_ref() {
-        Some(type_expr) => resolve_type_expr(type_expr, scope, package, registry, diagnostics),
-        None => registry.primitive("Unit"),
+        Some(type_expr) => resolve_type_expr(
+            type_expr,
+            type_params,
+            scope.resolution_scope(),
+            diagnostics,
+        ),
+        None => scope.registry.primitive("Unit"),
     };
-    let return_type = override_divergent_return(&identifier, declared_return_type, registry);
+    let return_type = override_divergent_return(&identifier, declared_return_type, scope.registry);
 
     let dispatch = match function.params.first() {
         Some(Param::Self_ { .. }) => Dispatch::Instance,
@@ -81,10 +85,16 @@ pub(super) fn lift_function_with_identifier(
     };
 
     if is_extern_c(&function.annotations) {
-        validate_extern_c_signature(function, &identifier, &signature, registry, diagnostics);
+        validate_extern_c_signature(
+            function,
+            &identifier,
+            &signature,
+            scope.registry,
+            diagnostics,
+        );
     }
 
-    registry.set_signature(id, signature);
+    scope.registry.set_signature(id, signature);
 }
 
 /// Pull the concrete pinning args off a `SelfContext::Receiver` whose
@@ -342,9 +352,8 @@ fn lift_param(
     param: &Param,
     identifier: &Identifier,
     self_context: SelfContext<'_>,
-    scope: TypeParamScope<'_>,
-    package: &str,
-    registry: &GlobalRegistry,
+    type_params: TypeParamScope<'_>,
+    scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedParam {
     match param {
@@ -370,14 +379,14 @@ fn lift_param(
             let ty = match self_override {
                 Some(target) => target.clone(),
                 None => {
-                    let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
+                    let Some((receiver_id, _)) = scope.registry.lookup(receiver_identifier) else {
                         panic!(
                             "lift_signatures: enclosing receiver `{receiver_identifier}` \
                              missing from registry while lifting `self` on `{identifier}` — \
                              collect invariant violation",
                         );
                     };
-                    concrete_self_type(receiver_id, registry)
+                    concrete_self_type(receiver_id, scope.registry)
                 }
             };
             ResolvedParam {
@@ -403,7 +412,12 @@ fn lift_param(
                     *span,
                 ));
             }
-            let ty = resolve_type_expr(type_expr, scope, package, registry, diagnostics);
+            let ty = resolve_type_expr(
+                type_expr,
+                type_params,
+                scope.resolution_scope(),
+                diagnostics,
+            );
             ResolvedParam {
                 mode: *mode,
                 name: name.clone(),

@@ -21,12 +21,16 @@ use crate::local::IRLocalId;
 use crate::mangling::{mangled_function_name, mangled_method_name};
 use crate::types::{IRType, ValueId};
 
-/// Lower a `ExprKind::Call`. Seal guarantees the callee is a bare
-/// `Ident`; the inner [`Resolution`] dispatches: `Global(id)` lowers
-/// to a direct [`IRInstruction::Call`] (with mangling for generic
-/// callees), `Local(local_id)` lowers to an indirect
-/// [`IRInstruction::CallClosure`] through the local's
-/// `IRType::Function` slot.
+/// Lower a `ExprKind::Call`. Seal guarantees the callee is one of:
+/// - Bare `Ident { Global(id) }` — direct [`IRInstruction::Call`]
+///   (mangling applied for generic callees).
+/// - Bare `Ident { Local(local_id) }` — indirect
+///   [`IRInstruction::CallClosure`] through the local's
+///   `IRType::Function` slot.
+/// - `FieldAccess` with an `AnonymousKind::Function` resolution
+///   (produced by the field-as-callable rewrite in alpha-typecheck)
+///   — lower the callee expression to a fn-typed value, then emit
+///   [`IRInstruction::CallClosure`].
 pub(super) fn lower_call(
     callee: &Expr,
     args: &[Arg],
@@ -36,9 +40,13 @@ pub(super) fn lower_call(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
+    if matches!(callee.kind, ExprKind::FieldAccess { .. }) {
+        return lower_closure_expr_call(callee, args, ctx, block, registry, output);
+    }
     let ExprKind::Ident { resolution, name } = &callee.kind else {
         panic!(
-            "alpha IR lower: call callee must be a bare Ident after typecheck seal (got {:?})",
+            "alpha IR lower: call callee must be a bare Ident or FieldAccess after typecheck seal \
+             (got {:?})",
             callee.kind,
         );
     };
@@ -187,6 +195,48 @@ fn lower_local_closure_call(
 
     let mut lowered_args = Vec::with_capacity(args.len());
     let mut current = block;
+    for arg in args {
+        let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
+        lowered_args.push(value);
+        current = next;
+    }
+
+    let dest = ctx.fresh_value(return_ty.clone());
+    ctx.cfg.append(
+        current,
+        IRInstruction::CallClosure {
+            args: lowered_args,
+            callee: callee_value,
+            dest,
+            result_ty: return_ty,
+        },
+    );
+    Ok((dest, current))
+}
+
+/// Lower a call whose callee is a non-Ident expression of fn type
+/// (today: a `FieldAccess` produced by the field-as-callable
+/// rewrite). Lowers the callee to a fn-typed value, lowers args in
+/// order, then emits [`IRInstruction::CallClosure`].
+fn lower_closure_expr_call(
+    callee: &Expr,
+    args: &[Arg],
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = &callee.resolution else {
+        panic!(
+            "alpha IR lower: closure-expr call callee resolved to non-function type ({:?}) — \
+             typecheck seal violation",
+            callee.resolution,
+        );
+    };
+    let return_ty = resolved_type_to_ir_type(ret, registry, &mut output.instantiations);
+
+    let (callee_value, mut current) = lower_expr(callee, ctx, block, registry, output)?;
+    let mut lowered_args = Vec::with_capacity(args.len());
     for arg in args {
         let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
         lowered_args.push(value);

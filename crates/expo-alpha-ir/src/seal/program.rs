@@ -4,7 +4,7 @@
 //! the assembled [`IRProgram`].
 
 use crate::IRProgram;
-use crate::function::IRInstruction;
+use crate::function::{FunctionKind, IRInstruction};
 
 use super::closures::seal_closure_ops;
 use super::enums::seal_enum_ops;
@@ -94,18 +94,41 @@ fn seal_program_loadconst_pool(program: &IRProgram) {
 /// dereferences the callee id through the typecheck registry, so a
 /// missing target here would indicate either a registry / IRProgram
 /// drift or a genuine lowering bug — both compiler issues.
+///
+/// The same check applies to [`IRInstruction::Spawn::wrapper`] —
+/// spawn wrappers are minted by the spawn-wrapper monomorphization
+/// planner; a missing one indicates the closure pass failed to
+/// discover the spawn site. Wrappers must register as
+/// `FunctionKind::SpawnWrapper`.
 fn seal_program_calls(program: &IRProgram) {
     for pkg in &program.packages {
         for (owner, function) in &pkg.functions {
             for block in &function.blocks {
                 for inst in &block.instructions {
-                    if let IRInstruction::Call { callee, .. } = inst
-                        && program.function(callee.mangled()).is_none()
-                    {
-                        seal_panic(&format!(
-                            "function `{owner}` calls `{callee}`, but that function is not \
-                             registered in the IRProgram",
-                        ));
+                    match inst {
+                        IRInstruction::Call { callee, .. } => {
+                            if program.function(callee.mangled()).is_none() {
+                                seal_panic(&format!(
+                                    "function `{owner}` calls `{callee}`, but that function is not \
+                                     registered in the IRProgram",
+                                ));
+                            }
+                        }
+                        IRInstruction::Spawn { wrapper, .. } => {
+                            let Some(target) = program.function(wrapper.mangled()) else {
+                                seal_panic(&format!(
+                                    "function `{owner}` spawns `{wrapper}`, but no spawn wrapper \
+                                     with that symbol is registered in the IRProgram",
+                                ));
+                            };
+                            if !matches!(target.kind, FunctionKind::SpawnWrapper { .. }) {
+                                seal_panic(&format!(
+                                    "function `{owner}` spawns `{wrapper}` but that function's \
+                                     kind is not `SpawnWrapper`",
+                                ));
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

@@ -109,6 +109,23 @@ const STRING_LITERAL_SCRIPT_SOURCE: &str = "
     \"hello\"
 ";
 
+/// Script-mode fixture pinning that `String.clone()` produces an
+/// independent heap buffer end-to-end. Clones `"abc"`, mutates the
+/// clone via `<>` concat (which allocates a fresh block from the
+/// `[i64 bit_length][payload + NUL]` source) and concatenates the
+/// untouched original after the mutated copy. If the clone aliased
+/// the source's payload, the `<>` would corrupt the source's bytes
+/// (or, more likely, double-free under DropLocal). The expected
+/// stdout is `abc!abc\n` — the mutated copy first, then the
+/// pristine original, separated by no delimiter so the
+/// concatenation boundary is observable in the output.
+const STRING_CLONE_INDEPENDENT_BUFFERS_SCRIPT_SOURCE: &str = "
+    source = \"abc\"
+    copy = source.clone()
+    mutated = copy <> \"!\"
+    mutated <> source
+";
+
 /// Script-mode fixture exercising the float-literal slice through
 /// arithmetic. `2.0 + 2.0` lowers to two `Const(Float64)` ops + an
 /// `IRBinOp::Add`; LLVM emits `fadd double` and the auto-print
@@ -195,6 +212,22 @@ const STRUCT_FIELD_SCRIPT_SOURCE: &str = "
     end
 
     Point{x: 5, y: 10}.x
+";
+
+/// Script-mode fixture exercising multi-segment field assignment
+/// end-to-end (`p.x = 10` followed by `p.x.print()`). Drives the
+/// `LocalRead → FieldSet → LocalWrite` rebuild chain through both
+/// the LLVM and eval backends — the trailing print emits the
+/// post-assignment value (`10\n`).
+const FIELD_ASSIGNMENT_SCRIPT_SOURCE: &str = "
+    struct Point
+      x: Int
+      y: Int
+    end
+
+    p = Point{x: 1, y: 2}
+    p.x = 10
+    p.x
 ";
 
 /// Script-mode fixture exercising the alpha static-method slice
@@ -640,6 +673,69 @@ fn alpha_run_llvm_script_string_literal_prints_hello() {
 }
 
 #[test]
+fn alpha_run_llvm_script_string_clone_independent_buffers() {
+    let scratch = scratch_dir("run_llvm_string_clone");
+    let fixture = write_fixture(
+        &scratch,
+        "string_clone.exps",
+        &dedent(STRING_CLONE_INDEPENDENT_BUFFERS_SCRIPT_SOURCE),
+    );
+
+    // End-to-end gate for `String.clone`: the cloned slot must be a
+    // fresh heap allocation, so concat'ing into it (which produces
+    // yet another fresh block) leaves the source `"abc"` untouched.
+    // If the clone aliased the source payload, the trailing `<>
+    // source` would either corrupt the original bytes or trip a
+    // double-free at scope exit. Stdout `abc!abc\n` proves both
+    // halves stay live and independent.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (string clone) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"abc!abc\n",
+        "expected LLVM backend to print `abc!abc\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_string_clone_independent_buffers() {
+    let scratch = scratch_dir("run_interpreter_string_clone");
+    let fixture = write_fixture(
+        &scratch,
+        "string_clone.exps",
+        &dedent(STRING_CLONE_INDEPENDENT_BUFFERS_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above. The interpreter
+    // clones via `Vec<u8>::clone`, so mutating the resulting
+    // `Value::String` cannot affect the original. Stdout matches
+    // the LLVM path byte-for-byte.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, string clone) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(
+        output.stdout,
+        b"abc!abc\n",
+        "expected interpreter to print `abc!abc\\n`, got stdout:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
 fn alpha_run_interpreter_script_string_literal_prints_hello() {
     let scratch = scratch_dir("run_interpreter_string_literal");
     let fixture = write_fixture(
@@ -951,6 +1047,68 @@ fn alpha_run_interpreter_script_struct_field_prints_five() {
         stdout.trim(),
         "5",
         "expected interpreter to print `5` (Point.x), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_llvm_script_field_assignment_prints_ten() {
+    let scratch = scratch_dir("run_llvm_field_assignment");
+    let fixture = write_fixture(
+        &scratch,
+        "field_assignment.exps",
+        &dedent(FIELD_ASSIGNMENT_SCRIPT_SOURCE),
+    );
+
+    // Drives the multi-segment assignment lowering through the LLVM
+    // backend end-to-end: the struct literal materializes through
+    // alloca + GEP + store-per-field, the `p.x = 10` write rebuilds
+    // the struct via FieldSet (alloca + GEP + store + load), the
+    // LocalWrite installs the new value into `p`'s slot, and the
+    // trailing `p.x` projection prints `10\n`.
+    let output = run_expo(&["alpha", "run", "--backend=llvm", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run --backend=llvm` (field assignment) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "10",
+        "expected LLVM backend to print `10` (post-assignment p.x), got stdout:\n{stdout}",
+    );
+
+    let _ = fs::remove_dir_all(&scratch);
+}
+
+#[test]
+fn alpha_run_interpreter_script_field_assignment_prints_ten() {
+    let scratch = scratch_dir("run_interpreter_field_assignment");
+    let fixture = write_fixture(
+        &scratch,
+        "field_assignment.exps",
+        &dedent(FIELD_ASSIGNMENT_SCRIPT_SOURCE),
+    );
+
+    // Backend symmetry with the LLVM test above: the interpreter
+    // clones the field vec, swaps slot 0 for the freshly-written
+    // `10`, writes the rebuilt `Value::Struct` into `p`'s frame
+    // entry, and the trailing `p.x` projection emits `10\n`.
+    let output = run_expo(&["alpha", "run", fixture.to_str().unwrap()]);
+    assert!(
+        output.status.success(),
+        "expected `expo alpha run` (interpreter, field assignment) to exit 0, got {:?}\nstderr:\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr),
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert_eq!(
+        stdout.trim(),
+        "10",
+        "expected interpreter to print `10` (post-assignment p.x), got stdout:\n{stdout}",
     );
 
     let _ = fs::remove_dir_all(&scratch);
@@ -2562,6 +2720,44 @@ fn alpha_run_interpreter_script_debug_pair_prints_paren_pair() {
         DEBUG_PAIR_SCRIPT_SOURCE,
         None,
         "(1, 2)",
+    );
+}
+
+/// Script-mode fixture pinning the alpha alias-import slice
+/// end-to-end against a qualified stdlib package. The script
+/// aliases `Crypto.SHA256` (loaded eagerly via
+/// `expo_stdlib::ALPHA_QUALIFIED`), takes a digest of `"abc"`, and
+/// asks for its byte size — SHA-256 always produces 32 bytes, so
+/// stdout is exactly `32`. Pins the full chain end-to-end:
+///
+/// - `validate_aliases` accepts `alias Crypto.SHA256` and stamps no
+///   diagnostic;
+/// - `lift_signatures` resolves `SHA256.digest` through the alias
+///   to `Crypto.SHA256.digest`'s lifted signature;
+/// - `resolve` stamps the alias-target's `Identifier` on the call
+///   site;
+/// - IR lowering monomorphizes the SHA256 method and threads the
+///   `@extern "C" @link "crypto:SHA256"` declaration through;
+/// - the LLVM backend links the runtime-bundled BoringSSL
+///   (`libcrypto.a` is embedded via `EMBEDDED_CRYPTO`) so the
+///   produced binary calls into the real C symbol and prints `32`.
+///
+/// Eval has no FFI surface for the BoringSSL symbol, so this is
+/// LLVM-only; the typecheck side of alias resolution is covered by
+/// `expo-alpha-typecheck/tests/aliases.rs`.
+const CRYPTO_SHA256_DIGEST_SCRIPT_SOURCE: &str = "
+    alias Crypto.SHA256
+
+    SHA256.digest(\"abc\".to_binary()).byte_size()
+";
+
+#[test]
+fn alpha_run_llvm_script_aliased_crypto_sha256_digest_prints_thirtytwo() {
+    assert_script_prints(
+        "run_llvm_aliased_crypto_sha256_digest",
+        CRYPTO_SHA256_DIGEST_SCRIPT_SOURCE,
+        Some("--backend=llvm"),
+        "32",
     );
 }
 

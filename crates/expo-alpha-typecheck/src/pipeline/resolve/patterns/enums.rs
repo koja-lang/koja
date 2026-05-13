@@ -15,8 +15,7 @@ use expo_ast::labels::{pattern_kind_label, pattern_span};
 use expo_ast::span::Span;
 
 use super::super::ctx::Resolver;
-use super::super::structs::lookup_type;
-use super::super::types::display_resolution;
+use super::super::types::{display_resolution, lookup_type};
 use super::structs::{resolve_field_patterns_unbound, walk_field_patterns};
 use super::{PatternCoverage, resolve_pattern};
 use crate::pipeline::unify::{Substitution, substitute};
@@ -267,7 +266,7 @@ pub(super) fn lookup_pattern_enum<'a>(
     resolver: &'a Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<EnumPatternTarget<'a>> {
-    let Some((enum_id, entry)) = lookup_type(type_path, resolver.package, resolver.registry) else {
+    let Some((enum_id, entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
         diagnostics.push(Diagnostic::error(
             format!(
                 "alpha typecheck does not recognize the enum type `{}`",
