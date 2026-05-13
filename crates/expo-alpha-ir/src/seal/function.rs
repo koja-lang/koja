@@ -70,6 +70,14 @@ fn seal_function(function: &IRFunction) {
                 ));
             }
         }
+        FunctionKind::SpawnWrapper { .. } => {
+            if function.blocks.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is a spawn wrapper but carries no basic blocks; the wrapper's \
+                     `state.start(config)` + `state.run()` chain must lower to a non-empty CFG",
+                ));
+            }
+        }
     }
     require_supported_type(&function.return_type, &|| format!("{owner} return type"));
     // Function parameter `ValueId`s seed the entry block's

@@ -223,6 +223,15 @@ fn execute_function<R: CallResolver>(
              `CallClosure` (seal invariant violation)",
             function.symbol,
         ),
+        FunctionKind::SpawnWrapper { .. } => {
+            return Err(RuntimeError::Unsupported {
+                detail: format!(
+                    "spawn wrapper `{}` cannot be invoked directly under the alpha interpreter; \
+                     spawn/receive scheduling lives in the LLVM runtime",
+                    function.symbol,
+                ),
+            });
+        }
         FunctionKind::Regular => {}
     }
     let mut frame = Frame::new();
@@ -652,6 +661,17 @@ fn execute_instruction<R: CallResolver>(
             );
             Ok(())
         }
+        IRInstruction::Spawn { wrapper, .. } => Err(RuntimeError::Unsupported {
+            detail: format!(
+                "`spawn` (wrapper `{wrapper}`) is not supported under the alpha interpreter; \
+                 process scheduling lives in the LLVM runtime",
+            ),
+        }),
+        IRInstruction::Receive { .. } => Err(RuntimeError::Unsupported {
+            detail: "`receive` is not supported under the alpha interpreter; mailbox dispatch \
+                 lives in the LLVM runtime"
+                .to_string(),
+        }),
     }
 }
 

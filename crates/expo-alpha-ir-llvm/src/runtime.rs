@@ -38,6 +38,20 @@ pub(crate) const STRING_GET_SYMBOL: &str = "expo_string_get";
 pub(crate) const STRING_LENGTH_SYMBOL: &str = "expo_string_length";
 pub(crate) const STRING_SLICE_SYMBOL: &str = "expo_string_slice";
 
+// `expo_rt_*` mailbox / scheduler symbols defined in
+// `expo-runtime/src/scheduler.rs`. Backend-side declare helpers
+// live below the existing `declare_*_extern` family.
+pub(crate) const RT_KILL_SYMBOL: &str = "expo_rt_kill";
+pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "expo_rt_main_done";
+pub(crate) const RT_PROCESS_ALIVE_SYMBOL: &str = "expo_rt_is_process_alive";
+pub(crate) const RT_RECEIVE_SYMBOL: &str = "expo_rt_receive";
+pub(crate) const RT_RECEIVE_TIMEOUT_SYMBOL: &str = "expo_rt_receive_timeout";
+pub(crate) const RT_SELF_SYMBOL: &str = "expo_rt_self";
+pub(crate) const RT_SEND_AFTER_SYMBOL: &str = "expo_rt_send_after";
+pub(crate) const RT_SEND_LIFECYCLE_SYMBOL: &str = "expo_rt_send_lifecycle";
+pub(crate) const RT_SEND_SYMBOL: &str = "expo_rt_send";
+pub(crate) const RT_SPAWN_SYMBOL: &str = "expo_rt_spawn";
+
 /// Get the existing declaration for `symbol` or stamp a fresh
 /// `void(arg_type)` external one. Idempotent so callers can declare
 /// the same printer from multiple emit sites without duplicating.
@@ -246,4 +260,165 @@ pub(crate) fn declare_panic_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVal
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(PANIC_SYMBOL, signature, Some(Linkage::External))
+}
+
+// `expo_rt_*` mailbox / scheduler externs ----------------------------------
+
+/// Declare (or look up) `expo_rt_spawn`. Signature:
+/// `i64 expo_rt_spawn(void (*fn)(i8*), i8* state_ptr, i64 state_len)`.
+/// Returns the new process's pid (1-indexed).
+pub(crate) fn declare_rt_spawn_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_SPAWN_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function(RT_SPAWN_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_receive`. Signature:
+/// `i8* expo_rt_receive()`. Returns a tagged envelope buffer
+/// (tag at offset 0; payload starts at offset 8). Blocks until a
+/// message arrives.
+pub(crate) fn declare_rt_receive_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_RECEIVE_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[], false);
+    ctx.module
+        .add_function(RT_RECEIVE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_receive_timeout`. Signature:
+/// `i8* expo_rt_receive_timeout(i64 timeout_ms)`. Like
+/// [`declare_rt_receive_extern`] but returns null on timeout.
+pub(crate) fn declare_rt_receive_timeout_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_RECEIVE_TIMEOUT_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ptr_ty.fn_type(&[i64_ty.into()], false);
+    ctx.module.add_function(
+        RT_RECEIVE_TIMEOUT_SYMBOL,
+        signature,
+        Some(Linkage::External),
+    )
+}
+
+/// Declare (or look up) `expo_rt_self`. Signature:
+/// `i64 expo_rt_self()`. Returns the current process's pid.
+pub(crate) fn declare_rt_self_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_SELF_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[], false);
+    ctx.module
+        .add_function(RT_SELF_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_send`. Signature:
+/// `void expo_rt_send(i64 pid, i8* msg_ptr, i64 msg_len)`. Copies
+/// `msg_len` bytes into the target's mailbox; the runtime tags the
+/// payload with `tag=0` (business message) before delivery.
+pub(crate) fn declare_rt_send_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_SEND_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx
+        .context
+        .void_type()
+        .fn_type(&[i64_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function(RT_SEND_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_send_lifecycle`. Signature:
+/// `void expo_rt_send_lifecycle(i64 pid, i64 variant)`. Variant
+/// indices follow the `Lifecycle` enum: 0=Shutdown, 1=Interrupt,
+/// 2=Reload. Inserted at the front of the mailbox for priority
+/// delivery.
+pub(crate) fn declare_rt_send_lifecycle_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_SEND_LIFECYCLE_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx
+        .context
+        .void_type()
+        .fn_type(&[i64_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function(RT_SEND_LIFECYCLE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_send_after`. Signature:
+/// `void expo_rt_send_after(i64 pid, i8* msg_ptr, i64 msg_len, i64 delay_ms)`.
+/// Copies the message immediately; delivery happens when the timer
+/// fires.
+pub(crate) fn declare_rt_send_after_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_SEND_AFTER_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx.context.void_type().fn_type(
+        &[i64_ty.into(), ptr_ty.into(), i64_ty.into(), i64_ty.into()],
+        false,
+    );
+    ctx.module
+        .add_function(RT_SEND_AFTER_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_kill`. Signature:
+/// `void expo_rt_kill(i64 pid)`. Marks the target process Dead
+/// without giving it a chance to run cleanup.
+pub(crate) fn declare_rt_kill_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_KILL_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
+    ctx.module
+        .add_function(RT_KILL_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_is_process_alive`. Signature:
+/// `i64 expo_rt_is_process_alive(i64 pid)`. Returns 1 when the
+/// target process is alive, 0 otherwise (including out-of-range
+/// pids). The `Ref.alive?` emitter trims the result down to `i1`
+/// before handing it back as a `Bool`.
+pub(crate) fn declare_rt_is_process_alive_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_PROCESS_ALIVE_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[i64_ty.into()], false);
+    ctx.module
+        .add_function(RT_PROCESS_ALIVE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_main_done`. Signature:
+/// `void expo_rt_main_done()`. Called by the auto-print wrapper
+/// after `main` returns; boots the I/O reactor and worker pool,
+/// then runs the scheduling loop until the main process (PID 1)
+/// dies. Without this call, spawned processes never execute.
+pub(crate) fn declare_rt_main_done_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_MAIN_DONE_SYMBOL) {
+        return existing;
+    }
+    let signature = ctx.context.void_type().fn_type(&[], false);
+    ctx.module
+        .add_function(RT_MAIN_DONE_SYMBOL, signature, Some(Linkage::External))
 }

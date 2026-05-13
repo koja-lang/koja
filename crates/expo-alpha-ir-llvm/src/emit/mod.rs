@@ -40,7 +40,9 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt::Display;
 
-use expo_alpha_ir::{BranchTarget, IRBasicBlock, IRBlockId, IRTerminator, IRType, ValueId};
+use expo_alpha_ir::{
+    BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRTerminator, IRType, ValueId,
+};
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, IntValue, PhiValue};
 
@@ -57,6 +59,7 @@ pub(crate) mod enums;
 mod instruction;
 mod locals;
 mod ops;
+pub(crate) mod process;
 mod structs;
 
 /// Per-function SSA index. The migration to [`BasicValueEnum`] (from
@@ -118,13 +121,35 @@ pub(crate) fn reachable_blocks(blocks: &[IRBasicBlock]) -> HashSet<IRBlockId> {
         let Some(block) = blocks.iter().find(|b| b.id == id) else {
             continue;
         };
-        for target in terminator_successors(&block.terminator) {
+        for target in block_successors(block) {
             if reachable.insert(target) {
                 queue.push_back(target);
             }
         }
     }
     reachable
+}
+
+/// Outgoing edges from `block` for the IR-level CFG walk. Most
+/// blocks reach their successors only through the terminator, but
+/// [`IRInstruction::Receive`] is a self-terminating instruction
+/// whose arm + `after` body blocks are reached through the
+/// dispatcher LLVM emits (see [`process::emit_receive`]). Counting
+/// those as successors keeps the [`reachable_blocks`] walk in
+/// agreement with what eventually executes — without it the arm
+/// bodies look unreachable and the LLVM emitter caps them with
+/// `unreachable` instead of their natural body.
+fn block_successors(block: &IRBasicBlock) -> Vec<IRBlockId> {
+    let mut successors = terminator_successors(&block.terminator);
+    for instr in &block.instructions {
+        if let IRInstruction::Receive { after, arms, .. } = instr {
+            successors.extend(arms.iter().map(|arm| arm.body));
+            if let Some(after) = after {
+                successors.push(after.body);
+            }
+        }
+    }
+    successors
 }
 
 fn terminator_successors(term: &IRTerminator) -> Vec<IRBlockId> {
@@ -176,6 +201,17 @@ pub(crate) fn emit_block<'ctx>(
 ) -> Result<(), LlvmError> {
     for instr in &block.instructions {
         instruction::emit_instruction(ctx, instr, values)?;
+    }
+    // `IRInstruction::Receive` is a self-terminating instruction —
+    // the dispatcher in [`process::emit_receive`] ends the host
+    // block with a `switch`/`br` into the arm body blocks before
+    // the IR terminator (today: `Unreachable`) gets a chance to
+    // run. Skip the natural terminator emit when the host block
+    // is already capped so LLVM doesn't reject the duplicate.
+    if let Some(insert_block) = ctx.builder.get_insert_block()
+        && insert_block.get_terminator().is_some()
+    {
+        return Ok(());
     }
     emit_terminator_default(ctx, block.id, &block.terminator, values, block_map, phi_map)
 }
@@ -245,6 +281,9 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
     for instr in &block.instructions {
         instruction::emit_instruction(ctx, instr, &mut values)?;
     }
+    // Same self-terminating-Receive guard as [`emit_block`]; the
+    // caller's terminator handling (today: `emit_main_return`)
+    // checks for an already-capped block before running.
     Ok((values, &block.terminator))
 }
 

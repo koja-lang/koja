@@ -12,12 +12,14 @@
 use std::collections::BTreeMap;
 
 use expo_alpha_ir::{FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRType};
+use inkwell::AddressSpace;
 use inkwell::basic_block::BasicBlock;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 
 use crate::ctx::{ClosureFrame, EmitContext};
+use crate::emit::process::emit_spawn_wrapper_body;
 use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::LlvmError;
 use crate::intrinsics;
@@ -57,7 +59,9 @@ pub(crate) fn declare_function<'ctx>(
             .link_name
             .clone()
             .unwrap_or_else(|| function.symbol.last_segment().to_string()),
-        FunctionKind::Intrinsic(_) | FunctionKind::Regular => function.symbol.mangled().to_string(),
+        FunctionKind::Intrinsic(_) | FunctionKind::Regular | FunctionKind::SpawnWrapper { .. } => {
+            function.symbol.mangled().to_string()
+        }
     };
     let llvm_function = match ctx.module.get_function(&llvm_name) {
         Some(existing) => existing,
@@ -76,6 +80,17 @@ fn function_signature<'ctx>(
     if matches!(function.kind, FunctionKind::Closure { .. }) {
         let user_params: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
         return closure_body_signature(ctx, &user_params, &function.return_type);
+    }
+    if matches!(function.kind, FunctionKind::SpawnWrapper { .. }) {
+        // Spawn wrappers are scheduler entry points called through
+        // `expo_rt_spawn`'s `void (*)(i8*)` function pointer. The IR
+        // signature carries `(config: C) -> Unit` for type-checking
+        // convenience, but the LLVM declaration takes the raw config
+        // pointer the runtime hands the worker thread; the
+        // [`emit_spawn_wrapper_body`] emitter loads the typed config
+        // out of that pointer in the entry block.
+        let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+        return Ok(ctx.context.void_type().fn_type(&[ptr_ty.into()], false));
     }
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
         Vec::with_capacity(function.params.len());
@@ -116,6 +131,14 @@ pub(crate) fn define_function<'ctx>(
             // C linker provides the implementation at link time.
             return Ok(());
         }
+        FunctionKind::SpawnWrapper { state } => {
+            // Spawn wrappers ignore the IR-level placeholder body
+            // synthesized by `lower::process` and instead emit the
+            // scheduler entry directly: load typed config from the
+            // raw `i8*` parameter, call the state's `start`, branch
+            // on the `Result` tag, and chain into `run` on success.
+            return emit_spawn_wrapper_body(ctx, function, llvm_function, state);
+        }
         FunctionKind::Closure { env_layout } => Some(env_layout.as_slice()),
         FunctionKind::Regular => None,
     };
@@ -133,6 +156,7 @@ pub(crate) fn define_function<'ctx>(
             env_struct,
         });
     }
+    ctx.set_block_map(block_map.clone());
     // Blocks unreachable from the entry block (e.g. the merge of a
     // value-producing `if`/`else` whose arms both diverge) get
     // `unreachable` instead of their natural terminator. The
@@ -154,6 +178,7 @@ pub(crate) fn define_function<'ctx>(
     if env_layout.is_some() {
         ctx.clear_closure_frame();
     }
+    ctx.clear_block_map();
     result
 }
 

@@ -31,6 +31,7 @@ mod list;
 mod map;
 mod parse;
 mod print;
+mod process;
 mod set;
 mod string;
 
@@ -63,6 +64,10 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         IRIntrinsicId::Map(method) => map::emit_map(ctx, function, llvm_function, method),
         IRIntrinsicId::Parse(target) => parse::emit_parse(ctx, function, llvm_function, target),
         IRIntrinsicId::Print => print::emit_global_print(ctx, function, llvm_function),
+        IRIntrinsicId::Ref(method) => process::emit_ref(ctx, function, llvm_function, method),
+        IRIntrinsicId::ReplyTo(method) => {
+            process::emit_reply_to(ctx, function, llvm_function, method)
+        }
         IRIntrinsicId::Set(method) => set::emit_set(ctx, function, llvm_function, method),
         IRIntrinsicId::String(method) => string::emit_string(ctx, function, llvm_function, method),
     }

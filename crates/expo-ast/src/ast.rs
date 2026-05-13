@@ -1028,9 +1028,24 @@ pub enum Pattern {
         resolved_type: Option<TypeIdentifier>,
     },
     /// A typed binding: `p: Post` -- matches a union member by type
-    /// and binds the unwrapped value.
+    /// and binds the unwrapped value. `local_id` is `None` after
+    /// parse and stamped by alpha typecheck-resolve when the binding
+    /// enters scope (today only inside `receive` arms; `match` arms
+    /// still reject typed bindings as a feature gap). The IR-side
+    /// translator reads it to thread the bound name through the same
+    /// `LocalRead` vocabulary as body-declared locals.
     TypedBinding {
+        local_id: Option<LocalId>,
         name: String,
+        /// Resolved type of the bound payload, stamped by typecheck-
+        /// resolve when the pattern is admitted (today: alpha
+        /// `receive` arms via
+        /// [`bind_receive_pattern`][resolver]). Lower passes consume
+        /// this directly so they don't have to re-walk `type_expr`
+        /// against the registry.
+        ///
+        /// [resolver]: https://docs.rs/expo-alpha-typecheck
+        resolved_type: Option<ResolvedType>,
         type_expr: TypeExpr,
         span: Span,
     },

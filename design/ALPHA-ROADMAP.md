@@ -119,10 +119,27 @@ _None outstanding._
 
 ### Significant — required for non-trivial stdlib pieces
 
-- **`spawn` and `receive` in IR** — `resolve/expr.rs` falls through.
-  Required only for `process.expo` (`Task.async` + `Process.run`
-  defaults). Eval can stub these (no scheduler in alpha-eval); LLVM
-  needs the runtime calls already used by v1 codegen.
+- ~~**`spawn` and `receive` in IR.**~~ **Shipped through LLVM emit.**
+  See the new "Concurrency primitives" entry under "Already supported"
+  for the full feature description. The remaining stdlib gap is _not_
+  the primitives themselves but `Task<R>.run` in `process.expo`
+  calling `self.work()` against a function-typed struct field —
+  alpha-typecheck only dispatches `recv.method(...)` through method
+  lookup today. Adding field-as-callable fallback unblocks
+  `Global.process` for `ALPHA_AUTOIMPORT`; until then the primitives
+  ship to user code via inline `Process` / `Ref` / `ReplyTo` decls
+  and the `expo_rt_*` runtime ABI.
+
+- **End-to-end concurrency execution.** Spawning works at the LLVM
+  level (`expo_rt_spawn` returns a real PID, the wrapper is
+  ABI-correct), but the alpha `main_wrapper.rs` does not call
+  `expo_rt_main_done()` after the body runs, so spawned processes
+  never actually execute. v1 codegen always emits the `main_done`
+  call (`expo-codegen/src/compiler.rs:1257`); alpha needs the same
+  one-line addition before the trailing `ret i64 0`. Pair this
+  with the field-as-callable fix above to land the
+  `task_async` / `counter_call` / `receive_lifecycle` end-to-end
+  driver tests originally scoped to this slice.
 
 ### Already supported — common false positives
 
@@ -402,9 +419,50 @@ of these, that's the trigger to revisit — not before.
 
 ---
 
-## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits, post-loops, post-closures)
+## Status snapshot (post-generics, post-`match`, post-move/drop, post-strings/binary/bits, post-loops, post-closures, post-concurrency-primitives)
 
 What's shipped since the last audit:
+
+- **Concurrency primitives — `spawn` / `receive` + `Ref<M, R>` /
+  `ReplyTo<R>` intrinsics, end-to-end through LLVM emit.**
+  `ExprKind::Spawn` and `ExprKind::Receive` are wired through
+  `expo-alpha-typecheck` (`pipeline/resolve/process.rs` +
+  `pipeline/seal/expressions.rs`, with the typed-binding tag
+  discrimination on receive arms), through `expo-alpha-ir`
+  (`IRInstruction::{Spawn, Receive}`,
+  `FunctionKind::SpawnWrapper`, the `IRIntrinsicId::{Ref,
+  ReplyTo}` typed dispatch family, and the `lower/process.rs`
+  lowering that synthesizes a wrapper body per spawned state
+  type), and through `expo-alpha-ir-llvm` (`emit/process.rs`
+  emits `expo_rt_spawn` / `expo_rt_receive` /
+  `expo_rt_receive_timeout` calls and synthesizes the C-ABI
+  `void(*)(i8*)` wrapper body that loads the config, calls
+  `<state>.start`, branches on the `Result` enum's tag, and
+  chains into `<state>.run` on `Ok`; `intrinsics/process.rs`
+  handles `Ref.{self_ref, cast, signal, kill, alive?,
+  send_after}` + `ReplyTo.send` against the corresponding
+  `expo_rt_*` externs declared in `runtime.rs`). Eval stubs
+  every concurrency intrinsic as `RuntimeError::Unsupported` —
+  alpha-eval is single-threaded and in-process; the LLVM
+  backend is the source of truth for runtime semantics. Pinned
+  by `crates/expo-alpha-typecheck/tests/process.rs`,
+  `crates/expo-alpha-ir/tests/lower_process.rs`, and
+  `crates/expo-alpha-ir-llvm/tests/process.rs` (10 tests
+  covering spawn-wrapper synthesis, receive arm dispatch,
+  timeout-driven `after` branches, and every implemented
+  `Ref` / `ReplyTo` method). **Out**: `Ref.call` (synchronous
+  request/reply — needs the runtime's matching reply-channel
+  primitive surfaced; stubbed with a `Codegen` error today),
+  `expo_rt_main_done` invocation in alpha's `main_wrapper`
+  (without it, spawned processes never run after `main`
+  returns; one-line addition to mirror v1 codegen), the
+  `Global.process` entry in `ALPHA_AUTOIMPORT` (gated on
+  `Task<R>.run` calling `self.work()` — see the field-as-callable
+  gap above), and the `task_async` / `counter_call` /
+  `receive_lifecycle` end-to-end driver tests originally
+  scoped to this slice (gated on the `main_done` wiring and
+  the autoimport flip).
+
 
 - **Generics — full feature, end-to-end (~6 kLOC).** Generic types
   (`<T>`, `<K, V>`), generic functions, generic impls (concrete

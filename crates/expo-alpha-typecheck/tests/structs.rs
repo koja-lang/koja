@@ -1511,3 +1511,112 @@ fn generic_struct_nested_in_generic_struct_resolves_through_typeparam_args() {
     ));
     assert_eq!(type_args[1], int);
 }
+
+// ---------------------------------------------------------------------------
+// Field-as-callable: `recv.field(args)` desugars to `(recv.field)(args)`
+// when there's no method by that name and the field is fn-typed.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn instance_method_call_on_fn_field_rewrites_to_field_access_call() {
+    let source = "
+        struct Task
+          work: fn () -> Int
+        end
+
+        fn main
+          t = Task{work: fn () -> Int
+            7
+          end}
+          t.work()
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let int = global_leaf(&checked, "Int");
+    let call = body_trailing_expr(&checked, "main");
+    assert_eq!(call.resolution, int, "field call should resolve to Int");
+
+    let ExprKind::Call { callee, args, .. } = &call.kind else {
+        panic!("expected Call after rewrite, got {:?}", call.kind);
+    };
+    assert!(args.is_empty());
+
+    let ExprKind::FieldAccess { field, receiver } = &callee.kind else {
+        panic!("expected FieldAccess callee, got {:?}", callee.kind);
+    };
+    assert_eq!(field, "work");
+    assert!(matches!(receiver.kind, ExprKind::Ident { .. }));
+}
+
+#[test]
+fn instance_method_call_on_fn_field_with_args_validates_signature() {
+    let source = "
+        struct Adder
+          add: fn (Int, Int) -> Int
+        end
+
+        fn main
+          a = Adder{add: fn (x: Int, y: Int) -> Int
+            x + y
+          end}
+          a.add(2, 3)
+        end
+        ";
+
+    let checked = typecheck(&dedent(source));
+    let int = global_leaf(&checked, "Int");
+    let call = body_trailing_expr(&checked, "main");
+    assert_eq!(call.resolution, int);
+
+    let ExprKind::Call { args, .. } = &call.kind else {
+        panic!("expected Call after rewrite, got {:?}", call.kind);
+    };
+    assert_eq!(args.len(), 2);
+}
+
+#[test]
+fn instance_method_call_on_fn_field_arg_type_mismatch_diagnoses() {
+    let source = "
+        struct Task
+          work: fn (Int) -> Int
+        end
+
+        fn main
+          t = Task{work: fn (x: Int) -> Int
+            x
+          end}
+          t.work(true)
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("expects `Int`") && m.contains("got `Bool`")),
+        "expected arg-type diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn instance_method_call_on_non_fn_field_falls_through_to_method_diagnostic() {
+    let source = "
+        struct Task
+          work: Int
+        end
+
+        fn main
+          t = Task{work: 1}
+          t.work()
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains("no method `work`")),
+        "expected no-method diagnostic for non-fn field, got {messages:?}",
+    );
+}

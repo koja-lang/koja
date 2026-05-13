@@ -128,17 +128,27 @@ impl fmt::Display for IRBlockId {
 ///   body code reads captures via [`IRInstruction::LoadCapture`]
 ///   indexed into that layout, and [`IRInstruction::MakeClosure`]
 ///   is the only writer.
+/// - `SpawnWrapper { state }` is the entrypoint thunk a spawned
+///   process executes. Single `i8*` config parameter; body calls
+///   `state.start(config)` (which returns `Result<state, StopReason>`)
+///   and on `Ok` chains into `state.run()`. Minted by the spawn-
+///   wrapper monomorphization planner — content-addressed by
+///   `state` so every `spawn S.start(...)` site for the same
+///   monomorphized state cell shares one wrapper symbol; distinct
+///   instantiations get distinct wrappers exactly like generic
+///   structs do.
 ///
 /// Per-kind body shape is enforced by the seal pass. The
-/// `Extern` and `Intrinsic` variants carry data, which is why
-/// this enum is not `Copy` — `Clone` callers compose the per-fn
-/// metadata without ambient interior mutation.
+/// `Extern`, `Intrinsic`, and `SpawnWrapper` variants carry data,
+/// which is why this enum is not `Copy` — `Clone` callers compose
+/// the per-fn metadata without ambient interior mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
     Closure { env_layout: Vec<IRType> },
     Extern(IRExternAttrs),
     Intrinsic(IRIntrinsicId),
     Regular,
+    SpawnWrapper { state: IRType },
 }
 
 /// A lowered function. `blocks[0]` is the entry block; `params`
@@ -447,6 +457,73 @@ pub enum IRInstruction {
         op: IRUnaryOp,
         operand: ValueId,
     },
+    /// `dest = spawn wrapper(config)`. Materialize a new process
+    /// running `wrapper` with `config` as its `i8*` payload. The
+    /// LLVM backend serializes `config`'s bytes into a fresh
+    /// allocation and calls `expo_rt_spawn(wrapper_fn_ptr, &bytes,
+    /// sizeof)`; eval declines (no scheduler). `dest` is the
+    /// returned `Ref<M, R>` (by-value struct wrapping the pid).
+    Spawn {
+        config: ValueId,
+        config_type: IRType,
+        dest: ValueId,
+        ref_type: IRSymbol,
+        wrapper: IRSymbol,
+    },
+    /// `dest = receive arms after?`. Block on the current process's
+    /// mailbox; on message arrival, dispatch to the matching arm
+    /// based on the envelope tag (business vs lifecycle); on
+    /// `after` timeout, run the after-body. Each arm binds a
+    /// payload local from the message buffer. `result_type` is the
+    /// joined type of every arm tail.
+    Receive {
+        after: Option<ReceiveAfter>,
+        arms: Vec<ReceiveArm>,
+        dest: ValueId,
+        result_type: IRType,
+    },
+}
+
+/// One arm of an [`IRInstruction::Receive`]. `tag` selects which
+/// envelope shape the arm matches; `payload_local` is the local
+/// slot the payload binds into (declared with `payload_type` in
+/// the same function); `body` is the basic block the arm runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiveArm {
+    pub body: IRBlockId,
+    pub payload_local: IRLocalId,
+    pub payload_type: IRType,
+    pub tag: ReceiveTag,
+}
+
+/// Envelope kind a receive arm matches. The runtime tags every
+/// message with a single byte at offset 0 and places the payload
+/// at offset 8; `Business == 0`, `Lifecycle == 1`. (`IORead == 2`
+/// is reserved for the future I/O fast path; alpha doesn't emit
+/// it.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiveTag {
+    Business,
+    Lifecycle,
+}
+
+impl ReceiveTag {
+    /// Wire byte the runtime stamps in the envelope's tag header.
+    pub fn wire_byte(self) -> u8 {
+        match self {
+            Self::Business => 0,
+            Self::Lifecycle => 1,
+        }
+    }
+}
+
+/// `after timeout body` clause on an [`IRInstruction::Receive`].
+/// `timeout` is an `Int64`-typed SSA value (milliseconds);
+/// `body` is the basic block the timeout path runs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReceiveAfter {
+    pub body: IRBlockId,
+    pub timeout: ValueId,
 }
 
 impl IRInstruction {
@@ -473,6 +550,8 @@ impl IRInstruction {
             | IRInstruction::LocalRead { dest, .. }
             | IRInstruction::MakeClosure { dest, .. }
             | IRInstruction::MoveOutLocal { dest, .. }
+            | IRInstruction::Receive { dest, .. }
+            | IRInstruction::Spawn { dest, .. }
             | IRInstruction::StructInit { dest, .. }
             | IRInstruction::UnaryOp { dest, .. } => Some(*dest),
             IRInstruction::DropLocal { .. }

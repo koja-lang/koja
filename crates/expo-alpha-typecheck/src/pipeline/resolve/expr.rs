@@ -10,7 +10,7 @@ use expo_ast::ast::{Diagnostic, Expr, ExprKind};
 use expo_ast::identifier::ResolvedType;
 use expo_ast::labels::expr_kind_label;
 
-use super::calls::{CallSite, resolve_call, resolve_method_call};
+use super::calls::{CallSite, resolve_call, resolve_method_call_expr};
 use super::closures::{resolve_closure, resolve_short_closure};
 use super::control_flow::{
     resolve_cond, resolve_if, resolve_ternary, resolve_unless, resolve_while,
@@ -21,6 +21,7 @@ use super::idents::{resolve_ident, resolve_self};
 use super::literals::{resolve_binary_literal, resolve_list_literal, resolve_map_literal};
 use super::match_expr::resolve_match;
 use super::ops::{binary_type, literal_type, unary_type};
+use super::process::{resolve_receive, resolve_spawn};
 use super::strings::resolve_string;
 use super::structs::{resolve_field_access, resolve_struct_construction};
 
@@ -57,6 +58,16 @@ pub(super) fn resolve_expr_with_expected(
     }
     if matches!(expr.kind, ExprKind::Map { .. }) {
         let ty = resolve_map_literal(expr, expected, resolver, diagnostics);
+        expr.resolution = ty;
+        return;
+    }
+    // `MethodCall` is also lifted out: the field-as-callable
+    // fallback rewrites `recv.field(args)` in place to
+    // `Call { callee: FieldAccess(recv, field), args }`, which
+    // requires `&mut Expr` access the main match's borrow on
+    // `expr.kind` precludes.
+    if matches!(expr.kind, ExprKind::MethodCall { .. }) {
+        let ty = resolve_method_call_expr(expr, expected, resolver, diagnostics);
         expr.resolution = ty;
         return;
     }
@@ -145,20 +156,16 @@ pub(super) fn resolve_expr_with_expected(
         ExprKind::Match { subject, arms } => {
             resolve_match(subject, arms, expected, expr.span, resolver, diagnostics)
         }
-        ExprKind::MethodCall {
-            receiver,
-            method,
-            args,
-            type_args,
-        } => resolve_method_call(
-            receiver,
-            method,
-            args,
-            CallSite {
-                out_type_args: type_args,
-                expected,
-                span: expr.span,
-            },
+        ExprKind::Receive {
+            arms,
+            after_timeout,
+            after_body,
+        } => resolve_receive(
+            arms,
+            after_timeout.as_deref_mut(),
+            after_body,
+            expected,
+            expr.span,
             resolver,
             diagnostics,
         ),
@@ -166,6 +173,7 @@ pub(super) fn resolve_expr_with_expected(
         ExprKind::ShortClosure { params, body } => {
             resolve_short_closure(params, body, expected, expr.span, resolver, diagnostics)
         }
+        ExprKind::Spawn { expr: inner } => resolve_spawn(inner, expr.span, resolver, diagnostics),
         ExprKind::String { parts, .. } => resolve_string(parts, expr.span, resolver, diagnostics),
         ExprKind::StructConstruction { type_path, fields } => {
             resolve_struct_construction(type_path, fields, expr.span, resolver, diagnostics)

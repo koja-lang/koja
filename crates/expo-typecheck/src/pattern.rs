@@ -499,6 +499,7 @@ pub(crate) fn check_pattern(
             name,
             type_expr,
             span,
+            ..
         } => {
             let struct_names = ctx.struct_names();
             let struct_refs: Vec<&str> = struct_names.iter().map(|s| s.as_str()).collect();

@@ -23,7 +23,8 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use expo_alpha_ir::{IRLocalId, IRSymbol};
+use expo_alpha_ir::{IRBlockId, IRLocalId, IRSymbol};
+use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
@@ -79,6 +80,14 @@ pub(crate) struct EmitContext<'ctx> {
     /// when it returns. `LoadCapture` reads `env_ptr` + `env_struct`
     /// to GEP its slot; non-closure bodies see `None`.
     closure_frame: RefCell<Option<ClosureFrame<'ctx>>>,
+    /// Per-function `IRBlockId -> BasicBlock` map. Set by
+    /// [`crate::function::define_function`] before the body walk and
+    /// cleared on return; the [`IRInstruction::Receive`] emitter in
+    /// [`crate::emit::process`] consults it to resolve arm body
+    /// blocks (the host block ends with the dispatch + the IR-level
+    /// `Unreachable` terminator). Non-Receive emit sites continue to
+    /// take `block_map` by parameter through the existing seam.
+    current_block_map: RefCell<Option<BTreeMap<IRBlockId, BasicBlock<'ctx>>>>,
 }
 
 /// Borrowed env handle used by the closure-body emit path.
@@ -113,7 +122,53 @@ impl<'ctx> EmitContext<'ctx> {
             load_const_cache: RefCell::new(BTreeMap::new()),
             declared_functions: RefCell::new(BTreeMap::new()),
             closure_frame: RefCell::new(None),
+            current_block_map: RefCell::new(None),
         }
+    }
+
+    /// Stage the per-function `IRBlockId -> BasicBlock` map for
+    /// emit sites that don't otherwise see it (today: the
+    /// [`IRInstruction::Receive`] dispatcher). Pairs with
+    /// [`Self::clear_block_map`]; calling twice without a clear in
+    /// between panics so the per-function scope stays explicit.
+    pub(crate) fn set_block_map(&self, block_map: BTreeMap<IRBlockId, BasicBlock<'ctx>>) {
+        let mut slot = self.current_block_map.borrow_mut();
+        if slot.is_some() {
+            panic!(
+                "alpha LLVM emit: nested block map set without clearing the previous one — \
+                 caller must clear before re-entering",
+            );
+        }
+        *slot = Some(block_map);
+    }
+
+    pub(crate) fn clear_block_map(&self) {
+        *self.current_block_map.borrow_mut() = None;
+    }
+
+    /// Resolve `block_id` to its registered `BasicBlock`. Misses
+    /// panic — the [`IRInstruction::Receive`] emitter calls into
+    /// this only after the per-function block-declare phase has
+    /// run, so a miss means the lowerer produced an arm body block
+    /// that wasn't placed in the function's `blocks` list.
+    pub(crate) fn block_for(&self, block_id: IRBlockId) -> BasicBlock<'ctx> {
+        *self
+            .current_block_map
+            .borrow()
+            .as_ref()
+            .unwrap_or_else(|| {
+                panic!(
+                    "alpha LLVM emit: block_for({block_id}) called outside a function emit — \
+                     EmitContext::set_block_map ordering violation",
+                )
+            })
+            .get(&block_id)
+            .unwrap_or_else(|| {
+                panic!(
+                    "alpha LLVM emit: IR block `{block_id}` not registered in the current \
+                     block map — IR seal / lower invariant violation",
+                )
+            })
     }
 
     /// Set the active [`ClosureFrame`] for the body currently being

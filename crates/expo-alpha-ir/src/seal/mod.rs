@@ -206,6 +206,16 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         | IRInstruction::MoveOutLocal { .. } => vec![],
         IRInstruction::LocalWrite { value, .. } => vec![*value],
         IRInstruction::MakeClosure { captures, .. } => captures.clone(),
+        // `Receive` consumes only the optional `after` timeout
+        // value; arm payloads bind into pre-declared local slots
+        // that the surrounding function-level walk validates.
+        IRInstruction::Receive { after, .. } => {
+            after.as_ref().map(|a| vec![a.timeout]).unwrap_or_default()
+        }
+        // `Spawn` consumes the config value; the wrapper symbol
+        // resolves through the program's function index, validated
+        // by `seal_program_calls`.
+        IRInstruction::Spawn { config, .. } => vec![*config],
         IRInstruction::StructInit { fields, .. } => fields.iter().map(|f| f.value).collect(),
         IRInstruction::UnaryOp { operand, .. } => vec![*operand],
     }

@@ -38,6 +38,7 @@ use super::ops::{
     lower_unary_op, parse_int_literal, unary_op_result_type,
 };
 use super::package::resolved_type_to_ir_type;
+use super::process::{lower_receive, lower_spawn};
 use super::structs::{lower_field_access, lower_struct_construction};
 
 pub(super) fn lower_expr(
@@ -316,6 +317,30 @@ pub(super) fn lower_expr(
         ),
         ExprKind::Map { entries } => lower_map_literal(
             entries,
+            &expr.resolution,
+            expr.span,
+            ctx,
+            block,
+            registry,
+            output,
+        ),
+        ExprKind::Spawn { expr: inner } => lower_spawn(
+            inner,
+            expr.span,
+            &expr.resolution,
+            ctx,
+            block,
+            registry,
+            output,
+        ),
+        ExprKind::Receive {
+            arms,
+            after_timeout,
+            after_body,
+        } => lower_receive(
+            arms,
+            after_timeout.as_deref(),
+            after_body,
             &expr.resolution,
             expr.span,
             ctx,

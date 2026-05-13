@@ -30,6 +30,7 @@ mod list;
 mod map;
 mod parse;
 mod print;
+mod process;
 mod set;
 mod string;
 
@@ -65,6 +66,8 @@ pub(crate) fn dispatch<R: CallResolver>(
         IRIntrinsicId::Map(method) => map::dispatch(method, function, args),
         IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args),
         IRIntrinsicId::Print => print::global_print(args),
+        IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function),
+        IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, function),
         IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
         IRIntrinsicId::String(method) => string::dispatch(method, function, args),
     }
