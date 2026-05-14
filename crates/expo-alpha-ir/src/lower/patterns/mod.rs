@@ -202,6 +202,17 @@ pub(super) fn lower_pattern_check(
     output: &mut LowerOutput,
 ) -> Result<(PatternCheck, IRBlockId), ()> {
     match pattern {
+        Pattern::Binary { segments, .. } => {
+            let cond = super::binary_match::lower_binary_pattern(
+                segments,
+                inputs.subject,
+                ctx,
+                block,
+                inputs.registry,
+                output,
+            );
+            Ok(single_test(cond, block))
+        }
         Pattern::Binding { local_id, name, .. } => {
             lower_binding_check(*local_id, name, &inputs, ctx, block, output);
             Ok((PatternCheck::CatchAll { binds: Vec::new() }, block))

@@ -809,6 +809,18 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, *payload);
             Ok(())
         }
+        IRInstruction::BinaryMatch { .. } => {
+            // Binary pattern matching is implemented in the LLVM
+            // backend; the alpha interpreter currently skips it
+            // because the only consumer (lib/global tests) runs
+            // through `--backend=llvm`. Lift to a fatal panic so a
+            // mis-routed eval run surfaces immediately rather than
+            // silently producing a wrong result.
+            panic!(
+                "alpha interpreter: IRInstruction::BinaryMatch is only supported by the \
+                 LLVM backend — re-run with `--backend=llvm` or extend the interpreter",
+            );
+        }
     }
 }
 

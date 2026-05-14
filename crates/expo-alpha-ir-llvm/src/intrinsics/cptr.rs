@@ -359,7 +359,7 @@ fn nth_int<'ctx>(
 /// [`emit_to_binary`] and CString conversions to copy raw bytes into
 /// a freshly-allocated payload block. Signature:
 /// `i8* memcpy(i8* dst, i8* src, i64 n)`.
-pub(super) fn declare_memcpy_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+pub(crate) fn declare_memcpy_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function("memcpy") {
         return existing;
     }
@@ -368,4 +368,19 @@ pub(super) fn declare_memcpy_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
     let signature = ptr_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
     ctx.module
         .add_function("memcpy", signature, Some(Linkage::External))
+}
+
+/// `int memcmp(const void *s1, const void *s2, size_t n)`. Returns
+/// `0` when the byte ranges match. Shared by binary-pattern
+/// string-segment emission and any future byte-equality helper.
+pub(crate) fn declare_memcmp_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function("memcmp") {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i32_ty = ctx.context.i32_type();
+    let i64_ty = ctx.context.i64_type();
+    let signature = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function("memcmp", signature, Some(Linkage::External))
 }

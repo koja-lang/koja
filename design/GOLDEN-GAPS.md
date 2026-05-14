@@ -6,7 +6,7 @@ A triage of the `tests/lang/` fixtures that fail under
 this doc enumerates what's still open and groups failures by root cause so
 fixing one entry unblocks a known cluster of fixtures.
 
-PASS count as of last run (2026-05-14): `57 passed, 9 failed, 1 skipped`
+PASS count as of last run (2026-05-14): `58 passed, 8 failed, 1 skipped`
 via [scripts/validate_alpha_lang.sh](../scripts/validate_alpha_lang.sh).
 `process_lifecycle` is the skipped fixture (signal-driven, intentionally
 excluded). The `ffi` fixture only links when
@@ -15,7 +15,10 @@ prerequisite step the script counts it as a failure even though every
 language-level concern is closed (see
 ["Closed: project-root FFI library search"](#closed-project-root-ffi-library-search)).
 That leaves **eight** real open failures, clustering into the four
-root causes below.
+root causes below. The previous count of nine dropped to eight when
+binary pattern matching shipped (typecheck + IR + LLVM) — see
+["Closed: binary pattern matching"](#closed-binary-pattern-matching)
+for the parity item.
 
 Two top-level buckets:
 
@@ -164,6 +167,47 @@ Pinned by
 [`tests/process.rs::ref_call_accepts_union_member_arg`](../crates/expo-alpha-typecheck/tests/process.rs)
 plus a negative companion that keeps the "cannot be both"
 diagnostic firing when an arg sits outside the declared union.
+
+### Binary pattern matching
+
+`<<segments>>` in `match` arms — previously stubbed as
+"alpha typecheck does not yet support binary patterns" in the
+resolver. Now flows end-to-end:
+
+- **Typecheck** (`expo-alpha-typecheck`): new
+  [`pipeline/resolve/patterns/binary.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/patterns/binary.rs)
+  validates segments (literal-only, sized-int bindings with
+  `signed` / `unsigned` / `big` / `little` modifiers, typed
+  bindings via `Int8`..`UInt64`, string-literal segments, greedy
+  `: Binary` / `: Bits` tails, `_::N` discards). Stamps
+  `Resolution::Local` onto binding `Expr`s and registers their
+  types in the arm scope so seal sees a fully-resolved AST.
+- **IR** (`expo-alpha-ir`): new `LoweredBinaryPattern` /
+  `LoweredBinaryMatchLayout` IR types and an
+  `IRInstruction::BinaryMatch` instruction. Lower in
+  [`lower/binary_match.rs`](../crates/expo-alpha-ir/src/lower/binary_match.rs)
+  re-classifies each segment, computes its `bit_offset`, and
+  declares the binding's `LocalDecl` in the entry block.
+- **LLVM** (`expo-alpha-ir-llvm`): new
+  [`emit/binary_match.rs`](../crates/expo-alpha-ir-llvm/src/emit/binary_match.rs)
+  emits the length check (`EQ` exact / `UGE` with greedy tail),
+  the byte-shift extract loop, the `signed` sign-extend (`shl` +
+  arithmetic `ashr` — fixes v1's latent bug where the modifier
+  was ignored), and the greedy-tail `malloc` + `memcpy` block.
+  String-literal segments route through `memcmp`.
+
+Pinned by
+[`tests/resolve_binary_pattern.rs`](../crates/expo-alpha-typecheck/tests/resolve_binary_pattern.rs)
+(13 typecheck cases including the negative paths for dynamic
+widths, byte units, float extracts, and bit-misaligned tails)
+and
+[`tests/binary_match.rs`](../crates/expo-alpha-ir-llvm/tests/binary_match.rs)
+(6 IR-text snapshot cases including the sign-extend pinning).
+
+Out of scope (rejected with diagnostics, deferred): dynamic
+sizes (`x::n`), `::N byte` / `::N size` units, float-extract
+bindings (`<<x: Float32>>`), and bit-misaligned `: Binary`
+greedy tails.
 
 ### Shortest-round-trip float `Debug.format` (1 fixture)
 

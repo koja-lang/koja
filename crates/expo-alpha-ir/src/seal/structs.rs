@@ -145,6 +145,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
                 );
             }
             IRInstruction::BinaryConstruct { .. }
+            | IRInstruction::BinaryMatch { .. }
             | IRInstruction::BinaryOp { .. }
             | IRInstruction::Call { .. }
             | IRInstruction::CallClosure { .. }

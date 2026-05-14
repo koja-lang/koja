@@ -14,8 +14,8 @@ use crate::local::IRLocalId;
 use crate::ownership::Ownership;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{
-    ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp, LoweredBinarySegment, ResolvedBinaryLayout,
-    ValueId,
+    ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp, LoweredBinaryMatchLayout,
+    LoweredBinaryPattern, LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
 };
 
 /// The IR's stable, backend-facing handle for a callable. Stamped
@@ -271,6 +271,37 @@ pub enum IRInstruction {
         dest: ValueId,
         layout: ResolvedBinaryLayout,
         segments: Vec<LoweredBinarySegment>,
+    },
+    /// `dest = match <subject> against <segments>` — assemble a
+    /// `Bool` (`i1`) success value from a runtime test against
+    /// `subject`'s `Binary`/`Bits` payload at the bit offsets
+    /// recorded in `segments`. As a side effect, every
+    /// [`LoweredBinaryPattern::BindInt`] / [`LoweredBinaryPattern::GreedyTail`]
+    /// segment extracts its slice of the subject into the
+    /// pre-declared local slot named on the segment — the
+    /// lowering layer emits the matching [`IRInstruction::LocalDecl`]
+    /// in the function's entry block, so seal's
+    /// "every-write-is-dominated-by-a-decl" rule still holds.
+    ///
+    /// LLVM emission is:
+    ///
+    /// 1. Compare the subject's runtime bit length against
+    ///    `layout.fixed_bits` (equality when
+    ///    `!layout.has_greedy_tail`, unsigned-greater-or-equal
+    ///    when there is a greedy tail).
+    /// 2. For each segment, extract its slice at `bit_offset` and
+    ///    AND its per-segment success bit into the running result.
+    /// 3. For [`LoweredBinaryPattern::BindInt`] segments, store
+    ///    the extracted (and sign-extended when `sign == Signed`)
+    ///    integer into the slot. For
+    ///    [`LoweredBinaryPattern::GreedyTail`] segments, allocate
+    ///    a fresh `[i64 bit_length][payload]` value, copy the
+    ///    remaining bytes, and store the payload pointer.
+    BinaryMatch {
+        dest: ValueId,
+        layout: LoweredBinaryMatchLayout,
+        segments: Vec<LoweredBinaryPattern>,
+        subject: ValueId,
     },
     /// `dest = callee(args)`. The callee resolves through the
     /// enclosing `IRProgram` / `IRScript` by [`IRSymbol`].
@@ -606,6 +637,7 @@ impl IRInstruction {
     pub fn dest(&self) -> Option<ValueId> {
         match self {
             IRInstruction::BinaryConstruct { dest, .. }
+            | IRInstruction::BinaryMatch { dest, .. }
             | IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
             | IRInstruction::CallClosure { dest, .. }

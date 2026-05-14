@@ -5,7 +5,8 @@
 //! Every other shape is a feature-gap diagnostic in resolve and
 //! never reaches seal on the success path.
 
-use expo_ast::ast::Pattern;
+use expo_ast::ast::{BinarySegment, ExprKind, Pattern};
+use expo_ast::identifier::Resolution;
 use expo_ast::labels::{pattern_kind_label, pattern_span};
 use expo_ast::span::Span;
 
@@ -80,6 +81,11 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
                 seal_pattern(&field.pattern);
             }
         }
+        Pattern::Binary { segments, .. } => {
+            for segment in segments {
+                seal_binary_segment(segment);
+            }
+        }
         Pattern::TypedBinding {
             local_id,
             name,
@@ -113,6 +119,28 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
             ),
             pattern_span(other),
         ),
+    }
+}
+
+/// Binary-pattern segments come in three shapes after resolve:
+/// literals (int / negated int / string), the discard wildcard
+/// `_`, and identifier bindings — the last of which must carry a
+/// `Resolution::Local` on the value expression (the resolver
+/// stamps the local id in place of the parser's default
+/// `Resolution::Unresolved`). Everything else is unreachable here
+/// because the resolver diagnoses unsupported shapes.
+fn seal_binary_segment(segment: &BinarySegment) {
+    if let ExprKind::Ident { name, resolution } = &segment.value.kind
+        && name != "_"
+        && !matches!(resolution, Resolution::Local(_))
+    {
+        seal_panic(
+            &format!(
+                "binary pattern binding `{name}` carries no LocalId; resolver should \
+                 have stamped it on the success path",
+            ),
+            segment.span,
+        );
     }
 }
 

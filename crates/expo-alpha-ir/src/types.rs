@@ -2,6 +2,7 @@
 //! constant payloads, binary-op kinds, and the IR type lattice.
 
 use crate::function::IRSymbol;
+use crate::local::IRLocalId;
 
 /// Identifier of an SSA value within a single function. Values are
 /// numbered in definition order starting from 0; the same `ValueId`
@@ -232,6 +233,93 @@ impl LoweredBinarySegment {
             | Self::String { value, .. } => *value,
         }
     }
+}
+
+/// One segment of a `<<segments>>` binary pattern after IR
+/// lowering. Each variant carries the bit width and bit-offset
+/// the LLVM emit phase needs to extract / compare / bind the
+/// segment at the right position in the subject payload. Bindings
+/// reference a pre-declared [`crate::local::IRLocalId`] slot —
+/// the emit phase stamps the extracted value into the slot at the
+/// matching `LocalWrite`-equivalent position so the arm body's
+/// `LocalRead`s find it.
+///
+/// Pairs with [`LoweredBinaryMatchLayout`] (carries the running
+/// `fixed_bits` total + a `has_greedy_tail` flag the length-check
+/// emission keys on).
+#[derive(Debug, Clone, PartialEq)]
+pub enum LoweredBinaryPattern {
+    /// Compare the segment at `bit_offset..bit_offset + width`
+    /// against the constant `value` (sign-interpreted per
+    /// `sign`). The arm fires only when every test in the
+    /// segment list succeeds.
+    LiteralInt {
+        bit_offset: u64,
+        endian: BinaryEndian,
+        sign: BinarySign,
+        value: i128,
+        width: u64,
+    },
+    /// Compare the byte run at `bit_offset / 8` against the
+    /// literal `bytes`. `bit_offset` is always byte-aligned —
+    /// the typecheck layer rejects byte-misaligned string
+    /// segments.
+    LiteralBytes { bit_offset: u64, bytes: Vec<u8> },
+    /// Extract an integer segment and bind it into the local
+    /// slot `local`. Sign-extend when `sign == Signed` (fixes a
+    /// v1 codegen bug where the modifier was ignored).
+    BindInt {
+        bit_offset: u64,
+        endian: BinaryEndian,
+        local: IRLocalId,
+        sign: BinarySign,
+        ty: IRType,
+        width: u64,
+    },
+    /// Skip `width` bits without binding anything. Carried so the
+    /// running `bit_offset` accumulator stays correct for the
+    /// segments after a `_::N` discard.
+    Discard { bit_offset: u64, width: u64 },
+    /// Bind the remaining bits / bytes from `bit_offset` to the
+    /// end of the subject into `local` (when `Some`). `ty` is
+    /// [`IRType::Binary`] or [`IRType::Bits`] per the source
+    /// annotation — typecheck has already ensured the segment is
+    /// last and that the `Binary` variant has a byte-aligned
+    /// prefix. `local: None` is the `_: Binary` / `_: Bits` shape
+    /// (consume-the-rest discard, no SSA slot to write).
+    GreedyTail {
+        bit_offset: u64,
+        local: Option<IRLocalId>,
+        ty: IRType,
+    },
+}
+
+impl LoweredBinaryPattern {
+    /// Bit offset of this segment within the subject payload.
+    /// Mirrors [`LoweredBinarySegment::bit_offset`] for the
+    /// pattern-side family.
+    pub fn bit_offset(&self) -> u64 {
+        match self {
+            Self::LiteralInt { bit_offset, .. }
+            | Self::LiteralBytes { bit_offset, .. }
+            | Self::BindInt { bit_offset, .. }
+            | Self::Discard { bit_offset, .. }
+            | Self::GreedyTail { bit_offset, .. } => *bit_offset,
+        }
+    }
+}
+
+/// Pre-computed bookkeeping for a binary pattern match. `fixed_bits`
+/// is the total bit width of every segment except the greedy tail
+/// (when present); the LLVM emit phase compares the subject's
+/// runtime bit length against this to decide whether the arm can
+/// fire at all. `has_greedy_tail` switches the length check between
+/// equality (`fixed_bits == subject_bits`) and unsigned-greater-or-
+/// equal (`subject_bits >= fixed_bits`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LoweredBinaryMatchLayout {
+    pub fixed_bits: u64,
+    pub has_greedy_tail: bool,
 }
 
 impl ConcatKind {

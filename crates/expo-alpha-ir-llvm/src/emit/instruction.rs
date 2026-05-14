@@ -10,6 +10,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
 use super::binary_construct::emit_binary_construct;
+use super::binary_match;
 use super::process::{emit_receive, emit_spawn};
 use super::{
     ValueMap, calls, closures, concat, constants, enums, locals, lookup, ops, structs, unions,
@@ -28,6 +29,16 @@ pub(crate) fn emit_instruction<'ctx>(
         } => {
             let result = emit_binary_construct(ctx, *layout, segments, values)?;
             values.insert(*dest, result);
+            Ok(())
+        }
+        IRInstruction::BinaryMatch {
+            dest,
+            layout,
+            segments,
+            subject,
+        } => {
+            let result = binary_match::emit_binary_match(ctx, *layout, segments, *subject, values)?;
+            values.insert(*dest, result.into());
             Ok(())
         }
         IRInstruction::BinaryOp { dest, lhs, op, rhs } => {

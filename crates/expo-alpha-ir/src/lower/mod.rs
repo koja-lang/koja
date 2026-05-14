@@ -50,6 +50,7 @@
 
 mod arms;
 mod binary_literal;
+mod binary_match;
 mod body;
 mod calls;
 mod closures;

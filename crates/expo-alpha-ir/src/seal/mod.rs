@@ -169,6 +169,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::BinaryConstruct { segments, .. } => {
             segments.iter().map(|s| s.value()).collect()
         }
+        IRInstruction::BinaryMatch { subject, .. } => vec![*subject],
         IRInstruction::BinaryOp { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Call { args, .. } => args.clone(),
         IRInstruction::CallClosure { args, callee, .. } => {

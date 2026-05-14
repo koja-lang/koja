@@ -145,7 +145,10 @@ fn emit_to_string<'ctx>(
         ctx.builder
             .build_gep(i8_ty, payload, &[neg_hdr], "hdr_ptr")
             .map_err(|e| {
-                inkwell_err(format_args!("to_string hdr GEP for `{}`", function.symbol), e)
+                inkwell_err(
+                    format_args!("to_string hdr GEP for `{}`", function.symbol),
+                    e,
+                )
             })?
     };
     let bit_length = ctx
@@ -215,15 +218,15 @@ fn emit_to_string<'ctx>(
 
     ctx.builder.position_at_end(valid_bb);
     let new_payload = heap_clone::copy_heap_payload(ctx, function, payload, true, false)?;
-    return_result(ctx, function, result_symbol, RESULT_OK_TAG, new_payload.into())?;
-
-    emit_err_branch(
+    return_result(
         ctx,
         function,
-        invalid_bb,
         result_symbol,
-        b"invalid UTF-8",
-    )
+        RESULT_OK_TAG,
+        new_payload.into(),
+    )?;
+
+    emit_err_branch(ctx, function, invalid_bb, result_symbol, b"invalid UTF-8")
 }
 
 /// `Bits.to_binary`: branch on `bit_length & 7 == 0`. The aligned
@@ -244,7 +247,10 @@ fn emit_to_binary<'ctx>(
         ctx.builder
             .build_gep(i8_ty, payload, &[neg_hdr], "hdr_ptr")
             .map_err(|e| {
-                inkwell_err(format_args!("to_binary hdr GEP for `{}`", function.symbol), e)
+                inkwell_err(
+                    format_args!("to_binary hdr GEP for `{}`", function.symbol),
+                    e,
+                )
             })?
     };
     let bit_length = ctx
@@ -282,7 +288,10 @@ fn emit_to_binary<'ctx>(
         .build_conditional_branch(is_aligned, ok_bb, err_bb)
         .map_err(|e| {
             inkwell_err(
-                format_args!("to_binary build_conditional_branch for `{}`", function.symbol),
+                format_args!(
+                    "to_binary build_conditional_branch for `{}`",
+                    function.symbol
+                ),
                 e,
             )
         })?;

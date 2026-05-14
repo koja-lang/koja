@@ -51,6 +51,7 @@ use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
 mod binary_construct;
+mod binary_match;
 mod calls;
 mod closures;
 mod concat;

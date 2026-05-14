@@ -28,6 +28,7 @@
 //!   canonical literal-string representation used by the cross-arm
 //!   reachability machinery.
 
+mod binary;
 mod constructor;
 mod enums;
 mod literals;
@@ -155,13 +156,8 @@ pub(super) fn resolve_pattern(
             diagnostics,
         ),
         Pattern::Wildcard { .. } => PatternCoverage::CatchAll,
-        Pattern::Binary { .. } => {
-            diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support binary patterns (blocked on binary \
-                 literals)",
-                pattern_span(pat),
-            ));
-            PatternCoverage::Other
+        Pattern::Binary { segments, span } => {
+            binary::resolve_binary_pattern(segments, subject_ty, *span, resolver, diagnostics)
         }
         Pattern::List { .. } => {
             diagnostics.push(Diagnostic::error(

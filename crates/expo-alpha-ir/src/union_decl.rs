@@ -347,6 +347,11 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
             walk_type(ty, out);
         }
         IRInstruction::UnionTagGet { ty, .. } => walk_type(ty, out),
+        IRInstruction::BinaryMatch { segments, .. } => {
+            for segment in segments {
+                walk_binary_pattern(segment, out);
+            }
+        }
         IRInstruction::BinaryConstruct { .. }
         | IRInstruction::BinaryOp { .. }
         | IRInstruction::Call { .. }
@@ -357,6 +362,24 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
         | IRInstruction::LocalWrite { .. }
         | IRInstruction::StructInit { .. }
         | IRInstruction::UnaryOp { .. } => {}
+    }
+}
+
+/// Per-segment IRType walker for the binary-pattern instruction.
+/// Only [`LoweredBinaryPattern::BindInt`] / [`LoweredBinaryPattern::GreedyTail`]
+/// carry types; the rest are pure shape + bit-offset metadata.
+fn walk_binary_pattern(
+    segment: &crate::types::LoweredBinaryPattern,
+    out: &mut BTreeMap<IRSymbol, IRType>,
+) {
+    use crate::types::LoweredBinaryPattern;
+    match segment {
+        LoweredBinaryPattern::BindInt { ty, .. } | LoweredBinaryPattern::GreedyTail { ty, .. } => {
+            walk_type(ty, out);
+        }
+        LoweredBinaryPattern::LiteralInt { .. }
+        | LoweredBinaryPattern::LiteralBytes { .. }
+        | LoweredBinaryPattern::Discard { .. } => {}
     }
 }
 
