@@ -83,14 +83,16 @@ The full list of "not yet" diagnostics lives in:
 
 ## Gaps gating golden tests
 
-After the 2026-05-13 concurrency + FFI + project-mode milestone and
-the 2026-05-13 `String.escape_debug()` fix below, no
+After the 2026-05-13 concurrency + FFI + project-mode milestone, the
+2026-05-13 `String.escape_debug()` fix below, and the 2026-05-13
+match-arm-literal + LLVM-layout dependency-order fix below, no
 language-feature blocker remains tracked here. Validating
 `tests/lang/` against `expo alpha run --backend=llvm` now reports
-35/66 PASS (script `expo/scripts/validate_alpha_lang.sh`); the
-remaining ~30 failures are individual alpha-IR / runtime bugs to
-triage one-by-one, not a single regression class, and are out of
-scope for this ledger until they coalesce into a pattern.
+48/66 PASS (script `expo/scripts/validate_alpha_lang.sh`); the
+remaining 18 failures are individual alpha-IR / runtime bugs to
+triage one-by-one (see [GOLDEN-GAPS.md](GOLDEN-GAPS.md)), not a
+single regression class, and are out of scope for this ledger until
+they coalesce into a pattern.
 
 ---
 
@@ -259,6 +261,36 @@ loop"`. Closure boundaries save/restore both fields, so an inner
   `crates/expo-alpha-ir/tests/lower_loops.rs`,
   `crates/expo-alpha-ir-eval/tests/loops.rs`, and
   `crates/expo-alpha-ir-llvm/tests/loops.rs`.
+
+- **Match-arm literal / partial / nested struct + enum patterns** —
+  shipped 2026-05-13. Phase 4 of `archive/20260511-ALPHA-MATCH-PLAN.md`
+  had restricted struct-field and enum-payload positions to wildcards
+  and bindings while the container-level machinery shipped. The
+  resolver gates (`is_admitted_field_element` /
+  `is_admitted_tuple_element`) are gone; pattern lowering now emits a
+  chained `BindStep` extraction (`EnumPayloadField` / `StructField` /
+  `UnionPayload`) followed by the inner pattern's own check against
+  the projected value, wired through `match_and_field` blocks under
+  `ChainMode::And`. Same time, the LLVM layout phase started defining
+  enum variant complete + outer bodies in dependency order — a
+  stdlib enum like `Option<TestApp.TokenKind>` previously sized its
+  outer to `[1 x i8]` when `TokenKind` was in a later package, since
+  `get_abi_size` on an opaque inner returned 0. The new
+  `layout/enum_order.rs` topo-sort guarantees every transitive
+  variant payload reference is bodied before its outer chunk is
+  computed. Pinned by the new `match_nested_*` /
+  `nested_enum_*` tests in
+  `crates/expo-alpha-typecheck/tests/resolve_match.rs`,
+  `crates/expo-alpha-ir/tests/lower_match.rs`,
+  `crates/expo-alpha-ir-eval/tests/match_nested.rs`,
+  `crates/expo-alpha-ir-llvm/tests/match_nested.rs`, and the
+  `types/struct_pattern_*` + `types/nested_enum_pattern_literal`
+  goldens. The layout-ordering fix also unblocks
+  `collections/json_value`, `generics/recursive_generic_list`,
+  `generics/recursive_generic_map`, `io/multi_process`,
+  `io/spawn_process`, and `types/cast_loop` as a bonus — every
+  fixture that depended on a cross-package generic enum sized
+  correctly.
 
 - **`String.print()` / `String.escape_debug()` runtime crash** —
   shipped 2026-05-13. The SIGABRT was a cross-arm slot-state leak

@@ -14,11 +14,9 @@ fn identity<T>(x: T) -> T
   x
 end
 
-fn main
-  c = Counter.new(10)
-  c.value.print()
-  c.add(5).print()
+c = Counter.new(10)
+c.value.print()
+c.add(5).print()
 
-  x: Int32 = identity(42)
-  x.print()
-end
+x: Int32 = identity(42)
+x.print()

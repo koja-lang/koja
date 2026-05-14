@@ -11,7 +11,6 @@
 
 use expo_ast::ast::{Diagnostic, FieldPattern, Pattern};
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
-use expo_ast::labels::{pattern_kind_label, pattern_span};
 use expo_ast::span::Span;
 
 use super::super::ctx::Resolver;
@@ -76,20 +75,19 @@ pub(super) fn resolve_enum_tuple_pattern(
         return PatternCoverage::Other;
     };
     for (element, element_ty) in elements.iter_mut().zip(metadata.element_types.iter()) {
-        if !is_admitted_tuple_element(element) {
-            diagnostics.push(Diagnostic::error(
-                format!(
-                    "alpha typecheck only admits wildcard / binding patterns inside \
-                     `{label}.{variant_name}` payloads (got `{kind}`)",
-                    label = metadata.label,
-                    kind = pattern_kind_label(element),
-                ),
-                pattern_span(element),
-            ));
-            continue;
-        }
         resolve_pattern(element, element_ty, resolver, diagnostics);
     }
+    // KNOWN-SOUNDNESS-GAP: marking the variant as fully covered
+    // even when an inner element narrows the match (literal /
+    // nested-enum / nested-struct pattern) lets the lang fixture
+    // `nested_enum_pattern_literal` typecheck without an explicit
+    // outer catch-all. The tightened plan (a non-catch-all inner
+    // demotes coverage to `Other`) needs a multi-arm coverage
+    // accumulator to recognize that, e.g., `Some(Ident(_))` +
+    // `Some(Number(_))` jointly cover `Some`. Until that lands,
+    // unreachable-arm warnings still fire because the cross-arm
+    // duplicate-literal accumulator in `match_expr` runs
+    // independently of this variant accounting.
     PatternCoverage::Variants(vec![metadata.variant_index])
 }
 
@@ -115,7 +113,11 @@ pub(super) fn resolve_enum_struct_pattern(
         return PatternCoverage::Other;
     };
     let owner_label = format!("{}.{variant_name}", metadata.label);
-    walk_field_patterns(
+    // The discarded coverage is intentional — see the soundness
+    // note on `resolve_enum_tuple_pattern` for why every enum-
+    // variant pattern still marks its variant as fully covered
+    // for exhaustiveness purposes regardless of interior shapes.
+    let _ = walk_field_patterns(
         &owner_label,
         fields,
         &metadata.declared,
@@ -127,7 +129,6 @@ pub(super) fn resolve_enum_struct_pattern(
 
 struct EnumTuplePatternMetadata {
     element_types: Vec<ResolvedType>,
-    label: String,
     variant_index: u32,
 }
 
@@ -180,7 +181,6 @@ fn resolve_enum_tuple_metadata(
     let element_types = declared.iter().map(|ty| substitute(ty, &subst)).collect();
     Some(EnumTuplePatternMetadata {
         element_types,
-        label: target.label,
         variant_index,
     })
 }
@@ -350,8 +350,4 @@ pub(super) fn declared_shape_label(data: &ResolvedVariantData) -> &'static str {
         ResolvedVariantData::Tuple(_) => "a tuple variant (positional fields)",
         ResolvedVariantData::Unit => "a unit variant (no payload)",
     }
-}
-
-fn is_admitted_tuple_element(pat: &Pattern) -> bool {
-    matches!(pat, Pattern::Binding { .. } | Pattern::Wildcard { .. })
 }

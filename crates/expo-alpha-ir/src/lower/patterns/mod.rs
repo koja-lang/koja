@@ -1,28 +1,35 @@
 //! Pattern lowering: walk a [`Pattern`] against a subject `ValueId`
 //! and produce a [`PatternCheck`] describing whether the arm fires
-//! unconditionally, after one or more chained predicates, and what
-//! field binds (`EnumPayloadFieldGet` / `FieldGet` + `LocalWrite`)
-//! the success edge needs to perform before the arm body runs. The
-//! match driver in [`super::match_expr`] consumes the result to
-//! wire the gating `CondBranch`(es) and the per-arm body block.
+//! unconditionally, after one or more chained predicates (joined
+//! either by [`ChainMode::And`] for struct/enum field-test chains
+//! or [`ChainMode::Or`] for or-pattern alternatives), and what
+//! field binds (`EnumPayloadFieldGet` / `FieldGet` + `LocalWrite`
+//! chains) the success edge needs to perform before the arm body
+//! runs. The match driver in [`super::match_expr`] consumes the
+//! result to wire the gating `CondBranch`(es) and the per-arm body
+//! block.
 //!
 //! Admits leaves (wildcard / binding / literal), `EnumUnit`,
-//! `EnumTuple` / `EnumStruct` (one-level — payload elements / fields
-//! restricted to wildcard / binding), `Struct` (same restriction —
-//! always a `CatchAll` carrying field binds), and `Or` (alternatives
-//! restricted to literal / EnumUnit, no bindings). Every other
-//! shape is a feature gap diagnosed in typecheck and is unreachable
-//! on the success path.
+//! `EnumTuple` / `EnumStruct` / `Struct` with arbitrary nested
+//! payload / field patterns, and `Or` (alternatives restricted to
+//! literal / EnumUnit, no bindings). Every other shape is a feature
+//! gap diagnosed in typecheck and is unreachable on the success
+//! path.
 //!
 //! # Module layout
 //!
 //! - [`enums`] — `EnumUnit` / `EnumTuple` / `EnumStruct` shapes,
 //!   `emit_enum_tag_eq`, and the shared enum-payload metadata
-//!   resolver.
-//! - [`structs`] — plain-struct destructure (always `CatchAll` with
-//!   per-field [`BindSource::StructField`] binds).
+//!   resolver. Tuple / struct variants recursively lower their
+//!   payload patterns and emit AND-chained `TestStep`s for any
+//!   non-binding inner shape.
+//! - [`structs`] — plain-struct destructure. Field patterns
+//!   recursively lower against the field type; bindings produce
+//!   chained [`BindOp::StructField`] binds, non-binding fields add
+//!   AND-chained `TestStep`s.
 //! - [`or_pattern`] — `A | B | C` chained through fresh
-//!   `match_or_alt_<n>` blocks, one [`TestStep`] per alternative.
+//!   `match_or_alt_<n>` blocks, one [`TestStep`] per alternative
+//!   under [`ChainMode::Or`].
 //! - [`literals`] — the `subject == const(value)` emission shared
 //!   between the dispatcher's `Pattern::Literal` arm and the
 //!   or-pattern literal-alternative arm.
@@ -64,23 +71,40 @@ pub(super) struct PatternInputs<'a> {
 /// pattern against the subject.
 pub(super) enum PatternCheck {
     /// Pattern fires unconditionally (wildcard / binding / struct
-    /// destructure). `binds` carries any field-extraction binds the
-    /// driver must emit at the head of the success block before
-    /// running the guard / body. Wildcard and binding always have
-    /// empty binds; struct destructure carries one entry per named
-    /// `Pattern::Binding` field.
+    /// destructure whose every listed field is itself a catch-all).
+    /// `binds` carries any field-extraction binds the driver must
+    /// emit at the head of the success block before running the
+    /// guard / body. Wildcard and binding always have empty binds;
+    /// struct destructure carries one entry per named binding field
+    /// (potentially through nested fields).
     CatchAll { binds: Vec<PayloadBind> },
-    /// One or more chained predicates. Length 1 for a single
-    /// `Literal` / `EnumUnit` / `EnumTuple` / `EnumStruct` pattern;
-    /// length n for an `Or` of n alternatives. The driver wires
-    /// every step's success edge to the same success block, every
-    /// interior step's failure edge to the next step's
-    /// `test_block`, and the last step's failure edge to the
-    /// caller-supplied fall-through.
+    /// One or more chained predicates. `chain_mode` decides the
+    /// wiring: [`ChainMode::And`] for struct/enum field-test chains
+    /// (every step must succeed for the arm to fire);
+    /// [`ChainMode::Or`] for or-pattern alternatives (any step
+    /// succeeding fires the arm). Single-step patterns
+    /// (`Literal` / `EnumUnit` / a struct or enum whose interior
+    /// reduces to one test) admit either mode, and lowerers default
+    /// to [`ChainMode::And`] for those.
     Tests {
+        chain_mode: ChainMode,
         payload_binds: Vec<PayloadBind>,
         steps: Vec<TestStep>,
     },
+}
+
+/// Wiring discipline for a chain of [`TestStep`]s. Drives the
+/// `then`/`else` choice in [`super::match_expr::wire_test_chain`].
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub(super) enum ChainMode {
+    /// Every step must succeed for the arm to fire. Interior
+    /// successes chain to the next step's `test_block`; any
+    /// failure short-circuits to the caller-supplied fall-through.
+    And,
+    /// Any step succeeding fires the arm. Interior failures chain
+    /// to the next step's `test_block`; only the last step's
+    /// failure reaches the caller-supplied fall-through.
+    Or,
 }
 
 /// One predicate gating arm execution. The test instructions are
@@ -92,22 +116,29 @@ pub(super) struct TestStep {
 }
 
 /// One field binding emitted on the success edge. The driver
-/// appends the right `*FieldGet` + `LocalWrite` pair to the head
-/// of the success block before the arm body runs. Source variant
-/// drives instruction selection.
+/// applies `chain` to the outer subject — one extraction op per
+/// nesting level — and writes the final value into `local`.
 pub(super) struct PayloadBind {
-    pub(super) field_type: IRType,
     pub(super) local: IRLocalId,
-    pub(super) source: BindSource,
+    pub(super) chain: Vec<BindStep>,
 }
 
-/// Where a [`PayloadBind`] reads its value from. `EnumPayload`
-/// emits `EnumPayloadFieldGet` (tag-gated extraction); `StructField`
-/// emits `FieldGet` (no tag — the subject is already a struct);
+/// One extraction step in a [`PayloadBind`]'s chain. `output_type`
+/// is the type of the value this step produces (handed to the next
+/// step or to `LocalWrite` if this is the last step).
+pub(super) struct BindStep {
+    pub(super) op: BindOp,
+    pub(super) output_type: IRType,
+}
+
+/// Which IR instruction a [`BindStep`] emits. `EnumPayloadField`
+/// emits `EnumPayloadFieldGet` (tag-gated, safe only when the
+/// enclosing tag test has already fired); `StructField` emits
+/// `FieldGet` (no tag — the input is already a struct);
 /// `UnionPayload` emits `UnionPayloadGet` (tag-gated extraction
 /// against a tagged union member).
-pub(super) enum BindSource {
-    EnumPayload {
+pub(super) enum BindOp {
+    EnumPayloadField {
         enum_symbol: IRSymbol,
         payload_index: u32,
         tag: IRVariantTag,
@@ -210,9 +241,8 @@ pub(super) fn lower_pattern_check(
         Pattern::Or { patterns, .. } => Ok(or_pattern::lower_or_check(
             patterns, &inputs, ctx, block, output,
         )),
-        Pattern::Struct { fields, .. } => Ok((
-            structs::lower_struct_check(fields, &inputs, ctx, output),
-            block,
+        Pattern::Struct { fields, .. } => Ok(structs::lower_struct_check(
+            fields, &inputs, ctx, block, output,
         )),
         Pattern::TypedBinding {
             local_id,
@@ -250,16 +280,19 @@ pub(super) fn lower_pattern_check(
             let local = require_local(*local_id, name);
             ensure_local_declared(local, &member_ir, ctx);
             let bind = PayloadBind {
-                field_type: member_ir.clone(),
                 local,
-                source: BindSource::UnionPayload {
-                    member_index,
-                    member_type: member_ir,
-                    union_type: subject_ir,
-                },
+                chain: vec![BindStep {
+                    output_type: member_ir.clone(),
+                    op: BindOp::UnionPayload {
+                        member_index,
+                        member_type: member_ir,
+                        union_type: subject_ir,
+                    },
+                }],
             };
             Ok((
                 PatternCheck::Tests {
+                    chain_mode: ChainMode::And,
                     payload_binds: vec![bind],
                     steps: vec![TestStep {
                         cond,
@@ -336,19 +369,24 @@ pub(super) fn require_local(local_id: Option<LocalId>, name: &str) -> IRLocalId 
 /// Substitute the subject's type-args into a declared field type
 /// and lower the result to its [`IRType`]. Shared by every per-
 /// field bind helper so generic enum-payload / struct-field types
-/// instantiate uniformly.
+/// instantiate uniformly. Returns the substituted [`ResolvedType`]
+/// alongside the [`IRType`] so callers that recurse into nested
+/// patterns can hand the subject type to the inner resolver
+/// without re-running the substitution.
 pub(super) fn field_type_for(
     declared_ty: &ResolvedType,
     owner: GlobalRegistryId,
     inputs: &PatternInputs<'_>,
     output: &mut LowerOutput,
-) -> IRType {
+) -> (ResolvedType, IRType) {
     let subject_args: &[ResolvedType] = match inputs.subject_ty {
         ResolvedType::Named { type_args, .. } => type_args,
         _ => &[],
     };
     let substituted = substitute_resolved_type(declared_ty, subject_args, owner);
-    resolved_type_to_ir_type(&substituted, inputs.registry, &mut output.instantiations)
+    let ir_type =
+        resolved_type_to_ir_type(&substituted, inputs.registry, &mut output.instantiations);
+    (substituted, ir_type)
 }
 
 /// Hoist a payload-binding's `LocalDecl` to the function entry
@@ -374,6 +412,7 @@ pub(super) fn ensure_local_declared(local: IRLocalId, ty: &IRType, ctx: &mut FnL
 fn single_test(cond: ValueId, block: IRBlockId) -> (PatternCheck, IRBlockId) {
     (
         PatternCheck::Tests {
+            chain_mode: ChainMode::And,
             payload_binds: Vec::new(),
             steps: vec![TestStep {
                 cond,

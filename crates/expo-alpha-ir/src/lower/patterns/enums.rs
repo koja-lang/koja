@@ -2,8 +2,15 @@
 //! `EnumStruct`. The unit case lives inline in the dispatcher
 //! ([`super::lower_pattern_check`]) since it's just an
 //! [`emit_enum_tag_eq`] + [`super::single_test`] pair; the tuple
-//! and struct cases own their own bind-list builders that share
-//! the [`enum_pattern_metadata`] resolver.
+//! and struct cases own their own payload walkers that share the
+//! [`enum_pattern_metadata`] resolver and the cross-shape
+//! [`super::structs::lower_subpattern_into`] merge discipline.
+//!
+//! Tuple / struct variants with non-binding payload elements
+//! emit an outer tag-test step followed by AND-chained payload
+//! tests. Each payload test executes in a fresh block dominated
+//! by the tag-check success edge, so the `EnumPayloadFieldGet`
+//! projection is safe.
 
 use expo_alpha_typecheck::ResolvedVariantData;
 use expo_ast::ast::{FieldPattern, Pattern};
@@ -13,10 +20,8 @@ use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::super::enums::{
     enum_definition_from_entry, enum_entry_from_resolution, resolved_enum_symbol,
 };
-use super::{
-    BindSource, PatternCheck, PatternInputs, PayloadBind, TestStep, ensure_local_declared,
-    field_type_for, require_local,
-};
+use super::structs::lower_subpattern_into;
+use super::{BindOp, BindStep, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep};
 use crate::enum_decl::IRVariantTag;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
@@ -29,17 +34,43 @@ pub(super) fn lower_enum_struct_check(
     block: IRBlockId,
     output: &mut LowerOutput,
 ) -> Result<(PatternCheck, IRBlockId), ()> {
-    let cond = emit_enum_tag_eq(variant_name, inputs, ctx, block, output);
-    let payload_binds = build_enum_struct_binds(variant_name, fields, inputs, ctx, output);
+    let metadata = enum_pattern_metadata(variant_name, inputs, output);
+    let ResolvedVariantData::Struct(declared_fields) = metadata.variant_data else {
+        panic!(
+            "alpha IR lower: enum struct pattern `{}.{variant_name}` targets a \
+             non-struct variant — typecheck invariant violation",
+            metadata.label,
+        );
+    };
+    let tag_cond = emit_enum_tag_eq_with(&metadata, inputs.subject, ctx, block);
+    let tag_step = TestStep {
+        cond: tag_cond,
+        test_block: block,
+    };
+
+    let mut steps = vec![tag_step];
+    let mut binds = Vec::new();
+    let mut current_block = block;
+
+    walk_enum_struct_fields(
+        fields,
+        declared_fields,
+        &metadata,
+        inputs,
+        ctx,
+        &mut current_block,
+        &mut steps,
+        &mut binds,
+        output,
+    );
+
     Ok((
         PatternCheck::Tests {
-            payload_binds,
-            steps: vec![TestStep {
-                cond,
-                test_block: block,
-            }],
+            chain_mode: ChainMode::And,
+            payload_binds: binds,
+            steps,
         },
-        block,
+        current_block,
     ))
 }
 
@@ -51,22 +82,52 @@ pub(super) fn lower_enum_tuple_check(
     block: IRBlockId,
     output: &mut LowerOutput,
 ) -> Result<(PatternCheck, IRBlockId), ()> {
-    let cond = emit_enum_tag_eq(variant_name, inputs, ctx, block, output);
-    let payload_binds = build_enum_tuple_binds(variant_name, elements, inputs, ctx, output);
+    let metadata = enum_pattern_metadata(variant_name, inputs, output);
+    let ResolvedVariantData::Tuple(declared_payload) = metadata.variant_data else {
+        panic!(
+            "alpha IR lower: enum tuple pattern `{}.{variant_name}` targets a \
+             non-tuple variant — typecheck invariant violation",
+            metadata.label,
+        );
+    };
+    let tag_cond = emit_enum_tag_eq_with(&metadata, inputs.subject, ctx, block);
+    let tag_step = TestStep {
+        cond: tag_cond,
+        test_block: block,
+    };
+
+    let mut steps = vec![tag_step];
+    let mut binds = Vec::new();
+    let mut current_block = block;
+
+    walk_enum_tuple_elements(
+        elements,
+        declared_payload,
+        &metadata,
+        inputs,
+        ctx,
+        &mut current_block,
+        &mut steps,
+        &mut binds,
+        output,
+    );
+
     Ok((
         PatternCheck::Tests {
-            payload_binds,
-            steps: vec![TestStep {
-                cond,
-                test_block: block,
-            }],
+            chain_mode: ChainMode::And,
+            payload_binds: binds,
+            steps,
         },
-        block,
+        current_block,
     ))
 }
 
 /// Emit `EnumTagGet(subject) == const(tag)` into `block` and return
-/// the resulting `Bool` value.
+/// the resulting `Bool` value. Used by the dispatcher's
+/// [`Pattern::EnumUnit`] arm to assemble a single-step
+/// [`PatternCheck::Tests`]. The dispatcher routes through
+/// [`super::single_test`] so no payload extraction happens for
+/// unit-variant patterns.
 pub(super) fn emit_enum_tag_eq(
     variant_name: &str,
     inputs: &PatternInputs<'_>,
@@ -74,28 +135,23 @@ pub(super) fn emit_enum_tag_eq(
     block: IRBlockId,
     output: &mut LowerOutput,
 ) -> ValueId {
-    let entry = enum_entry_from_resolution(inputs.subject_ty, inputs.registry);
-    let definition = enum_definition_from_entry(entry);
-    let symbol = resolved_enum_symbol(
-        inputs.subject_ty,
-        inputs.registry,
-        &mut output.instantiations,
-    );
-    let (variant_index, _) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
-        panic!(
-            "alpha IR lower: enum `{}` has no variant `{variant_name}` — \
-             typecheck seal must have rejected this",
-            entry.identifier,
-        )
-    });
-    let tag = IRVariantTag(variant_index as u8);
+    let metadata = enum_pattern_metadata(variant_name, inputs, output);
+    emit_enum_tag_eq_with(&metadata, inputs.subject, ctx, block)
+}
+
+fn emit_enum_tag_eq_with(
+    metadata: &EnumPatternMetadata<'_>,
+    subject: ValueId,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+) -> ValueId {
     let tag_value = ctx.fresh_value(IRType::Int8);
     ctx.cfg.append(
         block,
         IRInstruction::EnumTagGet {
             dest: tag_value,
-            value: inputs.subject,
-            ty: symbol,
+            value: subject,
+            ty: metadata.enum_symbol.clone(),
         },
     );
     let const_dest = ctx.fresh_value(IRType::Int8);
@@ -103,7 +159,7 @@ pub(super) fn emit_enum_tag_eq(
         block,
         IRInstruction::Const {
             dest: const_dest,
-            value: ConstValue::Int8(tag.0 as i8),
+            value: ConstValue::Int8(metadata.tag.0 as i8),
         },
     );
     let cond = ctx.fresh_value(IRType::Bool);
@@ -119,100 +175,97 @@ pub(super) fn emit_enum_tag_eq(
     cond
 }
 
-/// Build the bind list for an `EnumTuple` pattern's payload. Only
-/// `Pattern::Binding` elements produce binds; `Pattern::Wildcard`
-/// elements are skipped. Typecheck rejects every other element
-/// shape, so reaching one here is an invariant violation.
-fn build_enum_tuple_binds(
-    variant_name: &str,
+#[allow(clippy::too_many_arguments)]
+fn walk_enum_tuple_elements(
     elements: &[Pattern],
+    declared_payload: &[ResolvedType],
+    metadata: &EnumPatternMetadata<'_>,
     inputs: &PatternInputs<'_>,
     ctx: &mut FnLowerCtx,
+    current_block: &mut IRBlockId,
+    steps: &mut Vec<TestStep>,
+    binds: &mut Vec<PayloadBind>,
     output: &mut LowerOutput,
-) -> Vec<PayloadBind> {
-    let metadata = enum_pattern_metadata(variant_name, inputs, output);
-    let ResolvedVariantData::Tuple(declared_payload) = metadata.variant_data else {
-        panic!(
-            "alpha IR lower: enum tuple pattern `{}.{variant_name}` targets a \
-             non-tuple variant — typecheck invariant violation",
-            metadata.label,
-        );
-    };
-    let mut binds = Vec::new();
+) {
     for (payload_index, (element, declared_ty)) in
         elements.iter().zip(declared_payload.iter()).enumerate()
     {
-        let Pattern::Binding { local_id, name, .. } = element else {
-            continue;
-        };
-        let ir_local = require_local(*local_id, name);
-        let field_type = field_type_for(declared_ty, metadata.owner, inputs, output);
-        ensure_local_declared(ir_local, &field_type, ctx);
-        binds.push(PayloadBind {
-            field_type,
-            local: ir_local,
-            source: BindSource::EnumPayload {
+        let (element_resolved_ty, element_ir_type) =
+            super::field_type_for(declared_ty, metadata.owner, inputs, output);
+        let prefix = BindStep {
+            op: BindOp::EnumPayloadField {
                 enum_symbol: metadata.enum_symbol.clone(),
                 payload_index: payload_index as u32,
                 tag: metadata.tag,
             },
-        });
+            output_type: element_ir_type.clone(),
+        };
+        lower_subpattern_into(
+            element,
+            &element_resolved_ty,
+            &element_ir_type,
+            inputs.subject,
+            prefix,
+            inputs,
+            ctx,
+            current_block,
+            steps,
+            binds,
+            output,
+        );
     }
-    binds
 }
 
-/// Build the bind list for an `EnumStruct` pattern. Looks each
-/// surface field up by name on the variant's declared field
-/// roster; only `Pattern::Binding` field patterns produce binds.
-/// The `payload_index` is the field's declaration-order position,
-/// matching what [`crate::seal::enums::seal_payload_field_index`]
-/// expects.
-fn build_enum_struct_binds(
-    variant_name: &str,
+#[allow(clippy::too_many_arguments)]
+fn walk_enum_struct_fields(
     fields: &[FieldPattern],
+    declared_fields: &[expo_alpha_typecheck::ResolvedStructField],
+    metadata: &EnumPatternMetadata<'_>,
     inputs: &PatternInputs<'_>,
     ctx: &mut FnLowerCtx,
+    current_block: &mut IRBlockId,
+    steps: &mut Vec<TestStep>,
+    binds: &mut Vec<PayloadBind>,
     output: &mut LowerOutput,
-) -> Vec<PayloadBind> {
-    let metadata = enum_pattern_metadata(variant_name, inputs, output);
-    let ResolvedVariantData::Struct(declared_fields) = metadata.variant_data else {
-        panic!(
-            "alpha IR lower: enum struct pattern `{}.{variant_name}` targets a \
-             non-struct variant — typecheck invariant violation",
-            metadata.label,
-        );
-    };
-    let mut binds = Vec::new();
+) {
     for field in fields {
-        let Pattern::Binding { local_id, name, .. } = &field.pattern else {
-            continue;
-        };
         let (payload_index, declared) = declared_fields
             .iter()
             .enumerate()
             .find(|(_, decl)| decl.name == field.name)
             .unwrap_or_else(|| {
                 panic!(
-                    "alpha IR lower: enum struct pattern `{}.{variant_name}.{name}` \
-                     references unknown field — typecheck invariant violation",
+                    "alpha IR lower: enum struct pattern `{}.{variant}.{name}` references \
+                     unknown field — typecheck invariant violation",
                     metadata.label,
+                    variant = metadata.variant_name(),
                     name = field.name,
                 )
             });
-        let ir_local = require_local(*local_id, name);
-        let field_type = field_type_for(&declared.ty, metadata.owner, inputs, output);
-        ensure_local_declared(ir_local, &field_type, ctx);
-        binds.push(PayloadBind {
-            field_type,
-            local: ir_local,
-            source: BindSource::EnumPayload {
+        let (field_resolved_ty, field_ir_type) =
+            super::field_type_for(&declared.ty, metadata.owner, inputs, output);
+        let prefix = BindStep {
+            op: BindOp::EnumPayloadField {
                 enum_symbol: metadata.enum_symbol.clone(),
                 payload_index: payload_index as u32,
                 tag: metadata.tag,
             },
-        });
+            output_type: field_ir_type.clone(),
+        };
+        lower_subpattern_into(
+            &field.pattern,
+            &field_resolved_ty,
+            &field_ir_type,
+            inputs.subject,
+            prefix,
+            inputs,
+            ctx,
+            current_block,
+            steps,
+            binds,
+            output,
+        );
     }
-    binds
 }
 
 struct EnumPatternMetadata<'a> {
@@ -220,7 +273,14 @@ struct EnumPatternMetadata<'a> {
     label: String,
     owner: GlobalRegistryId,
     tag: IRVariantTag,
+    variant: &'a expo_alpha_typecheck::ResolvedEnumVariant,
     variant_data: &'a ResolvedVariantData,
+}
+
+impl EnumPatternMetadata<'_> {
+    fn variant_name(&self) -> &str {
+        &self.variant.name
+    }
 }
 
 /// Resolve everything every enum-payload bind helper needs from the
@@ -257,6 +317,7 @@ fn enum_pattern_metadata<'a>(
         label: entry.identifier.to_string(),
         owner,
         tag: IRVariantTag(variant_index as u8),
+        variant,
         variant_data: &variant.data,
     }
 }

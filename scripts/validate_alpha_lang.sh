@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Walk every tests/lang/ fixture and run it through `expo alpha run --backend=llvm`.
-# Reports PASS/FAIL per fixture; intended as one-shot triage during the v1 → alpha
-# parity migration. Delete once `lang_suite.rs` flips its runner.
+# Picks up both `.expo` programs (`fn main` form) and `.exps` scripts (no-main
+# trailing-expression form). Reports PASS/FAIL per fixture; intended as one-shot
+# triage during the v1 → alpha parity migration. Delete once `lang_suite.rs`
+# flips its runner.
 #
 # Usage:
 #   expo/scripts/validate_alpha_lang.sh            # run everything
@@ -31,7 +33,7 @@ failures=()
 run_single_file() {
   local fixture_path="$1"
   local label="$2"
-  local expected_path="${fixture_path%.expo}.stdout"
+  local expected_path="${fixture_path%.*}.stdout"
   if [[ ! -f "$expected_path" ]]; then
     skipped=$((skipped + 1))
     return
@@ -119,17 +121,18 @@ for fixture_dir in "${fixture_dirs[@]}"; do
     continue
   fi
 
-  for expo_file in "$fixture_dir"/*.expo; do
-    [[ -f "$expo_file" ]] || continue
-    label="$fixture_dir/$(basename "$expo_file" .expo)"
+  shopt -s nullglob
+  for fixture_file in "$fixture_dir"/*.expo "$fixture_dir"/*.exps; do
+    label="$fixture_dir/$(basename "${fixture_file%.*}")"
     before=$failed
-    run_single_file "$expo_file" "$label"
+    run_single_file "$fixture_file" "$label"
     if [[ $failed -eq $before ]]; then
       echo "PASS  $label"
     else
       echo "FAIL  $label"
     fi
   done
+  shopt -u nullglob
 done
 
 echo ""

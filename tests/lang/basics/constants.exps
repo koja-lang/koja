@@ -27,14 +27,12 @@ fn direction_name(d: Direction) -> String
   end
 end
 
-fn main
-  MAX.print()
-  PI.print()
-  NAME.print()
-  DEBUG.print()
-  (MAX + 1).print()
+MAX.print()
+PI.print()
+NAME.print()
+DEBUG.print()
+(MAX + 1).print()
 
-  direction_name(HEADING).print()
-  ORIGIN.x.print()
-  ORIGIN.y.print()
-end
+direction_name(HEADING).print()
+ORIGIN.x.print()
+ORIGIN.y.print()

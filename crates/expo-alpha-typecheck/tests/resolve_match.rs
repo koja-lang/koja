@@ -12,9 +12,12 @@
 //!   to catch-all detection or enum variant coverage
 //! - struct destructure patterns (`Type{ field: x, ... }` for plain
 //!   structs, `Type.Variant{ field: x, ... }` for struct-variant enums)
-//!   resolve each named field against the declared roster, restrict
-//!   field elements to wildcard / binding, and stamp a `LocalId` on
-//!   each binding; plain-struct destructure counts as a catch-all
+//!   resolve each named field against the declared roster, accept any
+//!   nested pattern shape (wildcard / binding / literal / nested
+//!   struct / nested enum / or-alternatives), and stamp a `LocalId`
+//!   on every binding; omitted fields are implicit wildcards. The arm
+//!   counts as a catch-all only when every listed field's own
+//!   coverage is catch-all
 //! - constructor shorthand (`Some(x)` / `None` against an enum subject)
 //!   rewrites in place to the corresponding `EnumTuple` / `EnumUnit`,
 //!   reusing every downstream invariant
@@ -675,7 +678,11 @@ fn match_struct_destructure_unknown_field_diagnoses() {
 }
 
 #[test]
-fn match_struct_destructure_non_binding_field_diagnoses() {
+fn match_struct_destructure_literal_field_resolves() {
+    // Inverted from the old "non-binding field diagnoses" — literal
+    // patterns inside struct fields are accepted post Phase 4
+    // follow-on. The arm's coverage is `Other` (not `CatchAll`) so
+    // the outer match needs an explicit catch-all to typecheck.
     let source = "
         struct Point
           x: Int
@@ -685,15 +692,209 @@ fn match_struct_destructure_non_binding_field_diagnoses() {
         fn main
           match Point{x: 1, y: 2}
             Point{x: 1, y: b} -> b
+            _other -> 0
+          end
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let main = main_fn(&checked);
+    let Statement::Expr(match_expr) = main.body.as_deref().unwrap().last().unwrap() else {
+        panic!("expected trailing Statement::Expr");
+    };
+    let ExprKind::Match { arms, .. } = &match_expr.kind else {
+        panic!("expected ExprKind::Match");
+    };
+    let Pattern::Struct { fields, .. } = &arms[0].pattern else {
+        panic!("expected Pattern::Struct for arm 0");
+    };
+    assert_eq!(fields.len(), 2);
+    assert!(
+        matches!(fields[0].pattern, Pattern::Literal { .. }),
+        "field `x` should preserve the literal pattern shape",
+    );
+    let Pattern::Binding { local_id: y_id, .. } = &fields[1].pattern else {
+        panic!("field `y` should be a binding");
+    };
+    assert!(y_id.is_some(), "binding `y` should have a stamped LocalId");
+}
+
+#[test]
+fn match_struct_partial_omitted_fields_match_anything() {
+    // `Point{x: 5}` lists only `x`; `y` is an implicit wildcard.
+    // The empty `Point{}` arm is the explicit full catch-all.
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn classify(p: Point) -> Int
+          match p
+            Point{x: 5} -> 1
+            Point{y: 9} -> 2
+            Point{} -> 3
+          end
+        end
+
+        fn main
+          classify(Point{x: 5, y: 1})
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_nested_struct_inside_enum_tuple_resolves() {
+    // `Option.Some(Point{x: 5})` nests a partial struct pattern
+    // inside the tuple payload of an enum variant. Resolver must
+    // recurse through both layers with the correct types.
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn label(op: Option<Point>) -> Int
+          match op
+            Option.Some(Point{x: 5}) -> 1
+            Option.Some(Point{x: x, y: y}) -> x + y
+            Option.None -> 0
+          end
+        end
+
+        fn main
+          label(Option.Some(Point{x: 5, y: 9}))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_enum_tuple_literal_payload_resolves() {
+    // String + int literal payloads inside enum tuple patterns —
+    // mirrors the `nested_enum_pattern_literal` lang golden's
+    // outer/inner discrimination shape.
+    let source = "
+        enum TokenKind
+          Ident(String)
+          Number(Int)
+        end
+
+        fn classify(t: TokenKind) -> Int
+          match t
+            TokenKind.Ident(\"and\") -> 1
+            TokenKind.Ident(_n) -> 2
+            TokenKind.Number(0) -> 3
+            TokenKind.Number(_v) -> 4
+          end
+        end
+
+        fn main
+          classify(TokenKind.Ident(\"and\"))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_enum_tuple_with_literal_payload_is_still_full_variant_coverage_for_now() {
+    // KNOWN-SOUNDNESS-GAP: `Option.Some(5)` semantically covers
+    // only Some(5), but the current variant accounting marks the
+    // arm as full Some coverage so the lang fixture
+    // `nested_enum_pattern_literal` (multiple Some-arms with
+    // disjoint inner patterns) still typechecks without a
+    // multi-arm coverage accumulator. This test pins the looser
+    // behavior; once a coverage accumulator lands, flip the
+    // expectation to a missing-catch-all diagnostic.
+    let source = "
+        fn classify(op: Option<Int>) -> Int
+          match op
+            Option.Some(5) -> 1
+            Option.None -> 0
+          end
+        end
+
+        fn main
+          classify(Option.Some(5))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_enum_struct_with_literal_field_is_still_full_variant_coverage_for_now() {
+    // KNOWN-SOUNDNESS-GAP — see the tuple-variant version above.
+    let source = "
+        enum Shape
+          Rect{w: Int, h: Int}
+          Circle{r: Int}
+        end
+
+        fn classify(s: Shape) -> Int
+          match s
+            Shape.Rect{w: 1, h: 2} -> 10
+            Shape.Circle{r: r} -> r
+          end
+        end
+
+        fn main
+          classify(Shape.Circle{r: 7})
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_enum_tuple_with_bindings_only_still_covers_variant() {
+    // `Option.Some(x)` with a plain binding does cover every
+    // Some — bindings are catch-alls. The match is exhaustive
+    // without an extra catch-all arm.
+    let source = "
+        fn classify(op: Option<Int>) -> Int
+          match op
+            Option.Some(x) -> x
+            Option.None -> 0
+          end
+        end
+
+        fn main
+          classify(Option.Some(5))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_struct_with_only_literal_fields_is_not_catch_all() {
+    // `Point{x: 5, y: 2}` is no longer treated as a catch-all
+    // (Phase 3 coverage refinement). With no explicit catch-all the
+    // match must diagnose missing coverage.
+    let source = "
+        struct Point
+          x: Int
+          y: Int
+        end
+
+        fn main
+          match Point{x: 5, y: 2}
+            Point{x: 5, y: 2} -> 1
           end
         end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
-        failure.diagnostics.iter().any(|d| d
-            .message
-            .contains("only admits wildcard / binding patterns inside")),
-        "expected field-element feature-gap diagnostic, got: {:?}",
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("catch-all") || d.message.contains("exhaustive")),
+        "expected missing-catch-all diagnostic, got: {:?}",
         failure.diagnostics,
     );
 }

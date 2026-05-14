@@ -13,7 +13,10 @@ use expo_alpha_ir::IRScript;
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::function::{declare_function, define_function};
-use crate::layout::enums::{declare_enum_type, define_enum_bodies};
+use crate::layout::enum_order::enums_in_dependency_order;
+use crate::layout::enums::{
+    declare_enum_type, define_enum_completes_and_outer, define_enum_payload_bodies,
+};
 use crate::layout::structs::{declare_struct_type, define_struct_body};
 use crate::layout::unions::{declare_union_type, define_union_body};
 use crate::main_wrapper::{emit_app_name_global, emit_as_main};
@@ -44,9 +47,14 @@ pub(crate) fn compile_script(
         for decl in package.structs.values() {
             define_struct_body(ctx, decl)?;
         }
+    }
+    for package in &script.packages {
         for decl in package.enums.values() {
-            define_enum_bodies(ctx, decl)?;
+            define_enum_payload_bodies(ctx, decl)?;
         }
+    }
+    for decl in enums_in_dependency_order(&script.packages) {
+        define_enum_completes_and_outer(ctx, decl)?;
     }
     emit_app_name_global(ctx, app_name);
     let mut declared = Vec::with_capacity(script.packages.iter().map(|p| p.functions.len()).sum());

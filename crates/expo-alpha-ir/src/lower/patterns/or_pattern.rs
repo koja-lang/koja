@@ -15,7 +15,7 @@ use expo_ast::labels::pattern_kind_label;
 use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::emit_enum_tag_eq;
 use super::literals::emit_literal_eq_or_panic;
-use super::{PatternCheck, PatternInputs, TestStep};
+use super::{ChainMode, PatternCheck, PatternInputs, TestStep};
 use crate::function::IRBlockId;
 use crate::types::ValueId;
 
@@ -40,6 +40,7 @@ pub(super) fn lower_or_check(
     }
     (
         PatternCheck::Tests {
+            chain_mode: ChainMode::Or,
             payload_binds: Vec::new(),
             steps,
         },

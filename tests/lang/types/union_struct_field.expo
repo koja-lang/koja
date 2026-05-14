@@ -19,6 +19,7 @@ impl Process<WorkerConfig, Tick | Sig, String> for Worker
 
   fn handle(move self, msg: Tick | Sig, from: Option<ReplyTo<String>>)
     -> Step<Self>
+
     match msg
       t: Tick ->
         match t

@@ -43,7 +43,7 @@ use super::arms::lower_arm_into;
 use super::ctx::{FnLowerCtx, LowerOutput, SlotStateSnapshot};
 use super::expr::lower_expr;
 use super::patterns::{
-    BindSource, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
+    BindOp, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
 };
 
 /// AST-side inputs to [`lower_match`]. Bundled per the same
@@ -131,10 +131,11 @@ pub(super) fn lower_match(
                 }
             }
             PatternCheck::Tests {
+                chain_mode,
                 payload_binds,
                 steps,
             } => {
-                wire_test_chain(&steps, success_block, fall_through, ctx);
+                wire_test_chain(&steps, chain_mode, success_block, fall_through, ctx);
                 emit_payload_binds(&payload_binds, success_block, subject_value, ctx);
             }
         }
@@ -184,21 +185,23 @@ pub(super) fn lower_match(
 
 fn wire_test_chain(
     steps: &[TestStep],
-    body_block: IRBlockId,
+    mode: ChainMode,
+    success_block: IRBlockId,
     fall_through: IRBlockId,
     ctx: &mut FnLowerCtx,
 ) {
     for (index, step) in steps.iter().enumerate() {
-        let else_block = steps
-            .get(index + 1)
-            .map(|next| next.test_block)
-            .unwrap_or(fall_through);
+        let next_step_block = steps.get(index + 1).map(|next| next.test_block);
+        let (then_target, else_target) = match mode {
+            ChainMode::And => (next_step_block.unwrap_or(success_block), fall_through),
+            ChainMode::Or => (success_block, next_step_block.unwrap_or(fall_through)),
+        };
         ctx.cfg.set_terminator(
             step.test_block,
             IRTerminator::CondBranch {
                 cond: step.cond,
-                else_target: BranchTarget::to(else_block),
-                then_target: BranchTarget::to(body_block),
+                else_target: BranchTarget::to(else_target),
+                then_target: BranchTarget::to(then_target),
             },
         );
     }
@@ -211,63 +214,67 @@ fn emit_payload_binds(
     ctx: &mut FnLowerCtx,
 ) {
     for bind in binds {
-        let dest = ctx.fresh_value(bind.field_type.clone());
-        match &bind.source {
-            BindSource::EnumPayload {
-                enum_symbol,
-                payload_index,
-                tag,
-            } => {
-                ctx.cfg.append(
-                    body_block,
-                    IRInstruction::EnumPayloadFieldGet {
-                        dest,
-                        field_type: bind.field_type.clone(),
-                        payload_index: *payload_index,
-                        tag: *tag,
-                        ty: enum_symbol.clone(),
-                        value: subject,
-                    },
-                );
+        let mut current = subject;
+        for step in &bind.chain {
+            let dest = ctx.fresh_value(step.output_type.clone());
+            match &step.op {
+                BindOp::EnumPayloadField {
+                    enum_symbol,
+                    payload_index,
+                    tag,
+                } => {
+                    ctx.cfg.append(
+                        body_block,
+                        IRInstruction::EnumPayloadFieldGet {
+                            dest,
+                            field_type: step.output_type.clone(),
+                            payload_index: *payload_index,
+                            tag: *tag,
+                            ty: enum_symbol.clone(),
+                            value: current,
+                        },
+                    );
+                }
+                BindOp::StructField {
+                    field_index,
+                    struct_symbol,
+                } => {
+                    ctx.cfg.append(
+                        body_block,
+                        IRInstruction::FieldGet {
+                            base: current,
+                            dest,
+                            field_index: *field_index,
+                            field_type: step.output_type.clone(),
+                            struct_symbol: struct_symbol.clone(),
+                        },
+                    );
+                }
+                BindOp::UnionPayload {
+                    member_index,
+                    member_type,
+                    union_type,
+                } => {
+                    ctx.cfg.append(
+                        body_block,
+                        IRInstruction::UnionPayloadGet {
+                            dest,
+                            member_index: *member_index,
+                            member_type: member_type.clone(),
+                            ty: union_type.clone(),
+                            value: current,
+                        },
+                    );
+                }
             }
-            BindSource::StructField {
-                field_index,
-                struct_symbol,
-            } => {
-                ctx.cfg.append(
-                    body_block,
-                    IRInstruction::FieldGet {
-                        base: subject,
-                        dest,
-                        field_index: *field_index,
-                        field_type: bind.field_type.clone(),
-                        struct_symbol: struct_symbol.clone(),
-                    },
-                );
-            }
-            BindSource::UnionPayload {
-                member_index,
-                member_type,
-                union_type,
-            } => {
-                ctx.cfg.append(
-                    body_block,
-                    IRInstruction::UnionPayloadGet {
-                        dest,
-                        member_index: *member_index,
-                        member_type: member_type.clone(),
-                        ty: union_type.clone(),
-                        value: subject,
-                    },
-                );
-            }
+            current = dest;
         }
         ctx.cfg.append(
             body_block,
             IRInstruction::LocalWrite {
                 local: bind.local,
                 ownership: Ownership::Unowned,
-                value: dest,
+                value: current,
             },
         );
         ctx.mark_local_written(bind.local, Ownership::Unowned);

@@ -25,6 +25,7 @@ use inkwell::targets::{
 };
 use inkwell::types::StructType;
 
+pub(crate) mod enum_order;
 pub(crate) mod enums;
 pub(crate) mod structs;
 pub(crate) mod unions;

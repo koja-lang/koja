@@ -1,17 +1,18 @@
 //! Match-arm pattern resolution.
 //!
 //! Admits `Wildcard`, `Binding`, primitive `Literal`, `EnumUnit`,
-//! `EnumTuple` / `EnumStruct` (one-level — elements / fields
-//! restricted to wildcard / binding), `Struct` (same restriction),
-//! `Or` (alternatives restricted to literal / EnumUnit, no
-//! bindings), and `Constructor` shorthand (`Some(x)`, `None`,
-//! `Ok(x)`, ...) — `Constructor` rewrites in place to the
-//! corresponding `EnumTuple` / `EnumUnit` after looking the
-//! variant up on the subject's enum, so seal / generics-substitute
-//! / lowering never see the shape. Every other shape diagnoses a
-//! feature gap. Returns [`PatternCoverage`] so
-//! [`super::match_expr::resolve_match`] can run the
-//! catch-all-or-exhaustiveness check without re-walking the arm.
+//! `EnumTuple` / `EnumStruct` / `Struct` with arbitrary nested
+//! pattern shapes in payload / field positions (literals, nested
+//! enums, nested structs, or-alternatives), `Or` (alternatives
+//! restricted to literal / EnumUnit, no bindings), and
+//! `Constructor` shorthand (`Some(x)`, `None`, `Ok(x)`, ...) —
+//! `Constructor` rewrites in place to the corresponding `EnumTuple`
+//! / `EnumUnit` after looking the variant up on the subject's enum,
+//! so seal / generics-substitute / lowering never see the shape.
+//! Every other shape diagnoses a feature gap. Returns
+//! [`PatternCoverage`] so [`super::match_expr::resolve_match`] can
+//! run the catch-all-or-exhaustiveness check without re-walking the
+//! arm.
 //!
 //! # Module layout
 //!

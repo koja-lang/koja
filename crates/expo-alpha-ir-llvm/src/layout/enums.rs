@@ -1,12 +1,24 @@
 //! Pre-emit phase for [`expo_alpha_ir::IREnumDecl`]: build one
 //! [`super::EnumLayout`] per decl on [`super::TypeLayouts`].
 //!
-//! Two-phase across all packages so an enum's tuple/struct payload
+//! Three-phase across all packages so an enum's tuple/struct payload
 //! can carry another struct or enum regardless of declaration
 //! order: [`declare_enum_type`] mints opaque placeholders for the
 //! outer + every variant's complete + every non-Unit variant's
-//! payload; [`define_enum_bodies`] sets bodies once every package's
-//! placeholders exist.
+//! payload; [`define_enum_payload_bodies`] sets the variant payload
+//! bodies (no size queries, so opaque inner references are fine);
+//! [`define_enum_completes_and_outer`] then sets the variant
+//! complete + outer bodies once every transitively-referenced
+//! payload is set.
+//!
+//! The complete + outer phase has a sub-ordering requirement of its
+//! own: a variant complete body sizes its padding from
+//! `get_abi_alignment(payload)`, and the outer body sizes itself
+//! from `max(get_abi_size(complete))` across variants — both
+//! returns 0/1 when the payload references an opaque inner enum
+//! outer. [`crate::program::compile_program`] walks `decl_order`
+//! (a topologically-sorted enum list) so every dependency's outer
+//! is already set when an enum's complete+outer phase runs.
 //!
 //! ## Layout (Rust-style, alignment-correct)
 //!
@@ -47,7 +59,30 @@ pub(crate) fn declare_enum_type<'ctx>(ctx: &EmitContext<'ctx>, decl: &IREnumDecl
     }
 }
 
-pub(crate) fn define_enum_bodies<'ctx>(
+/// Set every variant's payload body. No size or alignment queries
+/// happen here, so it's safe to call before any of the referenced
+/// types (other enums' outer chunks, mutually-referenced structs)
+/// have their bodies set. The variant complete + outer bodies are
+/// deferred to [`define_enum_completes_and_outer`].
+pub(crate) fn define_enum_payload_bodies<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    decl: &IREnumDecl,
+) -> Result<(), LlvmError> {
+    for variant in &decl.variants {
+        define_payload_body(ctx, decl, variant)?;
+    }
+    Ok(())
+}
+
+/// Set every variant's complete body and the enum's outer chunk
+/// body, then register the variant layouts. Must run after every
+/// transitively-referenced enum's outer body has been set —
+/// `get_abi_alignment` on a variant payload that names an opaque
+/// enum outer returns 1 instead of the real alignment, which would
+/// collapse the padding and outer chunk count. The caller
+/// ([`crate::program::compile_program`]) drives this in
+/// topological dependency order.
+pub(crate) fn define_enum_completes_and_outer<'ctx>(
     ctx: &EmitContext<'ctx>,
     decl: &IREnumDecl,
 ) -> Result<(), LlvmError> {
@@ -55,7 +90,7 @@ pub(crate) fn define_enum_bodies<'ctx>(
     let mut max_complete_size: u64 = 0;
     let mut max_complete_align: u32 = 1;
     for variant in &decl.variants {
-        let layout = define_variant(ctx, decl, variant)?;
+        let layout = define_variant_complete(ctx, decl, variant);
         let complete_basic: BasicTypeEnum<'ctx> = layout.complete.into();
         max_complete_size =
             max_complete_size.max(ctx.layouts.target_data.get_abi_size(&complete_basic));
@@ -72,16 +107,30 @@ pub(crate) fn define_enum_bodies<'ctx>(
     Ok(())
 }
 
-fn define_variant<'ctx>(
+fn define_variant_complete<'ctx>(
     ctx: &EmitContext<'ctx>,
     decl: &IREnumDecl,
     variant: &IREnumVariant,
-) -> Result<VariantLayout<'ctx>, LlvmError> {
-    let payload = define_payload_body(ctx, decl, variant)?;
+) -> VariantLayout<'ctx> {
+    let payload = lookup_payload_struct(ctx, decl, variant);
     let complete = lookup_named_struct(ctx, &variant_complete_name(decl, variant));
     let body = build_complete_body(ctx, payload);
     complete.set_body(&body, false);
-    Ok(VariantLayout { complete, payload })
+    VariantLayout { complete, payload }
+}
+
+fn lookup_payload_struct<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    decl: &IREnumDecl,
+    variant: &IREnumVariant,
+) -> Option<StructType<'ctx>> {
+    if matches!(variant.payload, IRVariantPayload::Unit) {
+        return None;
+    }
+    Some(lookup_named_struct(
+        ctx,
+        &variant_payload_name(decl, variant),
+    ))
 }
 
 fn define_payload_body<'ctx>(
