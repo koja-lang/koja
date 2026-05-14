@@ -1,10 +1,10 @@
-//! Eval handlers for the `Equality` intrinsic family — `Bool`, the
-//! 8 integer cells (flattened to [`Value::Int(i64)`]), and `String`.
-//! Each variant inspects its operands directly; mismatched shapes
-//! surface a typed [`RuntimeError::TypeMismatch`] instead of
-//! coercing.
+//! Eval handlers for the `Equality` intrinsic family — `Bool`,
+//! 8 integer cells (flattened to [`Value::Int(i64)`]), `Float` /
+//! `Float32` (IEEE-754 ordered: `NaN != NaN`), and `String`.
+//! Mismatched shapes surface a typed
+//! [`RuntimeError::TypeMismatch`] instead of coercing.
 
-use expo_alpha_ir::EqualityImpl;
+use expo_alpha_ir::{EqualityImpl, FloatType};
 
 use crate::error::RuntimeError;
 use crate::value::Value;
@@ -21,6 +21,8 @@ pub(super) fn dispatch(impl_: EqualityImpl, args: &[Value]) -> Result<Value, Run
     let result = match (impl_, lhs, rhs) {
         (EqualityImpl::Bool, Value::Bool(a), Value::Bool(b)) => a == b,
         (EqualityImpl::Int(_), Value::Int(a), Value::Int(b)) => a == b,
+        (EqualityImpl::Float(FloatType::Float), Value::Float64(a), Value::Float64(b)) => a == b,
+        (EqualityImpl::Float(FloatType::Float32), Value::Float32(a), Value::Float32(b)) => a == b,
         (EqualityImpl::String, Value::String(a), Value::String(b)) => a == b,
         _ => {
             return Err(RuntimeError::TypeMismatch {

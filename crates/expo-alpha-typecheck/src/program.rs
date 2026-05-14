@@ -95,6 +95,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     // we'd get duplicate impls.
     for pkg in &mut packages {
         synthesize::derive_debug::derive_debug_package(pkg);
+        synthesize::derive_equality::derive_equality_package(pkg);
     }
 
     for pkg in &packages {

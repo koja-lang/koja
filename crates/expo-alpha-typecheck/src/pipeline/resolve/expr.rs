@@ -6,7 +6,7 @@
 //! [`super::ops`] (literal / binary / unary). Every successful arm
 //! returns the [`ResolvedType`] to stamp on `expr.resolution`.
 
-use expo_ast::ast::{Diagnostic, Expr, ExprKind};
+use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind};
 use expo_ast::identifier::ResolvedType;
 use expo_ast::labels::expr_kind_label;
 
@@ -20,7 +20,7 @@ use super::enums::resolve_enum_construction;
 use super::idents::{resolve_ident, resolve_self};
 use super::literals::{resolve_binary_literal, resolve_list_literal, resolve_map_literal};
 use super::match_expr::resolve_match;
-use super::ops::{binary_type, unary_type};
+use super::ops::{binary_type, resolve_equality_op_expr, unary_type};
 use super::process::{resolve_receive, resolve_spawn};
 use super::strings::resolve_string;
 use super::structs::{resolve_field_access, resolve_struct_construction};
@@ -68,6 +68,22 @@ pub(super) fn resolve_expr_with_expected(
     // `expr.kind` precludes.
     if matches!(expr.kind, ExprKind::MethodCall { .. }) {
         let ty = resolve_method_call_expr(expr, expected, resolver, diagnostics);
+        expr.resolution = ty;
+        return;
+    }
+    // `==` / `!=` on user struct / enum operands rewrites to
+    // `lhs.eq(rhs)` (or `not lhs.eq(rhs)`) before re-resolving;
+    // primitive operands stay on the [`binary_type`] fast path.
+    // Same outer-expr-rewrite shape as List / Map / MethodCall
+    // above.
+    if matches!(
+        expr.kind,
+        ExprKind::Binary {
+            op: BinOp::Eq | BinOp::NotEq,
+            ..
+        }
+    ) {
+        let ty = resolve_equality_op_expr(expr, resolver, diagnostics);
         expr.resolution = ty;
         return;
     }

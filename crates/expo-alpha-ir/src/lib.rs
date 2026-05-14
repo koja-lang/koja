@@ -61,8 +61,8 @@ pub use function::{
     IRInstruction, IRSymbol, IRTerminator, ReceiveAfter, ReceiveArm, ReceiveTag,
 };
 pub use intrinsic_id::{
-    BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, DebugImpl, EqualityImpl, HashImpl,
-    IRIntrinsicId, IntType, KernelMethod, ListMethod, MapMethod, ParseTarget, RefMethod,
+    BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, DebugImpl, EqualityImpl, FloatType,
+    HashImpl, IRIntrinsicId, IntType, KernelMethod, ListMethod, MapMethod, ParseTarget, RefMethod,
     ReplyToMethod, SetMethod, SocketMethod, StringMethod,
 };
 pub use local::IRLocalId;

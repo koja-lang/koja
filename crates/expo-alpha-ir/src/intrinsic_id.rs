@@ -226,15 +226,15 @@ pub enum DebugImpl {
     Int(IntType),
 }
 
-/// Receiver shape for `Equality.eq` impls. `Bool` and `String` are
-/// siblings (each their own variant) rather than wrapped in a
-/// catch-all "integral" enum — the LLVM and eval emitters dispatch
-/// on three distinct shapes (boolean compare, integer compare,
-/// string memcmp), and a flat enum keeps the match arms one-to-one
-/// with the emitter cases.
+/// Receiver shape for `Equality.eq` impls. One variant per emitter
+/// shape: `icmp` for `Bool` + integers, `fcmp` for floats, `strcmp`
+/// for `String`. Integer / float widths are folded into nested
+/// [`IntType`] / [`FloatType`] enums (each width its own emitter
+/// cell) so the outer arms stay one-to-one with the emitter family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EqualityImpl {
     Bool,
+    Float(FloatType),
     Int(IntType),
     String,
 }
@@ -263,6 +263,15 @@ pub enum IntType {
     UInt16,
     UInt32,
     UInt64,
+}
+
+/// Float receivers for the float slice of `Equality`. Sibling of
+/// [`IntType`]; each width is its own emitter cell (LLVM picks
+/// f32 / f64 compare from the param's actual type).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FloatType {
+    Float,
+    Float32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -394,6 +403,23 @@ impl IntType {
     }
 }
 
+impl FloatType {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "Float" => Self::Float,
+            "Float32" => Self::Float32,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Float => "Float",
+            Self::Float32 => "Float32",
+        }
+    }
+}
+
 impl DebugImpl {
     /// Map a receiver-type name (`"Bool"`, `"Int"`, `"Float"`,
     /// `"Float32"`, `"Int8"`, …) to the matching impl cell.
@@ -421,10 +447,14 @@ impl DebugImpl {
 }
 
 impl EqualityImpl {
-    /// Map a receiver-type name (`"Bool"`, `"Int"`, `"String"`, …)
-    /// to the matching impl cell. Returns `None` for receivers
-    /// outside the three families (e.g. `Float`, struct types).
+    /// Map a receiver-type name (`"Bool"`, `"Int"`, `"Float"`,
+    /// `"String"`, …) to the matching impl cell. Returns `None` for
+    /// receivers outside the four families (`Bool` / numeric /
+    /// `String` / struct types).
     pub fn from_receiver(receiver: &str) -> Option<Self> {
+        if let Some(ty) = FloatType::from_source(receiver) {
+            return Some(Self::Float(ty));
+        }
         Some(match receiver {
             "Bool" => Self::Bool,
             "String" => Self::String,
@@ -435,6 +465,7 @@ impl EqualityImpl {
     fn segment(self) -> &'static str {
         match self {
             Self::Bool => "Bool",
+            Self::Float(ty) => ty.segment(),
             Self::Int(ty) => ty.segment(),
             Self::String => "String",
         }
@@ -1026,6 +1057,14 @@ mod tests {
                 &[ty_str, "hash"],
                 IRIntrinsicId::Hash(HashImpl::Int(ty)),
                 &format!("{ty_str}.hash"),
+            );
+        }
+        for ty_str in ["Float", "Float32"] {
+            let ty = FloatType::from_source(ty_str).unwrap();
+            assert_round_trip(
+                &[ty_str, "eq"],
+                IRIntrinsicId::Equality(EqualityImpl::Float(ty)),
+                &format!("{ty_str}.eq"),
             );
         }
         assert_round_trip(

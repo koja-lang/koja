@@ -12,9 +12,10 @@
 
 use expo_ast::ast::{Arg, Diagnostic, Expr};
 use expo_ast::coercion::{Coercion, LiteralCoercion};
-use expo_ast::identifier::{GlobalRegistryId, ResolvedType, TypeParamIndex};
+use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use expo_ast::span::Span;
 
+use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
 
 use super::super::coercion::{
@@ -100,7 +101,7 @@ pub(super) fn resolve_bounded_method_call(
         ));
         return ResolvedType::unresolved();
     }
-    let (_, protocol_method) = providers.into_iter().next().expect("len == 1");
+    let (protocol_id, protocol_method) = providers.into_iter().next().expect("len == 1");
     if protocol_method.dispatch != Dispatch::Instance {
         diagnostics.push(Diagnostic::error(
             format!(
@@ -111,6 +112,9 @@ pub(super) fn resolve_bounded_method_call(
         ));
         return ResolvedType::unresolved();
     }
+    let _ = receiver;
+    let receiver_type = type_param_ref(owner, index);
+    let self_subst = self_substitution(protocol_id, receiver_type);
     validate_bounded_args(
         BoundedArgsSite {
             method,
@@ -118,17 +122,36 @@ pub(super) fn resolve_bounded_method_call(
             args,
             protocol_method: &protocol_method,
             call_span,
+            self_subst: &self_subst,
         },
         resolver,
         diagnostics,
     );
-    // Return type may carry `Self` (TypeParam at protocol's slot 0).
-    // Generic protocols (slice 2.7+) will additionally substitute the
-    // protocol's user-declared params against the receiver's type-args
-    // — currently the protocol-method scope is `Self`-only so the
-    // return type passes through unchanged.
-    let _ = receiver;
-    protocol_method.return_type
+    // Substitute Self in the return type with the receiver's
+    // type-param (e.g. `Equality.eq -> Bool` is a no-op, but
+    // `Container.first -> Self` would substitute to `T`).
+    // Generic protocols (slice 2.7+) will additionally substitute
+    // user-declared params against the receiver's type-args.
+    substitute(&protocol_method.return_type, &self_subst)
+}
+
+/// Build the `ResolvedType` for the bare type-parameter `T` at
+/// `(owner, index)` — the receiver type a bounded-method call
+/// dispatches on. Used to fill the protocol's implicit `Self` slot.
+fn type_param_ref(owner: GlobalRegistryId, index: TypeParamIndex) -> ResolvedType {
+    ResolvedType::Named {
+        resolution: Resolution::TypeParam { owner, index },
+        type_args: Vec::new(),
+    }
+}
+
+/// Single-scope `Self`-substitution for `protocol_id`: slot 0 binds
+/// to `receiver_type`. Protocols register their implicit `Self`
+/// type-param at index 0 (see
+/// `lift_signatures/protocols.rs`), so this is the only slot the
+/// substitution needs to fill for non-generic protocols.
+fn self_substitution(protocol_id: GlobalRegistryId, receiver_type: ResolvedType) -> Substitution {
+    Substitution::from_args(protocol_id, &[receiver_type])
 }
 
 /// Augment a type-parameter's declared bounds with the universal
@@ -189,6 +212,11 @@ pub(super) struct BoundedArgsSite<'a> {
     pub(super) method: &'a str,
     pub(super) param_name: &'a str,
     pub(super) protocol_method: &'a ResolvedProtocolMethod,
+    /// `Self → <receiver>` substitution applied to each expected
+    /// param type before the compatibility check, so a method
+    /// declaring `other: Self` accepts an arg whose actual type is
+    /// the receiver (rather than the literal `Self` placeholder).
+    pub(super) self_subst: &'a Substitution,
 }
 
 /// Check arity + per-position type compatibility for a bounded
@@ -206,6 +234,7 @@ fn validate_bounded_args(
         args,
         protocol_method,
         call_span,
+        self_subst,
     } = site;
     if args.len() != protocol_method.non_self_params.len() {
         diagnostics.push(Diagnostic::error(
@@ -228,7 +257,8 @@ fn validate_bounded_args(
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, &actual, &expected.ty, resolver.registry) {
+        let expected_ty = substitute(&expected.ty, self_subst);
+        match check_compatible(&arg.value, &actual, &expected_ty, resolver.registry) {
             Compatible::Strict => {}
             Compatible::Coerced(width) => {
                 *coercion_target_mut(&mut arg.value) =
@@ -246,7 +276,7 @@ fn validate_bounded_args(
                         "argument `{}` to `{method}` expects `{}`: value \
                          `{rendered_value}` does not fit in `{}` (range {})",
                         expected.name,
-                        display_resolution(&expected.ty, resolver.registry),
+                        display_resolution(&expected_ty, resolver.registry),
                         width.label(),
                         width.range_label(),
                     ),
@@ -258,7 +288,7 @@ fn validate_bounded_args(
                     format!(
                         "argument `{}` to `{method}` expects `{}`, got `{}`",
                         expected.name,
-                        display_resolution(&expected.ty, resolver.registry),
+                        display_resolution(&expected_ty, resolver.registry),
                         display_resolution(&actual, resolver.registry),
                     ),
                     arg.span,

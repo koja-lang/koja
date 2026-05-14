@@ -1,12 +1,14 @@
-//! `Equality.eq` family — `Bool` and the 8 integer cells share a
-//! single `icmp eq` emitter (eval flattens both shapes to fixed-
-//! width integers). `String.eq` delegates to libc `strcmp`; alpha
-//! string payloads carry a trailing NUL, so byte-sequence equality
-//! matches Expo's source-level `==` semantics.
+//! `Equality.eq` family. `Bool` + the 8 integer cells share an
+//! `icmp eq` emitter (eval flattens both to fixed-width integers).
+//! `Float` / `Float32` use `fcmp oeq` (ordered: `NaN == NaN` is
+//! false, matching IEEE 754 and source-level `==`). `String.eq`
+//! delegates to libc `strcmp`; alpha string payloads carry a
+//! trailing NUL, so byte-sequence equality matches Expo's source-
+//! level `==` semantics.
 
 use expo_alpha_ir::{EqualityImpl, IRFunction};
-use inkwell::IntPredicate;
-use inkwell::values::{BasicValueEnum, FunctionValue, IntValue};
+use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
+use inkwell::{FloatPredicate, IntPredicate};
 
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
@@ -21,6 +23,7 @@ pub(super) fn emit_eq<'ctx>(
 ) -> Result<(), LlvmError> {
     match impl_ {
         EqualityImpl::Bool | EqualityImpl::Int(_) => emit_int_eq(ctx, function, llvm_function),
+        EqualityImpl::Float(_) => emit_float_eq(ctx, function, llvm_function),
         EqualityImpl::String => emit_string_eq(ctx, function, llvm_function),
     }
 }
@@ -124,6 +127,55 @@ fn nth_int<'ctx>(
         BasicValueEnum::IntValue(v) => Ok(v),
         other => Err(LlvmError::Codegen(format!(
             "expected integer for `{name}` on `{}`, got `{other:?}`",
+            function.symbol,
+        ))),
+    }
+}
+
+/// Ordered IEEE 754 equality — `NaN` operands always return `false`,
+/// matching source-level `f == f`. Float32 / Float64 share the
+/// emitter; LLVM picks the width from the param's actual type.
+fn emit_float_eq<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry);
+
+    let lhs = nth_float(function, llvm_function, 0, "self")?;
+    let rhs = nth_float(function, llvm_function, 1, "other")?;
+    let cmp = ctx
+        .builder
+        .build_float_compare(FloatPredicate::OEQ, lhs, rhs, "feq")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_float_compare for `{}`", function.symbol),
+                e,
+            )
+        })?;
+    ctx.builder
+        .build_return(Some(&cmp))
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+}
+
+fn nth_float<'ctx>(
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    index: u32,
+    name: &str,
+) -> Result<FloatValue<'ctx>, LlvmError> {
+    let raw = llvm_function.get_nth_param(index).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "missing param `{name}` (#{index}) on `{}`",
+            function.symbol,
+        ))
+    })?;
+    match raw {
+        BasicValueEnum::FloatValue(v) => Ok(v),
+        other => Err(LlvmError::Codegen(format!(
+            "expected float for `{name}` on `{}`, got `{other:?}`",
             function.symbol,
         ))),
     }

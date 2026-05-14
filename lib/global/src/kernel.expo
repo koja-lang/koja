@@ -220,6 +220,24 @@ impl Equality for Int
   fn eq(self, other: Int) -> Bool
 end
 
+impl Equality for Float
+  @doc """
+  IEEE 754 ordered equality for 64-bit floats: `+0.0 == -0.0` is
+  `true`, and `NaN == NaN` is `false`.
+  """
+  @intrinsic
+  fn eq(self, other: Float) -> Bool
+end
+
+impl Equality for Float32
+  @doc """
+  IEEE 754 ordered equality for 32-bit floats: `+0.0 == -0.0` is
+  `true`, and `NaN == NaN` is `false`.
+  """
+  @intrinsic
+  fn eq(self, other: Float32) -> Bool
+end
+
 impl Equality for Int8
   @doc """
   Returns `true` if both 8-bit integers are equal.

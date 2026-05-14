@@ -355,7 +355,10 @@ fn field_format_part(field_name: &str, field_type: &TypeExpr, span: Span) -> Str
 /// opaque: they pick up either a hand-written stdlib impl or a
 /// synthesized impl, so `.format()` always resolves after
 /// monomorphization.
-fn is_opaque_type(te: &TypeExpr) -> bool {
+///
+/// Shared with [`super::derive_equality`] — both synthesizers bail
+/// on the same shapes (no `Debug` / `Equality` impl available).
+pub(super) fn is_opaque_type(te: &TypeExpr) -> bool {
     match te {
         TypeExpr::Named { path, .. } => matches!(
             path.last().map(String::as_str),

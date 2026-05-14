@@ -21,15 +21,98 @@
 //! [`LiteralCoercion`] — same plumbing the four existing coercion
 //! sites use, just invoked at one more site.
 
-use expo_ast::ast::{BinOp, Diagnostic, Expr, UnaryOp};
+use expo_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, UnaryOp};
 use expo_ast::coercion::LiteralCoercion;
 use expo_ast::identifier::ResolvedType;
 use expo_ast::labels::bin_op_label;
 use expo_ast::span::Span;
 
 use super::coercion::{Compatible, check_compatible, coercion_target_mut};
+use super::ctx::Resolver;
+use super::expr::resolve_expr;
 use super::types::{display_resolution, is_primitive, types_equivalent};
 use crate::registry::GlobalRegistry;
+
+const EQ_METHOD: &str = "eq";
+
+/// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
+/// Int/Float widths, String) stay on the [`binary_type`] fast path
+/// — IR-lower emits `icmp eq` / `fcmp oeq` / `strcmp` directly.
+/// User struct / enum operands rewrite to `lhs.eq(rhs)` (wrapped in
+/// `not …` for `!=`) and re-resolve through the normal method-call
+/// path; `derive_equality` guarantees an `Equality` impl is present
+/// for every user type by the time resolve runs.
+pub(super) fn resolve_equality_op_expr(
+    expr: &mut Expr,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let ExprKind::Binary { op, left, right } = &mut expr.kind else {
+        unreachable!("resolve_equality_op_expr called on non-Binary");
+    };
+    let op = *op;
+    resolve_expr(left, resolver, diagnostics);
+    resolve_expr(right, resolver, diagnostics);
+
+    let span = expr.span;
+    let registry = resolver.registry;
+    if eligible_for_primitive_equality(left, right, registry) {
+        return binary_type(op, left, right, span, registry, diagnostics);
+    }
+
+    let left_taken = std::mem::replace(left.as_mut(), placeholder_expr(span));
+    let right_taken = std::mem::replace(right.as_mut(), placeholder_expr(span));
+    let method_call = ExprKind::MethodCall {
+        receiver: Box::new(left_taken),
+        method: EQ_METHOD.to_string(),
+        args: vec![Arg {
+            name: None,
+            value: right_taken,
+            span,
+        }],
+        type_args: Vec::new(),
+    };
+    expr.kind = match op {
+        BinOp::Eq => method_call,
+        BinOp::NotEq => ExprKind::Unary {
+            op: UnaryOp::Not,
+            operand: Box::new(Expr::new(method_call, span)),
+        },
+        _ => unreachable!("resolve_equality_op_expr only handles Eq / NotEq"),
+    };
+    resolve_expr(expr, resolver, diagnostics);
+    expr.resolution.clone()
+}
+
+/// True when both operands are primitive-equality-eligible. Keeps
+/// `Bool ==`, every integer / float width, and `String ==` on the
+/// `icmp` / `strcmp` fast path; everything else routes through
+/// method-call dispatch.
+fn eligible_for_primitive_equality(left: &Expr, right: &Expr, registry: &GlobalRegistry) -> bool {
+    is_primitive_equality_eligible(&left.resolution, registry)
+        && is_primitive_equality_eligible(&right.resolution, registry)
+}
+
+fn is_primitive_equality_eligible(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    const PRIMITIVES: &[&str] = &[
+        "Bool", "Float", "Float32", "Int", "Int16", "Int32", "Int64", "Int8", "String", "UInt16",
+        "UInt32", "UInt64", "UInt8",
+    ];
+    PRIMITIVES.iter().any(|p| is_primitive(ty, registry, p))
+}
+
+/// Stand-in `Expr` used during the [`std::mem::replace`] swap when
+/// rewriting `lhs == rhs` to a method call. The placeholder is
+/// dropped on the next line, so its shape never reaches resolve —
+/// `Unit` literal is the cheapest legal option.
+fn placeholder_expr(span: Span) -> Expr {
+    Expr::new(
+        ExprKind::Literal {
+            value: expo_ast::ast::Literal::Unit,
+        },
+        span,
+    )
+}
 
 pub(super) fn binary_type(
     op: BinOp,
