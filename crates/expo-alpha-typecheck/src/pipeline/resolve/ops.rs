@@ -227,6 +227,12 @@ fn both_aliased(
 /// - Both operands alias-equivalent to `Int` (covers `Int ↔ Int64`
 ///   mixes — the typical FFI-result-vs-literal case).
 /// - Both operands alias-equivalent to `Float` (analogous).
+/// - Both operands are the SAME sized-numeric primitive (`UInt8 ==
+///   UInt8`, `Int32 < Int32`, etc). Same-type sized comparison is a
+///   narrow allowance that lets stdlib byte-walking / FD-handle
+///   code compare values without round-tripping through `Int`. The
+///   broader `IntLiteral`-protocol story (cross-width arithmetic,
+///   mixed sized + default-literal arithmetic) stays deferred.
 /// - One sized-numeric operand (`Int8` … `UInt64`, `Float32`) paired
 ///   with a default `Int` / `Float` literal whose value fits the
 ///   sized type's range. The literal AST node is stamped with the
@@ -244,12 +250,32 @@ fn numeric_comparison_compatible(
 ) -> bool {
     if both_aliased(&left.resolution, &right.resolution, registry, "Int")
         || both_aliased(&left.resolution, &right.resolution, registry, "Float")
+        || both_same_sized_numeric(&left.resolution, &right.resolution, registry)
     {
         return true;
     }
     let lhs = left.resolution.clone();
     let rhs = right.resolution.clone();
     coerce_literal_to(left, &rhs, registry) || coerce_literal_to(right, &lhs, registry)
+}
+
+/// True when `lhs` and `rhs` resolve to the same sized-numeric
+/// primitive. Independent of the alias rule (`Int ≡ Int64`) so
+/// `Int64 == Int64` still flows through the alias path, while
+/// `UInt8 == UInt8` / `Int32 == Int32` / `Float32 == Float32`
+/// pick up here. Sized-vs-default-literal mixes (`UInt8 == 0`)
+/// continue to take the literal-coercion branch in the caller.
+fn both_same_sized_numeric(
+    lhs: &ResolvedType,
+    rhs: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> bool {
+    const SIZED_NUMERIC: &[&str] = &[
+        "Float32", "Int16", "Int32", "Int64", "Int8", "UInt16", "UInt32", "UInt64", "UInt8",
+    ];
+    SIZED_NUMERIC
+        .iter()
+        .any(|name| is_primitive(lhs, registry, name) && is_primitive(rhs, registry, name))
 }
 
 /// Try to stamp a literal-width [`LiteralCoercion`] on `actual` so

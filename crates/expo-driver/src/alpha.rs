@@ -414,17 +414,35 @@ fn check_single_file(path: &Path, mode: ParseMode, emit_ast: bool) {
 /// land first, qualified packages second, user file last — order
 /// is semantically irrelevant (every entry registers under its own
 /// `Identifier`) but keeps debug listings stable.
+///
+/// Single-file callers (`.exps` scripts, standalone `.expo`,
+/// `cmd_check` on one path) always pass `None` for `skip_package` —
+/// those flows never declare project membership.
 fn bundle_with_autoimport(user: SourceFile) -> Vec<SourceFile> {
-    bundle_many_with_autoimport(vec![user])
+    bundle_many_with_autoimport(vec![user], None)
 }
 
 /// Multi-file counterpart to [`bundle_with_autoimport`] for the
 /// project-mode pipeline. Same lead-with-stdlib ordering; the
 /// caller is expected to have already merged project + dependency
 /// sources into `user_files`.
-fn bundle_many_with_autoimport(user_files: Vec<SourceFile>) -> Vec<SourceFile> {
+///
+/// `skip_package` mirrors v1's
+/// [`crate::resolve::insert_stdlib`] convention: when a project IS
+/// one of the curated packages (e.g. building/testing `lib/global`,
+/// `lib/json`, …) the on-disk sources already provide every decl
+/// the autoimport would inject, and a second copy would collide at
+/// registry seal time. Project-mode callers thread
+/// `Some(&config.name)` through; single-file callers pass `None`.
+fn bundle_many_with_autoimport(
+    user_files: Vec<SourceFile>,
+    skip_package: Option<&str>,
+) -> Vec<SourceFile> {
     let mut sources = expo_stdlib::alpha_autoimport_sources();
     sources.extend(expo_stdlib::alpha_qualified_sources());
+    if let Some(skip) = skip_package {
+        sources.retain(|file| file.package != skip);
+    }
     sources.extend(user_files);
     sources
 }
@@ -671,7 +689,10 @@ fn single_file_package(path: &Path) -> String {
 /// through alpha typecheck.
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
     let user_files = collect_project_sources_or_exit(config, root);
-    let parsed = parse_program(bundle_many_with_autoimport(user_files), ParseMode::File);
+    let parsed = parse_program(
+        bundle_many_with_autoimport(user_files, Some(&config.name)),
+        ParseMode::File,
+    );
     match check_program(parsed) {
         Ok(checked) => {
             if emit_ast {
@@ -713,7 +734,7 @@ fn build_project_and_keep(config: &ProjectConfig, root: &Path, output: Option<St
 /// The early `no tests found` path is the lone non-diverging branch.
 fn run_project_tests(config: &ProjectConfig, root: &Path) {
     let user_files = collect_test_project_sources_or_exit(config, root);
-    let bundled = bundle_for_test(user_files, &config.name);
+    let bundled = bundle_many_with_autoimport(user_files, Some(&config.name));
     let mut parsed = parse_program(bundled, ParseMode::File);
 
     let tests = discover_tests(&parsed, &config.name);
@@ -822,37 +843,6 @@ fn collect_test_project_sources(
     Ok(files)
 }
 
-/// Test-mode wrapper around [`bundle_many_with_autoimport`] that
-/// drops any autoimport entries whose `package` matches the project
-/// under test. The stdlib's `lib/global/src/` already provides
-/// `Global.kernel`, `lib/json/src/` already provides `JSON.Decoder`,
-/// etc. — a second copy from `ALPHA_AUTOIMPORT` /
-/// `ALPHA_QUALIFIED` would collide at registry seal time. For every
-/// other package (i.e. user projects, not stdlib packages testing
-/// themselves), the curated bundle is exactly what gets pulled in
-/// during a normal alpha build.
-fn bundle_for_test(user_files: Vec<SourceFile>, project_name: &str) -> Vec<SourceFile> {
-    let mut bundled = bundle_many_with_autoimport(user_files);
-    bundled.retain(|file| !is_autoimport_self_collision(file, project_name));
-    bundled
-}
-
-/// `bundle_many_with_autoimport` synthesizes paths of the form
-/// `<Package.module>` for embedded sources (see
-/// [`expo_stdlib::alpha_autoimport_sources`]). When the project
-/// being tested IS that package, both the project walk and the
-/// autoimport register the same decls; the embedded copy gets
-/// filtered here. Real on-disk paths from the project walk never
-/// start with `<`, so the check is unambiguous.
-fn is_autoimport_self_collision(file: &SourceFile, project_name: &str) -> bool {
-    if file.package != project_name {
-        return false;
-    }
-    file.path
-        .to_str()
-        .is_some_and(|s| s.starts_with('<') && s.ends_with('>'))
-}
-
 /// `expo alpha run` for a project: build into a temp binary, exec
 /// with `args`, forward the exit code, and remove the binary.
 /// Diverges either way (binary status or launch error).
@@ -877,7 +867,10 @@ fn run_project_compiled(config: &ProjectConfig, root: &Path, args: &[String]) ->
 /// process with a formatted error on any failure.
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
     let user_files = collect_project_sources_or_exit(config, root);
-    let parsed = parse_program(bundle_many_with_autoimport(user_files), ParseMode::File);
+    let parsed = parse_program(
+        bundle_many_with_autoimport(user_files, Some(&config.name)),
+        ParseMode::File,
+    );
     let checked = match check_program(parsed) {
         Ok(checked) => checked,
         Err(failure) => {

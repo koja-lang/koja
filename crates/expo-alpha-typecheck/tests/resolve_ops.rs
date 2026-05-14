@@ -314,3 +314,47 @@ fn float_alias_comparison_resolves_to_bool() {
     let checked = typecheck(&use_alias_float("result >= 0.0"));
     assert_eq!(trailing_resolution(&checked), bool_type(&checked));
 }
+
+// ------------------------------------------------------------------
+// Same-sized-numeric comparison. Stdlib byte-walking (`String.bytes`,
+// `Binary.byte_at`, hash digest comparisons) needs `UInt8 == UInt8`
+// without a detour through `Int`. The rule extends naturally to every
+// other sized numeric — same predicate, no per-type arms.
+// ------------------------------------------------------------------
+
+fn use_sized_pair(sized: &str, op_expr: &str) -> String {
+    let extern_decl = format!("@extern \"C\"\nfn produce() -> {sized}\n\n");
+    format!("{extern_decl}fn main\n  a = produce()\n  b = produce()\n  {op_expr}\nend\n")
+}
+
+#[test]
+fn same_sized_numeric_eq_resolves_to_bool() {
+    for sized in [
+        "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64", "Float32",
+    ] {
+        for op in ["==", "!=", "<", ">", "<=", ">="] {
+            let source = use_sized_pair(sized, &format!("a {op} b"));
+            let checked = typecheck(&source);
+            assert_eq!(
+                trailing_resolution(&checked),
+                bool_type(&checked),
+                "source = {source:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn cross_sized_numeric_eq_is_rejected() {
+    let source = "@extern \"C\"\nfn produce_u8() -> UInt8\n\
+        @extern \"C\"\nfn produce_i32() -> Int32\n\
+        fn main\n  a = produce_u8()\n  b = produce_i32()\n  a == b\nend\n";
+    let failure = typecheck_fail(source);
+    assert!(
+        failure.diagnostics.iter().any(|d| d
+            .message
+            .contains("matching Bool, Float, Int, or String operands")),
+        "expected operand-mismatch diagnostic on cross-sized comparison; got {:?}",
+        failure.diagnostics,
+    );
+}
