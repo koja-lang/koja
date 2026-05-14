@@ -1,28 +1,31 @@
-//! Synthesize the host `i64 main()` entry point.
+//! Synthesize the host `main` entry point. Two shapes, picked per
+//! [`expo_alpha_ir::FunctionKind`] of the IR program's entry:
 //!
-//! Two-function shape, mirroring v1's `expo-codegen` convention:
+//! - **Function entry** ([`emit_as_main`]) — legacy v1 `fn main`
+//!   shape. Stamps `void __expo_user_main(i8*)` carrying the user
+//!   body plus an `i64 main()` trampoline that registers the
+//!   thunk as PID 1 and boots the scheduler. Always returns 0.
+//! - **Process entry** ([`emit_process_entry_main`]) — PascalCase
+//!   `Process<C, M, R>` shape. The IR program's entry function is
+//!   a `ProcessEntryWrapper` already defined like any helper; this
+//!   module only synthesizes the host `main` trampoline that
+//!   builds the `C` argument, hands the wrapper to
+//!   `expo_rt_spawn`, runs the scheduler via `expo_rt_main_done`,
+//!   and returns whatever the wrapper stored into
+//!   [`EXIT_CODE_SYMBOL`].
 //!
-//! - `void __expo_user_main(i8*)` — a spawn-wrapper-shaped thunk
-//!   carrying the user body. Always terminates with `ret void`;
-//!   the trailing expression's value (if any) is computed for its
-//!   side effects and then discarded. Single `i8*` parameter
-//!   (ignored) for ABI compatibility with `expo_rt_spawn`'s
-//!   `ProcessFn` typedef.
-//! - `i64 main()` — minimal trampoline: `expo_rt_spawn(
-//!   __expo_user_main, null, 0)` registers the body as PID 1,
-//!   `expo_rt_main_done()` boots the scheduler and runs until
-//!   PID 1 dies, then `ret i64 0`.
+//! The host `main`'s signature varies between shapes:
+//! - Function entry stays at `i64 main()`.
+//! - Process entry uses `i32 main(i32, i8**)` iff the entry state's
+//!   config type is `List<String>` (so the trampoline can build a
+//!   `List<String>` from argc/argv); otherwise it stays at
+//!   `i32 main()` and zero-fills the config alloca.
 //!
 //! Running the user body inside a spawned process (PID 1) is what
 //! lets `expo_rt_self()`, `Ref.call`, `Ref.cast`, and the rest of
 //! the concurrency primitives work from `main` — they need a
 //! `CURRENT_PID >= 1` thread-local and a real mailbox, both of
 //! which the scheduler installs before invoking the spawned thunk.
-//!
-//! Scripts and programs always exit 0 on normal completion. To
-//! surface a non-zero exit code the user must call an explicit
-//! exit intrinsic; the trailing expression's value is not
-//! examined here.
 //!
 //! The [`__expo_app_name`](APP_NAME_SYMBOL) global lives here
 //! because it's the same kind of "runtime convention" plumbing —
@@ -34,7 +37,7 @@
 
 use std::collections::HashSet;
 
-use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRTerminator};
+use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRFunction, IRTerminator, IRType};
 use inkwell::AddressSpace;
 use inkwell::module::Linkage;
 
@@ -42,10 +45,19 @@ use crate::ctx::EmitContext;
 use crate::emit::{self, ValueMap, inkwell_err};
 use crate::error::LlvmError;
 use crate::function::declare_blocks;
-use crate::runtime::{declare_rt_main_done_extern, declare_rt_spawn_extern};
+use crate::runtime::{
+    declare_rt_build_argv_extern, declare_rt_main_done_extern, declare_rt_spawn_extern,
+};
+use crate::types::ir_basic_type;
 
 const APP_NAME_SYMBOL: &str = "__expo_app_name";
 const ENTRY_SYMBOL: &str = "main";
+/// Module-level `i32` global the [`FunctionKind::ProcessEntryWrapper`]
+/// body writes the entry process's exit code into; the synthesized
+/// `main` trampoline returns its value after the scheduler joins.
+/// Function-shaped entries never touch this global (they always
+/// return 0 from `main`).
+pub(crate) const EXIT_CODE_SYMBOL: &str = "__expo_exit_code";
 /// Thunk that carries the user body. Single `i8*` parameter
 /// (ignored) so it matches `expo_rt_spawn`'s `ProcessFn` typedef.
 const USER_MAIN_SYMBOL: &str = "__expo_user_main";
@@ -62,6 +74,19 @@ pub(crate) fn emit_app_name_global(ctx: &EmitContext<'_>, app_name: &str) {
         .add_global(value.get_type(), None, APP_NAME_SYMBOL);
     global.set_initializer(&value);
     global.set_constant(true);
+}
+
+/// Emit the mutable `__expo_exit_code` (i32, init 0) global the
+/// process-entry wrapper writes into. The Function-entry shape never
+/// touches it; the Process-entry trampoline returns its value after
+/// the scheduler joins.
+pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
+    if ctx.module.get_global(EXIT_CODE_SYMBOL).is_some() {
+        return;
+    }
+    let i32_ty = ctx.context.i32_type();
+    let global = ctx.module.add_global(i32_ty, None, EXIT_CODE_SYMBOL);
+    global.set_initializer(&i32_ty.const_zero());
 }
 
 /// Emit `blocks` as a spawn-driven main pair:
@@ -134,6 +159,117 @@ fn define_user_main<'ctx>(
     })();
     ctx.clear_block_map();
     result
+}
+
+/// Synthesize the `main` trampoline for a Process-entry program.
+/// The entry IR function is a [`FunctionKind::ProcessEntryWrapper`]
+/// already declared+defined like any other helper; this trampoline
+/// only handles host-side argv plumbing and the exit-code return.
+///
+/// Signature picks:
+/// - `i32 main(i32, ptr)` iff the wrapper's config type lowers to
+///   `IRType::List(String)` (the entry state is
+///   `Process<List<String>, _, _>`). The body calls
+///   `expo_rt_build_argv(argc, argv, &config_alloca)` to build a
+///   `List<String>` in place before spawning.
+/// - `i32 main()` otherwise. The config alloca is zero-initialized;
+///   non-`List<String>` configs aren't reachable from `expo.toml`
+///   today (Process configs that aren't `List<String>` only make
+///   sense for spawn-from-user-code, not the project entry), but
+///   the shape leaves the door open.
+pub(crate) fn emit_process_entry_main<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    entry: &IRFunction,
+) -> Result<(), LlvmError> {
+    let config_type = entry.params.first().map(|p| &p.ty).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "alpha LLVM emit: process entry wrapper `{}` has no config parameter",
+            entry.symbol,
+        ))
+    })?;
+    let argv_shaped = matches!(
+        config_type,
+        IRType::List(element) if matches!(**element, IRType::String)
+    );
+
+    let i32_ty = ctx.context.i32_type();
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = if argv_shaped {
+        i32_ty.fn_type(&[i32_ty.into(), ptr_ty.into()], false)
+    } else {
+        i32_ty.fn_type(&[], false)
+    };
+    let main_fn = ctx
+        .module
+        .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
+
+    let entry_bb = ctx.context.append_basic_block(main_fn, "entry");
+    ctx.builder.position_at_end(entry_bb);
+
+    let config_llvm_type = ir_basic_type(ctx, config_type)?;
+    let config_alloca = ctx
+        .builder
+        .build_alloca(config_llvm_type, "entry_config")
+        .map_err(|e| inkwell_err("build_alloca entry_config", e))?;
+    if argv_shaped {
+        let argc = main_fn.get_nth_param(0).ok_or_else(|| {
+            LlvmError::Codegen("process entry main missing argc parameter".to_string())
+        })?;
+        let argv = main_fn.get_nth_param(1).ok_or_else(|| {
+            LlvmError::Codegen("process entry main missing argv parameter".to_string())
+        })?;
+        let build_argv = declare_rt_build_argv_extern(ctx);
+        ctx.builder
+            .build_call(
+                build_argv,
+                &[argc.into(), argv.into(), config_alloca.into()],
+                "",
+            )
+            .map_err(|e| inkwell_err("call expo_rt_build_argv", e))?;
+    } else {
+        ctx.builder
+            .build_store(config_alloca, config_llvm_type.const_zero())
+            .map_err(|e| inkwell_err("zero-init entry config", e))?;
+    }
+
+    let wrapper_fn = ctx.declared_function(&entry.symbol).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "alpha LLVM emit: process entry wrapper `{}` not declared before main trampoline emit",
+            entry.symbol,
+        ))
+    })?;
+    let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
+    let config_size = ctx.context.i64_type().const_int(
+        ctx.layouts.target_data.get_abi_size(&config_llvm_type),
+        false,
+    );
+    let spawn_fn = declare_rt_spawn_extern(ctx);
+    ctx.builder
+        .build_call(
+            spawn_fn,
+            &[wrapper_ptr.into(), config_alloca.into(), config_size.into()],
+            "",
+        )
+        .map_err(|e| inkwell_err("call expo_rt_spawn (process entry main)", e))?;
+    let main_done = declare_rt_main_done_extern(ctx);
+    ctx.builder
+        .build_call(main_done, &[], "")
+        .map_err(|e| inkwell_err("call expo_rt_main_done (process entry main)", e))?;
+
+    let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "alpha LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before main trampoline emit",
+        ))
+    })?;
+    let exit_value = ctx
+        .builder
+        .build_load(i32_ty, exit_global.as_pointer_value(), "exit_code")
+        .map_err(|e| inkwell_err("load __expo_exit_code", e))?
+        .into_int_value();
+    ctx.builder
+        .build_return(Some(&exit_value))
+        .map(|_| ())
+        .map_err(|e| inkwell_err("build_return process entry main", e))
 }
 
 /// Define `i64 main()` as a minimal trampoline that hands the

@@ -39,9 +39,11 @@
 //! `cmd_shell` has no file dimension and bypasses the resolver
 //! entirely; REPL fragments are always script-mode. Project mode
 //! routes through [`expo_alpha_ir::lower_program`] +
-//! [`expo_alpha_ir_llvm::compile_program`]; PascalCase Process
-//! entry types (`entry = "App"`) are not yet supported and bail
-//! with a precise diagnostic.
+//! [`expo_alpha_ir_llvm::compile_program`]. PascalCase entries
+//! (`entry = "App"`) name a `Process<C, M, R>` state type and
+//! lower as [`ProjectEntry::Process`]; lowercase entries
+//! (`entry = "main"`) name a `fn main` and lower as
+//! [`ProjectEntry::Function`].
 //!
 //! ## Backend selection
 //!
@@ -72,7 +74,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process;
 
-use expo_alpha_ir::{IRProgram, IRScript, lower_program, lower_script};
+use expo_alpha_ir::{IRProgram, IRScript, ProjectEntry, lower_program, lower_script};
 use expo_alpha_ir_eval::Interpreter;
 use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 use expo_ast::ast::Diagnostic;
@@ -679,7 +681,7 @@ fn build_single_file_program(path: &Path) -> IRProgram {
         }
     };
     let entry = Identifier::new(package, vec!["main".to_string()]);
-    match lower_program(&checked, entry) {
+    match lower_program(&checked, ProjectEntry::Function(entry)) {
         Ok(program) => program,
         Err(err) => {
             eprintln!("error: {err}");
@@ -766,7 +768,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path) {
         }
     };
     let entry = Identifier::new(config.name.clone(), vec!["main".to_string()]);
-    let program = match lower_program(&checked, entry) {
+    let program = match lower_program(&checked, ProjectEntry::Function(entry)) {
         Ok(program) => program,
         Err(err) => {
             eprintln!("error: {err}");
@@ -901,24 +903,23 @@ fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
     }
 }
 
-/// Resolve the project's entry function as an [`Identifier`]. v1
-/// allows PascalCase entries to designate Process types; the alpha
-/// pipeline doesn't synthesize a Process entry yet, so any uppercase
-/// entry bails with a clear error rather than silently skipping the
-/// `spawn` wrapper.
-fn resolve_project_entry(config: &ProjectConfig) -> Identifier {
+/// Resolve the project's entry as a [`ProjectEntry`]. PascalCase
+/// entries name a `Process<C, M, R>` state type
+/// ([`ProjectEntry::Process`]); lowercase entries name a `fn main`
+/// function ([`ProjectEntry::Function`]). The `Function` variant is
+/// transitional and dies with v1 — every project will eventually
+/// route through `Process`.
+fn resolve_project_entry(config: &ProjectConfig) -> ProjectEntry {
     let entry = config.entry.as_deref().unwrap_or_else(|| {
         eprintln!("error: expo.toml has no `entry` field; required for build/run");
         process::exit(1);
     });
+    let identifier = Identifier::new(config.name.clone(), vec![entry.to_string()]);
     if config.entry_type_name().is_some() {
-        eprintln!(
-            "error: alpha pipeline does not yet support PascalCase Process entry `{entry}`; \
-             use a `fn main` entry for now"
-        );
-        process::exit(1);
+        ProjectEntry::Process { state: identifier }
+    } else {
+        ProjectEntry::Function(identifier)
     }
-    Identifier::new(config.name.clone(), vec![entry.to_string()])
 }
 
 /// Walk the project's `src` directories (and recursively, every

@@ -1,8 +1,8 @@
 //! LLVM emit for `IRInstruction::Spawn` / `IRInstruction::Receive`
-//! and the [`FunctionKind::SpawnWrapper`] body. The mailbox surface
-//! lives in `expo-runtime/src/scheduler.rs`; this module is the
-//! sole call site for the `expo_rt_*` declares minted in
-//! [`crate::runtime`].
+//! and the [`FunctionKind::SpawnWrapper`] / [`FunctionKind::ProcessEntryWrapper`]
+//! bodies. The mailbox surface lives in `expo-runtime/src/scheduler.rs`;
+//! this module is the sole call site for the `expo_rt_*` declares
+//! minted in [`crate::runtime`].
 //!
 //! The three pieces snap together as follows:
 //!
@@ -45,6 +45,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::main_wrapper::EXIT_CODE_SYMBOL;
 use crate::runtime::{
     declare_rt_receive_extern, declare_rt_receive_timeout_extern, declare_rt_spawn_extern,
 };
@@ -86,113 +87,275 @@ pub(crate) fn emit_spawn_wrapper_body<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     state: &IRType,
 ) -> Result<(), LlvmError> {
-    let IRType::Struct(state_symbol) = state else {
-        return Err(LlvmError::Codegen(format!(
-            "alpha LLVM emit: SpawnWrapper `{}` declared with non-struct state \
-             `{state:?}` — IR seal invariant violation",
-            function.symbol,
-        )));
-    };
+    let ctx_wrapper = WrapperBodyCtx::resolve(ctx, function, llvm_function, state, "SpawnWrapper")?;
+    let StartBranch {
+        ok_bb,
+        err_bb,
+        ok_complete,
+        ok_payload,
+        result_alloca,
+        ..
+    } = ctx_wrapper.emit_start_dispatch(ctx)?;
 
-    let config_ir_type = function
-        .params
-        .first()
-        .map(|p| p.ty.clone())
-        .ok_or_else(|| {
+    // Ok path: extract state, fire-and-forget run() — its return is
+    // discarded because the scheduler manages the spawned process's
+    // lifecycle through receive loops and shutdown signals.
+    ctx.builder.position_at_end(ok_bb);
+    let state_val = load_ok_state(ctx, &ctx_wrapper, ok_complete, ok_payload, result_alloca)?;
+    ctx.builder
+        .build_call(ctx_wrapper.run_fn, &[state_val.into()], "")
+        .map_err(|e| inkwell_err("build_call run", e))?;
+    ctx.builder
+        .build_return(None)
+        .map_err(|e| inkwell_err("build_return wrapper ok", e))?;
+
+    ctx.builder.position_at_end(err_bb);
+    ctx.builder
+        .build_return(None)
+        .map_err(|e| inkwell_err("build_return wrapper err", e))?;
+
+    Ok(())
+}
+
+/// Synthesize the body of a [`expo_alpha_ir::FunctionKind::ProcessEntryWrapper`]
+/// function. Extends [`emit_spawn_wrapper_body`] with an exit-code
+/// hand-off so the synthesized `main` trampoline can return a
+/// process exit status:
+///
+/// - On `start` returning `Ok(state)`, the wrapper calls
+///   `state.run(state)`, threads the resulting `StopReason` through
+///   `Global.StopReason.code()`, truncates the `i64` to `i32`, and
+///   stores it into the `__expo_exit_code` global.
+/// - On `start` returning `Err(stop_reason)`, the wrapper hands the
+///   `StopReason` directly to `Global.StopReason.code()`, truncates,
+///   and stores. The wrapper always `ret void`s — the trampoline's
+///   `ret i32` reads the global after `expo_rt_main_done()` joins
+///   the scheduler.
+pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    state: &IRType,
+) -> Result<(), LlvmError> {
+    let ctx_wrapper =
+        WrapperBodyCtx::resolve(ctx, function, llvm_function, state, "ProcessEntryWrapper")?;
+    let code_symbol = "Global.StopReason.code";
+    let code_fn = ctx.module.get_function(code_symbol).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "alpha LLVM emit: ProcessEntryWrapper `{}` cannot resolve StopReason method \
+             `{code_symbol}`",
+            function.symbol,
+        ))
+    })?;
+
+    let StartBranch {
+        ok_bb,
+        err_bb,
+        ok_complete,
+        ok_payload,
+        result_alloca,
+        result_outer_name,
+    } = ctx_wrapper.emit_start_dispatch(ctx)?;
+
+    // Ok path: extract state, call run, then route run's StopReason
+    // return through StopReason.code() into __expo_exit_code.
+    ctx.builder.position_at_end(ok_bb);
+    let state_val = load_ok_state(ctx, &ctx_wrapper, ok_complete, ok_payload, result_alloca)?;
+    let run_call = ctx
+        .builder
+        .build_call(ctx_wrapper.run_fn, &[state_val.into()], "stop_reason")
+        .map_err(|e| inkwell_err("build_call run", e))?;
+    let stop_reason = run_call.try_as_basic_value().basic().ok_or_else(|| {
+        LlvmError::Codegen("run() did not produce a StopReason value".to_string())
+    })?;
+    store_exit_code(ctx, code_fn, stop_reason)?;
+    ctx.builder
+        .build_return(None)
+        .map_err(|e| inkwell_err("build_return entry wrapper ok", e))?;
+
+    // Err path: extract the StopReason payload from Result.Err, hand
+    // it to StopReason.code(), store the exit code.
+    ctx.builder.position_at_end(err_bb);
+    let stop_reason_val = load_err_stop_reason(
+        ctx,
+        &ctx_wrapper,
+        &result_outer_name,
+        result_alloca,
+        code_fn,
+    )?;
+    store_exit_code(ctx, code_fn, stop_reason_val)?;
+    ctx.builder
+        .build_return(None)
+        .map_err(|e| inkwell_err("build_return entry wrapper err", e))?;
+
+    Ok(())
+}
+
+/// Shared inputs both wrapper bodies need before they branch. Owns
+/// the `start` + `run` function handles and the typed state LLVM
+/// type so the per-kind tails can keep their dispatch shape flat.
+struct WrapperBodyCtx<'ctx> {
+    state_llvm_type: BasicTypeEnum<'ctx>,
+    start_fn: FunctionValue<'ctx>,
+    run_fn: FunctionValue<'ctx>,
+    typed_config: BasicValueEnum<'ctx>,
+    llvm_function: FunctionValue<'ctx>,
+    function_label: IRSymbol,
+}
+
+struct StartBranch<'ctx> {
+    ok_bb: BasicBlock<'ctx>,
+    err_bb: BasicBlock<'ctx>,
+    ok_complete: StructType<'ctx>,
+    ok_payload: Option<StructType<'ctx>>,
+    result_alloca: PointerValue<'ctx>,
+    result_outer_name: String,
+}
+
+impl<'ctx> WrapperBodyCtx<'ctx> {
+    fn resolve(
+        ctx: &EmitContext<'ctx>,
+        function: &IRFunction,
+        llvm_function: FunctionValue<'ctx>,
+        state: &IRType,
+        kind_label: &str,
+    ) -> Result<Self, LlvmError> {
+        let IRType::Struct(state_symbol) = state else {
+            return Err(LlvmError::Codegen(format!(
+                "alpha LLVM emit: {kind_label} `{}` declared with non-struct state `{state:?}` — \
+                 IR seal invariant violation",
+                function.symbol,
+            )));
+        };
+
+        let config_ir_type = function
+            .params
+            .first()
+            .map(|p| p.ty.clone())
+            .ok_or_else(|| {
+                LlvmError::Codegen(format!(
+                    "alpha LLVM emit: {kind_label} `{}` has no config parameter",
+                    function.symbol,
+                ))
+            })?;
+        let config_llvm_type = ir_basic_type(ctx, &config_ir_type)?;
+
+        let start_symbol = mangled_method_name(state_symbol, &[], "start", &[]);
+        let start_fn = ctx.declared_function(&start_symbol).ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "alpha LLVM emit: SpawnWrapper `{}` has no config parameter",
+                "alpha LLVM emit: {kind_label} `{}` cannot resolve start method `{start_symbol}`",
                 function.symbol,
             ))
         })?;
-    let config_llvm_type = ir_basic_type(ctx, &config_ir_type)?;
-
-    let start_symbol = mangled_method_name(state_symbol, &[], "start", &[]);
-    let start_fn = ctx.declared_function(&start_symbol).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "alpha LLVM emit: SpawnWrapper `{}` cannot resolve start method `{start_symbol}`",
-            function.symbol,
-        ))
-    })?;
-    let run_symbol = mangled_method_name(state_symbol, &[], "run", &[]);
-    let run_fn = ctx.declared_function(&run_symbol).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "alpha LLVM emit: SpawnWrapper `{}` cannot resolve run method `{run_symbol}`",
-            function.symbol,
-        ))
-    })?;
-
-    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
-    let ok_bb = ctx.context.append_basic_block(llvm_function, "start_ok");
-    let err_bb = ctx.context.append_basic_block(llvm_function, "start_err");
-
-    ctx.builder.position_at_end(entry_bb);
-
-    let raw_ptr = llvm_function
-        .get_nth_param(0)
-        .ok_or_else(|| {
+        let run_symbol = mangled_method_name(state_symbol, &[], "run", &[]);
+        let run_fn = ctx.declared_function(&run_symbol).ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "alpha LLVM emit: SpawnWrapper `{}` declaration has no param #0",
+                "alpha LLVM emit: {kind_label} `{}` cannot resolve run method `{run_symbol}`",
                 function.symbol,
             ))
-        })?
-        .into_pointer_value();
-    let typed_config = ctx
-        .builder
-        .build_load(config_llvm_type, raw_ptr, "loaded_config")
-        .map_err(|e| inkwell_err("build_load loaded_config", e))?;
+        })?;
 
-    let start_call = ctx
-        .builder
-        .build_call(start_fn, &[typed_config.into()], "start_result")
-        .map_err(|e| inkwell_err("build_call start", e))?;
-    let result_value = start_call
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("start() did not produce a value".to_string()))?;
+        let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
+        ctx.builder.position_at_end(entry_bb);
+        let raw_ptr = llvm_function
+            .get_nth_param(0)
+            .ok_or_else(|| {
+                LlvmError::Codegen(format!(
+                    "alpha LLVM emit: {kind_label} `{}` declaration has no param #0",
+                    function.symbol,
+                ))
+            })?
+            .into_pointer_value();
+        let typed_config = ctx
+            .builder
+            .build_load(config_llvm_type, raw_ptr, "loaded_config")
+            .map_err(|e| inkwell_err("build_load loaded_config", e))?;
 
-    // The Result<state, StopReason> outer is `{ [N x iAlign] }`
-    // (see `crate::layout::enums`); the alpha enum machinery
-    // gives us per-variant `complete` structs with the layout
-    // `{ i8 tag, [pad x i8], payload }`. We GEP through variant 0
-    // (`Result.Ok`) to read the tag and payload — every variant
-    // shares the same `i8` tag prefix, so variant 0's complete
-    // works for the tag check too.
-    let result_outer = result_value.into_struct_value().get_type();
-    let result_outer_name = result_outer.get_name().and_then(|n| n.to_str().ok()).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "alpha LLVM emit: SpawnWrapper `{}` could not resolve start return type's struct name",
-            function.symbol,
-        ))
-    })?;
-    let (ok_complete, ok_payload) = ctx
-        .layouts
-        .enum_variant_types(result_outer_name, IRVariantTag(0));
-    let result_alloca = ctx
-        .builder
-        .build_alloca(result_outer, "result")
-        .map_err(|e| inkwell_err("build_alloca result", e))?;
-    ctx.builder
-        .build_store(result_alloca, result_value)
-        .map_err(|e| inkwell_err("build_store result", e))?;
+        let state_llvm_type = ir_basic_type(ctx, state)?;
 
-    let i8_ty = ctx.context.i8_type();
-    let tag = read_variant_tag(ctx, ok_complete, result_alloca)?;
-    let is_ok = ctx
-        .builder
-        .build_int_compare(IntPredicate::EQ, tag, i8_ty.const_int(0, false), "is_ok")
-        .map_err(|e| inkwell_err("build_int_compare is_ok", e))?;
-    ctx.builder
-        .build_conditional_branch(is_ok, ok_bb, err_bb)
-        .map_err(|e| inkwell_err("build_conditional_branch wrapper", e))?;
+        Ok(Self {
+            state_llvm_type,
+            start_fn,
+            run_fn,
+            typed_config,
+            llvm_function,
+            function_label: function.symbol.clone(),
+        })
+    }
 
-    // -- Ok path: extract state, chain into run --------------------------
-    ctx.builder.position_at_end(ok_bb);
-    let state_llvm_type = ir_basic_type(ctx, state)?;
+    fn emit_start_dispatch(&self, ctx: &EmitContext<'ctx>) -> Result<StartBranch<'ctx>, LlvmError> {
+        let start_call = ctx
+            .builder
+            .build_call(self.start_fn, &[self.typed_config.into()], "start_result")
+            .map_err(|e| inkwell_err("build_call start", e))?;
+        let result_value = start_call
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| LlvmError::Codegen("start() did not produce a value".to_string()))?;
+
+        let result_outer = result_value.into_struct_value().get_type();
+        let result_outer_name = result_outer
+            .get_name()
+            .and_then(|n| n.to_str().ok())
+            .ok_or_else(|| {
+                LlvmError::Codegen(format!(
+                    "alpha LLVM emit: wrapper `{}` could not resolve start return type's struct \
+                     name",
+                    self.function_label,
+                ))
+            })?
+            .to_string();
+        let (ok_complete, ok_payload) = ctx
+            .layouts
+            .enum_variant_types(&result_outer_name, IRVariantTag(0));
+        let result_alloca = ctx
+            .builder
+            .build_alloca(result_outer, "result")
+            .map_err(|e| inkwell_err("build_alloca result", e))?;
+        ctx.builder
+            .build_store(result_alloca, result_value)
+            .map_err(|e| inkwell_err("build_store result", e))?;
+
+        let ok_bb = ctx
+            .context
+            .append_basic_block(self.llvm_function, "start_ok");
+        let err_bb = ctx
+            .context
+            .append_basic_block(self.llvm_function, "start_err");
+
+        let i8_ty = ctx.context.i8_type();
+        let tag = read_variant_tag(ctx, ok_complete, result_alloca)?;
+        let is_ok = ctx
+            .builder
+            .build_int_compare(IntPredicate::EQ, tag, i8_ty.const_int(0, false), "is_ok")
+            .map_err(|e| inkwell_err("build_int_compare is_ok", e))?;
+        ctx.builder
+            .build_conditional_branch(is_ok, ok_bb, err_bb)
+            .map_err(|e| inkwell_err("build_conditional_branch wrapper", e))?;
+
+        Ok(StartBranch {
+            ok_bb,
+            err_bb,
+            ok_complete,
+            ok_payload,
+            result_alloca,
+            result_outer_name,
+        })
+    }
+}
+
+fn load_ok_state<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    wrapper: &WrapperBodyCtx<'ctx>,
+    ok_complete: StructType<'ctx>,
+    ok_payload: Option<StructType<'ctx>>,
+    result_alloca: PointerValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let ok_payload_struct = ok_payload.ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: SpawnWrapper `{}` start return type's `Ok` variant declares no \
-             payload — IR seal invariant violation",
-            function.symbol,
+            "alpha LLVM emit: wrapper `{}` start return type's `Ok` variant declares no payload \
+             — IR seal invariant violation",
+            wrapper.function_label,
         ))
     })?;
     let payload_struct_ptr = ctx
@@ -203,24 +366,85 @@ pub(crate) fn emit_spawn_wrapper_body<'ctx>(
         .builder
         .build_struct_gep(ok_payload_struct, payload_struct_ptr, 0, "ok_state_field")
         .map_err(|e| inkwell_err("build_struct_gep ok_state_field", e))?;
-    let state_val = ctx
+    ctx.builder
+        .build_load(wrapper.state_llvm_type, state_ptr, "state")
+        .map_err(|e| inkwell_err("build_load state", e))
+}
+
+fn load_err_stop_reason<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    wrapper: &WrapperBodyCtx<'ctx>,
+    result_outer_name: &str,
+    result_alloca: PointerValue<'ctx>,
+    code_fn: FunctionValue<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let stop_reason_llvm_type = code_fn
+        .get_type()
+        .get_param_types()
+        .into_iter()
+        .next()
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!(
+                "alpha LLVM emit: wrapper `{}` StopReason.code has no receiver parameter",
+                wrapper.function_label,
+            ))
+        })?
+        .into_struct_type();
+    let (err_complete, err_payload) = ctx
+        .layouts
+        .enum_variant_types(result_outer_name, IRVariantTag(1));
+    let err_payload_struct = err_payload.ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "alpha LLVM emit: wrapper `{}` start return type's `Err` variant declares no payload \
+             — IR seal invariant violation",
+            wrapper.function_label,
+        ))
+    })?;
+    let payload_struct_ptr = ctx
         .builder
-        .build_load(state_llvm_type, state_ptr, "state")
-        .map_err(|e| inkwell_err("build_load state", e))?;
+        .build_struct_gep(err_complete, result_alloca, 2, "err_payload_struct")
+        .map_err(|e| inkwell_err("build_struct_gep err_payload_struct", e))?;
+    let stop_reason_ptr = ctx
+        .builder
+        .build_struct_gep(
+            err_payload_struct,
+            payload_struct_ptr,
+            0,
+            "err_stop_reason_field",
+        )
+        .map_err(|e| inkwell_err("build_struct_gep err_stop_reason_field", e))?;
     ctx.builder
-        .build_call(run_fn, &[state_val.into()], "")
-        .map_err(|e| inkwell_err("build_call run", e))?;
-    ctx.builder
-        .build_return(None)
-        .map_err(|e| inkwell_err("build_return wrapper ok", e))?;
+        .build_load(stop_reason_llvm_type, stop_reason_ptr, "stop_reason")
+        .map_err(|e| inkwell_err("build_load stop_reason", e))
+}
 
-    // -- Err path --------------------------------------------------------
-    ctx.builder.position_at_end(err_bb);
+fn store_exit_code<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    code_fn: FunctionValue<'ctx>,
+    stop_reason: BasicValueEnum<'ctx>,
+) -> Result<(), LlvmError> {
+    let code_call = ctx
+        .builder
+        .build_call(code_fn, &[stop_reason.into()], "exit_code_i64")
+        .map_err(|e| inkwell_err("build_call StopReason.code", e))?;
+    let code_i64 = code_call
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| LlvmError::Codegen("StopReason.code did not produce a value".to_string()))?
+        .into_int_value();
+    let code_i32 = ctx
+        .builder
+        .build_int_truncate(code_i64, ctx.context.i32_type(), "exit_code_i32")
+        .map_err(|e| inkwell_err("build_int_truncate exit_code", e))?;
+    let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "alpha LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before wrapper body emit",
+        ))
+    })?;
     ctx.builder
-        .build_return(None)
-        .map_err(|e| inkwell_err("build_return wrapper err", e))?;
-
-    Ok(())
+        .build_store(exit_global.as_pointer_value(), code_i32)
+        .map(|_| ())
+        .map_err(|e| inkwell_err("build_store __expo_exit_code", e))
 }
 
 /// Read the `i8` variant tag (always at field 0 of every variant's

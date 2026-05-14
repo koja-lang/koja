@@ -66,8 +66,15 @@ run_project_dir() {
     skipped=$((skipped + 1))
     return
   fi
+  # Forward fixture-specific argv to the compiled binary so `process_argv`
+  # can exercise its `Process<List<String>, ..>` entry. Mirrors the harness in
+  # `tests/lang/lang_suite.rs`, which appends the same args after `--`.
+  local extra_args=()
+  case "$(basename "$dir")" in
+    process_argv) extra_args=(-- hello world) ;;
+  esac
   local actual
-  actual="$(cd "$dir" && "$EXPO_BIN" alpha run --backend=llvm 2>/dev/null)"
+  actual="$(cd "$dir" && "$EXPO_BIN" alpha run --backend=llvm "${extra_args[@]}" 2>/dev/null)"
   local code=$?
   local expected_code=0
   if [[ -f "$dir/expected.exit_code" ]]; then

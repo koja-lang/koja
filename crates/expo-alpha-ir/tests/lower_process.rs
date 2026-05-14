@@ -19,7 +19,7 @@ use std::path::PathBuf;
 
 use expo_alpha_ir::{
     FunctionKind, IRBlockId, IRFunction, IRInstruction, IRProgram, IRTerminator, IRType,
-    ReceiveTag, lower_program,
+    ProjectEntry, ReceiveTag, lower_program,
 };
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
@@ -60,13 +60,37 @@ const PROCESS_STUB: &str = "
       id: Int
     end
 
+    protocol ExitStatus
+      fn code(self) -> Int
+    end
+
+    impl ExitStatus for StopReason
+      fn code(self) -> Int
+        match self
+          StopReason.Normal -> 0
+          StopReason.Shutdown -> 1
+        end
+      end
+    end
+
     protocol Process<C, M, R>
       fn start(move config: C) -> Result<Self, StopReason>
       fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+      fn run(move self) -> StopReason
     end
     ";
 
 fn lower(source: &str) -> IRProgram {
+    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
+    lower_with_entry(source, ProjectEntry::Function(entry))
+}
+
+fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
+    let state = Identifier::new(PACKAGE, vec![state_name.to_string()]);
+    lower_with_entry(source, ProjectEntry::Process { state })
+}
+
+fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
     let mut sources = expo_stdlib::alpha_autoimport_sources();
     sources.push(SourceFile {
         package: "Global".to_string(),
@@ -91,7 +115,6 @@ fn lower(source: &str) -> IRProgram {
                 .join("\n"),
         )
     });
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
     lower_program(&checked, entry).expect("lowering should succeed")
 }
 
@@ -117,6 +140,10 @@ fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
 
           fn handle(move self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
             Step.Done(StopReason.Normal)
+          end
+
+          fn run(move self) -> StopReason
+            StopReason.Normal
           end
         end
 
@@ -214,6 +241,10 @@ fn spawn_dedupes_wrapper_across_call_sites() {
 
           fn handle(move self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
             Step.Done(StopReason.Normal)
+          end
+
+          fn run(move self) -> StopReason
+            StopReason.Normal
           end
         end
 
@@ -442,5 +473,78 @@ fn receive_arm_payload_local_is_declared_with_resolved_type() {
     assert!(
         payload_decl,
         "receive arm payload local {payload_local} should be declared in the entry block",
+    );
+}
+
+#[test]
+fn process_entry_lowers_to_process_entry_wrapper() {
+    let program = lower_process_entry(
+        "
+        struct App
+        end
+
+        enum AppMsg
+          Greet
+        end
+
+        impl Process<App, AppMsg, String> for App
+          fn start(move config: App) -> Result<Self, StopReason>
+            Result.Ok(config)
+          end
+
+          fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+            Step.Continue(self)
+          end
+
+          fn run(move self) -> StopReason
+            StopReason.Normal
+          end
+        end
+        ",
+        "App",
+    );
+
+    let wrapper_mangled = format!("{PACKAGE}.App.__entry_wrapper");
+    assert_eq!(
+        program.entry_point.mangled(),
+        wrapper_mangled,
+        "Process-entry should stamp entry_point on the synthesized `__entry_wrapper`",
+    );
+    let wrapper = program
+        .function(&wrapper_mangled)
+        .expect("entry wrapper must be registered as a function");
+    match &wrapper.kind {
+        FunctionKind::ProcessEntryWrapper { state } => {
+            assert!(
+                matches!(state, IRType::Struct(symbol) if symbol.mangled() == format!("{PACKAGE}.App")),
+                "ProcessEntryWrapper.state should reference the App struct",
+            );
+        }
+        other => panic!("expected ProcessEntryWrapper, got {other:?}"),
+    }
+    assert_eq!(
+        wrapper.return_type,
+        IRType::Unit,
+        "entry wrapper's IR-level return type is Unit; the LLVM emitter \
+         remaps to void(i8*)",
+    );
+    let config_param = wrapper
+        .params
+        .first()
+        .expect("entry wrapper must declare its config parameter");
+    assert!(
+        matches!(&config_param.ty, IRType::Struct(symbol) if symbol.mangled() == format!("{PACKAGE}.App")),
+        "entry wrapper's config type should match the App state",
+    );
+
+    // start/run must be registered so the seal pass + LLVM body emit can
+    // dispatch through them.
+    assert!(
+        program.function(&format!("{PACKAGE}.App.start")).is_some(),
+        "App.start must be registered when the entry is a Process state",
+    );
+    assert!(
+        program.function(&format!("{PACKAGE}.App.run")).is_some(),
+        "App.run must be registered when the entry is a Process state",
     );
 }

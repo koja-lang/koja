@@ -40,6 +40,7 @@ pub(crate) const STRING_SLICE_SYMBOL: &str = "expo_string_slice";
 // `expo_rt_*` mailbox / scheduler symbols defined in
 // `expo-runtime/src/scheduler.rs`. Backend-side declare helpers
 // live below the existing `declare_*_extern` family.
+pub(crate) const RT_BUILD_ARGV_SYMBOL: &str = "expo_rt_build_argv";
 pub(crate) const RT_KILL_SYMBOL: &str = "expo_rt_kill";
 pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "expo_rt_main_done";
 pub(crate) const RT_PROCESS_ALIVE_SYMBOL: &str = "expo_rt_is_process_alive";
@@ -526,4 +527,24 @@ pub(crate) fn declare_rt_main_done_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
     let signature = ctx.context.void_type().fn_type(&[], false);
     ctx.module
         .add_function(RT_MAIN_DONE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `expo_rt_build_argv`. Signature:
+/// `void expo_rt_build_argv(i32 argc, i8** argv, i8* out)`. Builds a
+/// `List<String>` from C `argc`/`argv` (skipping `argv[0]`) and
+/// writes it into `*out`. Used by the process-entry `main`
+/// trampoline when the entry state's `Process<C, ..>` impl picks
+/// `C = List<String>`.
+pub(crate) fn declare_rt_build_argv_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_BUILD_ARGV_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i32_ty = ctx.context.i32_type();
+    let signature = ctx
+        .context
+        .void_type()
+        .fn_type(&[i32_ty.into(), ptr_ty.into(), ptr_ty.into()], false);
+    ctx.module
+        .add_function(RT_BUILD_ARGV_SYMBOL, signature, Some(Linkage::External))
 }

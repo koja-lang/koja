@@ -29,7 +29,7 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{IRProgram, IRScript, lower_program, lower_script};
+use expo_alpha_ir::{IRProgram, IRScript, ProjectEntry, lower_program, lower_script};
 use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::identifier::Identifier;
 use expo_parser::{ParseMode, SourceFile, parse_program};
@@ -55,7 +55,7 @@ pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProg
 pub fn lower_program_source(source: &str) -> IRProgram {
     let checked = typecheck(source, ParseMode::File);
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
+    lower_program(&checked, ProjectEntry::Function(entry)).expect("lowering should succeed")
 }
 
 pub fn lower_script_source(source: &str) -> IRScript {

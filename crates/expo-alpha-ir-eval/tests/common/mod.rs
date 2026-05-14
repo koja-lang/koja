@@ -27,7 +27,7 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{lower_program, lower_script};
+use expo_alpha_ir::{ProjectEntry, lower_program, lower_script};
 use expo_alpha_ir_eval::{Interpreter, RuntimeError, Value};
 use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::identifier::Identifier;
@@ -53,7 +53,8 @@ pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProg
 pub fn evaluate_program(source: &str) -> Result<Value, RuntimeError> {
     let checked = typecheck(source, ParseMode::File);
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    let program = lower_program(&checked, entry).expect("alpha lowering should succeed");
+    let program = lower_program(&checked, ProjectEntry::Function(entry))
+        .expect("alpha lowering should succeed");
     Interpreter::run_program(program)
 }
 

@@ -30,7 +30,7 @@ impl IRSymbol {
     /// Mint an `IRSymbol` from a declaration's canonical AST
     /// identifier. The only path that introduces a new symbol root —
     /// every other `IRSymbol` is [`Self::derived`] off one of these.
-    pub(crate) fn from_identifier(identifier: &Identifier) -> Self {
+    pub fn from_identifier(identifier: &Identifier) -> Self {
         Self(identifier.qualified_name())
     }
 
@@ -145,16 +145,27 @@ impl fmt::Display for IRBlockId {
 ///   monomorphized state cell shares one wrapper symbol; distinct
 ///   instantiations get distinct wrappers exactly like generic
 ///   structs do.
+/// - `ProcessEntryWrapper { state }` is the project-mode entry
+///   thunk minted when `expo.toml`'s `entry` names a PascalCase
+///   `Process<C, M, R>` type. Same `void(i8*)` shape and `start →
+///   run` dispatch as `SpawnWrapper`, but the LLVM emit pass also
+///   funnels the resulting `StopReason` through `ExitStatus.code()`
+///   and stores it in the module-level `__expo_exit_code` global
+///   that the synthesized `main` trampoline returns from. One per
+///   program (the entry can't be generic — `expo.toml` names a
+///   single concrete state type).
 ///
 /// Per-kind body shape is enforced by the seal pass. The
-/// `Extern`, `Intrinsic`, and `SpawnWrapper` variants carry data,
-/// which is why this enum is not `Copy` — `Clone` callers compose
-/// the per-fn metadata without ambient interior mutation.
+/// `Extern`, `Intrinsic`, `SpawnWrapper`, and `ProcessEntryWrapper`
+/// variants carry data, which is why this enum is not `Copy` —
+/// `Clone` callers compose the per-fn metadata without ambient
+/// interior mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
     Closure { env_layout: Vec<IRType> },
     Extern(IRExternAttrs),
     Intrinsic(IRIntrinsicId),
+    ProcessEntryWrapper { state: IRType },
     Regular,
     SpawnWrapper { state: IRType },
 }

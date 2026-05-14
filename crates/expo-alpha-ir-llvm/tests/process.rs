@@ -25,7 +25,7 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{IRProgram, lower_program};
+use expo_alpha_ir::{IRProgram, ProjectEntry, lower_program};
 use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
@@ -96,6 +96,19 @@ const PROCESS_STUB: &str = "
       fn call(self, msg: M, timeout_ms: Int) -> Result<R, CallError>
     end
 
+    protocol ExitStatus
+      fn code(self) -> Int
+    end
+
+    impl ExitStatus for StopReason
+      fn code(self) -> Int
+        match self
+          StopReason.Normal -> 0
+          StopReason.Shutdown -> 1
+        end
+      end
+    end
+
     protocol Process<C, M, R>
       fn start(move config: C) -> Result<Self, StopReason>
       fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
@@ -104,6 +117,16 @@ const PROCESS_STUB: &str = "
     ";
 
 fn lower(source: &str) -> IRProgram {
+    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
+    lower_with_entry(source, ProjectEntry::Function(entry))
+}
+
+fn lower_process_entry(source: &str, state: &str) -> IRProgram {
+    let state_id = Identifier::new(PACKAGE, vec![state.to_string()]);
+    lower_with_entry(source, ProjectEntry::Process { state: state_id })
+}
+
+fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
     let mut sources = expo_stdlib::alpha_autoimport_sources();
     sources.push(SourceFile {
         package: "Global".to_string(),
@@ -128,12 +151,16 @@ fn lower(source: &str) -> IRProgram {
                 .join("\n"),
         )
     });
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
     lower_program(&checked, entry).expect("lowering should succeed")
 }
 
 fn emit(source: &str) -> String {
     let program = lower(source);
+    emit_llvm_ir(&program, APP_NAME).expect("LLVM emit should succeed")
+}
+
+fn emit_with_process_entry(source: &str, state: &str) -> String {
+    let program = lower_process_entry(source, state);
     emit_llvm_ir(&program, APP_NAME).expect("LLVM emit should succeed")
 }
 
@@ -502,4 +529,84 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
     assert_contains(&ir_text, "call_merge:");
     assert_contains(&ir_text, "target_alive");
     assert_contains(&ir_text, "reply_value");
+}
+
+/// Minimal Process-entry fixture mirroring the alpha lang
+/// `process_entry` test: an `App` struct, a `Process<App, (), ()>`
+/// impl whose `start` returns the config unchanged and whose `run`
+/// terminates with `StopReason.Normal`. No PascalCase entry helper
+/// — `lower_process_entry` synthesizes the `App.__entry_wrapper`
+/// from the impl signature.
+const APP_PROCESS_ENTRY: &str = "
+    struct App
+      flag: Int
+    end
+
+    impl Process<App, (), ()> for App
+      fn start(move config: App) -> Result<App, StopReason>
+        Result.Ok(config)
+      end
+
+      fn handle(move self, msg: (), from: Option<ReplyTo<()>>) -> Step<App>
+        Step.Done(StopReason.Normal)
+      end
+
+      fn run(move self) -> StopReason
+        StopReason.Normal
+      end
+    end
+    ";
+
+#[test]
+fn process_entry_declares_exit_code_global_and_main_trampoline() {
+    let ir_text = emit_with_process_entry(APP_PROCESS_ENTRY, "App");
+
+    assert_contains(&ir_text, "@__expo_exit_code = global i32 0");
+    assert_contains(&ir_text, "define i32 @main()");
+    assert_contains(
+        &ir_text,
+        "call i64 @expo_rt_spawn(ptr @TestApp.App.__entry_wrapper",
+    );
+    assert_contains(&ir_text, "declare void @expo_rt_main_done()");
+    assert_contains(&ir_text, "call void @expo_rt_main_done()");
+    assert_contains(&ir_text, "load i32, ptr @__expo_exit_code");
+    assert_contains(&ir_text, "ret i32 ");
+}
+
+#[test]
+fn process_entry_wrapper_body_calls_stopreason_code_on_both_paths() {
+    let ir_text = emit_with_process_entry(APP_PROCESS_ENTRY, "App");
+
+    assert_contains(&ir_text, "define void @TestApp.App.__entry_wrapper(ptr");
+    assert_contains(&ir_text, "start_ok:");
+    assert_contains(&ir_text, "start_err:");
+    assert_contains(&ir_text, "call i64 @Global.StopReason.code");
+    assert_contains(&ir_text, "@__expo_exit_code");
+}
+
+#[test]
+fn process_entry_with_list_string_config_uses_argv_main_signature() {
+    let source = "
+        struct ArgvApp
+          argv: List<String>
+        end
+
+        impl Process<List<String>, (), ()> for ArgvApp
+          fn start(move config: List<String>) -> Result<ArgvApp, StopReason>
+            Result.Ok(ArgvApp{argv: config})
+          end
+
+          fn handle(move self, msg: (), from: Option<ReplyTo<()>>) -> Step<ArgvApp>
+            Step.Done(StopReason.Normal)
+          end
+
+          fn run(move self) -> StopReason
+            StopReason.Normal
+          end
+        end
+        ";
+    let ir_text = emit_with_process_entry(source, "ArgvApp");
+
+    assert_contains(&ir_text, "define i32 @main(i32 %0, ptr %1)");
+    assert_contains(&ir_text, "@expo_rt_build_argv");
 }

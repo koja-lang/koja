@@ -5,6 +5,8 @@
 
 use crate::IRProgram;
 use crate::function::{FunctionKind, IRInstruction};
+use crate::mangling::mangled_method_name;
+use crate::types::IRType;
 
 use super::closures::seal_closure_ops;
 use super::enums::seal_enum_ops;
@@ -27,6 +29,36 @@ pub(crate) fn seal_program(program: &IRProgram) {
     seal_program_enum_ops(program);
     seal_program_closure_ops(program);
     seal_program_loadconst_pool(program);
+    seal_program_entry_wrappers(program);
+}
+
+/// Every [`FunctionKind::ProcessEntryWrapper`] must point at a struct
+/// state whose `start` and `run` methods are registered in the
+/// IRProgram. LLVM emit dereferences both symbols when synthesizing
+/// the wrapper body; a miss here would surface as a codegen-time
+/// panic instead of a clear seal violation.
+fn seal_program_entry_wrappers(program: &IRProgram) {
+    for pkg in &program.packages {
+        for (owner, function) in &pkg.functions {
+            let FunctionKind::ProcessEntryWrapper { state } = &function.kind else {
+                continue;
+            };
+            let IRType::Struct(state_symbol) = state else {
+                seal_panic(&format!(
+                    "process entry wrapper `{owner}` declared with non-struct state `{state:?}`",
+                ));
+            };
+            for method in ["start", "run"] {
+                let symbol = mangled_method_name(state_symbol, &[], method, &[]);
+                if program.function(symbol.mangled()).is_none() {
+                    seal_panic(&format!(
+                        "process entry wrapper `{owner}` references state method `{symbol}`, but \
+                         that function is not registered in the IRProgram",
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// Cross-package closure check: every `MakeClosure::body` must

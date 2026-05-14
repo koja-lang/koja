@@ -414,14 +414,40 @@ fn synthesize_spawn_wrapper(
     if !output.spawn_wrappers.insert(wrapper_symbol.clone()) {
         return wrapper_symbol;
     }
-    let function = build_spawn_wrapper_body(wrapper_symbol.clone(), state_type, config_type);
+    let function = build_wrapper_body(
+        wrapper_symbol.clone(),
+        FunctionKind::SpawnWrapper { state: state_type },
+        config_type,
+    );
     output.synthesized_functions.push(function);
     wrapper_symbol
 }
 
-fn build_spawn_wrapper_body(
-    wrapper_symbol: IRSymbol,
+/// Mint the project-mode [`FunctionKind::ProcessEntryWrapper`] thunk
+/// for `state_symbol`. Differs from [`synthesize_spawn_wrapper`] in
+/// two ways: the resulting symbol carries the `.__entry_wrapper`
+/// suffix (so it can coexist with a regular `.__spawn_wrapper` if
+/// the program also spawns its own state cell), and the LLVM emit
+/// pass picks up the `ProcessEntryWrapper` kind to thread the
+/// `StopReason` returned from `run` through `ExitStatus.code()` and
+/// store it in the module-level `__expo_exit_code` global that the
+/// synthesized `main` trampoline returns from.
+pub(crate) fn synthesize_process_entry_wrapper(
+    state_symbol: &IRSymbol,
     state_type: IRType,
+    config_type: IRType,
+) -> IRFunction {
+    let wrapper_symbol = state_symbol.derived(".__entry_wrapper");
+    build_wrapper_body(
+        wrapper_symbol,
+        FunctionKind::ProcessEntryWrapper { state: state_type },
+        config_type,
+    )
+}
+
+fn build_wrapper_body(
+    wrapper_symbol: IRSymbol,
+    kind: FunctionKind,
     config_type: IRType,
 ) -> IRFunction {
     let mut ctx = FnLowerCtx::new();
@@ -466,7 +492,7 @@ fn build_spawn_wrapper_body(
 
     IRFunction {
         blocks: ctx.into_blocks(),
-        kind: FunctionKind::SpawnWrapper { state: state_type },
+        kind,
         params: vec![IRFunctionParam {
             id: config_id,
             local_id: config_local,

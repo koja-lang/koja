@@ -16,7 +16,7 @@
 
 use expo_alpha_ir::{
     ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRTerminator, IRType, LowerError,
-    ValueId, lower_program,
+    ProjectEntry, ValueId, lower_program,
 };
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
@@ -185,7 +185,7 @@ fn lower_program_reports_missing_entry_point() {
 
     let checked = typecheck(&dedent(source), ParseMode::File);
     let missing = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    let err = lower_program(&checked, missing.clone())
+    let err = lower_program(&checked, ProjectEntry::Function(missing.clone()))
         .expect_err("missing entry point should be reported");
     match err {
         LowerError::EntryPointNotFound { identifier } => assert_eq!(identifier, missing),

@@ -6,7 +6,7 @@ A triage of the `tests/lang/` fixtures that fail under
 this doc enumerates what's still open and groups failures by root cause so
 fixing one entry unblocks a known cluster of fixtures.
 
-PASS count as of last run (2026-05-14): `58 passed, 8 failed, 1 skipped`
+PASS count as of last run (2026-05-14): `65 passed, 1 failed, 1 skipped`
 via [scripts/validate_alpha_lang.sh](../scripts/validate_alpha_lang.sh).
 `process_lifecycle` is the skipped fixture (signal-driven, intentionally
 excluded). The `ffi` fixture only links when
@@ -14,11 +14,13 @@ excluded). The `ffi` fixture only links when
 prerequisite step the script counts it as a failure even though every
 language-level concern is closed (see
 ["Closed: project-root FFI library search"](#closed-project-root-ffi-library-search)).
-That leaves **eight** real open failures, clustering into the four
-root causes below. The previous count of nine dropped to eight when
-binary pattern matching shipped (typecheck + IR + LLVM) — see
-["Closed: binary pattern matching"](#closed-binary-pattern-matching)
-for the parity item.
+That leaves **one** real open failure, the single root cause below.
+The previous count of eight dropped to one when PascalCase `Process`
+entries (`FunctionKind::ProcessEntryWrapper`, four fixtures) and the
+generic-payload `Equality` synthesis (one fixture) shipped — see
+["Closed: PascalCase Process entries"](#closed-pascalcase-process-entries)
+and ["Closed: Equality for nested enum payloads"](#closed-equality-for-nested-enum-payloads)
+for the parity items.
 
 Two top-level buckets:
 
@@ -32,21 +34,7 @@ Two top-level buckets:
 
 ## Real alpha gaps
 
-### 1. `Process`-shaped PascalCase entries (4 fixtures)
-
-`fn App.run(self)` style entries are rejected:
-
-> alpha pipeline does not yet support PascalCase Process entry `App`;
-> use a `fn main` entry for now
-
-Blocks `kernel_exit/`, `process_argv/`, `process_entry/`, `process_exit/`
-— all four use the `App` entry shape. Two viable fixes: (a) implement
-the PascalCase entry resolver (lifts the body into the runtime's spawn
-thunk like the `fn main` path); (b) rewrite the fixtures to use `fn
-main` and a manually-spawned `App` ref. (a) preserves the surface area
-v1 supported.
-
-### 2. Sized-int arithmetic + `IntLiteral` widening (1 fixture)
+### 1. Sized-int arithmetic + `IntLiteral` widening (1 fixture)
 
 `basics/int_coercion` stacks two v1-isms that the pending sized-int
 arithmetic + `IntLiteral` protocol work absorbs:
@@ -61,29 +49,76 @@ One fixture but the broader narrow-int story across stdlib rides on
 the same plan, so this entry is high-leverage even though the
 fixture count is small.
 
-### 3. `Equality` not synthesized for nested enum payloads (1 fixture)
-
-`types/nested_enum_eq` exercises `Option<Color> == Option<Color>` and
-similar enum-of-enum equality. Alpha rejects with:
-
-> `==` requires matching Bool, Float, Int, or String operands; got
-> `Option<Color>` and `Option<Color>`
-
-`Equality` synthesis bails when a generic enum's variant payload is
-itself a (different) enum, so the recursive equality call never gets
-generated. Likely fix: thread the synthesis pass through generic enum
-payloads so `Option<E>.eq` recurses into `E.eq` whenever `E:
-Equality`. Same one-fix-unblocks-everything shape as the existing
-`derive_debug` recursion — that pass already handles this for the
-Debug side.
-
 ---
 
 ## Closed since this doc was last rewritten
 
-The four entries below were open gaps in earlier passes of this
-document. Each is now a closed parity item with a runnable fixture
-or regression test pinning it.
+The entries below were open gaps in earlier passes of this document.
+Each is now a closed parity item with a runnable fixture or
+regression test pinning it.
+
+### Closed: PascalCase Process entries
+
+Four fixtures (`kernel_exit/`, `process_argv/`, `process_entry/`,
+`process_exit/`) rejected `entry = "App"`-style projects with:
+
+> alpha pipeline does not yet support PascalCase Process entry `App`;
+> use a `fn main` entry for now
+
+Closed (landed 2026-05-14) by threading a new `ProjectEntry` enum
+(`Function` | `Process { state }`) through the driver and lower
+pipeline, plus a dedicated synthesized wrapper in the IR backend:
+
+- [`expo-driver/src/alpha.rs`](../crates/expo-driver/src/alpha.rs)
+  `resolve_project_entry` now returns `ProjectEntry`. PascalCase
+  entries no longer bail; they pull the `Process<C, M, R>` impl off
+  the typecheck registry and hand the state identifier to the IR.
+- [`expo-alpha-ir/src/function.rs`](../crates/expo-alpha-ir/src/function.rs)
+  adds `FunctionKind::ProcessEntryWrapper { state: IRType }`,
+  sibling of `SpawnWrapper`.
+  [`expo-alpha-ir/src/lower/process.rs`](../crates/expo-alpha-ir/src/lower/process.rs)
+  synthesizes `<state>.__entry_wrapper`; `lower_program` stamps
+  `entry_point` on the wrapper symbol and enqueues `start` / `run`
+  `Instantiation`s.
+- [`expo-alpha-ir/src/seal/program.rs`](../crates/expo-alpha-ir/src/seal/program.rs)
+  asserts every `ProcessEntryWrapper` resolves to a registered
+  `start` / `run` method on its state struct.
+- [`expo-alpha-ir-llvm/src/emit/process.rs`](../crates/expo-alpha-ir-llvm/src/emit/process.rs)
+  `emit_process_entry_wrapper_body` chains `start` → `run` →
+  `Global.StopReason.code()` and stores the truncated `i32` into
+  the new `__expo_exit_code` global on both Ok and Err paths.
+  [`expo-alpha-ir-llvm/src/main_wrapper.rs`](../crates/expo-alpha-ir-llvm/src/main_wrapper.rs)
+  `emit_process_entry_main` builds the `i32 main(i32, ptr)` /
+  `i32 main()` trampoline (signature picked off the entry's config
+  type; `List<String>` triggers the `expo_rt_build_argv` path) and
+  returns `load __expo_exit_code` after `expo_rt_main_done()`.
+- [`expo-alpha-ir-eval/src/interpreter.rs`](../crates/expo-alpha-ir-eval/src/interpreter.rs)
+  dispatches `ProcessEntryWrapper` to a new `run_process_entry`
+  that simulates `start` → `run` → `StopReason.code()` for the
+  alpha-interpreter backend.
+
+Pinned by
+[`tests/lower_process.rs::process_entry_lowers_to_process_entry_wrapper`](../crates/expo-alpha-ir/tests/lower_process.rs)
+and three new cases in
+[`tests/process.rs`](../crates/expo-alpha-ir-llvm/tests/process.rs)
+covering the global, both wrapper-body code paths, and the
+`List<String>` argv main signature. All four lang fixtures now
+PASS under `validate_alpha_lang.sh`.
+
+### Closed: Equality for nested enum payloads
+
+`types/nested_enum_eq` exercised `Option<Color> == Option<Color>`
+and similar enum-of-enum equality. Alpha rejected with:
+
+> `==` requires matching Bool, Float, Int, or String operands; got
+> `Option<Color>` and `Option<Color>`
+
+Closed by the `derive_equality` synthesizer: `impl Equality for T`
+is now generated whenever `T`'s payloads (recursively) satisfy
+`Equality` themselves, matching the recursion `derive_debug`
+already does for the Debug side. `EqualityImpl`'s `Float` variant
+collapses into `Int(IntType)` since both lower to the same
+intrinsic emit shape.
 
 ### Recursive struct + enum miscompile under LLVM (2 fixtures)
 
@@ -407,11 +442,8 @@ is the first thing to touch the fixture.
 
 ## Priority order (cheapest unblock per fixture-count)
 
-1. **PascalCase process entry** (gap #1) — 4 fixtures from one fix.
-2. **`IntLiteral` + sized arithmetic** (gap #2) — 1 fixture but
+1. **`IntLiteral` + sized arithmetic** (gap #1) — 1 fixture but
    unblocks the broader narrow-int story across stdlib.
-3. **`Equality` synthesis for nested enums** (gap #3) — 1 fixture,
-   small targeted recursion fix in the synthesis pass.
 
-After (1)–(3) the lang suite is at full alpha parity and
+After (1) the lang suite is at full alpha parity and
 `lang_suite.rs` can flip its runner off v1.

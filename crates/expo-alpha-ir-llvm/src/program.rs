@@ -43,7 +43,7 @@
 //! reading an opaque inner (`align 1`, `size 0`) and collapsing
 //! the outer chunk count to a single byte — wire-format wrong.
 
-use expo_alpha_ir::IRProgram;
+use expo_alpha_ir::{FunctionKind, IRProgram};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
@@ -54,7 +54,9 @@ use crate::layout::enums::{
 };
 use crate::layout::structs::{declare_struct_type, define_struct_body};
 use crate::layout::unions::{declare_union_type, define_union_body};
-use crate::main_wrapper::{emit_app_name_global, emit_as_main};
+use crate::main_wrapper::{
+    emit_app_name_global, emit_as_main, emit_exit_code_global, emit_process_entry_main,
+};
 
 pub(crate) fn compile_program(
     ctx: &EmitContext<'_>,
@@ -92,19 +94,34 @@ pub(crate) fn compile_program(
         define_enum_completes_and_outer(ctx, decl)?;
     }
     emit_app_name_global(ctx, app_name);
+    let entry = program.entry_function();
+    let process_entry = matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. });
+    if process_entry {
+        emit_exit_code_global(ctx);
+    }
     let mut declared = Vec::with_capacity(program.packages.iter().map(|p| p.functions.len()).sum());
     for package in &program.packages {
         for function in package.functions.values() {
-            if program.is_entry(function) {
+            // Function-shaped entries skip the helper declare path — the
+            // body becomes `__expo_user_main` via `emit_as_main`. Process-
+            // shaped entries declare and define like any other helper
+            // (their kind is `ProcessEntryWrapper`); the host `main`
+            // trampoline is synthesized separately by
+            // `emit_process_entry_main`.
+            if !process_entry && program.is_entry(function) {
                 continue;
             }
             declared.push((function, declare_function(ctx, function)?));
         }
     }
-    let entry = program.entry_function();
-    emit_as_main(ctx, &entry.blocks)?;
-    for (function, llvm_function) in declared {
-        define_function(ctx, function, llvm_function)?;
+    if !process_entry {
+        emit_as_main(ctx, &entry.blocks)?;
+    }
+    for (function, llvm_function) in &declared {
+        define_function(ctx, function, *llvm_function)?;
+    }
+    if process_entry {
+        emit_process_entry_main(ctx, entry)?;
     }
     Ok(())
 }

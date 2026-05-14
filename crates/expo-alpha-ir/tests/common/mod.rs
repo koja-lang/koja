@@ -31,7 +31,9 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{IRFunction, IRProgram, IRScript, LowerError, lower_program, lower_script};
+use expo_alpha_ir::{
+    IRFunction, IRProgram, IRScript, LowerError, ProjectEntry, lower_program, lower_script,
+};
 use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
 use expo_ast::identifier::Identifier;
 use expo_parser::{ParseMode, SourceFile, parse_program};
@@ -75,7 +77,7 @@ fn parse_and_check(
 pub fn lower_program_source(source: &str) -> IRProgram {
     let checked = typecheck(source, ParseMode::File);
     let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, entry).expect("lowering should succeed")
+    lower_program(&checked, ProjectEntry::Function(entry)).expect("lowering should succeed")
 }
 
 pub fn lower_script_source(source: &str) -> IRScript {
@@ -90,7 +92,8 @@ pub fn lower_script_source_in(package: &str, source: &str) -> IRScript {
 pub fn lower_program_err(source: &str, entry: &str) -> LowerError {
     let checked = typecheck(source, ParseMode::File);
     let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
-    lower_program(&checked, entry_id).expect_err("lowering should surface diagnostics")
+    lower_program(&checked, ProjectEntry::Function(entry_id))
+        .expect_err("lowering should surface diagnostics")
 }
 
 pub fn expect_diagnostics(err: LowerError) -> Vec<String> {

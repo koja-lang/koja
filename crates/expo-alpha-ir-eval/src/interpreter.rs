@@ -23,8 +23,18 @@ pub struct Interpreter;
 
 impl Interpreter {
     /// Execute the project-mode entry function and return its result.
+    /// For [`FunctionKind::ProcessEntryWrapper`] entries the interpreter
+    /// dispatches through `state.start` / `state.run`: an `Ok` start
+    /// chains into `run` and the returned `StopReason` is reported as
+    /// a [`Value::Int`] (`StopReason.code()` semantics); an `Err`
+    /// start surfaces its embedded `StopReason` the same way. The
+    /// interpreter has no host argv, so a `List<String>` config
+    /// resolves to an empty list.
     pub fn run_program(program: IRProgram) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
+        if let FunctionKind::ProcessEntryWrapper { state } = &entry.kind {
+            return run_process_entry(&program, entry, state);
+        }
         execute_function(entry, Vec::new(), &program)
     }
 
@@ -202,6 +212,162 @@ enum BlockOutcome {
     TailRestart(Vec<Value>),
 }
 
+/// Drive a [`FunctionKind::ProcessEntryWrapper`] entry under the
+/// interpreter: call `state.start(config)`, on `Ok` chain into
+/// `state.run`, then hand the resulting `StopReason` to
+/// `Global.StopReason.code`. `Err` skips `run` and routes its
+/// embedded `StopReason` straight to `code`. The returned value is
+/// the integer exit code (`Value::Int`) — analogous to what the
+/// LLVM trampoline stores into `__expo_exit_code`.
+fn run_process_entry(
+    program: &IRProgram,
+    entry: &IRFunction,
+    state: &IRType,
+) -> Result<Value, RuntimeError> {
+    let IRType::Struct(state_symbol) = state else {
+        return Err(RuntimeError::Unsupported {
+            detail: format!(
+                "process entry wrapper `{}` declared with non-struct state `{state:?}`",
+                entry.symbol,
+            ),
+        });
+    };
+    let config_type =
+        entry
+            .params
+            .first()
+            .map(|p| &p.ty)
+            .ok_or_else(|| RuntimeError::Unsupported {
+                detail: format!(
+                    "process entry wrapper `{}` has no config parameter",
+                    entry.symbol,
+                ),
+            })?;
+    let config_value = default_value_for_type(config_type, program)?;
+
+    let start_symbol = format!("{}.start", state_symbol.mangled());
+    let start_fn = program
+        .function(&start_symbol)
+        .ok_or_else(|| RuntimeError::Unsupported {
+            detail: format!(
+                "process entry wrapper `{}` cannot resolve start method `{start_symbol}`",
+                entry.symbol,
+            ),
+        })?;
+    let start_result = execute_function(start_fn, vec![config_value], program)?;
+    let stop_reason = match start_result {
+        Value::Enum { tag, payload, .. } if tag.0 == 0 => {
+            let state_value = take_first_payload_field(payload, &entry.symbol, "Ok")?;
+            let run_symbol = format!("{}.run", state_symbol.mangled());
+            let run_fn =
+                program
+                    .function(&run_symbol)
+                    .ok_or_else(|| RuntimeError::Unsupported {
+                        detail: format!(
+                            "process entry wrapper `{}` cannot resolve run method `{run_symbol}`",
+                            entry.symbol,
+                        ),
+                    })?;
+            execute_function(run_fn, vec![state_value], program)?
+        }
+        Value::Enum { tag, payload, .. } if tag.0 == 1 => {
+            take_first_payload_field(payload, &entry.symbol, "Err")?
+        }
+        other => {
+            return Err(RuntimeError::Unsupported {
+                detail: format!(
+                    "process entry wrapper `{}` start() returned a non-Result value `{other:?}`",
+                    entry.symbol,
+                ),
+            });
+        }
+    };
+
+    let code_symbol = "Global.StopReason.code";
+    let code_fn = program
+        .function(code_symbol)
+        .ok_or_else(|| RuntimeError::Unsupported {
+            detail: format!(
+                "process entry wrapper `{}` cannot resolve `{code_symbol}`",
+                entry.symbol,
+            ),
+        })?;
+    execute_function(code_fn, vec![stop_reason], program)
+}
+
+/// Build a fresh interpreter [`Value`] suitable as the entry's config
+/// argument. Mirrors the LLVM trampoline's zero-init / argv-build
+/// shape: empty structs round-trip as `Value::Struct` with no
+/// fields, `List<T>` produces an empty list, and primitive scalars
+/// default to their zero element. Anything richer than that needs
+/// host argv plumbing the interpreter doesn't have.
+fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, RuntimeError> {
+    match ty {
+        IRType::Bool => Ok(Value::Bool(false)),
+        IRType::Float32 => Ok(Value::Float32(0.0)),
+        IRType::Float64 => Ok(Value::Float64(0.0)),
+        IRType::Int8
+        | IRType::Int16
+        | IRType::Int32
+        | IRType::Int64
+        | IRType::UInt8
+        | IRType::UInt16
+        | IRType::UInt32
+        | IRType::UInt64 => Ok(Value::Int(0)),
+        IRType::List(_) => Ok(Value::List(std::rc::Rc::new(std::cell::RefCell::new(
+            Vec::new(),
+        )))),
+        IRType::String => Ok(Value::String(Vec::new())),
+        IRType::Struct(symbol) => {
+            let decl =
+                program
+                    .struct_decl(symbol.mangled())
+                    .ok_or_else(|| RuntimeError::Unsupported {
+                        detail: format!(
+                            "interpreter: cannot build default value for unknown struct `{symbol}`",
+                        ),
+                    })?;
+            let mut fields = Vec::with_capacity(decl.fields.len());
+            for field in &decl.fields {
+                fields.push(default_value_for_type(&field.ir_type, program)?);
+            }
+            Ok(Value::Struct {
+                symbol: symbol.clone(),
+                fields,
+            })
+        }
+        IRType::Unit => Ok(Value::Unit),
+        other => Err(RuntimeError::Unsupported {
+            detail: format!(
+                "interpreter: cannot synthesize a default value for process-entry config type \
+                 `{other:?}`",
+            ),
+        }),
+    }
+}
+
+/// Pull the first payload field out of a `Value::Enum` produced by
+/// `start` — used to extract either the `Ok(state)` state or the
+/// `Err(stop_reason)` reason. Both variants today carry a single
+/// positional field on a [`EnumPayload::Tuple`] layout.
+fn take_first_payload_field(
+    payload: crate::value::EnumPayload,
+    function: &IRSymbol,
+    variant: &str,
+) -> Result<Value, RuntimeError> {
+    use crate::value::EnumPayload;
+    match payload {
+        EnumPayload::Tuple(mut values) if !values.is_empty() => Ok(values.swap_remove(0)),
+        EnumPayload::Struct(mut entries) if !entries.is_empty() => Ok(entries.swap_remove(0).1),
+        other => Err(RuntimeError::Unsupported {
+            detail: format!(
+                "process entry wrapper `{function}` start() `{variant}` variant has empty / \
+                 unrecognized payload `{other:?}`",
+            ),
+        }),
+    }
+}
+
 /// Run `function` in a fresh frame with `args` positionally bound to
 /// its param `ValueId`s. Param promotion (entry-block `LocalDecl` +
 /// `LocalWrite`) means the body reads from the slot, not the raw
@@ -253,6 +419,16 @@ fn execute_function<R: CallResolver>(
                 detail: format!(
                     "spawn wrapper `{}` cannot be invoked directly under the alpha interpreter; \
                      spawn/receive scheduling lives in the LLVM runtime",
+                    function.symbol,
+                ),
+            });
+        }
+        FunctionKind::ProcessEntryWrapper { .. } => {
+            return Err(RuntimeError::Unsupported {
+                detail: format!(
+                    "process entry wrapper `{}` cannot be invoked directly; use \
+                     `Interpreter::run_program`, which dispatches through state.start / \
+                     state.run for ProcessEntryWrapper entries",
                     function.symbol,
                 ),
             });
