@@ -439,7 +439,20 @@ fn bundle_many_with_autoimport(
     skip_package: Option<&str>,
 ) -> Vec<SourceFile> {
     let mut sources = expo_stdlib::alpha_autoimport_sources();
-    sources.extend(expo_stdlib::alpha_qualified_sources());
+    // Qualified stdlib packages (Crypto, HTTP, JSON, Net, …)
+    // ship pre-baked against the published Global. Loading them
+    // when the user IS compiling Global self-imports an
+    // inconsistent pair — the user's edited `lib/global/src` would
+    // co-exist with qualified packages typechecked against the
+    // older baked Global, and protocol-impl resolution gets
+    // confused (e.g. HTTP's `.clone()` calls fail to see the
+    // user's `Global.alpha_clone` impls because the qualified
+    // packages were lifted before user files joined the bundle).
+    // Mirrors v1's behavior: qualified deps don't tag along on a
+    // Global self-compile.
+    if skip_package != Some("Global") {
+        sources.extend(expo_stdlib::alpha_qualified_sources());
+    }
     if let Some(skip) = skip_package {
         sources.retain(|file| file.package != skip);
     }

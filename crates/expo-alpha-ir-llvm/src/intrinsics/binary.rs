@@ -8,18 +8,35 @@
 //! - `Binary.ptr(self) -> CPtr<UInt8>` — returns `self` (the payload
 //!   pointer is already byte-addressable).
 //! - `Binary.to_bits(self) -> Bits` — zero-cost reinterpret.
-//! - `Binary.to_string(self) -> Result<String, String>` — TODO once
-//!   UTF-8 validation lands; for now panics via `unreachable`.
-//! - `Bits.to_binary(self) -> Result<Binary, String>` — TODO once
-//!   the byte-aligned check lands; same placeholder.
+//! - `Binary.to_string(self) -> Result<String, String>` — validates
+//!   UTF-8 via the `expo_utf8_validate` runtime helper, then
+//!   heap-copies into a NUL-terminated `String` payload on success.
+//!   Error branch returns `Result.Err("invalid UTF-8")`. Mirrors
+//!   v1's `Binary_to_string` codegen one-for-one (same runtime
+//!   helper, same Ok/Err shapes).
+//! - `Bits.to_binary(self) -> Result<Binary, String>` — checks
+//!   `bit_length & 7 == 0` and returns `Result.Ok(self)` (zero-cost
+//!   reinterpret, both layouts are identical) when aligned, or
+//!   `Result.Err("bit length is not byte-aligned")` otherwise.
 
-use expo_alpha_ir::{BinaryMethod, BitsMethod, IRFunction};
-use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
+use expo_alpha_ir::{BinaryMethod, BitsMethod, IRFunction, IRSymbol, IRType, IRVariantTag};
+use inkwell::IntPredicate;
+use inkwell::basic_block::BasicBlock;
+use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::ctx::EmitContext;
+use crate::emit::constants::emit_string_literal_payload;
+use crate::emit::enums::build_enum_value;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
-use crate::intrinsics::heap_clone;
+use crate::intrinsics::heap_clone::{self, HEADER_BYTES};
+use crate::runtime::declare_utf8_validate_extern;
+
+/// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
+/// in `expo/lib/global/src/kernel.expo`.
+const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
+/// `enum Result<T, E>` variant tag for `Err(E)`.
+const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
 
 pub(super) fn emit_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -38,7 +55,7 @@ pub(super) fn emit_binary<'ctx>(
         BinaryMethod::Ptr | BinaryMethod::ToBits => {
             emit_self_passthrough(ctx, function, llvm_function)
         }
-        BinaryMethod::ToString => emit_unimplemented_result(ctx, function),
+        BinaryMethod::ToString => emit_to_string(ctx, function, llvm_function),
     }
 }
 
@@ -55,7 +72,7 @@ pub(super) fn emit_bits<'ctx>(
         BitsMethod::Clone => {
             heap_clone::emit_payload_clone(ctx, function, llvm_function, false, true)
         }
-        BitsMethod::ToBinary => emit_unimplemented_result(ctx, function),
+        BitsMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
     }
 }
 
@@ -68,8 +85,8 @@ fn emit_byte_size<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
-    let payload = pointer_param(function, llvm_function, 0)?;
-    let neg = i64_ty.const_int((-8i64) as u64, true);
+    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let neg = i64_ty.const_int((-(HEADER_BYTES as i64)) as u64, true);
     let hdr_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, payload, &[neg], "hdr_ptr")
@@ -103,41 +120,219 @@ fn emit_self_passthrough<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = pointer_param(function, llvm_function, 0)?;
+    let payload = heap_clone::pointer_param(function, llvm_function)?;
     ctx.builder
         .build_return(Some(&payload))
         .map(|_| ())
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
-/// Stub for the `Result<T, String>`-returning conversions until the
-/// real validation logic lands. Today the body just unreachable-traps;
-/// a runtime caller hitting it indicates an upstream "we shouldn't
-/// have lowered this yet" bug rather than a recoverable error.
-fn emit_unimplemented_result<'ctx>(
+/// `Binary.to_string`: validate UTF-8 via the runtime helper, then
+/// heap-copy the payload into a fresh NUL-terminated `String`
+/// allocation and return `Result.Ok(payload)`. Invalid UTF-8 falls
+/// through to `Result.Err("invalid UTF-8")`.
+fn emit_to_string<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    ctx.builder.build_unreachable().map(|_| ()).map_err(|e| {
-        inkwell_err(
-            format_args!("build_unreachable for `{}`", function.symbol),
-            e,
+    let result_symbol = expect_enum_symbol(&function.return_type, function)?;
+    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
+    let neg_hdr = i64_ty.const_int((-(HEADER_BYTES as i64)) as u64, true);
+    let hdr_ptr = unsafe {
+        ctx.builder
+            .build_gep(i8_ty, payload, &[neg_hdr], "hdr_ptr")
+            .map_err(|e| {
+                inkwell_err(format_args!("to_string hdr GEP for `{}`", function.symbol), e)
+            })?
+    };
+    let bit_length = ctx
+        .builder
+        .build_load(i64_ty, hdr_ptr, "bit_length")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("to_string hdr load for `{}`", function.symbol),
+                e,
+            )
+        })?
+        .into_int_value();
+    let byte_count = ctx
+        .builder
+        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("to_string byte_count for `{}`", function.symbol),
+                e,
+            )
+        })?;
+
+    let validate = declare_utf8_validate_extern(ctx);
+    let is_valid = ctx
+        .builder
+        .build_call(validate, &[payload.into(), byte_count.into()], "utf8_ok")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_call expo_utf8_validate for `{}`", function.symbol),
+                e,
+            )
+        })?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!(
+                "expo_utf8_validate returned no value for `{}`",
+                function.symbol,
+            ))
+        })?
+        .into_int_value();
+    let succeeded = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            is_valid,
+            i64_ty.const_int(0, false),
+            "succeeded",
         )
-    })
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_int_compare for `{}`", function.symbol),
+                e,
+            )
+        })?;
+
+    let valid_bb = ctx.context.append_basic_block(llvm_function, "valid");
+    let invalid_bb = ctx.context.append_basic_block(llvm_function, "invalid");
+    ctx.builder
+        .build_conditional_branch(succeeded, valid_bb, invalid_bb)
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_conditional_branch for `{}`", function.symbol),
+                e,
+            )
+        })?;
+
+    ctx.builder.position_at_end(valid_bb);
+    let new_payload = heap_clone::copy_heap_payload(ctx, function, payload, true, false)?;
+    return_result(ctx, function, result_symbol, RESULT_OK_TAG, new_payload.into())?;
+
+    emit_err_branch(
+        ctx,
+        function,
+        invalid_bb,
+        result_symbol,
+        b"invalid UTF-8",
+    )
 }
 
-fn pointer_param<'ctx>(
+/// `Bits.to_binary`: branch on `bit_length & 7 == 0`. The aligned
+/// branch returns `Result.Ok(self)` (Bits and Binary share the
+/// payload-pointer + header layout). The unaligned branch returns
+/// `Result.Err("bit length is not byte-aligned")`.
+fn emit_to_binary<'ctx>(
+    ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
-    index: u32,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let raw = llvm_function.get_nth_param(index).ok_or_else(|| {
-        LlvmError::Codegen(format!("missing param #{index} on `{}`", function.symbol))
-    })?;
-    match raw {
-        BasicValueEnum::PointerValue(p) => Ok(p),
+) -> Result<(), LlvmError> {
+    let result_symbol = expect_enum_symbol(&function.return_type, function)?;
+    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
+    let neg_hdr = i64_ty.const_int((-(HEADER_BYTES as i64)) as u64, true);
+    let hdr_ptr = unsafe {
+        ctx.builder
+            .build_gep(i8_ty, payload, &[neg_hdr], "hdr_ptr")
+            .map_err(|e| {
+                inkwell_err(format_args!("to_binary hdr GEP for `{}`", function.symbol), e)
+            })?
+    };
+    let bit_length = ctx
+        .builder
+        .build_load(i64_ty, hdr_ptr, "bit_length")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("to_binary hdr load for `{}`", function.symbol),
+                e,
+            )
+        })?
+        .into_int_value();
+    let remainder = ctx
+        .builder
+        .build_and(bit_length, i64_ty.const_int(7, false), "remainder")
+        .map_err(|e| inkwell_err(format_args!("to_binary `&7` for `{}`", function.symbol), e))?;
+    let is_aligned = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            remainder,
+            i64_ty.const_int(0, false),
+            "is_aligned",
+        )
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("to_binary build_int_compare for `{}`", function.symbol),
+                e,
+            )
+        })?;
+
+    let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
+    let err_bb = ctx.context.append_basic_block(llvm_function, "err");
+    ctx.builder
+        .build_conditional_branch(is_aligned, ok_bb, err_bb)
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("to_binary build_conditional_branch for `{}`", function.symbol),
+                e,
+            )
+        })?;
+
+    ctx.builder.position_at_end(ok_bb);
+    return_result(ctx, function, result_symbol, RESULT_OK_TAG, payload.into())?;
+
+    emit_err_branch(
+        ctx,
+        function,
+        err_bb,
+        result_symbol,
+        b"bit length is not byte-aligned",
+    )
+}
+
+fn emit_err_branch<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    block: BasicBlock<'ctx>,
+    result_symbol: &IRSymbol,
+    message: &[u8],
+) -> Result<(), LlvmError> {
+    ctx.builder.position_at_end(block);
+    let err_msg = emit_string_literal_payload(ctx, message, "binary_err");
+    return_result(ctx, function, result_symbol, RESULT_ERR_TAG, err_msg.into())
+}
+
+fn return_result<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    result_symbol: &IRSymbol,
+    tag: IRVariantTag,
+    payload: BasicValueEnum<'ctx>,
+) -> Result<(), LlvmError> {
+    let value = build_enum_value(ctx, result_symbol, tag, &[payload])?;
+    ctx.builder
+        .build_return(Some(&value))
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+}
+
+fn expect_enum_symbol<'ty>(
+    ty: &'ty IRType,
+    function: &IRFunction,
+) -> Result<&'ty IRSymbol, LlvmError> {
+    match ty {
+        IRType::Enum(symbol) => Ok(symbol),
         other => Err(LlvmError::Codegen(format!(
-            "expected pointer for param #{index} on `{}`, got `{other:?}`",
+            "binary intrinsic on `{}` expected an enum-typed return, got `{other:?}`",
             function.symbol,
         ))),
     }

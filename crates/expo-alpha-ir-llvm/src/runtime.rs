@@ -26,6 +26,7 @@ pub(crate) const LAST_ERROR_SYMBOL: &str = "expo_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "malloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
 pub(crate) const REALLOC_SYMBOL: &str = "realloc";
+pub(crate) const UTF8_VALIDATE_SYMBOL: &str = "expo_utf8_validate";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_alpha_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__expo_alpha_panic";
 pub(crate) const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
@@ -168,6 +169,22 @@ pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
     let signature = ptr_ty.fn_type(&[i64_ty.into()], false);
     ctx.module
         .add_function(MALLOC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `expo_utf8_validate` runtime helper.
+/// Signature: `i64 expo_utf8_validate(i8* ptr, i64 len)`. Returns
+/// `1` if `[ptr..ptr+len)` is valid UTF-8, `0` otherwise. Called
+/// from `Binary.to_string` to gate the heap-clone path; the same
+/// helper backs v1's `Binary_to_string` intrinsic.
+pub(crate) fn declare_utf8_validate_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(UTF8_VALIDATE_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function(UTF8_VALIDATE_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the libc `memset` extern. The hashtable
