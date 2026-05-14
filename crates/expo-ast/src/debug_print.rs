@@ -734,7 +734,7 @@ impl<'a> Printer<'a> {
             ClosureParam::Destructured { names, span } => {
                 self.header(&format!("Destructured ({})", names.join(", ")), *span);
             }
-            ClosureParam::Wildcard { span } => self.header("Wildcard", *span),
+            ClosureParam::Wildcard { span, .. } => self.header("Wildcard", *span),
         }
     }
 

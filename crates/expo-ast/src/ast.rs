@@ -653,8 +653,14 @@ pub enum ClosureParam {
         span: Span,
         type_expr: Option<TypeExpr>,
     },
-    /// A wildcard parameter: `_`.
-    Wildcard { span: Span },
+    /// A wildcard parameter: `_`. `local_id` is `None` after parse;
+    /// alpha typecheck stamps a nameless slot id so IR lower can
+    /// emit the param the same way it emits a `Name` param — the
+    /// body just never reads it.
+    Wildcard {
+        local_id: Option<LocalId>,
+        span: Span,
+    },
 }
 
 /// The data payload when constructing an enum variant value.

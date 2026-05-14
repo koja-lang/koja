@@ -219,9 +219,19 @@ fn declare_closure_params(
     resolver: &mut Resolver<'_>,
 ) {
     for (param, fn_param) in params.iter_mut().zip(resolved.iter()) {
-        if let ClosureParam::Name { local_id, name, .. } = param {
-            let id = resolver.scope.declare(name, fn_param.ty.clone());
-            *local_id = Some(id);
+        match param {
+            ClosureParam::Name { local_id, name, .. } => {
+                let id = resolver.scope.declare(name, fn_param.ty.clone());
+                *local_id = Some(id);
+            }
+            ClosureParam::Wildcard { local_id, .. } => {
+                let id = resolver.scope.declare_anonymous(fn_param.ty.clone());
+                *local_id = Some(id);
+            }
+            ClosureParam::Destructured { .. } => {
+                // Diagnostic was already emitted in resolve_closure_param;
+                // leave local_id unstamped — IR lower stays gated on this.
+            }
         }
     }
 }

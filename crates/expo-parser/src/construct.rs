@@ -425,6 +425,7 @@ impl Parser {
             TokenKind::Ident(name) if name == "_" => {
                 self.advance();
                 ClosureParam::Wildcard {
+                    local_id: None,
                     span: self.span_from(start),
                 }
             }
@@ -468,7 +469,10 @@ impl Parser {
                     span,
                 );
                 self.advance();
-                ClosureParam::Wildcard { span }
+                ClosureParam::Wildcard {
+                    local_id: None,
+                    span,
+                }
             }
         }
     }
@@ -476,7 +480,10 @@ impl Parser {
     pub(crate) fn expr_to_closure_params(&mut self, expr: &Expr, span: Span) -> Vec<ClosureParam> {
         match &expr.kind {
             ExprKind::Ident { name, .. } if name == "_" => {
-                vec![ClosureParam::Wildcard { span: expr.span }]
+                vec![ClosureParam::Wildcard {
+                    local_id: None,
+                    span: expr.span,
+                }]
             }
             ExprKind::Ident { name, .. } => {
                 vec![ClosureParam::Name {
@@ -490,7 +497,10 @@ impl Parser {
             ExprKind::Group { expr: inner, .. } => self.expr_to_closure_params(inner, span),
             _ => {
                 self.error("invalid closure parameter list".to_string(), span);
-                vec![ClosureParam::Wildcard { span }]
+                vec![ClosureParam::Wildcard {
+                    local_id: None,
+                    span,
+                }]
             }
         }
     }

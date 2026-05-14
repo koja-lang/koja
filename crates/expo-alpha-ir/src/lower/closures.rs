@@ -564,12 +564,16 @@ fn closure_param_local_id(param: &ClosureParam, index: usize) -> LocalId {
     match param {
         ClosureParam::Name {
             local_id: Some(id), ..
+        }
+        | ClosureParam::Wildcard {
+            local_id: Some(id), ..
         } => *id,
-        ClosureParam::Name { local_id: None, .. } => panic!(
+        ClosureParam::Name { local_id: None, .. }
+        | ClosureParam::Wildcard { local_id: None, .. } => panic!(
             "alpha IR lower: closure param #{index} carries no LocalId — \
              typecheck resolve invariant violation",
         ),
-        ClosureParam::Wildcard { .. } | ClosureParam::Destructured { .. } => panic!(
+        ClosureParam::Destructured { .. } => panic!(
             "alpha IR lower: closure param #{index} ({:?}) is not yet supported in lowering",
             param,
         ),

@@ -31,6 +31,19 @@ impl LocalScope {
         id
     }
 
+    /// Mint a fresh nameless [`LocalId`] and register its type.
+    /// Used for slots that aren't reachable by name (wildcard
+    /// closure params today; future destructure machinery will
+    /// follow the same path). The id participates in normal local
+    /// allocation so IR lower can emit `LocalDecl` / `LocalWrite`
+    /// the same way it does for named slots.
+    pub(crate) fn declare_anonymous(&mut self, ty: ResolvedType) -> LocalId {
+        let id = LocalId::new(self.next_id);
+        self.next_id += 1;
+        self.types.insert(id, ty);
+        id
+    }
+
     /// Look up `name` in scope; callers fall through to the global
     /// lookup on miss.
     pub(crate) fn lookup(&self, name: &str) -> Option<(LocalId, &ResolvedType)> {
