@@ -266,6 +266,27 @@ fn closure_param_local_ids_stamped_for_seal() {
 }
 
 #[test]
+fn block_closure_return_annotation_threads_to_trailing_expr() {
+    // `Result.Ok(v)` in a closure whose return type is annotated
+    // `Result<Int, Int>` must let the `E` slot fill from the
+    // surrounding annotation — without the return-hint plumbing
+    // alpha used to fire "cannot infer type parameter `E` of
+    // `Global.Result` from the supplied `Ok` payload" inside
+    // `result.then`-style higher-order callers.
+    typecheck(&dedent(
+        "
+        fn run -> Int
+          step = fn (v: Int) -> Result<Int, Int>
+            Result.Ok(v * 3)
+          end
+          step
+          0
+        end
+        ",
+    ));
+}
+
+#[test]
 fn closure_capture_of_heap_local_resolves_through_string() {
     let source = "
         fn apply(f: fn (Int) -> String, value: Int) -> String

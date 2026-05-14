@@ -34,7 +34,7 @@ use expo_ast::span::Span;
 
 use super::ctx::Resolver;
 use super::expr::resolve_expr_with_expected;
-use super::walker::resolve_statement;
+use super::walker::resolve_body_with_expected;
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 
 /// Resolve a block closure (`fn (x: Int) -> Int ... end` or
@@ -60,12 +60,17 @@ pub(super) fn resolve_closure(
     let return_hint = annotated_return
         .clone()
         .or_else(|| expected_return.cloned());
-    let saved_return = std::mem::replace(&mut resolver.current_return_type, return_hint);
+    let saved_return = std::mem::replace(&mut resolver.current_return_type, return_hint.clone());
     let saved_loop_depth = std::mem::replace(&mut resolver.loop_depth, 0);
     let saved_loop_break_seen = std::mem::take(&mut resolver.loop_break_seen);
-    for stmt in body.iter_mut() {
-        resolve_statement(stmt, resolver, diagnostics);
-    }
+    // Thread the closure's annotated / context-derived return type
+    // as the trailing-expression expected-type hint, mirroring how
+    // [`crate::pipeline::resolve::walker::resolve_function_body`]
+    // does for named functions. Without this, a trailing
+    // `Result.Ok(v * 3)` in a closure annotated `-> Result<Int, Int>`
+    // can't pin `E` from context and fires "cannot infer type
+    // parameter `E` of `Global.Result`".
+    resolve_body_with_expected(body, return_hint.as_ref(), resolver, diagnostics);
     let body_return_ty = trailing_expr_type(body);
     resolver.loop_break_seen = saved_loop_break_seen;
     resolver.loop_depth = saved_loop_depth;
