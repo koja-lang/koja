@@ -201,6 +201,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
         return_type,
     };
     crate::union_decl::discover_unions(&mut script.packages);
+    crate::cycle::break_type_cycles(&mut script.packages);
     crate::tail_calls::rewrite_tail_calls(&mut script.packages);
     seal::seal_script(&script);
     Ok(script)

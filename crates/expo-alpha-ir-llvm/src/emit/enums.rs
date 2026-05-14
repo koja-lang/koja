@@ -11,7 +11,9 @@
 //! layout-aware path the instruction emitter uses, instead of
 //! GEPing raw indices into an assumed-flat outer struct.
 
-use expo_alpha_ir::{EnumPayloadInit, IRSymbol, IRType, IRVariantTag, StructFieldInit};
+use expo_alpha_ir::{
+    EnumPayloadInit, IRSymbol, IRType, IRVariantPayload, IRVariantTag, StructFieldInit,
+};
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, PointerValue};
 
@@ -19,6 +21,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
+use super::indirect::{emit_box_value, emit_unbox_value};
 use super::{ValueMap, inkwell_err, lookup};
 
 /// Materialize an enum-variant literal: resolve `payload` operands
@@ -62,10 +65,15 @@ pub(crate) fn build_enum_value<'ctx>(
     let (complete, payload_type) = ctx.layouts.enum_variant_types(ty.mangled(), tag);
     let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_tmp"));
     write_variant_tag(ctx, ty, tag, complete, alloca)?;
-    match (payload_type, payload_values.is_empty()) {
+    let boxed_values: Vec<BasicValueEnum<'ctx>> = if payload_values.is_empty() {
+        Vec::new()
+    } else {
+        box_payload_indirects(ctx, ty, tag, payload_values)?
+    };
+    match (payload_type, boxed_values.is_empty()) {
         (Some(payload_struct), false) => {
             let payload_ptr = build_payload_gep(ctx, ty, complete, alloca)?;
-            write_payload_fields(ctx, ty, payload_struct, payload_ptr, payload_values)?;
+            write_payload_fields(ctx, ty, payload_struct, payload_ptr, &boxed_values)?;
         }
         (None, true) => {}
         (Some(_), true) => panic!(
@@ -75,7 +83,7 @@ pub(crate) fn build_enum_value<'ctx>(
         (None, false) => panic!(
             "alpha LLVM emit: enum `{ty}` variant at tag {tag} is Unit but build_enum_value \
              was called with {} payload value(s) — caller mismatch",
-            payload_values.len(),
+            boxed_values.len(),
         ),
     }
     ctx.builder
@@ -173,6 +181,14 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
             e,
         )
     })?;
+    let _ = field_type;
+    let declared_payload = ctx.layouts.enum_variant_payload(ty, tag);
+    let declared_ty = declared_slot_type(&declared_payload, payload_index).unwrap_or_else(|| {
+        panic!(
+            "alpha LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` payload index \
+             {payload_index} out of range — IR seal invariant violation",
+        )
+    });
     let (complete, payload_struct) = ctx.layouts.enum_variant_types(ty.mangled(), tag);
     let Some(payload_struct) = payload_struct else {
         panic!(
@@ -195,14 +211,61 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
                 e,
             )
         })?;
-    let field_llvm_type = ir_basic_type(ctx, field_type)?;
-    ctx.builder
-        .build_load(
-            field_llvm_type,
-            field_ptr,
-            &format!("{ty}_payload_{payload_index}"),
-        )
-        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` EnumPayloadFieldGet"), e))
+    let field_llvm_type = ir_basic_type(ctx, &declared_ty)?;
+    let label = format!("{ty}_payload_{payload_index}");
+    let loaded = ctx
+        .builder
+        .build_load(field_llvm_type, field_ptr, &label)
+        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` EnumPayloadFieldGet"), e))?;
+    if let IRType::Indirect(inner) = &declared_ty {
+        return emit_unbox_value(
+            ctx,
+            inner,
+            loaded.into_pointer_value(),
+            &format!("{label}_unbox"),
+        );
+    }
+    Ok(loaded)
+}
+
+/// Look up the declared IR type of `payload`'s slot at `index`.
+/// Mirrors the `IRVariantPayload` shape: tuples index directly,
+/// struct payloads index into the field vec.
+fn declared_slot_type(payload: &IRVariantPayload, index: u32) -> Option<IRType> {
+    match payload {
+        IRVariantPayload::Tuple(types) => types.get(index as usize).cloned(),
+        IRVariantPayload::Struct(fields) => fields.get(index as usize).map(|f| f.ir_type.clone()),
+        IRVariantPayload::Unit => None,
+    }
+}
+
+/// Walk the variant's declared payload slot types; for each
+/// [`IRType::Indirect`] slot, box the matching incoming value via
+/// [`emit_box_value`] so the store hits a ptr slot rather than the
+/// raw value.
+fn box_payload_indirects<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    ty: &IRSymbol,
+    tag: IRVariantTag,
+    payload_values: &[BasicValueEnum<'ctx>],
+) -> Result<Vec<BasicValueEnum<'ctx>>, LlvmError> {
+    let payload = ctx.layouts.enum_variant_payload(ty, tag);
+    let slot_types: Vec<IRType> = match &payload {
+        IRVariantPayload::Tuple(types) => types.clone(),
+        IRVariantPayload::Struct(fields) => fields.iter().map(|f| f.ir_type.clone()).collect(),
+        IRVariantPayload::Unit => Vec::new(),
+    };
+    let mut out = Vec::with_capacity(payload_values.len());
+    for (idx, value) in payload_values.iter().enumerate() {
+        let stored = match slot_types.get(idx) {
+            Some(IRType::Indirect(inner)) => {
+                emit_box_value(ctx, inner, *value, &format!("{ty}_payload_{idx}_box"))?
+            }
+            _ => *value,
+        };
+        out.push(stored);
+    }
+    Ok(out)
 }
 
 fn write_variant_tag<'ctx>(

@@ -22,6 +22,7 @@ use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
 
 use crate::constant::IRConstantValue;
+use crate::cycle::break_type_cycles;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{FunctionKind, IRFunction, IRSymbol};
@@ -180,6 +181,7 @@ pub fn lower_program(checked: &CheckedProgram, entry: Identifier) -> Result<IRPr
     let mut program = merge::merge(packages, entry_symbol);
     program.link_libraries = collect_link_libraries(program.packages.iter());
     discover_unions(&mut program.packages);
+    break_type_cycles(&mut program.packages);
     rewrite_tail_calls(&mut program.packages);
 
     if program.function(program.entry_point.mangled()).is_none() {

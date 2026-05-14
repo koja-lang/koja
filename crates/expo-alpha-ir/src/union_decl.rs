@@ -80,6 +80,7 @@ fn size_and_align(
         | IRType::Bits
         | IRType::CPtr(_)
         | IRType::Function { .. }
+        | IRType::Indirect(_)
         | IRType::List(_)
         | IRType::Map { .. }
         | IRType::Set(_)
@@ -428,7 +429,10 @@ fn walk_type(ty: &IRType, out: &mut BTreeMap<IRSymbol, IRType>) {
         | IRType::UInt32
         | IRType::UInt64
         | IRType::Unit => {}
-        IRType::CPtr(inner) | IRType::List(inner) | IRType::Set(inner) => walk_type(inner, out),
+        IRType::CPtr(inner)
+        | IRType::Indirect(inner)
+        | IRType::List(inner)
+        | IRType::Set(inner) => walk_type(inner, out),
         IRType::Map { key, value } => {
             walk_type(key, out);
             walk_type(value, out);

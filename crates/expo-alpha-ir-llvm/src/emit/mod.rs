@@ -57,6 +57,7 @@ mod closures;
 mod concat;
 pub(crate) mod constants;
 pub(crate) mod enums;
+mod indirect;
 mod instruction;
 mod locals;
 mod ops;

@@ -158,9 +158,11 @@ fn collect_type_enum_refs(
         }
         // Heap-pointer payloads — the inner type lives behind a
         // pointer and contributes no inline size dependency to the
-        // outer enum chunk computation.
+        // outer enum chunk computation. `Indirect` is the cycle-
+        // breaking pointer minted by `expo_alpha_ir::cycle`.
         IRType::CPtr(_)
         | IRType::Function { .. }
+        | IRType::Indirect(_)
         | IRType::List(_)
         | IRType::Map { .. }
         | IRType::Set(_) => {}

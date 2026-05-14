@@ -425,6 +425,12 @@ pub enum IRType {
         params: Vec<IRType>,
         ret: Box<IRType>,
     },
+    /// Heap-boxed `T`, stamped by [`crate::cycle::break_type_cycles`]
+    /// on struct fields / enum payload slots that would otherwise
+    /// be value-level recursive (`Tree.Branch(Tree, Tree)`,
+    /// `Node.next: Option<Node>`). Backends lower as `ptr` and
+    /// transparently box / unbox at construct / project sites.
+    Indirect(Box<IRType>),
     Int8,
     Int16,
     Int32,

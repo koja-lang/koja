@@ -52,6 +52,9 @@ pub(crate) fn ir_int_type<'ctx>(
         IRType::Function { .. } => Err(LlvmError::Codegen(format!(
             "expected an integer or Bool IRType, got `{ty:?}`",
         ))),
+        IRType::Indirect(_) => Err(LlvmError::Codegen(format!(
+            "expected an integer or Bool IRType, got `{ty:?}`",
+        ))),
         IRType::Int8 | IRType::UInt8 => Ok(context.i8_type()),
         IRType::Int16 | IRType::UInt16 => Ok(context.i16_type()),
         IRType::Int32 | IRType::UInt32 => Ok(context.i32_type()),
@@ -101,7 +104,9 @@ pub(crate) fn ir_basic_type<'ctx>(
         IRType::Binary | IRType::Bits | IRType::String => {
             Ok(ctx.context.ptr_type(AddressSpace::default()).into())
         }
-        IRType::CPtr(_) => Ok(ctx.context.ptr_type(AddressSpace::default()).into()),
+        IRType::CPtr(_) | IRType::Indirect(_) => {
+            Ok(ctx.context.ptr_type(AddressSpace::default()).into())
+        }
         IRType::Enum(symbol) => Ok(ctx.enum_outer_type(symbol.mangled()).into()),
         IRType::Float32 => Ok(ctx.context.f32_type().into()),
         IRType::Float64 => Ok(ctx.context.f64_type().into()),

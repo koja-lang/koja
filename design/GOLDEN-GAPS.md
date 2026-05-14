@@ -46,29 +46,7 @@ thunk like the `fn main` path); (b) rewrite the fixtures to use `fn
 main` and a manually-spawned `App` ref. (a) preserves the surface area
 v1 supported.
 
-### 2. Recursive payload miscompile under LLVM (2 fixtures)
-
-`generics/recursive_enum` — built binary exits 133 silently. The
-fixture exercises a self-referential enum (a tree with `Node(Box<...>)`
-shape). The companion fixtures `recursive_generic_list` and
-`recursive_generic_map` previously failed under the same banner; both
-now pass once the LLVM layout phase started defining variant complete +
-outer bodies in dependency order. `recursive_enum` still fails, so the
-remaining root cause is likely IR-side payload projection through the
-recursive variant rather than the layout phase.
-
-`generics/recursive_struct` sits in the same bucket once its
-`Option.None` typecheck rewrite (see ["Closed: v1-permissive
-Option.None inference"](#closed-v1-permissive-optionnone-inference))
-landed: alpha typecheck and the interpreter backend both produce the
-expected `1\n2\n3`, but the LLVM backend prints `1\n2\n0` — the
-innermost recursive-struct field read returns zero. Same
-payload-projection shape as the enum case (Node holds
-`Option<Node>`, the inner `match n.next { Option.Some(n2) -> ... }`
-arm reads a stale/empty payload). Fixing the recursive-enum root
-cause should close this one too.
-
-### 3. Sized-int arithmetic + `IntLiteral` widening (1 fixture)
+### 2. Sized-int arithmetic + `IntLiteral` widening (1 fixture)
 
 `basics/int_coercion` stacks two v1-isms that the pending sized-int
 arithmetic + `IntLiteral` protocol work absorbs:
@@ -83,7 +61,7 @@ One fixture but the broader narrow-int story across stdlib rides on
 the same plan, so this entry is high-leverage even though the
 fixture count is small.
 
-### 4. `Equality` not synthesized for nested enum payloads (1 fixture)
+### 3. `Equality` not synthesized for nested enum payloads (1 fixture)
 
 `types/nested_enum_eq` exercises `Option<Color> == Option<Color>` and
 similar enum-of-enum equality. Alpha rejects with:
@@ -106,6 +84,36 @@ Debug side.
 The four entries below were open gaps in earlier passes of this
 document. Each is now a closed parity item with a runnable fixture
 or regression test pinning it.
+
+### Recursive struct + enum miscompile under LLVM (2 fixtures)
+
+`generics/recursive_struct` (printed `1\n0\n0` instead of `1\n2\n3`)
+and `generics/recursive_enum` (exited 133) both miscompiled under the
+LLVM backend: alpha IR represented self-referential slots inline, so
+`Node { value, next: Option<Node> }` and
+`Tree { Leaf(Int), Branch(Tree, Tree) }` collapsed to zero-byte /
+truncated layouts before the dependency walker could spot the
+recursion.
+
+Closed by porting v1's `Type::Indirect` shape into the alpha pipeline:
+
+- `IRType::Indirect(Box<IRType>)` lattice variant (`expo-alpha-ir
+  /src/types.rs`), with mangling, seal, union-walk, and
+  `enum_order` updates so back-edges read as a `ptr` everywhere
+  layout cares.
+- New `expo-alpha-ir/src/cycle.rs` pass runs after `discover_unions`
+  in `lower_program` / `lower_script`; DFS over struct fields +
+  enum variant payloads, marks back-edge slots as
+  `Indirect(_)`, and leaves all other slots untouched.
+- LLVM backend transparently boxes / unboxes around the indirection
+  (`expo-alpha-ir-llvm/src/emit/indirect.rs`): `emit_struct_init`,
+  `emit_field_get`, `emit_field_set`, `build_enum_value`, and
+  `emit_enum_payload_field_get` all consult the decl-recorded
+  type so the storage shape stays a `ptr` while every IR caller
+  keeps the unboxed view.
+- Seal relaxations in `seal/structs.rs` + `seal/enums.rs` accept the
+  decl-side `Indirect(T)` vs instruction-side `T` mismatch via a
+  shared `field_type_matches` helper.
 
 ### Dotted type names in expr + type position (2 fixtures)
 
@@ -322,12 +330,11 @@ field type instead of from `None` directly.
 | `generics/recursive_generic`  | `no_next: Option<GNode<Int>>`    |
 | `generics/recursive_struct`   | `no_next: Option<Node>`          |
 
-All three typecheck cleanly under alpha and produce the recorded
-stdouts under v1 + alpha-interpreter. `recursive_struct` still
-miscompiles under alpha LLVM (innermost field reads as `0`) — see
-[§2 Recursive payload miscompile](#2-recursive-payload-miscompile-under-llvm-2-fixtures);
-the typecheck rewrite is correct, the LLVM miscompile is the
-remaining gap.
+All three typecheck cleanly and now produce the expected stdouts
+under both alpha-interpreter and alpha LLVM. The recursive shape
+itself ships via the `IRType::Indirect` cycle-break pass (see
+[Closed: Recursive struct + enum miscompile under
+LLVM](#recursive-struct--enum-miscompile-under-llvm-2-fixtures)).
 
 ### `.clone()` on copy types (1 fixture)
 
@@ -401,12 +408,10 @@ is the first thing to touch the fixture.
 ## Priority order (cheapest unblock per fixture-count)
 
 1. **PascalCase process entry** (gap #1) — 4 fixtures from one fix.
-2. **Recursive payload miscompile** (gap #2) — 2 fixtures
-   (`recursive_enum` + `recursive_struct`, same root cause).
-3. **`IntLiteral` + sized arithmetic** (gap #3) — 1 fixture but
+2. **`IntLiteral` + sized arithmetic** (gap #2) — 1 fixture but
    unblocks the broader narrow-int story across stdlib.
-4. **`Equality` synthesis for nested enums** (gap #4) — 1 fixture,
+3. **`Equality` synthesis for nested enums** (gap #3) — 1 fixture,
    small targeted recursion fix in the synthesis pass.
 
-After (1)–(4) the lang suite is at full alpha parity and
+After (1)–(3) the lang suite is at full alpha parity and
 `lang_suite.rs` can flip its runner off v1.

@@ -30,6 +30,7 @@
 
 mod cfg;
 mod constant;
+mod cycle;
 mod dominators;
 mod enum_decl;
 mod error;

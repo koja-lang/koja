@@ -98,6 +98,7 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Bits => "Bits".to_string(),
         IRType::Bool => "Bool".to_string(),
         IRType::CPtr(inner) => format!("CPtr_${}$", mangle_type(inner)),
+        IRType::Indirect(inner) => format!("Indirect_${}$", mangle_type(inner)),
         IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.mangled().to_string(),
         IRType::Float32 => "Float32".to_string(),
         IRType::Float64 => "Float64".to_string(),

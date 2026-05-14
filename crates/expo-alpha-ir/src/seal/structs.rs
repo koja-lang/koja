@@ -23,6 +23,7 @@ use std::collections::HashSet;
 use crate::function::{IRFunction, IRInstruction, IRSymbol};
 use crate::package::IRPackage;
 use crate::struct_decl::{IRStructDecl, IRStructField};
+use crate::types::IRType;
 
 use super::{require_supported_type, seal_panic};
 
@@ -184,7 +185,7 @@ fn seal_field_projection<'decl>(
     lookup: &impl Fn(&str) -> Option<&'decl IRStructDecl>,
     struct_symbol: &IRSymbol,
     field_index: u32,
-    field_type: &crate::types::IRType,
+    field_type: &IRType,
     owner: &str,
 ) {
     let decl = require_struct(lookup, struct_symbol, owner);
@@ -195,7 +196,7 @@ fn seal_field_projection<'decl>(
             count = decl.fields.len(),
         ));
     };
-    if &declared.ir_type != field_type {
+    if !field_type_matches(&declared.ir_type, field_type) {
         seal_panic(&format!(
             "{owner}: {op} on `{struct_symbol}.{name}` carries field_type `{got:?}` but \
              the decl declares `{expected:?}`",
@@ -204,6 +205,16 @@ fn seal_field_projection<'decl>(
             expected = declared.ir_type,
         ));
     }
+}
+
+/// Match exactly OR allow a decl `Indirect(T)` against an
+/// instruction-view `T`. Cycle-broken slots stay boxed in the decl
+/// but materialize as the unboxed value at every IR call site.
+fn field_type_matches(declared: &IRType, requested: &IRType) -> bool {
+    if declared == requested {
+        return true;
+    }
+    matches!(declared, IRType::Indirect(inner) if inner.as_ref() == requested)
 }
 
 fn require_struct<'decl>(
