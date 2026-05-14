@@ -187,7 +187,7 @@ fn main() {
     // entry's full file roster is loaded eagerly so `lift_signatures` /
     // `resolve` see its types when validating a user's `alias` decl.
     // Retires once `IRPackage` caching + on-demand package loads land.
-    let alpha_qualified_packages: &[&str] = &["Crypto"];
+    let alpha_qualified_packages: &[&str] = &["Crypto", "HTTP", "JSON", "Net"];
     code.push_str("\n/// Stdlib sources for qualified packages alpha programs can\n");
     code.push_str("/// `alias` into scope. Loaded eagerly alongside `ALPHA_AUTOIMPORT`;\n");
     code.push_str("/// pragmatic stand-in for on-demand `IRPackage` loading.\n");

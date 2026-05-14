@@ -102,10 +102,7 @@ impl Decoder
 
     if pos + 5 <= self.input.length()
       if self.input.slice(Range{start: pos, stop: pos + 4}) == "false"
-        ok_pair: Pair<Value, Int> = Pair{
-          first: Value.Bool(false),
-          second: pos + 5,
-        }
+        ok_pair = Pair{first: Value.Bool(false), second: pos + 5}
         return Result.Ok(ok_pair)
       end
     end
@@ -192,7 +189,7 @@ impl Decoder
 
     match num_str.to_int()
       Result.Ok(n) ->
-        ok_pair: Pair<Value, Int> = Pair{first: Value.Int(n), second: i}
+        ok_pair = Pair{first: Value.Int(n), second: i}
         Result.Ok(ok_pair)
 
       Result.Err(msg) ->
@@ -265,10 +262,10 @@ impl Decoder
 
   fn parse_array(self, pos: Int) -> Result<Pair<Value, Int>, String>
     i = Decoder.skip_ws_at(self.input, pos + 1)
+    items: List<Value> = List.new()
 
     if i < self.input.length()
       if self.input.get(i).unwrap() == "]"
-        items: List<Value> = List.new()
         ok_pair: Pair<Value, Int> = Pair{
           first: Value.Array(items),
           second: i + 1,
@@ -277,7 +274,6 @@ impl Decoder
       end
     end
 
-    items: List<Value> = List.new()
     self.parse_array_elements(items, i, pos)
   end
 
@@ -322,10 +318,10 @@ impl Decoder
 
   fn parse_object(self, pos: Int) -> Result<Pair<Value, Int>, String>
     i = Decoder.skip_ws_at(self.input, pos + 1)
+    entries: List<Pair<String, Value>> = List.new()
 
     if i < self.input.length()
       if self.input.get(i).unwrap() == "}"
-        entries: List<Pair<String, Value>> = List.new()
         ok_pair: Pair<Value, Int> = Pair{
           first: Value.Object(entries),
           second: i + 1,
@@ -334,7 +330,6 @@ impl Decoder
       end
     end
 
-    entries: List<Pair<String, Value>> = List.new()
     self.parse_object_entries(entries, i, pos)
   end
 

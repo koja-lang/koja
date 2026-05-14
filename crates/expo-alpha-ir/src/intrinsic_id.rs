@@ -62,6 +62,14 @@ pub enum IRIntrinsicId {
     /// [`KernelMethod`] / [`BitsMethod`].
     ReplyTo(ReplyToMethod),
     Set(SetMethod),
+    /// `@intrinsic` methods on `Socket` from
+    /// [`expo/lib/net/src/net.expo`]. Both methods bridge into the
+    /// runtime's `expo_socket_*` C ABI (`recv_from` → mailbox-driven
+    /// recv with sender address, `resolve` → blocking
+    /// `getaddrinfo`). Wrapped in an enum so adding sibling methods
+    /// (e.g. `send_to_async`) is a variant-add rather than a shape
+    /// change.
+    Socket(SocketMethod),
     String(StringMethod),
 }
 
@@ -173,6 +181,16 @@ pub enum RefMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReplyToMethod {
     Send,
+}
+
+/// `@intrinsic`-flagged methods on `Socket` from
+/// [`expo/lib/net/src/net.expo`]. `RecvFrom` receives one
+/// datagram + sender address (suspending the process until the fd
+/// is readable); `Resolve` is a synchronous `getaddrinfo` shim.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SocketMethod {
+    RecvFrom,
+    Resolve,
 }
 
 /// Methods on `String` flagged `@intrinsic` in
@@ -312,6 +330,9 @@ impl IRIntrinsicId {
         }
         if receiver == "Set" {
             return SetMethod::from_source(method).map(Self::Set);
+        }
+        if receiver == "Socket" {
+            return SocketMethod::from_source(method).map(Self::Socket);
         }
         if receiver == "String"
             && let Some(m) = StringMethod::from_source(method)
@@ -690,6 +711,23 @@ impl SetMethod {
     }
 }
 
+impl SocketMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "recv_from" => Self::RecvFrom,
+            "resolve" => Self::Resolve,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::RecvFrom => "recv_from",
+            Self::Resolve => "resolve",
+        }
+    }
+}
+
 impl ParseTarget {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
@@ -753,6 +791,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Ref(m) => write!(f, "Ref.{}", m.segment()),
             Self::ReplyTo(m) => write!(f, "ReplyTo.{}", m.segment()),
             Self::Set(m) => write!(f, "Set.{}", m.segment()),
+            Self::Socket(m) => write!(f, "Socket.{}", m.segment()),
             Self::String(m) => write!(f, "String.{}", m.segment()),
         }
     }
@@ -865,6 +904,20 @@ mod tests {
                 &["Set", method],
                 IRIntrinsicId::Set(variant),
                 &format!("Set.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn socket_methods_cover_the_full_surface() {
+        for (method, variant) in [
+            ("recv_from", SocketMethod::RecvFrom),
+            ("resolve", SocketMethod::Resolve),
+        ] {
+            assert_round_trip(
+                &["Socket", method],
+                IRIntrinsicId::Socket(variant),
+                &format!("Socket.{method}"),
             );
         }
     }

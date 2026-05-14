@@ -32,6 +32,7 @@ mod parse;
 mod print;
 mod process;
 mod set;
+mod socket;
 mod string;
 
 /// Run the registered intrinsic `id` against `args`. `function` is
@@ -67,6 +68,7 @@ pub(crate) fn dispatch<R: CallResolver>(
         IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function),
         IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, function),
         IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
+        IRIntrinsicId::Socket(method) => socket::dispatch(method, function, args),
         IRIntrinsicId::String(method) => string::dispatch(method, function, args),
     }
 }

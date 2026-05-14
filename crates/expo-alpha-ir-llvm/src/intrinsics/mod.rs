@@ -34,6 +34,7 @@ mod parse;
 mod print;
 mod process;
 mod set;
+mod socket;
 mod string;
 
 /// Synthesize the body of an `@intrinsic` function. Forwards each
@@ -68,6 +69,7 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
             process::emit_reply_to(ctx, function, llvm_function, method)
         }
         IRIntrinsicId::Set(method) => set::emit_set(ctx, function, llvm_function, method),
+        IRIntrinsicId::Socket(method) => socket::emit_socket(ctx, function, llvm_function, method),
         IRIntrinsicId::String(method) => string::emit_string(ctx, function, llvm_function, method),
     }
 }
