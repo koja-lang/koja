@@ -228,44 +228,6 @@ fn is_alpha_only_path(path: &Path) -> bool {
         .is_some_and(|stem| stem.starts_with("alpha_"))
 }
 
-/// Builds a [`SourceSet`] + file vector for running tests.
-///
-/// Like [`resolve_project_sources`], but also scans `test` directories and
-/// includes all source + test files in the source set. The project's entry
-/// file (which contains `fn main`) is excluded since the test harness
-/// replaces it. The `entry` field is left empty -- the caller inserts a
-/// generated harness.
-pub fn resolve_test_project_sources(
-    config: &ProjectConfig,
-    project_root: &Path,
-) -> Result<(SourceSet, Vec<SourceFile>), String> {
-    let src_roots: Vec<PathBuf> = config.src.iter().map(|s| project_root.join(s)).collect();
-    let test_roots: Vec<PathBuf> = config.test.iter().map(|s| project_root.join(s)).collect();
-
-    let all_roots: Vec<PathBuf> = src_roots.iter().chain(test_roots.iter()).cloned().collect();
-
-    let mut sources = SourceSet::new();
-    let mut source_files: Vec<SourceFile> = Vec::new();
-
-    if config.name != "Global" {
-        insert_stdlib(&mut source_files, Some(&config.name));
-    }
-    scan_directories(&config.name, &all_roots, &mut source_files)?;
-    resolve_dependencies(config, project_root, &mut sources, &mut source_files)?;
-
-    if let Some(ref entry) = config.entry
-        && config.entry_type_name().is_none()
-    {
-        let entry_paths: Vec<PathBuf> = src_roots
-            .iter()
-            .map(|r| r.join(format!("{entry}.expo")))
-            .collect();
-        source_files.retain(|f| !entry_paths.iter().any(|p| p == &f.path));
-    }
-
-    Ok((sources, source_files))
-}
-
 /// Scans each dependency declared in `[dependencies]` and adds its source
 /// files to the file vector. The dep's entry file is skipped to avoid
 /// `fn main` conflicts with the consuming project.

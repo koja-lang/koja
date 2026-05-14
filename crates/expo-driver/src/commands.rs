@@ -47,7 +47,7 @@ fn current_dir_or_exit() -> PathBuf {
 ///
 /// On a missing `expo.toml`, prints each line in `missing_message` to stderr
 /// and exits non-zero. On any other error, prints `error: {e}` and exits.
-fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
+pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
     let cwd = current_dir_or_exit();
     let config = match project::load_project(&cwd) {
         Ok(Some(c)) => c,
@@ -423,16 +423,13 @@ pub fn cmd_eval(file: String, entry: Option<String>) {
     }
 }
 
-/// `expo test` -- discovers `@test` functions, compiles a test harness, and runs it.
-///
-/// Requires an `expo.toml` in the current directory.
+/// `expo test` — thin shim that routes through the alpha pipeline.
+/// All discovery, harness synthesis, lowering, linking, and exec
+/// happens inside [`crate::alpha::cmd_test`]; this function exists
+/// only to keep the top-level CLI dispatch in `main.rs` looking like
+/// every other `commands::cmd_*` entry.
 pub fn cmd_test(color: bool) {
-    let (config, cwd) = load_project_or_exit(&[
-        "error: no expo.toml found",
-        "Usage: expo test (run from a directory containing expo.toml)",
-    ]);
-
-    pipeline::test_project(&config, &cwd, color);
+    crate::alpha::cmd_test(color);
 }
 
 /// `expo format [files...] [--check] [--write]` -- formats Expo source files.

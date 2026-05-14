@@ -19,6 +19,7 @@ members = [
     "crates/expo-runtime",
     "crates/expo-shell",
     "crates/expo-stdlib",
+    "crates/expo-test",
     "crates/expo-typecheck",
 ]
 

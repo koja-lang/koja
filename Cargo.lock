@@ -468,6 +468,7 @@ dependencies = [
  "expo-runtime",
  "expo-shell",
  "expo-stdlib",
+ "expo-test",
  "expo-typecheck",
  "libc",
  "serde",
@@ -564,6 +565,14 @@ dependencies = [
 name = "expo-stdlib"
 version = "0.9.0"
 dependencies = [
+ "expo-parser",
+]
+
+[[package]]
+name = "expo-test"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
  "expo-parser",
 ]
 
