@@ -63,7 +63,7 @@ pub(crate) fn lookup_type<'r>(
 }
 
 /// Does `ty` resolve to the preloaded `Global.<name>` stdlib stub?
-pub(super) fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &str) -> bool {
+pub(crate) fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &str) -> bool {
     let ResolvedType::Named {
         resolution: Resolution::Global(id),
         type_args,

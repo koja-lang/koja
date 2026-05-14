@@ -17,7 +17,7 @@ use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
 
-use crate::pipeline::resolve::types::types_equivalent;
+use crate::pipeline::resolve::types::{is_primitive, types_equivalent};
 use crate::registry::GlobalRegistry;
 
 /// A type parameter unified to two distinct concrete types across two
@@ -157,7 +157,8 @@ impl Substitution {
         match slot {
             Some(prev)
                 if !types_equivalent(prev, &value, registry)
-                    && !union_contains(prev, &value, registry) =>
+                    && !union_contains(prev, &value, registry)
+                    && !literal_widens_into(prev, &value, registry) =>
             {
                 Err(Conflict {
                     actual: value,
@@ -221,6 +222,47 @@ impl Substitution {
 /// scope pre-binds `M → MsgA | MsgB`; the arg drives a unify of
 /// `M → MsgA`; without this rule the per-slot compatibility check
 /// would surface a spurious "cannot be both" diagnostic.
+/// True when `prev` is a sized numeric primitive (`Int8`/`Int32`/...,
+/// `UInt8`/..., `Float32`) and `value` is the default literal type for
+/// that family (`Int` or `Float`). Lets the per-arg unifier accept a
+/// re-bind driven by an integer/float literal whose AST type is the
+/// default `Int`/`Float` against a slot already pinned (typically by
+/// receiver seeding) to a sized variant.
+///
+/// The post-substitute [`super::resolve::calls::validate_arg_signature`]
+/// then runs [`super::resolve::coercion::check_compatible`] against the
+/// substituted param type, which:
+///   - accepts literal args that fit the sized slot ([`Compatible::Coerced`])
+///   - rejects non-literal `Int`/`Float` values with a clean
+///     "argument expects `Int32`, got `Int`" diagnostic
+///
+/// The pre-existing "cannot be both X and Y" diagnostic was wrong for
+/// these sites — the slot's type is authoritative once seeded, not
+/// "in conflict with" a literal's default type.
+fn literal_widens_into(
+    prev: &ResolvedType,
+    value: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> bool {
+    let int_widens = is_primitive(value, registry, "Int") && is_sized_int(prev, registry);
+    let float_widens = is_primitive(value, registry, "Float") && is_sized_float(prev, registry);
+    int_widens || float_widens
+}
+
+fn is_sized_int(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    [
+        "Int8", "Int16", "Int32", "Int64", "UInt8", "UInt16", "UInt32", "UInt64",
+    ]
+    .iter()
+    .any(|name| is_primitive(ty, registry, name))
+}
+
+fn is_sized_float(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    ["Float32", "Float64"]
+        .iter()
+        .any(|name| is_primitive(ty, registry, name))
+}
+
 fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRegistry) -> bool {
     let ResolvedType::Union(members) = prev else {
         return false;
