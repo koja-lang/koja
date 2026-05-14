@@ -54,7 +54,7 @@ mod binary_construct;
 mod calls;
 mod closures;
 mod concat;
-mod constants;
+pub(crate) mod constants;
 pub(crate) mod enums;
 mod instruction;
 mod locals;

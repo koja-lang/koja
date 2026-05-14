@@ -19,7 +19,9 @@ pub(crate) const FORMAT_F32_SYMBOL: &str = "expo_format_f32";
 pub(crate) const FORMAT_F64_SYMBOL: &str = "expo_format_f64";
 pub(crate) const FORMAT_I64_SYMBOL: &str = "expo_format_i64";
 pub(crate) const FORMAT_U64_SYMBOL: &str = "expo_format_u64";
+pub(crate) const FLOAT_PARSE_SYMBOL: &str = "expo_float_parse";
 pub(crate) const FREE_SYMBOL: &str = "free";
+pub(crate) const INT_PARSE_SYMBOL: &str = "expo_int_parse";
 pub(crate) const LAST_ERROR_SYMBOL: &str = "expo_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "malloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
@@ -99,6 +101,40 @@ pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValu
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(FREE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `expo_int_parse` runtime helper.
+/// Signature: `i64 expo_int_parse(i8* input_payload, i64* out)`.
+/// Parses the input as a base-10 i64, writes the result to `*out`,
+/// and returns `1` on success / `0` on failure (leaving `*out`
+/// untouched). The `Int.parse` intrinsic emitter allocates a
+/// stack slot for `out`, branches on the return code, and wraps
+/// the parsed value (or a literal `"invalid integer"`) into
+/// `Result<Int, String>`.
+pub(crate) fn declare_int_parse_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(INT_PARSE_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+    ctx.module
+        .add_function(INT_PARSE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `expo_float_parse` runtime helper.
+/// Signature: `i64 expo_float_parse(i8* input_payload, f64* out)`.
+/// Same return convention as [`declare_int_parse_extern`]; the
+/// `Float.parse` intrinsic emitter follows the same skeleton.
+pub(crate) fn declare_float_parse_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(FLOAT_PARSE_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+    ctx.module
+        .add_function(FLOAT_PARSE_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `expo_last_error` runtime helper.

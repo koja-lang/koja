@@ -139,6 +139,20 @@ fn emit_const<'ctx>(
     }
 }
 
+/// Emit a `String`-shaped payload literal (8-byte bit-length
+/// header + NUL-terminated bytes) and return the payload pointer.
+/// Intrinsic emitters that need to mint a literal error message
+/// (`Int.parse` / `Float.parse` etc.) call this to get a String SSA
+/// value compatible with the rest of the alpha pipeline — same
+/// shape every `ConstValue::String` materializes through.
+pub(crate) fn emit_string_literal_payload<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    bytes: &[u8],
+    prefix: &str,
+) -> PointerValue<'ctx> {
+    emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, true, prefix)
+}
+
 /// Emit a heap-payload literal as a private constant global with
 /// the v1 header layout: `{ i64 bit_length, [N (+1) x i8] bytes }`.
 /// Returns a const-GEP to the payload (8 bytes past the header) so
