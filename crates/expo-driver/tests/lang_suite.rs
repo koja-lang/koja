@@ -47,7 +47,7 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
 fn run_expo(file: &Path) -> (String, String, i32) {
     run_with_timeout(|cmd| {
-        cmd.arg("run").arg(file);
+        cmd.arg("alpha").arg("run").arg("--backend=llvm").arg(file);
     })
 }
 
@@ -239,7 +239,10 @@ fn run_project_dir_with(dir: &Path, label: &str, extra_args: &[&str]) {
     let dir_owned = dir.to_path_buf();
     let extra: Vec<String> = extra_args.iter().map(|s| s.to_string()).collect();
     let (stdout, stderr, code) = run_with_timeout(|cmd| {
-        cmd.arg("run").current_dir(&dir_owned);
+        cmd.arg("alpha")
+            .arg("run")
+            .arg("--backend=llvm")
+            .current_dir(&dir_owned);
         if !extra.is_empty() {
             cmd.arg("--");
             for a in &extra {
@@ -398,7 +401,9 @@ fn lang_ffi() {
         None => dir.display().to_string(),
     };
     let output = Command::new(expo_bin())
+        .arg("alpha")
         .arg("run")
+        .arg("--backend=llvm")
         .current_dir(&dir)
         .env("LIBRARY_PATH", &ffi_lib_path)
         .stdout(Stdio::piped())
@@ -446,7 +451,9 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
 
     let build_out = {
         let mut cmd = Command::new(expo_bin());
-        cmd.arg("build")
+        cmd.arg("alpha")
+            .arg("build")
+            .arg("--backend=llvm")
             .arg("-o")
             .arg(binary.to_str().unwrap())
             .current_dir(dir);
@@ -604,7 +611,9 @@ fn lang_project_build_test() {
     let _ = std::fs::remove_file(&binary_path);
 
     let mut cmd = Command::new(expo_bin());
-    cmd.arg("build")
+    cmd.arg("alpha")
+        .arg("build")
+        .arg("--backend=llvm")
         .arg("-o")
         .arg(binary_path.to_str().unwrap())
         .current_dir(&project_dir);
@@ -633,7 +642,7 @@ fn lang_project_check_test() {
     }
 
     let mut cmd = Command::new(expo_bin());
-    cmd.arg("check").current_dir(&project_dir);
+    cmd.arg("alpha").arg("check").current_dir(&project_dir);
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", lib_path);
     }
@@ -661,7 +670,7 @@ fn lang_dup_pkg_name() {
     assert!(dir.exists(), "test fixture dup_pkg_name/ not found");
 
     let mut cmd = Command::new(expo_bin());
-    cmd.arg("check").current_dir(&dir);
+    cmd.arg("alpha").arg("check").current_dir(&dir);
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", lib_path);
     }
@@ -689,21 +698,20 @@ fn lang_release_build_test() {
     let _ = std::fs::remove_file(&binary_path);
 
     let mut cmd = Command::new(expo_bin());
-    cmd.arg("build")
-        .arg("--release")
+    cmd.arg("alpha")
+        .arg("build")
+        .arg("--backend=llvm")
         .arg("-o")
         .arg(binary_path.to_str().unwrap())
         .current_dir(&project_dir);
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", lib_path);
     }
-    let output = cmd
-        .output()
-        .expect("failed to execute expo build --release");
+    let output = cmd.output().expect("failed to execute expo alpha build");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(
         output.status.success(),
-        "expo build --release failed\nstderr:\n{stderr}"
+        "expo alpha build failed\nstderr:\n{stderr}"
     );
     assert!(
         binary_path.exists(),

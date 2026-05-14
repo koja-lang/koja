@@ -1,1 +1,1 @@
-expected `Int`, found `String`
+expects `Int`, got `String`

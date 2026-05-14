@@ -1,1 +1,1 @@
-return type mismatch: expected `Int`, found `String`
+return type mismatch on `typo`: expected `Int`, found `String`

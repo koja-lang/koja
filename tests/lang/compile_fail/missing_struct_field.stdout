@@ -1,1 +1,1 @@
-struct `User` is missing field: name
+missing field `name` in literal for

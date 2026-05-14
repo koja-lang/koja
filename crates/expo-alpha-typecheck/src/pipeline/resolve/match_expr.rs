@@ -29,6 +29,7 @@ use expo_ast::span::Span;
 use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
+use super::moves::MoveLedgerSnapshot;
 use super::patterns::{
     PatternCoverage, collect_literal_reprs, is_match_subject_primitive, match_subject_enum,
     resolve_pattern,
@@ -58,6 +59,12 @@ pub(super) fn resolve_match(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     resolve_expr(subject, resolver, diagnostics);
+    // NOTE: deliberately do NOT mark a bare-ident subject as moved
+    // here. Literal / wildcard / enum-unit patterns compare without
+    // consuming, mirroring alpha-ir's borrow-the-subject lowering.
+    // A future slice that tracks per-arm binding-pattern moves can
+    // surface "subject moved by an earlier binding arm" diagnostics;
+    // the bare receive-and-compare case stays a borrow.
     let subject_ty = subject.resolution.clone();
 
     if arms.is_empty() {
@@ -65,6 +72,8 @@ pub(super) fn resolve_match(
         return ResolvedType::unresolved();
     }
 
+    let baseline_moves = resolver.moves.snapshot();
+    let mut branch_moves: Vec<MoveLedgerSnapshot> = Vec::with_capacity(arms.len());
     let mut has_catch_all = false;
     let mut has_literal_arm = false;
     let mut covered_variants: Vec<u32> = Vec::new();
@@ -76,12 +85,14 @@ pub(super) fn resolve_match(
             has_literal_arm = true;
         }
         let scope_snapshot = resolver.scope.snapshot();
+        resolver.moves.restore(baseline_moves.clone());
         let coverage = resolve_pattern(&mut arm.pattern, &subject_ty, resolver, diagnostics);
         if let Some(guard) = &mut arm.guard {
             resolve_expr(guard, resolver, diagnostics);
             require_bool_condition("match arm guard", guard, resolver.registry, diagnostics);
         }
         resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
+        branch_moves.push(resolver.moves.snapshot());
         resolver.scope.restore(scope_snapshot);
         check_arm_reachability(
             arm,
@@ -119,6 +130,7 @@ pub(super) fn resolve_match(
             body_tail_type(&arm.body, resolver.registry),
         ));
     }
+    resolver.moves.merge_branches(branch_moves);
 
     let subject_enum = match_subject_enum(&subject_ty, resolver.registry);
     let subject_union_members = subject_union_member_keys(&subject_ty, resolver.registry);

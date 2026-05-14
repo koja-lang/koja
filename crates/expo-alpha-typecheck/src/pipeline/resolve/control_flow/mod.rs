@@ -22,6 +22,7 @@ use expo_ast::span::Span;
 
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::moves::MoveLedgerSnapshot;
 use super::types::{display_resolution, is_primitive, types_equivalent};
 use super::walker::{resolve_body_with_expected, resolve_statement};
 use crate::registry::GlobalRegistry;
@@ -37,16 +38,28 @@ pub(super) fn resolve_if(
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("if", condition, resolver.registry, diagnostics);
+    // Snapshot the move ledger so each arm walks from the same
+    // pre-branch state; merge pessimistically afterward so a move
+    // in any arm shows up as (Maybe)Moved post-join. See
+    // [`MoveLedger::merge_branches`].
+    let baseline = resolver.moves.snapshot();
     resolve_body_with_expected(then_body, expected, resolver, diagnostics);
+    let after_then = resolver.moves.snapshot();
     let Some(else_body) = else_body else {
         // No-`else` `if` is statement-shaped — there's no else-arm
         // to join, so the surface expression is `Unit`. Matches the
         // pre-block-params behavior; future "if-as-expression"
         // ergonomics that admit `if cond then 1 end` (Optional-typed
-        // implicit None) is a separate slice.
+        // implicit None) is a separate slice. Treat the absent else
+        // as a baseline-state arm so a move in `then` only becomes
+        // `MaybeMoved` post-join, not `Moved`.
+        resolver.moves.merge_branches(vec![after_then, baseline]);
         return resolver.registry.primitive("Unit");
     };
+    resolver.moves.restore(baseline);
     resolve_body_with_expected(else_body, expected, resolver, diagnostics);
+    let after_else = resolver.moves.snapshot();
+    resolver.moves.merge_branches(vec![after_then, after_else]);
     let then_tail = body_tail_type(then_body, resolver.registry);
     let else_tail = body_tail_type(else_body, resolver.registry);
     join_two_arms(
@@ -77,8 +90,13 @@ pub(super) fn resolve_ternary(
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("ternary", condition, resolver.registry, diagnostics);
+    let baseline = resolver.moves.snapshot();
     resolve_expr_with_expected(then_expr, expected, resolver, diagnostics);
+    let after_then = resolver.moves.snapshot();
+    resolver.moves.restore(baseline);
     resolve_expr_with_expected(else_expr, expected, resolver, diagnostics);
+    let after_else = resolver.moves.snapshot();
+    resolver.moves.merge_branches(vec![after_then, after_else]);
     join_two_arms(
         "ternary",
         ("then", &then_expr.resolution),
@@ -97,9 +115,15 @@ pub(super) fn resolve_unless(
 ) -> ResolvedType {
     resolve_expr(condition, resolver, diagnostics);
     require_bool_condition("unless", condition, resolver.registry, diagnostics);
+    // `unless cond do BODY end` is `if !cond do BODY end` — there's
+    // no else, so a body move only joins to MaybeMoved by merging
+    // the body's post-state with the baseline.
+    let baseline = resolver.moves.snapshot();
     for stmt in body.iter_mut() {
         resolve_statement(stmt, resolver, diagnostics);
     }
+    let after_body = resolver.moves.snapshot();
+    resolver.moves.merge_branches(vec![after_body, baseline]);
     resolver.registry.primitive("Unit")
 }
 
@@ -118,11 +142,15 @@ pub(super) fn resolve_cond(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
+    let baseline = resolver.moves.snapshot();
+    let mut branch_states: Vec<MoveLedgerSnapshot> = Vec::with_capacity(arms.len() + 1);
     let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len() + 1);
     for (index, arm) in arms.iter_mut().enumerate() {
+        resolver.moves.restore(baseline.clone());
         resolve_expr(&mut arm.condition, resolver, diagnostics);
         require_bool_condition("cond", &arm.condition, resolver.registry, diagnostics);
         resolve_body_with_expected(&mut arm.body, expected, resolver, diagnostics);
+        branch_states.push(resolver.moves.snapshot());
         tails.push((
             format!("arm #{}", index + 1),
             body_tail_type(&arm.body, resolver.registry),
@@ -130,11 +158,21 @@ pub(super) fn resolve_cond(
     }
     let else_tail = match else_body {
         Some(stmts) => {
+            resolver.moves.restore(baseline.clone());
             resolve_body_with_expected(stmts, expected, resolver, diagnostics);
+            branch_states.push(resolver.moves.snapshot());
             body_tail_type(stmts, resolver.registry)
         }
-        None => resolver.registry.primitive("Unit"),
+        None => {
+            // Defensive: parser requires `else`, but if it ever
+            // emits a `cond` without one, treat the missing arm as
+            // the baseline so a move in any cond arm joins to
+            // MaybeMoved rather than Moved.
+            branch_states.push(baseline.clone());
+            resolver.registry.primitive("Unit")
+        }
     };
+    resolver.moves.merge_branches(branch_states);
     tails.push(("else".to_string(), else_tail));
     join_arm_tails("cond", &tails, span, resolver.registry, diagnostics)
 }
@@ -157,9 +195,19 @@ pub(super) fn resolve_while(
     require_bool_condition("while", condition, resolver.registry, diagnostics);
     resolver.loop_depth += 1;
     resolver.loop_break_seen.push(false);
+    // One-pass conservative join: snapshot before the body, walk
+    // once, merge with baseline so any move inside surfaces as
+    // `MaybeMoved` post-loop (the body might run zero times). A
+    // true fixpoint walk that catches "moved on iter 1, read on
+    // iter 2" requires re-walking the body, which would re-mint
+    // `LocalId`s through `LocalScope::declare`; deferred until the
+    // scope is rotation-safe.
+    let baseline = resolver.moves.snapshot();
     for stmt in body.iter_mut() {
         resolve_statement(stmt, resolver, diagnostics);
     }
+    let after_body = resolver.moves.snapshot();
+    resolver.moves.merge_branches(vec![baseline, after_body]);
     resolver.loop_break_seen.pop();
     resolver.loop_depth -= 1;
     resolver.registry.primitive("Unit")
@@ -178,9 +226,12 @@ pub(super) fn resolve_loop(
 ) -> ResolvedType {
     resolver.loop_depth += 1;
     resolver.loop_break_seen.push(false);
+    let baseline = resolver.moves.snapshot();
     for stmt in body.iter_mut() {
         resolve_statement(stmt, resolver, diagnostics);
     }
+    let after_body = resolver.moves.snapshot();
+    resolver.moves.merge_branches(vec![baseline, after_body]);
     let saw_break = resolver
         .loop_break_seen
         .pop()

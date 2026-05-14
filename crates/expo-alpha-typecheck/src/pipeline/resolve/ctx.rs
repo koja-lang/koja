@@ -7,6 +7,8 @@ use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::GlobalRegistry;
 
+use super::moves::MoveLedger;
+
 /// File-level resolver inputs: the cross-function pieces every
 /// per-function [`Resolver`] reuses verbatim. Bundling them at the
 /// file level keeps the `walker::resolve_function` signature short
@@ -40,6 +42,7 @@ impl<'a> ResolverEnv<'a> {
             file_aliases: self.file_aliases,
             loop_break_seen: Vec::new(),
             loop_depth: 0,
+            moves: MoveLedger::new(),
             package: self.package,
             registry: self.registry,
             scope,
@@ -112,6 +115,13 @@ pub(super) struct Resolver<'a> {
     /// this to `0` and restore on exit so a `break` inside a
     /// closure body must reference a loop _inside_ the closure.
     pub loop_depth: u32,
+    /// Per-function move-state ledger. Updated at every move-trigger
+    /// site (assignment RHS for non-`Copy` types, `move` parameter
+    /// arg, `move self` receiver) and consulted at every local read
+    /// to diagnose use-after-move. Lives on the resolver so branch
+    /// joins can `snapshot` / `restore` / `merge_branches` it
+    /// without separate plumbing.
+    pub moves: MoveLedger,
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
     pub scope: &'a mut LocalScope,

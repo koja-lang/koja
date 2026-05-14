@@ -1,1 +1,1 @@
-return type mismatch: expected `String`, found `Int`
+return type mismatch on `show`: expected `String`, found `Int`

@@ -18,10 +18,13 @@ use expo_ast::span::Span;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
 
+use expo_ast::ast::PassMode;
+
 use super::super::coercion::{
     Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut,
 };
 use super::super::ctx::Resolver;
+use super::super::moves::move_source_local;
 use super::super::types::display_resolution;
 
 /// Inputs to [`resolve_bounded_method_call`]. Bundles every
@@ -253,6 +256,11 @@ fn validate_bounded_args(
         return;
     }
     for (arg, expected) in args.iter_mut().zip(protocol_method.non_self_params.iter()) {
+        if expected.mode == PassMode::Move
+            && let Some(source) = move_source_local(&arg.value, resolver)
+        {
+            resolver.moves.mark_moved(source, arg.value.span);
+        }
         let actual = arg.value.resolution.clone();
         if !actual.is_resolved() {
             continue;

@@ -1,1 +1,1 @@
-requires both sides to be the same type
+`<>` requires matching String, Binary, or Bits operands

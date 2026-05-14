@@ -1,1 +1,1 @@
-has no function `to_cstring` for this type specialization
+no method `to_cstring` on `CPtr`

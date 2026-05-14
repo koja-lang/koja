@@ -1,1 +1,1 @@
-expected `fn (Int) -> String`, found `fn (Int) -> Int`
+expects `fn (Int) -> String`, got `fn (Int) -> Int`

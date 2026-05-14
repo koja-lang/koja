@@ -51,93 +51,6 @@ Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
 
 ---
 
-## Cached impl ASTs are pre-typecheck clones
-
-`expo-typecheck/src/collect.rs` clones every `ImplBlock` into
-`ctx.generic_impl_asts` and `ctx.specialized_impl_asts` _before_
-`check.rs` runs. Type-checking mutates `module.items` in place (populating
-`Expr::resolved_type` etc.), so the cached clones used by codegen never
-see those mutations. Same story for protocol-default bodies stored in
-`ctx.synthesized_default_fns`.
-
-Today's `compile_match` hides this by emitting the subject first and
-reading `subject_tv.expo_type` from codegen's own type tracking; pure
-lower-then-emit splits in IR can't rely on `subject.resolved_type` because
-of this gap. (See the doc comment on `patterns.rs::compile_match` for the
-"why pre-emit" rationale.)
-
-A naive fix -- writing the typechecked `impl_block` back into both caches
-keyed by `Span`, plus running a `rebuild_impl_asts_from_modules` pass after
-context merge -- gets `test-rust` green but still leaves `test-stdlib`
-failing on protocol-default bodies (their synthesized functions share
-spans across impls and the dedupe-by-span logic in `TypeContext::merge`
-prefers the stale clone).
-
-**Fix:** make the caches store references / IDs back into `module.items`
-so there's only one source of truth, or have `synthesize_protocol_defaults`
-type-check its outputs eagerly so the stored AST is authoritative.
-
-**Current state (Apr 2026):** the user-visible symptoms previously
-catalogued as separate "user-defined generic types" gaps (static-method
-type inference, generic methods on generic impls, struct construction
-inside impl method bodies) are now papered over by:
-
-- `infer_arg_expo_type` consulting `expr.resolved_type` as a fallback so
-  literal call-site arguments still drive type-arg inference;
-- `lookup_struct_info` and `try_parse_mangled_name` routing through the
-  package-aware bare-name resolvers so missing `resolved_type` on cached
-  AST nodes inside impl method bodies doesn't block construction.
-
-Those fallbacks keep the call-site/construction surface working for
-v0.10. The underlying cache duplication is still here and will keep
-biting deeper IR splits (`compile_match` in particular) until the cache
-is fixed for real.
-
-Surfaced during Stage 5 of the fix-generic-impl-typecheck plan; that stage
-is paused until this is sorted.
-
----
-
-## `try_parse_mangled_name` strips package prefix before AST lookup
-
-`expo-ir/src/lower/mangling.rs::try_parse_mangled_name` strips the package
-prefix from the base of a flat-mangled name (e.g. `pkg.MyBox_$Int$` →
-`MyBox`) before looking it up in `generic_struct_asts` /
-`generic_enum_asts`, then re-packages via `resolve_name_current` using the
-current codegen scope. This works because those caches are keyed by bare
-names today, but it introduces a cross-package collision risk: if package
-`a` is being compiled and encounters a substituted mangled name from
-package `b` (e.g. `b.Box_$Int$`) while `a` _also_ defines a generic
-`Box<T>`, `resolve_name_current` will prefer `a.Box` and produce
-`Type::Named { id: a.Box, type_args: [Int] }` for what was originally
-`b.Box<Int>`. Same-package generics (the only shape exercised by current
-tests and stdlib) are always correct.
-
-The flat-mangled form itself is the real culprit. `Type::substitute`
-intentionally collapses fully-monomorphized `Type::Named { id, type_args }`
-into `Type::Named { id: unresolved("pkg.Type_$args$"), type_args: [] }` to
-encode "no further substitution needed", and the
-`try_parse_mangled_name` machinery is the bridge that recovers structure.
-
-**Resolution plan:** the EXPOIR refactor threads structured
-`Type::Named { id, type_args }` end-to-end (no flat-mangled form in IR),
-which deletes both `try_parse_mangled_name` and this collision risk. As a
-smaller pre-EXPOIR fix, swap `substitute()` for `substitute_preserving()`
-in `resolve_method_signature` so the structured form survives the impl
-boundary -- but auditing every `substitute()` consumer for the change has
-broader surface than the current fallback.
-
-If we ever ship cross-package generic reuse before EXPOIR is done, add a
-debug assertion in `try_parse_mangled_name` that warns when the bare-name
-strip produces a different `TypeIdentifier` than the original
-`pkg.Type` would have, so the collision shows up as a clear failure
-rather than a silent miscompilation.
-
-Surfaced as a known follow-up while landing the GAPS 2/3/5 generics fix
-(April 2026).
-
----
-
 ## `Debug.format` for tuple variants drops payloads beyond the first
 
 The auto-derived `Debug` implementation only renders the payload of
@@ -353,6 +266,36 @@ analysis isn't lost.
 
 ---
 
+## Keyword as identifier silently drops the function
+
+A function whose parameter (or local) name shadows a reserved keyword
+(`cond`, `if`, `match`, `loop`, `do`, `end`, ...) doesn't error — the
+declaration is silently dropped and the rest of the file resolves
+against an empty body. No diagnostic, no parse error, just a missing
+function.
+
+```expo
+fn run(cond: Bool) -> Int    # `cond` is a keyword
+  greeting = "hello"
+  consume(greeting)
+  greeting.length()
+end
+```
+
+The above type-checks clean (zero diagnostics), but `run` never enters
+the registry — downstream callers see `unknown function run`.
+
+**Workaround:** rename the offending identifier (`flag`, `condition`,
+etc).
+
+**Fix sketch:** when `parse_param` sees a token that isn't `Ident`,
+emit a "reserved keyword `{name}` cannot be used as a parameter name"
+diagnostic instead of bailing the whole function.
+
+Surfaced during alpha use-after-move test writing (May 2026).
+
+---
+
 Audited 2026-05-03
 
 # Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift
@@ -362,26 +305,6 @@ Inventory of every discrepancy between `expo-ast`, `expo-parser`,
 `expo-ir` / `expo-codegen` (non-alpha). Grouped by category so each item
 can be triaged independently: remove the cruft, tighten the AST, or just
 reconcile the docs.
-
-## A. Dead end cruft (parsed, but dies at codegen or earlier)
-
-### A3. `ExprKind` variants that only go through the legacy codegen path (never real IR)
-
-These lower to `IRInstruction::Stub`, which `expo-codegen`'s instruction
-executor unwraps back into the legacy AST emitter at
-[instructions.rs:369-378](../crates/expo-codegen/src/control/instructions.rs).
-They work, but represent IR gaps, not AST gaps:
-
-- `Closure`, `ShortClosure` → `compile_closure_core` ([expr.rs:296-302](../crates/expo-codegen/src/expr.rs))
-- `List`, `Map` → `compile_list_literal`, `compile_map_literal`
-- `For` → `compile_for` (note: there IS a `lower_for` in `loops.rs` but it's dead code — never called)
-- `Receive`, `Spawn` → `compile_receive`, `compile_spawn`
-- `Literal::Unit` → falls through `resolve_const_inline` → Stub → legacy
-
-**Action:** not AST cruft. Flag for the EXPOIR roadmap /
-stub-categorization doc — no changes to AST/grammar/LANGUAGE needed.
-
----
 
 ## B. AST shapes never produced by the parser (dead AST subspace)
 
@@ -518,10 +441,9 @@ shorthand-in-struct-pattern work.
 
 ## Recommended execution order
 
-1. **Category A1 + A2** (remove `arena`, `shared`) — most cruft, clear decision, ~200 LOC deletion across parser/AST/grammar/LANGUAGE.md/lexer token list.
-2. **Category C** (grammar.ebnf sync) — 5 minutes, grammar-only.
-3. **Category D** (LANGUAGE.md drift) — rewrite Concurrency section, fix TOC, fix `receive` / `reply` / `send_after` / generics note.
-4. **Category E** (ROADMAP.md sync) — tiny, remove Mmap claim, rewrite arena status.
-5. **Category B / F** (AssignTarget tightening, short closure destructure, other minor cleanups) — pick off as bite-sized PRs.
+1. **Category C** (grammar.ebnf sync) — 5 minutes, grammar-only.
+2. **Category D** (LANGUAGE.md drift) — rewrite Concurrency section, fix TOC, fix `receive` / `reply` / `send_after` / generics note.
+3. **Category E** (ROADMAP.md sync) — tiny, remove Mmap claim.
+4. **Category B / F** (AssignTarget tightening, short closure destructure, other minor cleanups) — pick off as bite-sized PRs.
 
 Each step is independent and can land in its own commit/PR.

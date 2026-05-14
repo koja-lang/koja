@@ -48,6 +48,7 @@ mod idents;
 mod inference;
 mod literals;
 mod match_expr;
+mod moves;
 mod ops;
 mod patterns;
 mod process;

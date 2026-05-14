@@ -1,1 +1,1 @@
-unknown type `Headers`: bare names resolve to the current package or `Global` only
+does not recognize the struct type `Headers`

@@ -43,6 +43,16 @@ enum SegmentKind {
     String,
 }
 
+/// Signedness of an integer binary segment — `UInt8`-style /
+/// `::N` / bare segments are unsigned; `Int8`-style segments are
+/// signed. Used to pick the literal range when overflow-checking
+/// a constant-int segment value.
+#[derive(Clone, Copy)]
+enum IntSign {
+    Signed,
+    Unsigned,
+}
+
 /// Resolved per-segment metadata. `width_bits` is the segment's
 /// total bit count (`byte_length * 8` for strings, the explicit
 /// `::N` for sized integers, the type-annotation width for floats /
@@ -158,6 +168,9 @@ fn resolve_segment(
             ));
             return None;
         }
+        if !literal_fits_int_segment(segment, width_bits, IntSign::Unsigned, diagnostics) {
+            return None;
+        }
         return Some(SegmentInfo {
             kind: SegmentKind::Integer,
             width_bits,
@@ -173,13 +186,17 @@ fn resolve_segment(
             return None;
         };
         let name = path.last().map(String::as_str).unwrap_or("");
-        let (kind, width_bits) = match name {
-            "Float32" => (SegmentKind::Float, 32u64),
-            "Float64" => (SegmentKind::Float, 64u64),
-            "Int8" | "UInt8" => (SegmentKind::Integer, 8u64),
-            "Int16" | "UInt16" => (SegmentKind::Integer, 16u64),
-            "Int32" | "UInt32" => (SegmentKind::Integer, 32u64),
-            "Int64" | "UInt64" => (SegmentKind::Integer, 64u64),
+        let (kind, width_bits, sign) = match name {
+            "Float32" => (SegmentKind::Float, 32u64, None),
+            "Float64" => (SegmentKind::Float, 64u64, None),
+            "Int8" => (SegmentKind::Integer, 8u64, Some(IntSign::Signed)),
+            "UInt8" => (SegmentKind::Integer, 8u64, Some(IntSign::Unsigned)),
+            "Int16" => (SegmentKind::Integer, 16u64, Some(IntSign::Signed)),
+            "UInt16" => (SegmentKind::Integer, 16u64, Some(IntSign::Unsigned)),
+            "Int32" => (SegmentKind::Integer, 32u64, Some(IntSign::Signed)),
+            "UInt32" => (SegmentKind::Integer, 32u64, Some(IntSign::Unsigned)),
+            "Int64" => (SegmentKind::Integer, 64u64, Some(IntSign::Signed)),
+            "UInt64" => (SegmentKind::Integer, 64u64, Some(IntSign::Unsigned)),
             other => {
                 diagnostics.push(Diagnostic::error(
                     format!(
@@ -192,10 +209,15 @@ fn resolve_segment(
                 return None;
             }
         };
+        if let Some(sign) = sign
+            && !literal_fits_int_segment(segment, width_bits, sign, diagnostics)
+        {
+            return None;
+        }
         return Some(SegmentInfo { kind, width_bits });
     }
 
-    // Bare segment: integer value, default 8-bit width.
+    // Bare segment: integer value, default 8-bit unsigned width.
     if !is_primitive(&segment.value.resolution, registry, "Int") {
         diagnostics.push(Diagnostic::error(
             "alpha typecheck: bare binary segment requires an `Int`-typed value (or use \
@@ -204,10 +226,56 @@ fn resolve_segment(
         ));
         return None;
     }
+    if !literal_fits_int_segment(segment, 8, IntSign::Unsigned, diagnostics) {
+        return None;
+    }
     Some(SegmentInfo {
         kind: SegmentKind::Integer,
         width_bits: 8,
     })
+}
+
+/// Validate that a constant-int segment value fits the segment's
+/// declared bit width and signedness. Non-literal values pass
+/// (the IR lowering enforces width at runtime). Emits a "does not
+/// fit in N {un}signed bits" diagnostic on overflow.
+fn literal_fits_int_segment(
+    segment: &BinarySegment,
+    width_bits: u64,
+    sign: IntSign,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    let ExprKind::Literal {
+        value: Literal::Int(text),
+    } = &segment.value.kind
+    else {
+        return true;
+    };
+    let Ok(value) = text.parse::<i128>() else {
+        return true;
+    };
+    if width_bits == 0 || width_bits > 127 {
+        return true;
+    }
+    let (low, high) = match sign {
+        IntSign::Signed => {
+            let half = 1i128 << (width_bits - 1);
+            (-half, half - 1)
+        }
+        IntSign::Unsigned => (0, (1i128 << width_bits) - 1),
+    };
+    if value >= low && value <= high {
+        return true;
+    }
+    let sign_label = match sign {
+        IntSign::Signed => "signed",
+        IntSign::Unsigned => "unsigned",
+    };
+    diagnostics.push(Diagnostic::error(
+        format!("value `{value}` does not fit in {width_bits} {sign_label} bits"),
+        segment.value.span,
+    ));
+    false
 }
 
 /// Recover the byte length of a string-literal segment (no

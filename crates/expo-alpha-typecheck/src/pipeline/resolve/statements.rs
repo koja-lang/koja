@@ -54,6 +54,8 @@ use crate::registry::GlobalKind;
 use super::coercion::{Compatible, check_compatible, coercion_annotation_mut};
 use super::ctx::Resolver;
 use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::idents::diagnose_if_moved;
+use super::moves::move_source_local;
 use super::types::{display_resolution, is_arithmetic_type};
 use expo_ast::coercion::Coercion;
 
@@ -110,6 +112,15 @@ pub(super) fn resolve_assignment(
         resolved.is_resolved().then_some(resolved)
     });
     resolve_expr_with_expected(value, expected_ty.as_ref(), resolver, diagnostics);
+
+    // The RHS expression has been resolved; if it bottoms out at a
+    // bare-ident read of a non-`Copy` local, the assignment moves
+    // that local. Mark it before recording the LHS write so a
+    // self-aliasing case like `x = x` stamps `x` as moved first and
+    // then clears it as the LHS write resets the slot.
+    if let Some(source_local) = move_source_local(value, resolver) {
+        resolver.moves.mark_moved(source_local, value.span);
+    }
 
     let name = lvalue.segments[0].clone();
 
@@ -201,6 +212,11 @@ pub(super) fn resolve_assignment(
     // here — multi-segment field writes routed to
     // `resolve_field_assignment` above and bailed early.
     lvalue.local_id = Some(local_id);
+
+    // Fresh write resets the slot's move state: reassigning a
+    // previously-moved name (`x = ...; consume(x); x = ...`) makes
+    // the slot live again.
+    resolver.moves.clear(local_id);
 }
 
 /// Resolve a `target op= value` statement. Reassignment-only — the
@@ -239,6 +255,7 @@ pub(super) fn resolve_compound_assignment(
         }
         return;
     };
+    diagnose_if_moved(&name, head.local_id, target.span, resolver, diagnostics);
 
     let leaf_ty = if target.segments.len() == 1 {
         head.ty
@@ -312,6 +329,13 @@ fn resolve_field_assignment(
         ));
         return;
     };
+    diagnose_if_moved(
+        &head_name,
+        head.local_id,
+        lvalue.span,
+        resolver,
+        diagnostics,
+    );
     if !require_self_mutable(&head_name, lvalue.span, resolver, diagnostics) {
         return;
     }
