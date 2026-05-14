@@ -14,6 +14,8 @@
 
 set -uo pipefail
 
+just build-ffi-fixture
+
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 LANG_DIR="$REPO_ROOT/tests/lang"
 EXPO_BIN="${EXPO_BIN:-$HOME/.local/bin/expo}"

@@ -20,12 +20,15 @@ pub(crate) const FORMAT_F64_SYMBOL: &str = "expo_format_f64";
 pub(crate) const FORMAT_I64_SYMBOL: &str = "expo_format_i64";
 pub(crate) const FORMAT_U64_SYMBOL: &str = "expo_format_u64";
 pub(crate) const FREE_SYMBOL: &str = "free";
+pub(crate) const LAST_ERROR_SYMBOL: &str = "expo_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "malloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
 pub(crate) const REALLOC_SYMBOL: &str = "realloc";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_alpha_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__expo_alpha_panic";
 pub(crate) const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
+pub(crate) const SOCKET_RECV_FROM_SYMBOL: &str = "expo_socket_recv_from";
+pub(crate) const SOCKET_RESOLVE_SYMBOL: &str = "expo_socket_resolve";
 pub(crate) const STRCMP_SYMBOL: &str = "strcmp";
 pub(crate) const STRING_GET_SYMBOL: &str = "expo_string_get";
 pub(crate) const STRING_LENGTH_SYMBOL: &str = "expo_string_length";
@@ -98,6 +101,24 @@ pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValu
         .add_function(FREE_SYMBOL, signature, Some(Linkage::External))
 }
 
+/// Declare (or look up) the `expo_last_error` runtime helper.
+/// Signature: `i8* expo_last_error()`. Returns a freshly-allocated
+/// Expo string payload (8 bytes past its `i64 bit_length` header)
+/// describing the last I/O error set via `set_last_error` on the
+/// calling thread; falls back to `"unknown error"` when no error
+/// is set. The socket intrinsics (`Socket.recv_from`,
+/// `Socket.resolve`) wrap this pointer directly into the
+/// `Result.Err(String)` branch.
+pub(crate) fn declare_last_error_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(LAST_ERROR_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[], false);
+    ctx.module
+        .add_function(LAST_ERROR_SYMBOL, signature, Some(Linkage::External))
+}
+
 /// Declare (or look up) the libc `malloc` extern. The concat /
 /// binary-construct emitters call this for the heap block base.
 /// Signature: `i8* malloc(i64)` (alpha targets 64-bit hosts; the
@@ -127,6 +148,43 @@ pub(crate) fn declare_memset_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
     let signature = ptr_ty.fn_type(&[ptr_ty.into(), i32_ty.into(), i64_ty.into()], false);
     ctx.module
         .add_function(MEMSET_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `expo_socket_recv_from` runtime
+/// helper. Signature: `i8* expo_socket_recv_from(i32 fd, i64 count)`.
+/// Suspends the calling process until the fd is readable, then
+/// receives one datagram and returns a heap-allocated
+/// `[*u8 data, *u8 ip_bin, i64 port]` triple (or null on error).
+/// The `Socket.recv_from` intrinsic emitter marshals the triple
+/// into a `Pair<String, SocketAddress>` SSA value.
+pub(crate) fn declare_socket_recv_from_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(SOCKET_RECV_FROM_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i32_ty = ctx.context.i32_type();
+    let i64_ty = ctx.context.i64_type();
+    let signature = ptr_ty.fn_type(&[i32_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function(SOCKET_RECV_FROM_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `expo_socket_resolve` runtime helper.
+/// Signature: `i8* expo_socket_resolve(i8* hostname_payload)`.
+/// Wraps `getaddrinfo` and returns a heap-allocated
+/// `[i64 count, *u8 ip0, *u8 ip1, ...]` buffer (or null on error).
+/// The `Socket.resolve` intrinsic emitter copies the trailing
+/// pointer array into a fresh `List<IPAddress>` element buffer.
+pub(crate) fn declare_socket_resolve_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(SOCKET_RESOLVE_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(SOCKET_RESOLVE_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the libc `realloc` extern. The list
