@@ -48,24 +48,20 @@ pub(super) fn emit_load_const<'ctx>(
     Ok(materialized)
 }
 
-/// Lower a scalar `IRInstruction::Const`. `ConstValue::Unit` is
-/// machine-representation-less; the merge block of an `if` /
-/// `unless` emits a `Const::Unit` so the surrounding expression
-/// has a `ValueId` to thread, but in practice nothing downstream
-/// consumes it (the if/unless expression is Unit-typed and the
-/// function's actual return is the trailing Int / Bool expression
-/// that follows the conditional). Returning `None` for Unit lets
-/// the caller skip the value-map insert; if some caller does
-/// reference the Unit value, the resulting `lookup` miss surfaces
-/// as an explicit "undefined SSA value" error rather than a
-/// half-shaped i1 / i8 placeholder that papers over a real feature
-/// gap.
+/// Lower a scalar `IRInstruction::Const`. `ConstValue::Unit` binds
+/// an `i8 0` placeholder so downstream consumers (call args into
+/// generic intrinsics with Unit-pinned params, `Pair<Unit, _>` field
+/// reads) get a defined LLVM value rather than a lookup miss. The
+/// placeholder pairs with the matching `i8` slot minted in
+/// [`crate::function::function_signature`] /
+/// [`crate::layout::structs::define_struct_body`]; Unit values are
+/// inert at runtime, so the byte itself is never observed.
 pub(super) fn emit_const_instruction<'ctx>(
     ctx: &EmitContext<'ctx>,
     value: &ConstValue,
 ) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
     if matches!(value, ConstValue::Unit) {
-        return Ok(None);
+        return Ok(Some(ctx.context.i8_type().const_zero().into()));
     }
     Ok(Some(emit_const(ctx, value)?))
 }
@@ -133,9 +129,7 @@ fn emit_const<'ctx>(
             .const_int(u64::from(*v), false)
             .into()),
         ConstValue::UInt64(v) => Ok(ctx.context.i64_type().const_int(*v, false).into()),
-        ConstValue::Unit => Err(LlvmError::Codegen(
-            "alpha LLVM does not yet emit Unit constants in value position".to_string(),
-        )),
+        ConstValue::Unit => Ok(ctx.context.i8_type().const_zero().into()),
     }
 }
 

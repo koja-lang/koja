@@ -343,7 +343,14 @@ pub(super) fn lower_method_call(
         let receiver_template = IRSymbol::from_identifier(&struct_entry.identifier);
         let callee =
             mangled_method_name(&receiver_template, &receiver_arg_ir, method, &method_arg_ir);
-        if !method_type_args.is_empty() {
+        // Enqueue the specific method we're calling so the mono
+        // worklist sees the call's `(method_id, receiver_args,
+        // method_args)` triple. Static dispatch on a generic type
+        // (`Task.async(...)`) never lowers the receiver expression,
+        // so without this push the call symbol mangled above would
+        // have no matching `IRFunction` and `seal_program_calls`
+        // would panic.
+        if !receiver_type_args.is_empty() || !method_type_args.is_empty() {
             output.instantiations.push(Instantiation {
                 template: method_id,
                 args: receiver_type_args.clone(),

@@ -114,6 +114,32 @@ pub(crate) fn instantiate(
         }
         monomorphize::monomorphize(&inst, registry, &function_index, packages, output);
         worklist.append(&mut std::mem::take(&mut output.instantiations));
+        // Mono'd bodies can mint closures / spawn wrappers via
+        // `lower_function_inner`. `lower_package_inner` drains those
+        // once at the end of each initial-pass lowering, before mono
+        // runs, so anything pushed here would otherwise be stranded.
+        drain_synthesized_into_packages(packages, output);
+    }
+}
+
+/// Route each synthesized function to the `IRPackage` whose label
+/// matches its symbol's package prefix; fall back to the first
+/// package on a misalignment so a missing target surfaces as a seal
+/// panic instead of a silent drop.
+fn drain_synthesized_into_packages(packages: &mut [IRPackage], output: &mut LowerOutput) {
+    for synthesized in output.synthesized_functions.drain(..) {
+        let symbol_str = synthesized.symbol.mangled();
+        let pkg_prefix = symbol_str.split('.').next().unwrap_or(symbol_str);
+        let index = packages
+            .iter()
+            .position(|pkg| pkg.package == pkg_prefix)
+            .unwrap_or(0);
+        let owner = packages
+            .get_mut(index)
+            .expect("alpha IR generics: no IRPackage available to host synthesized function");
+        owner
+            .functions
+            .insert(synthesized.symbol.clone(), synthesized);
     }
 }
 

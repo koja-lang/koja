@@ -6,6 +6,8 @@
 //! nested instantiations accumulate in `output.instantiations` for
 //! [`super::instantiate`] to drain.
 
+use std::collections::BTreeSet;
+
 use expo_alpha_typecheck::{
     EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedVariantData,
     StructDefinition,
@@ -281,6 +283,7 @@ fn enqueue_member_methods(
         .expect("template id was just resolved");
     let owner_pkg = entry.identifier.package();
     let owner_path = entry.identifier.path();
+    let protocol_method_names = protocol_method_names(&entry.kind, registry);
     for (id, candidate) in registry.iter_in_package(owner_pkg) {
         if !matches!(candidate.kind, GlobalKind::Function(Some(_))) {
             continue;
@@ -295,6 +298,15 @@ fn enqueue_member_methods(
         if !candidate.type_params.is_empty() {
             continue;
         }
+        // Protocol-impl methods are call-site driven. Eagerly mono'ing
+        // every time the struct is instantiated cascades into missing-
+        // method errors when the impl body assumes a constraint the
+        // concrete arg doesn't satisfy (e.g. `Debug for Pair<A, B>`
+        // calling `A.format()` with no `A: Debug` bound, exploded by
+        // a `Pair<Unit, X>` instance).
+        if protocol_method_names.contains(candidate.identifier.last()) {
+            continue;
+        }
         output.instantiations.push(Instantiation {
             template: id,
             args: inst.args.clone(),
@@ -302,6 +314,30 @@ fn enqueue_member_methods(
             owner: inst.template,
         });
     }
+}
+
+/// Method names contributed by every protocol in `kind`'s
+/// `conformances`. Drives the call-site-only filter in
+/// [`enqueue_member_methods`].
+fn protocol_method_names(kind: &GlobalKind, registry: &GlobalRegistry) -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+    let conformances = match kind {
+        GlobalKind::Struct(Some(def)) => &def.conformances,
+        GlobalKind::Enum(Some(def)) => &def.conformances,
+        _ => return names,
+    };
+    for protocol_id in conformances.keys() {
+        let Some(protocol_entry) = registry.get(*protocol_id) else {
+            continue;
+        };
+        let GlobalKind::Protocol(Some(protocol_def)) = &protocol_entry.kind else {
+            continue;
+        };
+        for method in &protocol_def.methods {
+            names.insert(method.name.clone());
+        }
+    }
+    names
 }
 
 /// True for stdlib structs that lower to a primitive [`IRType`] —

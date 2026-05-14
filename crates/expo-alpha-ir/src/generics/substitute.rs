@@ -13,7 +13,8 @@
 
 use expo_alpha_typecheck::{FunctionSignature, ResolvedParam};
 use expo_ast::ast::{
-    AssignTarget, EnumConstructionData, Expr, ExprKind, Function, Statement, StringPart,
+    AssignTarget, EnumConstructionData, Expr, ExprKind, FieldPattern, Function, Pattern, Statement,
+    StringPart,
 };
 use expo_ast::identifier::{GlobalRegistryId, ResolvedType};
 
@@ -206,6 +207,13 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
             after_body,
         } => {
             for arm in arms {
+                // `receive` arms admit typed-binding patterns whose
+                // payload type can carry a `TypeParam` from the
+                // enclosing generic decl (e.g. `pair: Pair<(),
+                // Option<ReplyTo<R>>>`). Without this walk the raw
+                // `R` leaks into `resolved_type_to_ir_type` on
+                // re-lower.
+                substitute_in_pattern(&mut arm.pattern, args, owner);
                 if let Some(guard) = &mut arm.guard {
                     substitute_in_expr(guard, args, owner);
                 }
@@ -247,6 +255,44 @@ fn substitute_in_expr(expr: &mut Expr, args: &[ResolvedType], owner: GlobalRegis
         ExprKind::While { condition, body } => {
             substitute_in_expr(condition, args, owner);
             substitute_in_statements(body, args, owner);
+        }
+    }
+}
+
+/// Rewrite every `ResolvedType` slot reachable from a [`Pattern`].
+/// Only [`Pattern::TypedBinding`] carries a generic-bearing
+/// resolution today; other kinds either have no resolution or only
+/// a generic-free `TypeIdentifier` head, so the walk just recurses
+/// into nested sub-patterns.
+fn substitute_in_pattern(pattern: &mut Pattern, args: &[ResolvedType], owner: GlobalRegistryId) {
+    match pattern {
+        Pattern::Binding { .. }
+        | Pattern::Binary { .. }
+        | Pattern::EnumUnit { .. }
+        | Pattern::Literal { .. }
+        | Pattern::Wildcard { .. } => {}
+        Pattern::Constructor { elements, .. } | Pattern::EnumTuple { elements, .. } => {
+            for sub in elements {
+                substitute_in_pattern(sub, args, owner);
+            }
+        }
+        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
+            for FieldPattern { pattern, .. } in fields {
+                substitute_in_pattern(pattern, args, owner);
+            }
+        }
+        Pattern::List { elements, .. }
+        | Pattern::Or {
+            patterns: elements, ..
+        } => {
+            for sub in elements {
+                substitute_in_pattern(sub, args, owner);
+            }
+        }
+        Pattern::TypedBinding { resolved_type, .. } => {
+            if let Some(ty) = resolved_type.as_mut() {
+                *ty = substitute_resolved_type(ty, args, owner);
+            }
         }
     }
 }

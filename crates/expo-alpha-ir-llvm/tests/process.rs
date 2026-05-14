@@ -400,6 +400,64 @@ fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
     assert_contains(&ir_text, "[2 x i64] [i64 1, i64 0]");
 }
 
+/// Pins the Unit-as-msg-payload codegen surface used by
+/// `Task<R>` (where the public-API `Ref<(), R>` pins `M = Unit`).
+/// Unit at the IR layer has no value-level type — the LLVM
+/// boundary maps it to an `i8` placeholder in every value
+/// position (param, struct field, local) so the Pair envelope
+/// still lays out cleanly. Catches regressions in any of:
+/// `function::function_signature`, `types::value_basic_type`,
+/// or the `Ref.cast` intrinsic's `value_basic_type` lookup.
+#[test]
+fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
+    let unit_process = "
+        struct UnitWorker
+          tag: Int
+        end
+
+        impl Process<Int, (), Int> for UnitWorker
+          fn start(move config: Int) -> Result<UnitWorker, StopReason>
+            Result.Ok(UnitWorker{tag: config})
+          end
+
+          fn handle(move self, msg: (), from: Option<ReplyTo<Int>>) -> Step<UnitWorker>
+            Step.Done(StopReason.Normal)
+          end
+
+          fn run(move self) -> StopReason
+            receive
+              event: Lifecycle ->
+                StopReason.Shutdown
+            end
+          end
+        end
+        ";
+    let mut source = String::from(unit_process);
+    source.push_str(
+        "
+        fn main
+          handle = spawn UnitWorker.start(0)
+          handle.cast(())
+        end
+        ",
+    );
+    let ir_text = emit(&source);
+
+    // Signature carries the i8 placeholder where M = Unit lands;
+    // the Pair envelope still packs an Option::None reply slot in
+    // the trailing `[2 x i64]` array.
+    assert_contains(
+        &ir_text,
+        "define void @\"Global.Ref_$Unit.Int64$.cast\"(%\"Global.Ref_$Unit.Int64$\" %0, i8 %1)",
+    );
+    assert_contains(&ir_text, "%cast_envelope = alloca { i8, [2 x i64] }");
+    assert_contains(
+        &ir_text,
+        "%pair_msg = insertvalue { i8, [2 x i64] } undef, i8 %1, 0",
+    );
+    assert_contains(&ir_text, "[2 x i64] [i64 1, i64 0]");
+}
+
 #[test]
 fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
     let mut source = String::from(COUNTER_PROCESS);

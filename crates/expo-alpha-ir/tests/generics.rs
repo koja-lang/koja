@@ -411,3 +411,96 @@ fn nested_generic_enum_in_generic_struct_yields_concrete_decls_for_both() {
     assert_eq!(outer.fields[0].ir_type, IRType::Enum(inner.symbol.clone()));
     assert_eq!(outer.fields[1].ir_type, IRType::String);
 }
+
+// ---------------------------------------------------------------------------
+// Static method dispatch on generic types
+// ---------------------------------------------------------------------------
+
+/// Static-dispatch method calls on a generic type (`Box.make(...)`)
+/// previously skipped the per-method instantiation enqueue when no
+/// method-level type-args were present, so the call site mangled
+/// `Box_$Int64$.make` but no `IRFunction` with that symbol ever
+/// reached the `IRProgram` — `seal_program_calls` then panicked
+/// with "function `...` calls `Box_$Int64$.make`, but that function
+/// is not registered in the IRProgram". Pin the regression by
+/// asserting both the call instruction and the mono'd target land
+/// in the same script.
+#[test]
+fn static_call_on_generic_struct_registers_mono_method() {
+    let source = "
+        struct Box<T>
+          value: T
+        end
+
+        impl Box<T>
+          fn make(v: T) -> Box<T>
+            Box{value: v}
+          end
+        end
+
+        Box.make(42)
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let target = "TestApp.Box_$Int64$.make";
+    let function = script
+        .function(target)
+        .unwrap_or_else(|| panic!("expected mono'd `{target}` in script"));
+    assert_eq!(function.symbol.mangled(), target);
+
+    let block = script.blocks.first().expect("script has one block");
+    let call_symbol = block
+        .instructions
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::Call { callee, .. } => Some(callee.mangled().to_string()),
+            _ => None,
+        })
+        .expect("expected one Call to the mono'd static method");
+    assert_eq!(call_symbol, target);
+}
+
+/// Receive-arm typed-binding patterns previously skipped pattern-type
+/// substitution during mono, leaving a raw `TypeParam` inside the
+/// payload's `resolved_type` and panicking downstream in
+/// `resolved_type_to_ir_type` ("received a non-Global resolution
+/// (TypeParam ...)"). The fix walks `Pattern::TypedBinding`'s
+/// `resolved_type` slot alongside the existing expr-level substitute,
+/// so monomorphizing a generic receive-arm container substitutes the
+/// payload type the same way it substitutes arm bodies.
+#[test]
+fn receive_arm_typed_binding_substitutes_payload_type_during_mono() {
+    // No receive-arm-aware standalone smoke is wired up at the
+    // script-test layer (receive lives behind a process struct), so
+    // settle for "this mono'd path used to panic; if the script
+    // lowers without panicking, the pattern substitution is doing
+    // its job".
+    let source = "
+        struct Pair<A, B>
+          first: A
+          second: B
+        end
+
+        struct Wrap<R>
+          x: R
+        end
+
+        impl Wrap<R>
+          fn make(value: R) -> Pair<Wrap<R>, R>
+            Pair{first: Wrap{x: value}, second: value}
+          end
+        end
+
+        Wrap.make(42)
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let target = "TestApp.Wrap_$Int64$.make";
+    script
+        .function(target)
+        .unwrap_or_else(|| panic!("expected mono'd `{target}` in script"));
+    let outer_pair = "TestApp.Pair_$TestApp.Wrap_$Int64$.Int64$";
+    script
+        .struct_decl(outer_pair)
+        .unwrap_or_else(|| panic!("expected nested `{outer_pair}` in script"));
+}

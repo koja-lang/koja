@@ -75,13 +75,14 @@ pub(crate) fn ir_int_type<'ctx>(
 }
 
 /// LLVM basic type for any [`IRType`] that has a value-level
-/// representation. `Unit` is rejected (no LLVM type); ints / `Bool`
-/// route through [`ir_int_type`]; `Float32` / `Float64` map to
-/// `f32` / `f64`; `String` is a default-AS pointer; `Struct(symbol)`
-/// resolves through [`EmitContext::struct_type`] (registered by the
-/// pre-emit phase); `Enum(symbol)` resolves through
-/// [`EmitContext::enum_outer_type`] (the outer opaque blob registered
-/// by [`crate::layout::enums::declare_enum_type`] +
+/// representation. `Unit` is rejected (no value form at this layer —
+/// see [`value_basic_type`] for the placeholder-friendly variant);
+/// ints / `Bool` route through [`ir_int_type`]; `Float32` / `Float64`
+/// map to `f32` / `f64`; `String` is a default-AS pointer;
+/// `Struct(symbol)` resolves through [`EmitContext::struct_type`]
+/// (registered by the pre-emit phase); `Enum(symbol)` resolves
+/// through [`EmitContext::enum_outer_type`] (the outer opaque blob
+/// registered by [`crate::layout::enums::declare_enum_type`] +
 /// [`crate::layout::enums::define_enum_bodies`]).
 pub(crate) fn ir_basic_type<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -113,6 +114,24 @@ pub(crate) fn ir_basic_type<'ctx>(
             "expected a value-level IRType, got `Unit`".to_string(),
         )),
     }
+}
+
+/// [`ir_basic_type`] with `Unit` mapped to an `i8` placeholder. Use
+/// at every site that needs an LLVM type for a value-position slot
+/// (function params, local allocas, struct fields) so generic
+/// instantiations that pin a type-param to `Unit` lay out cleanly.
+/// The byte is inert at runtime — Unit constants emit `i8 0` (see
+/// [`crate::emit::constants::emit_const_instruction`]) and Unit
+/// returns still route through `void` in
+/// [`crate::function::function_signature`].
+pub(crate) fn value_basic_type<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    ty: &IRType,
+) -> Result<BasicTypeEnum<'ctx>, LlvmError> {
+    if matches!(ty, IRType::Unit) {
+        return Ok(ctx.context.i8_type().into());
+    }
+    ir_basic_type(ctx, ty)
 }
 
 /// ABI byte size of `ty` on the host triple. Routes through

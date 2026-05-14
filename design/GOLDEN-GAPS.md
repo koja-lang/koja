@@ -209,6 +209,75 @@ sizes (`x::n`), `::N byte` / `::N size` units, float-extract
 bindings (`<<x: Float32>>`), and bit-misaligned `: Binary`
 greedy tails.
 
+### `lib/global` Task / Ref<Unit, R> instantiations
+
+`lib/global/test/task_test.expo` and the wider `Task<R>` /
+`Ref<Unit, R>` shapes failed under the LLVM backend with a chain
+of monomorphization + Unit-as-value gaps:
+
+1. **Static generic method calls not enqueued** — `Task.async(...)`
+   never lowered the receiver expression, so the
+   `(method_id, receiver_args)` instantiation never reached the
+   worklist and `seal_program_calls` panicked with
+   > function `Global.TaskTest.test_async_await` calls
+   > `Global.Task_$Int64$.async`, but that function is not
+   > registered in the IRProgram
+2. **`receive`-arm typed-binding patterns kept raw `TypeParam`
+   leaves** — `pair: Pair<(), Option<ReplyTo<R>>>` retained an
+   unsubstituted `R` after `Task.run`'s monomorphization,
+   panicking downstream in `resolved_type_to_ir_type`.
+3. **Synthesized spawn wrappers stranded** — mono'd bodies that
+   minted closures / spawn wrappers via `lower_function_inner`
+   landed in `output.synthesized_functions`, but the per-package
+   drain ran once before mono, so subsequent wrappers were
+   silently dropped (next seal pass complained "no spawn wrapper
+   with that symbol is registered").
+4. **Eager `Debug`-impl monomorphization on Unit-pinned generics
+   ** — `enqueue_member_methods` greedily mono'd every method
+   reachable from `Pair`, including the `Debug.format` impl that
+   recurses into `A.format()` without an `A: Debug` bound,
+   exploding on a `Pair<Unit, …>` instance.
+5. **`IRType::Unit` in value position** — LLVM signatures, local
+   allocas, struct fields, and the `Ref<M, R>` intrinsic
+   emitters all rejected `Unit` outright, so even with the
+   monomorphization fixes the Unit-pinned `Ref<(), R>.cast`
+   couldn't lay out.
+
+Fixes (landed 2026-05-14):
+
+- [`lower/calls.rs`](../crates/expo-alpha-ir/src/lower/calls.rs)
+  pushes a method-targeted `Instantiation` whenever the call
+  carries receiver or method type-args. Mirrors what
+  `resolved_type_to_ir_type` already does for instance dispatch.
+- [`generics/substitute.rs`](../crates/expo-alpha-ir/src/generics/substitute.rs)
+  adds `substitute_in_pattern` and threads it through the
+  `ExprKind::Receive` walk so typed-binding payload types get
+  rewritten.
+- [`generics/mod.rs`](../crates/expo-alpha-ir/src/generics/mod.rs)
+  drains `output.synthesized_functions` after every
+  `monomorphize` step and routes each to the matching
+  `IRPackage` by symbol prefix.
+- [`generics/monomorphize.rs`](../crates/expo-alpha-ir/src/generics/monomorphize.rs)
+  filters protocol-impl method names out of
+  `enqueue_member_methods`. Protocol methods stay on-demand via
+  `lower_method_call`'s push.
+- [`types.rs::value_basic_type`](../crates/expo-alpha-ir-llvm/src/types.rs)
+  maps `IRType::Unit` to an `i8` placeholder; routed through
+  `function_signature` (params), `emit_local_decl` /
+  `emit_local_read` (locals), `define_struct_body` (fields),
+  and the `Ref<M, R>` envelope emitters in
+  [`intrinsics/process.rs`](../crates/expo-alpha-ir-llvm/src/intrinsics/process.rs).
+  `emit_const_instruction` binds Unit constants to `i8 0` so
+  call-site lookups resolve cleanly.
+
+Pinned by
+[`tests/generics.rs`](../crates/expo-alpha-ir/tests/generics.rs)
+(`static_call_on_generic_struct_registers_mono_method` and
+`receive_arm_typed_binding_substitutes_payload_type_during_mono`)
+and
+[`tests/process.rs::ref_cast_with_unit_message_uses_i8_placeholder_in_envelope`](../crates/expo-alpha-ir-llvm/tests/process.rs).
+All 163 `lib/global` tests now pass.
+
 ### Shortest-round-trip float `Debug.format` (1 fixture)
 
 `protocols/debug_format` previously diverged: v1 printed

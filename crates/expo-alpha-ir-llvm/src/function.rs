@@ -26,7 +26,7 @@ use crate::emit::process::emit_spawn_wrapper_body;
 use crate::emit::{self, BlockMap, ValueMap, inkwell_err};
 use crate::error::LlvmError;
 use crate::intrinsics;
-use crate::types::{closure_body_signature, env_struct_type, ir_basic_type};
+use crate::types::{closure_body_signature, env_struct_type, ir_basic_type, value_basic_type};
 
 /// Declare an LLVM function for `function`. The signature mirrors
 /// the IR exactly: each [`expo_alpha_ir::IRFunctionParam::ty`]
@@ -98,7 +98,7 @@ fn function_signature<'ctx>(
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
         Vec::with_capacity(function.params.len());
     for param in &function.params {
-        param_types.push(ir_basic_type(ctx, &param.ty)?.into());
+        param_types.push(value_basic_type(ctx, &param.ty)?.into());
     }
     Ok(if matches!(function.return_type, IRType::Unit) {
         ctx.context.void_type().fn_type(&param_types, false)
