@@ -23,6 +23,7 @@ editors/zed/expo/target/
 .DS_Store
 justfile
 .rules
+tests/lang/ffi/libffi_helper.a
 
 # Stub-retirement diagnostics (regen via stub/regenerate.sh)
 /stub/*.log

@@ -6,9 +6,11 @@ A triage of the `tests/lang/` fixtures that fail under
 this doc enumerates what's still open and groups failures by root cause so
 fixing one entry unblocks a known cluster of fixtures.
 
-PASS count as of last run: `48 passed, 18 failed, 1 skipped` (script
+PASS count as of last run: `54 passed, 12 failed, 1 skipped` (script
 [scripts/validate_alpha_lang.sh](../scripts/validate_alpha_lang.sh),
-`process_lifecycle` skipped because it's signal-driven).
+`process_lifecycle` skipped because it's signal-driven; the `ffi`
+fixture's `libffi_helper.a` must be built ahead of time — see
+["Closed: project-root FFI library search"](#closed-project-root-ffi-library-search)).
 
 Two top-level buckets:
 
@@ -36,7 +38,7 @@ thunk like the `fn main` path); (b) rewrite the fixtures to use `fn
 main` and a manually-spawned `App` ref. (a) preserves the surface area
 v1 supported.
 
-### 2. Recursive enum miscompile (1 fixture)
+### 2. Recursive payload miscompile (2 fixtures)
 
 `generics/recursive_enum` — built binary exits 133 silently. The
 fixture exercises a self-referential enum (a tree with `Node(Box<...>)`
@@ -46,6 +48,17 @@ now pass once the LLVM layout phase started defining variant complete +
 outer bodies in dependency order. `recursive_enum` still fails, so the
 remaining root cause is likely IR-side payload projection through the
 recursive variant rather than the layout phase.
+
+`generics/recursive_struct` now sits in the same bucket once its
+`Option.None` typecheck rewrite (see ["Closed: v1-permissive
+Option.None inference"](#closed-v1-permissive-optionnone-inference))
+landed: alpha typecheck and the interpreter backend both produce the
+expected `1\n2\n3`, but the LLVM backend prints `1\n2\n0` — the
+innermost recursive-struct field read returns zero. Same
+payload-projection shape as the enum case (Node holds
+`Option<Node>`, the inner `match n.next { Option.Some(n2) -> ... }`
+arm reads a stale/empty payload). Fixing the recursive enum root
+cause should close this one too.
 
 ### 3. `Ref<M>` substitution with union message types (2 fixtures)
 
@@ -96,29 +109,48 @@ type.
 
 ---
 
-## v1-permissive idioms (4 fixtures, fixture rewrites)
+## Closed: v1-permissive `Option.None` inference
 
-These fixtures lean on v1 looseness alpha intentionally rejects.
-Rewriting the fixture is cheaper than relaxing the type system.
+Three fixtures relied on v1's backwards-flow inference for
+`Option.None` in a generic position — alpha rejects with:
 
-- **`generics/nested_generics`, `generics/recursive_generic`,
-  `generics/recursive_struct`** — `Option.None` in generic position
-  relies on backwards-flow inference. Alpha says:
+> alpha typecheck cannot infer type parameter `T` of `Global.Option`
+> from unit variant `None`
 
-  > alpha typecheck cannot infer type parameter `T` of `Global.Option`
-  > from unit variant `None`
+Rewrite (landed 2026-05-13): bind `Option.None` to a typed local
+on its first declaration, then read it back as the field value.
+The struct constructor infers its own type parameter from the
+field type instead of from `None` directly.
 
-  Already documented under "Generic enum unit variants in top-level
-  code" in [GAPS.md](GAPS.md). Rewrite the fixtures with explicit type
-  annotations: `let x: Option<Foo> = Option.None` or pass through a
-  typed return slot.
+| Fixture                       | Annotation                       |
+| ----------------------------- | -------------------------------- |
+| `generics/nested_generics`    | `no_detail: Option<Int>`         |
+| `generics/recursive_generic`  | `no_next: Option<GNode<Int>>`    |
+| `generics/recursive_struct`   | `no_next: Option<Node>`          |
 
-- **`ownership/ownership_clone`** — Calls `.clone()` on `Int` and on a
-  plain `Point` struct (no heap fields). In alpha, `Clone` is a
-  protocol — copy types don't (and shouldn't) implement it. Rewrite to
-  drop the explicit `.clone()` calls on copy types.
+All three typecheck cleanly under alpha and produce the recorded
+stdouts under v1 + alpha-interpreter. `recursive_struct` still
+miscompiles under alpha LLVM (innermost field reads as `0`); see
+["§2 Recursive payload miscompile"](#2-recursive-payload-miscompile-2-fixtures)
+— the typecheck rewrite is correct; the LLVM miscompile is the
+remaining gap.
 
----
+## Closed: v1-permissive `.clone()` on copy types
+
+`ownership/ownership_clone` called `.clone()` on `Int` (a copy
+type) and on a plain `Point{ x: Int, y: Int }` struct (a move
+type per the spec, but alpha hadn't synthesized `Clone` for it).
+
+Rewrite (landed 2026-05-13):
+
+- Dropped `m = n.clone()` for `Int` — `m = n` works in both v1
+  and alpha since `Int` is a copy type.
+- Added a manual `impl Point { fn clone(self) -> Point }` to the
+  fixture, keeping the `q = p.clone()` shape working in both
+  toolchains.
+
+The fixture still demonstrates the original ownership shape
+(consume `q`, then read `p.x` to prove the clone kept `p` alive).
 
 ## Closed: opaque `Debug` receivers for anonymous types
 
@@ -154,27 +186,44 @@ struct/enum fields. Pinned by
 
 ---
 
-## Infrastructure (not an alpha bug)
+## Closed: project-root FFI library search
 
-- **`ffi/`** — `alpha LLVM object emit failed: failed to write object
-  file: "Operation not permitted"`. Sandbox-only filesystem permission
-  issue on the link temp dir. The fixture itself compiles. Move the
-  temp-dir under a writable path or ignore this fixture in
-  sandboxed runs.
+The `ffi/` fixture's `@link "ffi_helper"` annotation expands to a
+`cc -lffi_helper` flag, but the linker had no `-L` for the project
+directory — so `libffi_helper.a` (sitting next to `expo.toml`) was
+not discoverable unless the caller exported `LIBRARY_PATH=<dir>` by
+hand. The `lang_suite.rs` `lang_ffi` harness already did this, which
+masked the gap for the test runner; manual `expo run` / `expo alpha
+run` from inside the project dir failed identically under both
+pipelines.
+
+Fixed by threading `extra_lib_search_paths` through
+[`pipeline::link`](../crates/expo-driver/src/pipeline.rs) so
+project-mode callers (`build_project`, `cmd_alpha_run_project`,
+`cmd_alpha_build_project`, the `expo test` harness) pass the
+directory holding `expo.toml`. The linker emits one extra `-L<root>`
+after the embedded-runtime `-L`, so a sibling `libfoo.a` resolves
+without any env juggling. Single-file `.expo` / `.exps` builds pass
+`&[]` and keep their existing behavior.
+
+`@link` still requires the user to build the static archive (`cc -c`
++ `ar rcs` for now); the compiler doesn't ship a build-script
+phase. The fixture itself still relies on the harness or a manual
+build step to produce `libffi_helper.a`.
 
 ---
 
 ## Priority order (cheapest unblock per fixture-count)
 
 1. **PascalCase process entry** (gap #1) — 4 fixtures from one fix.
-2. **Option.None inference rewrites** (bucket B) — 3 fixtures, zero
-   compiler work.
-3. **`IntLiteral` + sized arithmetic** (mixed) — 1 fixture but unblocks
+2. **`IntLiteral` + sized arithmetic** (mixed) — 1 fixture but unblocks
    the broader narrow-int story across stdlib.
-4. **`Ref<M>` union substitution** (gap #3) — 2 fixtures.
-5. **Wire `HTTP` into `ALPHA_QUALIFIED`** (gap #4) — 2 fixtures.
-6. **Recursive enum miscompile** (gap #2) — 1 fixture.
-7. **One-offs** (gap #5, #6) — 3 fixtures each fixed in isolation.
+3. **`Ref<M>` union substitution** (gap #3) — 2 fixtures.
+4. **Wire `HTTP` into `ALPHA_QUALIFIED`** (gap #4) — 2 fixtures.
+5. **Recursive payload miscompile** (gap #2) — 2 fixtures
+   (`recursive_enum` + `recursive_struct`, same root cause).
+6. **One-offs** (gap #5, #6) — 3 fixtures each fixed in isolation.
 
-After (1)–(6) the lang suite is at full alpha parity and `lang_suite.rs`
-can flip its runner off v1.
+`Option.None` inference and `.clone()` on copy types are closed —
+see the "Closed:" sections above. After (1)–(5) the lang suite is at
+full alpha parity and `lang_suite.rs` can flip its runner off v1.

@@ -14,7 +14,8 @@ fn main
   c2.name.print()
   c2.detail.unwrap().print()
 
-  c3: Config<Int> = Config{name: "empty", enabled: true, detail: Option.None}
+  no_detail: Option<Int> = Option.None
+  c3 = Config{name: "empty", enabled: true, detail: no_detail}
   c3.name.print()
   (c3.detail.or(99)).print()
 end

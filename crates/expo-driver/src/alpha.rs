@@ -473,17 +473,28 @@ fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str) {
         eprintln!("error: {err}");
         process::exit(1);
     }
-    link_object(&object_path, output, &script.link_libraries);
+    link_object(&object_path, output, &script.link_libraries, &[]);
 }
 
-fn link_object(object_path: &str, output: &str, link_libraries: &[String]) {
+fn link_object(
+    object_path: &str,
+    output: &str,
+    link_libraries: &[String],
+    extra_lib_search_paths: &[&Path],
+) {
     let options = BuildOptions {
         color: false,
         emit_llvm: false,
         quiet: true,
         release: false,
     };
-    pipeline::link(object_path, output, link_libraries, options);
+    pipeline::link(
+        object_path,
+        output,
+        link_libraries,
+        extra_lib_search_paths,
+        options,
+    );
 }
 
 /// Canonicalize a user-supplied source path, exiting on miss with
@@ -560,7 +571,7 @@ fn build_single_file_and_keep(path: &Path, output: Option<String>) {
     let program = build_single_file_program(path);
     let stem = single_file_package(path);
     let output = resolve_output_name(output, path);
-    emit_and_link_program(&program, &stem, &output);
+    emit_and_link_program(&program, &stem, &output, &[]);
     println!("compiled: {output}");
 }
 
@@ -574,7 +585,7 @@ fn run_single_file_compiled(path: &Path, args: &[String]) -> ! {
         .join(format!("expo-alpha-run-{}-{stem}", process::id()))
         .to_string_lossy()
         .to_string();
-    emit_and_link_program(&program, &stem, &output);
+    emit_and_link_program(&program, &stem, &output, &[]);
 
     let status = process::Command::new(&output).args(args).status();
     let _ = fs::remove_file(&output);
@@ -660,7 +671,7 @@ fn build_project_and_keep(config: &ProjectConfig, root: &Path, output: Option<St
         Some(o) => o,
         None => default_project_output(config, root),
     };
-    emit_and_link_program(&program, &config.name, &output);
+    emit_and_link_program(&program, &config.name, &output, &[root]);
     println!("compiled: {output}");
 }
 
@@ -671,7 +682,7 @@ fn run_project_compiled(config: &ProjectConfig, root: &Path, args: &[String]) ->
     let program = build_project_program(config, root);
     let target = project_target_dir(root);
     let binary = target.join(&config.name).to_string_lossy().to_string();
-    emit_and_link_program(&program, &config.name, &binary);
+    emit_and_link_program(&program, &config.name, &binary, &[root]);
 
     let status = process::Command::new(&binary).args(args).status();
     match status {
@@ -901,7 +912,16 @@ fn project_target_dir(root: &Path) -> PathBuf {
 /// the only difference is the IR variant fed into the LLVM
 /// backend. `app_name` flows into `__expo_app_name` and
 /// `program.link_libraries` becomes the `cc -l<name>` set.
-fn emit_and_link_program(program: &IRProgram, app_name: &str, output: &str) {
+/// `extra_lib_search_paths` lets project-mode callers add the
+/// project root to `-L` so a sibling `libfoo.a` resolves without
+/// the user setting `LIBRARY_PATH` or invoking `expo` from a
+/// specific working directory.
+fn emit_and_link_program(
+    program: &IRProgram,
+    app_name: &str,
+    output: &str,
+    extra_lib_search_paths: &[&Path],
+) {
     if let Some(parent) = Path::new(output).parent()
         && !parent.as_os_str().is_empty()
         && let Err(err) = fs::create_dir_all(parent)
@@ -919,7 +939,12 @@ fn emit_and_link_program(program: &IRProgram, app_name: &str, output: &str) {
         eprintln!("error: {err}");
         process::exit(1);
     }
-    link_object(&object_path, output, &program.link_libraries);
+    link_object(
+        &object_path,
+        output,
+        &program.link_libraries,
+        extra_lib_search_paths,
+    );
 }
 
 /// Prints every file in the sealed program to stdout using

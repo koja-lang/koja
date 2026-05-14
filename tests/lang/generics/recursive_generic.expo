@@ -4,7 +4,8 @@ struct GNode<T>
 end
 
 fn main
-  a = GNode{value: 10, next: Option.None}
+  no_next: Option<GNode<Int>> = Option.None
+  a = GNode{value: 10, next: no_next}
   b = GNode{value: 20, next: Option.Some(a)}
   b.value.print()
 

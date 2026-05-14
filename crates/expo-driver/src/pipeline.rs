@@ -93,6 +93,7 @@ pub fn build_from_sources(
     sources: &SourceSet,
     checked: &CheckedProgram,
     output: &str,
+    extra_lib_search_paths: &[&Path],
     options: BuildOptions,
 ) {
     let files_ast: Vec<&File> = checked
@@ -140,7 +141,13 @@ pub fn build_from_sources(
     }
 
     let link_libs = collect_link_libraries(&files_ast);
-    link(&obj_path, output, &link_libs, options);
+    link(
+        &obj_path,
+        output,
+        &link_libs,
+        extra_lib_search_paths,
+        options,
+    );
 }
 
 /// Walks all files and collects unique `@link` library names from function
@@ -218,7 +225,7 @@ pub fn build_project(
             default_output.to_str().unwrap()
         }
     };
-    build_from_sources(&sources, &checked, output, options);
+    build_from_sources(&sources, &checked, output, &[project_root], options);
 }
 
 /// Full single-file build pipeline: resolve sources from an entry file,
@@ -252,7 +259,7 @@ pub fn build(args: BuildArgs, options: BuildOptions) {
     if checked.has_errors {
         process::exit(1);
     }
-    build_from_sources(&sources, &checked, &output, options);
+    build_from_sources(&sources, &checked, &output, &[], options);
 }
 
 /// Type-checks a single-file source set (without compiling).
@@ -393,7 +400,7 @@ pub fn test_project(config: &ProjectConfig, project_root: &Path, color: bool) {
     if checked.has_errors {
         process::exit(1);
     }
-    build_from_sources(&sources, &checked, &output, options);
+    build_from_sources(&sources, &checked, &output, &[project_root], options);
 
     let status = process::Command::new(&binary).status();
     let _ = fs::remove_file(&binary);
@@ -537,13 +544,26 @@ fn macos_version() -> &'static str {
 
 /// Links an object file with the embedded runtime library to produce an executable.
 /// `link_libraries` contains library names from `@link` annotations (passed as `-l` flags).
+/// `extra_lib_search_paths` lets callers add directories the linker
+/// should scan for `-l<name>` resolution (passed as `-L<dir>`).
+/// Project-mode callers thread the directory holding `expo.toml`
+/// through so a sibling `libfoo.a` is discoverable without the
+/// user manually setting `LIBRARY_PATH` or running from a specific
+/// `cwd`. The embedded-archive temp dir is always added on top of
+/// these so the runtime / crypto archives stay resolvable.
 ///
 /// Exposed at `pub(crate)` so `crate::alpha`'s `cmd_alpha_build` can
 /// reuse the same `cc` invocation + embedded runtime + BoringSSL
 /// archives that v1 already wires up. Keeping it crate-private keeps
 /// the function out of the public driver API; alpha and v1 link side
 /// by side rather than diverging.
-pub(crate) fn link(obj_path: &str, output: &str, link_libraries: &[String], options: BuildOptions) {
+pub(crate) fn link(
+    obj_path: &str,
+    output: &str,
+    link_libraries: &[String],
+    extra_lib_search_paths: &[&Path],
+    options: BuildOptions,
+) {
     #[cfg(not(target_os = "macos"))]
     let _ = options.release;
 
@@ -567,6 +587,10 @@ pub(crate) fn link(obj_path: &str, output: &str, link_libraries: &[String], opti
         "-o".to_string(),
         output.to_string(),
     ];
+    for path in extra_lib_search_paths {
+        args.push("-L".to_string());
+        args.push(path.to_string_lossy().to_string());
+    }
     // Modern Debian/Ubuntu default `cc` to PIE, which rejects the
     // absolute (`R_X86_64_32`) relocations LLVM emits under
     // `RelocMode::Default`. Until codegen is switched to

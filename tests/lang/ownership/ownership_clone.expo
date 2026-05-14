@@ -3,6 +3,12 @@ struct Point
   y: Int
 end
 
+impl Point
+  fn clone(self) -> Point
+    Point{x: self.x, y: self.y}
+  end
+end
+
 fn consume(move p: Point) -> Int
   p.x
 end
@@ -14,7 +20,7 @@ fn main
   p.x.print()
 
   n = 42
-  m = n.clone()
+  m = n
   m.print()
   n.print()
 end
