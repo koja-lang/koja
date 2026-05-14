@@ -120,6 +120,27 @@ Rewriting the fixture is cheaper than relaxing the type system.
 
 ---
 
+## Closed: opaque `Debug` receivers for anonymous types
+
+Latent at the time this doc was written; surfaced once the
+remaining stdlib packages (`Net`, `Json`) were wired into
+`ALPHA_QUALIFIED` and their `Process<…, Union<…>>` impls forced
+mono to substitute `A → Union<…>` inside the parametric
+`impl Debug for Pair<A, B>`. IR-lower's `receiver_struct_id`
+panicked because the receiver was `Union(…)` instead of
+`Named { Global }`.
+
+Fixed by short-circuiting `lower_method_call` for
+`Debug.{format, print, inspect}` on opaque receivers
+(`Union` / `Anonymous(Function)`): emit the literal `"..."`
+placeholder, matching the AST-layer rule
+[`derive_debug::is_opaque_type`] already applies to opaque
+struct/enum fields. Pinned by
+`crates/expo-alpha-ir/tests/opaque_debug_receivers.rs`. See
+[V1-PARITY §10](V1-PARITY.md#10-opaque-debug-receivers-for-anonymous-types--shipped-2026-05-13).
+
+---
+
 ## Mixed: covered by an existing plan
 
 - **`basics/int_coercion`** — Two v1-isms stacked, both addressed by the

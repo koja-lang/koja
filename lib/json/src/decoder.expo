@@ -102,8 +102,11 @@ impl Decoder
 
     if pos + 5 <= self.input.length()
       if self.input.slice(Range{start: pos, stop: pos + 4}) == "false"
-        ok_pair = Pair{first: Value.Bool(false), second: pos + 5}
-        return Result.Ok(ok_pair)
+        false_pair: Pair<Value, Int> = Pair{
+          first: Value.Bool(false),
+          second: pos + 5,
+        }
+        return Result.Ok(false_pair)
       end
     end
 
@@ -189,8 +192,8 @@ impl Decoder
 
     match num_str.to_int()
       Result.Ok(n) ->
-        ok_pair = Pair{first: Value.Int(n), second: i}
-        Result.Ok(ok_pair)
+        int_pair: Pair<Value, Int> = Pair{first: Value.Int(n), second: i}
+        Result.Ok(int_pair)
 
       Result.Err(msg) ->
         Result.Err("invalid integer '#{num_str}' at position #{pos}: #{msg}")

@@ -511,6 +511,31 @@ multi_process, process_union_msg}` fixtures in alpha.
 shipped 2026-05-13. See the "Verified parity" section below for
 the full breakdown.
 
+### 10. Opaque `Debug` receivers for anonymous types — shipped 2026-05-13
+
+`impl Debug for Pair<A, B>` in
+`lib/global/src/alpha_debug_containers.expo` is parametric: its
+body calls `self.first.format()` and `self.second.format()` on
+type-parameter receivers. When mono substitutes `A → Foo | Bar`
+(or `A → fn (…) -> R`), the receiver lands at IR lower with
+`ResolvedType::Union(…)` / `ResolvedType::Anonymous(Function)`,
+which `receiver_struct_id` rejected as a non-`Named { Global }`
+shape. The typecheck-side union-receiver rejection only fires
+for concrete unions; with the receiver being a `TypeParam`, the
+panic surfaced only after monomorphization.
+
+Alpha now short-circuits the IR-lower path for
+`Debug.{format, print, inspect}` whose receiver resolved to an
+opaque anonymous type, emitting the literal `"..."` placeholder.
+This mirrors the AST-layer rule
+[`expo_alpha_typecheck::pipeline::synthesize::derive_debug::is_opaque_type`]
+already applies to struct/enum fields — when the field's type is
+`Function` / `Union` / `Self_` / `Unit`, the synthesized Debug
+impl renders it as `"..."`. Keeping the two layers in sync means
+a programmer can't tell whether the opaque-field handling came
+from the AST synthesizer or the IR-lower shortcut. Pinned by
+`crates/expo-alpha-ir/tests/opaque_debug_receivers.rs`.
+
 ### Future direction: prefer `.exps` for new goldens
 
 Alpha runs `.exps` scripts directly (no `fn main`, no `expo.toml`),

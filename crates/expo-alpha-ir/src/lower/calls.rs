@@ -19,7 +19,7 @@ use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
 use crate::local::IRLocalId;
 use crate::mangling::{mangled_function_name, mangled_method_name};
-use crate::types::{IRType, ValueId};
+use crate::types::{ConstValue, IRType, ValueId};
 
 /// Lower a `ExprKind::Call`. Seal guarantees the callee is one of:
 /// - Bare `Ident { Global(id) }` — direct [`IRInstruction::Call`]
@@ -294,6 +294,9 @@ pub(super) fn lower_method_call(
         args,
         method_type_args,
     } = shape;
+    if let Some(opaque) = opaque_debug_method(method, &receiver.resolution) {
+        return lower_opaque_debug_call(opaque, receiver, ctx, block, registry, output);
+    }
     let dispatch = method_dispatch_kind(receiver, registry);
     let (prepend, current_block) = match dispatch {
         Dispatch::Static => (None, block),
@@ -533,4 +536,128 @@ fn emit_call(
         },
     );
     Ok((dest, current))
+}
+
+/// `Debug` protocol methods that get the opaque-receiver shortcut.
+/// Mirrors the AST-layer opaque-field rule in
+/// [`expo_alpha_typecheck::pipeline::synthesize::derive_debug`] (the
+/// `is_opaque_type` helper there). Keep the two layers in sync: if
+/// you add a new opaque shape to one, add it to the other.
+#[derive(Clone, Copy)]
+enum OpaqueDebugMethod {
+    Format,
+    Inspect,
+    Print,
+}
+
+/// Recognize a bounded `Debug.{format, print, inspect}` call whose
+/// receiver, after monomorphic substitution, resolved to a type that
+/// alpha treats as opaque to `format` (a union or a function/closure
+/// type). Returning `Some` short-circuits the regular instance-method
+/// path in [`lower_method_call`] — `receiver_struct_id` would
+/// otherwise panic because anonymous types have no `Named { Global }`
+/// receiver to look a method up against.
+///
+/// Today's opaque set mirrors `derive_debug`'s `is_opaque_type` for
+/// struct/enum field rendering: `TypeExpr::Function` and
+/// `TypeExpr::Union`. `TypeExpr::Self_` / `TypeExpr::Unit` map to a
+/// `Named { Global }` receiver at this layer (`Self` is the enclosing
+/// type, `()` is `Global.Unit`), so they don't need a sibling arm.
+///
+/// Aliases peel earlier in typecheck, so a direct `ResolvedType::Union`
+/// or `ResolvedType::Anonymous(Function)` is what reaches here — no
+/// alias-walking needed.
+fn opaque_debug_method(method: &str, ty: &ResolvedType) -> Option<OpaqueDebugMethod> {
+    let kind = match method {
+        "format" => OpaqueDebugMethod::Format,
+        "inspect" => OpaqueDebugMethod::Inspect,
+        "print" => OpaqueDebugMethod::Print,
+        _ => return None,
+    };
+    match ty {
+        ResolvedType::Anonymous(AnonymousKind::Function { .. }) | ResolvedType::Union(_) => {
+            Some(kind)
+        }
+        _ => None,
+    }
+}
+
+/// Emit the opaque-receiver shortcut for the `Debug` protocol. The
+/// behavioral contract matches what `derive_debug` already emits at
+/// the AST layer for opaque struct fields:
+///
+/// * `format(self) -> String` returns the literal `"..."`.
+/// * `print(self) -> Unit` writes `"..."` to stdout via `IO.puts` and
+///   returns `Unit`.
+/// * `inspect(self) -> Self` writes `"..."` via `IO.puts` and returns
+///   the receiver value unchanged, so call chains preserve the value.
+///
+/// The receiver is lowered exactly once: the `Inspect` arm passes it
+/// through as the result; the `Format` and `Print` arms still lower
+/// it for side effects (closure captures, owner reads) even though
+/// they discard the value.
+fn lower_opaque_debug_call(
+    method: OpaqueDebugMethod,
+    receiver: &Expr,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let (receiver_value, mut current) = lower_expr(receiver, ctx, block, registry, output)?;
+    let placeholder = emit_opaque_placeholder(ctx, current);
+    match method {
+        OpaqueDebugMethod::Format => Ok((placeholder, current)),
+        OpaqueDebugMethod::Print => {
+            current = emit_io_puts(placeholder, ctx, current);
+            let unit = ctx.fresh_value(IRType::Unit);
+            ctx.cfg.append(
+                current,
+                IRInstruction::Const {
+                    dest: unit,
+                    value: ConstValue::Unit,
+                },
+            );
+            Ok((unit, current))
+        }
+        OpaqueDebugMethod::Inspect => {
+            current = emit_io_puts(placeholder, ctx, current);
+            Ok((receiver_value, current))
+        }
+    }
+}
+
+/// Allocate a fresh `String`-typed value holding the literal `"..."`.
+fn emit_opaque_placeholder(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
+    let dest = ctx.fresh_value(IRType::String);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest,
+            value: ConstValue::String("...".to_string()),
+        },
+    );
+    dest
+}
+
+/// Emit `Global.IO.puts(<message>)` and return the block the call
+/// landed in. The callee symbol matches the one stamped by lift for
+/// the `IO.puts` function in [`expo/lib/global/src/io.expo`], so the
+/// regular function registration in `lower_function_inner` resolves
+/// it at link time.
+fn emit_io_puts(message: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {
+    let callee = IRSymbol::from_identifier(&Identifier::new(
+        "Global",
+        vec!["IO".to_string(), "puts".to_string()],
+    ));
+    let dest = ctx.fresh_value(IRType::Unit);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Call {
+            dest,
+            callee,
+            args: vec![message],
+        },
+    );
+    block
 }
