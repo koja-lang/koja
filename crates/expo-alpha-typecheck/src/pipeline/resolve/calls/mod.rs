@@ -539,12 +539,13 @@ fn try_field_callable(
     })
 }
 
-/// Drive call-site type inference for a generic callee. Unifies each
-/// declared param against its arg; surfaces conflicts and phantom
-/// params; populates `type_args` on the AST and returns the
-/// substituted param list + return type so [`validate_arg_signature`]
-/// shows concrete types in arity / type diagnostics rather than
-/// leaked `T`.
+/// Drive call-site type inference for a generic callee. Tries a
+/// speculative pre-seed (`fill_from_expected` → per-arg unify on a
+/// scratch); on success the pre-seeded substitution wins so
+/// `x: Int32 = identity(42)` keeps `T = Int32` via `literal_widens_into`.
+/// On any conflict (e.g. outer expected `Unit` vs `identity(1) : Int`)
+/// the fallback runs the original arg-first / advisory-fill order so
+/// every existing diagnostic still fires.
 fn infer_call_type_args(
     callee: Callee<'_>,
     sig: &FunctionSignature,
@@ -559,16 +560,20 @@ fn infer_call_type_args(
         span: call_span,
     } = site;
     let mut subst = Substitution::single(callee.id, callee.type_params.len());
-    let pairs = sig
-        .params
-        .iter()
-        .zip(args.iter())
-        .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
-    unify_pairs(pairs, &mut subst, registry, |conflict, arg_span| {
-        emit_conflict(&callee, conflict, arg_span, registry, diagnostics);
-    });
-    if let Some(hint) = expected {
-        fill_from_expected(&sig.return_type, hint, &mut subst, registry);
+    if let Some(pre_seeded) = try_pre_seeded_subst(&callee, sig, args, expected, registry) {
+        subst = pre_seeded;
+    } else {
+        let pairs = sig
+            .params
+            .iter()
+            .zip(args.iter())
+            .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
+        unify_pairs(pairs, &mut subst, registry, |conflict, arg_span| {
+            emit_conflict(&callee, conflict, arg_span, registry, diagnostics);
+        });
+        if let Some(hint) = expected {
+            fill_from_expected(&sig.return_type, hint, &mut subst, registry);
+        }
     }
     finalize_inference(
         &[callee],
@@ -590,6 +595,31 @@ fn infer_call_type_args(
     let substituted_return = substitute(&sig.return_type, &subst);
     *out_type_args = subst.args(callee.id);
     (substituted_params, substituted_return)
+}
+
+/// Speculative pre-seed for [`infer_call_type_args`]: seed from
+/// `expected`, run per-arg unify on a scratch, return `Some(subst)`
+/// iff no conflict. Conflicts surface only from the fallback path.
+fn try_pre_seeded_subst(
+    callee: &Callee<'_>,
+    sig: &FunctionSignature,
+    args: &[Arg],
+    expected: Option<&ResolvedType>,
+    registry: &GlobalRegistry,
+) -> Option<Substitution> {
+    let hint = expected?;
+    let mut scratch = Substitution::single(callee.id, callee.type_params.len());
+    fill_from_expected(&sig.return_type, hint, &mut scratch, registry);
+    let mut had_conflict = false;
+    let pairs = sig
+        .params
+        .iter()
+        .zip(args.iter())
+        .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
+    unify_pairs(pairs, &mut scratch, registry, |_, _| {
+        had_conflict = true;
+    });
+    (!had_conflict).then_some(scratch)
 }
 
 /// Surface a "this generic-param slot got two distinct types"

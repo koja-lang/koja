@@ -287,20 +287,34 @@ pub(super) fn infer_method_call_type_args(
         method.type_params.len(),
     );
     seed_receiver_subst(&mut subst, receiver.id, receiver_type, registry);
-    let pairs = explicit_params
-        .iter()
-        .zip(args.iter())
-        .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
-    unify_pairs(pairs, &mut subst, registry, |conflict, arg_span| {
-        let scope_callee = if conflict.owner == method.id {
-            &method
-        } else {
-            &receiver
-        };
-        emit_conflict(scope_callee, conflict, arg_span, registry, diagnostics);
-    });
-    if let Some(hint) = expected {
-        fill_from_expected(&sig.return_type, hint, &mut subst, registry);
+    // Mirror `infer_call_type_args`'s speculative pre-seed: lets
+    // binding annotations pin sized-numeric type params before
+    // arg-driven default-literal types lock in.
+    if let Some(pre_seeded) = try_pre_seeded_method_subst(
+        &subst,
+        &sig.return_type,
+        explicit_params,
+        args,
+        expected,
+        registry,
+    ) {
+        subst = pre_seeded;
+    } else {
+        let pairs = explicit_params
+            .iter()
+            .zip(args.iter())
+            .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
+        unify_pairs(pairs, &mut subst, registry, |conflict, arg_span| {
+            let scope_callee = if conflict.owner == method.id {
+                &method
+            } else {
+                &receiver
+            };
+            emit_conflict(scope_callee, conflict, arg_span, registry, diagnostics);
+        });
+        if let Some(hint) = expected {
+            fill_from_expected(&sig.return_type, hint, &mut subst, registry);
+        }
     }
     finalize_inference(
         &[method, receiver],
@@ -323,6 +337,31 @@ pub(super) fn infer_method_call_type_args(
     *outputs.method_type_args = subst.args(method.id);
     *outputs.receiver_type_args = subst.args(receiver.id);
     (substituted_params, substituted_return)
+}
+
+/// Speculative pre-seed for [`infer_method_call_type_args`]. Mirrors
+/// `try_pre_seeded_subst` in the bare-call path with the
+/// receiver-seeded `baseline` as the starting substitution.
+fn try_pre_seeded_method_subst(
+    baseline: &Substitution,
+    return_type: &ResolvedType,
+    explicit_params: &[ResolvedParam],
+    args: &[Arg],
+    expected: Option<&ResolvedType>,
+    registry: &GlobalRegistry,
+) -> Option<Substitution> {
+    let hint = expected?;
+    let mut scratch = baseline.clone();
+    fill_from_expected(return_type, hint, &mut scratch, registry);
+    let mut had_conflict = false;
+    let pairs = explicit_params
+        .iter()
+        .zip(args.iter())
+        .map(|(param, arg)| (&param.ty, &arg.value.resolution, arg.span));
+    unify_pairs(pairs, &mut scratch, registry, |_, _| {
+        had_conflict = true;
+    });
+    (!had_conflict).then_some(scratch)
 }
 
 /// Pre-fill the receiver scope with the receiver value's resolved

@@ -274,6 +274,35 @@ fn int_eq_compiles_cleanly() {
     assert_main_shape(&ir_text);
 }
 
+#[test]
+fn int32_arithmetic_lowers_to_i32_add() {
+    // `Int32 + Int32` is now a valid alpha typecheck shape; the
+    // operand-width flows through IR `bin_op_result_type` and LLVM
+    // `emit_int_binary_op` so the emitted instruction is `add i32`,
+    // not `add i64`. Pins both the body width and the helper's
+    // signature so a future regression in either layer surfaces here.
+    let source = "
+        fn add32(a: Int32, b: Int32) -> Int32
+          a + b
+        end
+
+        fn main
+          add32(1, 2)
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    let body = extract_function_body(&ir_text, "TestApp.add32");
+    assert!(
+        body.contains("add i32"),
+        "expected `add i32` in TestApp.add32 body:\n{body}",
+    );
+    assert_contains(&ir_text, "define i32 @TestApp.add32(i32 ");
+}
+
 // ---------------------------------------------------------------------------
 // Helper-function definition + call coverage
 //

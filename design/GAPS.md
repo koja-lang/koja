@@ -51,34 +51,6 @@ Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
 
 ---
 
-## Free function codegen gap
-
-Free functions (outside `impl` blocks) pass `expo check` but crash at
-codegen with `"assignment value produced no value"`. The type checker still
-has old semantics from before the migration to `impl`-based functions.
-
-**Fix:** either reject free functions at the type-check stage with a clear
-error (`"functions must be declared inside impl blocks"`), or finish codegen
-support.
-
-Surfaced during the agent expression evaluator test.
-
-**Why this is still around:** the long-term plan is to remove free
-functions entirely in favour of a "single file mode" where the whole file
-is implicitly the body of `main`. That mode requires being able to declare
-`struct`/`enum` _inside_ a function body (so a script can define its own
-local types without falling back to top-level items). Local types in
-function bodies is currently deferred — the `(package, bare_name)` type
-identity model used everywhere in `expo-typecheck` and `expo-codegen`
-needs a `DefId`-style overhaul before nested decls can be represented
-cleanly, and that's a multi-week refactor on top of an already-fragile
-generic-impl pipeline (see the "Cached impl ASTs" entry below). Order of
-operations when this becomes a priority: introduce `DefId`, then local
-types fall out almost mechanically, then free functions can finally be
-deleted.
-
----
-
 ## Cached impl ASTs are pre-typecheck clones
 
 `expo-typecheck/src/collect.rs` clones every `ImplBlock` into

@@ -260,3 +260,81 @@ fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
          head differs from the unit variant's enum; got {failure}",
     );
 }
+
+// ------------------------------------------------------------------
+// Sized-int widening through generic returns. When the surrounding
+// expected type is a sized numeric primitive and the generic return
+// would otherwise lock in as the default `Int` literal, the
+// speculative pre-seed in `infer_call_type_args` keeps the sized
+// slot intact via `Substitution::set`'s `literal_widens_into` rule.
+// The literal arg picks up the matching `NumericLiteralWidth`
+// coercion downstream.
+// ------------------------------------------------------------------
+
+#[test]
+fn generic_return_hint_widens_int_literal_arg_to_int32() {
+    let source = "
+        fn identity<T>(x: T) -> T
+          x
+        end
+
+        fn main
+          x: Int32 = identity(42)
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn generic_return_hint_widens_int_literal_arg_to_int8() {
+    let source = "
+        fn identity<T>(x: T) -> T
+          x
+        end
+
+        fn main
+          x: Int8 = identity(7)
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn generic_return_hint_unrelated_to_arg_type_still_errors() {
+    use common::typecheck_file_fail as typecheck_fail;
+
+    // `identity(42)` returns `Int`; annotating it as `String` must
+    // still surface a diagnostic. The exact message may shift between
+    // call-site (`T cannot be both`) and use-site (`expected String,
+    // got Int`) depending on the speculative-pre-seed fallback path;
+    // either is acceptable as long as SOME diagnostic fires.
+    let source = "
+        fn identity<T>(x: T) -> T
+          x
+        end
+
+        fn main
+          x: String = identity(42)
+        end
+        ";
+    typecheck_fail(&dedent(source));
+}
+
+#[test]
+fn generic_return_hint_inside_unit_body_does_not_widen_unrelated_call() {
+    // Regression for the `fn main` (Unit return) + trailing
+    // `identity(1)` case: the outer expected hint is `Unit`, but
+    // `T = Int` from the arg must win — the speculative pre-seed
+    // would set `T = Unit` then conflict on the arg unify, so the
+    // fallback path runs and the call types as `Int`.
+    let source = "
+        fn identity<T>(value: T) -> T
+          value
+        end
+
+        fn main
+          identity(1)
+        end
+        ";
+    typecheck(&dedent(source));
+}

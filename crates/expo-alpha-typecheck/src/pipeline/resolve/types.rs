@@ -80,12 +80,17 @@ pub(crate) fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &
     entry.identifier.is_in_global() && entry.identifier.last() == name
 }
 
-/// Does `ty` resolve to a primitive admitting `+`, `-`, `*`, `/`?
-/// Used by both binary-arithmetic and compound-assign typechecking;
-/// kept in sync with the operand rule at
+/// Does `ty` admit `+`, `-`, `*`, `/`? Used by binary-arithmetic
+/// and compound-assign; mirrors the operand rule at
 /// [`super::ops::binary_type`]'s `Add | Div | Mul | Sub` arm.
+/// Accepts every numeric primitive; cross-width pairing is rejected
+/// at the binary-op site, not here.
 pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    is_primitive(ty, registry, "Int") || is_primitive(ty, registry, "Float")
+    const NUMERIC: &[&str] = &[
+        "Float", "Float32", "Int", "Int16", "Int32", "Int64", "Int8", "UInt16", "UInt32", "UInt64",
+        "UInt8",
+    ];
+    NUMERIC.iter().any(|name| is_primitive(ty, registry, name))
 }
 
 /// Build a canonical `ResolvedType::Union` from `members`. Steps:

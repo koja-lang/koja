@@ -254,7 +254,9 @@ fn mixed_int_float_arith_diagnoses() {
     let failure = typecheck_fail("fn main\n  1 + 1.0\nend\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
-        failure.diagnostics[0].message.contains("Int or Float"),
+        failure.diagnostics[0]
+            .message
+            .contains("Int, Float, or matching sized numeric"),
         "unexpected diagnostic: {}",
         failure.diagnostics[0].message,
     );
@@ -355,6 +357,93 @@ fn cross_sized_numeric_eq_is_rejected() {
             .message
             .contains("matching Bool, Float, Int, or String operands")),
         "expected operand-mismatch diagnostic on cross-sized comparison; got {:?}",
+        failure.diagnostics,
+    );
+}
+
+// ------------------------------------------------------------------
+// Same-sized-numeric arithmetic. Same predicate as comparison —
+// every sized numeric admits `+ - * / %` with its peer; cross-width
+// arithmetic (`Int32 + Int64`) is rejected so the user must convert
+// explicitly. `Int32 + IntLiteral` widens the literal to `Int32`.
+// ------------------------------------------------------------------
+
+#[test]
+fn same_sized_numeric_arith_resolves_to_operand_type() {
+    // Int64 / Float64 take the alias path (collapse to Int / Float
+    // via `types_equivalent`); test the genuinely sized variants
+    // here. `same_sized_numeric_eq_resolves_to_bool` above covers
+    // the full set on the comparison side.
+    for sized in [
+        "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64", "Float32",
+    ] {
+        for op in ["+", "-", "*", "/"] {
+            let source = use_sized_pair(sized, &format!("a {op} b"));
+            let checked = typecheck(&source);
+            let expected = global_leaf(&checked, sized);
+            assert_eq!(
+                trailing_resolution(&checked),
+                expected,
+                "source = {source:?}",
+            );
+        }
+    }
+}
+
+#[test]
+fn sized_int_plus_int_literal_resolves_to_sized() {
+    let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
+        fn main\n  a = produce_i32()\n  a + 5\nend\n";
+    let checked = typecheck(source);
+    let expected = global_leaf(&checked, "Int32");
+    assert_eq!(trailing_resolution(&checked), expected);
+}
+
+#[test]
+fn int_literal_plus_sized_int_resolves_to_sized() {
+    let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
+        fn main\n  a = produce_i32()\n  5 + a\nend\n";
+    let checked = typecheck(source);
+    let expected = global_leaf(&checked, "Int32");
+    assert_eq!(trailing_resolution(&checked), expected);
+}
+
+#[test]
+fn cross_sized_numeric_arith_is_rejected() {
+    let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
+        @extern \"C\"\nfn produce_i64() -> Int64\n\
+        fn main\n  a = produce_i32()\n  b = produce_i64()\n  a + b\nend\n";
+    let failure = typecheck_fail(source);
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("Int, Float, or matching sized numeric")),
+        "expected operand-mismatch diagnostic on cross-sized arithmetic; got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn unary_neg_on_sized_int_resolves_to_sized() {
+    let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
+        fn main\n  a = produce_i32()\n  -a\nend\n";
+    let checked = typecheck(source);
+    let expected = global_leaf(&checked, "Int32");
+    assert_eq!(trailing_resolution(&checked), expected);
+}
+
+#[test]
+fn unary_neg_on_unsigned_int_is_rejected() {
+    let source = "@extern \"C\"\nfn produce_u8() -> UInt8\n\
+        fn main\n  a = produce_u8()\n  -a\nend\n";
+    let failure = typecheck_fail(source);
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("signed Int or Float")),
+        "expected signed-numeric diagnostic on unsigned negation; got {:?}",
         failure.diagnostics,
     );
 }

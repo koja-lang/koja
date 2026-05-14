@@ -6,7 +6,7 @@ A triage of the `tests/lang/` fixtures that fail under
 this doc enumerates what's still open and groups failures by root cause so
 fixing one entry unblocks a known cluster of fixtures.
 
-PASS count as of last run (2026-05-14): `65 passed, 1 failed, 1 skipped`
+PASS count as of last run (2026-05-14): `66 passed, 0 failed, 1 skipped`
 via [scripts/validate_alpha_lang.sh](../scripts/validate_alpha_lang.sh).
 `process_lifecycle` is the skipped fixture (signal-driven, intentionally
 excluded). The `ffi` fixture only links when
@@ -14,40 +14,96 @@ excluded). The `ffi` fixture only links when
 prerequisite step the script counts it as a failure even though every
 language-level concern is closed (see
 ["Closed: project-root FFI library search"](#closed-project-root-ffi-library-search)).
-That leaves **one** real open failure, the single root cause below.
-The previous count of eight dropped to one when PascalCase `Process`
-entries (`FunctionKind::ProcessEntryWrapper`, four fixtures) and the
-generic-payload `Equality` synthesis (one fixture) shipped — see
-["Closed: PascalCase Process entries"](#closed-pascalcase-process-entries)
-and ["Closed: Equality for nested enum payloads"](#closed-equality-for-nested-enum-payloads)
-for the parity items.
 
-Two top-level buckets:
+**No open alpha gaps.** The previous count of eight dropped to zero
+when PascalCase `Process` entries (`FunctionKind::ProcessEntryWrapper`,
+four fixtures), generic-payload `Equality` synthesis (one fixture),
+and the sized-int arithmetic + return-type-hint widening pair
+(one fixture) all shipped — see the Closed sections below. The
+natural next step is flipping `lang_suite.rs`'s runner off v1; that
+sits in a follow-up PR.
 
-- **Real alpha gaps** — bugs / unimplemented features the alpha pipeline
-  needs to absorb. Each root-cause cluster lists the fixtures it unblocks.
-- **v1-permissive idioms** — fixtures that lean on v1 looseness alpha
-  intentionally rejects. Rewrite the fixture (or defer the gap) rather
-  than relaxing the type system.
+The richer `IntLiteral<T>` carrier protocol (planned at
+[`literals/carrier.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/literals/carrier.rs))
+remains the long-term direction for cross-width inference (e.g.
+`let x = 42 + n` where `n: Int32` and `x` is inferred without
+annotation). Today's narrow-int rule is "matching sized operands or
+sized + Int-literal" — enough to close every lang fixture; the
+carrier rewrite tightens the story for richer inference shapes
+across stdlib.
+
+The remaining sections track parity items closed since this doc was
+last rewritten — kept on file as regression-test pointers.
 
 ---
 
-## Real alpha gaps
+## Closed since this doc was last rewritten
 
-### 1. Sized-int arithmetic + `IntLiteral` widening (1 fixture)
+The entries below were open gaps in earlier passes of this document.
+Each is now a closed parity item with a runnable fixture or
+regression test pinning it.
 
-`basics/int_coercion` stacks two v1-isms that the pending sized-int
-arithmetic + `IntLiteral` protocol work absorbs:
+### Closed: sized-int arithmetic and return-type-hint widening
 
-1. `Counter.add` body uses `Int32 + Int32` arithmetic; alpha rejects
-   sized-int arithmetic. Closes once `binary_type` / `unary_type`
-   generalize (Phase 1 of that plan).
-2. `x: Int32 = identity(42)` widens an `Int` literal through a generic
-   return; alpha won't unless `IntLiteral<T>` ships (Phase 2).
+`basics/int_coercion` was the last open lang fixture, blocked on two
+distinct alpha typecheck gaps:
 
-One fixture but the broader narrow-int story across stdlib rides on
-the same plan, so this entry is high-leverage even though the
-fixture count is small.
+1. `self.value + n` with both operands `Int32` — `binary_type`'s
+   `Add | Sub | Mul | Div | Mod` arm only accepted the `Int` / `Float`
+   alias families. Comparison ops already accepted same-sized numerics
+   via `numeric_comparison_compatible`; arithmetic needed the same
+   shape.
+2. `x: Int32 = identity(42)` — the generic call inference order
+   (`unify_pairs` first, `fill_from_expected` after as advisory)
+   locked `T = Int` from the arg's default-literal type before the
+   `Int32` annotation could refine the slot. The reverse direction
+   (`prev=Int32, value=Int`) is what `Substitution::set`'s
+   `literal_widens_into` rule already permits, so re-ordering the
+   inference passes was enough.
+
+Fixes (landed 2026-05-14):
+
+- [`expo-alpha-typecheck/src/pipeline/resolve/ops.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/ops.rs)
+  `binary_type`'s arithmetic arm now flows through a new
+  `numeric_arithmetic_result` helper that mirrors
+  `numeric_comparison_compatible`: alias-equivalent `Int`/`Float`
+  pairs, same-sized numerics (`Int32 + Int32` → `Int32`,
+  `UInt8 - UInt8` → `UInt8`, `Float32 * Float32` → `Float32`), and
+  sized + Int-literal mixes via `coerce_literal_to`. `unary_type`'s
+  `Neg` arm extends to every signed numeric primitive (signed sized
+  ints plus `Float32`); unsigned operands stay rejected.
+- [`expo-alpha-typecheck/src/pipeline/resolve/types.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/types.rs)
+  `is_arithmetic_type` accepts the same set so compound assignment
+  (`+=`, `-=`, …) on sized operands works for free.
+- [`expo-alpha-typecheck/src/pipeline/resolve/calls/mod.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/calls/mod.rs)
+  `infer_call_type_args` and
+  [`calls/methods.rs::infer_method_call_type_args`](../crates/expo-alpha-typecheck/src/pipeline/resolve/calls/methods.rs)
+  speculatively try a pre-seed-then-refine pass (run
+  `fill_from_expected` on a scratch substitution, then `unify_pairs`
+  on the same scratch). If the speculative pass produces no
+  conflicts, the pre-seeded subst wins — that's what makes
+  `x: Int32 = identity(42)` resolve cleanly. If the pre-seed
+  conflicts with arg-driven unification (e.g. `fn main`'s trailing
+  expression sees `expected = Unit` but `identity(1) : Int`), the
+  fallback path runs the original "args first, hint as advisory
+  fill" order, preserving every existing diagnostic.
+
+Pinned by:
+
+- [`tests/resolve_ops.rs`](../crates/expo-alpha-typecheck/tests/resolve_ops.rs)
+  — `same_sized_numeric_arith_resolves_to_operand_type`,
+  `sized_int_plus_int_literal_resolves_to_sized`,
+  `int_literal_plus_sized_int_resolves_to_sized`,
+  `cross_sized_numeric_arith_is_rejected`,
+  `unary_neg_on_sized_int_resolves_to_sized`,
+  `unary_neg_on_unsigned_int_is_rejected`.
+- [`tests/bidirectional_inference.rs`](../crates/expo-alpha-typecheck/tests/bidirectional_inference.rs)
+  — `generic_return_hint_widens_int_literal_arg_to_int32`,
+  `generic_return_hint_widens_int_literal_arg_to_int8`,
+  `generic_return_hint_unrelated_to_arg_type_still_errors`,
+  `generic_return_hint_inside_unit_body_does_not_widen_unrelated_call`.
+- [`tests/program.rs::int32_arithmetic_lowers_to_i32_add`](../crates/expo-alpha-ir-llvm/tests/program.rs)
+  — LLVM emit pins `add i32` (not `add i64`) for `Int32 + Int32`.
 
 ---
 
@@ -440,10 +496,8 @@ is the first thing to touch the fixture.
 
 ---
 
-## Priority order (cheapest unblock per fixture-count)
+## Priority order
 
-1. **`IntLiteral` + sized arithmetic** (gap #1) — 1 fixture but
-   unblocks the broader narrow-int story across stdlib.
-
-After (1) the lang suite is at full alpha parity and
-`lang_suite.rs` can flip its runner off v1.
+No remaining lang-suite gaps — alpha is at full parity. The natural
+next step is flipping `lang_suite.rs`'s runner off v1, which is its
+own PR (and lives outside this doc's scope).

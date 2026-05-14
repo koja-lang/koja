@@ -124,23 +124,13 @@ pub(super) fn binary_type(
 ) -> ResolvedType {
     match op {
         BinOp::Add | BinOp::Div | BinOp::Mod | BinOp::Mul | BinOp::Sub => {
-            // Arithmetic preserves the operand's numeric width: both
-            // sides must agree on `Int` or `Float`. Cross-numeric
-            // mixing (`1 + 1.0`) and sized-numeric arithmetic
-            // (`Int8 + Int8`) are deferred per `LANGUAGE.md` /
-            // `V1-PARITY.md`. The alias rule still applies, so
-            // `Int + Int64` is valid and produces `Int` — same
-            // predicate that will accept `Int8 + Int8` once `Int`
-            // becomes a real union over its sized variants.
-            if both_aliased(&left.resolution, &right.resolution, registry, "Int") {
-                registry.primitive("Int")
-            } else if both_aliased(&left.resolution, &right.resolution, registry, "Float") {
-                registry.primitive("Float")
+            if let Some(ty) = numeric_arithmetic_result(left, right, registry) {
+                ty
             } else {
                 push_op_mismatch(
                     diagnostics,
                     op,
-                    "Int or Float operands of the same type",
+                    "Int, Float, or matching sized numeric operands",
                     &left.resolution,
                     &right.resolution,
                     span,
@@ -245,14 +235,12 @@ pub(super) fn unary_type(
     let ty = &operand.resolution;
     match op {
         UnaryOp::Neg => {
-            if is_primitive(ty, registry, "Int") {
-                registry.primitive("Int")
-            } else if is_primitive(ty, registry, "Float") {
-                registry.primitive("Float")
+            if let Some(name) = signed_numeric_name(ty, registry) {
+                registry.primitive(name)
             } else {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "unary `-` requires an Int or Float operand; got `{}`",
+                        "unary `-` requires a signed Int or Float operand; got `{}`",
                         display_resolution(ty, registry),
                     ),
                     span,
@@ -353,12 +341,66 @@ fn both_same_sized_numeric(
     rhs: &ResolvedType,
     registry: &GlobalRegistry,
 ) -> bool {
-    const SIZED_NUMERIC: &[&str] = &[
-        "Float32", "Int16", "Int32", "Int64", "Int8", "UInt16", "UInt32", "UInt64", "UInt8",
-    ];
+    same_sized_numeric_name(lhs, rhs, registry).is_some()
+}
+
+const SIZED_NUMERIC: &[&str] = &[
+    "Float32", "Int16", "Int32", "Int64", "Int8", "UInt16", "UInt32", "UInt64", "UInt8",
+];
+
+/// Primitive name when `lhs` and `rhs` resolve to the same sized
+/// numeric; `None` otherwise.
+fn same_sized_numeric_name(
+    lhs: &ResolvedType,
+    rhs: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> Option<&'static str> {
     SIZED_NUMERIC
         .iter()
-        .any(|name| is_primitive(lhs, registry, name) && is_primitive(rhs, registry, name))
+        .find(|name| is_primitive(lhs, registry, name) && is_primitive(rhs, registry, name))
+        .copied()
+}
+
+/// Primitive name when `ty` is a signed numeric admitting unary
+/// `-`. `UInt*` is rejected.
+fn signed_numeric_name(ty: &ResolvedType, registry: &GlobalRegistry) -> Option<&'static str> {
+    const SIGNED_NUMERIC: &[&str] = &["Float", "Float32", "Int", "Int16", "Int32", "Int64", "Int8"];
+    SIGNED_NUMERIC
+        .iter()
+        .find(|name| is_primitive(ty, registry, name))
+        .copied()
+}
+
+/// Arithmetic-operand rule — arithmetic counterpart of
+/// [`numeric_comparison_compatible`]. Returns the result type for
+/// `Int`/`Float` alias pairs, same-sized numerics, and sized +
+/// default-literal mixes (literal node stamped with `LiteralCoercion`).
+/// Cross-sized arithmetic (`Int32 + Int64`) → `None`. The broader
+/// `IntLiteral<T>` carrier (planned in `literals/carrier.rs`) is the
+/// long-term direction.
+fn numeric_arithmetic_result(
+    left: &mut Expr,
+    right: &mut Expr,
+    registry: &GlobalRegistry,
+) -> Option<ResolvedType> {
+    if both_aliased(&left.resolution, &right.resolution, registry, "Int") {
+        return Some(registry.primitive("Int"));
+    }
+    if both_aliased(&left.resolution, &right.resolution, registry, "Float") {
+        return Some(registry.primitive("Float"));
+    }
+    if let Some(name) = same_sized_numeric_name(&left.resolution, &right.resolution, registry) {
+        return Some(registry.primitive(name));
+    }
+    let lhs_ty = left.resolution.clone();
+    let rhs_ty = right.resolution.clone();
+    if coerce_literal_to(left, &rhs_ty, registry) {
+        return Some(rhs_ty);
+    }
+    if coerce_literal_to(right, &lhs_ty, registry) {
+        return Some(lhs_ty);
+    }
+    None
 }
 
 /// Try to stamp a literal-width [`LiteralCoercion`] on `actual` so
