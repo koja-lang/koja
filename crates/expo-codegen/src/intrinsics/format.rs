@@ -37,17 +37,21 @@ pub fn emit_debug_format_intrinsic<'ctx>(
             c.builder.build_return(Some(&result)).unwrap();
         }
         "Float" | "Float32" => {
-            let f64_ty = c.context.f64_type();
-            let val = if type_name == "Float32" {
-                let ext = c
-                    .builder
-                    .build_float_ext(self_val.into_float_value(), f64_ty, "f64_ext")
-                    .unwrap();
-                ext.into()
+            // Route through `expo_format_{f32,f64}` so the rendered
+            // bytes match alpha exactly (shortest round-trip via
+            // Rust's `{:?}`), instead of `snprintf("%f")`'s legacy
+            // 6-digit fixed precision. One source of truth for both
+            // backends — same runtime helpers, same output.
+            let symbol = if type_name == "Float32" {
+                "expo_format_f32"
             } else {
-                self_val
+                "expo_format_f64"
             };
-            let result = snprintf_to_expo_string(c, "%f", &[val.into()], "dbg");
+            let rt_fn = *c
+                .functions
+                .get(&FunctionIdentifier::new(symbol))
+                .ok_or_else(|| format!("{symbol} not declared"))?;
+            let result = c.call(rt_fn, &[self_val.into()], "float_fmt").unwrap();
             c.builder.build_return(Some(&result)).unwrap();
         }
         "Binary" | "Bits" => {

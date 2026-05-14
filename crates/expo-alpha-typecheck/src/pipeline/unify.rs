@@ -117,9 +117,10 @@ impl Substitution {
     }
 
     /// Set a slot. Returns `Err(Conflict)` if the slot was already
-    /// filled with a value that isn't [`types_equivalent`] to `value`;
-    /// `Ok(())` on a fresh fill or a compatible re-fill. Out-of-scope
-    /// owners and out-of-range indices are silent no-ops.
+    /// filled with a value that isn't [`types_equivalent`] to `value`
+    /// AND isn't a union containing `value` as a member; `Ok(())` on a
+    /// fresh fill or a compatible re-fill. Out-of-scope owners and
+    /// out-of-range indices are silent no-ops.
     ///
     /// The compatibility check (rather than strict `prev == value`)
     /// matters most for the `fill_from_expected` path: a payload-
@@ -131,6 +132,15 @@ impl Substitution {
     /// predicate generalizes — `T → Int64` then `T → Int` still
     /// resolves cleanly because `Int64` is a member of the `Int`
     /// union.
+    ///
+    /// The union-member arm covers the dual case for user-declared
+    /// unions: a receiver pre-bind of `M → MsgA | MsgB` (from a
+    /// `Ref<MsgA | MsgB, _>.call(...)` site) followed by an
+    /// arg-driven bind of `M → MsgA` keeps the wider slot intact
+    /// rather than rejecting the call as a "cannot be both" conflict.
+    /// One-direction-only: if a narrower slot value would be widened
+    /// by a later union arrival, that's a `fill_from_expected` story,
+    /// not this one — leave it for the (rarer) flow-inference case.
     pub(crate) fn set(
         &mut self,
         owner: GlobalRegistryId,
@@ -145,12 +155,17 @@ impl Substitution {
             return Ok(());
         };
         match slot {
-            Some(prev) if !types_equivalent(prev, &value, registry) => Err(Conflict {
-                actual: value,
-                owner,
-                param_index: index.as_u32() as usize,
-                prev: prev.clone(),
-            }),
+            Some(prev)
+                if !types_equivalent(prev, &value, registry)
+                    && !union_contains(prev, &value, registry) =>
+            {
+                Err(Conflict {
+                    actual: value,
+                    owner,
+                    param_index: index.as_u32() as usize,
+                    prev: prev.clone(),
+                })
+            }
             Some(_) => Ok(()),
             None => {
                 *slot = Some(value);
@@ -193,6 +208,26 @@ impl Substitution {
     fn scope_mut(&mut self, owner: GlobalRegistryId) -> Option<&mut Scope> {
         self.scopes.iter_mut().find(|scope| scope.owner == owner)
     }
+}
+
+/// True when `prev` is a `ResolvedType::Union` whose members include
+/// a type equivalent to `value`. Asymmetric: `Union ⊇ {value}` only —
+/// the symmetric "value is a union containing prev" case would widen
+/// an already-filled narrower slot and belongs to the
+/// `fill_from_expected` flow, not the per-arg unification path.
+///
+/// Used by [`Substitution::set`] to accept a method-arg unification
+/// like `Ref<MsgA | MsgB, _>.call(MsgA.Ping(...))`: the receiver
+/// scope pre-binds `M → MsgA | MsgB`; the arg drives a unify of
+/// `M → MsgA`; without this rule the per-slot compatibility check
+/// would surface a spurious "cannot be both" diagnostic.
+fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    let ResolvedType::Union(members) = prev else {
+        return false;
+    };
+    members
+        .iter()
+        .any(|member| types_equivalent(member, value, registry))
 }
 
 /// Walk `template` against `actual` and populate `subst` with every

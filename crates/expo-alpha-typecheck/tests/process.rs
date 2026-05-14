@@ -62,6 +62,19 @@ struct Ref<M, R>
   id: Int
 end
 
+enum CallError
+  Timeout
+  ProcessDown
+end
+
+impl Ref<M, R>
+  @intrinsic
+  fn call(self, msg: M, timeout: Int) -> Result<R, CallError>
+
+  @intrinsic
+  fn cast(self, msg: M)
+end
+
 protocol Process<C, M, R>
   fn start(move config: C) -> Result<Self, StopReason>
   fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
@@ -419,5 +432,100 @@ fn receive_with_inconsistent_arm_tails_diagnoses() {
     assert!(
         messages.iter().any(|m| m.contains("inconsistent types")),
         "expected arm-join diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn ref_call_accepts_union_member_arg() {
+    // `impl Process<_, MsgA | MsgB, _>` makes `spawn`'s return
+    // `Ref<MsgA | MsgB, _>`. Calling `.call(MsgA.Ping(...))` must
+    // accept — the receiver's slot already pre-binds `M → MsgA |
+    // MsgB`, and the arg-driven unification of `M → MsgA` is a
+    // union-member compatibility, not a conflict.
+    let source = "
+        enum MsgA
+          Ping(String)
+        end
+
+        enum MsgB
+          Pong(Int)
+        end
+
+        struct ParentConfig
+        end
+
+        struct Parent
+          count: Int
+        end
+
+        impl Process<ParentConfig, MsgA | MsgB, String> for Parent
+          fn start(move config: ParentConfig) -> Result<Self, StopReason>
+            Result.Ok(Parent{count: 0})
+          end
+
+          fn handle(move self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
+            Step.Continue(self)
+          end
+        end
+
+        fn main
+          p = spawn Parent.start(ParentConfig{})
+          p.call(MsgA.Ping(\"hello\"), 5000)
+          p.call(MsgB.Pong(42), 5000)
+        end
+        ";
+    // `typecheck` panics on any diagnostic; reaching this point
+    // means the union-member acceptance fired and the program
+    // checked cleanly.
+    let _checked = typecheck(&dedent(source));
+}
+
+#[test]
+fn ref_call_rejects_non_member_arg() {
+    // Negative pin: arg outside the declared union still produces
+    // the operand-conflict diagnostic. The union-member relaxation
+    // is one-direction-only — random outsider types are not OK.
+    let source = "
+        enum MsgA
+          Ping(String)
+        end
+
+        enum MsgB
+          Pong(Int)
+        end
+
+        enum MsgC
+          Other
+        end
+
+        struct ParentConfig
+        end
+
+        struct Parent
+          count: Int
+        end
+
+        impl Process<ParentConfig, MsgA | MsgB, String> for Parent
+          fn start(move config: ParentConfig) -> Result<Self, StopReason>
+            Result.Ok(Parent{count: 0})
+          end
+
+          fn handle(move self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
+            Step.Continue(self)
+          end
+        end
+
+        fn main
+          p = spawn Parent.start(ParentConfig{})
+          p.call(MsgC.Other, 5000)
+        end
+        ";
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("cannot be both") && m.contains("MsgC")),
+        "expected operand-conflict diagnostic mentioning `MsgC`, got {messages:?}",
     );
 }

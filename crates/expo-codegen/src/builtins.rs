@@ -21,6 +21,8 @@ pub(crate) fn declare_builtins<'ctx>(c: &mut Compiler<'ctx>) {
     let void = c.context.void_type();
     let i32 = c.context.i32_type();
     let i64 = c.context.i64_type();
+    let f32 = c.context.f32_type();
+    let f64 = c.context.f64_type();
     let ptr = c.context.ptr_type(AddressSpace::default());
 
     // C stdlib
@@ -143,6 +145,8 @@ pub(crate) fn declare_builtins<'ctx>(c: &mut Compiler<'ctx>) {
         "expo_format_binary",
         ptr.fn_type(&[ptr.into(), i64.into()], false),
     );
+    decl(c, "expo_format_f32", ptr.fn_type(&[f32.into()], false));
+    decl(c, "expo_format_f64", ptr.fn_type(&[f64.into()], false));
 
     // Time
     decl(c, "expo_time_now_millis", i64.fn_type(&[], false));

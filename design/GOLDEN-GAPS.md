@@ -1,16 +1,21 @@
 # Lang-suite golden gaps
 
 A triage of the `tests/lang/` fixtures that fail under
-`expo alpha run --backend=llvm` as of 2026-05-13. Companion to
+`expo alpha run --backend=llvm`. Companion to
 [V1-PARITY.md](V1-PARITY.md) — that doc tracks the closed parity items;
 this doc enumerates what's still open and groups failures by root cause so
 fixing one entry unblocks a known cluster of fixtures.
 
-PASS count as of last run: `54 passed, 12 failed, 1 skipped` (script
-[scripts/validate_alpha_lang.sh](../scripts/validate_alpha_lang.sh),
-`process_lifecycle` skipped because it's signal-driven; the `ffi`
-fixture's `libffi_helper.a` must be built ahead of time — see
+PASS count as of last run (2026-05-14): `57 passed, 9 failed, 1 skipped`
+via [scripts/validate_alpha_lang.sh](../scripts/validate_alpha_lang.sh).
+`process_lifecycle` is the skipped fixture (signal-driven, intentionally
+excluded). The `ffi` fixture only links when
+[`just build-ffi-fixture`](../justfile) has run first — without that
+prerequisite step the script counts it as a failure even though every
+language-level concern is closed (see
 ["Closed: project-root FFI library search"](#closed-project-root-ffi-library-search)).
+That leaves **eight** real open failures, clustering into the four
+root causes below.
 
 Two top-level buckets:
 
@@ -38,7 +43,7 @@ thunk like the `fn main` path); (b) rewrite the fixtures to use `fn
 main` and a manually-spawned `App` ref. (a) preserves the surface area
 v1 supported.
 
-### 2. Recursive payload miscompile (2 fixtures)
+### 2. Recursive payload miscompile under LLVM (2 fixtures)
 
 `generics/recursive_enum` — built binary exits 133 silently. The
 fixture exercises a self-referential enum (a tree with `Node(Box<...>)`
@@ -49,7 +54,7 @@ outer bodies in dependency order. `recursive_enum` still fails, so the
 remaining root cause is likely IR-side payload projection through the
 recursive variant rather than the layout phase.
 
-`generics/recursive_struct` now sits in the same bucket once its
+`generics/recursive_struct` sits in the same bucket once its
 `Option.None` typecheck rewrite (see ["Closed: v1-permissive
 Option.None inference"](#closed-v1-permissive-optionnone-inference))
 landed: alpha typecheck and the interpreter backend both produce the
@@ -57,59 +62,135 @@ expected `1\n2\n3`, but the LLVM backend prints `1\n2\n0` — the
 innermost recursive-struct field read returns zero. Same
 payload-projection shape as the enum case (Node holds
 `Option<Node>`, the inner `match n.next { Option.Some(n2) -> ... }`
-arm reads a stale/empty payload). Fixing the recursive enum root
+arm reads a stale/empty payload). Fixing the recursive-enum root
 cause should close this one too.
 
-### 3. `Ref<M>` substitution with union message types (2 fixtures)
+### 3. Sized-int arithmetic + `IntLiteral` widening (1 fixture)
 
-`io/process_union_msg` + `types/union_struct_field` both fail with:
+`basics/int_coercion` stacks two v1-isms that the pending sized-int
+arithmetic + `IntLiteral` protocol work absorbs:
+
+1. `Counter.add` body uses `Int32 + Int32` arithmetic; alpha rejects
+   sized-int arithmetic. Closes once `binary_type` / `unary_type`
+   generalize (Phase 1 of that plan).
+2. `x: Int32 = identity(42)` widens an `Int` literal through a generic
+   return; alpha won't unless `IntLiteral<T>` ships (Phase 2).
+
+One fixture but the broader narrow-int story across stdlib rides on
+the same plan, so this entry is high-leverage even though the
+fixture count is small.
+
+### 4. `Equality` not synthesized for nested enum payloads (1 fixture)
+
+`types/nested_enum_eq` exercises `Option<Color> == Option<Color>` and
+similar enum-of-enum equality. Alpha rejects with:
+
+> `==` requires matching Bool, Float, Int, or String operands; got
+> `Option<Color>` and `Option<Color>`
+
+`Equality` synthesis bails when a generic enum's variant payload is
+itself a (different) enum, so the recursive equality call never gets
+generated. Likely fix: thread the synthesis pass through generic enum
+payloads so `Option<E>.eq` recurses into `E.eq` whenever `E:
+Equality`. Same one-fix-unblocks-everything shape as the existing
+`derive_debug` recursion — that pass already handles this for the
+Debug side.
+
+---
+
+## Closed since this doc was last rewritten
+
+The four entries below were open gaps in earlier passes of this
+document. Each is now a closed parity item with a runnable fixture
+or regression test pinning it.
+
+### Dotted type names in expr + type position (2 fixtures)
+
+`types/qualified_signature` + `types/qualified_static_call` were
+blocked on `HTTP.Headers` (and similar) not parsing without an
+`alias` line. Resolver gate widened in `resolve_path_to_global`
+(alias → same-package → head-as-package → `Global` precedence) and
+`classify_receiver` collapsed the parser's three receiver shapes
+onto a unified dotted-path lookup. Closed alongside the broader
+`Http` package wiring — see [V1-PARITY
+§2](V1-PARITY.md#2-dotted-type-names-in-expr--type-position--shipped-2026-05-13).
+
+### Generic function-pointer field as callee (1 fixture)
+
+`functions/fn_generic_arg` exercised `wrapper.f()` where `f` is an
+anonymous-function-typed field on a generic struct. IR lower
+asserted "instance method receiver resolved to non-Global type
+(Anonymous(Function { … }))"; closed by the
+call-shape work that taught lower to dispatch
+function-pointer-typed receivers as indirect calls rather than
+method calls.
+
+### Wildcard closure parameters (1 fixture)
+
+`functions/short_closures` panicked in IR lower:
+
+> alpha IR lower: closure param #0 (Wildcard { … }) is not yet
+> supported in lowering
+
+Fixed (commit a4e49be, 2026-05-14) by stamping a unique `LocalId`
+on every `ClosureParam::Wildcard` in typecheck (new
+`LocalScope::declare_anonymous`) so the lowerer can route it
+through the same path as named params.
+
+### `Ref<M>` narrowing for union message types (2 fixtures)
+
+Two fixtures (`io/process_union_msg`, `types/union_struct_field`)
+exercise the `Process<C, M, R>` shape with `M = MsgA | MsgB`.
+`spawn Parent.start(...)` produces a `Ref<MsgA | MsgB, _>` (the
+receiver scope pre-binds `M → MsgA | MsgB`); the follow-up
+`ref.call(MsgA.Ping(...), 5000)` then drives the method-arg
+unifier to bind `M → MsgA`. `Substitution::set` flagged the
+second bind as a conflict and emitted
 
 > type parameter `M` of `Global.Ref` cannot be both `MsgA | MsgB`
 > and `MsgA`
 
-`Substitution::set` rejects a narrowing rebinding of `M` from the
-union literal type to one of its members. Likely fix: when the
-template slot is bound to a union and the new actual is a member of
-that union, treat it as compatible (UnionWiden) rather than a
-conflict.
+Fix (landed 2026-05-14): extend the slot re-fill check in
+[`pipeline/unify::Substitution::set`](../crates/expo-alpha-typecheck/src/pipeline/unify.rs)
+with a one-direction `union_contains` helper — if the slot already
+holds a `ResolvedType::Union` and the incoming actual is
+[`types_equivalent`] to one of its members, accept the re-fill and
+keep the wider slot intact. The reverse direction (widening a
+narrower slot to a later union arrival) belongs to
+`fill_from_expected`, not the per-arg path, so it stays
+unchanged.
 
-### 4. `HTTP` not wired into `ALPHA_QUALIFIED` (2 fixtures)
+Pinned by
+[`tests/process.rs::ref_call_accepts_union_member_arg`](../crates/expo-alpha-typecheck/tests/process.rs)
+plus a negative companion that keeps the "cannot be both"
+diagnostic firing when an arg sits outside the declared union.
 
-`types/qualified_signature` and `types/qualified_static_call` both
-reference `HTTP.Headers`:
+### Shortest-round-trip float `Debug.format` (1 fixture)
 
-> alpha typecheck does not recognize the type name `HTTP.Headers`
+`protocols/debug_format` previously diverged: v1 printed
+`"3.140000"` (`snprintf("%f")`'s legacy 6-digit fixed precision),
+alpha printed `"3.14"` (Rust's `{:?}` — shortest round-trip via
+Grisu/Ryu). Alpha's form is the right default: it round-trips
+exactly (`parse(format(x)) == x` for every finite `f64`), it
+doesn't fake precision with meaningless trailing zeros, and it
+doesn't silently round away digits past the 6th decimal — the same
+choice Rust, Go, modern JS, Python `repr`, Swift, etc. all make.
 
-Per [V1-PARITY.md](V1-PARITY.md): "`Http` — language-feature parity ...
-ready to wire into `ALPHA_QUALIFIED` once the source files clean-compile
-end-to-end." This is the wiring step (and confirming the source files
-clean-compile, which they presumably do now that field assignment and
-dotted type names shipped).
-
-### 5. Generic function-pointer field as callee (1 fixture)
-
-`functions/fn_generic_arg` — IR lower asserts:
-
-> alpha IR lower: instance method receiver resolved to non-Global type
-> (Anonymous(Function { … }))
-
-A generic struct field holding a function pointer is being dispatched
-as a method receiver. Needs a callee shape for `wrapper.f()` indirect
-dispatch where `f` is an anonymous-function-typed field on a generic
-type.
-
-### 6. Miscellaneous one-offs (2 fixtures)
-
-- `functions/short_closures` — Wildcard closure parameter (`|_| ...`)
-  not yet lowered: `alpha IR lower: closure param #0 (Wildcard { … })
-  is not yet supported in lowering`.
-- `types/nested_enum_eq` — `==` not implemented for `Option<Color>` or
-  any enum-of-enum. Likely needs `Equality` derivation to recurse
-  through generic enums.
+Fix (landed 2026-05-14): route v1's `Debug.format` for `Float` /
+`Float32` through the same `expo_format_f64` / `expo_format_f32`
+runtime helpers alpha uses, instead of inlining `snprintf("%f")`.
+One source of truth for both backends, and the `.stdout` golden
+updated to the round-trip form (`"3.14"`).
 
 ---
 
-## Closed: v1-permissive `Option.None` inference
+## Closed: v1-permissive idioms (rewrites, not compiler fixes)
+
+The five fixtures below relied on v1 looseness alpha intentionally
+rejects. Each was rewritten to a shape both pipelines accept — the
+alpha-side surface area is unchanged.
+
+### `Option.None` inference (3 fixtures)
 
 Three fixtures relied on v1's backwards-flow inference for
 `Option.None` in a generic position — alpha rejects with:
@@ -130,12 +211,12 @@ field type instead of from `None` directly.
 
 All three typecheck cleanly under alpha and produce the recorded
 stdouts under v1 + alpha-interpreter. `recursive_struct` still
-miscompiles under alpha LLVM (innermost field reads as `0`); see
-["§2 Recursive payload miscompile"](#2-recursive-payload-miscompile-2-fixtures)
-— the typecheck rewrite is correct; the LLVM miscompile is the
+miscompiles under alpha LLVM (innermost field reads as `0`) — see
+[§2 Recursive payload miscompile](#2-recursive-payload-miscompile-under-llvm-2-fixtures);
+the typecheck rewrite is correct, the LLVM miscompile is the
 remaining gap.
 
-## Closed: v1-permissive `.clone()` on copy types
+### `.clone()` on copy types (1 fixture)
 
 `ownership/ownership_clone` called `.clone()` on `Int` (a copy
 type) and on a plain `Point{ x: Int, y: Int }` struct (a move
@@ -152,7 +233,7 @@ Rewrite (landed 2026-05-13):
 The fixture still demonstrates the original ownership shape
 (consume `q`, then read `p.x` to prove the clone kept `p` alive).
 
-## Closed: opaque `Debug` receivers for anonymous types
+### Opaque `Debug` receivers for anonymous types
 
 Latent at the time this doc was written; surfaced once the
 remaining stdlib packages (`Net`, `Json`) were wired into
@@ -170,19 +251,6 @@ placeholder, matching the AST-layer rule
 struct/enum fields. Pinned by
 `crates/expo-alpha-ir/tests/opaque_debug_receivers.rs`. See
 [V1-PARITY §10](V1-PARITY.md#10-opaque-debug-receivers-for-anonymous-types--shipped-2026-05-13).
-
----
-
-## Mixed: covered by an existing plan
-
-- **`basics/int_coercion`** — Two v1-isms stacked, both addressed by the
-  pending sized-int arithmetic + `IntLiteral` protocol work:
-  1. `Counter.add` body uses `Int32 + Int32` arithmetic; alpha rejects
-     sized-int arithmetic. Closed by Phase 1 of that plan
-     (`binary_type` / `unary_type` generalization).
-  2. `x: Int32 = identity(42)` widens an `Int` literal through a generic
-     return; alpha won't unless `IntLiteral<T>` ships. Closed by Phase
-     2 of that plan.
 
 ---
 
@@ -208,22 +276,24 @@ without any env juggling. Single-file `.expo` / `.exps` builds pass
 
 `@link` still requires the user to build the static archive (`cc -c`
 + `ar rcs` for now); the compiler doesn't ship a build-script
-phase. The fixture itself still relies on the harness or a manual
-build step to produce `libffi_helper.a`.
+phase. Run [`just build-ffi-fixture`](../justfile) before the
+validator script (or any manual `expo alpha run` inside
+`tests/lang/ffi/`) so `libffi_helper.a` is present when the linker
+goes looking. `cargo test ... lang_ffi` still cleans the archive
+up after itself, so the manual step is needed any time the script
+is the first thing to touch the fixture.
 
 ---
 
 ## Priority order (cheapest unblock per fixture-count)
 
 1. **PascalCase process entry** (gap #1) — 4 fixtures from one fix.
-2. **`IntLiteral` + sized arithmetic** (mixed) — 1 fixture but unblocks
-   the broader narrow-int story across stdlib.
-3. **`Ref<M>` union substitution** (gap #3) — 2 fixtures.
-4. **Wire `HTTP` into `ALPHA_QUALIFIED`** (gap #4) — 2 fixtures.
-5. **Recursive payload miscompile** (gap #2) — 2 fixtures
+2. **Recursive payload miscompile** (gap #2) — 2 fixtures
    (`recursive_enum` + `recursive_struct`, same root cause).
-6. **One-offs** (gap #5, #6) — 3 fixtures each fixed in isolation.
+3. **`IntLiteral` + sized arithmetic** (gap #3) — 1 fixture but
+   unblocks the broader narrow-int story across stdlib.
+4. **`Equality` synthesis for nested enums** (gap #4) — 1 fixture,
+   small targeted recursion fix in the synthesis pass.
 
-`Option.None` inference and `.clone()` on copy types are closed —
-see the "Closed:" sections above. After (1)–(5) the lang suite is at
-full alpha parity and `lang_suite.rs` can flip its runner off v1.
+After (1)–(4) the lang suite is at full alpha parity and
+`lang_suite.rs` can flip its runner off v1.
