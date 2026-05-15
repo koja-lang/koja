@@ -1,4 +1,4 @@
-//! Native linker glue for the alpha LLVM backend.
+//! Native linker glue for the LLVM backend.
 //!
 //! [`expo-alpha-ir-llvm`](../expo_alpha_ir_llvm/index.html) emits a
 //! `.o` file; this module hands that object to `cc` along with the

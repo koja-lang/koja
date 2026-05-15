@@ -47,7 +47,7 @@ fn bounded_dispatch_returns_concrete_impl_method_value() {
           value.greet()
         end
 
-        fn main
+        fn main -> String
           show(Point{x: 1})
         end
         ",
@@ -87,7 +87,7 @@ fn bounded_dispatch_distinct_concrete_args_dispatch_to_distinct_impls() {
           value.greet()
         end
 
-        fn main
+        fn main -> String
           a = show(Point{x: 1})
           b = show(Tag{label: \"hi\"})
           a
@@ -123,7 +123,7 @@ fn bounded_dispatch_through_generic_struct_receiver_runs_to_completion() {
           value.greet()
         end
 
-        fn main
+        fn main -> String
           show(Bag{item: 1})
         end
         ",

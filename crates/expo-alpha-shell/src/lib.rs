@@ -29,7 +29,7 @@
 //! comparison operators, and parenthesized groups. Richer constructs
 //! typecheck-error with a precise diagnostic.
 
-use std::io::{self, BufRead, IsTerminal, Write};
+use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process;
 
@@ -39,6 +39,9 @@ use expo_alpha_typecheck::{CheckFailure, check_program};
 use expo_ast::ast::Diagnostic;
 use expo_ast::token::TokenKind;
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
+use rustyline::Editor;
+use rustyline::error::ReadlineError;
+use rustyline::history::DefaultHistory;
 
 /// Synthetic package name for the REPL session. The session re-runs
 /// the entire concatenated input history through the alpha pipeline
@@ -52,10 +55,14 @@ const BANNER: &str = "expo alpha shell -- alpha IR interpreter\n\
 const HELP: &str = "Commands:\n  \
     :help    show this message\n  \
     :quit    exit the shell\n  \
-    :reset   clear session state and discard the current multiline buffer\n  \
+    :reset   clear session state (or abandon a partial multi-line input)\n  \
     :state   print how many statement blocks the session is holding\n\
 \n\
 Notes:\n  \
+    - Multi-line blocks (struct, enum, fn, ...) rewrite the prompt onto\n    \
+      its own line so the block reads as bare code; Ctrl-C or :reset\n    \
+      abandons an in-flight multi-line input.\n  \
+    - Up-arrow recalls previous inputs (in-memory, per session).\n  \
     - State accumulates across inputs: each new input runs the whole\n    \
       session (today's pipeline is whole-program; incremental support\n    \
       lands later).\n  \
@@ -63,75 +70,84 @@ Notes:\n  \
       boolean / comparison operators, and parenthesized groups.\n    \
       Other constructs typecheck-error.\n";
 
-/// Run the alpha REPL on stdin/stdout until `:quit` or EOF.
+/// Outcome of one [`read_input`] call: either a complete buffer
+/// ready for the pipeline, the user bailed mid-multiline
+/// (`Ctrl-C` / `:reset`), the user hit Ctrl-D on a fresh prompt,
+/// or an unrecoverable line-editor error occurred.
+enum InputOutcome {
+    Buffer(String),
+    Cancelled,
+    Eof,
+    Fatal(String),
+}
+
+/// Run the REPL on stdin/stdout until `:quit`, `Ctrl-D`, or an
+/// unrecoverable line-editor error.
 ///
-/// Reads stdin, accumulating each evaluated input into a [`Session`]
-/// that re-runs the whole history every step. The trailing expression's
-/// value (if any) gets printed; [`Value::Unit`] suppresses the print
-/// line. Pipeline errors print `error: …` and roll the session back to
-/// its pre-input state.
+/// Drives a [`rustyline::Editor`] one line at a time via
+/// [`read_input`], which rewrites the prompt onto its own row
+/// the first time an input proves to be multi-line so the typed
+/// block reads as bare code; subsequent continuation lines come
+/// in without any prompt prefix. Successful inputs accumulate
+/// into a [`Session`] that re-runs the whole history every step;
+/// the trailing expression's value (if any) gets printed and a
+/// [`Value::Unit`] trailing value suppresses the print line.
+/// Pipeline errors print `error: …` and roll the session back to
+/// its pre-input state. Ctrl-C cancels the in-flight input and
+/// loops back to a fresh prompt; Ctrl-D / EOF exits cleanly.
+///
+/// History is kept in memory only — each accepted input (the full
+/// multi-line block, where applicable) is added as one entry so
+/// up-arrow recalls prior commands within the session, but
+/// nothing is persisted to disk.
 pub fn run() {
     print!("{BANNER}");
     let _ = io::stdout().flush();
-    let stdin = io::stdin();
-    let mut handle = stdin.lock();
-    let mut session = Session::new();
-    let mut buffer = String::new();
-    loop {
-        if io::stdin().is_terminal() {
-            let prompt = if buffer.is_empty() {
-                format!("expo({})> ", session.counter())
-            } else {
-                format!("....({})> ", session.counter())
-            };
-            print!("{prompt}");
-            let _ = io::stdout().flush();
+
+    let mut editor = match Editor::<(), DefaultHistory>::new() {
+        Ok(editor) => editor,
+        Err(err) => {
+            eprintln!("error: failed to initialize line editor: {err}");
+            process::exit(1);
         }
-        let mut line = String::new();
-        match handle.read_line(&mut line) {
-            Ok(0) => {
-                if !buffer.is_empty() {
-                    eprintln!("\nerror: unterminated input discarded at EOF");
-                }
+    };
+
+    let mut session = Session::new();
+    loop {
+        let input = match read_input(&mut editor, session.counter()) {
+            InputOutcome::Buffer(input) => input,
+            InputOutcome::Cancelled => continue,
+            InputOutcome::Eof => {
                 println!();
                 break;
             }
-            Ok(_) => {}
-            Err(error) => {
-                eprintln!("error reading input: {error}");
+            InputOutcome::Fatal(message) => {
+                eprintln!("{message}");
                 process::exit(1);
             }
+        };
+        let trimmed = input.trim();
+        if trimmed.is_empty() {
+            continue;
         }
-        let trimmed = line.trim();
-        if buffer.is_empty() {
-            if trimmed.is_empty() {
-                continue;
-            }
-            if trimmed == ":quit" {
-                break;
-            }
-            if trimmed == ":help" {
+        match trimmed {
+            ":quit" => break,
+            ":help" => {
                 print!("{HELP}");
                 continue;
             }
-            if trimmed == ":reset" {
+            ":reset" => {
                 session.clear();
                 continue;
             }
-            if trimmed == ":state" {
+            ":state" => {
                 println!("session: {} statement block(s)", session.statement_count());
                 continue;
             }
-        } else if trimmed == ":reset" {
-            buffer.clear();
-            continue;
+            _ => {}
         }
-        buffer.push_str(&line);
-        if !is_input_complete(&buffer) {
-            continue;
-        }
-        let input = std::mem::take(&mut buffer);
-        match session.try_eval(input.trim()) {
+        let _ = editor.add_history_entry(input.as_str());
+        match session.try_eval(trimmed) {
             Ok(Some(rendered)) => {
                 println!("\x1b[90m{rendered}\x1b[0m");
                 session.bump_counter();
@@ -142,6 +158,78 @@ pub fn run() {
             Err(error) => eprintln!("error: {error}"),
         }
     }
+}
+
+/// Read one complete REPL input (possibly multi-line). On the
+/// first line, rustyline shows the standard `expo(N)>` prompt
+/// with full editing + history. If that line alone isn't a
+/// complete fragment (open block, unclosed bracket, dangling
+/// string), the prompt + typed line are rewritten via ANSI so
+/// the prompt sits on its own row and the typed first line drops
+/// onto its own row below; the block then reads as bare code.
+/// Subsequent reads happen with an empty prompt until
+/// [`is_input_complete`] flips true.
+///
+/// Returns [`InputOutcome::Cancelled`] if the user hits Ctrl-C
+/// (on any line) or types `:reset` mid-multiline, discarding the
+/// partial buffer in either case. Ctrl-D / EOF mid-multiline
+/// surfaces as a Cancelled outcome with an "unterminated input
+/// discarded at EOF" message; Ctrl-D on the first read returns
+/// [`InputOutcome::Eof`].
+fn read_input(editor: &mut Editor<(), DefaultHistory>, counter: u32) -> InputOutcome {
+    let prompt = format!("expo({counter})> ");
+    let first = match editor.readline(&prompt) {
+        Ok(line) => line,
+        Err(ReadlineError::Eof) => return InputOutcome::Eof,
+        Err(ReadlineError::Interrupted) => return InputOutcome::Cancelled,
+        Err(error) => return InputOutcome::Fatal(format!("error reading input: {error}")),
+    };
+    if is_input_complete(&first) {
+        return InputOutcome::Buffer(first);
+    }
+
+    // The first line proves the input is multi-line. Drop the
+    // prompt onto its own row, the typed line below it, and read
+    // subsequent lines with an empty prompt so the block reads as
+    // bare code on the terminal.
+    if io::stdout().is_terminal() {
+        erase_current_line();
+        println!("expo({counter})>");
+        println!("{first}");
+    }
+
+    let mut buffer = String::with_capacity(first.len() + 16);
+    buffer.push_str(&first);
+    buffer.push('\n');
+
+    loop {
+        let line = match editor.readline("") {
+            Ok(line) => line,
+            Err(ReadlineError::Eof) => {
+                eprintln!("error: unterminated input discarded at EOF");
+                return InputOutcome::Cancelled;
+            }
+            Err(ReadlineError::Interrupted) => return InputOutcome::Cancelled,
+            Err(error) => return InputOutcome::Fatal(format!("error reading input: {error}")),
+        };
+        if line.trim() == ":reset" {
+            return InputOutcome::Cancelled;
+        }
+        buffer.push_str(&line);
+        buffer.push('\n');
+        if is_input_complete(&buffer) {
+            return InputOutcome::Buffer(buffer);
+        }
+    }
+}
+
+/// Cursor up one row, carriage return, erase the entire row.
+/// Issued the moment the first read returns an incomplete
+/// fragment so the typed content "drops down" onto its own bare
+/// line.
+fn erase_current_line() {
+    print!("\x1b[1A\r\x1b[2K");
+    let _ = io::stdout().flush();
 }
 
 /// Accumulating REPL state. Each new input pushes one statement-text
@@ -190,25 +278,32 @@ impl Session {
 
     /// Evaluate `input` against this session, mutating it on success
     /// (the input gets appended to the statement list) and rolling
-    /// back on failure (the session is left exactly as it was before
-    /// the call). `Ok(Some(rendered))` carries the trailing
-    /// expression's `Debug.format` output (or its runtime [`Display`]
-    /// fallback for types without a Debug impl); `Ok(None)` covers
+    /// back on pipeline failure (parse / typecheck / lower / runtime
+    /// errors leave the session exactly as it was before the call).
+    ///
+    /// `Ok(Some(rendered))` carries the trailing expression's
+    /// `Debug.format` output, falling back to the runtime
+    /// [`Display`] when `Debug.format` isn't applicable
+    /// (primitives, containers) or when its instance wasn't
+    /// monomorphized into the session IR. The statement evaluated
+    /// successfully in either case (side effects already landed),
+    /// so we don't roll the session back. `Ok(None)` covers
     /// [`Value::Unit`] so the REPL suppresses the trailing print
-    /// line for void inputs.
+    /// line for void inputs — including calls to functions like
+    /// `IO.puts` whose signature elides `-> T` and which the
+    /// interpreter coerces to [`Value::Unit`] at the call boundary.
     fn try_eval(&mut self, input: &str) -> Result<Option<String>, String> {
         let snapshot = self.statements.len();
         self.statements.push(input.to_string());
         match self.run() {
             Ok((_, Value::Unit)) => Ok(None),
-            Ok((script, value)) => match Interpreter::format_via_debug(&script, value.clone()) {
-                Ok(Some(bytes)) => Ok(Some(String::from_utf8_lossy(&bytes).into_owned())),
-                Ok(None) => Ok(Some(value.to_string())),
-                Err(error) => {
-                    self.statements.truncate(snapshot);
-                    Err(error.to_string())
-                }
-            },
+            Ok((script, value)) => {
+                let rendered = match Interpreter::format_via_debug(&script, value.clone()) {
+                    Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
+                    Ok(None) | Err(_) => value.to_string(),
+                };
+                Ok(Some(rendered))
+            }
             Err(error) => {
                 self.statements.truncate(snapshot);
                 Err(error)

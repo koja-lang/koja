@@ -84,7 +84,7 @@ fn method_on_generic_struct_dispatches_under_mangled_symbol() {
           end
         end
 
-        fn main
+        fn main -> Int
           p = Pair{a: 1, b: \"x\"}
           p.first()
         end

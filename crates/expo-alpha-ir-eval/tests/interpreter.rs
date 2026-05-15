@@ -30,7 +30,10 @@ use common::{evaluate_program as evaluate, evaluate_script};
 
 #[test]
 fn fn_main_two_plus_two_evaluates_to_int_four() {
-    assert_eq!(evaluate("fn main\n  2 + 2\nend\n").unwrap(), Value::Int(4),);
+    assert_eq!(
+        evaluate("fn main -> Int\n  2 + 2\nend\n").unwrap(),
+        Value::Int(4),
+    );
 }
 
 #[test]
@@ -40,12 +43,24 @@ fn bare_two_plus_two_script_evaluates_to_int_four() {
 
 #[test]
 fn integer_arithmetic_combinations() {
-    assert_eq!(evaluate("fn main\n  10 - 3\nend\n").unwrap(), Value::Int(7),);
-    assert_eq!(evaluate("fn main\n  6 * 7\nend\n").unwrap(), Value::Int(42),);
-    assert_eq!(evaluate("fn main\n  20 / 4\nend\n").unwrap(), Value::Int(5),);
-    assert_eq!(evaluate("fn main\n  17 % 5\nend\n").unwrap(), Value::Int(2),);
     assert_eq!(
-        evaluate("fn main\n  (2 + 3) * 4\nend\n").unwrap(),
+        evaluate("fn main -> Int\n  10 - 3\nend\n").unwrap(),
+        Value::Int(7),
+    );
+    assert_eq!(
+        evaluate("fn main -> Int\n  6 * 7\nend\n").unwrap(),
+        Value::Int(42),
+    );
+    assert_eq!(
+        evaluate("fn main -> Int\n  20 / 4\nend\n").unwrap(),
+        Value::Int(5),
+    );
+    assert_eq!(
+        evaluate("fn main -> Int\n  17 % 5\nend\n").unwrap(),
+        Value::Int(2),
+    );
+    assert_eq!(
+        evaluate("fn main -> Int\n  (2 + 3) * 4\nend\n").unwrap(),
         Value::Int(20),
     );
 }
@@ -58,7 +73,7 @@ fn script_mode_arithmetic_matches_project_mode() {
 
 #[test]
 fn division_by_zero_surfaces_as_runtime_error() {
-    let err = evaluate("fn main\n  10 / 0\nend\n").expect_err("should fail at runtime");
+    let err = evaluate("fn main -> Int\n  10 / 0\nend\n").expect_err("should fail at runtime");
     assert!(matches!(err, RuntimeError::DivisionByZero { .. }));
 }
 
@@ -106,7 +121,7 @@ fn zero_arg_call_returns_callee_value() {
           42
         end
 
-        fn main
+        fn main -> Int
           answer() + 1
         end
         ";
@@ -126,7 +141,7 @@ fn nested_zero_arg_calls_combine_via_arithmetic() {
           2
         end
 
-        fn main
+        fn main -> Int
           a() + b()
         end
         ";
@@ -147,7 +162,7 @@ fn arg_taking_callee_with_unreferenced_param_returns_body_value() {
           7
         end
 
-        fn main
+        fn main -> Int
           take(99)
         end
         ";
@@ -166,7 +181,7 @@ fn multiple_args_evaluate_in_order() {
           11
         end
 
-        fn main
+        fn main -> Int
           pair(2, 3)
         end
         ";
@@ -182,7 +197,7 @@ fn call_return_participates_in_outer_expression() {
           4
         end
 
-        fn main
+        fn main -> Int
           double() * 5
         end
         ";
@@ -299,7 +314,7 @@ fn if_drives_program_mode_through_helper_calls() {
           2
         end
 
-        fn main
+        fn main -> Int
           pick_then() + pick_merge()
         end
         ";

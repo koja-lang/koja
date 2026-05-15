@@ -17,7 +17,7 @@
 //! `--backend={interpreter,llvm}` (see [`alpha::Backend`]). `run`
 //! defaults to `interpreter` (fast feedback, prints the trailing
 //! value, exits 0); `build` defaults to `llvm` (only backend that
-//! produces a binary). `build --backend=interpreter` errors. The
+//! produces a binary). `build --backend=interpreter` errors. A
 //! future WASM backend slots in as a third variant.
 
 mod alpha;
@@ -82,7 +82,7 @@ enum Command {
         #[arg(short, long, default_value = "doc")]
         output: String,
     },
-    /// Run a source file through the alpha interpreter
+    /// Run a source file through the interpreter
     ///
     /// Thin alias for `expo run --backend=interpreter`. Prints the
     /// trailing value and exits 0 on success.
@@ -139,7 +139,7 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Start an interactive REPL backed by the alpha interpreter
+    /// Start an interactive REPL backed by the interpreter
     Shell,
     /// Run tests (requires expo.toml)
     Test,

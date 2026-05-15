@@ -111,7 +111,7 @@ fn uint8_band_dispatches_through_narrow_impl() {
           x.band(y)
         end
 
-        fn main
+        fn main -> UInt8
           band_u8(0xFF, 0x0F)
         end
         ",
@@ -130,7 +130,7 @@ fn int8_negative_literal_folds_through_narrow_band() {
           x.band(y)
         end
 
-        fn main
+        fn main -> Int8
           band_i8(-1, 5)
         end
         ",
@@ -146,7 +146,7 @@ fn int32_bsl_dispatches_through_narrow_impl() {
           x.bsl(8)
         end
 
-        fn main
+        fn main -> Int32
           shifted(1)
         end
         ",

@@ -42,10 +42,16 @@ impl Interpreter {
     /// value. Borrows `script` so the caller can dispatch follow-up
     /// helper calls (e.g. [`Self::format_via_debug`] for the REPL's
     /// inspect-style print) without re-lowering.
+    ///
+    /// Coerces the trailing value to [`Value::Unit`] when the
+    /// script's static [`IRScript::return_type`] is `Unit`. See
+    /// [`coerce_return`] for the rationale — same shape mirrors
+    /// LLVM's `void`-return coercion in
+    /// `expo_alpha_ir_llvm::emit::emit_terminator`.
     pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
         let mut frame = Frame::new();
         match execute_blocks(&script.blocks, &mut frame, script)? {
-            BlockOutcome::Done(value) => Ok(value),
+            BlockOutcome::Done(value) => Ok(coerce_return(value, &script.return_type)),
             BlockOutcome::TailRestart(_) => panic!(
                 "interpreter: script body produced a `TailCall` terminator — \
                  tail-call rewrite never targets the implicit script body",
@@ -61,13 +67,10 @@ impl Interpreter {
     /// [`expo_alpha_shell`]'s REPL inspect line.
     ///
     /// Drives off the runtime [`Value`] shape rather than the
-    /// caller's static IR type, because the script's
-    /// [`IRScript::return_type`] tracks the trailing expression's
-    /// declared return — which is `Unit` for any method whose
-    /// signature elides `-> T` (e.g. `Debug.print`), even when the
-    /// body's actual trailing expression hands back a richer value
-    /// like `Result<Int, String>`. Routing off the live value
-    /// resolves this static / dynamic mismatch.
+    /// caller's static IR type so the lookup works without
+    /// re-deriving the trailing expression's declared type from
+    /// the IR; the runtime tag is the source of truth for the
+    /// `format()` instance we want.
     ///
     /// Returns `None` for shapes where the runtime [`Display`] of
     /// [`Value`] is the right rendering — primitive scalars and the
@@ -368,6 +371,29 @@ fn take_first_payload_field(
     }
 }
 
+/// Coerce a body-returned [`Value`] to [`Value::Unit`] when the
+/// function (or script body) declares [`IRType::Unit`] as its
+/// return type.
+///
+/// IR lowering threads the trailing expression's SSA value through
+/// `Return { Some(id) }` even for void-returning functions — the
+/// IR comment in `expo_alpha_ir::lower::body::finalize_open_flow`
+/// notes the value is tracked for seal / dominator analysis but
+/// is unobservable at the type level. The LLVM backend collapses
+/// this to `ret void` in `expo_alpha_ir_llvm::emit::emit_terminator`;
+/// without this coercion the interpreter would propagate the
+/// trailing temp (e.g. `STDOUT.write`'s `Result<Int64, String>`
+/// inside `IO.puts`) and callers would see a richer-than-declared
+/// runtime shape. Centralizing the coercion at every body exit
+/// keeps the two backends aligned.
+fn coerce_return(value: Value, return_type: &IRType) -> Value {
+    if matches!(return_type, IRType::Unit) {
+        Value::Unit
+    } else {
+        value
+    }
+}
+
 /// Run `function` in a fresh frame with `args` positionally bound to
 /// its param `ValueId`s. Param promotion (entry-block `LocalDecl` +
 /// `LocalWrite`) means the body reads from the slot, not the raw
@@ -441,7 +467,7 @@ fn execute_function<R: CallResolver>(
             frame.values.insert(param.id, value);
         }
         match execute_blocks(&function.blocks, &mut frame, resolver)? {
-            BlockOutcome::Done(value) => return Ok(value),
+            BlockOutcome::Done(value) => return Ok(coerce_return(value, &function.return_type)),
             BlockOutcome::TailRestart(new_args) => {
                 args = new_args;
             }
@@ -488,7 +514,7 @@ fn execute_closure_function<R: CallResolver>(
         frame.values.insert(param.id, value);
     }
     match execute_blocks(&function.blocks, &mut frame, resolver)? {
-        BlockOutcome::Done(value) => Ok(value),
+        BlockOutcome::Done(value) => Ok(coerce_return(value, &function.return_type)),
         BlockOutcome::TailRestart(_) => panic!(
             "interpreter: closure body `{}` produced a `TailCall` terminator — \
              tail-call rewrite is not enabled for closures yet",

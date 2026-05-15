@@ -1133,9 +1133,7 @@ fn is_alpha_only_path(path: &Path) -> bool {
 
 /// Default output path for project builds:
 /// `<root>/target/{debug,release}/<config.name>` depending on the
-/// `release` flag. Mirrors v1's [`crate::pipeline::build_project`]
-/// convention so users moving between modes find the binary in the
-/// same place.
+/// `release` flag.
 fn default_project_output(config: &ProjectConfig, root: &Path, release: bool) -> String {
     project_target_dir(root, release)
         .join(&config.name)

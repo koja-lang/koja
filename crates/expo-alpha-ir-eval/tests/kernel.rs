@@ -60,7 +60,7 @@ fn uint8_eq_dispatches_through_narrow_impl() {
           x.eq(y)
         end
 
-        fn main
+        fn main -> Bool
           eq_u8(255, 255)
         end
         ",
