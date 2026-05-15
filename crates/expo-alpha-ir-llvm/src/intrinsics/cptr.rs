@@ -7,15 +7,13 @@
 //! `params[0].ty` for instance methods and on `return_type` for
 //! `alloc`/`null`; [`pointee`] picks the right slot.
 //!
-//! Mirrors v1 [`expo_codegen::intrinsics::cptr`] one-to-one, ported
-//! to the alpha emit context. Bodies are inline LLVM IR — `null`
-//! returns `null`, `alloc` calls `malloc(count * sizeof(T))`, `free`
-//! calls libc `free`, `offset` issues a typed GEP, `read` / `write`
-//! load / store at the typed pointer, `null?` compares against
-//! `null`, `to_string` is a zero-cost reinterpret (the pointer
-//! already points to a valid Expo string payload), `to_binary`
-//! malloc's a length-prefixed block and memcpy's `len` bytes from
-//! the source pointer.
+//! Bodies are inline LLVM IR — `null` returns `null`, `alloc` calls
+//! `malloc(count * sizeof(T))`, `free` calls libc `free`, `offset`
+//! issues a typed GEP, `read` / `write` load / store at the typed
+//! pointer, `null?` compares against `null`, `to_string` is a
+//! zero-cost reinterpret (the pointer already points to a valid Expo
+//! string payload), `to_binary` malloc's a length-prefixed block and
+//! memcpy's `len` bytes from the source pointer.
 
 use expo_alpha_ir::{CPtrMethod, IRFunction, IRType};
 use inkwell::AddressSpace;

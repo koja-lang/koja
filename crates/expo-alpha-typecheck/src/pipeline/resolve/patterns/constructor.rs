@@ -42,14 +42,12 @@ pub(super) fn resolve_constructor_pattern(
                     type_path: metadata.type_path,
                     variant: name_owned,
                     span,
-                    resolved_type: None,
                 },
                 ConstructorRewrite::Tuple => Pattern::EnumTuple {
                     type_path: metadata.type_path,
                     variant: name_owned,
                     elements: elements_owned,
                     span,
-                    resolved_type: None,
                 },
             };
             resolve_pattern(pat, subject_ty, resolver, diagnostics)

@@ -9,15 +9,13 @@
 //! Both bodies follow the same skeleton: call the runtime helper,
 //! branch on the null sentinel, build either `Result.Err` from
 //! `expo_last_error()` or `Result.Ok` from the runtime's buffer.
-//! Mirrors [`expo_codegen::intrinsics::socket`] one-to-one — ported
-//! to alpha's [`EmitContext`], the [`layout`]-driven struct lookups
+//! Built against the [`layout`]-driven struct lookups
 //! ([`Layouts::struct_type`] / [`Layouts::struct_field_ir_type`] /
-//! [`Layouts::enum_variant_payload`]), and
-//! [`build_enum_value`] for the `Result.Ok` / `Result.Err`
-//! construction. Once v1 is decommissioned the two intrinsics can
-//! be hoisted back into stdlib Expo with thinner runtime helpers;
-//! the marshaling-in-LLVM shape mirrors v1 only to unblock the
-//! `Net` test surface today.
+//! [`Layouts::enum_variant_payload`]) and [`build_enum_value`] for
+//! the `Result.Ok` / `Result.Err` construction. The marshaling-in-LLVM
+//! shape is a pragmatic stopgap for the `Net` test surface; the two
+//! intrinsics can be hoisted back into stdlib Expo with thinner
+//! runtime helpers once the surface stabilizes.
 //!
 //! [`layout`]: crate::layout
 //! [`Layouts::struct_type`]: crate::layout::Layouts::struct_type

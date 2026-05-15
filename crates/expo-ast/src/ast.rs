@@ -9,9 +9,8 @@
 use std::path::PathBuf;
 
 use crate::coercion::{Coercion, LiteralCoercion};
-use crate::identifier::{LocalId, Resolution, ResolvedType, TypeIdentifier};
+use crate::identifier::{LocalId, Resolution, ResolvedType};
 use crate::span::Span;
-use crate::types::Type;
 
 // Semantic enums
 
@@ -207,9 +206,8 @@ impl Annotation {
 
 /// Returns `true` when `annotations` contains an `@extern "C"` marker
 /// (FFI-linked function with no source body). Thin wrapper over
-/// [`Annotation::kind`]; kept as a free function because v1
-/// (`expo-typecheck`, `expo-codegen`) binds against this signature
-/// directly.
+/// [`Annotation::kind`]; kept as a free function so callers can bind
+/// against this signature without going through `Annotation::kind`.
 pub fn is_extern_c(annotations: &[Annotation]) -> bool {
     annotations
         .iter()
@@ -218,9 +216,9 @@ pub fn is_extern_c(annotations: &[Annotation]) -> bool {
 
 /// Returns `true` when `annotations` contains an `@intrinsic` marker
 /// (compiler-emitted body, no source body, no FFI symbol). Thin
-/// wrapper over [`Annotation::kind`]; kept as a free function
-/// because v1 (`expo-typecheck`, `expo-codegen`) binds against this
-/// signature directly.
+/// wrapper over [`Annotation::kind`]; kept as a free function so
+/// callers can bind against this signature without going through
+/// `Annotation::kind`.
 pub fn is_intrinsic(annotations: &[Annotation]) -> bool {
     annotations
         .iter()
@@ -676,35 +674,24 @@ pub enum EnumConstructionData {
 
 /// An expression node in the AST.
 ///
-/// Every expression carries a `span` for source location and **two**
-/// type-annotation slots that together describe the expression's type
-/// as known by the compiler:
+/// Every expression carries a `span` for source location and a
+/// [`ResolvedType`] in `resolution` that the typecheck pass populates
+/// with a registry-pointing shape. Seal asserts
+/// `resolution.is_resolved()` on every non-excluded node.
 ///
-/// - `resolved_type`: **legacy (v1 pipeline).** Populated by
-///   `expo-typecheck`; read by v1 codegen, LSP, and IR. Uses the
-///   closed `Type` enum from `expo_ast::types`. Alpha does **not**
-///   populate this field.
-/// - `resolution`: **northstar (alpha pipeline).** Populated by
-///   `expo-alpha-typecheck`; carries a [`ResolvedType`] that points
-///   into the alpha `GlobalRegistry` by id. Every sealed alpha `Expr`
-///   has `resolution.is_resolved()` true. V1 does **not** populate
-///   this field.
-///
-/// The two fields coexist during the v1 -> alpha migration so both
-/// pipelines can operate on the same AST shape without clobbering
-/// each other's state. Once v1 is retired, `resolved_type` goes away
-/// and `resolution` is the single ledger.
+/// The two coercion slots (`literal_coercion`, `coercion`) carry
+/// per-expression coercion annotations stamped by typecheck; see
+/// [`crate::coercion`] for the design rationale.
 #[derive(Debug, Clone)]
 pub struct Expr {
     pub kind: ExprKind,
-    /// Per-expression coercion annotation. Stamped by alpha typecheck
-    /// at literal-fit sites (e.g. `5: UInt8`); read by alpha IR
-    /// lowering to mint the matching narrow `Const` opcode. `None`
-    /// for every other position. See [`crate::coercion`] for the
-    /// full design rationale (annotation vs value-conversion
-    /// families).
+    /// Per-expression coercion annotation. Stamped by typecheck at
+    /// literal-fit sites (e.g. `5: UInt8`); read by IR lowering to
+    /// mint the matching narrow `Const` opcode. `None` for every
+    /// other position. See [`crate::coercion`] for the full design
+    /// rationale (annotation vs value-conversion families).
     pub literal_coercion: Option<LiteralCoercion>,
-    /// Per-expression value-conversion coercion. Stamped by alpha
+    /// Per-expression value-conversion coercion. Stamped by
     /// typecheck when the expression's value needs runtime work to
     /// flow into its consumer (member→union widening today; future
     /// fn-as-closure, generic phi widening, etc.). Each
@@ -714,28 +701,24 @@ pub struct Expr {
     /// — see [`crate::coercion`]'s module doc for the full
     /// rationale.
     pub coercion: Option<Coercion>,
-    /// Northstar-aligned type annotation. Default is
-    /// [`ResolvedType::unresolved`]; alpha resolve populates it with
-    /// a registry-pointing shape, and seal asserts
-    /// `resolution.is_resolved()` on every non-excluded node.
+    /// Type annotation. Default is [`ResolvedType::unresolved`];
+    /// typecheck resolve populates it with a registry-pointing
+    /// shape, and seal asserts `resolution.is_resolved()` on every
+    /// non-excluded node.
     pub resolution: ResolvedType,
-    /// Legacy v1 type annotation. `None` before v1 typecheck runs.
-    /// Alpha does not populate this field.
-    pub resolved_type: Option<Type>,
     pub span: Span,
 }
 
 impl Expr {
     /// Convenience constructor: wraps a kind + span with every
-    /// annotation slot defaulted (no coercion, legacy
-    /// `resolved_type: None`, northstar `resolution: Unresolved`).
+    /// annotation slot defaulted (no coercion,
+    /// `resolution: Unresolved`).
     pub fn new(kind: ExprKind, span: Span) -> Self {
         Self {
             kind,
             literal_coercion: None,
             coercion: None,
             resolution: ResolvedType::unresolved(),
-            resolved_type: None,
             span,
         }
     }
@@ -1011,8 +994,6 @@ pub enum Pattern {
         type_path: Vec<String>,
         variant: String,
         span: Span,
-        /// Resolved identity of the enum type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// A tuple enum variant: `Option.Some(x)`.
     EnumTuple {
@@ -1020,8 +1001,6 @@ pub enum Pattern {
         variant: String,
         elements: Vec<Pattern>,
         span: Span,
-        /// Resolved identity of the enum type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// A struct enum variant: `Shape.Rect { width, height }`.
     EnumStruct {
@@ -1029,16 +1008,12 @@ pub enum Pattern {
         variant: String,
         fields: Vec<FieldPattern>,
         span: Span,
-        /// Resolved identity of the enum type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// Shorthand constructors: `Some(x)`, `Ok(x)`, `Err(x)`.
     Constructor {
         name: String,
         elements: Vec<Pattern>,
         span: Span,
-        /// Resolved identity of the enum type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// A plain (non-enum) struct destructuring: `Point{x: 5, y: 2}`.
     /// Field syntax is always `name: pattern` (no shorthand binding).
@@ -1048,8 +1023,6 @@ pub enum Pattern {
         type_path: Vec<String>,
         fields: Vec<FieldPattern>,
         span: Span,
-        /// Resolved identity of the struct type. Populated by the type checker.
-        resolved_type: Option<TypeIdentifier>,
     },
     /// A typed binding: `p: Post` -- matches a union member by type
     /// and binds the unwrapped value. `local_id` is `None` after

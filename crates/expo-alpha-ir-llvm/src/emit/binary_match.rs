@@ -1,9 +1,7 @@
 //! LLVM emission for `IRInstruction::BinaryMatch` — `<<segments>>`
 //! binary pattern matching.
 //!
-//! Algorithm (ported from v1's
-//! [`expo_codegen::binary::patterns::compile_binary_pattern`], with
-//! two corrections):
+//! Algorithm:
 //!
 //! 1. Load the subject's runtime bit length from `subject - 8`,
 //!    shift right by 3 for the byte length.

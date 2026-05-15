@@ -398,7 +398,6 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
                 type_path: vec![enum_name.to_string()],
                 variant: variant.name.clone(),
                 span,
-                resolved_type: None,
             },
             unit_variant_body(&variant.name, span),
         ),
@@ -418,7 +417,6 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
                     variant: variant.name.clone(),
                     elements,
                     span,
-                    resolved_type: None,
                 },
                 tuple_variant_body(&variant.name, &bindings, types, span),
             )
@@ -442,7 +440,6 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
                     variant: variant.name.clone(),
                     fields: field_patterns,
                     span,
-                    resolved_type: None,
                 },
                 struct_variant_body(&variant.name, fields, span),
             )

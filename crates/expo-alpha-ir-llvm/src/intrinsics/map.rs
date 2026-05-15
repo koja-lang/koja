@@ -6,9 +6,6 @@
 //! by ABI; `states_ptr` is `[u8; capacity]` (`0` empty / `1`
 //! occupied / `2` tombstone). Both buffers malloc on `new`, realloc
 //! on resize, and free on drop.
-//!
-//! Mirrors v1 [`expo_codegen::map`] one-to-one, ported to the alpha
-//! emit context.
 
 use expo_alpha_ir::{IRFunction, IRType, MapMethod};
 

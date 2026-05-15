@@ -383,7 +383,6 @@ fn enum_unit_pattern(enum_name: &str, variant_name: &str, span: Span) -> Pattern
         type_path: vec![enum_name.to_string()],
         variant: variant_name.to_string(),
         span,
-        resolved_type: None,
     }
 }
 
@@ -406,7 +405,6 @@ fn enum_tuple_pattern(
         variant: variant_name.to_string(),
         elements,
         span,
-        resolved_type: None,
     }
 }
 
@@ -434,7 +432,6 @@ fn enum_struct_pattern(
         variant: variant_name.to_string(),
         fields: field_patterns,
         span,
-        resolved_type: None,
     }
 }
 

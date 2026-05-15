@@ -9,10 +9,7 @@
 //! collection modules ([`super::map`], [`super::set`]) stitch them
 //! into the per-method dispatch.
 //!
-//! Mirrors v1 [`expo_codegen::hashtable`] / [`expo_codegen::map`] /
-//! [`expo_codegen::set`] one-to-one, ported to the alpha emit
-//! context. The only behavioural change is the use of typed errors
-//! (`LlvmError::Codegen(...)`) in place of v1's `String` errors.
+//! Errors surface as typed [`LlvmError::Codegen`] values.
 
 use expo_alpha_ir::mangling::{global_primitive_symbol, mangled_method_name};
 use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag};
