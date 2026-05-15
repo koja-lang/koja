@@ -1,17 +1,18 @@
 //! Completion provider for the Expo LSP.
 //!
 //! Offers keyword completions, symbol completions, and dot-completions
-//! (methods and fields on a type) based on the type-checking context.
+//! (methods and fields on a type) based on the alpha registry.
 
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
+use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
 use expo_ast::ast::{ExprKind, Visibility};
-use expo_ast::types::Type;
-use expo_typecheck::context::{FunctionKind, TypeContext};
+use expo_ast::identifier::GlobalRegistryId;
 
+use crate::alpha_format::{format_function_signature, format_resolved_type};
 use crate::backend::Backend;
-use crate::lookup::find_expr_at;
+use crate::lookup::{LookupCtx, find_expr_at, traverse_receiver_type_id};
 
 /// Expo language keywords offered as completions.
 const KEYWORDS: &[&str] = &[
@@ -22,8 +23,8 @@ const KEYWORDS: &[&str] = &[
 
 impl Backend {
     /// Handles `textDocument/completion` requests by returning keyword
-    /// completions and known symbols from the current type context,
-    /// filtered to the prefix at the cursor position.
+    /// completions and known symbols from the registry, filtered to the
+    /// prefix at the cursor.
     pub(crate) async fn handle_completion(
         &self,
         params: CompletionParams,
@@ -37,18 +38,31 @@ impl Backend {
             Some(s) => s,
             None => return Ok(Some(CompletionResponse::Array(items))),
         };
+        let (file, registry) = match (state.active_file(), state.registry()) {
+            (Some(f), Some(r)) => (f, r),
+            _ => return Ok(Some(CompletionResponse::Array(items))),
+        };
+
+        let ctx = LookupCtx {
+            registry,
+            package: &state.active_package,
+            locals: &state.locals,
+        };
 
         let line = pos.line + 1;
         let col = pos.character + 1;
-        if let Some(expr) = find_expr_at(&state.file, line, col)
+        if let Some(expr) = find_expr_at(file, line, col)
             && let ExprKind::FieldAccess { receiver, .. } = &expr.kind
+            && let Some(type_id) = traverse_receiver_type_id(receiver, &ctx)
         {
-            let (type_name, is_static) = resolve_dot_type(receiver, &state.ctx);
-            if let Some(type_name) = type_name {
-                add_dot_completions(&type_name, is_static, &state.ctx, &mut items);
-                add_dot_completions(&type_name, is_static, &self.stdlib_ctx, &mut items);
-                return Ok(Some(CompletionResponse::Array(items)));
-            }
+            let is_static = matches!(&receiver.kind, ExprKind::Ident { .. })
+                && matches!(
+                    registry.get(type_id).map(|e| &e.kind),
+                    Some(GlobalKind::Struct(_) | GlobalKind::Enum(_))
+                )
+                && receiver.resolution == expo_ast::identifier::ResolvedType::Unresolved;
+            add_dot_completions(type_id, is_static, registry, &mut items);
+            return Ok(Some(CompletionResponse::Array(items)));
         }
 
         let prefix = word_prefix_at(&state.source, pos);
@@ -64,96 +78,72 @@ impl Backend {
             }
         }
 
-        add_symbol_completions(&state.ctx, &prefix_lower, &mut items);
-        add_symbol_completions(&self.stdlib_ctx, &prefix_lower, &mut items);
+        add_symbol_completions(registry, &state.active_package, &prefix_lower, &mut items);
+        if state.active_package != "Global" {
+            add_symbol_completions(registry, "Global", &prefix_lower, &mut items);
+        }
 
         Ok(Some(CompletionResponse::Array(items)))
     }
 }
 
-/// Extracts the base type name and static/instance distinction from a
-/// dot-completion receiver expression using its `resolved_type`.
-fn resolve_dot_type(receiver: &expo_ast::ast::Expr, ctx: &TypeContext) -> (Option<String>, bool) {
-    if let Some(ty) = &receiver.resolved_type {
-        let base = type_base_name(ty);
-        if base.is_some() {
-            return (base, false);
-        }
-    }
-
-    if let ExprKind::Ident { name, .. } = &receiver.kind
-        && (ctx.is_struct(name) || ctx.is_enum(name))
-    {
-        return (Some(name.clone()), true);
-    }
-
-    (None, false)
-}
-
-/// Returns the simple name of a type (without generic arguments) for
-/// looking up methods and fields via `TypeContext::find_type`.
-fn type_base_name(ty: &Type) -> Option<String> {
-    match ty {
-        Type::Named { identifier, .. } => Some(identifier.name.clone()),
-        Type::Primitive(p) => Some(p.display().to_string()),
-        _ => None,
-    }
-}
-
-/// Adds completion items for methods and fields available on a type.
+/// Add completion items for a type's methods (and, for instance
+/// dispatch, its fields). `type_id` identifies the receiver's type in
+/// the alpha registry; `is_static` switches between static (`Type.x`)
+/// and instance (`value.x`) dispatch.
 fn add_dot_completions(
-    type_name: &str,
+    type_id: GlobalRegistryId,
     is_static: bool,
-    ctx: &TypeContext,
+    registry: &GlobalRegistry,
     items: &mut Vec<CompletionItem>,
 ) {
-    let info = match ctx.find_type(type_name) {
-        Some(i) => i,
+    let entry = match registry.get(type_id) {
+        Some(e) => e,
         None => return,
     };
+    let pkg = entry.identifier.package().to_string();
+    let type_name = entry.identifier.last().to_string();
 
-    for (name, sig) in &info.functions {
-        let matches_context = if is_static {
-            sig.kind == FunctionKind::Static
-        } else {
-            matches!(sig.kind, FunctionKind::Instance(_))
-        };
-        if !matches_context || sig.visibility == Visibility::Private {
+    for (_, m_entry) in registry.iter() {
+        let path = m_entry.identifier.path();
+        if path.len() != 2 || path[0] != type_name {
             continue;
         }
-
-        let params_str: Vec<String> = sig
-            .params
-            .iter()
-            .filter(|p| p.name != "self")
-            .map(|p| format!("{}: {}", p.name, p.ty.display()))
-            .collect();
-        let detail = format!(
-            "fn({}) -> {}",
-            params_str.join(", "),
-            sig.return_type.display()
-        );
+        if m_entry.identifier.package() != pkg {
+            continue;
+        }
+        let GlobalKind::Function(Some(sig)) = &m_entry.kind else {
+            continue;
+        };
+        let dispatch_matches = match sig.dispatch {
+            expo_alpha_typecheck::Dispatch::Instance => !is_static,
+            expo_alpha_typecheck::Dispatch::Static => is_static,
+        };
+        if !dispatch_matches {
+            continue;
+        }
+        let detail =
+            format_function_signature(path[1].as_str(), sig, &m_entry.type_params, registry);
         items.push(CompletionItem {
-            label: name.clone(),
+            label: path[1].clone(),
             kind: Some(CompletionItemKind::METHOD),
             detail: Some(detail),
             ..Default::default()
         });
     }
 
-    if !is_static && let Some(fields) = info.fields() {
-        for (name, ty) in fields {
+    if !is_static && let GlobalKind::Struct(Some(def)) = &entry.kind {
+        for field in &def.fields {
             items.push(CompletionItem {
-                label: name.clone(),
+                label: field.name.clone(),
                 kind: Some(CompletionItemKind::FIELD),
-                detail: Some(ty.display()),
+                detail: Some(format_resolved_type(&field.ty, registry)),
                 ..Default::default()
             });
         }
     }
 }
 
-/// Extracts the partial identifier immediately before the cursor position.
 fn word_prefix_at(source: &str, pos: Position) -> String {
     let lines: Vec<&str> = source.lines().collect();
     let line_idx = pos.line as usize;
@@ -173,91 +163,88 @@ fn word_prefix_at(source: &str, pos: Position) -> String {
         .collect()
 }
 
-/// Appends completion items for symbols in a type context whose names
-/// match the given lowercase prefix.
-fn add_symbol_completions(ctx: &TypeContext, prefix_lower: &str, items: &mut Vec<CompletionItem>) {
+/// Append completion items for non-method registry entries in `pkg`
+/// whose names match `prefix_lower`.
+fn add_symbol_completions(
+    registry: &GlobalRegistry,
+    pkg: &str,
+    prefix_lower: &str,
+    items: &mut Vec<CompletionItem>,
+) {
     let matches =
         |name: &str| prefix_lower.is_empty() || name.to_ascii_lowercase().starts_with(prefix_lower);
 
-    for (name, sig) in &ctx.functions {
-        if sig.visibility == Visibility::Private || !matches(name) {
+    for (_, entry) in registry.iter_in_package(pkg) {
+        let path = entry.identifier.path();
+        if path.len() != 1 {
             continue;
         }
-        let params_str: Vec<String> = sig
-            .params
-            .iter()
-            .map(|p| format!("{}: {}", p.name, p.ty.display()))
-            .collect();
-        let detail = format!(
-            "fn({}) -> {}",
-            params_str.join(", "),
-            sig.return_type.display()
-        );
+        let name = &path[0];
+        if !matches(name) {
+            continue;
+        }
+        let (kind, detail) = match &entry.kind {
+            GlobalKind::Function(Some(sig)) => {
+                if sig.params.iter().any(|p| p.name == "self") {
+                    continue;
+                }
+                if visibility_for(sig) == Visibility::Private {
+                    continue;
+                }
+                (
+                    CompletionItemKind::FUNCTION,
+                    Some(format_function_signature(
+                        name,
+                        sig,
+                        &entry.type_params,
+                        registry,
+                    )),
+                )
+            }
+            GlobalKind::Function(None) => continue,
+            GlobalKind::Struct(_) => (
+                CompletionItemKind::STRUCT,
+                type_params_detail(&entry.type_params),
+            ),
+            GlobalKind::Enum(_) => (
+                CompletionItemKind::ENUM,
+                type_params_detail(&entry.type_params),
+            ),
+            GlobalKind::Protocol(_) => (
+                CompletionItemKind::INTERFACE,
+                type_params_detail(&entry.type_params),
+            ),
+            GlobalKind::Constant(Some(def)) => (
+                CompletionItemKind::CONSTANT,
+                Some(format_resolved_type(&def.ty, registry)),
+            ),
+            GlobalKind::Constant(None) => (CompletionItemKind::CONSTANT, None),
+            GlobalKind::TypeAlias(Some(t)) => (
+                CompletionItemKind::TYPE_PARAMETER,
+                Some(format_resolved_type(t, registry)),
+            ),
+            GlobalKind::TypeAlias(None) => (CompletionItemKind::TYPE_PARAMETER, None),
+        };
         items.push(CompletionItem {
             label: name.clone(),
-            kind: Some(CompletionItemKind::FUNCTION),
-            detail: Some(detail),
-            ..Default::default()
-        });
-    }
-
-    for (id, info) in ctx.types.iter().filter(|(_, ti)| ti.is_struct()) {
-        if !matches(&id.name) {
-            continue;
-        }
-        let detail = if info.type_params.is_empty() {
-            None
-        } else {
-            Some(format!(
-                "<{}>",
-                info.type_params
-                    .iter()
-                    .map(|p| p.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        };
-        items.push(CompletionItem {
-            label: id.name.clone(),
-            kind: Some(CompletionItemKind::STRUCT),
+            kind: Some(kind),
             detail,
             ..Default::default()
         });
     }
+}
 
-    for (id, info) in ctx.types.iter().filter(|(_, ti)| ti.is_enum()) {
-        if !matches(&id.name) {
-            continue;
-        }
-        let detail = if info.type_params.is_empty() {
-            None
-        } else {
-            Some(format!(
-                "<{}>",
-                info.type_params
-                    .iter()
-                    .map(|p| p.name.as_str())
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            ))
-        };
-        items.push(CompletionItem {
-            label: id.name.clone(),
-            kind: Some(CompletionItemKind::ENUM),
-            detail,
-            ..Default::default()
-        });
+fn type_params_detail(params: &[String]) -> Option<String> {
+    if params.is_empty() {
+        None
+    } else {
+        Some(format!("<{}>", params.join(", ")))
     }
+}
 
-    for (id, ty) in &ctx.constants {
-        if !matches(&id.name) {
-            continue;
-        }
-        items.push(CompletionItem {
-            label: id.name.clone(),
-            kind: Some(CompletionItemKind::CONSTANT),
-            detail: Some(ty.display()),
-            ..Default::default()
-        });
-    }
+/// Today's alpha [`FunctionSignature`] doesn't carry visibility; we
+/// always treat it as public. Kept as a tiny helper so adding it later
+/// is a one-line change.
+fn visibility_for(_sig: &expo_alpha_typecheck::FunctionSignature) -> Visibility {
+    Visibility::Public
 }

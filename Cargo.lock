@@ -517,11 +517,11 @@ dependencies = [
 name = "expo-lsp"
 version = "0.9.0"
 dependencies = [
+ "expo-alpha-typecheck",
  "expo-ast",
  "expo-fmt",
  "expo-parser",
  "expo-stdlib",
- "expo-typecheck",
  "serde",
  "tokio",
  "toml",

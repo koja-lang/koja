@@ -4,7 +4,8 @@
 //! [`LanguageServer`] trait implementation that dispatches to focused
 //! handler modules.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use tokio::sync::RwLock;
@@ -12,30 +13,66 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
+use expo_alpha_typecheck::{CheckedProgram, GlobalRegistry};
 use expo_ast::ast::File;
-use expo_parser::ParseMode;
-use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::{Package, fqn_to_package};
+use expo_parser::{ParsedProgram, SourceFile};
 
-/// Cached state for a single open document, including the parsed AST
-/// and type-checking context.
+use crate::lookup::LocalIndex;
+
+/// Cached state for a single open document. Holds the parsed program
+/// and the optional sealed [`CheckedProgram`] from the alpha typecheck
+/// pipeline. On typecheck failure we keep the parsed AST so AST-only
+/// handlers (symbols, folding) still work.
 pub(crate) struct DocumentState {
-    pub(crate) file: File,
-    pub(crate) ctx: TypeContext,
     pub(crate) source: String,
-    pub(crate) project_files: Vec<File>,
+    pub(crate) active_path: PathBuf,
+    pub(crate) active_package: String,
+    pub(crate) parsed: ParsedProgram,
+    pub(crate) checked: Option<CheckedProgram>,
+    pub(crate) locals: LocalIndex,
+}
+
+impl DocumentState {
+    /// The currently-edited file, preferring the sealed AST from
+    /// `checked` and falling back to the parsed AST when typecheck
+    /// failed.
+    pub(crate) fn active_file(&self) -> Option<&File> {
+        if let Some(checked) = &self.checked {
+            for pkg in &checked.packages {
+                for file in &pkg.files {
+                    if file.path.as_deref() == Some(self.active_path.as_path()) {
+                        return Some(file);
+                    }
+                }
+            }
+        }
+        self.parsed
+            .get(&self.active_path)
+            .map(|parsed_file| &parsed_file.ast)
+    }
+
+    pub(crate) fn registry(&self) -> Option<&GlobalRegistry> {
+        self.checked.as_ref().map(|c| &c.registry)
+    }
 }
 
 /// The Expo language server backend.
 ///
-/// Holds shared state (stdlib context, open documents) and the LSP client
-/// handle used to push diagnostics and notifications.
+/// Holds shared state (cached stdlib sources, open documents) and the
+/// LSP client handle used to push diagnostics and notifications.
+///
+/// The stdlib bundle is split into autoimport and qualified halves so
+/// the diagnostics pipeline can selectively skip the package the user
+/// is currently editing — opening `lib/global/src/foo.expo` must not
+/// double-bundle the embedded `Global.*` modules alongside the
+/// on-disk siblings. Mirrors
+/// [`expo_driver::alpha::bundle_many_with_autoimport`]'s
+/// `skip_package` behavior.
 pub struct Backend {
     pub(crate) client: Client,
     pub(crate) documents: Arc<RwLock<HashMap<String, DocumentState>>>,
-    pub(crate) project_files: Arc<RwLock<Vec<File>>>,
-    pub(crate) stdlib_ctx: TypeContext,
-    pub(crate) stdlib_files: Vec<File>,
+    pub(crate) autoimport_sources: Arc<Vec<SourceFile>>,
+    pub(crate) qualified_sources: Arc<Vec<SourceFile>>,
 }
 
 impl std::fmt::Debug for Backend {
@@ -51,53 +88,16 @@ impl std::fmt::Debug for DocumentState {
 }
 
 impl Backend {
-    /// Creates a new backend, pre-loading all stdlib files.
+    /// Creates a new backend, pre-loading the alpha stdlib sources.
+    /// The sources are parsed fresh on every diagnostic run; caching
+    /// them as `SourceFile`s avoids re-reading the embedded strings on
+    /// every keystroke while keeping each parse independent.
     pub fn new(client: Client) -> Self {
-        let mut ctx = expo_typecheck::context::TypeContext::new();
-        let mut stdlib_files = Vec::new();
-        let mut source_names = Vec::new();
-
-        for &(name, source) in expo_stdlib::SOURCES {
-            let parsed = expo_parser::parse(source, ParseMode::File);
-            source_names.push(name);
-            stdlib_files.push(parsed.ast);
-        }
-
-        let stdlib_refs: Vec<&File> = stdlib_files.iter().collect();
-        let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Global]);
-        for name in &source_names {
-            if !name.starts_with("Global.") {
-                known_packages.insert(Package::Named(fqn_to_package(name).to_string()));
-            }
-        }
-        let global_names = expo_typecheck::collect_all_names(&stdlib_refs, known_packages);
-
-        // Collect all stdlib files. Auto-imported files (Global.*) use
-        // package "Global". Qualified files (JSON, Net, etc.) use their
-        // package name as the identifier, making them accessible via
-        // ctx.is_package_type() for alias resolution.
-        // `collect_file` is `&mut` because it runs the synthesize
-        // sub-pass internally (auto-derives `impl Debug`).
-        for (i, file) in stdlib_files.iter_mut().enumerate() {
-            let name = source_names[i];
-            let pkg = if name.starts_with("Global.") {
-                "Global"
-            } else {
-                fqn_to_package(name)
-            };
-            let mut mod_ctx = expo_typecheck::collect_file(file, &global_names, pkg);
-            mod_ctx.merge(&ctx);
-            ctx.merge(&mod_ctx);
-        }
-
-        expo_typecheck::resolve_packages(&mut ctx);
-
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
-            project_files: Arc::new(RwLock::new(Vec::new())),
-            stdlib_ctx: ctx,
-            stdlib_files,
+            autoimport_sources: Arc::new(expo_stdlib::alpha_autoimport_sources()),
+            qualified_sources: Arc::new(expo_stdlib::alpha_qualified_sources()),
         }
     }
 }

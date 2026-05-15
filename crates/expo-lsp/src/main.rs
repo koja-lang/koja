@@ -1,3 +1,4 @@
+mod alpha_format;
 mod backend;
 mod completion;
 mod convert;

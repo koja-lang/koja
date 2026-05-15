@@ -1,25 +1,29 @@
 //! Diagnostics pipeline for the Expo LSP.
 //!
-//! Handles parsing, type checking, and conversion of Expo compiler
-//! diagnostics into LSP diagnostics. When a file belongs to a project
-//! (detected by walking up to find `expo.toml`), all sibling project
-//! files are parsed and merged into a unified type context so that
-//! cross-file type references resolve correctly.
+//! Bundles stdlib + project sibling files + the active buffer into a
+//! single [`ParsedProgram`], runs the alpha pipeline
+//! ([`parse_program`] then [`check_program`]), merges parse-phase and
+//! check-phase diagnostics, filters to the active path, and publishes
+//! them to the client.
+//!
+//! When a file belongs to a project (detected by walking up to find
+//! `expo.toml`), all sibling project files are bundled so cross-file
+//! type references resolve correctly.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 use tower_lsp_server::ls_types::*;
 
-use expo_ast::ast::{Diagnostic as ExpoDiagnostic, File, Severity as ExpoSeverity};
-use expo_parser::ParseMode;
-use expo_typecheck::context::TypeContext;
-use expo_typecheck::types::{Package, package_for_path, package_from_str};
+use expo_alpha_typecheck::{CheckedProgram, check_program};
+use expo_ast::ast::{Diagnostic as ExpoDiagnostic, Severity as ExpoSeverity};
+use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
 
 use crate::backend::{Backend, DocumentState};
 use crate::convert::{span_to_range, uri_to_path};
+use crate::lookup::LocalIndex;
 
 #[derive(Deserialize)]
 struct ExpoToml {
@@ -44,11 +48,14 @@ fn default_src() -> Vec<String> {
     vec!["src".to_string()]
 }
 
-/// Derives a synthetic package name for an LSP-owned file from its on-disk
-/// path. Untitled buffers (no path) fall back to `"__lsp_preview__"` so every
-/// call site passes a real, non-empty package to the type checker.
-fn package_for_file(path: Option<&Path>) -> String {
-    package_for_path(path, "__lsp_preview__")
+/// Derives a package name for an LSP-owned file from its on-disk path.
+/// Untitled buffers fall back to `"__lsp_preview__"` so every call
+/// site passes a real, non-empty package to the type checker.
+fn package_for_path(path: Option<&Path>) -> String {
+    path.and_then(|p| p.file_stem())
+        .and_then(|s| s.to_str())
+        .map(str::to_string)
+        .unwrap_or_else(|| "__lsp_preview__".to_string())
 }
 
 /// Walks up from `start` looking for a directory containing `expo.toml`.
@@ -80,22 +87,11 @@ fn collect_expo_files(dir: &Path) -> Vec<PathBuf> {
     result
 }
 
-/// Reads `[project] name` from `<project_root>/expo.toml`, returning `None`
-/// if the file is missing, unparseable, or doesn't declare a project name.
-fn read_project_name(project_root: &Path) -> Option<String> {
-    let source = fs::read_to_string(project_root.join("expo.toml")).ok()?;
-    let parsed: ExpoToml = toml::from_str(&source).ok()?;
-    Some(parsed.project.name)
-}
-
-/// Parses all project source files (excluding `current_path`) and returns
-/// each parsed file paired with its owning package name (from the project's
-/// `expo.toml`). Also scans local-path dependencies, using each dep's own
-/// `[project] name` for its files. Enforces the duplicate-package-name
-/// rule (project + implicit `Global` + each dep): on collision, returns the
-/// files collected so far without descending into the offending dep, so
-/// the driver-level error eventually surfaces in the editor as well.
-fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<(File, String)> {
+/// Collects sibling project [`SourceFile`]s (excluding `current_path`)
+/// with their owning package names. Also scans local-path dependencies.
+/// Returns an empty vec on any I/O or parse-toml failure so the LSP
+/// degrades gracefully rather than dropping diagnostics entirely.
+fn collect_sibling_sources(project_root: &Path, current_path: Option<&Path>) -> Vec<SourceFile> {
     let toml_path = project_root.join("expo.toml");
     let source = match fs::read_to_string(&toml_path) {
         Ok(s) => s,
@@ -106,63 +102,86 @@ fn parse_sibling_files(project_root: &Path, current_path: Option<&Path>) -> Vec<
         Err(_) => return Vec::new(),
     };
 
-    let mut files: Vec<(File, String)> = Vec::new();
-
-    let scan_roots =
-        |src_dirs: &[String], root: &Path, pkg: &str, out: &mut Vec<(File, String)>| {
-            for src in src_dirs {
-                let dir = root.join(src);
-                if dir.is_dir() {
-                    for file_path in collect_expo_files(&dir) {
-                        if current_path.is_some_and(|cp| same_file(&file_path, cp)) {
-                            continue;
-                        }
-                        if let Ok(text) = fs::read_to_string(&file_path) {
-                            let pr = expo_parser::parse(&text, ParseMode::File);
-                            if pr
-                                .errors
-                                .iter()
-                                .all(|d| !matches!(d.severity, ExpoSeverity::Error))
-                            {
-                                let mut file = pr.ast;
-                                file.path = Some(file_path.clone());
-                                out.push((file, pkg.to_string()));
-                            }
-                        }
-                    }
-                }
-            }
-        };
-
-    let project_pkg = parsed.project.name.clone();
+    let mut files: Vec<SourceFile> = Vec::new();
     let mut seen_pkgs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
-    seen_pkgs.insert(project_pkg.clone());
-    if project_pkg != "Global" {
+    seen_pkgs.insert(parsed.project.name.clone());
+    if parsed.project.name != "Global" {
         seen_pkgs.insert("Global".to_string());
     }
 
-    scan_roots(&parsed.project.src, project_root, &project_pkg, &mut files);
+    push_package_files(
+        &parsed.project.src,
+        project_root,
+        &parsed.project.name,
+        current_path,
+        &mut files,
+    );
 
     for dep in parsed.dependencies.values() {
-        if let Some(ref rel) = dep.path {
-            let dep_root = project_root.join(rel);
-            if let Ok(dep_src) = fs::read_to_string(dep_root.join("expo.toml"))
-                && let Ok(dep_toml) = toml::from_str::<ExpoToml>(&dep_src)
-            {
-                let dep_pkg = dep_toml.project.name.clone();
-                if !seen_pkgs.insert(dep_pkg.clone()) {
-                    // Duplicate package name in dep graph; skip it. The
-                    // driver pipeline reports a hard error for this; the LSP
-                    // simply omits the offending dep so the rest of the
-                    // project still type-checks.
-                    continue;
-                }
-                scan_roots(&dep_toml.project.src, &dep_root, &dep_pkg, &mut files);
-            }
+        let Some(ref rel) = dep.path else { continue };
+        let dep_root = project_root.join(rel);
+        let Ok(dep_src) = fs::read_to_string(dep_root.join("expo.toml")) else {
+            continue;
+        };
+        let Ok(dep_toml) = toml::from_str::<ExpoToml>(&dep_src) else {
+            continue;
+        };
+        if !seen_pkgs.insert(dep_toml.project.name.clone()) {
+            continue;
         }
+        push_package_files(
+            &dep_toml.project.src,
+            &dep_root,
+            &dep_toml.project.name,
+            current_path,
+            &mut files,
+        );
     }
 
     files
+}
+
+fn push_package_files(
+    src_dirs: &[String],
+    package_root: &Path,
+    package: &str,
+    current_path: Option<&Path>,
+    out: &mut Vec<SourceFile>,
+) {
+    for src in src_dirs {
+        let dir = package_root.join(src);
+        if !dir.is_dir() {
+            continue;
+        }
+        for file_path in collect_expo_files(&dir) {
+            if current_path.is_some_and(|cp| same_file(&file_path, cp)) {
+                continue;
+            }
+            // Mirror [`expo_driver::alpha::push_package_sources`]: files
+            // whose stem starts with `alpha_` are alpha-only sources
+            // delivered exclusively through the curated autoimport set
+            // (their declarations would land out-of-order if pulled
+            // from disk — e.g. `alpha_debug_containers` references
+            // `Pair`/`Option`/`Result` and must come after `kernel`).
+            if is_alpha_only_path(&file_path) {
+                continue;
+            }
+            let Ok(text) = fs::read_to_string(&file_path) else {
+                continue;
+            };
+            out.push(SourceFile {
+                package: package.to_string(),
+                path: file_path,
+                source: text,
+            });
+        }
+    }
+}
+
+fn is_alpha_only_path(path: &Path) -> bool {
+    path.file_stem()
+        .and_then(|s| s.to_str())
+        .is_some_and(|stem| stem.starts_with("alpha_"))
 }
 
 fn same_file(a: &Path, b: &Path) -> bool {
@@ -172,100 +191,201 @@ fn same_file(a: &Path, b: &Path) -> bool {
     }
 }
 
+fn read_project_name(project_root: &Path) -> Option<String> {
+    let source = fs::read_to_string(project_root.join("expo.toml")).ok()?;
+    let parsed: ExpoToml = toml::from_str(&source).ok()?;
+    Some(parsed.project.name)
+}
+
 impl Backend {
-    /// Runs the full diagnostic pipeline on the given source text:
-    /// parse, type-check, then publish LSP diagnostics.
+    /// Runs the alpha pipeline on the current source text and publishes
+    /// LSP diagnostics for the active document.
     ///
-    /// When the file belongs to a project (has an `expo.toml` ancestor),
-    /// all sibling project files are parsed so cross-file type references
-    /// resolve correctly.
+    /// The bundle (stdlib + siblings + active buffer) is parsed and
+    /// checked from scratch on every call; we accept that cost for
+    /// simplicity and revisit only if real-world latency complains.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
-        let mut parse_result = expo_parser::parse(text, ParseMode::File);
-        let file_path = uri_to_path(uri.as_str());
+        let active_path = uri_to_path(uri.as_str())
+            .unwrap_or_else(|| PathBuf::from(format!("<{}>", uri.as_str())));
 
-        let mut all_diags: Vec<ExpoDiagnostic> = parse_result.errors;
-
-        let (ctx, project_files) = if all_diags
-            .iter()
-            .all(|d| !matches!(d.severity, ExpoSeverity::Error))
-        {
-            let project_root = file_path
-                .as_deref()
-                .and_then(|p| p.parent())
-                .and_then(find_project_root);
-
-            let mut sibling_files: Vec<(File, String)> = match (&project_root, &file_path) {
-                (Some(root), Some(fp)) => parse_sibling_files(root, Some(fp)),
-                _ => Vec::new(),
-            };
-
-            let mut all_for_names: Vec<&File> = self.stdlib_files.iter().collect();
-            for (m, _) in &sibling_files {
-                all_for_names.push(m);
+        let project_root = active_path.parent().and_then(find_project_root);
+        let active_package = match (&project_root, active_path.as_path()) {
+            (Some(root), _) => {
+                read_project_name(root).unwrap_or_else(|| package_for_path(Some(&active_path)))
             }
-            all_for_names.push(&parse_result.ast);
-
-            let current_pkg = project_root
-                .as_deref()
-                .and_then(read_project_name)
-                .unwrap_or_else(|| package_for_file(file_path.as_deref()));
-            let mut known_packages: BTreeSet<Package> = BTreeSet::from([Package::Global]);
-            for (_, sibling_pkg) in &sibling_files {
-                known_packages.insert(package_from_str(sibling_pkg));
-            }
-            known_packages.insert(package_from_str(&current_pkg));
-            let global_names = expo_typecheck::collect_all_names(&all_for_names, known_packages);
-
-            // `collect_file` is `&mut` because the synthesize sub-pass
-            // (auto-derive `Debug`) runs inside it and mutates the AST.
-            let mut unified_ctx = self.stdlib_ctx.clone();
-            for (m, sibling_pkg) in &mut sibling_files {
-                let mod_ctx = expo_typecheck::collect_file(m, &global_names, sibling_pkg);
-                unified_ctx.merge(&mod_ctx);
-            }
-
-            let mut ctx =
-                expo_typecheck::collect_file(&mut parse_result.ast, &global_names, &current_pkg);
-            ctx.merge(&unified_ctx);
-            expo_typecheck::synthesize_protocol_defaults(&parse_result.ast, &mut ctx, &current_pkg);
-            expo_typecheck::mark_recursive_fields(&mut ctx);
-            expo_typecheck::resolve_file_aliases(&parse_result.ast, &mut ctx);
-            expo_typecheck::resolve_packages(&mut ctx);
-            expo_typecheck::check_file(&mut parse_result.ast, &mut ctx, &current_pkg);
-            all_diags.extend(ctx.diagnostics.clone());
-            let stored_files: Vec<File> = sibling_files.into_iter().map(|(m, _)| m).collect();
-            (ctx, stored_files)
-        } else {
-            (TypeContext::new(), Vec::new())
+            (None, p) => package_for_path(Some(p)),
         };
 
-        {
-            let mut file = parse_result.ast;
-            file.path = file_path;
+        let sources =
+            self.build_bundle(&active_package, &active_path, text, project_root.as_deref());
 
-            if !project_files.is_empty() {
-                let mut pf = self.project_files.write().await;
-                *pf = project_files.clone();
+        let parsed = parse_program(sources, ParseMode::File);
+
+        let parse_diags = collect_parse_diagnostics(&parsed, &active_path);
+        let check_result = check_program(parsed);
+        let (checked, mut check_diags) = match check_result {
+            Ok(checked) => {
+                let diags = filter_diags(&checked.diagnostics, &active_path);
+                (Some(checked), diags)
             }
+            Err(failure) => {
+                let diags = filter_diags(&failure.diagnostics, &active_path);
+                // Recover the partial ParsedProgram so AST-only handlers
+                // (symbols, folding) still see something useful on
+                // typecheck failure.
+                let parsed = failure.partial;
+                let locals = LocalIndex::build(&parsed, &active_path);
+                let mut all_diags = parse_diags.clone();
+                all_diags.extend(diags);
+                let lsp_diags: Vec<Diagnostic> = all_diags.iter().map(to_lsp_diagnostic).collect();
+                {
+                    let mut docs = self.documents.write().await;
+                    docs.insert(
+                        uri.as_str().to_string(),
+                        DocumentState {
+                            source: text.to_string(),
+                            active_path: active_path.clone(),
+                            active_package: active_package.clone(),
+                            parsed,
+                            checked: None,
+                            locals,
+                        },
+                    );
+                }
+                self.client
+                    .publish_diagnostics(uri, lsp_diags, version)
+                    .await;
+                return;
+            }
+        };
 
+        let mut all_diags = parse_diags;
+        all_diags.append(&mut check_diags);
+        let lsp_diags: Vec<Diagnostic> = all_diags.iter().map(to_lsp_diagnostic).collect();
+
+        let parsed_again = rebuild_parsed_from_checked(checked.as_ref().unwrap());
+        let locals = LocalIndex::build(&parsed_again, &active_path);
+
+        {
             let mut docs = self.documents.write().await;
             docs.insert(
                 uri.as_str().to_string(),
                 DocumentState {
-                    file,
-                    ctx,
                     source: text.to_string(),
-                    project_files,
+                    active_path: active_path.clone(),
+                    active_package,
+                    parsed: parsed_again,
+                    checked,
+                    locals,
                 },
             );
         }
-
-        let lsp_diags: Vec<Diagnostic> = all_diags.iter().map(to_lsp_diagnostic).collect();
 
         self.client
             .publish_diagnostics(uri, lsp_diags, version)
             .await;
     }
+}
+
+impl Backend {
+    /// Bundle the source list that gets fed to `parse_program`.
+    ///
+    /// Mirrors [`expo_driver::alpha::bundle_many_with_autoimport`]: the
+    /// embedded autoimport set is dropped for any module already
+    /// provided by the active package (so opening
+    /// `lib/global/src/debug.expo` doesn't double-define `Global.debug`),
+    /// and the qualified bundle is skipped entirely when the user is
+    /// editing `Global` because the prebaked qualified packages were
+    /// typechecked against the published Global and would clash with
+    /// the in-progress edits.
+    fn build_bundle(
+        &self,
+        active_package: &str,
+        active_path: &Path,
+        text: &str,
+        project_root: Option<&Path>,
+    ) -> Vec<SourceFile> {
+        let mut sources: Vec<SourceFile> =
+            Vec::with_capacity(self.autoimport_sources.len() + self.qualified_sources.len() + 4);
+        sources.extend(filter_stdlib(&self.autoimport_sources, active_package));
+        if active_package != "Global" {
+            sources.extend(filter_stdlib(&self.qualified_sources, active_package));
+        }
+        if let Some(root) = project_root {
+            sources.extend(collect_sibling_sources(root, Some(active_path)));
+        }
+        sources.push(SourceFile {
+            package: active_package.to_string(),
+            path: active_path.to_path_buf(),
+            source: text.to_string(),
+        });
+        sources
+    }
+}
+
+/// Clone stdlib sources, dropping any entries owned by `active_package`
+/// — those modules come from the user's on-disk project (or the active
+/// buffer) and a second definition would collide at registry seal time.
+fn filter_stdlib(src: &[SourceFile], active_package: &str) -> Vec<SourceFile> {
+    src.iter()
+        .filter(|s| s.package != active_package)
+        .map(|s| SourceFile {
+            package: s.package.clone(),
+            path: s.path.clone(),
+            source: s.source.clone(),
+        })
+        .collect()
+}
+
+/// Build a fresh [`ParsedProgram`] from a sealed [`CheckedProgram`]
+/// so the cached `DocumentState` exposes the post-check ASTs to
+/// downstream handlers without holding onto the original parsed map.
+/// The reconstructed program is `package`/`path`-keyed exactly like
+/// the parser's output, with empty per-file diagnostics (the
+/// check-phase already drained them).
+fn rebuild_parsed_from_checked(checked: &CheckedProgram) -> ParsedProgram {
+    use std::collections::BTreeMap;
+    let mut files = BTreeMap::new();
+    let mut order = Vec::new();
+    for pkg in &checked.packages {
+        for file in &pkg.files {
+            let path = file
+                .path
+                .clone()
+                .unwrap_or_else(|| PathBuf::from(format!("<{}>", pkg.package)));
+            order.push(path.clone());
+            files.insert(
+                path.clone(),
+                expo_parser::ParsedFile {
+                    ast: file.clone(),
+                    diagnostics: Vec::new(),
+                    package: pkg.package.clone(),
+                    path,
+                    source: String::new(),
+                },
+            );
+        }
+    }
+    ParsedProgram { files, order }
+}
+
+fn collect_parse_diagnostics(parsed: &ParsedProgram, active_path: &Path) -> Vec<ExpoDiagnostic> {
+    let mut out = Vec::new();
+    if let Some(file) = parsed.get(active_path) {
+        out.extend(file.diagnostics.iter().cloned());
+    }
+    out
+}
+
+/// Forward all check-phase diagnostics to the active URI. Today's
+/// `ExpoDiagnostic` carries only a [`Span`] (no file path), so the
+/// LSP can't yet split a multi-file bundle's diagnostics across
+/// per-URI streams; users see every check-phase error attributed to
+/// whichever file last triggered `diagnose`. Acceptable for v1
+/// alongside the big-bang flip; revisit when diagnostics learn to
+/// carry their owning path.
+fn filter_diags(diags: &[ExpoDiagnostic], _active_path: &Path) -> Vec<ExpoDiagnostic> {
+    diags.to_vec()
 }
 
 /// Converts an Expo compiler diagnostic to an LSP diagnostic.

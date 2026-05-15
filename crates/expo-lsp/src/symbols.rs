@@ -69,12 +69,18 @@ impl Backend {
             None => return Ok(None),
         };
 
-        let symbols = build_document_symbols(&state.file);
+        let symbols = state
+            .active_file()
+            .map(build_document_symbols)
+            .unwrap_or_default();
         Ok(Some(DocumentSymbolResponse::Nested(symbols)))
     }
 
-    /// Handles `workspace/symbol` requests by searching all project files
-    /// and open documents for symbols matching the query.
+    /// Handles `workspace/symbol` requests by searching every open
+    /// document (and its sibling project files) for symbols matching
+    /// the query. The alpha pipeline no longer maintains a separate
+    /// project-files cache — sibling state lives in each document's
+    /// `parsed` bundle, so we walk those instead.
     pub(crate) async fn handle_workspace_symbol(
         &self,
         params: WorkspaceSymbolParams,
@@ -82,14 +88,11 @@ impl Backend {
         let query = params.query.to_ascii_lowercase();
         let mut results = Vec::new();
 
-        let project_files = self.project_files.read().await;
-        for file in project_files.iter() {
-            collect_workspace_symbols(file, &query, &mut results);
-        }
-
         let docs = self.documents.read().await;
         for state in docs.values() {
-            collect_workspace_symbols(&state.file, &query, &mut results);
+            for parsed_file in state.parsed.iter() {
+                collect_workspace_symbols(&parsed_file.ast, &query, &mut results);
+            }
         }
 
         Ok(Some(WorkspaceSymbolResponse::Flat(results)))

@@ -4,15 +4,20 @@
 //! handlers: given a cursor position, determine which symbol (if any) is
 //! under it.
 
+mod local_index;
 mod span;
 mod traverse;
 
+use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
 use expo_ast::ast::*;
-use expo_ast::identifier::TypeIdentifier;
-use expo_typecheck::context::TypeContext;
+use expo_ast::identifier::Identifier;
 
-use span::{span_contains, span_contains_name};
-pub(crate) use traverse::{find_enclosing_call, find_expr_at};
+pub(crate) use local_index::LocalIndex;
+pub(crate) use span::span_contains;
+use span::span_contains_name;
+pub(crate) use traverse::{
+    find_enclosing_call, find_expr_at, receiver_type_id as traverse_receiver_type_id,
+};
 use traverse::{find_in_ident_at_name, find_in_params, find_in_statement, find_in_type_expr};
 
 /// Describes the kind and identity of a symbol found at a cursor position.
@@ -28,9 +33,7 @@ pub(crate) enum SymbolInfo {
         name: String,
     },
     /// A method on a struct, enum, or protocol. Carries both the
-    /// owning type's name and the bare method name so the hover can
-    /// look up the function signature on the type's `TypeInfo` and
-    /// the doc string under the mangled `Type_method` form.
+    /// owning type's name and the bare method name.
     Method {
         type_name: String,
         method_name: String,
@@ -46,9 +49,19 @@ pub(crate) enum SymbolInfo {
     },
     Variable {
         name: String,
-        /// Human-readable type string from `resolved_type`, if available.
+        /// Resolved type rendered for display, if available.
         type_display: Option<String>,
     },
+}
+
+/// Bundle of resolved-state inputs the lookup helpers need to classify
+/// names against the alpha registry. Keeps every traversal signature a
+/// single `&LookupCtx` instead of threading three slots per call.
+#[derive(Clone, Copy)]
+pub(crate) struct LookupCtx<'a> {
+    pub(crate) registry: &'a GlobalRegistry,
+    pub(crate) package: &'a str,
+    pub(crate) locals: &'a LocalIndex,
 }
 
 /// Finds the symbol at the given 1-indexed `(line, col)` position in
@@ -57,7 +70,7 @@ pub(crate) fn find_symbol_at(
     file: &File,
     line: u32,
     col: u32,
-    ctx: &TypeContext,
+    ctx: &LookupCtx<'_>,
 ) -> Option<SymbolInfo> {
     for item in &file.items {
         match item {
@@ -199,7 +212,7 @@ fn find_in_inline_functions(
     functions: &[Function],
     line: u32,
     col: u32,
-    ctx: &TypeContext,
+    ctx: &LookupCtx<'_>,
 ) -> Option<SymbolInfo> {
     for f in functions {
         if !span_contains(&f.span, line, col) {
@@ -230,8 +243,7 @@ fn find_in_inline_functions(
 /// * Top-level declarations (`fn`, `struct`, `enum`, `const`,
 ///   `protocol`, `type`).
 /// * Inline methods on `struct` / `enum` declarations: matches both
-///   the bare name (`puts`) and the mangled `Type_method` form used
-///   by static-call hovers (`IO_puts`).
+///   the bare name (`puts`) and the mangled `Type_method` form.
 /// * Methods inside `impl` blocks (same dual form) and default
 ///   methods on `protocol` declarations.
 pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
@@ -298,8 +310,7 @@ pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
 }
 
 /// Helper for `find_doc_for`: looks up a function inside a list of
-/// inline methods on a struct or enum, matching either the bare
-/// method name or the mangled `Type_method` form.
+/// inline methods on a struct or enum.
 fn doc_in_methods(functions: &[Function], type_name: &str, name: &str) -> Option<String> {
     for f in functions {
         if f.name == name || format!("{type_name}_{}", f.name) == name {
@@ -309,54 +320,79 @@ fn doc_in_methods(functions: &[Function], type_name: &str, name: &str) -> Option
     None
 }
 
-/// Classifies an identifier by looking it up in the type context,
-/// returning the appropriate [`SymbolInfo`] variant.
-pub(crate) fn classify_name(name: &str, ctx: &TypeContext) -> Option<SymbolInfo> {
-    if ctx.functions.contains_key(name) {
-        Some(SymbolInfo::Function {
-            name: name.to_string(),
-        })
-    } else if ctx.is_struct(name) {
-        Some(SymbolInfo::Struct {
-            name: name.to_string(),
-        })
-    } else if ctx.is_enum(name) {
-        Some(SymbolInfo::Enum {
-            name: name.to_string(),
-        })
-    } else if ctx.protocols.contains_key(name) {
-        Some(SymbolInfo::Protocol {
-            name: name.to_string(),
-        })
-    } else if ctx.current_package.as_ref().is_some_and(|pkg| {
-        ctx.constants.contains_key(&TypeIdentifier {
-            package: pkg.clone(),
-            name: name.to_string(),
-        })
-    }) {
-        Some(SymbolInfo::Constant {
-            name: name.to_string(),
-        })
-    } else if ctx.type_aliases.contains_key(name) {
-        Some(SymbolInfo::TypeAlias {
-            name: name.to_string(),
-        })
-    } else {
-        Some(SymbolInfo::Variable {
-            name: name.to_string(),
-            type_display: None,
-        })
+/// Classifies an identifier by looking it up in the alpha registry,
+/// returning the appropriate [`SymbolInfo`] variant. Looks first in
+/// the active package, then falls back to `Global`. Unknown names
+/// classify as [`SymbolInfo::Variable`].
+pub(crate) fn classify_name(name: &str, ctx: &LookupCtx<'_>) -> Option<SymbolInfo> {
+    if let Some(info) = classify_in_package(name, ctx.package, ctx.registry) {
+        return Some(info);
     }
+    if ctx.package != "Global"
+        && let Some(info) = classify_in_package(name, "Global", ctx.registry)
+    {
+        return Some(info);
+    }
+    Some(SymbolInfo::Variable {
+        name: name.to_string(),
+        type_display: None,
+    })
+}
+
+fn classify_in_package(name: &str, package: &str, registry: &GlobalRegistry) -> Option<SymbolInfo> {
+    let identifier = Identifier::new(package, vec![name.to_string()]);
+    let (_, entry) = registry.lookup(&identifier)?;
+    Some(match &entry.kind {
+        GlobalKind::Function(_) => SymbolInfo::Function {
+            name: name.to_string(),
+        },
+        GlobalKind::Struct(_) => SymbolInfo::Struct {
+            name: name.to_string(),
+        },
+        GlobalKind::Enum(_) => SymbolInfo::Enum {
+            name: name.to_string(),
+        },
+        GlobalKind::Protocol(_) => SymbolInfo::Protocol {
+            name: name.to_string(),
+        },
+        GlobalKind::Constant(_) => SymbolInfo::Constant {
+            name: name.to_string(),
+        },
+        GlobalKind::TypeAlias(_) => SymbolInfo::TypeAlias {
+            name: name.to_string(),
+        },
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use expo_alpha_typecheck::{CheckedProgram, check_program};
     use expo_ast::util::dedent;
-    use expo_parser::{ParseMode, parse};
+    use expo_parser::{ParseMode, SourceFile, parse_program};
+    use std::path::PathBuf;
+
+    const PACKAGE: &str = "TestApp";
+
+    fn check(source: &str) -> CheckedProgram {
+        let mut sources = expo_stdlib::alpha_autoimport_sources();
+        sources.extend(expo_stdlib::alpha_qualified_sources());
+        sources.push(SourceFile {
+            package: PACKAGE.to_string(),
+            path: PathBuf::from("test.expo"),
+            source: dedent(source),
+        });
+        let parsed = parse_program(sources, ParseMode::File);
+        check_program(parsed).unwrap_or_else(|f| {
+            panic!(
+                "alpha typecheck failed: {} diagnostic(s)",
+                f.diagnostics.len()
+            )
+        })
+    }
 
     fn parse_source(source: &str) -> File {
-        let result = parse(&dedent(source), ParseMode::File);
+        let result = expo_parser::parse(&dedent(source), ParseMode::File);
         assert!(
             result.errors.is_empty(),
             "parse errors: {:?}",
@@ -372,7 +408,7 @@ mod tests {
             @doc """
             Adds two numbers.
             """
-            fn add(a: I32, b: I32) -> I32
+            fn add(a: Int, b: Int) -> Int
               a + b
             end
             "#,
@@ -449,5 +485,170 @@ mod tests {
                 .unwrap()
                 .contains("Increments the counter.")
         );
+    }
+
+    #[test]
+    fn classify_resolves_top_level_function() {
+        let checked = check(
+            r#"
+            fn add(a: Int, b: Int) -> Int
+              a + b
+            end
+            "#,
+        );
+        let locals = LocalIndex::default();
+        let ctx = LookupCtx {
+            registry: &checked.registry,
+            package: PACKAGE,
+            locals: &locals,
+        };
+        let info = classify_name("add", &ctx).expect("classify");
+        assert!(matches!(info, SymbolInfo::Function { ref name } if name == "add"));
+    }
+
+    #[test]
+    fn classify_resolves_struct_from_active_package() {
+        let checked = check(
+            r#"
+            struct Point
+              x: Int
+              y: Int
+            end
+            "#,
+        );
+        let locals = LocalIndex::default();
+        let ctx = LookupCtx {
+            registry: &checked.registry,
+            package: PACKAGE,
+            locals: &locals,
+        };
+        let info = classify_name("Point", &ctx).expect("classify");
+        assert!(matches!(info, SymbolInfo::Struct { ref name } if name == "Point"));
+    }
+
+    /// Smoke test: classify_name surfaces stdlib `Int` even though
+    /// the active package is the user's.
+    #[test]
+    fn classify_resolves_global_primitive_fallback() {
+        let checked = check("fn id(x: Int) -> Int\n  x\nend\n");
+        let locals = LocalIndex::default();
+        let ctx = LookupCtx {
+            registry: &checked.registry,
+            package: PACKAGE,
+            locals: &locals,
+        };
+        let info = classify_name("Int", &ctx).expect("classify");
+        assert!(matches!(info, SymbolInfo::Struct { ref name } if name == "Int"));
+    }
+
+    /// Smoke test mirroring the hover/definition pipeline: build a
+    /// `CheckedProgram`, find the symbol at the cursor on a function
+    /// name's line. Exercises `find_symbol_at` end-to-end against the
+    /// alpha registry.
+    #[test]
+    fn find_symbol_at_resolves_function_name() {
+        let checked = check(
+            r#"
+            fn greet() -> Unit
+              ()
+            end
+            "#,
+        );
+        let active_path = PathBuf::from("test.expo");
+        let file = checked
+            .packages
+            .iter()
+            .find(|p| p.package == PACKAGE)
+            .and_then(|pkg| {
+                pkg.files
+                    .iter()
+                    .find(|f| f.path.as_deref() == Some(active_path.as_path()))
+            })
+            .expect("active file in checked program");
+        let locals = LocalIndex::default();
+        let ctx = LookupCtx {
+            registry: &checked.registry,
+            package: PACKAGE,
+            locals: &locals,
+        };
+        // Cursor on the `greet` name (line 1, col 5 — between `f`/`n` and parens).
+        let info = find_symbol_at(file, 1, 5, &ctx).expect("symbol at cursor");
+        assert!(matches!(info, SymbolInfo::Function { ref name } if name == "greet"));
+    }
+
+    /// Smoke test mirroring the definition pipeline's local-index
+    /// path: every function param + body local lands in the index.
+    #[test]
+    fn local_index_records_params_and_body_locals() {
+        let mut sources = expo_stdlib::alpha_autoimport_sources();
+        sources.extend(expo_stdlib::alpha_qualified_sources());
+        let active = PathBuf::from("test.expo");
+        sources.push(SourceFile {
+            package: PACKAGE.to_string(),
+            path: active.clone(),
+            source: dedent(
+                r#"
+                fn add(a: Int, b: Int) -> Int
+                  total = a + b
+                  total
+                end
+                "#,
+            ),
+        });
+        let parsed = parse_program(sources, ParseMode::File);
+        let _ = check_program(parsed).expect("check passes");
+
+        // Rebuild parsed for the LocalIndex (check_program consumes its
+        // input; mirror diagnostics.rs::rebuild_parsed_from_checked).
+        let mut sources = expo_stdlib::alpha_autoimport_sources();
+        sources.extend(expo_stdlib::alpha_qualified_sources());
+        sources.push(SourceFile {
+            package: PACKAGE.to_string(),
+            path: active.clone(),
+            source: dedent(
+                r#"
+                fn add(a: Int, b: Int) -> Int
+                  total = a + b
+                  total
+                end
+                "#,
+            ),
+        });
+        let parsed = parse_program(sources, ParseMode::File);
+        let checked = check_program(parsed).expect("check passes");
+
+        // Round-trip parsed via the checked program so we exercise the
+        // same shape the diagnostics pipeline hands LocalIndex::build.
+        let mut rebuilt_files = std::collections::BTreeMap::new();
+        let mut order = Vec::new();
+        for pkg in &checked.packages {
+            for file in &pkg.files {
+                let path = file
+                    .path
+                    .clone()
+                    .unwrap_or_else(|| PathBuf::from(format!("<{}>", pkg.package)));
+                order.push(path.clone());
+                rebuilt_files.insert(
+                    path.clone(),
+                    expo_parser::ParsedFile {
+                        ast: file.clone(),
+                        diagnostics: Vec::new(),
+                        package: pkg.package.clone(),
+                        path,
+                        source: String::new(),
+                    },
+                );
+            }
+        }
+        let rebuilt = expo_parser::ParsedProgram {
+            files: rebuilt_files,
+            order,
+        };
+        let idx = LocalIndex::build(&rebuilt, &active);
+        let names: std::collections::BTreeSet<String> =
+            idx.iter().map(|info| info.name.clone()).collect();
+        assert!(names.contains("a"), "expected `a` in {:?}", names);
+        assert!(names.contains("b"), "expected `b` in {:?}", names);
+        assert!(names.contains("total"), "expected `total` in {:?}", names);
     }
 }

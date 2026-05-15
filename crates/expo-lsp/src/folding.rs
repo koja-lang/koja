@@ -27,8 +27,10 @@ impl Backend {
         };
 
         let mut ranges = Vec::new();
-        collect_item_folds(&state.file, &mut ranges);
-        collect_comment_folds(&state.file.comments, &mut ranges);
+        if let Some(file) = state.active_file() {
+            collect_item_folds(file, &mut ranges);
+            collect_comment_folds(&file.comments, &mut ranges);
+        }
         Ok(Some(ranges))
     }
 }

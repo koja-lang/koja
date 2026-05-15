@@ -10,11 +10,11 @@ name = "expo-lsp"
 path = "src/main.rs"
 
 [dependencies]
+expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
 expo-ast = { path = "../expo-ast" }
 expo-fmt = { path = "../expo-fmt" }
 expo-parser = { path = "../expo-parser" }
 expo-stdlib = { path = "../expo-stdlib" }
-expo-typecheck = { path = "../expo-typecheck" }
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
 tokio = { version = "1", features = ["full"] }

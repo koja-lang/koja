@@ -3,12 +3,14 @@
 //! Recursively walks expressions and statements to locate the innermost
 //! symbol that contains the given cursor position.
 
+use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::*;
+use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use expo_ast::span::Span;
-use expo_typecheck::context::TypeContext;
 
 use super::span::span_contains;
-use super::{SymbolInfo, classify_name};
+use super::{LookupCtx, SymbolInfo, classify_name};
+use crate::alpha_format::format_resolved_type;
 
 /// Attempts to match a function name identifier at the cursor position.
 ///
@@ -19,7 +21,7 @@ pub(crate) fn find_in_ident_at_name(
     span: &Span,
     line: u32,
     col: u32,
-    ctx: &TypeContext,
+    ctx: &LookupCtx<'_>,
 ) -> Option<SymbolInfo> {
     if span.start.line != line {
         return None;
@@ -40,7 +42,7 @@ pub(crate) fn find_in_params(
     params: &[Param],
     line: u32,
     col: u32,
-    ctx: &TypeContext,
+    ctx: &LookupCtx<'_>,
 ) -> Option<SymbolInfo> {
     for param in params {
         if let Param::Regular { type_expr, .. } = param
@@ -52,13 +54,12 @@ pub(crate) fn find_in_params(
     None
 }
 
-/// Searches a statement for a symbol at the cursor position by
-/// delegating to expression and type expression traversal.
+/// Searches a statement for a symbol at the cursor position.
 pub(crate) fn find_in_statement(
     stmt: &Statement,
     line: u32,
     col: u32,
-    ctx: &TypeContext,
+    ctx: &LookupCtx<'_>,
 ) -> Option<SymbolInfo> {
     match stmt {
         Statement::Expr(expr) => find_in_expr(expr, line, col, ctx),
@@ -82,19 +83,23 @@ pub(crate) fn find_in_statement(
     }
 }
 
-/// Searches a statement body (slice) for a symbol at the cursor position.
-fn find_in_body(body: &[Statement], line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
+/// Searches a statement body for a symbol at the cursor position.
+fn find_in_body(
+    body: &[Statement],
+    line: u32,
+    col: u32,
+    ctx: &LookupCtx<'_>,
+) -> Option<SymbolInfo> {
     body.iter()
         .find_map(|stmt| find_in_statement(stmt, line, col, ctx))
 }
 
-/// Searches a type expression for a symbol at the cursor position,
-/// resolving named types and generic base types.
+/// Searches a type expression for a symbol at the cursor position.
 pub(crate) fn find_in_type_expr(
     type_expr: &TypeExpr,
     line: u32,
     col: u32,
-    ctx: &TypeContext,
+    ctx: &LookupCtx<'_>,
 ) -> Option<SymbolInfo> {
     match type_expr {
         TypeExpr::Named { path, span } => {
@@ -146,8 +151,8 @@ pub(crate) fn find_in_type_expr(
 }
 
 /// Recursively searches a match pattern for a symbol at the cursor
-/// position, resolving type names and enum paths.
-fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
+/// position.
+fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option<SymbolInfo> {
     match pat {
         Pattern::TypedBinding {
             type_expr, span, ..
@@ -255,14 +260,35 @@ fn find_in_pattern(pat: &Pattern, line: u32, col: u32, ctx: &TypeContext) -> Opt
 }
 
 /// Recursively searches an expression tree for a symbol at the cursor
-/// position, descending into sub-expressions and statement bodies.
-fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &TypeContext) -> Option<SymbolInfo> {
+/// position.
+fn find_in_expr(expr: &Expr, line: u32, col: u32, ctx: &LookupCtx<'_>) -> Option<SymbolInfo> {
     match &expr.kind {
-        ExprKind::Ident { name, .. } => {
+        ExprKind::Ident { name, resolution } => {
             if span_contains(&expr.span, line, col) {
+                if let Resolution::Local(id) = resolution
+                    && let Some(info) = ctx.locals.get(*id)
+                {
+                    let display = info
+                        .ty
+                        .as_ref()
+                        .map(|t| format_resolved_type(t, ctx.registry))
+                        .or_else(|| {
+                            if expr.resolution.is_resolved() {
+                                Some(format_resolved_type(&expr.resolution, ctx.registry))
+                            } else {
+                                None
+                            }
+                        });
+                    return Some(SymbolInfo::Variable {
+                        name: info.name.clone(),
+                        type_display: display,
+                    });
+                }
                 let mut info = classify_name(name, ctx);
-                if let Some(SymbolInfo::Variable { type_display, .. }) = &mut info {
-                    *type_display = expr.resolved_type.as_ref().map(|ty| ty.display());
+                if let Some(SymbolInfo::Variable { type_display, .. }) = &mut info
+                    && expr.resolution.is_resolved()
+                {
+                    *type_display = Some(format_resolved_type(&expr.resolution, ctx.registry));
                 }
                 return info;
             }
@@ -565,7 +591,7 @@ pub(crate) struct CallSite<'a> {
 }
 
 /// Returns a reference to the innermost `Expr` node whose span contains the
-/// given cursor position, walking through all items in the file.
+/// given cursor position.
 pub(crate) fn find_expr_at(file: &File, line: u32, col: u32) -> Option<&Expr> {
     for item in &file.items {
         let result = match item {
@@ -861,14 +887,11 @@ fn find_call_in_body<'a>(body: &'a [Statement], line: u32, col: u32) -> Option<C
     })
 }
 
-/// Recursively descends into the expression tree looking for the innermost
-/// `Call` or `MethodCall` that encloses the cursor position.
 fn find_call_inner<'a>(expr: &'a Expr, line: u32, col: u32) -> Option<CallSite<'a>> {
     if !span_contains(&expr.span, line, col) {
         return None;
     }
 
-    // Always try children first so we find the innermost call.
     let child = match &expr.kind {
         ExprKind::Call { callee, args, .. } => find_call_inner(callee, line, col).or_else(|| {
             args.iter()
@@ -992,7 +1015,6 @@ fn find_call_inner<'a>(expr: &'a Expr, line: u32, col: u32) -> Option<CallSite<'
         return child;
     }
 
-    // If no deeper call was found, check whether *this* node is a call.
     match &expr.kind {
         ExprKind::Call { args, .. } | ExprKind::MethodCall { args, .. } => {
             let active_param = compute_active_param(args, line, col);
@@ -1002,58 +1024,87 @@ fn find_call_inner<'a>(expr: &'a Expr, line: u32, col: u32) -> Option<CallSite<'
     }
 }
 
-/// Determines which parameter index the cursor is on by comparing its
-/// position against the argument spans.
 fn compute_active_param(args: &[Arg], line: u32, col: u32) -> usize {
     for (i, arg) in args.iter().enumerate() {
         if span_contains(&arg.span, line, col) {
             return i;
         }
     }
-    // Cursor is past all args (e.g. after trailing comma or in empty parens).
     args.len()
 }
 
-/// Resolves the mangled function name for a method call using the
-/// receiver's `resolved_type` (e.g. `Int_band` for `5.band(3)`).
-/// Resolves the owning type for a method call so hover/go-to-definition
-/// can locate the right `FunctionSig` on a `TypeInfo`. Methods are
-/// stored on `TypeInfo.functions`, never on `ctx.functions`, so the
-/// LSP must walk the receiver's type to find them.
-fn resolve_method_name(
-    receiver: &Expr,
-    method: &str,
-    ctx: &TypeContext,
-) -> Option<(String, String)> {
-    // Instance call: the receiver is a value with a resolved type;
-    // its `display()` matches the type's name in the type registry.
-    if let Some(resolved) = receiver.resolved_type.as_ref() {
-        let type_name = resolved.display();
-        if let Some(ti) = ctx.find_type(&type_name)
-            && ti.functions.contains_key(method)
-        {
-            return Some((type_name, method.to_string()));
-        }
+/// Peels a method receiver's `Expr.resolution` down to the head
+/// [`Resolution::Global`] type id (struct or enum) for method
+/// dispatch. Static calls (`Type.method`) where the receiver is a
+/// bare type name return the type id directly. Returns `None` if the
+/// receiver doesn't resolve to a named type.
+pub(crate) fn receiver_type_id(receiver: &Expr, ctx: &LookupCtx<'_>) -> Option<GlobalRegistryId> {
+    if let Some(id) = head_type_id(&receiver.resolution, ctx.registry) {
+        return Some(id);
     }
-    // Static call (`IO.puts`, `List.new`): typecheck doesn't stamp a
-    // `resolved_type` on the type-as-namespace receiver, but the
-    // identifier itself names a known type. Walk that type's methods
-    // so hover still reaches the right function.
-    if let ExprKind::Ident { name, .. } = &receiver.kind
-        && let Some(ti) = ctx.find_type(name)
-        && ti.functions.contains_key(method)
-    {
-        return Some((name.clone(), method.to_string()));
+    if let ExprKind::Ident { name, .. } = &receiver.kind {
+        return lookup_type(name, ctx);
     }
     None
 }
 
+/// Walk a [`ResolvedType`] to its leaf [`Resolution::Global`] type
+/// id, following type aliases through the registry. Returns `None`
+/// for anonymous types or unresolved leaves.
+fn head_type_id(ty: &ResolvedType, registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
+    match ty {
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            ..
+        } => {
+            if let Some(expansion) = registry.alias_expansion(*id) {
+                return head_type_id(&expansion, registry);
+            }
+            Some(*id)
+        }
+        ResolvedType::Union(members) => {
+            if let Some(first) = members.first() {
+                head_type_id(first, registry)
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Resolve a bare type name (`Point`, `Option`) to a registry id by
+/// searching the active package first, then `Global`.
+fn lookup_type(name: &str, ctx: &LookupCtx<'_>) -> Option<GlobalRegistryId> {
+    use expo_ast::identifier::Identifier;
+    for pkg in [ctx.package, "Global"] {
+        let ident = Identifier::new(pkg, vec![name.to_string()]);
+        if let Some((id, _)) = ctx.registry.lookup(&ident) {
+            return Some(id);
+        }
+    }
+    None
+}
+
+/// Resolves the owning type for a method call so hover/go-to-definition
+/// can locate the right method entry. Returns `(type_name, method_name)`.
+fn resolve_method_name(
+    receiver: &Expr,
+    method: &str,
+    ctx: &LookupCtx<'_>,
+) -> Option<(String, String)> {
+    use expo_ast::identifier::Identifier;
+    let type_id = receiver_type_id(receiver, ctx)?;
+    let type_entry = ctx.registry.get(type_id)?;
+    let type_name = type_entry.identifier.last().to_string();
+    let pkg = type_entry.identifier.package().to_string();
+    let method_ident = Identifier::new(&pkg, vec![type_name.clone(), method.to_string()]);
+    ctx.registry.lookup(&method_ident)?;
+    Some((type_name, method.to_string()))
+}
+
 /// Returns true if the cursor is positioned on the method name portion of a
 /// method call (after the `.`), not on the receiver or arguments.
-///
-/// Spans use end-exclusive columns (the column *after* the last character),
-/// so the method identifier begins at `receiver.span.end.column + 1` —
-/// one column past the `.` separator.
 fn cursor_on_method(receiver: &Expr, method: &str, span: &Span, line: u32, col: u32) -> bool {
     let recv_end = match &receiver.kind {
         ExprKind::Literal { .. }
