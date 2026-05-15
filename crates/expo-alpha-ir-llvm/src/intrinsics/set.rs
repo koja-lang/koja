@@ -3,9 +3,6 @@
 //! [`crate::types::hashtable_value_type`]); each `Entry` is a single
 //! `T` rather than a `(K, V)` pair, but the probe / resize / state
 //! machinery is identical.
-//!
-//! Mirrors v1 [`expo_codegen::set`] one-to-one, ported to the alpha
-//! emit context.
 
 use expo_alpha_ir::{IRFunction, IRType, SetMethod};
 

@@ -1,9 +1,7 @@
 //! `Hash.hash` family — `Bool` and the 8 integer cells zero-extend
 //! to `i64` and feed the [SplitMix64] finalizer. `String.hash`
 //! reads the payload's bit-length header, walks the byte range, and
-//! folds each byte through the FNV-1a recurrence (matching v1's
-//! `expo_codegen::intrinsics::hash::emit_fnv1a_hash` so any hash-
-//! consuming Map keyed by `String` reproduces v1's bucket layout).
+//! folds each byte through the FNV-1a recurrence.
 //!
 //! [SplitMix64]: https://prng.di.unimi.it/splitmix64.c
 

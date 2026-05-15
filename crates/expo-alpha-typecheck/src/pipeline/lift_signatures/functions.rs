@@ -158,15 +158,15 @@ fn is_kernel_panic(identifier: &Identifier) -> bool {
     identifier.package() == "Global" && identifier.path() == ["Kernel", "panic"]
 }
 
-/// Mirror of v1's `validate_ffi_signature`. Run after a function's
-/// resolved signature is in hand (so type validation works against
+/// Validate a function's resolved signature against the FFI rules.
+/// Run after the signature is in hand (so validation works against
 /// `ResolvedType`s, not raw `TypeExpr`s) but before stamping it onto
 /// the registry — emitting diagnostics here keeps every path through
-/// alpha typecheck honest. Stamping the signature anyway preserves
+/// typecheck honest. Stamping the signature anyway preserves
 /// downstream invariants (call sites can still see a `Function(Some(_))`
 /// entry, so resolve doesn't double-error on every call).
 ///
-/// Rules (parity with v1's `expo_typecheck`):
+/// Rules:
 ///
 /// - `@extern "C"` and `@intrinsic` are mutually exclusive — both
 ///   describe bodyless functions but with different semantics

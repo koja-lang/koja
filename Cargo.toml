@@ -7,20 +7,15 @@ members = [
     "crates/expo-alpha-shell",
     "crates/expo-alpha-typecheck",
     "crates/expo-ast",
-    "crates/expo-codegen",
     "crates/expo-doc",
     "crates/expo-driver",
     "crates/expo-fmt",
-    "crates/expo-ir",
-    "crates/expo-ir-eval",
     "crates/expo-lexer",
     "crates/expo-lsp",
     "crates/expo-parser",
     "crates/expo-runtime",
-    "crates/expo-shell",
     "crates/expo-stdlib",
     "crates/expo-test",
-    "crates/expo-typecheck",
 ]
 
 [workspace.package]

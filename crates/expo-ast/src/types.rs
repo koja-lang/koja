@@ -449,13 +449,13 @@ pub fn substitute_preserving(ty: &Type, subst: &HashMap<String, Type>) -> Type {
 
 /// Produces a mangled symbol name for a type.
 ///
-/// The base component follows the same convention as
-/// `expo_ir::lower::naming::method_symbol_prefix`: stdlib and unresolved-package types
-/// use their bare name (so `Global.String` → `String`), while user packages
-/// stay fully qualified (`alpha.Config` → `alpha.Config`). This keeps
-/// mangled names consistent with how function symbols are registered
-/// (`String_length`, `alpha.Config_new`, etc.) and prevents cross-package
-/// collisions for user types without changing stdlib symbol names.
+/// The base component (see [`mangle_base`]) uses the bare name for
+/// stdlib and unresolved-package types (so `Global.String` → `String`),
+/// while user packages stay fully qualified (`alpha.Config` →
+/// `alpha.Config`). This keeps mangled names consistent with how
+/// function symbols are registered (`String_length`, `alpha.Config_new`,
+/// etc.) and prevents cross-package collisions for user types without
+/// changing stdlib symbol names.
 ///
 /// For generic instances the base is followed by `_$...$` containing the
 /// mangled type arguments: `Global.List<Int>` → `List_$Int$`,
@@ -473,9 +473,8 @@ pub fn mangle_name(
     format!("{}_${}$", base, args.join("."))
 }
 
-/// Returns the symbol-prefix component of a [`TypeIdentifier`]. Matches
-/// `expo_ir::lower::naming::method_symbol_prefix`: bare name for stdlib/unresolved,
-/// `{package}.{name}` for user packages.
+/// Returns the symbol-prefix component of a [`TypeIdentifier`]: bare
+/// name for stdlib/unresolved, `{package}.{name}` for user packages.
 fn mangle_base(id: &crate::identifier::TypeIdentifier) -> std::string::String {
     match &id.package {
         crate::identifier::Package::Named(pkg) => format!("{pkg}.{}", id.name),

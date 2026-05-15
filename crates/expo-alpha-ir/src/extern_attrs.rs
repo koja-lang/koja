@@ -39,8 +39,7 @@ impl IRExternAttrs {
     /// the optional `@link` payload(s).
     ///
     /// Multiple `@link` annotations on one function fold with
-    /// last-write-wins for whichever fields each one carries
-    /// (mirrors v1's `expo_codegen::compiler::extract_extern_attrs`).
+    /// last-write-wins for whichever fields each one carries.
     /// Annotations whose `kind()` isn't [`AnnotationKind::Link`] are
     /// skipped silently — the typecheck layer is responsible for
     /// rejecting unrecognized annotations.

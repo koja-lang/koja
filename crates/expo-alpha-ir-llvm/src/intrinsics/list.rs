@@ -3,11 +3,9 @@
 //! storage lives off-heap behind `buf_ptr`. Methods malloc / realloc
 //! / memcpy via libc directly — no Rust-side runtime helpers.
 //!
-//! Mirrors v1 [`expo_codegen::list`] one-to-one, ported to the alpha
-//! emit context. Element-size-parameterized: each method computes
-//! `elem_size` from the `IRType::List(_)` inner type carried on the
-//! function's signature, then generates the same shape of IR
-//! regardless of `T`.
+//! Element-size-parameterized: each method computes `elem_size` from
+//! the `IRType::List(_)` inner type carried on the function's
+//! signature, then generates the same shape of IR regardless of `T`.
 
 use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ListMethod};
 use inkwell::AddressSpace;

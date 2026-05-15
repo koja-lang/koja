@@ -8,9 +8,7 @@
 //! out slot, calls the helper, branches on the return code, and
 //! wraps the parsed value into `Result.Ok(_)` or a literal
 //! `"invalid integer"` / `"invalid float"` message into
-//! `Result.Err(String)`. Mirrors [`expo_codegen::intrinsics::string::emit_parse_intrinsic`]
-//! one-to-one — same runtime helpers, same wire format — adapted to
-//! alpha's [`EmitContext`] and [`build_enum_value`].
+//! `Result.Err(String)`.
 
 use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ParseTarget};
 use inkwell::IntPredicate;
