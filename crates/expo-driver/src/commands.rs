@@ -1,8 +1,11 @@
-//! CLI command implementations.
+//! Frontend / filesystem CLI command implementations.
 //!
-//! Each `cmd_*` function handles argument parsing for its subcommand and
-//! delegates to [`crate::pipeline`] for compilation or directly to the
-//! relevant crate (`expo_parser`, `expo_fmt`, `expo_doc`) for simpler tools.
+//! Each `cmd_*` function handles argument parsing for its
+//! subcommand and delegates to the relevant standalone crate
+//! (`expo_parser`, `expo_lexer`, `expo_fmt`, `expo_doc`) for
+//! parse-only or filesystem tooling. Compiler-pipeline commands
+//! (`build`, `check`, `run`, `eval`, `shell`, `test`) live in
+//! [`crate::alpha`].
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};
@@ -11,31 +14,10 @@ use expo_ast::util::dedent;
 use expo_parser::ParseMode;
 
 use crate::diagnostics::render_diagnostics;
-use crate::pipeline;
 use crate::project::{self, ProjectConfig};
-use crate::resolve;
 
-/// Replaces the current process with the given binary via `exec`. Never returns on success.
-fn exec_binary(binary: &Path, args: &[String]) -> ! {
-    use std::os::unix::process::CommandExt;
-    let err = process::Command::new(binary).args(args).exec();
-    eprintln!("failed to run binary: {err}");
-    process::exit(1);
-}
-
-/// Returns the `target/debug/` directory under the given root, creating it
-/// if it doesn't exist.
-fn target_debug_dir(project_root: &Path) -> PathBuf {
-    let dir = project_root.join("target").join("debug");
-    fs::create_dir_all(&dir).unwrap_or_else(|e| {
-        eprintln!("error: cannot create target directory: {e}");
-        process::exit(1);
-    });
-    dir
-}
-
-/// Returns the process's current directory, or prints an error to stderr and
-/// exits non-zero.
+/// Returns the process's current directory, or prints an error to
+/// stderr and exits non-zero.
 fn current_dir_or_exit() -> PathBuf {
     env::current_dir().unwrap_or_else(|e| {
         eprintln!("error: cannot determine current directory: {e}");
@@ -43,10 +25,12 @@ fn current_dir_or_exit() -> PathBuf {
     })
 }
 
-/// Loads `expo.toml` from the current directory, returning `(config, cwd)`.
+/// Loads `expo.toml` from the current directory, returning
+/// `(config, cwd)`.
 ///
-/// On a missing `expo.toml`, prints each line in `missing_message` to stderr
-/// and exits non-zero. On any other error, prints `error: {e}` and exits.
+/// On a missing `expo.toml`, prints each line in `missing_message`
+/// to stderr and exits non-zero. On any other error, prints
+/// `error: {e}` and exits.
 pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, PathBuf) {
     let cwd = current_dir_or_exit();
     let config = match project::load_project(&cwd) {
@@ -63,129 +47,6 @@ pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, 
         }
     };
     (config, cwd)
-}
-
-/// `expo build [file.expo] [-o output] [--emit-llvm]` -- compiles an Expo program to an executable.
-///
-/// With no arguments, looks for `expo.toml` in the current directory.
-/// With `--emit-llvm`, prints LLVM IR to stdout instead of producing a binary.
-pub fn cmd_build(
-    file: Option<String>,
-    output: Option<String>,
-    emit_llvm: bool,
-    release: bool,
-    color: bool,
-) {
-    let options = pipeline::BuildOptions {
-        color,
-        emit_llvm,
-        quiet: false,
-        release,
-    };
-
-    if let Some(source) = file {
-        let args = pipeline::BuildArgs {
-            output_name: output,
-            source_file: Some(source),
-        };
-        pipeline::build(args, options);
-    } else {
-        let (config, cwd) = load_project_or_exit(&[
-            "error: no source file specified and no expo.toml found",
-            "Usage: expo build <file.expo> [-o output]",
-            "  or:  create an expo.toml in the current directory",
-        ]);
-
-        pipeline::build_project(&config, &cwd, output.as_deref(), options);
-    }
-}
-
-/// `expo run [file.expo] [-- args...]` -- compiles and runs an Expo program.
-///
-/// With no arguments, looks for `expo.toml` in the current directory.
-/// The compiled binary is placed in `target/debug/` for project mode
-/// or a temp directory for single-file mode. On Unix, the current process
-/// is replaced with the binary via `exec` so signals reach it directly.
-pub fn cmd_run(file: Option<String>, release: bool, run_args: Vec<String>, color: bool) {
-    let options = pipeline::BuildOptions {
-        color,
-        emit_llvm: false,
-        quiet: true,
-        release,
-    };
-
-    if let Some(path) = file {
-        let tmp_dir = env::temp_dir();
-        let binary = tmp_dir.join(format!(
-            "expo_run_{}",
-            Path::new(&path)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("out")
-        ));
-        let output = binary.to_str().unwrap().to_string();
-
-        let args = pipeline::BuildArgs {
-            output_name: Some(output),
-            source_file: Some(path),
-        };
-        pipeline::build(args, options);
-        exec_binary(&binary, &run_args);
-    } else {
-        let (config, cwd) = load_project_or_exit(&[
-            "error: no source file specified and no expo.toml found",
-            "Usage: expo run <file.expo>",
-            "  or:  create an expo.toml in the current directory",
-        ]);
-
-        let binary = target_debug_dir(&cwd).join(&config.name);
-        let output = binary.to_str().unwrap().to_string();
-
-        pipeline::build_project(&config, &cwd, Some(&output), options);
-        exec_binary(&binary, &run_args);
-    }
-}
-
-/// `expo check [file.expo ...] [--emit-ast]` -- type-checks without producing an executable.
-///
-/// With no arguments, looks for `expo.toml` in the current directory.
-/// With `--emit-ast`, prints each type-checked file's AST (`{:#?}`) to stdout
-/// instead of the per-file/project OK line. The dump runs even when typecheck
-/// reports diagnostics, but a non-zero exit is still gated on errors -- mirrors
-/// how `--emit-llvm` works on `expo build`.
-pub fn cmd_check(files: Vec<String>, color: bool, emit_ast: bool) {
-    if files.is_empty() {
-        let (config, cwd) = load_project_or_exit(&[
-            "error: no source file specified and no expo.toml found",
-            "Usage: expo check <file.expo>",
-            "  or:  create an expo.toml in the current directory",
-        ]);
-
-        let has_errors = pipeline::check_project(&config, &cwd, color, emit_ast);
-        if has_errors {
-            process::exit(1);
-        }
-        if !emit_ast {
-            println!("{}: OK", config.name);
-        }
-        return;
-    }
-
-    for path in &files {
-        let entry_path = match Path::new(path).canonicalize() {
-            Ok(p) => p,
-            Err(e) => {
-                eprintln!("error: {path}: {e}");
-                process::exit(1);
-            }
-        };
-
-        let has_errors = pipeline::check_single_file(&entry_path, color, emit_ast);
-
-        if !has_errors && !emit_ast {
-            println!("{path}: OK");
-        }
-    }
 }
 
 /// `expo doc [file.expo ...] [-o output_dir]` -- generates HTML documentation.
@@ -212,10 +73,11 @@ pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
 }
 
 /// Resolves the list of source files `expo doc` will process, as
-/// `(path, file_fqn)` pairs, plus the display name shown in the sidebar.
-/// Empty `files` means project mode (walk `src` from `expo.toml` and every
-/// dep's `src`) and uses `expo.toml`'s `name`; otherwise treat each entry
-/// as a path or a directory of `.expo` files and fall back to "Docs".
+/// `(path, file_fqn)` pairs, plus the display name shown in the
+/// sidebar. Empty `files` means project mode (walk `src` from
+/// `expo.toml` and every dep's `src`) and uses `expo.toml`'s
+/// `name`; otherwise treat each entry as a path or a directory of
+/// `.expo` files and fall back to "Docs".
 fn discover_doc_inputs(files: &[String]) -> (Vec<(String, String)>, String) {
     let mut inputs = Vec::new();
 
@@ -229,7 +91,7 @@ fn discover_doc_inputs(files: &[String]) -> (Vec<(String, String)>, String) {
         for src_dir in &config.src {
             let dir = cwd.join(src_dir);
             if dir.is_dir() {
-                collect_expo_files(&dir, &dir, Some(&config.name), &mut inputs);
+                collect_doc_files(&dir, &dir, Some(&config.name), &mut inputs);
             }
         }
         discover_dep_doc_inputs(&config, &cwd, &mut inputs);
@@ -239,7 +101,7 @@ fn discover_doc_inputs(files: &[String]) -> (Vec<(String, String)>, String) {
     for input in files {
         let p = Path::new(input);
         if p.is_dir() {
-            collect_expo_files(p, p, None, &mut inputs);
+            collect_doc_files(p, p, None, &mut inputs);
         } else {
             let name = Path::new(input)
                 .file_stem()
@@ -252,9 +114,10 @@ fn discover_doc_inputs(files: &[String]) -> (Vec<(String, String)>, String) {
     (inputs, "Docs".to_string())
 }
 
-/// Walks every dependency declared in `[dependencies]` and appends its source
-/// files to `out`. Missing paths or unreadable `expo.toml` files emit a
-/// warning and skip the dep rather than aborting the doc build.
+/// Walks every dependency declared in `[dependencies]` and appends
+/// its source files to `out`. Missing paths or unreadable
+/// `expo.toml` files emit a warning and skip the dep rather than
+/// aborting the doc build.
 fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<(String, String)>) {
     for (alias, dep) in &config.dependencies {
         let dep_path = match &dep.path {
@@ -281,14 +144,15 @@ fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<(St
         for src_dir in &dep_config.src {
             let dir = dep_path.join(src_dir);
             if dir.is_dir() {
-                collect_expo_files(&dir, &dir, Some(&dep_config.name), out);
+                collect_doc_files(&dir, &dir, Some(&dep_config.name), out);
             }
         }
     }
 }
 
 /// Parses every input file and extracts doc-renderable items into a
-/// [`expo_doc::DocProject`]. Files with parse errors are reported and skipped.
+/// [`expo_doc::DocProject`]. Files with parse errors are reported
+/// and skipped.
 fn extract_doc_project(
     inputs: &[(String, String)],
     project_name: &str,
@@ -326,8 +190,8 @@ fn extract_doc_project(
     project
 }
 
-/// Renders each item in `project` as HTML and writes it under `out_path`,
-/// plus a top-level `index.html`.
+/// Renders each item in `project` as HTML and writes it under
+/// `out_path`, plus a top-level `index.html`.
 fn write_doc_files(project: &expo_doc::DocProject, out_path: &Path) {
     for c in &project.constants {
         let html = expo_doc::render_constant(c, project);
@@ -362,11 +226,12 @@ fn write_doc_file(path: &Path, content: &str) {
     println!("  {}", path.display());
 }
 
-/// Recursively collects `.expo` files from a directory, building file FQNs
-/// from relative paths (e.g. `foo/bar.expo` becomes file FQN `foo.bar`).
-/// When `prefix` is `Some`, each FQN is prefixed with `{prefix}.` (e.g.
-/// `src/lexer.expo` with prefix `myproject` becomes `myproject.lexer`).
-fn collect_expo_files(
+/// Recursively collects `.expo` files from a directory, building
+/// file FQNs from relative paths (e.g. `foo/bar.expo` becomes file
+/// FQN `foo.bar`). When `prefix` is `Some`, each FQN is prefixed
+/// with `{prefix}.` (e.g. `src/lexer.expo` with prefix `myproject`
+/// becomes `myproject.lexer`).
+fn collect_doc_files(
     dir: &Path,
     root: &Path,
     prefix: Option<&str>,
@@ -382,7 +247,7 @@ fn collect_expo_files(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_expo_files(&path, root, prefix, out);
+            collect_doc_files(&path, root, prefix, out);
             continue;
         }
         if path.extension().is_none_or(|ext| ext != "expo") {
@@ -406,37 +271,11 @@ fn collect_expo_files(
     }
 }
 
-/// `expo eval <file>` -- runs the file through the IR interpreter and
-/// prints the entry function's result. The interpreter's coverage
-/// matches what the IR lowerer produces without `IRInstruction::Stub`;
-/// programs that exceed that coverage report a precise interpreter
-/// error rather than silently falling through to codegen.
-pub fn cmd_eval(file: String, entry: Option<String>) {
-    let path = Path::new(&file);
-    match expo_shell::eval_file(path, entry.as_deref()) {
-        Ok(Some(value)) => println!("{value}"),
-        Ok(None) => {}
-        Err(error) => {
-            eprintln!("error: {error}");
-            process::exit(1);
-        }
-    }
-}
-
-/// `expo test` — thin shim that routes through the alpha pipeline.
-/// All discovery, harness synthesis, lowering, linking, and exec
-/// happens inside [`crate::alpha::cmd_test`]; this function exists
-/// only to keep the top-level CLI dispatch in `main.rs` looking like
-/// every other `commands::cmd_*` entry.
-pub fn cmd_test(color: bool) {
-    crate::alpha::cmd_test(color);
-}
-
-/// `expo format [files...] [--check] [--write]` -- formats Expo source files.
-///
-/// With no arguments, looks for `expo.toml` and formats all `.expo` files in
-/// the project's `src` and `test` directories. Directory arguments are walked
-/// recursively for `.expo` files.
+/// `expo format [files...] [--check] [--write]` -- formats Expo
+/// source files. With no arguments, looks for `expo.toml` and
+/// formats all `.expo` files in the project's `src` and `test`
+/// directories. Directory arguments are walked recursively for
+/// `.expo` files.
 pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     let resolved = if files.is_empty() {
         let (config, cwd) = load_project_or_exit(&[
@@ -455,7 +294,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
         let mut paths = Vec::new();
         for root in &roots {
             if root.is_dir() {
-                paths.extend(resolve::collect_expo_files_recursive(root));
+                paths.extend(collect_expo_files_recursive(root));
             }
         }
         paths.sort();
@@ -468,7 +307,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
         for input in &files {
             let p = Path::new(input);
             if p.is_dir() {
-                let found = resolve::collect_expo_files_recursive(p);
+                let found = collect_expo_files_recursive(p);
                 for f in found {
                     if let Some(s) = f.to_str() {
                         paths.push(s.to_string());
@@ -530,6 +369,26 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     }
 }
 
+/// Recursively gather every `.expo` file under `dir`. Returns an
+/// empty vec if `dir` isn't readable so format/lex callers degrade
+/// gracefully on an unreadable subdirectory rather than aborting.
+fn collect_expo_files_recursive(dir: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
+    let entries = match fs::read_dir(dir) {
+        Ok(e) => e,
+        Err(_) => return result,
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            result.extend(collect_expo_files_recursive(&path));
+        } else if path.extension().is_some_and(|ext| ext == "expo") {
+            result.push(path);
+        }
+    }
+    result
+}
+
 /// `expo new <name>` -- scaffolds a new Expo project.
 ///
 /// Creates a directory with `expo.toml` and `src/main.expo`.
@@ -580,14 +439,15 @@ pub fn cmd_new(name: String) {
     println!("created project '{name}'");
 }
 
-/// `expo parse <file.expo> [--emit-ast]` -- parses and reports item count or errors.
+/// `expo parse <file.expo> [--emit-ast]` -- parses and reports
+/// item count or errors.
 ///
-/// With `--emit-ast`, prints the parsed AST to stdout using the compact
-/// `expo_ast::format_file` tree (2-space indent, `@L:C-L:C` span
-/// suffixes, exhaustive over every AST variant) instead of the
-/// item-count line. Annotation slots like `Expr.resolved_type` are
-/// `None` here -- no typecheck has run. Diagnostics still go to
-/// stderr regardless.
+/// With `--emit-ast`, prints the parsed AST to stdout using the
+/// compact `expo_ast::format_file` tree (2-space indent, `@L:C-L:C`
+/// span suffixes, exhaustive over every AST variant) instead of
+/// the item-count line. Annotation slots like `Expr.resolved_type`
+/// are `None` here -- no typecheck has run. Diagnostics still go
+/// to stderr regardless.
 pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
     if files.is_empty() {
         eprintln!("Usage: expo parse <file.expo>");
@@ -608,7 +468,7 @@ pub fn cmd_parse(files: Vec<String>, color: bool, emit_ast: bool) {
         // leaves `ast.path` unset. Populate it from the CLI argument
         // so `--emit-ast` surfaces the file identity in the `File`
         // header line.
-        result.ast.path = Some(std::path::PathBuf::from(path));
+        result.ast.path = Some(PathBuf::from(path));
 
         if !result.errors.is_empty() {
             render_diagnostics(path, &source, &result.errors, color);

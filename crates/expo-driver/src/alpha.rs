@@ -83,7 +83,7 @@ use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_file, parse_progra
 use expo_test::{TestCase, discover_tests, generate_harness};
 
 use crate::commands::load_project_or_exit;
-use crate::pipeline::{self, BuildOptions};
+use crate::link::{self, LinkOptions};
 use crate::project::{self, ProjectConfig};
 
 /// Which downstream backend a `run` / `build` invocation drives.
@@ -263,16 +263,26 @@ pub fn cmd_shell() {
 /// auto-print wrapper in `expo-runtime/src/alpha.rs`; goes away
 /// with `IO.puts`). `-o`/`--output` overrides the default
 /// stem-based output name.
-pub fn cmd_build(file: Option<String>, backend: Backend, output: Option<String>) {
+pub fn cmd_build(
+    file: Option<String>,
+    backend: Backend,
+    output: Option<String>,
+    release: bool,
+    emit_llvm: bool,
+) {
     let mode = resolve_alpha_mode(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
     match (mode, backend) {
         (AlphaMode::Script(_), Backend::Interpreter) => bail_interpreter_no_binary(),
-        (AlphaMode::Script(path), Backend::Llvm) => build_and_keep(&path, output),
+        (AlphaMode::Script(path), Backend::Llvm) => {
+            build_and_keep(&path, output, release, emit_llvm)
+        }
         (AlphaMode::Program(_), Backend::Interpreter) => bail_interpreter_no_binary(),
-        (AlphaMode::Program(path), Backend::Llvm) => build_single_file_and_keep(&path, output),
+        (AlphaMode::Program(path), Backend::Llvm) => {
+            build_single_file_and_keep(&path, output, release, emit_llvm)
+        }
         (AlphaMode::Project { .. }, Backend::Interpreter) => bail_interpreter_no_binary(),
         (AlphaMode::Project { config, root }, Backend::Llvm) => {
-            build_project_and_keep(&config, &root, output)
+            build_project_and_keep(&config, &root, output, release, emit_llvm)
         }
     }
 }
@@ -290,16 +300,18 @@ pub fn cmd_build(file: Option<String>, backend: Backend, output: Option<String>)
 /// binary to a temp path → exec it (forwarding `args`) → forward
 /// its exit code → remove the temp binary. `cmd_run` leaves no
 /// artifacts behind on either backend.
-pub fn cmd_run(file: Option<String>, backend: Backend, args: Vec<String>) {
+pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<String>) {
     let mode = resolve_alpha_mode(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
     match (mode, backend) {
         (AlphaMode::Script(path), Backend::Interpreter) => run_script_interpreted(&path),
-        (AlphaMode::Script(path), Backend::Llvm) => run_script_compiled(&path, &args),
+        (AlphaMode::Script(path), Backend::Llvm) => run_script_compiled(&path, release, &args),
         (AlphaMode::Program(path), Backend::Interpreter) => bail_program_interpreter(&path),
-        (AlphaMode::Program(path), Backend::Llvm) => run_single_file_compiled(&path, &args),
+        (AlphaMode::Program(path), Backend::Llvm) => {
+            run_single_file_compiled(&path, release, &args)
+        }
         (AlphaMode::Project { .. }, Backend::Interpreter) => bail_project_interpreter(),
         (AlphaMode::Project { config, root }, Backend::Llvm) => {
-            run_project_compiled(&config, &root, &args)
+            run_project_compiled(&config, &root, release, &args)
         }
     }
 }
@@ -317,10 +329,7 @@ pub fn cmd_run(file: Option<String>, backend: Backend, args: Vec<String>) {
 /// stdlib roots and a second copy would collide at registration
 /// time.
 ///
-/// Color is accepted to mirror the previous v1 surface but is
-/// presently unused — the alpha link path does not surface
-/// terminal colorization today (matches `cmd_build`).
-pub fn cmd_test(_color: bool) {
+pub fn cmd_test() {
     let (config, root) = load_project_or_exit(&[
         "error: no expo.toml found",
         "Usage: expo test (run from a directory containing expo.toml)",
@@ -330,11 +339,18 @@ pub fn cmd_test(_color: bool) {
 
 /// Build the `.exps` script at `path` through LLVM and keep the
 /// resulting binary at `output` (or a stem-derived default). Used
-/// by `cmd_build` when the user picks the LLVM backend.
-fn build_and_keep(path: &Path, output: Option<String>) {
+/// by `cmd_build` when the user picks the LLVM backend. When
+/// `emit_llvm` is set, print the textual LLVM IR to stdout and
+/// short-circuit before linking — no `.o`, no binary.
+fn build_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm: bool) {
     let script = build_script(path);
+    let app_name = derive_package(path);
+    if emit_llvm {
+        print_script_ir(&script, &app_name);
+        return;
+    }
     let output = resolve_output_name(output, path);
-    emit_and_link_script(&script, &derive_package(path), &output);
+    emit_and_link_script(&script, &app_name, &output, release);
     println!("compiled: {output}");
 }
 
@@ -343,7 +359,7 @@ fn build_and_keep(path: &Path, output: Option<String>) {
 /// binary. Diverges either way — we either exit with the binary's
 /// status or print a launch error and exit 1. Used by `cmd_run`
 /// when the user picks the LLVM backend.
-fn run_script_compiled(path: &Path, args: &[String]) -> ! {
+fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
     let script = build_script(path);
     let stem = path
         .file_stem()
@@ -353,7 +369,7 @@ fn run_script_compiled(path: &Path, args: &[String]) -> ! {
         .join(format!("expo-alpha-run-{}-{stem}", process::id()))
         .to_string_lossy()
         .to_string();
-    emit_and_link_script(&script, &derive_package(path), &output);
+    emit_and_link_script(&script, &derive_package(path), &output, release);
 
     let status = process::Command::new(&output).args(args).status();
     let _ = fs::remove_file(&output);
@@ -518,21 +534,50 @@ fn read_source_or_exit(path: &Path) -> String {
 }
 
 /// Compile the [`IRScript`] to an object file and link it into a
-/// native binary at `output`, reusing v1's
-/// [`pipeline::link`](crate::pipeline) helper for `cc` invocation,
-/// runtime archive embedding, and BoringSSL linkage. `app_name`
-/// flows into the binary's `__expo_app_name` global (panic
-/// backtrace label). `script.link_libraries` (deduped at lower
-/// time from every `@extern "C" @link "lib"`) flows through to
-/// `cc -l<name>` so FFI calls resolve at link time.
-fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str) {
+/// native binary at `output`, threading through [`link::link`] for
+/// `cc` invocation, runtime archive embedding, and BoringSSL
+/// linkage. `app_name` flows into the binary's `__expo_app_name`
+/// global (panic backtrace label). `script.link_libraries`
+/// (deduped at lower time from every `@extern "C" @link "lib"`)
+/// flows through to `cc -l<name>` so FFI calls resolve at link
+/// time.
+/// Render the sealed [`IRScript`] as LLVM IR text and stream it to
+/// stdout. Backs `expo build --emit-llvm` for script sources. The
+/// IR matches what the compiled `.o` would carry — same module,
+/// same `i64 main()` wrapper, same runtime helpers — minus the
+/// object emission. Diverges with `process::exit(1)` on
+/// codegen failure to keep the call site a single statement.
+fn print_script_ir(script: &IRScript, app_name: &str) {
+    match expo_alpha_ir_llvm::emit_script_llvm_ir(script, app_name) {
+        Ok(ir) => print!("{ir}"),
+        Err(err) => {
+            eprintln!("error: {err}");
+            process::exit(1);
+        }
+    }
+}
+
+/// Render the sealed [`IRProgram`] as LLVM IR text and stream it
+/// to stdout. Counterpart to [`print_script_ir`] for the project /
+/// single-file `.expo` build paths.
+fn print_program_ir(program: &IRProgram, app_name: &str) {
+    match expo_alpha_ir_llvm::emit_llvm_ir(program, app_name) {
+        Ok(ir) => print!("{ir}"),
+        Err(err) => {
+            eprintln!("error: {err}");
+            process::exit(1);
+        }
+    }
+}
+
+fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str, release: bool) {
     let object_path = format!("{output}.o");
     if let Err(err) = expo_alpha_ir_llvm::compile_script(script, app_name, Path::new(&object_path))
     {
         eprintln!("error: {err}");
         process::exit(1);
     }
-    link_object(&object_path, output, &script.link_libraries, &[]);
+    link_object(&object_path, output, &script.link_libraries, &[], release);
 }
 
 fn link_object(
@@ -540,14 +585,13 @@ fn link_object(
     output: &str,
     link_libraries: &[String],
     extra_lib_search_paths: &[&Path],
+    release: bool,
 ) {
-    let options = BuildOptions {
-        color: false,
-        emit_llvm: false,
+    let options = LinkOptions {
         quiet: true,
-        release: false,
+        release,
     };
-    pipeline::link(
+    link::link(
         object_path,
         output,
         link_libraries,
@@ -626,25 +670,29 @@ fn run_check(
 /// to the file stem). Mirrors v1's `expo build path/to/file.expo`
 /// shape so users moving from v1 don't have to wrap every file in
 /// an `expo.toml`.
-fn build_single_file_and_keep(path: &Path, output: Option<String>) {
+fn build_single_file_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm: bool) {
     let program = build_single_file_program(path);
     let stem = single_file_package(path);
+    if emit_llvm {
+        print_program_ir(&program, &stem);
+        return;
+    }
     let output = resolve_output_name(output, path);
-    emit_and_link_program(&program, &stem, &output, &[]);
+    emit_and_link_program(&program, &stem, &output, &[], release);
     println!("compiled: {output}");
 }
 
 /// `expo alpha run` for a standalone `.expo` file: build into a
 /// temp binary, exec with `args`, forward the exit code, and
 /// remove the binary.
-fn run_single_file_compiled(path: &Path, args: &[String]) -> ! {
+fn run_single_file_compiled(path: &Path, release: bool, args: &[String]) -> ! {
     let program = build_single_file_program(path);
     let stem = single_file_package(path);
     let output = std::env::temp_dir()
         .join(format!("expo-alpha-run-{}-{stem}", process::id()))
         .to_string_lossy()
         .to_string();
-    emit_and_link_program(&program, &stem, &output, &[]);
+    emit_and_link_program(&program, &stem, &output, &[], release);
 
     let status = process::Command::new(&output).args(args).status();
     let _ = fs::remove_file(&output);
@@ -727,13 +775,23 @@ fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
 /// whole project, compile via [`expo_alpha_ir_llvm::compile_program`],
 /// and link to a binary at `output` (defaulting to
 /// `target/debug/<config.name>`). Prints the final binary path.
-fn build_project_and_keep(config: &ProjectConfig, root: &Path, output: Option<String>) {
+fn build_project_and_keep(
+    config: &ProjectConfig,
+    root: &Path,
+    output: Option<String>,
+    release: bool,
+    emit_llvm: bool,
+) {
     let program = build_project_program(config, root);
+    if emit_llvm {
+        print_program_ir(&program, &config.name);
+        return;
+    }
     let output = match output {
         Some(o) => o,
-        None => default_project_output(config, root),
+        None => default_project_output(config, root, release),
     };
-    emit_and_link_program(&program, &config.name, &output, &[root]);
+    emit_and_link_program(&program, &config.name, &output, &[root], release);
     println!("compiled: {output}");
 }
 
@@ -776,11 +834,11 @@ fn run_project_tests(config: &ProjectConfig, root: &Path) {
         }
     };
 
-    let binary = project_target_dir(root)
+    let binary = project_target_dir(root, false)
         .join(format!("{}_test", config.name))
         .to_string_lossy()
         .to_string();
-    emit_and_link_program(&program, &config.name, &binary, &[root]);
+    emit_and_link_program(&program, &config.name, &binary, &[root], false);
 
     let status = process::Command::new(&binary).status();
     let _ = fs::remove_file(&binary);
@@ -861,11 +919,11 @@ fn collect_test_project_sources(
 /// `expo alpha run` for a project: build into a temp binary, exec
 /// with `args`, forward the exit code, and remove the binary.
 /// Diverges either way (binary status or launch error).
-fn run_project_compiled(config: &ProjectConfig, root: &Path, args: &[String]) -> ! {
+fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args: &[String]) -> ! {
     let program = build_project_program(config, root);
-    let target = project_target_dir(root);
+    let target = project_target_dir(root, release);
     let binary = target.join(&config.name).to_string_lossy().to_string();
-    emit_and_link_program(&program, &config.name, &binary, &[root]);
+    emit_and_link_program(&program, &config.name, &binary, &[root], release);
 
     let status = process::Command::new(&binary).args(args).status();
     match status {
@@ -1073,18 +1131,21 @@ fn is_alpha_only_path(path: &Path) -> bool {
         .is_some_and(|stem| stem.starts_with("alpha_"))
 }
 
-/// Default output path for project builds: `<root>/target/debug/<config.name>`.
-/// Mirrors v1's [`crate::pipeline::build_project`] convention so users moving
-/// between modes find the binary in the same place.
-fn default_project_output(config: &ProjectConfig, root: &Path) -> String {
-    project_target_dir(root)
+/// Default output path for project builds:
+/// `<root>/target/{debug,release}/<config.name>` depending on the
+/// `release` flag. Mirrors v1's [`crate::pipeline::build_project`]
+/// convention so users moving between modes find the binary in the
+/// same place.
+fn default_project_output(config: &ProjectConfig, root: &Path, release: bool) -> String {
+    project_target_dir(root, release)
         .join(&config.name)
         .to_string_lossy()
         .to_string()
 }
 
-fn project_target_dir(root: &Path) -> PathBuf {
-    let dir = root.join("target").join("debug");
+fn project_target_dir(root: &Path, release: bool) -> PathBuf {
+    let profile = if release { "release" } else { "debug" };
+    let dir = root.join("target").join(profile);
     fs::create_dir_all(&dir).unwrap_or_else(|e| {
         eprintln!("error: cannot create target directory: {e}");
         process::exit(1);
@@ -1106,6 +1167,7 @@ fn emit_and_link_program(
     app_name: &str,
     output: &str,
     extra_lib_search_paths: &[&Path],
+    release: bool,
 ) {
     if let Some(parent) = Path::new(output).parent()
         && !parent.as_os_str().is_empty()
@@ -1129,6 +1191,7 @@ fn emit_and_link_program(
         output,
         &program.link_libraries,
         extra_lib_search_paths,
+        release,
     );
 }
 

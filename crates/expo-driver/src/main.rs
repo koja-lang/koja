@@ -1,17 +1,32 @@
 //! Expo compiler CLI entry point.
 //!
-//! Parses the top-level subcommand and delegates to [`commands`].
+//! Parses the top-level subcommand and dispatches each one through
+//! either [`alpha`] (the compiler pipeline: `expo-alpha-typecheck →
+//! expo-alpha-ir → expo-alpha-ir-llvm` / `expo-alpha-ir-eval`) or
+//! [`commands`] (frontend / filesystem tooling: `parse`, `lex`,
+//! `format`, `doc`, `new`).
+//!
+//! Source dispatch follows [`alpha::cmd_build`]'s extension rules:
+//! `.exps` files are scripts (top-level expressions, no project
+//! context); `.expo` files are project files. Omitting the file
+//! argument falls back to discovering an `expo.toml` in the
+//! current directory; project mode runs the full pipeline through
+//! [`expo_alpha_ir_llvm::compile_program`].
+//!
+//! Backend selection: `run` and `build` accept
+//! `--backend={interpreter,llvm}` (see [`alpha::Backend`]). `run`
+//! defaults to `interpreter` (fast feedback, prints the trailing
+//! value, exits 0); `build` defaults to `llvm` (only backend that
+//! produces a binary). `build --backend=interpreter` errors. The
+//! future WASM backend slots in as a third variant.
 
 mod alpha;
 mod commands;
 mod diagnostics;
-mod pipeline;
+mod link;
 pub mod project;
-mod resolve;
 
 use expo_runtime as _;
-
-use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 
@@ -28,15 +43,14 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Experimental alpha-pipeline subcommands (subject to breaking changes)
-    Alpha {
-        #[command(subcommand)]
-        command: AlphaCommand,
-    },
-    /// Compile a source file to a native binary
+    /// Compile a source file or project to a native binary
     Build {
-        /// Source file (omit to use expo.toml)
+        /// Source file (`.expo` / `.exps`; omit to use `expo.toml`)
         file: Option<String>,
+
+        /// Backend to drive the build through (defaults to `llvm`; `interpreter` errors since it cannot produce a binary)
+        #[arg(long, value_enum, default_value = "llvm")]
+        backend: alpha::Backend,
 
         /// Output binary name
         #[arg(short, long)]
@@ -50,10 +64,10 @@ enum Command {
         #[arg(long)]
         release: bool,
     },
-    /// Type-check a source file without compiling
+    /// Type-check a source file or project without compiling
     Check {
-        /// Source files (omit to use expo.toml)
-        files: Vec<String>,
+        /// Source file (`.expo` / `.exps`; omit to use `expo.toml`)
+        file: Option<String>,
 
         /// Print the type-checked AST to stdout instead of just OK/diagnostics
         #[arg(long)]
@@ -68,14 +82,13 @@ enum Command {
         #[arg(short, long, default_value = "doc")]
         output: String,
     },
-    /// Run a source file through the IR interpreter
+    /// Run a source file through the alpha interpreter
+    ///
+    /// Thin alias for `expo run --backend=interpreter`. Prints the
+    /// trailing value and exits 0 on success.
     Eval {
-        /// Source file
+        /// Source file (`.expo` / `.exps`)
         file: String,
-
-        /// Entry function to invoke (defaults to `main`)
-        #[arg(long)]
-        entry: Option<String>,
     },
     /// Format source files
     Format {
@@ -109,12 +122,16 @@ enum Command {
         #[arg(long)]
         emit_ast: bool,
     },
-    /// Compile and run a source file
+    /// Compile and run a source file or project
     Run {
-        /// Source file (omit to use expo.toml)
+        /// Source file (`.expo` / `.exps`; omit to use `expo.toml`)
         file: Option<String>,
 
-        /// Build with aggressive optimizations
+        /// Backend to drive execution through (defaults to `interpreter`; `llvm` compiles + execs and forwards the exit code)
+        #[arg(long, value_enum, default_value = "interpreter")]
+        backend: alpha::Backend,
+
+        /// Build with aggressive optimizations (LLVM backend only)
         #[arg(long)]
         release: bool,
 
@@ -122,77 +139,10 @@ enum Command {
         #[arg(last = true)]
         args: Vec<String>,
     },
-    /// Start an interactive REPL backed by the IR interpreter
-    Shell {
-        /// Load a project directory before starting the REPL
-        /// (currently ignored -- project loading is a future
-        /// enhancement; the MVP shell evaluates each input as a
-        /// self-contained expression).
-        #[arg(short = 'S', long = "project")]
-        project: Option<PathBuf>,
-    },
+    /// Start an interactive REPL backed by the alpha interpreter
+    Shell,
     /// Run tests (requires expo.toml)
     Test,
-}
-
-/// Subcommands under `expo alpha`. These drive the alpha compiler
-/// pipeline (`expo-alpha-typecheck → expo-alpha-ir → expo-alpha-ir-eval`) and
-/// are intentionally namespaced so the production `expo eval` /
-/// `expo shell` paths can keep their full v1 feature set during the
-/// alpha build-out.
-///
-/// Source dispatch follows [`alpha::cmd_build`]'s extension rules:
-/// `.exps` files are scripts (top-level expressions, no project
-/// context); `.expo` files are project members. Omitting the file
-/// argument falls back to discovering an `expo.toml` in the current
-/// directory; project mode runs the full alpha pipeline through
-/// [`expo_alpha_ir_llvm::compile_program`].
-///
-/// Backend selection: `run` and `build` accept
-/// `--backend={interpreter,llvm}` (see [`alpha::Backend`]). `run`
-/// defaults to `interpreter` (fast feedback, prints the trailing
-/// value, exits 0); `build` defaults to `llvm` (only backend that
-/// produces a binary). `build --backend=interpreter` errors. The
-/// future WASM backend slots in here as a third variant.
-#[derive(Subcommand)]
-enum AlphaCommand {
-    /// Compile a source file through the alpha pipeline to a native binary (`.exps` scripts and `expo.toml` projects)
-    Build {
-        /// Source file (omit to use `expo.toml` in the current directory)
-        file: Option<String>,
-
-        /// Backend to drive the build through (defaults to `llvm`; `interpreter` errors since it cannot produce a binary)
-        #[arg(long, value_enum, default_value = "llvm")]
-        backend: alpha::Backend,
-
-        /// Output binary name
-        #[arg(short, long)]
-        output: Option<String>,
-    },
-    /// Type-check a source file through the alpha pipeline without lowering or running it
-    Check {
-        /// Source file (omit to use `expo.toml` in the current directory)
-        file: Option<String>,
-
-        /// Print the type-checked AST to stdout instead of just OK/diagnostics
-        #[arg(long)]
-        emit_ast: bool,
-    },
-    /// Run a source file through the alpha pipeline
-    Run {
-        /// Source file (omit to use `expo.toml` in the current directory)
-        file: Option<String>,
-
-        /// Backend to drive execution through (defaults to `interpreter`; `llvm` compiles + execs and forwards the exit code)
-        #[arg(long, value_enum, default_value = "interpreter")]
-        backend: alpha::Backend,
-
-        /// Arguments passed to the compiled program
-        #[arg(last = true)]
-        args: Vec<String>,
-    },
-    /// Start an interactive REPL backed by the alpha pipeline
-    Shell,
 }
 
 fn main() {
@@ -200,29 +150,18 @@ fn main() {
     let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
 
     match cli.command {
-        Command::Alpha { command } => match command {
-            AlphaCommand::Build {
-                file,
-                backend,
-                output,
-            } => alpha::cmd_build(file, backend, output),
-            AlphaCommand::Check { file, emit_ast } => alpha::cmd_check(file, emit_ast),
-            AlphaCommand::Run {
-                file,
-                backend,
-                args,
-            } => alpha::cmd_run(file, backend, args),
-            AlphaCommand::Shell => alpha::cmd_shell(),
-        },
         Command::Build {
             file,
+            backend,
             output,
             emit_llvm,
             release,
-        } => commands::cmd_build(file, output, emit_llvm, release, color),
-        Command::Check { files, emit_ast } => commands::cmd_check(files, color, emit_ast),
+        } => alpha::cmd_build(file, backend, output, release, emit_llvm),
+        Command::Check { file, emit_ast } => alpha::cmd_check(file, emit_ast),
         Command::Doc { files, output } => commands::cmd_doc(files, output, color),
-        Command::Eval { file, entry } => commands::cmd_eval(file, entry),
+        Command::Eval { file } => {
+            alpha::cmd_run(Some(file), alpha::Backend::Interpreter, false, Vec::new())
+        }
         Command::Format {
             files,
             check,
@@ -233,10 +172,11 @@ fn main() {
         Command::Parse { files, emit_ast } => commands::cmd_parse(files, color, emit_ast),
         Command::Run {
             file,
+            backend,
             release,
             args,
-        } => commands::cmd_run(file, release, args, color),
-        Command::Shell { project } => expo_shell::run(project, color),
-        Command::Test => commands::cmd_test(color),
+        } => alpha::cmd_run(file, backend, release, args),
+        Command::Shell => alpha::cmd_shell(),
+        Command::Test => alpha::cmd_test(),
     }
 }
