@@ -1,8 +1,8 @@
 //! Short, stable labels for AST shapes used in diagnostics and panics.
-//! `expr_kind_label` / `item_label` return compact kind names ("binary",
-//! "fn"); `bin_op_label` renders the literal source token ("+", "and").
+//! `expr_kind_label` returns a compact kind name (e.g. `"binary"`);
+//! `bin_op_label` renders the literal source token (`"+"`, `"and"`).
 
-use crate::ast::{BinOp, CompoundOp, ExprKind, Item, Pattern};
+use crate::ast::{BinOp, CompoundOp, ExprKind, Pattern};
 use crate::span::Span;
 
 pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
@@ -37,19 +37,6 @@ pub fn expr_kind_label(kind: &ExprKind) -> &'static str {
     }
 }
 
-pub fn item_label(item: &Item) -> &'static str {
-    match item {
-        Item::Alias(_) => "alias",
-        Item::Constant(_) => "const",
-        Item::Enum(_) => "enum",
-        Item::Function(_) => "fn",
-        Item::Impl(_) => "impl",
-        Item::Protocol(_) => "protocol",
-        Item::Struct(_) => "struct",
-        Item::TypeAlias(_) => "type",
-    }
-}
-
 pub fn pattern_kind_label(pattern: &Pattern) -> &'static str {
     match pattern {
         Pattern::Binary { .. } => "binary",
@@ -81,19 +68,6 @@ pub fn pattern_span(pattern: &Pattern) -> Span {
         | Pattern::Struct { span, .. }
         | Pattern::TypedBinding { span, .. }
         | Pattern::Wildcard { span, .. } => *span,
-    }
-}
-
-pub fn item_span(item: &Item) -> Span {
-    match item {
-        Item::Alias(decl) => decl.span,
-        Item::Constant(c) => c.span,
-        Item::Enum(e) => e.span,
-        Item::Function(f) => f.span,
-        Item::Impl(i) => i.span,
-        Item::Protocol(p) => p.span,
-        Item::Struct(s) => s.span,
-        Item::TypeAlias(t) => t.span,
     }
 }
 

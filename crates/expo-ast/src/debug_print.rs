@@ -762,10 +762,8 @@ impl<'a> Printer<'a> {
                 type_path,
                 variant,
                 span,
-                resolved_type,
             } => {
-                let header =
-                    enum_pattern_header("EnumUnit", type_path, variant, resolved_type.as_ref());
+                let header = enum_pattern_header("EnumUnit", type_path, variant);
                 self.header(&header, *span);
             }
             Pattern::EnumTuple {
@@ -773,10 +771,8 @@ impl<'a> Printer<'a> {
                 variant,
                 elements,
                 span,
-                resolved_type,
             } => {
-                let header =
-                    enum_pattern_header("EnumTuple", type_path, variant, resolved_type.as_ref());
+                let header = enum_pattern_header("EnumTuple", type_path, variant);
                 self.nested(&header, *span, |p| {
                     for e in elements {
                         p.pattern(e);
@@ -788,10 +784,8 @@ impl<'a> Printer<'a> {
                 variant,
                 fields,
                 span,
-                resolved_type,
             } => {
-                let header =
-                    enum_pattern_header("EnumStruct", type_path, variant, resolved_type.as_ref());
+                let header = enum_pattern_header("EnumStruct", type_path, variant);
                 self.nested(&header, *span, |p| {
                     for f in fields {
                         p.field_pattern(f);
@@ -802,12 +796,8 @@ impl<'a> Printer<'a> {
                 name,
                 elements,
                 span,
-                resolved_type,
             } => {
-                let mut header = format!("Constructor {name}");
-                if let Some(ty) = resolved_type {
-                    let _ = write!(header, " -> {ty}");
-                }
+                let header = format!("Constructor {name}");
                 self.nested(&header, *span, |p| {
                     for e in elements {
                         p.pattern(e);
@@ -818,12 +808,8 @@ impl<'a> Printer<'a> {
                 type_path,
                 fields,
                 span,
-                resolved_type,
             } => {
-                let mut header = format!("Struct {}", type_path.join("."));
-                if let Some(ty) = resolved_type {
-                    let _ = write!(header, " -> {ty}");
-                }
+                let header = format!("Struct {}", type_path.join("."));
                 self.nested(&header, *span, |p| {
                     for f in fields {
                         p.field_pattern(f);
@@ -945,9 +931,6 @@ fn expr_header(expr: &Expr) -> String {
         ExprKind::Unless { .. } => String::from("Unless"),
         ExprKind::While { .. } => String::from("While"),
     };
-    if let Some(ty) = &expr.resolved_type {
-        let _ = write!(out, " : {}", ty.display());
-    }
     if !matches!(expr.resolution, ResolvedType::Unresolved) {
         let _ = write!(out, " ~> {}", format_resolved_type(&expr.resolution));
     }
@@ -1034,17 +1017,8 @@ fn enum_ctor_data_label(data: &EnumConstructionData) -> &'static str {
     }
 }
 
-fn enum_pattern_header(
-    kind: &str,
-    type_path: &[String],
-    variant: &str,
-    resolved_type: Option<&crate::identifier::TypeIdentifier>,
-) -> String {
-    let mut header = format!("{kind} {}.{variant}", type_path.join("."));
-    if let Some(ty) = resolved_type {
-        let _ = write!(header, " -> {ty}");
-    }
-    header
+fn enum_pattern_header(kind: &str, type_path: &[String], variant: &str) -> String {
+    format!("{kind} {}.{variant}", type_path.join("."))
 }
 
 // -------------------------------------------------------------------
