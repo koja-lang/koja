@@ -1,30 +1,39 @@
+//! Type-expression parser. Handles the eight surface shapes:
+//!
+//! - `Int`, `String` (`Named` with a single segment)
+//! - `Pkg.Type` (`Named` with a dotted path; packages are PascalCase)
+//! - `List<Int>`, `Pkg.Container<T>` (`Generic`)
+//! - `()` (`Unit`)
+//! - `fn (A, B) -> C` (`Function`)
+//! - `Self` (`Self_`)
+//! - `A | B | C` (`Union`)
+//!
+//! Lowercase primitive aliases (`bool`, `i32`, …) used to be
+//! accepted as a backwards-compatible bridge; they were removed
+//! once the canonical PascalCase forms (`Bool`, `Int32`) landed in
+//! stdlib and project sources alike.
+
 use expo_ast::ast::{PassMode, TypeExpr};
+use expo_ast::span::Span;
 use expo_ast::token::TokenKind;
 
-use crate::parser::Parser;
+use crate::parser::{ERROR_IDENT, Parser};
 
 impl Parser {
     pub(crate) fn parse_type_expr(&mut self) -> TypeExpr {
         let first = self.parse_primary_type_expr();
-        if self.at(&TokenKind::Pipe) {
-            let start_span = match &first {
-                TypeExpr::Named { span, .. }
-                | TypeExpr::Generic { span, .. }
-                | TypeExpr::Unit { span, .. }
-                | TypeExpr::Function { span, .. }
-                | TypeExpr::Self_ { span, .. }
-                | TypeExpr::Union { span, .. } => *span,
-            };
-            let mut types = vec![first];
-            while self.eat(&TokenKind::Pipe).is_some() {
-                types.push(self.parse_primary_type_expr());
-            }
-            return TypeExpr::Union {
-                types,
-                span: self.span_from(start_span),
-            };
+        if !self.at(&TokenKind::Pipe) {
+            return first;
         }
-        first
+        let start_span = type_expr_span(&first);
+        let mut types = vec![first];
+        while self.eat(&TokenKind::Pipe).is_some() {
+            types.push(self.parse_primary_type_expr());
+        }
+        TypeExpr::Union {
+            types,
+            span: self.span_from(start_span),
+        }
     }
 
     fn parse_primary_type_expr(&mut self) -> TypeExpr {
@@ -38,9 +47,7 @@ impl Parser {
                     span: self.span_from(span),
                 }
             }
-            TokenKind::TypeIdent(_) => self.parse_named_type(),
-            TokenKind::Ident(ref name) if is_legacy_primitive(name) => self.parse_primitive_type(),
-            TokenKind::Ident(_) if self.is_module_type_path() => self.parse_module_qualified_type(),
+            TokenKind::TypeIdent(_) | TokenKind::Ident(_) => self.parse_dotted_type_path(),
             _ => {
                 let span = self.current_span();
                 self.error(
@@ -49,16 +56,11 @@ impl Parser {
                 );
                 self.advance();
                 TypeExpr::Named {
-                    path: vec!["<error>".to_string()],
+                    path: vec![ERROR_IDENT.to_string()],
                     span,
                 }
             }
         }
-    }
-
-    /// Lookahead check: is this `ident.` followed eventually by a TypeIdent?
-    fn is_module_type_path(&self) -> bool {
-        matches!(self.peek_nth(1), TokenKind::Dot)
     }
 
     fn parse_function_type(&mut self) -> TypeExpr {
@@ -66,33 +68,12 @@ impl Parser {
         self.advance(); // fn
         self.expect(&TokenKind::LParen);
 
-        let mut params = Vec::new();
-        let mut param_modes = Vec::new();
-        self.skip_newlines();
-        if !self.at(&TokenKind::RParen) {
-            param_modes.push(if self.eat(&TokenKind::Move).is_some() {
-                PassMode::Move
-            } else {
-                PassMode::Borrow
-            });
-            params.push(self.parse_type_expr());
-            while self.eat(&TokenKind::Comma).is_some() {
-                self.skip_newlines();
-                if self.at(&TokenKind::RParen) {
-                    break;
-                }
-                param_modes.push(if self.eat(&TokenKind::Move).is_some() {
-                    PassMode::Move
-                } else {
-                    PassMode::Borrow
-                });
-                params.push(self.parse_type_expr());
-            }
-        }
-        self.skip_newlines();
+        let entries = self.comma_separated(&TokenKind::RParen, Self::parse_function_type_param);
         self.expect(&TokenKind::RParen);
         self.expect(&TokenKind::Arrow);
         let return_type = self.parse_type_expr();
+
+        let (param_modes, params): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
 
         TypeExpr::Function {
             params,
@@ -100,6 +81,15 @@ impl Parser {
             return_type: Box::new(return_type),
             span: self.span_from(start),
         }
+    }
+
+    fn parse_function_type_param(&mut self) -> (PassMode, TypeExpr) {
+        let mode = if self.eat(&TokenKind::Move).is_some() {
+            PassMode::Move
+        } else {
+            PassMode::Borrow
+        };
+        (mode, self.parse_type_expr())
     }
 
     fn parse_paren_type(&mut self) -> TypeExpr {
@@ -118,29 +108,35 @@ impl Parser {
         first
     }
 
-    fn parse_named_type(&mut self) -> TypeExpr {
-        let start = self.current_span();
-        let first = self.expect_type_ident();
-        let mut path = vec![first];
-
-        while self.eat(&TokenKind::Dot).is_some() {
-            if matches!(self.peek(), TokenKind::TypeIdent(_)) {
-                path.push(self.expect_type_ident());
-            } else {
-                break;
-            }
-        }
-
-        self.parse_optional_generic_args(path, start)
-    }
-
-    fn parse_module_qualified_type(&mut self) -> TypeExpr {
+    /// Parse a possibly-dotted type path. Both segments are
+    /// canonically `TypeIdent` (e.g. `JSON.Decoder`) since
+    /// packages adopted PascalCase, but the parser also accepts a
+    /// leading `Ident.` for legacy / mistaken inputs so the
+    /// resolver can produce a "package names are PascalCase"
+    /// diagnostic later instead of bailing here.
+    ///
+    /// Wraps the resulting path in `Generic` if a `<...>` argument
+    /// list follows; otherwise returns `Named`.
+    fn parse_dotted_type_path(&mut self) -> TypeExpr {
         let start = self.current_span();
         let mut path = Vec::new();
 
-        while let TokenKind::Ident(_) = self.peek().clone() {
-            let name = self.expect_ident();
-            path.push(name);
+        loop {
+            match self.peek().clone() {
+                TokenKind::Ident(_) => path.push(self.expect_ident()),
+                TokenKind::TypeIdent(_) => {
+                    path.push(self.expect_type_ident());
+                    while self.eat(&TokenKind::Dot).is_some() {
+                        if matches!(self.peek(), TokenKind::TypeIdent(_)) {
+                            path.push(self.expect_type_ident());
+                        } else {
+                            break;
+                        }
+                    }
+                    return self.parse_optional_generic_args(path, start);
+                }
+                _ => break,
+            }
             if self.eat(&TokenKind::Dot).is_none() {
                 return TypeExpr::Named {
                     path,
@@ -149,71 +145,39 @@ impl Parser {
             }
         }
 
-        if matches!(self.peek(), TokenKind::TypeIdent(_)) {
-            path.push(self.expect_type_ident());
-            while self.eat(&TokenKind::Dot).is_some() {
-                if matches!(self.peek(), TokenKind::TypeIdent(_)) {
-                    path.push(self.expect_type_ident());
-                } else {
-                    break;
-                }
-            }
-        }
-
         self.parse_optional_generic_args(path, start)
     }
 
-    fn parse_optional_generic_args(
-        &mut self,
-        path: Vec<String>,
-        start: expo_ast::span::Span,
-    ) -> TypeExpr {
-        if self.eat(&TokenKind::Lt).is_some() {
-            let mut args = vec![self.parse_type_expr()];
-            while self.eat(&TokenKind::Comma).is_some() {
-                args.push(self.parse_type_expr());
-            }
-            self.expect_gt();
-            TypeExpr::Generic {
-                path,
-                args,
-                span: self.span_from(start),
-            }
-        } else {
-            TypeExpr::Named {
+    fn parse_optional_generic_args(&mut self, path: Vec<String>, start: Span) -> TypeExpr {
+        if self.eat(&TokenKind::Lt).is_none() {
+            return TypeExpr::Named {
                 path,
                 span: self.span_from(start),
-            }
+            };
         }
-    }
-
-    fn parse_primitive_type(&mut self) -> TypeExpr {
-        let start = self.current_span();
-        let name = self.expect_ident();
-        TypeExpr::Named {
-            path: vec![name],
+        let mut args = vec![self.parse_type_expr()];
+        while self.eat(&TokenKind::Comma).is_some() {
+            args.push(self.parse_type_expr());
+        }
+        self.expect_gt();
+        // Note: we don't route this through `comma_separated`
+        // because the closing token here (`Gt` or the `>>`
+        // ambiguity) needs the special `expect_gt` handling.
+        TypeExpr::Generic {
+            path,
+            args,
             span: self.span_from(start),
         }
     }
 }
 
-/// Recognizes old lowercase primitive names for backward compatibility during
-/// the transition period. New code should use PascalCase (Int, String, Bool, etc.)
-/// which lex as TypeIdent and flow through parse_named_type automatically.
-fn is_legacy_primitive(name: &str) -> bool {
-    matches!(
-        name,
-        "bool"
-            | "f32"
-            | "f64"
-            | "i8"
-            | "i16"
-            | "i32"
-            | "i64"
-            | "string"
-            | "u8"
-            | "u16"
-            | "u32"
-            | "u64"
-    )
+fn type_expr_span(t: &TypeExpr) -> Span {
+    match t {
+        TypeExpr::Named { span, .. }
+        | TypeExpr::Generic { span, .. }
+        | TypeExpr::Unit { span, .. }
+        | TypeExpr::Function { span, .. }
+        | TypeExpr::Self_ { span, .. }
+        | TypeExpr::Union { span, .. } => *span,
+    }
 }

@@ -1,8 +1,7 @@
 use expo_ast::ast::*;
 use expo_ast::token::TokenKind;
 
-use crate::expr::expr_span;
-use crate::parser::Parser;
+use crate::parser::{ERROR_IDENT, Parser};
 
 impl Parser {
     pub(crate) fn parse_statement(&mut self) -> Statement {
@@ -52,7 +51,7 @@ impl Parser {
 
     fn parse_expr_or_assign(&mut self) -> Statement {
         let expr = self.parse_expr();
-        let start_span = expr_span(&expr);
+        let start_span = expr.span;
 
         match self.peek() {
             TokenKind::Colon if matches!(&expr.kind, ExprKind::Ident { .. }) => {
@@ -98,7 +97,7 @@ impl Parser {
                     AssignTarget::LValue(LValue {
                         head_resolved_type: None,
                         local_id: None,
-                        segments: vec!["<error>".to_string()],
+                        segments: vec![ERROR_IDENT.to_string()],
                         span: start_span,
                     })
                 };
@@ -110,15 +109,9 @@ impl Parser {
                     span,
                 }
             }
-            TokenKind::PlusEq | TokenKind::MinusEq | TokenKind::StarEq | TokenKind::SlashEq => {
-                let op_token = self.advance();
-                let op = match op_token.kind {
-                    TokenKind::PlusEq => CompoundOp::Add,
-                    TokenKind::MinusEq => CompoundOp::Sub,
-                    TokenKind::StarEq => CompoundOp::Mul,
-                    TokenKind::SlashEq => CompoundOp::Div,
-                    _ => unreachable!(),
-                };
+            token if token_to_compound_op(token).is_some() => {
+                let op = token_to_compound_op(self.peek()).expect("matched above");
+                self.advance();
                 let value = self.parse_expr();
                 let span = self.span_from(start_span);
 
@@ -133,7 +126,7 @@ impl Parser {
                     LValue {
                         head_resolved_type: None,
                         local_id: None,
-                        segments: vec!["<error>".to_string()],
+                        segments: vec![ERROR_IDENT.to_string()],
                         span: start_span,
                     }
                 };
@@ -186,6 +179,20 @@ fn try_expr_to_lvalue(expr: &Expr) -> Option<LValue> {
             lvalue.span = expr.span;
             Some(lvalue)
         }
+        _ => None,
+    }
+}
+
+/// Token-to-`CompoundOp` table. Mirrors [`crate::expr::token_to_binop`]:
+/// keeps the dispatch flat and lets the assignment-statement
+/// branch gate on `is_some()` without spelling out the four arms
+/// twice.
+fn token_to_compound_op(kind: &TokenKind) -> Option<CompoundOp> {
+    match kind {
+        TokenKind::PlusEq => Some(CompoundOp::Add),
+        TokenKind::MinusEq => Some(CompoundOp::Sub),
+        TokenKind::StarEq => Some(CompoundOp::Mul),
+        TokenKind::SlashEq => Some(CompoundOp::Div),
         _ => None,
     }
 }

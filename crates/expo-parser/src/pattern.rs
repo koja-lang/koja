@@ -16,7 +16,9 @@ impl Parser {
             TokenKind::Ident(name) => {
                 let start = self.current_span();
                 self.advance();
-                // Check for module-qualified enum pattern: module.Type.Variant
+                // Legacy lowercase-package qualifier: `pkg.Type.Variant`.
+                // Canonical packages are now PascalCase (`Pkg.Type.Variant`)
+                // and flow through the `TokenKind::TypeIdent` arm below.
                 if self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
                     let mut type_path = vec![name];
                     self.advance(); // .
@@ -179,19 +181,7 @@ impl Parser {
 
         // Constructor shorthand: Some(x), Ok(x), Err(x)
         if self.eat(&TokenKind::LParen).is_some() {
-            let mut elements = Vec::new();
-            self.skip_newlines();
-            if !self.at(&TokenKind::RParen) {
-                elements.push(self.parse_pattern());
-                while self.eat(&TokenKind::Comma).is_some() {
-                    self.skip_newlines();
-                    if self.at(&TokenKind::RParen) {
-                        break;
-                    }
-                    elements.push(self.parse_pattern());
-                }
-            }
-            self.skip_newlines();
+            let elements = self.comma_separated(&TokenKind::RParen, Self::parse_pattern);
             self.expect(&TokenKind::RParen);
             return Pattern::Constructor {
                 name: first,
@@ -224,19 +214,7 @@ impl Parser {
         start: expo_ast::span::Span,
     ) -> Pattern {
         if self.eat(&TokenKind::LParen).is_some() {
-            let mut elements = Vec::new();
-            self.skip_newlines();
-            if !self.at(&TokenKind::RParen) {
-                elements.push(self.parse_pattern());
-                while self.eat(&TokenKind::Comma).is_some() {
-                    self.skip_newlines();
-                    if self.at(&TokenKind::RParen) {
-                        break;
-                    }
-                    elements.push(self.parse_pattern());
-                }
-            }
-            self.skip_newlines();
+            let elements = self.comma_separated(&TokenKind::RParen, Self::parse_pattern);
             self.expect(&TokenKind::RParen);
             Pattern::EnumTuple {
                 type_path,
@@ -302,22 +280,8 @@ impl Parser {
     fn parse_list_pattern(&mut self) -> Pattern {
         let start = self.current_span();
         self.advance(); // [
-
-        self.skip_newlines();
-        let mut elements = Vec::new();
-        if !self.at(&TokenKind::RBracket) {
-            elements.push(self.parse_pattern());
-            while self.eat(&TokenKind::Comma).is_some() {
-                self.skip_newlines();
-                if self.at(&TokenKind::RBracket) {
-                    break;
-                }
-                elements.push(self.parse_pattern());
-            }
-        }
-        self.skip_newlines();
+        let elements = self.comma_separated(&TokenKind::RBracket, Self::parse_pattern);
         self.expect(&TokenKind::RBracket);
-
         Pattern::List {
             elements,
             span: self.span_from(start),
@@ -327,27 +291,7 @@ impl Parser {
     fn parse_binary_pattern(&mut self) -> Pattern {
         let start = self.current_span();
         self.advance(); // <<
-
-        let mut segments = Vec::new();
-        if self.eat(&TokenKind::GtGt).is_some() {
-            return Pattern::Binary {
-                segments,
-                span: self.span_from(start),
-            };
-        }
-
-        self.skip_newlines();
-        segments.push(self.parse_binary_segment());
-        while self.eat(&TokenKind::Comma).is_some() {
-            self.skip_newlines();
-            if self.at(&TokenKind::GtGt) {
-                break;
-            }
-            segments.push(self.parse_binary_segment());
-        }
-        self.skip_newlines();
-        self.expect(&TokenKind::GtGt);
-
+        let segments = self.parse_binary_segments();
         Pattern::Binary {
             segments,
             span: self.span_from(start),

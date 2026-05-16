@@ -3,6 +3,12 @@ use expo_ast::span::{Position, Span};
 use expo_ast::token::{Token, TokenKind};
 use expo_lexer::{LexResult, lex};
 
+/// Sentinel name emitted in place of a missing identifier so the
+/// parser can keep building an AST after a diagnostic. Downstream
+/// passes treat this as opaque text and never resolve it; it shows
+/// up only inside error-recovery paths.
+pub(crate) const ERROR_IDENT: &str = "<error>";
+
 /// Selects the top-level grammar accepted by the parser.
 ///
 /// `ParseMode::File` (default) parses today's `.expo` compilation-unit
@@ -33,6 +39,17 @@ pub(crate) struct Parser {
     pub(crate) pos: usize,
     pub(crate) errors: Vec<Diagnostic>,
     pub(crate) pending_token: Option<TokenKind>,
+}
+
+/// Snapshot of `Parser` state for speculative parsing. Captured by
+/// [`Parser::save_pos`] before a tentative read and restored via
+/// [`Parser::restore_pos`] when the speculation aborts. Restoring
+/// also truncates any diagnostics emitted during the discarded
+/// branch.
+#[derive(Clone, Copy)]
+pub(crate) struct Checkpoint {
+    pos: usize,
+    error_count: usize,
 }
 
 impl Parser {
@@ -87,6 +104,14 @@ impl Parser {
         std::mem::discriminant(self.peek()) == std::mem::discriminant(kind)
     }
 
+    /// Matches a specific lowercase identifier in argument position
+    /// (used by the binary-segment grammar for `byte`, `signed`,
+    /// `unsigned`, `big`, `little`). These are not reserved
+    /// keywords, just recognized in the segment-suffix position.
+    pub(crate) fn at_contextual_ident(&self, name: &str) -> bool {
+        matches!(self.peek(), TokenKind::Ident(n) if n == name)
+    }
+
     pub(crate) fn at_eof(&self) -> bool {
         matches!(self.peek(), TokenKind::EndOfFile)
     }
@@ -97,6 +122,70 @@ impl Parser {
         } else {
             None
         }
+    }
+
+    /// Generic "arm loop": parse items until `should_stop` fires
+    /// or we hit EOF. Each iteration verifies forward progress and
+    /// emits an `unexpected token` diagnostic + recovery advance
+    /// when the inner parser stalls, so a malformed item doesn't
+    /// wedge the entire block. Trailing newlines between items are
+    /// trimmed for the caller.
+    ///
+    /// Used by `match`, `cond`, `receive`, and plain blocks.
+    pub(crate) fn parse_until<F, P, T>(&mut self, mut should_stop: F, mut parse_one: P) -> Vec<T>
+    where
+        F: FnMut(&Self) -> bool,
+        P: FnMut(&mut Self) -> T,
+    {
+        let mut items = Vec::new();
+        while !should_stop(self) && !self.at_eof() {
+            let before = self.pos;
+            items.push(parse_one(self));
+            if self.pos == before {
+                self.error(
+                    format!("unexpected token {:?}", self.peek()),
+                    self.current_span(),
+                );
+                self.advance();
+            }
+            self.skip_newlines();
+        }
+        items
+    }
+
+    /// Parse a comma-separated sequence of items terminated by
+    /// `terminator`. The opening delimiter must already be consumed
+    /// by the caller; this helper:
+    ///
+    /// - skips newlines before the first item
+    /// - returns `Vec::new()` immediately if the terminator is
+    ///   already in front of us (empty sequence)
+    /// - tolerates a trailing comma before the terminator
+    /// - skips newlines between items
+    ///
+    /// The terminator itself is **not** consumed — the caller still
+    /// owns the `expect(&terminator)` (or equivalent) that closes
+    /// the construct, because some constructs want to attach a
+    /// custom error to the missing terminator.
+    pub(crate) fn comma_separated<T>(
+        &mut self,
+        terminator: &TokenKind,
+        mut parse_one: impl FnMut(&mut Self) -> T,
+    ) -> Vec<T> {
+        self.skip_newlines();
+        if self.at(terminator) {
+            return Vec::new();
+        }
+        let mut items = vec![parse_one(self)];
+        while self.eat(&TokenKind::Comma).is_some() {
+            self.skip_newlines();
+            if self.at(terminator) {
+                break;
+            }
+            items.push(parse_one(self));
+        }
+        self.skip_newlines();
+        items
     }
 
     pub(crate) fn expect(&mut self, kind: &TokenKind) -> Token {
@@ -148,7 +237,7 @@ impl Parser {
                     span,
                 );
                 self.advance();
-                String::from("<error>")
+                ERROR_IDENT.to_string()
             }
         }
     }
@@ -167,18 +256,21 @@ impl Parser {
                     span,
                 );
                 self.advance();
-                String::from("<error>")
+                ERROR_IDENT.to_string()
             }
         }
     }
 
-    pub(crate) fn save_pos(&self) -> (usize, usize) {
-        (self.pos, self.errors.len())
+    pub(crate) fn save_pos(&self) -> Checkpoint {
+        Checkpoint {
+            pos: self.pos,
+            error_count: self.errors.len(),
+        }
     }
 
-    pub(crate) fn restore_pos(&mut self, saved: (usize, usize)) {
-        self.pos = saved.0;
-        self.errors.truncate(saved.1);
+    pub(crate) fn restore_pos(&mut self, saved: Checkpoint) {
+        self.pos = saved.pos;
+        self.errors.truncate(saved.error_count);
     }
 
     pub(crate) fn skip_newlines(&mut self) {
@@ -303,46 +395,38 @@ impl Parser {
         }
     }
 
+    /// Parse a single top-level item. Annotations (`@name [value]`)
+    /// are read once up front so the dispatch table below is flat:
+    /// every declaration kind gets the (possibly empty) annotation
+    /// list directly. `impl` and `alias` decline annotations — if
+    /// any are present we route to the "annotation must be followed
+    /// by a declaration" diagnostic instead.
     fn parse_item(&mut self) -> Option<Item> {
         self.skip_newlines();
+        let annotations = self.parse_annotations();
+        self.skip_newlines();
+
         match self.peek().clone() {
-            TokenKind::Struct => Some(self.parse_struct_item()),
-            TokenKind::Enum => Some(self.parse_enum_item()),
-            TokenKind::Protocol => Some(self.parse_protocol_item(Vec::new())),
-            TokenKind::Impl => Some(self.parse_impl_item()),
-            TokenKind::Fn => Some(self.parse_function_item(Vec::new(), Visibility::Public)),
+            TokenKind::Struct => Some(self.parse_struct_item(annotations)),
+            TokenKind::Enum => Some(self.parse_enum_item(annotations)),
+            TokenKind::Protocol => Some(self.parse_protocol_item(annotations)),
+            TokenKind::Fn => Some(self.parse_function_item(annotations, Visibility::Public)),
             TokenKind::Priv => {
                 self.advance();
-                Some(self.parse_function_item(Vec::new(), Visibility::Private))
+                Some(self.parse_function_item(annotations, Visibility::Private))
             }
-            TokenKind::At => {
-                let annotations = self.parse_annotations();
-                match self.peek().clone() {
-                    TokenKind::Struct => Some(self.parse_struct_item_with_annotations(annotations)),
-                    TokenKind::Enum => Some(self.parse_enum_item_with_annotations(annotations)),
-                    TokenKind::Protocol => Some(self.parse_protocol_item(annotations)),
-                    TokenKind::Fn => {
-                        Some(self.parse_function_item(annotations, Visibility::Public))
-                    }
-                    TokenKind::Priv => {
-                        self.advance();
-                        Some(self.parse_function_item(annotations, Visibility::Private))
-                    }
-                    TokenKind::Const => Some(self.parse_constant_item(annotations)),
-                    TokenKind::Type => Some(self.parse_type_alias_item(annotations)),
-                    _ => {
-                        let span = self.current_span();
-                        self.error(
-                            "annotation must be followed by a declaration".to_string(),
-                            span,
-                        );
-                        None
-                    }
-                }
+            TokenKind::Const => Some(self.parse_constant_item(annotations)),
+            TokenKind::Type => Some(self.parse_type_alias_item(annotations)),
+            TokenKind::Impl if annotations.is_empty() => Some(self.parse_impl_item()),
+            TokenKind::Alias if annotations.is_empty() => Some(self.parse_alias_item()),
+            _ if !annotations.is_empty() => {
+                let span = self.current_span();
+                self.error(
+                    "annotation must be followed by a declaration".to_string(),
+                    span,
+                );
+                None
             }
-            TokenKind::Type => Some(self.parse_type_alias_item(Vec::new())),
-            TokenKind::Alias => Some(self.parse_alias_item()),
-            TokenKind::Const => Some(self.parse_constant_item(Vec::new())),
             _ => {
                 let span = self.current_span();
                 self.error(
