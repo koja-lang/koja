@@ -14,9 +14,9 @@ see `archive/20260502-COMPILER-NORTHSTAR-QA.md`.
 ## Pipeline shape
 
 ```text
-                        (sealed AST)         (sealed IRProgram)
-expo-parser → expo-typecheck ────────→ expo-ir ──────────────→ expo-codegen
-                                                             ↘ expo-ir-eval
+                  (sealed AST + GlobalRegistry)    (sealed IRProgram)
+expo-parser → expo-typecheck ──────────────────→ expo-ir ──────────────→ expo-ir-llvm
+                                                                       ↘ expo-ir-eval
 ```
 
 Five crates (counting both backends), four logical phases. Two
@@ -41,10 +41,26 @@ sequential.
 
 Definitions used throughout this doc.
 
-- **Sealed AST.** The output of the typecheck phase on the
-  typecheck-success path. Every relevant resolution annotation is
-  populated; every `Expr.resolved_type` is populated. Asserted by
-  `seal_ast`.
+- **Sealed AST.** The AST half of the typecheck phase's sealed output
+  on the typecheck-success path. Every `Expr.resolution` is populated
+  to a resolved `ResolvedType` (seal asserts `resolution.is_resolved()`
+  recursively across heads and type args). The sealed AST does not
+  travel alone — see **Sealed substrate** below.
+- **Sealed substrate.** The typecheck → ir handoff is the pair
+  `(sealed AST, GlobalRegistry)`, wrapped together as
+  `CheckedProgram`. The AST carries `Resolution::Global(GlobalRegistryId)`
+  handles that dereference into the registry; the registry holds the
+  canonical decl metadata (signatures, lifted struct / enum payloads,
+  type-param bindings) that those handles point to. Splitting them
+  would force ir to re-derive the registry from sealed annotations,
+  which is pure duplication of typecheck work. The registry travels
+  with the AST as a sealed, read-only input — not as a shared mutable
+  brain.
+- **`GlobalRegistry`.** The typecheck-side registry of every
+  globally-named decl. Indexed by `GlobalRegistryId` (opaque,
+  sequential `u32` today). Built during the `collect` and
+  `lift_signatures` sub-passes, frozen at seal, then consumed by
+  ir (and the LSP) as part of the sealed substrate.
 - **Sealed `IRProgram`.** The output of the expo-ir phase. No
   `Stub` instructions; every callee is resolved to a registered
   symbol; every coercion has been emitted as an explicit
@@ -58,14 +74,28 @@ Definitions used throughout this doc.
   `IRFunction` to `IRProgram`. LLVM-free; idempotent.
 - **`IRPackage`.** A per-package fragment produced by source
   lowering. The unit of incremental cache.
-- **`Identifier`.** The single identifier type
-  (`{ package: String, path: Vec<String> }`). Identifies any bound
-  thing in the program — types, functions, methods, fields,
-  variants, locals, type parameters, anonymous closures.
-- **`Resolution`.** AST annotation type
-  (`enum Resolution { Global(Identifier), Unresolved }`). Single-variant
-  today as compiler-checked migration prep for future variants
-  (`Local(LocalId)`, etc.).
+- **`Identifier`.** Globally-unique handle for any bound thing in
+  the program (`{ package: String, path: Vec<String> }`, fields
+  private, accessed via `package()`, `path()`, `qualified_name()`,
+  `is_in_package`, `is_in_global`). Identifiers live inside the
+  `GlobalRegistry`; AST nodes carry `GlobalRegistryId` handles, not
+  bare `Identifier` clones.
+- **`Resolution`.** AST annotation type with four variants:
+
+  ```rust
+  pub enum Resolution {
+      Global(GlobalRegistryId),
+      Local(LocalId),
+      TypeParam { owner: GlobalRegistryId, index: TypeParamIndex },
+      Unresolved,
+  }
+  ```
+
+  `Global` indexes into the `GlobalRegistry`; `Local` indexes into
+  the enclosing function's `LocalScope`; `TypeParam` references a
+  generic decl's type parameter slot. `Unresolved` is the default
+  (pre-resolve) state. Each variant carries an opaque handle whose
+  numeric derivation is an implementation detail.
 
 ## Phase 1: `expo-parser`
 
@@ -82,44 +112,60 @@ syntactic; those are `expo-typecheck`'s job.
 ## Phase 2: `expo-typecheck` (the semantic-analysis phase)
 
 Input: raw AST + build configuration (target, cfg flags, etc.).
-Output: sealed AST, with `Resolution` and type annotations on every
-relevant node.
+Output: `CheckedProgram` — the sealed pair (sealed AST +
+`GlobalRegistry`). Every relevant AST node carries a resolved
+`Resolution` and `resolution: ResolvedType`; the registry holds the
+canonical decl metadata that those handles dereference into.
 
 Crate name `expo-typecheck` for implementation continuity. The phase
-is conceptually broader than its name — it does cfg-stripping,
-synthesis of default protocol impls, name and type resolution,
-type checking, annotation, and sealing. There is no separate
-"preprocess" phase.
+is conceptually broader than its name — it does name and type
+resolution, lifting of signatures and lifted struct / enum / protocol
+payloads onto the registry, surface-shape synthesis, type checking,
+annotation, and sealing. There is no separate "preprocess" phase.
 
 ### Sub-pass order
 
 ```text
 expo-typecheck:
-  strip-cfg     -> remove @cfg-excluded nodes
-  collect       -> register surviving top-level decls; assign
-                   Identifier
-  synthesize    -> generate AST for default protocol impls (Debug,
-                   etc.) for surviving types only
-  resolve       -> walk all bodies (user + synthesized); populate
-                   Resolution + resolved_type annotations
-  check         -> validate type compatibility
-  annotate      -> populate any remaining annotations (coercion, etc.)
-  seal          -> assert sealed-AST invariants per seal_ast
+  collect          -> two passes across all files. collect_file_decls
+                      registers named decls (types, functions, etc.)
+                      into the GlobalRegistry. collect_file_impls runs
+                      after every decl is registered and binds impl
+                      blocks. The two-pass shape lets impls reference
+                      types declared in later files.
+  lift_signatures  -> stamp FunctionSignatures and lifted struct /
+                      enum / protocol payloads on the registry.
+  synthesize       -> surface-shape AST rewrites (today: `for` desugar).
+                      Default protocol impl bodies (Debug, etc.) are
+                      derived at monomorphization time by the codegen
+                      backends, not pre-baked as a typecheck sub-pass.
+  resolve          -> walk all bodies; populate Resolution and
+                      resolution: ResolvedType on every relevant node;
+                      validate type compatibility; annotate coercion
+                      sites. Check, annotate, and resolve are folded
+                      into one walk rather than separate sub-passes.
+  seal             -> assert sealed-substrate invariants per seal_ast.
 ```
 
-Order is forced by data dependencies, not preference.
+Order is forced by data dependencies, not preference. (cfg-stripping
+is not yet implemented as a sub-pass; when it lands it slots ahead of
+`collect` so excluded nodes never reach the registry.)
 
 ### Decision procedure for new AST transformations
 
 When a new transformation is proposed, find its slot mechanically:
 
 1. Does it remove nodes that should never be checked?
-   → strip-cfg time.
-2. Does it need type info?
-   → after collect (synthesize time or later).
-3. Does it produce nodes that themselves need checking?
+   → ahead of collect (the future strip-cfg slot).
+2. Does it need to register new decls?
+   → at collect time (decls phase or impls phase, depending on shape).
+3. Does it need a registered signature?
+   → at lift_signatures time or later.
+4. Does it need type info on bodies?
+   → at synthesize time or later.
+5. Does it produce nodes that themselves need resolution?
    → before resolve.
-4. Does it touch invariants the seal asserts?
+6. Does it touch invariants the seal asserts?
    → it doesn't belong in typecheck; it belongs in expo-ir or later.
 
 ### What typecheck owns
@@ -129,35 +175,43 @@ When a new transformation is proposed, find its slot mechanically:
 - Type resolution for every type expression.
 - Overload / dispatch resolution for every call.
 - Coercion annotation on every site that requires one.
-- Synthesis of default protocol impl bodies.
-- Registration of every top-level decl in its own indices
-  (`TypeContext`).
+- Surface-shape synthesis (today: `for` desugar).
+- Registration of every top-level decl in its own
+  `GlobalRegistry`.
 
 ### What typecheck does not own
 
 - Generic specialization (monomorphization). Generic decls remain
   in the sealed AST with type-parameter references; expo-ir
   specializes them.
+- Default protocol impl bodies (Debug, etc.). The registry knows
+  which protocols a type conforms to, but the synthesized impl
+  bodies are produced at monomorphization time by the codegen
+  backends — not pre-baked into the sealed AST.
 - Any IR construction.
 - Any awareness of LLVM types or backend concerns.
 
 ### Seal contract
 
 ```rust
-pub fn seal_ast(ast: &Ast) -> Result<(), SealViolation>
+pub(crate) fn seal_ast(program: &CheckedProgram)
 ```
 
-Walks every AST node and asserts the relevant resolution annotation
-is `Some(_)` and every `Expr.resolved_type` is populated.
+Walks every AST node and asserts `Expr.resolution.is_resolved()`
+recursively, and asserts every `RegistryEntry` in the
+`GlobalRegistry` is complete. Panics on violation — the seal is a
+hard invariant, not advisory.
 
 The seal applies on the **typecheck-success path**: typecheck OK →
-seal*ast → expo-ir. Typecheck-\_failure* ASTs (partial annotations,
-diagnostics attached) are consumed by the LSP best-effort and never
-enter the lowering pipeline. The LSP never calls `seal_ast`.
+`seal_ast` → expo-ir. Typecheck-_failure_ outputs (partial
+annotations, diagnostics attached) are consumed by the LSP
+best-effort and never enter the lowering pipeline. The LSP never
+calls `seal_ast`.
 
 ## Phase 3: expo-ir (the lowering phase)
 
-Input: sealed AST.
+Input: `CheckedProgram` — the sealed (AST + `GlobalRegistry`) pair
+from typecheck.
 Output: sealed `IRProgram`.
 
 ### Sub-pass order
@@ -165,8 +219,8 @@ Output: sealed `IRProgram`.
 ```text
 expo-ir:
   collect-package -> per-package source-lowering produces an IRPackage
-                     fragment (cacheable per package per D7's incremental
-                     story)
+                     fragment (cacheable per package per the
+                     incremental-compilation section)
   merge           -> merge IRPackages into a single working IRProgram
   closure         -> whole-program walk discovers required generic
                      instantiations; planners register them in IRProgram
@@ -178,22 +232,26 @@ expo-ir:
 ### Pipeline entry points
 
 ```rust
-pub fn lower_package(
-    source: &PackageSource,
-    deps: &[&IRPackage],
-    type_ctx: &TypeContext,
-) -> Result<IRPackage, LowerError>;
-
 pub fn lower_program(
-    packages: &[IRPackage],
-    entry: EntryPointSpec,
-    type_ctx: &TypeContext,
+    checked: &CheckedProgram,
+    entry: ProjectEntry,
 ) -> Result<IRProgram, LowerError>;
+
+pub(crate) fn lower_package(
+    pkg: &CheckedPackage,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> IRPackage;
 ```
 
-`lower_package` is pure with respect to its inputs; cacheable per
-package. `lower_program` is reconstructed every build; it is not
-cached.
+`lower_program` is the single public entry point — it owns the
+package-by-package walk, the closure pass, the merge, and the
+seal. `lower_package` is `pub(crate)`; it is called once per
+package from inside `lower_program` and produces a per-package
+fragment. Per-package source-lowering cacheability is the design
+intent (the function is pure with respect to its inputs); the
+on-disk cache layer is not yet implemented and lives behind the
+`lower_program` shell today.
 
 ### What expo-ir owns
 
@@ -228,10 +286,14 @@ under this architecture:
 ### Seal contract
 
 ```rust
-pub fn seal_program(prog: &IRProgram) -> Result<(), SealViolation>
+pub(crate) fn seal_program(program: &IRProgram)
 ```
 
-Asserts:
+Implemented in `expo-ir/src/seal/program.rs` as a top-level walk
+that delegates to focused helpers (`seal_program_entry_wrappers`,
+`seal_program_calls`, `seal_program_closure_ops`,
+`seal_program_enum_ops`, `seal_program_struct_ops`,
+`seal_program_loadconst_pool`). Together they assert:
 
 - No `IRInstruction::Stub` anywhere.
 - Every callee in `IRInstruction::Call` and friends resolves to a
@@ -243,25 +305,26 @@ Asserts:
 
 `seal_program` panics on violation; it is not advisory.
 
-## Phase 4a: expo-codegen (LLVM emission)
+## Phase 4a: expo-ir-llvm (LLVM emission)
 
 Input: sealed `IRProgram`.
 Output: LLVM IR / object code.
 
-### What codegen owns
+### What expo-ir-llvm owns
 
 - Translation of each `IRInstruction` to its LLVM emission pattern.
-- Codegen builds **its own indices** over the sealed `IRProgram`
-  (mangled-name → `FunctionValue`, struct → LLVM type, etc.). It
-  does not import any expo-ir or expo-typecheck side-tables.
+- expo-ir-llvm builds **its own indices** over the sealed
+  `IRProgram` (mangled-name → `FunctionValue`, struct → LLVM type,
+  etc.). It does not import any expo-ir or expo-typecheck
+  side-tables.
 
-### What codegen does not own
+### What expo-ir-llvm does not own
 
 - Any monomorphization. There is no lazy backfill. There is no
   `lazy_mono_count`. If a callee resolves to a symbol not present
   in `IRProgram.functions`, that is a bug upstream — codegen panics
   with a clear "missing symbol" diagnostic.
-- Any interpretation of `Coercion::*`. Codegen does not import
+- Any interpretation of `Coercion::*`. The backend does not import
   `Coercion`. Each `IRInstruction` has a single direct LLVM
   emission pattern.
 - Any imports of `expo-typecheck`. The sealed `IRProgram` is the
@@ -273,7 +336,7 @@ Input: sealed `IRProgram`.
 Output: side effects from running the program (or returned values
 in REPL mode).
 
-Sibling to `expo-codegen`, not sequential. Both backends consume
+Sibling to `expo-ir-llvm`, not sequential. Both backends consume
 the same sealed `IRProgram` and follow the same pattern: each
 `IRInstruction` has one direct emission/interpretation; no
 fallback paths; no awareness of `Coercion::*`.
@@ -287,16 +350,18 @@ IR. They are not IR features and do not introduce any
 
 ### Identifiers and resolution
 
-One identifier type:
+One identifier type — globally-named decls only:
 
 ```rust
 pub struct Identifier {
-    package: String,
-    path: Vec<String>,  // lexical containment chain
+    package: String,        // private
+    path: Vec<String>,      // private; lexical containment chain
 }
 ```
 
-The path is the lexical containment chain. Examples:
+Fields are private and accessed via the public surface (`package()`,
+`path()`, `qualified_name()`, `is_in_package`, `is_in_global`). The
+path is the lexical containment chain. Examples:
 
 | Decl                       | `path`                                      |
 | -------------------------- | ------------------------------------------- |
@@ -307,26 +372,46 @@ The path is the lexical containment chain. Examples:
 | Struct defined inside a fn | `["User", "Role", "validate", "TempTable"]` |
 | Enum variant               | `["Color", "Red"]`                          |
 | Field on a struct          | `["Circle", "radius"]`                      |
-| Local in a fn              | `["validate", "x"]`                         |
-| Type param in a fn         | `["identity", "T"]`                         |
+
+`Identifier` is for globally-named decls. Locals and type parameters
+use different handles (`LocalId`, `TypeParamIndex`) — see
+[`Resolution`](#resolution) below.
+
+Identifiers live inside the `GlobalRegistry`. AST nodes do not carry
+bare `Identifier` clones — they carry `GlobalRegistryId` handles
+that dereference into the registry. This keeps annotation sites
+small and equality cheap; the registry is the single source of
+truth for the underlying string-shaped data.
 
 Type args remain _separate_ from the identifier and compose at use
-sites: `List<Int>` is `(Identifier { package: "std", path:
-["List"] }, type_args: [Type::Int])`.
+sites: `List<Int>` is rendered on the AST as a `ResolvedType::Named`
+holding a head `Resolution::Global(list_registry_id)` plus a
+`type_args` vector containing the `ResolvedType::Named` for `Int`.
 
-AST annotation type:
+#### Resolution
 
 ```rust
 pub enum Resolution {
+    Global(GlobalRegistryId),
+    Local(LocalId),
+    TypeParam { owner: GlobalRegistryId, index: TypeParamIndex },
     #[default]
     Unresolved,
-    Global(Identifier),
 }
 ```
 
-Single-variant enum from day one. When a future memory optimization
-adds `Local(LocalId)`, Rust's exhaustiveness checker flags every
-read site that needs an arm.
+- `Global` indexes into the `GlobalRegistry`.
+- `Local` indexes into the enclosing function's `LocalScope` (minted
+  when parameters or `let`-introduced names enter scope). `LocalId`
+  does not cross the IR boundary; expo-ir defines a sibling
+  `IRLocalId` and translates one-to-one at lower time.
+- `TypeParam` references one of an owning generic decl's type
+  parameter slots. Seal asserts this variant only appears inside
+  generic-decl bodies.
+- `Unresolved` is the in-flight default state before resolve runs.
+
+Each variant carries an opaque handle. Callers do not synthesize
+handles by hand and do not reason about their numeric values.
 
 #### Naming policy for synthesized path segments
 
@@ -345,10 +430,14 @@ cache key in it.
 
 #### Stable IDs across builds
 
-Satisfied by construction. `Identifier` paths are derived from
-source positions (lexical containment + naming policy). Cross-
-package references stay valid across cache hits because they are
-content-addressed, not opaque-counter-allocated.
+`Identifier` paths are derived from source positions (lexical
+containment + naming policy), so they are stable across cosmetic
+edits. `GlobalRegistryId` handles are stable within a build via the
+registry; today they are sequential `u32`s assigned at insertion
+time, with content-addressable derivation reserved as a future swap
+that does not change the public surface (`GlobalRegistryId` is
+opaque). Cross-package references stay valid across cache hits
+because the registry roots them in package-qualified `Identifier`s.
 
 #### Annotations live on AST nodes
 
@@ -375,9 +464,10 @@ Not in a parallel side-table. Choices:
 
 ### Coercions
 
-`Coercion` (defined in `expo-typecheck`) is a typecheck-layer
-vocabulary. It records "the value at this site needs widening /
-wrapping / conversion before it can flow to its consumer."
+`Coercion` (defined in `expo-ast/src/coercion.rs`) is a
+typecheck-layer vocabulary. It records "the value at this site
+needs widening / wrapping / conversion before it can flow to its
+consumer."
 
 - One `IRInstruction::*` variant per `Coercion::*` variant
   (today: `Coercion::UnionWiden` ↔ `IRInstruction::UnionWrap`).
@@ -385,9 +475,17 @@ wrapping / conversion before it can flow to its consumer."
   corresponding `IRInstruction` at the exact site.
 - The sealed `IRProgram` contains zero `Coercion` metadata on any
   operand.
-- `expo-codegen` and `expo-ir-eval` do not import `Coercion`.
+- `expo-ir-llvm` and `expo-ir-eval` do not import `Coercion`.
 - Adding a new `Coercion` variant requires adding the paired
   `IRInstruction` and lowerer emitter in the same change.
+
+A parallel `LiteralCoercion` annotation family lives alongside
+`Coercion` in the same module. It handles per-expression numeric
+literal width fitting (`UInt8 = 4` minting the const at `u8`
+width rather than the default `i64`). Width fitting is structurally
+distinct from value-conversion coercion: it changes the materialized
+constant, not the data-flow shape. See the module doc in
+`expo-ast/src/coercion.rs` for the full rationale.
 
 ### Polymorphism
 
@@ -410,7 +508,7 @@ The compiler uses three seal pass-throughs:
 
 | Seal                    | Phase     | Asserts                                                                    |
 | ----------------------- | --------- | -------------------------------------------------------------------------- |
-| `seal_ast`              | typecheck | every annotation populated; every `resolved_type` set                      |
+| `seal_ast`              | typecheck | every `Expr.resolution` resolved; every `RegistryEntry` complete           |
 | `seal_program`          | expo-ir   | no `Stub`; every callee registered; no `Coercion` metadata; entry resolved |
 | (codegen/eval implicit) | backend   | one match arm per `IRInstruction`; no fallback paths                       |
 
@@ -504,55 +602,71 @@ the resulting sealed `IRProgram` to eval.
 
 ### Consumer-builds-its-own-indices
 
-The substrate (sealed AST / sealed `IRProgram`) does not ship
-indices. Each consumer builds its own purpose-shaped lookups:
+The sealed substrate (the typecheck pair `(sealed AST,
+GlobalRegistry)` for ir/LSP; the sealed `IRProgram` for backends)
+does not ship **derived** indices. Each consumer builds its own
+purpose-shaped lookups on top:
 
-| Consumer          | Sealed input       | Builds                                                   |
-| ----------------- | ------------------ | -------------------------------------------------------- |
-| `expo-codegen`    | sealed `IRProgram` | mangled-name → `FunctionValue`, struct → LLVM type, etc. |
-| `expo-ir-eval`    | sealed `IRProgram` | mangled-name → interpreter handle, etc.                  |
-| `expo-ir` (lower) | sealed AST         | per-function substitution context, mono registry, etc.   |
-| LSP               | sealed AST         | name → references, file → symbols, ID → def site, etc.   |
-| (future) tools    | sealed AST         | whatever they need                                       |
+| Consumer          | Sealed input                  | Builds                                                                  |
+| ----------------- | ----------------------------- | ----------------------------------------------------------------------- |
+| `expo-ir-llvm`    | sealed `IRProgram`            | mangled-name → `FunctionValue`, struct → LLVM type, etc.                |
+| `expo-ir-eval`    | sealed `IRProgram`            | mangled-name → interpreter handle, etc.                                 |
+| `expo-ir` (lower) | sealed AST + `GlobalRegistry` | per-function substitution context, mono registry, IR symbol table, etc. |
+| LSP               | sealed AST + `GlobalRegistry` | name → references, file → symbols, ID → def site, etc.                  |
+| (future) tools    | sealed AST + `GlobalRegistry` | whatever they need                                                      |
 
-`TypeContext` is _typecheck's own_ indices — its purpose-built
-lookup tables. It is not a privileged shared brain. Other
-consumers can ignore it and build their own indices keyed by the
-same `Identifier`s.
+`GlobalRegistry` is _not_ a derived index — it is part of the
+typecheck phase's sealed output, alongside the AST. Consumers
+read from it; they do not re-derive its contents from sealed
+annotations (that would be pure duplication of typecheck work).
+What they build for themselves are **backend-shaped derived
+indices** (LLVM type maps, IR symbol tables, mono caches, LSP
+file→symbol maps) keyed by the same `Identifier` / `GlobalRegistryId`
+handles the registry uses.
 
 ### Entry points
 
 ```rust
-pub enum EntryPoint {
-    LegacyMain(Identifier),     // legacy fn main; going away
-    Process(Identifier),        // Process.run entry
-    Eval(Identifier),           // whole-file eval entry
+pub enum ProjectEntry {
+    Function(Identifier),
+    Process { state: Identifier },
 }
 ```
+
+`ProjectEntry::Function` covers both `fn main` (the legacy-support
+window) and script entry — `.exps` files lower to a synthesized
+top-level function with the same shape, so the original `EntryPoint`
+plan's separate `Eval` variant was folded into `Function` once
+scripts started lowering this way. `ProjectEntry::Process` carries
+the state struct's `Identifier`; the runtime spawns it as the entry
+process.
 
 The entry point is a property of `IRProgram`, not of any
 `IRPackage`. Library packages built standalone produce an
 `IRPackage` and stop; only executable builds construct an
 `IRProgram`.
 
-`IRFunctionKind::MainEntry` does not exist. The user's `fn main`
-(during the legacy-support window) is a normal `IRFunctionKind::Free`;
-its body is reachable to the closure pass like any other function.
+There is no dedicated `MainEntry` `FunctionKind`. The user's `fn main`
+(or script entry) is a normal `FunctionKind::Regular`; its body is
+reachable to the closure pass like any other function. The
+`FunctionKind` enum reserves variants for the IR-internal shapes
+that need different lowering (closures, externs, intrinsics,
+process / spawn wrappers).
 
 ## Mechanical checks
 
 The following are grep/assertion-checkable in CI:
 
-- `expo-codegen` does not import `expo-typecheck`. Grep:
-  `rg "use expo_typecheck" expo/crates/expo-codegen/`
-- `expo-codegen` does not call any `monomorphize_*` planner. Grep:
-  `rg "monomorphize_" expo/crates/expo-codegen/`
+- `expo-ir-llvm` does not import `expo-typecheck`. Grep:
+  `rg "use expo_typecheck" expo/crates/expo-ir-llvm/`
+- `expo-ir-llvm` does not call any `monomorphize_*` planner. Grep:
+  `rg "monomorphize_" expo/crates/expo-ir-llvm/`
 - No `lazy_mono_count` field or its increment sites exist.
 - `IRInstruction::Stub` does not exist.
 - No `Ok(None)` paths in `expo-ir/src/lower/` that fall through to
   `Stub` emission.
-- `expo-codegen/src/stmt.rs::apply_coercion` does not exist.
-- `expo-codegen` does not import `Coercion`.
+- `expo-ir-llvm/src/stmt.rs::apply_coercion` does not exist.
+- `expo-ir-llvm` does not import `Coercion`.
 - For every `Coercion::*` variant, a paired `IRInstruction::*`
   variant exists. Grep both enums and diff the variant lists.
 - `seal_program` is called exactly once in the lowering pipeline,
@@ -584,7 +698,7 @@ the closure pass, it lands earlier.
 ### A new `IRInstruction` variant
 
 Add the corresponding emission patterns to both backends
-(`expo-codegen` and `expo-ir-eval`) in the same change. If the
+(`expo-ir-llvm` and `expo-ir-eval`) in the same change. If the
 instruction materializes a coercion, also add the paired
 `Coercion::*` variant to typecheck and the staging emitter to the
 lowerer.
@@ -592,9 +706,9 @@ lowerer.
 ### A new `Coercion` variant
 
 Same change: add the paired `IRInstruction::*` variant and the
-lowerer's staging emitter. Codegen and eval gain emission patterns
+lowerer's staging emitter. Both backends gain emission patterns
 for the new instruction. The variant should not require any code
-change in `expo-codegen` other than the new instruction's
+change in `expo-ir-llvm` other than the new instruction's
 emission pattern.
 
 ### A new top-level pipeline phase
@@ -618,8 +732,12 @@ discussion level.
   well-defined seam.
 - **A dedicated preprocess crate** as a top-level pipeline phase.
   Its responsibilities live as typecheck sub-passes.
-- **Side-tables shared across phases.** Each phase produces its
-  own outputs; downstream consumers build their own indices.
+- **Stale side-tables shared across phases.** Each phase produces
+  its own sealed output (the typecheck phase's sealed output is the
+  pair (sealed AST, `GlobalRegistry`); the ir phase's sealed output
+  is `IRProgram`). Downstream consumers build their own derived
+  indices over those sealed inputs; nothing they build mutates
+  upstream data.
 - **Cross-phase mutation.** Each phase consumes its sealed input
   and produces its own sealed output. It does not mutate upstream
   data.

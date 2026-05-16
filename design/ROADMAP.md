@@ -8,25 +8,48 @@ Solo developer + AI assistance. Bootstrap in Rust, self-host in Expo.
 
 ### Compiler
 
-An 11-crate Rust workspace that compiles Expo source to native binaries via LLVM:
+A 15-crate Rust workspace built around the four-phase sealed pipeline described in [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md): `expo-parser → expo-typecheck → expo-ir → expo-ir-llvm` / `expo-ir-eval`. The typecheck phase populates `Resolution` and `resolved_type` annotations on the AST and asserts via `seal_ast`; the IR phase consumes the sealed AST and produces a sealed `IRProgram` asserted by `seal_program`; both backends consume the same sealed `IRProgram` as siblings.
 
-- `expo-ast` -- tokens, spans, AST node definitions, type representations (`Type`, `Primitive`, `FnParam`). Every `Expr` node carries a `resolved_type: Option<Type>` populated by the type checker.
-- `expo-lexer` -- custom tokenizer
-- `expo-parser` -- recursive descent parser (Pratt precedence for expressions)
-- `expo-typecheck` -- type inference and semantic analysis
-- `expo-codegen` -- LLVM IR generation via `inkwell`
+Pipeline crates:
+
+- `expo-lexer` -- custom tokenizer (implementation detail of `expo-parser`, not a phase boundary)
+- `expo-parser` -- recursive descent parser (Pratt precedence for expressions); produces raw AST
+- `expo-typecheck` -- semantic analysis: cfg-strip, collect, synthesize default impls, resolve, check, annotate, seal
+- `expo-ir` -- lowers sealed AST into a sealed `IRProgram` (per-package source lowering, whole-program closure pass for monomorphization, coercion emission)
+- `expo-ir-llvm` -- LLVM IR generation via `inkwell` (native binary backend)
+- `expo-ir-eval` -- tree-walking interpreter over the sealed `IRProgram` (powers `expo eval`, `expo shell`, and the REPL evaluator)
+
+Shared substrate:
+
+- `expo-ast` -- tokens, spans, AST node definitions, `Resolution`/`Identifier` shapes, `seal_ast`
+- `expo-runtime` -- multi-threaded process scheduler and C-ABI intrinsics (static library linked into compiled binaries)
 - `expo-stdlib` -- build script auto-discovers `.expo` sources under `expo/lib/` and embeds them via `include_str!`
+
+Tooling:
+
 - `expo-fmt` -- opinionated code formatter
 - `expo-doc` -- HTML documentation generator (askama templates, pulldown-cmark)
-- `expo-runtime` -- multi-threaded process scheduler (C ABI static library linked into compiled binaries)
-- `expo-driver` -- CLI binary (`expo`); builds BoringSSL via `boring-sys` and embeds `libcrypto.a` for `@link "crypto"` resolution
+- `expo-test` -- test runner library (`@test` discovery, harness generation)
+- `expo-shell` -- interactive REPL (rustyline-driven; runs the four-phase pipeline per input and evaluates via `expo-ir-eval`)
 - `expo-lsp` -- language server (diagnostics, formatting, hover with inferred types, go-to-definition, AST-based dot completion and signature help)
+
+Driver:
+
+- `expo-driver` -- CLI binary (`expo`); builds BoringSSL via `boring-sys` and embeds `libcrypto.a` for `@link "crypto"` resolution
 
 ### CLI
 
-Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, `expo format`, `expo doc`, `expo lex`, `expo parse`. All commands support multi-module projects.
+Eleven commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo eval`, `expo shell`, `expo test`, `expo format`, `expo doc`, `expo lex`, `expo parse`.
 
-### What compiles to native binaries today
+Source-shape rule: `.expo` files are project files (multi-module, declarations only); `.exps` files are scripts (top-level expressions and statements, no `fn main`); omitting the file argument resolves the project via `expo.toml`. Project mode runs the full pipeline through `expo-ir-llvm::compile_program`; script mode lowers a synthetic entry point and (by default) evaluates via `expo-ir-eval`.
+
+Backend selection: `run` and `build` accept `--backend={interpreter,llvm}`. `run` defaults to `interpreter` (millisecond startup, prints the trailing value, exits 0); `build` defaults to `llvm` and rejects `interpreter` since the interpreter does not produce a binary. `expo eval` is a thin alias for `expo run --backend=interpreter`. `expo shell` always uses the interpreter.
+
+Additional flags: `--release` on `run`/`build` (LLVM aggressive optimizations), `--emit-llvm` on `build` (print LLVM IR to stdout), `--emit-ast` on `parse` (raw AST) and `check` (sealed AST). See the per-phase emit conventions in [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md).
+
+### What runs today
+
+Both backends share the same feature surface by design -- they consume the same sealed `IRProgram` and follow the same "one emission pattern per `IRInstruction`" rule. The LLVM backend produces native binaries; the interpreter runs the IR directly for `expo eval`, `expo shell`, and `expo run --backend=interpreter` (the new default for `run`).
 
 - Multi-module imports (including qualified calls like `math.add()`)
 - Functions (`fn`/`priv fn`)
@@ -73,7 +96,7 @@ Nine commands: `expo new`, `expo build`, `expo run`, `expo check`, `expo test`, 
 ### Design notes
 
 - **No tuples**: Expo does not have anonymous tuple syntax. `(a, b)` is grouping only. For multiple return values, use a struct. `Pair<A, B>` (with `.first` / `.second`) is available in the stdlib for lightweight two-value cases. 3+ values should always be a struct. Note: `(a, b)` pair syntax may return once protocols land via a `PairLiteral<A, B>` literal protocol -- this would be protocol-backed syntax, not a built-in tuple type, and is limited to arity 2.
-- **`()` as the unit expression**: `()` is a "do-nothing" expression (empty closure that runs and returns nothing). Use `else -> ()` in `cond` for side-effect-only fallthrough.
+- **`()` as the unit literal**: `()` is the literal whose type is the 0-tuple -- Expo's "no useful value" type. Use `else -> ()` in `cond` for side-effect-only fallthrough. Function bodies whose declared return is the 0-tuple implicitly coerce the trailing value to unit (kept for stdlib ergonomics; the interpreter applies the coercion via `coerce_return` in `expo-ir-eval`). Pre-1.0 cleanup: tighten the typechecker to require explicit return-type annotations rather than relying on implicit coercion, and consider renaming the type itself to `Unit` (or `Void`) so it sits visually alongside `Int`/`String`. 1-tuples are not and never will be a thing.
 - **Closures**: Block closures with explicit types and parens: `fn (a: Int32, b: Int32) -> Int32 ... end`. Mirrors function signature syntax. Short closures (`x -> expr`) with full capture support and context-driven parameter type inference at inline call sites. Used by `map`/`then` on `Option` and `Result`.
 - **No private modules**: Files are modules, and all modules are importable. Access control lives at the function level (`priv fn`), not the module level. Use `@doc false` on types to signal "internal, don't depend on this" -- a documentation-level convention, not a compiler wall. This matches Elixir's approach and avoids the complexity of Rust's `pub(crate)` or Go's `internal/` directory enforcement.
 - **PascalCase primitives and type simplification** (done): Primitives renamed from `i32`/`i64`/`f32`/`f64`/`bool`/`string` to PascalCase: `Int` (64-bit default), `Int32`, `Float` (64-bit IEEE default), `Float32`, `Bool`, `String`. User-defined types (`Pair`, `User`) and language types (`Int`, `String`) are now visually uniform. `Decimal` will ship in the stdlib as an exact-arithmetic type for financial/business logic, sitting alongside the primitives with no visual distinction.
@@ -344,17 +367,27 @@ Dual entry mode is implemented. `expo.toml` `entry` field determines behavior by
 - ~~Autocomplete for struct fields and methods (AST-based dot completion using `resolved_type`)~~
 - ~~Signature help for function and method calls (AST-based `find_enclosing_call`)~~
 - ~~Hover shows inferred types for variables (e.g. `x: Int32`)~~
+- ~~Powered by the four-phase pipeline -- the LSP consumes the same sealed AST that drives the compiler, so hover types, completions, and signature help reflect post-typecheck reality (typecheck-failure ASTs are consumed best-effort and never sealed).~~
 - Inline type hints for inferred types (inlay hints)
 - Multi-module resolution (cross-file diagnostics)
 - **Done when**: editing `.expo` files in Cursor shows real-time errors and supports go-to-definition
 
-### Interactive shell (REPL)
+### Interactive shell (REPL) -- started
 
-- `expo shell` -- evaluate expressions and statements interactively, one at a time
+#### Scratch session -- **DONE**
+
+- ~~`expo shell` opens a session that evaluates expressions and statements one at a time against `expo-ir-eval`.~~
+- ~~Multi-line input via `rustyline` with ANSI rewrite -- blocks like `struct User` drop to the next line; no `...(N)>` continuation noise.~~
+- ~~In-memory history (up-arrow recalls within the session; not persisted to disk).~~
+- ~~Trailing values render through `Debug.format()`; falls back to `value.to_string()` when `Debug.format` isn't monomorphized for a transient type.~~
+- ~~Interpreter-backed so each input is millisecond-cheap. The northstar's sibling-backends model means a future JIT could slot in alongside `expo-ir-llvm` and `expo-ir-eval`, but no concrete plan to add one -- the interpreter handles REPL latency budgets fine. Cranelift framing dropped.~~
+
+#### Project mode + docs + completion -- remaining
+
 - `expo shell -S .` -- load a project so you can call your functions, inspect types, and explore live
 - Inline documentation: `h module.function` pulls from `@doc` annotations
 - Tab completion for module names, functions, and variables in scope
-- Backend: LLVM JIT (via inkwell `ExecutionEngine`) initially; Cranelift JIT long-term for faster response
+- REPL debug affordances built on the interpreter: inspect running processes, dump mailboxes, step a single message
 - **Done when**: `expo shell -S .` loads a multi-module project and you can call functions, inspect results, and read docs interactively
 
 ### CLI query and guide system
@@ -386,14 +419,25 @@ Rewrite the Expo compiler in Expo. The lexer port from Phase 3 A4 (validation) p
 - Expect to discover language shortcomings -- feed them back into design
 - **Done when**: the Expo-written parser can parse all `.expo` files identically to the Rust parser
 
-#### Introduce ExpoIR and the codegen backend protocol
+#### Introduce ExpoIR and the codegen backend protocol -- mostly landed
 
-- Split `expo-codegen` into two stages: lowering (TypedAST → ExpoIR) and emission (ExpoIR → target output)
-- ExpoIR is a flat, lowered representation -- monomorphized, closures desugared, drops inserted. Simple enough that writing a new backend is a tractable project.
-- Define `CodeEmitter` as an Expo protocol. The LLVM backend is `impl CodeEmitter for LlvmEmitter`. Cranelift, WASM, and C backends implement the same interface.
-- Publish `expo-ir` and the backend protocol as packages so third parties can build custom backends.
-- **Status note**: this work was pulled forward into Phase 4 because compiler instability made waiting until Phase 6 impractical. The destination architecture is captured in [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md); `expo-ir` is a working crate being progressively tightened against those commitments. Predecessor docs ([archive/20260502-EXPOIR-ROADMAP.md](archive/20260502-EXPOIR-ROADMAP.md), [archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md)) preserve the prior roadmap and the Wave 1-17 narrative.
-- **Done when**: the LLVM backend works through ExpoIR with no regressions, and a second backend (Cranelift for the REPL) compiles a non-trivial program.
+This work was pulled forward out of Phase 6 -- compiler instability under the original codegen-only crate boundary made waiting impractical, and the IR/backend split unblocked the second backend (interpreter) the REPL needed. The destination architecture is captured in [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md). Predecessor docs ([archive/20260502-EXPOIR-ROADMAP.md](archive/20260502-EXPOIR-ROADMAP.md), [archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md)) preserve the prior roadmap and the Wave 1-17 narrative.
+
+**Landed:**
+
+- ~~Lowering and emission split into separate phases: lowering (sealed AST → sealed `IRProgram`) lives in `expo-ir`; emission lives in the backend crates. The earlier monolithic `expo-codegen` crate has been retired.~~
+- ~~Sealed `IRProgram` -- a flat, lowered representation. Monomorphized, closures desugared as `{fn_ptr, env_ptr}` structs, coercions emitted as explicit `IRInstruction`s. Asserted by `seal_program` (no `Stub`, every callee resolved, no `Coercion` metadata on operands).~~
+- ~~Two backends consume the same sealed `IRProgram` as siblings: `expo-ir-llvm` (native binaries via `inkwell`) and `expo-ir-eval` (tree-walking interpreter for `expo eval`, `expo shell`, and `expo run --backend=interpreter`).~~
+- ~~Codegen builds its own indices over the sealed program and does not import `expo-typecheck`; both backends follow the "one emission pattern per `IRInstruction`" rule with no fallback paths and no lazy backfill.~~
+- ~~The second-backend bar is cleared by `expo-ir-eval` -- a non-LLVM consumer that runs the full sealed `IRProgram` and is exercised end-to-end by `expo test`, `expo shell`, and `expo eval`.~~
+
+**Remaining:**
+
+- Formalize `CodeEmitter` as an Expo-side protocol once self-hosting begins (today it is a Rust trait surface implicit in the structure of each backend crate).
+- Per-package incremental caching of `lower_package` (the API exists; the on-disk cache layer does not).
+- `--emit-package` and `--emit-ir` artifacts to expose mid-pipeline state at the package and program seams.
+- Publish `expo-ir` and the backend protocol as packages so third parties can build custom backends (depends on self-hosting).
+- A third backend slots in here when justified by a real workload (WASM, embedded, debug). The sibling-backends model in the northstar makes this a contained add, not a rewrite.
 
 #### Port type checking and codegen
 
@@ -554,13 +598,12 @@ Exploration of treating modules as `TypeKind::Module` in the unified registry. N
 
 See [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) for the destination architecture (four-phase linear pipeline, sealed `IRProgram`, package-granular incremental, no lazy backfill in codegen, no dynamic-dispatch IR). Predecessor docs are preserved in archive: [archive/20260502-EXPOIR-ROADMAP.md](archive/20260502-EXPOIR-ROADMAP.md) (prior live roadmap) and [archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md) (original SIL-style design — instruction set, ownership operations, shared type ARC, data structures, incremental self-hosting strategy).
 
-- **Planned**: introduce an intermediate representation (`expo-ir`) between the type checker and codegen. The IR is a lowered, flat representation -- no generics (already monomorphized), no closures (already desugared to structs + function pointers), no high-level control flow (already lowered to branches). Just functions, calls, loads, stores, branches.
-- **Motivation**: the current `expo-codegen` crate mixes two concerns -- lowering (closure desugaring, monomorphization, drop insertion) and emission (inkwell LLVM calls). Separating them creates a clean interface for multiple codegen backends.
-- **Backend protocol**: codegen backends implement a `CodeEmitter` protocol against ExpoIR. The LLVM backend (current) is the first implementation, not a special case. Other backends become possible: Cranelift (fast compilation for the REPL), direct WASM emission (smaller output for edge), C emission (maximum portability), or an interpreter (scripting, hot-reload).
-- **Compiler pipeline**: `Source → AST (with resolved_type) → ExpoIR → [CodeEmitter backend] → output`. The AST carries resolved types on every expression after typechecking -- there is no separate TypedAST struct. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
-- **Public API**: ExpoIR and the backend protocol would be published as packages after self-hosting, enabling third-party codegen backends. During bootstrap, they're Rust crates wrapping inkwell.
-- **Build-time selection**: `expo.toml` or `expo build --backend cranelift` selects the backend. One backend per binary. The compiler monomorphizes all emitter calls against the selected implementation -- no vtable overhead.
-- **Timing**: the IR split is Phase 6 (self-hosting) work. The current crate boundaries (codegen depends on ast + typecheck, clean downward dependencies) already support this separation. Keeping `expo-codegen` internals organized now avoids a painful refactor later.
+- **Landed**: the IR phase lives in its own crate (`expo-ir`) between the type checker and the backends. The sealed `IRProgram` is a lowered, flat representation -- monomorphized, closures desugared to `{fn_ptr, env_ptr}` structs, coercions emitted as explicit `IRInstruction`s, control flow lowered to branches. Just functions, calls, loads, stores, branches.
+- **Landed**: lowering and emission are separate concerns. `expo-ir` owns lowering (closure desugaring, monomorphization, coercion emission, drop insertion). `expo-ir-llvm` and `expo-ir-eval` own their respective emission patterns -- one direct emission per `IRInstruction`, no fallback paths, no awareness of `Coercion::*`.
+- **Backend protocol (today, implicit)**: codegen backends are crates that take a sealed `IRProgram` and produce target output. The LLVM backend is `expo-ir-llvm`; the interpreter is `expo-ir-eval`. Both follow the same pattern, which is the de facto protocol -- not yet a formal `CodeEmitter` trait on either side. Other backends become possible: Cranelift, direct WASM emission, C emission, alternative interpreters with debug affordances.
+- **Compiler pipeline**: `Source → raw AST → sealed AST → sealed IRProgram → [backend crate] → output`. The AST carries `Resolution` and `resolved_type` annotations on every relevant node after typechecking -- there is no separate TypedAST struct. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
+- **Build-time selection**: `expo run --backend={interpreter,llvm}` and `expo build --backend=llvm` select the backend. One backend per build. A future WASM backend slots in as a third variant; the rest of the pipeline does not change.
+- **Remaining**: formalize `CodeEmitter` as an Expo-side protocol once self-hosting begins; publish `expo-ir` + the backend protocol as packages so third parties can build custom backends; per-package incremental caching of `lower_package`; the `--emit-package` / `--emit-ir` artifacts.
 
 ### Literal protocols
 
@@ -572,27 +615,28 @@ See [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) for the destination architect
 
 ### Done
 
-| Phase     | Milestone                                                                                                             |
-| --------- | --------------------------------------------------------------------------------------------------------------------- |
-| Bootstrap | Lexer, parser, type system, LLVM codegen -- native binaries from Expo source                                          |
-| Tooling   | Formatter, `expo new`, `expo run`, VSCode extension, LSP, documentation generator                                     |
-| Core      | Generics, ownership, protocols, closures, collections, processes                                                      |
-| Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer |
-| Phase 4A  | Test runner, `Net` package (POSIX surface), `Debug` protocol, `Global.IO`, `Global.File`, `Global.System`, `Global.DateTime`/`Global.Duration` |
-| Tooling   | DWARF debug info, `--release` flag, runtime stacktraces, Vim plugin (indent, matchit, compiler)                       |
-| Phase 4B  | Multi-threaded scheduler, cgroup-aware thread count, Condvar parking, graceful shutdown, I/O reactor                  |
+| Phase     | Milestone                                                                                                                                                                                |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap | Lexer, parser, type system, LLVM codegen -- native binaries from Expo source                                                                                                             |
+| Tooling   | Formatter, `expo new`, `expo run`, VSCode extension, LSP, `expo-test`, documentation generator                                                                                           |
+| Core      | Generics, ownership, protocols, closures, collections, processes                                                                                                                         |
+| Phase 3   | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer                                                                    |
+| Phase 4A  | Test runner, `Net` package (POSIX surface), `Debug` protocol, `Global.IO`, `Global.File`, `Global.System`, `Global.DateTime`/`Global.Duration`                                           |
+| Tooling   | DWARF debug info, `--release` flag, runtime stacktraces, Vim plugin (indent, matchit, compiler)                                                                                          |
+| Phase 4B  | Multi-threaded scheduler, cgroup-aware thread count, Condvar parking, graceful shutdown, I/O reactor                                                                                     |
+| Compiler  | Sealed four-phase pipeline (`expo-parser → expo-typecheck → expo-ir → expo-ir-llvm`/`expo-ir-eval`), interpreter backend, `expo shell` + `expo eval`, `.exps` scripts, v1 crates retired |
 
 For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md) and [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md).
 
 ### Remaining
 
-| Phase | Milestone                                                                                                                                                                                                                                            |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Phase | Milestone                                                                                                                                                                                                                                                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 4A    | ~~Test runner~~, ~~`Debug` protocol~~, ~~`Global.IO`~~, ~~`Global.File`~~, ~~`Global.System`~~, ~~time~~, ~~`Random`~~, package manager, ~~C FFI Phase 1-2~~, C FFI Phase 3, stdlib packages (`Net`, `HTTP`, ~~`JSON`~~, ~~`Crypto`~~), first-party packages |
-| 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                                                               |
-| 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), REPL, CLI query/guide system                                                                                                                              |
-| 6A    | Parser in Expo, ExpoIR + backend protocol, full compiler, retire bootstrap                                                                                                                                                                           |
-| 6B    | auth-manager-expo runs for real, second project                                                                                                                                                                                                      |
+| 4B    | ~~Multi-threaded scheduler~~, work-stealing, ~~I/O reactor~~, preemption, supervision, process discovery, `shared_map`                                                                                                                                       |
+| 5     | Documentation (doctests, search), LSP (~~autocomplete~~, ~~signature help~~, inlay hints), ~~REPL scratch session~~, REPL project mode + docs + completion, CLI query/guide system                                                                           |
+| 6A    | Parser in Expo, ~~sealed IRProgram + two backends~~, formalize `CodeEmitter` as Expo protocol, publish IR + backend protocol as packages, per-package incremental cache, full compiler in Expo, retire bootstrap                                             |
+| 6B    | auth-manager-expo runs for real, second project                                                                                                                                                                                                              |
 
 ---
 
