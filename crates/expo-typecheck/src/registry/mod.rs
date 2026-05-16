@@ -22,7 +22,7 @@
 //! states unrepresentable — non-function entries literally cannot
 //! carry a signature.
 //!
-//! Registry rendering for `expo alpha check --emit-ast` lives in the
+//! Registry rendering for `expo check --emit-ast` lives in the
 //! [`format`] submodule; it's a separate concern from the data + insert
 //! API (different audience: diagnostic rendering vs pipeline work).
 
@@ -575,7 +575,7 @@ impl GlobalRegistry {
         let (id, _) = self.lookup(&ident).unwrap_or_else(|| {
             panic!(
                 "stdlib stub `Global.{name}` missing from registry — \
-                 alpha pipeline must seed it via `GlobalRegistry::with_stdlib_stubs`",
+                 pipeline must seed it via `GlobalRegistry::with_stdlib_stubs`",
             )
         });
         ResolvedType::leaf(Resolution::Global(id))

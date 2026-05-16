@@ -10,7 +10,7 @@
 //! `"invalid integer"` / `"invalid float"` message into
 //! `Result.Err(String)`.
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ParseTarget};
+use expo_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ParseTarget};
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicType;

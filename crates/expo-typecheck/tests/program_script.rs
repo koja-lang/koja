@@ -6,10 +6,10 @@
 //! accepts the resulting program (a panic would fail the test), and
 //! script files coexist with `File.items[Function]` decls.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_parser::ParseMode;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

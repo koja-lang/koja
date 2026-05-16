@@ -1,4 +1,4 @@
-//! Pre-emit phase for [`expo_alpha_ir::IREnumDecl`]: build one
+//! Pre-emit phase for [`expo_ir::IREnumDecl`]: build one
 //! [`super::EnumLayout`] per decl on [`super::TypeLayouts`].
 //!
 //! Three-phase across all packages so an enum's tuple/struct payload
@@ -39,7 +39,7 @@
 //!   complete struct for the tag and the payload for fields, then
 //!   loads the populated outer as the SSA result.
 
-use expo_alpha_ir::{IREnumDecl, IREnumVariant, IRStructField, IRType, IRVariantPayload};
+use expo_ir::{IREnumDecl, IREnumVariant, IRStructField, IRType, IRVariantPayload};
 use inkwell::types::{BasicTypeEnum, StructType};
 
 use crate::ctx::EmitContext;
@@ -214,7 +214,7 @@ fn define_outer_body<'ctx>(
 fn lookup_named_struct<'ctx>(ctx: &EmitContext<'ctx>, name: &str) -> StructType<'ctx> {
     ctx.context.get_struct_type(name).unwrap_or_else(|| {
         panic!(
-            "alpha LLVM emit: named struct `{name}` not declared — \
+            "LLVM emit: named struct `{name}` not declared — \
              declare_enum_type ordering violation",
         )
     })

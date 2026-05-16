@@ -1,13 +1,13 @@
 //! IR-text snapshot tests for value-producing `if`/`else` and
 //! `cond` lowering through the LLVM emitter. Block parameters in
-//! alpha-IR translate to `phi` instructions at the merge block:
+//! IR translate to `phi` instructions at the merge block:
 //! one phi per `BlockParam`, one `add_incoming` call per
 //! `BranchTarget` arg. These tests pin the resulting LLVM IR text
 //! shape so a future regression that drops phi emission or shuffles
 //! the incoming wiring shows up as a substring miss.
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 

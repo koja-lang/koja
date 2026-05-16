@@ -19,12 +19,12 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
-use expo_alpha_typecheck::{FunctionSignature, GlobalRegistry};
 use expo_ast::ast::{
     AssignTarget, BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm,
     Pattern, Statement, StringPart,
 };
 use expo_ast::identifier::{AnonymousKind, FnParam, LocalId, Resolution, ResolvedType};
+use expo_typecheck::{FunctionSignature, GlobalRegistry};
 
 use crate::function::{
     FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
@@ -139,7 +139,7 @@ fn expect_function_params(resolution: &ResolvedType) -> &[FnParam] {
     match resolution {
         ResolvedType::Anonymous(AnonymousKind::Function { params, .. }) => params,
         other => panic!(
-            "alpha IR lower: closure resolution must be Anonymous(Function), got {other:?} — \
+            "IR lower: closure resolution must be Anonymous(Function), got {other:?} — \
              typecheck seal violation",
         ),
     }
@@ -149,7 +149,7 @@ fn expect_function_return(resolution: &ResolvedType) -> &ResolvedType {
     match resolution {
         ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) => ret,
         other => panic!(
-            "alpha IR lower: closure resolution must be Anonymous(Function), got {other:?} — \
+            "IR lower: closure resolution must be Anonymous(Function), got {other:?} — \
              typecheck seal violation",
         ),
     }
@@ -432,7 +432,7 @@ impl CaptureWalker {
 
     fn visit_pattern(&mut self, _pattern: &Pattern) {
         // Patterns don't reference outer locals through expressions
-        // alpha lowers today; nested expression slots (`Bind { default }`)
+        // we lower today; nested expression slots (`Bind { default }`)
         // would extend this when they land.
     }
 
@@ -570,11 +570,11 @@ fn closure_param_local_id(param: &ClosureParam, index: usize) -> LocalId {
         } => *id,
         ClosureParam::Name { local_id: None, .. }
         | ClosureParam::Wildcard { local_id: None, .. } => panic!(
-            "alpha IR lower: closure param #{index} carries no LocalId — \
+            "IR lower: closure param #{index} carries no LocalId — \
              typecheck resolve invariant violation",
         ),
         ClosureParam::Destructured { .. } => panic!(
-            "alpha IR lower: closure param #{index} ({:?}) is not yet supported in lowering",
+            "IR lower: closure param #{index} ({:?}) is not yet supported in lowering",
             param,
         ),
     }

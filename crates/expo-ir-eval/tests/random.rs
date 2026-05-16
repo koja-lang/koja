@@ -15,8 +15,8 @@
 //! `min == max` (deterministic) so the test doesn't depend on the
 //! live entropy source.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

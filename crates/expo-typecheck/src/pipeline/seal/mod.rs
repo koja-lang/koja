@@ -217,7 +217,7 @@ pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
 
 pub(super) fn seal_panic(message: &str, span: Span) -> ! {
     panic!(
-        "alpha typecheck seal violation: {message} at line {}, column {}",
+        "typecheck seal violation: {message} at line {}, column {}",
         span.start.line, span.start.column
     );
 }

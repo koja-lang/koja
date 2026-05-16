@@ -4,7 +4,7 @@
 //! Mismatched shapes surface a typed
 //! [`RuntimeError::TypeMismatch`] instead of coercing.
 
-use expo_alpha_ir::{EqualityImpl, FloatType};
+use expo_ir::{EqualityImpl, FloatType};
 
 use crate::error::RuntimeError;
 use crate::value::Value;

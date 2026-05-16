@@ -354,7 +354,7 @@ lang_test_dir!(lang_alias_dep, "alias_dep", project);
 
 /// Canary for the TypeIdentifier migration: two packages each define
 /// `struct Config`, used from a root package via aliases. Today the bare-name
-/// entries in `TypeContext::name_index` are last-write-wins, so alpha's own
+/// entries in `TypeContext::name_index` are last-write-wins, so the pipeline's own
 /// references to `Config` resolve to beta.Config (or vice versa) and the
 /// program fails at typecheck. This test must pass once the migration is
 /// complete; until then it is the oracle that we are actually fixing the bug.

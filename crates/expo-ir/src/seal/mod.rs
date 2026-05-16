@@ -272,5 +272,5 @@ pub(super) fn terminator_targets(term: &IRTerminator) -> Vec<IRBlockId> {
 }
 
 pub(super) fn seal_panic(message: &str) -> ! {
-    panic!("alpha IR seal violation: {message}");
+    panic!("IR seal violation: {message}");
 }

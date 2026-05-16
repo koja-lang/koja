@@ -14,7 +14,7 @@
 //! independent stores. The trailing `\0` (when requested) is a
 //! single byte store after the memcpy.
 
-use expo_alpha_ir::IRFunction;
+use expo_ir::IRFunction;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
 use crate::ctx::EmitContext;
@@ -66,7 +66,7 @@ pub(super) fn emit_payload_clone<'ctx>(
 /// values are addressed at their first payload byte, header at
 /// offset `-8`).
 ///
-/// Same shape every heap-clone-flavored intrinsic in alpha needs —
+/// Same shape every heap-clone-flavored intrinsic in the pipeline needs —
 /// callers wire it into a wider control-flow shape when they want
 /// `Result.Ok(new_payload)` (`Binary.to_string`) vs a plain return
 /// (`String.clone`).

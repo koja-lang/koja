@@ -5,9 +5,9 @@
 //! `resolution`. Error paths assert a diagnostic on ill-typed
 //! programs.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

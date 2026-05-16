@@ -14,7 +14,7 @@
 //! makes the dedup-by-instantiation-set contract observable — every
 //! value reaching the interpreter carries the mangled name, so the
 //! test fixture observes the closure-pass result end-to-end without
-//! reaching back into [`expo_alpha_ir`] internals.
+//! reaching back into [`expo_ir`] internals.
 //!
 //! Field-access *through* a generic value (`Pair{...}.a`) isn't
 //! exercised here: typecheck doesn't yet substitute `TypeParam`
@@ -23,8 +23,8 @@
 //! typecheck slice; the IR contract is concretely pinned by the
 //! construction-shaped tests in this file.
 
-use expo_alpha_ir_eval::{EnumPayload, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{EnumPayload, Value};
 
 mod common;
 

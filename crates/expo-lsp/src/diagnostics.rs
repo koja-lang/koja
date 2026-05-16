@@ -1,7 +1,7 @@
 //! Diagnostics pipeline for the Expo LSP.
 //!
 //! Bundles stdlib + project sibling files + the active buffer into a
-//! single [`ParsedProgram`], runs the alpha pipeline
+//! single [`ParsedProgram`], runs the pipeline
 //! ([`parse_program`] then [`check_program`]), merges parse-phase and
 //! check-phase diagnostics, filters to the active path, and publishes
 //! them to the client.
@@ -17,9 +17,9 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use tower_lsp_server::ls_types::*;
 
-use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::ast::{Diagnostic as ExpoDiagnostic, Severity as ExpoSeverity};
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
+use expo_typecheck::{CheckedProgram, check_program};
 
 use crate::backend::{Backend, DocumentState};
 use crate::convert::{span_to_range, uri_to_path};
@@ -157,11 +157,11 @@ fn push_package_files(
             if current_path.is_some_and(|cp| same_file(&file_path, cp)) {
                 continue;
             }
-            // Mirror [`expo_driver::alpha::push_package_sources`]: files
-            // whose stem starts with `alpha_` are alpha-only sources
+            // Mirror [`expo_driver::pipeline::push_package_sources`]: files
+            // whose stem starts with `alpha_` are pipeline-only sources
             // delivered exclusively through the curated autoimport set
             // (their declarations would land out-of-order if pulled
-            // from disk — e.g. `alpha_debug_containers` references
+            // from disk — e.g. `debug_containers` references
             // `Pair`/`Option`/`Result` and must come after `kernel`).
             if is_alpha_only_path(&file_path) {
                 continue;
@@ -198,7 +198,7 @@ fn read_project_name(project_root: &Path) -> Option<String> {
 }
 
 impl Backend {
-    /// Runs the alpha pipeline on the current source text and publishes
+    /// Runs the pipeline on the current source text and publishes
     /// LSP diagnostics for the active document.
     ///
     /// The bundle (stdlib + siblings + active buffer) is parsed and
@@ -290,7 +290,7 @@ impl Backend {
 impl Backend {
     /// Bundle the source list that gets fed to `parse_program`.
     ///
-    /// Mirrors [`expo_driver::alpha::bundle_many_with_autoimport`]: the
+    /// Mirrors [`expo_driver::pipeline::bundle_many_with_autoimport`]: the
     /// embedded autoimport set is dropped for any module already
     /// provided by the active package (so opening
     /// `lib/global/src/debug.expo` doesn't double-define `Global.debug`),

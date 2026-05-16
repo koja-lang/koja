@@ -1,26 +1,27 @@
 //! Collect sub-pass: register a canonical [`Identifier`] for every
-//! globally-named decl. Pure registration — signature resolution lives
-//! in [`super::lift_signatures`].
+//! globally-named decl. Pure registration — signature resolution
+//! lives in [`super::lift_signatures`].
 //!
 //! Path encoding follows the [`Identifier`] convention: top-level
-//! functions register at `path = ["name"]`; static methods on `Point`
-//! (declared inline in the struct body or in an `impl` block) register
-//! at `path = ["Point", "name"]`. Both forms produce the same registry
-//! entry so call resolution can't tell them apart.
+//! functions register at `path = ["name"]`; static methods on
+//! `Point` (declared inline in the struct body or in an `impl`
+//! block) register at `path = ["Point", "name"]`. Both forms
+//! produce the same registry entry so call resolution can't tell
+//! them apart.
 //!
-//! The walk is split into two passes: pass 1 registers `Item::Function`
-//! and `Item::Struct` (including each `decl.functions[i]`); pass 2
-//! registers `Item::Impl`. The split makes `impl Foo` order-independent
-//! relative to `struct Foo` — pass 2 always sees a fully-populated
-//! registry of declared types.
+//! The walk is split into two passes driven by
+//! [`super::super::program::check_program`]: pass 1
+//! ([`collect_file_decls`]) registers `Item::Function`, `Item::Struct`,
+//! `Item::Enum`, `Item::Protocol`, `Item::Constant`, and
+//! `Item::TypeAlias` (including each `decl.functions[i]`); pass 2
+//! ([`collect_file_impls`]) registers `Item::Impl`. Each pass runs
+//! across every file in every package before the next starts —
+//! that makes `impl Foo` order-independent relative to its target,
+//! regardless of which file (or which package) declared `Foo`.
 //!
-//! Today the supported surface is: top-level functions, structs, and
-//! static methods on structs (no `self`). Default field values and
-//! impl-block type aliases surface as feature-gap diagnostics here so
-//! later passes never see those shapes. `alias Pkg.Type` is accepted
-//! as a no-op at collect; [`super::aliases::validate_aliases`] runs
-//! immediately after to enforce path-len / target-exists / no-shadow
-//! rules.
+//! `alias Pkg.Type` is accepted as a no-op at collect;
+//! [`super::aliases::validate_aliases`] runs immediately after to
+//! enforce path-len / target-exists / no-shadow rules.
 
 use expo_ast::ast::{
     Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File,
@@ -32,16 +33,17 @@ use expo_ast::span::Span;
 
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome};
 
-pub(crate) fn collect_file(
+/// Pass 1 of collect: register every named decl (functions,
+/// structs, enums, protocols, constants, type aliases) so that
+/// downstream impl blocks have a fully-populated registry to look
+/// up against. Skips impl blocks; pass 2 handles those once every
+/// file's types are in the registry.
+pub(crate) fn collect_file_decls(
     file: &File,
     package: &str,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // Pass 1: top-level functions, structs, enums, protocols, and
-    // inline static/instance methods. Every type / protocol name a
-    // later impl block could target is registered before pass 2
-    // starts looking up impl targets.
     for item in &file.items {
         match item {
             Item::Enum(decl) => {
@@ -85,9 +87,18 @@ pub(crate) fn collect_file(
             }
         }
     }
+}
 
-    // Pass 2: impl blocks, now that every struct declared anywhere in
-    // the file has a registry entry.
+/// Pass 2 of collect: register every `impl` block. Must run after
+/// [`collect_file_decls`] has been invoked on every file in every
+/// package, so that an impl in one file targeting a type declared
+/// in another file (or another package) finds its target.
+pub(crate) fn collect_file_impls(
+    file: &File,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
     for item in &file.items {
         if let Item::Impl(impl_block) = item {
             register_impl(impl_block, package, registry, diagnostics);
@@ -262,7 +273,7 @@ fn register_impl(
     diagnose_impl_member_feature_gaps(impl_block, diagnostics);
     let Some(target_name) = simple_named_target(&impl_block.target) else {
         diagnostics.push(Diagnostic::error(
-            "alpha typecheck does not yet support generic impl targets".to_string(),
+            "typecheck does not yet support generic impl targets".to_string(),
             type_expr_span(&impl_block.target),
         ));
         return;
@@ -270,7 +281,7 @@ fn register_impl(
     let target_identifier = Identifier::new(package, vec![target_name.to_string()]);
     let Some((_, entry)) = registry.lookup(&target_identifier) else {
         diagnostics.push(Diagnostic::error(
-            format!("alpha typecheck cannot extend unknown type `{target_name}`"),
+            format!("typecheck cannot extend unknown type `{target_name}`"),
             type_expr_span(&impl_block.target),
         ));
         return;
@@ -278,7 +289,7 @@ fn register_impl(
     if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck only supports `impl` on structs and enums \
+                "typecheck only supports `impl` on structs and enums \
                  (`{target_name}` is a {})",
                 entry.kind.label(),
             ),
@@ -416,7 +427,7 @@ fn diagnose_alias_annotations(
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support `@{}` on type alias `{alias_name}`",
+                "typecheck does not yet support `@{}` on type alias `{alias_name}`",
                 annotation.name,
             ),
             annotation.span,
@@ -435,7 +446,7 @@ fn diagnose_constant_annotations(
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support annotations on constant items \
+                "typecheck does not yet support annotations on constant items \
                  (`@{}` on `{constant_name}`)",
                 annotation.name,
             ),
@@ -504,7 +515,7 @@ fn diagnose_struct_annotations(
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support annotations on struct items \
+                "typecheck does not yet support annotations on struct items \
                  (`@{}` on `{struct_name}`)",
                 annotation.name,
             ),
@@ -521,7 +532,7 @@ fn diagnose_struct_field_gaps(
     if field.default.is_some() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support default field values \
+                "typecheck does not yet support default field values \
                  (on `{struct_name}.{}`)",
                 field.name,
             ),
@@ -541,7 +552,7 @@ fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support annotations on enum items \
+                "typecheck does not yet support annotations on enum items \
                  (`@{}` on `{}`)",
                 annotation.name, decl.name,
             ),
@@ -582,8 +593,7 @@ fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut V
     for member in &impl_block.members {
         if let ImplMember::TypeAlias(alias) = member {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support `type` aliases inside `impl` blocks"
-                    .to_string(),
+                "typecheck does not yet support `type` aliases inside `impl` blocks".to_string(),
                 alias.span,
             ));
         }
@@ -601,7 +611,7 @@ fn diagnose_protocol_feature_gaps(decl: &ProtocolDecl, diagnostics: &mut Vec<Dia
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support annotations on protocols \
+                "typecheck does not yet support annotations on protocols \
                  (`@{}` on `{}`)",
                 annotation.name, decl.name,
             ),
@@ -621,7 +631,7 @@ fn diagnose_protocol_method_feature_gaps(
     if !method.type_params.is_empty() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support generic protocol methods \
+                "typecheck does not yet support generic protocol methods \
                  (`{protocol_name}.{}` has type parameters)",
                 method.name,
             ),
@@ -634,7 +644,7 @@ fn diagnose_protocol_method_feature_gaps(
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not yet support annotations on protocol methods \
+                "typecheck does not yet support annotations on protocol methods \
                  (`@{}` on `{protocol_name}.{}`)",
                 annotation.name, method.name,
             ),

@@ -223,7 +223,7 @@ fn resolve_generic(
     if path.len() == 1 && type_params.lookup(&path[0], scope.registry).is_some() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck: type parameter `{}` cannot take type arguments",
+                "typecheck: type parameter `{}` cannot take type arguments",
                 path[0],
             ),
             span,
@@ -294,7 +294,7 @@ pub(crate) fn resolve_path_to_global(
             return Some(id);
         }
         diagnostics.push(Diagnostic::error(
-            format!("alpha typecheck does not recognize the alias target `{target}`"),
+            format!("typecheck does not recognize the alias target `{target}`"),
             span,
         ));
         return None;
@@ -320,7 +320,7 @@ pub(crate) fn resolve_path_to_global(
         if path.len() == 1 && !entry.identifier.is_in_global() {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck only recognizes `Global.*` primitive type names; got `{}`",
+                    "typecheck only recognizes `Global.*` primitive type names; got `{}`",
                     path[0],
                 ),
                 span,
@@ -331,7 +331,7 @@ pub(crate) fn resolve_path_to_global(
     }
     diagnostics.push(Diagnostic::error(
         format!(
-            "alpha typecheck does not recognize the type name `{}` (no same-package or \
+            "typecheck does not recognize the type name `{}` (no same-package or \
              `Global.*` entry registered)",
             path.join("."),
         ),

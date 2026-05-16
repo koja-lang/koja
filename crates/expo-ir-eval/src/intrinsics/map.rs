@@ -13,7 +13,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use expo_alpha_ir::{IRFunction, MapMethod};
+use expo_ir::{IRFunction, MapMethod};
 
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;

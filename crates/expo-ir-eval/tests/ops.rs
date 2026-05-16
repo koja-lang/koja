@@ -8,7 +8,7 @@
 //! shape lowering produces; the helpers themselves never see anything
 //! but pre-resolved [`Value`] operands.
 
-use expo_alpha_ir_eval::Value;
+use expo_ir_eval::Value;
 
 mod common;
 

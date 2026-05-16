@@ -13,14 +13,14 @@ use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalRegistry};
 use expo_ast::ast::File;
 use expo_parser::{ParsedProgram, SourceFile};
+use expo_typecheck::{CheckedProgram, GlobalRegistry};
 
 use crate::lookup::LocalIndex;
 
 /// Cached state for a single open document. Holds the parsed program
-/// and the optional sealed [`CheckedProgram`] from the alpha typecheck
+/// and the optional sealed [`CheckedProgram`] from the typecheck
 /// pipeline. On typecheck failure we keep the parsed AST so AST-only
 /// handlers (symbols, folding) still work.
 pub(crate) struct DocumentState {
@@ -66,7 +66,7 @@ impl DocumentState {
 /// is currently editing — opening `lib/global/src/foo.expo` must not
 /// double-bundle the embedded `Global.*` modules alongside the
 /// on-disk siblings. Mirrors
-/// [`expo_driver::alpha::bundle_many_with_autoimport`]'s
+/// [`expo_driver::pipeline::bundle_many_with_autoimport`]'s
 /// `skip_package` behavior.
 pub struct Backend {
     pub(crate) client: Client,
@@ -88,7 +88,7 @@ impl std::fmt::Debug for DocumentState {
 }
 
 impl Backend {
-    /// Creates a new backend, pre-loading the alpha stdlib sources.
+    /// Creates a new backend, pre-loading the stdlib sources.
     /// The sources are parsed fresh on every diagnostic run; caching
     /// them as `SourceFile`s avoids re-reading the embedded strings on
     /// every keystroke while keeping each parse independent.
@@ -96,8 +96,8 @@ impl Backend {
         Self {
             client,
             documents: Arc::new(RwLock::new(HashMap::new())),
-            autoimport_sources: Arc::new(expo_stdlib::alpha_autoimport_sources()),
-            qualified_sources: Arc::new(expo_stdlib::alpha_qualified_sources()),
+            autoimport_sources: Arc::new(expo_stdlib::autoimport_sources()),
+            qualified_sources: Arc::new(expo_stdlib::qualified_sources()),
         }
     }
 }

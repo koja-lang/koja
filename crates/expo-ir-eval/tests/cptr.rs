@@ -10,8 +10,8 @@
 //! suite) since constructing a header-prefixed buffer manually from
 //! pure Expo is awkward.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 
@@ -20,7 +20,7 @@ use common::evaluate_script;
 #[test]
 fn cptr_null_returns_a_null_pointer() {
     // Type-annotated binding pins `T = UInt8` for `CPtr.null` —
-    // alpha's bidirectional inference reads it off the lhs.
+    // bidirectional inference reads it off the lhs.
     let outcome = evaluate_script(&dedent(
         r#"
         p: CPtr<UInt8> = CPtr.null()

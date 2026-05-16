@@ -3,10 +3,10 @@
 //! conformance diagnostics (missing / extra / sig mismatches), and
 //! the inherent-vs-trait collision case.
 
-use expo_alpha_typecheck::GlobalKind;
 use expo_ast::ast::{Item, Visibility};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::GlobalKind;
 
 mod common;
 

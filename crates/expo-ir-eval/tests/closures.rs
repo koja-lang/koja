@@ -3,12 +3,12 @@
 //! Pins runtime behavior across the two dispatch shapes the lower
 //! pass emits — direct user closures and named-fn-as-value adapters
 //! — including capture lifetimes, env indexing through
-//! [`expo_alpha_ir::IRInstruction::LoadCapture`], higher-order
+//! [`expo_ir::IRInstruction::LoadCapture`], higher-order
 //! parameter passing, and heap-typed captures whose outer slot is
 //! moved into the env.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

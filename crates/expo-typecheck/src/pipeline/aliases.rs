@@ -48,7 +48,7 @@ pub(crate) fn rewrite_through_aliases(
 }
 
 /// Walk every file in `packages`, validating each [`AliasDecl`].
-/// Runs after [`super::collect::collect_file`] (so the registry
+/// Runs after [`super::collect::collect_file_decls`] (so the registry
 /// holds every package + Global decl) and before
 /// [`super::lift_signatures::lift_signatures`] (so type-name
 /// lookups in struct / fn signatures see the validated roster).
@@ -197,7 +197,7 @@ fn check_no_duplicate(
 }
 
 /// Reject any alias whose `local_name` collides with an existing
-/// binding in the current package or `Global` — alpha treats
+/// binding in the current package or `Global` — the pipeline treats
 /// shadowing as a hard error. Carve-out: when the colliding
 /// identifier *is* the alias target, the alias is redundant but
 /// not a shadow (resolves to the same id). Allow it.
@@ -225,7 +225,7 @@ fn check_no_shadow(
         }
         diagnostics.push(Diagnostic::error_with_hint(
             format!(
-                "alias `{}` would shadow existing {} `{}` -- alpha rejects shadowing",
+                "alias `{}` would shadow existing {} `{}` -- the pipeline rejects shadowing",
                 alias.local_name,
                 entry.kind.label(),
                 entry.identifier,

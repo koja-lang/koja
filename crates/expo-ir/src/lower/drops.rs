@@ -4,14 +4,14 @@
 //! stamps when the function body falls off the end without an
 //! explicit terminator.
 //!
-//! The model is function-flat: alpha-IR locals don't track
+//! The model is function-flat: IR locals don't track
 //! per-block scopes, so every Live & Owned slot at the function-exit
 //! site gets a [`crate::IRInstruction::DropLocal`]. This is
 //! equivalent to v1's `emit_function_drops` for the foundation
 //! slice and consistent with the "drops at function boundary" Phase A
 //! contract from `COMPILER-NORTHSTAR.md`.
 //!
-//! Drop order isn't load-bearing today: alpha doesn't expose any
+//! Drop order isn't load-bearing today: the pipeline does not yet expose any
 //! observable side effect from `free` (no destructor methods, no
 //! reference cycles). [`FnLowerCtx::live_owned_locals`] yields
 //! slots in declaration order (the [`std::collections::BTreeMap`]

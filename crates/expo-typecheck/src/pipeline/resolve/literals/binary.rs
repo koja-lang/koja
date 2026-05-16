@@ -32,7 +32,7 @@ use crate::registry::GlobalRegistry;
 /// Per-segment kind decided from the AST modifiers and the
 /// resolved value type. The IR lowering layer re-derives the same
 /// shape from the AST during
-/// [`expo_alpha_ir::lower::binary_literal`] — typecheck only needs
+/// [`expo_ir::lower::binary_literal`] — typecheck only needs
 /// to know that the value type is admissible and to count bits.
 /// Carrying the kind alongside the bit width lets the typecheck
 /// pass return one structured result per segment without committing
@@ -111,7 +111,7 @@ fn resolve_segment(
     if let Some(byte_length) = string_segment_byte_length(segment) {
         if segment.size.is_some() || segment.type_ann.is_some() {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: a `String`-valued binary segment cannot \
+                "typecheck: a `String`-valued binary segment cannot \
                  carry a `::N` size or `:Type` annotation",
                 segment.span,
             ));
@@ -131,7 +131,7 @@ fn resolve_segment(
                 Ok(parsed) => parsed,
                 Err(_) => {
                     diagnostics.push(Diagnostic::error(
-                        format!("alpha typecheck: invalid binary segment size literal `{n}`"),
+                        format!("typecheck: invalid binary segment size literal `{n}`"),
                         size_expr.span,
                     ));
                     return None;
@@ -139,7 +139,7 @@ fn resolve_segment(
             },
             _ => {
                 diagnostics.push(Diagnostic::error(
-                    "alpha typecheck does not yet support dynamic-width binary segments \
+                    "typecheck does not yet support dynamic-width binary segments \
                      (`::n` where `n` is not a literal int)",
                     size_expr.span,
                 ));
@@ -152,7 +152,7 @@ fn resolve_segment(
         };
         if width_bits == 0 {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: a binary segment must carry at least 1 bit",
+                "typecheck: a binary segment must carry at least 1 bit",
                 segment.span,
             ));
             return None;
@@ -163,7 +163,7 @@ fn resolve_segment(
         // misuse like `1.0 :: 16` doesn't silently coerce.
         if !is_primitive(&segment.value.resolution, registry, "Int") {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: `::N` segment size requires an `Int`-typed value",
+                "typecheck: `::N` segment size requires an `Int`-typed value",
                 segment.span,
             ));
             return None;
@@ -180,7 +180,7 @@ fn resolve_segment(
     if let Some(type_ann) = &segment.type_ann {
         let TypeExpr::Named { path, .. } = type_ann else {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: binary segment type annotation must be a primitive name",
+                "typecheck: binary segment type annotation must be a primitive name",
                 segment.span,
             ));
             return None;
@@ -200,7 +200,7 @@ fn resolve_segment(
             other => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck: binary segment type annotation `{other}` is not \
+                        "typecheck: binary segment type annotation `{other}` is not \
                          a recognized primitive (expected one of: Int8/16/32/64, \
                          UInt8/16/32/64, Float32, Float64)",
                     ),
@@ -220,7 +220,7 @@ fn resolve_segment(
     // Bare segment: integer value, default 8-bit unsigned width.
     if !is_primitive(&segment.value.resolution, registry, "Int") {
         diagnostics.push(Diagnostic::error(
-            "alpha typecheck: bare binary segment requires an `Int`-typed value (or use \
+            "typecheck: bare binary segment requires an `Int`-typed value (or use \
              a `: Type` / `::N` modifier to spell out the segment shape)",
             segment.span,
         ));
@@ -280,8 +280,8 @@ fn literal_fits_int_segment(
 
 /// Recover the byte length of a string-literal segment (no
 /// interpolations). Returns `None` for non-string and interpolated
-/// strings — interpolation in binary segments isn't supported in
-/// alpha (interpolation is a feature gap everywhere else too).
+/// strings — interpolation in binary segments is a feature gap
+/// (and the same is true everywhere else interpolation appears).
 fn string_segment_byte_length(segment: &BinarySegment) -> Option<u64> {
     let ExprKind::String { parts, .. } = &segment.value.kind else {
         return None;

@@ -12,14 +12,14 @@
 //! - The entry block stays the home of every `LocalDecl` (LLVM relies
 //!   on this for single-`alloca` hoisting).
 
-use expo_alpha_ir::{IRFunction, IRInstruction, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{IRFunction, IRInstruction, IRType};
 
 mod common;
 
 use common::{function, lower_program_source as lower};
 
-fn entry_block(function: &IRFunction) -> &expo_alpha_ir::IRBasicBlock {
+fn entry_block(function: &IRFunction) -> &expo_ir::IRBasicBlock {
     function
         .blocks
         .first()

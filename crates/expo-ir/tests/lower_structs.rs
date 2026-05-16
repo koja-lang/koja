@@ -16,8 +16,8 @@
 //!   surface a [`LowerError::Diagnostics`] with the matching message
 //!   and the offending struct is dropped from the package fragment.
 
-use expo_alpha_ir::{IRInstruction, IRProgram, IRStructDecl, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{IRInstruction, IRProgram, IRStructDecl, IRType};
 
 mod common;
 
@@ -237,13 +237,13 @@ fn nested_field_access_chains_two_field_gets() {
 // pipeline these tests drive. The IR-side checks stay as defense-in-depth
 // for any future caller that bypasses typecheck (e.g. tooling that constructs
 // a CheckedProgram by hand); the typecheck-side gaps are covered by
-// `expo-alpha-typecheck/tests/structs.rs`.
+// `expo-typecheck/tests/structs.rs`.
 
 // ---------------------------------------------------------------------------
 // Static methods (inline + impl-block forms)
 // ---------------------------------------------------------------------------
 
-use expo_alpha_ir::FunctionKind;
+use expo_ir::FunctionKind;
 
 #[test]
 fn inline_static_method_lowers_into_package_function_map() {

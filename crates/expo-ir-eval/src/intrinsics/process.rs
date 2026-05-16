@@ -3,11 +3,11 @@
 //! live in the LLVM backend's `expo_rt_*` runtime ABI — so every
 //! method here returns [`RuntimeError::Unsupported`]. The dispatch
 //! still goes through an exhaustive match on
-//! [`expo_alpha_ir::RefMethod`] / [`expo_alpha_ir::ReplyToMethod`]
+//! [`expo_ir::RefMethod`] / [`expo_ir::ReplyToMethod`]
 //! so adding a new mailbox primitive forces a touch here even
 //! while the bodies stay stubs.
 
-use expo_alpha_ir::{IRFunction, RefMethod, ReplyToMethod};
+use expo_ir::{IRFunction, RefMethod, ReplyToMethod};
 
 use crate::error::RuntimeError;
 use crate::value::Value;
@@ -18,7 +18,7 @@ pub(super) fn ref_dispatch(
 ) -> Result<Value, RuntimeError> {
     Err(RuntimeError::Unsupported {
         detail: format!(
-            "`Ref.{}` (called via `{}`) is not supported under the alpha interpreter; \
+            "`Ref.{}` (called via `{}`) is not supported under the interpreter; \
              process scheduling lives in the LLVM runtime",
             method_name(method),
             function.symbol,
@@ -32,7 +32,7 @@ pub(super) fn reply_to_dispatch(
 ) -> Result<Value, RuntimeError> {
     Err(RuntimeError::Unsupported {
         detail: format!(
-            "`ReplyTo.{}` (called via `{}`) is not supported under the alpha interpreter; \
+            "`ReplyTo.{}` (called via `{}`) is not supported under the interpreter; \
              reply delivery lives in the LLVM runtime",
             reply_method_name(method),
             function.symbol,

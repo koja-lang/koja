@@ -8,9 +8,9 @@
 //! `bounded_dispatch.rs`; struct-side concrete-impl shape coverage
 //! lives in `structs.rs`. This file pins the protocol-side surface.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 

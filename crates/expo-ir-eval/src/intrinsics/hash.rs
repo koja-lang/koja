@@ -7,7 +7,7 @@
 //! LLVM-side [`crate::intrinsics::hash::emit_string_hash`] for the
 //! IR-level twin.
 
-use expo_alpha_ir::HashImpl;
+use expo_ir::HashImpl;
 
 use crate::error::RuntimeError;
 use crate::value::Value;

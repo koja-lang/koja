@@ -6,9 +6,9 @@
 //! linker metadata and pass through silently — the IR layer
 //! consumes them via `AnnotationKind::Link`.
 
-use expo_alpha_typecheck::GlobalKind;
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::GlobalKind;
 
 mod common;
 

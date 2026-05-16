@@ -7,7 +7,7 @@
 //! the `IRType::List(_)` inner type carried on the function's
 //! signature, then generates the same shape of IR regardless of `T`.
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ListMethod};
+use expo_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ListMethod};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;

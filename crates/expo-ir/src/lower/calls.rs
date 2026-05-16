@@ -4,13 +4,11 @@
 //! same registry-driven mangling / instantiation-recording shape and
 //! benefit from a single emitter ([`emit_call`]).
 
-use expo_alpha_typecheck::{
-    Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry,
-};
 use expo_ast::ast::{Arg, Expr, ExprKind};
 use expo_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
+use expo_typecheck::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
@@ -28,7 +26,7 @@ use crate::types::{ConstValue, IRType, ValueId};
 ///   [`IRInstruction::CallClosure`] through the local's
 ///   `IRType::Function` slot.
 /// - `FieldAccess` with an `AnonymousKind::Function` resolution
-///   (produced by the field-as-callable rewrite in alpha-typecheck)
+///   (produced by the field-as-callable rewrite in typecheck)
 ///   — lower the callee expression to a fn-typed value, then emit
 ///   [`IRInstruction::CallClosure`].
 pub(super) fn lower_call(
@@ -45,7 +43,7 @@ pub(super) fn lower_call(
     }
     let ExprKind::Ident { resolution, name } = &callee.kind else {
         panic!(
-            "alpha IR lower: call callee must be a bare Ident or FieldAccess after typecheck seal \
+            "IR lower: call callee must be a bare Ident or FieldAccess after typecheck seal \
              (got {:?})",
             callee.kind,
         );
@@ -62,11 +60,11 @@ pub(super) fn lower_call(
         );
     }
     let Resolution::Global(id) = resolution else {
-        panic!("alpha IR lower: callee `{name}` has Unresolved resolution after typecheck seal",);
+        panic!("IR lower: callee `{name}` has Unresolved resolution after typecheck seal",);
     };
     let entry = registry.get(*id).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: callee id {id} not present in the registry — \
+            "IR lower: callee id {id} not present in the registry — \
              seal invariant violation",
         )
     });
@@ -132,7 +130,7 @@ fn impl_pinned_call_symbol(
     let path = identifier.path();
     assert!(
         path.len() >= 2,
-        "alpha IR lower: impl_args expects an owner-qualified identifier (got `{identifier}`)",
+        "IR lower: impl_args expects an owner-qualified identifier (got `{identifier}`)",
     );
     let owner = Identifier::new(identifier.package(), path[..path.len() - 1].to_vec());
     let owner_symbol = IRSymbol::from_identifier(&owner);
@@ -161,7 +159,7 @@ fn lower_local_closure_call(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = callee_ty else {
         panic!(
-            "alpha IR lower: local closure call callee resolved to non-function type \
+            "IR lower: local closure call callee resolved to non-function type \
              ({callee_ty:?}) — typecheck seal violation",
         );
     };
@@ -228,7 +226,7 @@ fn lower_closure_expr_call(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = &callee.resolution else {
         panic!(
-            "alpha IR lower: closure-expr call callee resolved to non-function type ({:?}) — \
+            "IR lower: closure-expr call callee resolved to non-function type ({:?}) — \
              typecheck seal violation",
             callee.resolution,
         );
@@ -309,7 +307,7 @@ pub(super) fn lower_method_call(
 
     let struct_entry = registry.get(struct_id).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: method call receiver id {struct_id} not present in the registry — \
+            "IR lower: method call receiver id {struct_id} not present in the registry — \
              seal invariant violation",
         )
     });
@@ -319,7 +317,7 @@ pub(super) fn lower_method_call(
     let method_identifier = Identifier::new(struct_entry.identifier.package(), method_path);
     let (method_id, method_entry) = registry.lookup(&method_identifier).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: method `{method_identifier}` missing from registry — \
+            "IR lower: method `{method_identifier}` missing from registry — \
              seal invariant violation",
         )
     });
@@ -377,7 +375,7 @@ pub(super) fn lower_method_call(
 /// Pull the receiver's type-args off a method-call site. For
 /// instance dispatch they live on `receiver.resolution.type_args`;
 /// for static dispatch the receiver is a bare type name with no
-/// type-args attached at the AST layer (alpha doesn't support
+/// type-args attached at the AST layer (the pipeline does not yet support
 /// turbofish-style invocation), so this is currently always empty.
 fn receiver_type_args(receiver: &Expr, _dispatch: Dispatch) -> Vec<ResolvedType> {
     // Static dispatch on a generic struct (`List.new()` against
@@ -394,7 +392,7 @@ fn function_signature_from_entry(entry: &RegistryEntry) -> &FunctionSignature {
     match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig,
         other => panic!(
-            "alpha IR lower: callee `{}` resolved to non-function entry ({}) — \
+            "IR lower: callee `{}` resolved to non-function entry ({}) — \
              typecheck seal violation",
             entry.identifier,
             other.label(),
@@ -421,7 +419,7 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
 /// Collapse `Global.Int64` / `Global.Float64` onto `Global.Int` /
 /// `Global.Float` for method lookup. The typecheck pass treats these
 /// pairs as alias-equivalent (see
-/// [`expo_alpha_typecheck::pipeline::resolve::types::types_equivalent`])
+/// [`expo_typecheck::pipeline::resolve::types::types_equivalent`])
 /// — until `Int` and `Float` become proper unions over their sized
 /// variants, methods registered on the unsized canonical (e.g.
 /// `Debug.format`, `Equality.eq`, `Hash.hash`) need to be reachable
@@ -462,14 +460,14 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
             } = &receiver.kind
             else {
                 panic!(
-                    "alpha IR lower: static method call receiver must be a bare Ident after \
+                    "IR lower: static method call receiver must be a bare Ident after \
                      typecheck seal (got {:?})",
                     receiver.kind,
                 );
             };
             let Resolution::Global(struct_id) = resolution else {
                 panic!(
-                    "alpha IR lower: static method call receiver `{name}` has Unresolved \
+                    "IR lower: static method call receiver `{name}` has Unresolved \
                      resolution after typecheck seal",
                 );
             };
@@ -483,7 +481,7 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
             } = resolution
             else {
                 panic!(
-                    "alpha IR lower: instance method receiver resolved to non-Global type \
+                    "IR lower: instance method receiver resolved to non-Global type \
                      ({resolution:?}) — typecheck seal must have rejected this",
                 );
             };
@@ -547,7 +545,7 @@ fn emit_call(
 
 /// `Debug` protocol methods that get the opaque-receiver shortcut.
 /// Mirrors the AST-layer opaque-field rule in
-/// [`expo_alpha_typecheck::pipeline::synthesize::derive_debug`] (the
+/// [`expo_typecheck::pipeline::synthesize::derive_debug`] (the
 /// `is_opaque_type` helper there). Keep the two layers in sync: if
 /// you add a new opaque shape to one, add it to the other.
 #[derive(Clone, Copy)]
@@ -559,7 +557,7 @@ enum OpaqueDebugMethod {
 
 /// Recognize a bounded `Debug.{format, print, inspect}` call whose
 /// receiver, after monomorphic substitution, resolved to a type that
-/// alpha treats as opaque to `format` (a union or a function/closure
+/// the pipeline treats as opaque to `format` (a union or a function/closure
 /// type). Returning `Some` short-circuits the regular instance-method
 /// path in [`lower_method_call`] — `receiver_struct_id` would
 /// otherwise panic because anonymous types have no `Named { Global }`

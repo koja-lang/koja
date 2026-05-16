@@ -1,5 +1,5 @@
 //! Runtime coverage for the union slice in
-//! [`expo_alpha_ir_eval::Interpreter`]: a member-typed value flowing
+//! [`expo_ir_eval::Interpreter`]: a member-typed value flowing
 //! through a union slot materializes a [`Value::Union`] carrying the
 //! union's mangled symbol, the canonical-position tag, and the boxed
 //! payload. A typed-binding `match` arm extracts the payload back out
@@ -19,8 +19,8 @@
 //!   reading the field yields the same `Value::Union` shape
 //!   construction would.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

@@ -34,8 +34,8 @@
 //!   `expo_rt_receive_timeout` reader pulls `R` straight off the
 //!   envelope's `+8` payload offset.
 
-use expo_alpha_ir::mangling::global_primitive_symbol;
-use expo_alpha_ir::{
+use expo_ir::mangling::global_primitive_symbol;
+use expo_ir::{
     IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, RefMethod, ReplyToMethod,
 };
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
@@ -109,7 +109,7 @@ fn emit_self_ref<'ctx>(
         IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
         other => {
             return Err(LlvmError::Codegen(format!(
-                "alpha LLVM emit: `Ref.self_ref` returns `{other:?}` (expected Struct) — \
+                "LLVM emit: `Ref.self_ref` returns `{other:?}` (expected Struct) — \
                  IR seal invariant violation",
             )));
         }
@@ -236,7 +236,7 @@ fn emit_call<'ctx>(
         IRType::Enum(symbol) => symbol.clone(),
         other => {
             return Err(LlvmError::Codegen(format!(
-                "alpha LLVM emit: `Ref.call` returns `{other:?}` (expected Enum) — \
+                "LLVM emit: `Ref.call` returns `{other:?}` (expected Enum) — \
                  IR seal invariant violation",
             )));
         }
@@ -661,7 +661,7 @@ fn ok_payload_field_type(
             Ok(fields.into_iter().next().unwrap().ir_type)
         }
         other => Err(LlvmError::Codegen(format!(
-            "alpha LLVM emit: `Ref.call` return `{result_symbol}` Ok variant has unexpected \
+            "LLVM emit: `Ref.call` return `{result_symbol}` Ok variant has unexpected \
              payload `{other:?}` (expected single-field) — IR seal invariant violation",
         ))),
     }
@@ -699,7 +699,7 @@ fn pid_from_self<'ctx>(
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let self_value = llvm_function.get_nth_param(0).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: `{}` missing self parameter",
+            "LLVM emit: `{}` missing self parameter",
             function.symbol,
         ))
     })?;
@@ -720,7 +720,7 @@ fn nth_param<'ctx, 'fn_>(
 ) -> Result<(BasicValueEnum<'ctx>, &'fn_ IRType), LlvmError> {
     let value = llvm_function.get_nth_param(index).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: `{}` missing param #{index}",
+            "LLVM emit: `{}` missing param #{index}",
             function.symbol,
         ))
     })?;
@@ -730,7 +730,7 @@ fn nth_param<'ctx, 'fn_>(
         .map(|p| &p.ty)
         .ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "alpha LLVM emit: `{}` IR has no param #{index}",
+                "LLVM emit: `{}` IR has no param #{index}",
                 function.symbol,
             ))
         })?;

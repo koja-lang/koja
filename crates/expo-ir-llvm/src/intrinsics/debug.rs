@@ -14,7 +14,7 @@
 //! `String.format` is intentionally absent — it ships a pure-Expo
 //! body in `lib/global/src/debug.expo`, not an intrinsic.
 
-use expo_alpha_ir::{DebugImpl, IRFunction, IntType};
+use expo_ir::{DebugImpl, IRFunction, IntType};
 use inkwell::values::{BasicValueEnum, FunctionValue};
 
 use crate::ctx::EmitContext;

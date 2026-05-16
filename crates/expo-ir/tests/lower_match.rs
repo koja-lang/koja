@@ -17,10 +17,10 @@
 //! act as catch-alls (no tag check, no test block — only binds in
 //! the success block).
 //!
-//! [`BlockParam`]: expo_alpha_ir::BlockParam
+//! [`BlockParam`]: expo_ir::BlockParam
 
-use expo_alpha_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType, IRVariantTag};
 use expo_ast::util::dedent;
+use expo_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType, IRVariantTag};
 
 mod common;
 

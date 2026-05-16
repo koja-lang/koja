@@ -1,4 +1,4 @@
-//! Pin alpha typecheck's bidirectional expected-type propagation:
+//! Pin typecheck's bidirectional expected-type propagation:
 //!
 //! - The function-body trailing expression sees the declared return
 //!   type as expected.

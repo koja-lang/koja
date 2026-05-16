@@ -1,4 +1,4 @@
-//! Translate alpha [`expo_alpha_ir::IRType`] values into the
+//! Translate [`expo_ir::IRType`] values into the
 //! corresponding inkwell types. `Bool` maps to `i1`; signed and
 //! unsigned widths share their LLVM width (signedness is
 //! per-instruction, not per-type); `Float32` / `Float64` map to
@@ -16,7 +16,7 @@
 //! [`crate::ctx::EmitContext`] so the layout matches the object emitter's
 //! ABI rather than a hard-coded 64-bit assumption.
 
-use expo_alpha_ir::IRType;
+use expo_ir::IRType;
 use inkwell::AddressSpace;
 use inkwell::context::Context;
 use inkwell::types::{

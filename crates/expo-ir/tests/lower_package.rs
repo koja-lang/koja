@@ -14,12 +14,12 @@
 //!   in a multi-fn package produces exactly one diagnostic for the
 //!   failing function while the rest are still walked.
 
-use expo_alpha_ir::{
+use expo_ast::identifier::Identifier;
+use expo_ast::util::dedent;
+use expo_ir::{
     ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRTerminator, IRType, LowerError,
     ProjectEntry, ValueId, lower_program,
 };
-use expo_ast::identifier::Identifier;
-use expo_ast::util::dedent;
 use expo_parser::ParseMode;
 
 mod common;
@@ -41,7 +41,7 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
 
     assert_eq!(program.entry_point.mangled(), format!("{PACKAGE}.main"));
     // The user-facing `TestApp` package has just `main`; the
-    // alpha auto-import seeds `Global` packages alongside it
+    // auto-import seeds `Global` packages alongside it
     // (today `Global.bitwise` + `Global.time`), so we assert on
     // the user package's shape only and let the stdlib packages
     // ride along.
@@ -194,9 +194,9 @@ fn lower_program_reports_missing_entry_point() {
 }
 
 /// Extern fns no longer surface a lower-time feature gap — they
-/// lower to [`expo_alpha_ir::FunctionKind::Extern`] with empty
+/// lower to [`expo_ir::FunctionKind::Extern`] with empty
 /// blocks. Type-shape rejections are intercepted earlier by the
-/// alpha-typecheck FFI gate (see `expo-alpha-typecheck`'s
+/// typecheck FFI gate (see `expo-typecheck`'s
 /// `extern_c.rs`). This test pins the lower-time positive path:
 /// FFI-admissible signatures lower cleanly with the empty-body
 /// shape the seal pass requires for `FunctionKind::Extern`.
@@ -219,7 +219,7 @@ fn extern_fn_lowers_with_empty_blocks_and_extern_kind() {
         cosf.blocks.len(),
     );
     assert!(
-        matches!(cosf.kind, expo_alpha_ir::FunctionKind::Extern(_)),
+        matches!(cosf.kind, expo_ir::FunctionKind::Extern(_)),
         "expected FunctionKind::Extern for cosf; got {:?}",
         cosf.kind,
     );
@@ -231,7 +231,7 @@ fn extern_fn_lowers_with_empty_blocks_and_extern_kind() {
 /// from the function that actually failed. Pins the per-function
 /// fail-fast contract so a single bad function doesn't mask issues in
 /// other ones and doesn't spew spurious errors either. Uses a
-/// bodyless `fn broken` (an IR-only feature gap that passes alpha
+/// bodyless `fn broken` (an IR-only feature gap that passes typecheck via
 /// typecheck and parse — see `decl.rs:485` — but which IR lower
 /// rejects with the bodyless-fn diagnostic in `package.rs:284`).
 #[test]

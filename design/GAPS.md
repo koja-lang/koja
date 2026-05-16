@@ -292,7 +292,7 @@ etc).
 emit a "reserved keyword `{name}` cannot be used as a parameter name"
 diagnostic instead of bailing the whole function.
 
-Surfaced during alpha use-after-move test writing (May 2026).
+Surfaced during use-after-move test writing (May 2026).
 
 ---
 
@@ -302,9 +302,9 @@ Audited 2026-05-03
 
 Inventory of every discrepancy between `expo-ast`, `expo-parser`,
 `grammar.ebnf`, `LANGUAGE.md`, `design/ROADMAP.md`, and downstream
-`expo-ir` / `expo-codegen` (non-alpha). Grouped by category so each item
-can be triaged independently: remove the cruft, tighten the AST, or just
-reconcile the docs.
+`expo-ir` / `expo-codegen` (as of the v1 pipeline). Grouped by category
+so each item can be triaged independently: remove the cruft, tighten
+the AST, or just reconcile the docs.
 
 ## B. AST shapes never produced by the parser (dead AST subspace)
 

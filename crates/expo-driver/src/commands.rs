@@ -5,7 +5,7 @@
 //! (`expo_parser`, `expo_lexer`, `expo_fmt`, `expo_doc`) for
 //! parse-only or filesystem tooling. Compiler-pipeline commands
 //! (`build`, `check`, `run`, `eval`, `shell`, `test`) live next
-//! door in [`crate::alpha`].
+//! door in [`crate::pipeline`].
 
 use std::path::{Path, PathBuf};
 use std::{env, fs, process};

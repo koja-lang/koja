@@ -1,4 +1,4 @@
-//! End-to-end smoke coverage for the alpha-foundation `move`/drop
+//! End-to-end smoke coverage for the foundation `move`/drop
 //! pipeline. Each test drives `parse → check → lower` against a
 //! source that exercises one of the three drop-pipeline scenarios
 //! and pins the resulting IR shape:
@@ -19,8 +19,8 @@
 //! `MoveOutLocal` substitution, and `emit_function_exit_drops`
 //! placement.
 
-use expo_alpha_ir::{IRBasicBlock, IRFunction, IRInstruction, IRLocalId, IRTerminator};
 use expo_ast::util::dedent;
+use expo_ir::{IRBasicBlock, IRFunction, IRInstruction, IRLocalId, IRTerminator};
 
 mod common;
 
@@ -344,7 +344,7 @@ fn match_arms_writing_owned_merge_to_owned_when_every_arm_agrees() {
 
 #[test]
 fn no_owned_slots_means_no_droplocal_or_moveoutlocal() {
-    // Smoke regression: existing alpha programs without `move`
+    // Smoke regression: existing programs without `move`
     // params or heap-typed assignments should produce zero
     // `DropLocal` and zero `MoveOutLocal` instructions across
     // every block. Guards against accidental drop-on-everything

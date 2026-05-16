@@ -8,11 +8,11 @@
 //! the block param to a phi node (LLVM) or bind on edge traversal
 //! (eval); this test crate just inspects the IR shape.
 //!
-//! [`BlockParam`]: expo_alpha_ir::BlockParam
-//! [`BranchTarget::args`]: expo_alpha_ir::BranchTarget::args
+//! [`BlockParam`]: expo_ir::BlockParam
+//! [`BranchTarget::args`]: expo_ir::BranchTarget::args
 
-use expo_alpha_ir::{BranchTarget, ConstValue, IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{BranchTarget, ConstValue, IRInstruction, IRTerminator, IRType};
 
 mod common;
 

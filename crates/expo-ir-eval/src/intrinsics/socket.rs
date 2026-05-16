@@ -13,7 +13,7 @@
 //! gives a clean, actionable diagnostic instead of a "no eval
 //! handler" generic.
 
-use expo_alpha_ir::{IRFunction, SocketMethod};
+use expo_ir::{IRFunction, SocketMethod};
 
 use crate::error::RuntimeError;
 use crate::value::Value;

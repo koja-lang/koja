@@ -20,7 +20,7 @@
 //! - This file: block seams, lookups, type aliases.
 //! - [`instruction`]: per-instruction dispatch (`emit_instruction`).
 //! - [`ops`]: binary + unary operator emission, parallel to
-//!   `expo-alpha-ir-eval/src/ops.rs`.
+//!   `expo-ir-eval/src/ops.rs`.
 //! - [`binary_construct`]: `BinaryConstruct` literal emission.
 //! - [`calls`]: direct-call (`Call`) emission.
 //! - [`closures`]: closure-shaped instructions (`MakeClosure`,
@@ -40,7 +40,7 @@
 use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::fmt::Display;
 
-use expo_alpha_ir::{
+use expo_ir::{
     BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRTerminator, IRType, ValueId,
 };
 use inkwell::basic_block::BasicBlock;
@@ -75,7 +75,7 @@ pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, BasicValueEnum<'ctx>>;
 pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 
 /// Per-function index of `phi` instructions emitted for each
-/// [`expo_alpha_ir::BlockParam`]. Branch terminators consult this
+/// [`expo_ir::BlockParam`]. Branch terminators consult this
 /// map post-`build_*_branch` to call `add_incoming` for every
 /// (phi, branch-arg) pair on each [`BranchTarget`]. Empty for blocks
 /// with no params (i.e. most blocks that aren't if/else/cond merges).
@@ -224,7 +224,7 @@ pub(crate) fn emit_block<'ctx>(
 }
 
 /// Pre-pass over `blocks`: for every IR block declaring at least
-/// one [`expo_alpha_ir::BlockParam`], position the builder at the
+/// one [`expo_ir::BlockParam`], position the builder at the
 /// matching LLVM block and emit one `phi` instruction per param.
 /// The phis form the join sites that branch terminators feed via
 /// `add_incoming` later in [`emit_terminator_default`].
@@ -391,13 +391,13 @@ fn emit_tail_call<'ctx>(
 ) -> Result<(), LlvmError> {
     let frame = ctx.tco_frame().unwrap_or_else(|| {
         panic!(
-            "alpha LLVM emit: TailCall terminator emitted without a staged TCO frame — \
+            "LLVM emit: TailCall terminator emitted without a staged TCO frame — \
              define_function ordering violation",
         )
     });
     if args.len() != frame.param_slots.len() {
         panic!(
-            "alpha LLVM emit: TailCall passes {} arg(s) but the function declares {} param(s) — \
+            "LLVM emit: TailCall passes {} arg(s) but the function declares {} param(s) — \
              seal invariant violation",
             args.len(),
             frame.param_slots.len(),
@@ -418,7 +418,7 @@ fn emit_tail_call<'ctx>(
 
 /// For each non-`None` phi, look up the matching branch arg's LLVM
 /// equivalent and hand it to the phi via `add_incoming`. `None`
-/// slots correspond to Unit-typed [`expo_alpha_ir::BlockParam`]s
+/// slots correspond to Unit-typed [`expo_ir::BlockParam`]s
 /// (no LLVM representation, no value-map binding); we skip the arg
 /// entirely without complaining when its lookup would fail.
 ///
@@ -441,7 +441,7 @@ fn wire_phi_incomings<'ctx>(
     })?;
     if phis.len() != target.args.len() {
         panic!(
-            "alpha LLVM emit: branch from {pred} to {} passes {} arg(s) but target has {} \
+            "LLVM emit: branch from {pred} to {} passes {} arg(s) but target has {} \
              phi slot(s) — IR seal invariant violation",
             target.block,
             target.args.len(),
@@ -454,7 +454,7 @@ fn wire_phi_incomings<'ctx>(
             // Unit-typed BlockParam: no phi to wire, no LLVM value
             // for the arg to look up. The IR-level Const::Unit that
             // produced `arg` is structurally consistent at the
-            // alpha-IR boundary; LLVM just elides the whole pair.
+            // IR boundary; LLVM just elides the whole pair.
             continue;
         };
         let arg_value = lookup(values, *arg)?;

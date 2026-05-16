@@ -1,7 +1,7 @@
 //! Phase 2 typecheck coverage for type-parameter bounds —
 //! parsing/lifting `<T: P>`, multi-bound `<T: P1 & P2>`, bound name
 //! resolution, and call-site verification through
-//! [`expo_alpha_typecheck::pipeline::resolve::types::verify_bounds`].
+//! [`expo_typecheck::pipeline::resolve::types::verify_bounds`].
 //!
 //! Bound *dispatch* — calling a bound's method on a value typed as
 //! the bounded param — lives in `bounded_dispatch.rs`. This file is

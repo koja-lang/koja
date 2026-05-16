@@ -220,10 +220,10 @@ pub(super) fn resolve_expr_with_expected(
         }
         // Statement-position `for` is rewritten by `synthesize`
         // before resolve runs; reaching here means expression
-        // position, which alpha doesn't support yet.
+        // position, which the pipeline does not yet support yet.
         ExprKind::For { .. } => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support `for` in expression \
+                "typecheck does not yet support `for` in expression \
                  position (only statement-position `for` is supported)"
                     .to_string(),
                 expr.span,
@@ -237,7 +237,7 @@ pub(super) fn resolve_expr_with_expected(
         other => {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck does not yet support expression `{}`",
+                    "typecheck does not yet support expression `{}`",
                     expr_kind_label(other)
                 ),
                 expr.span,

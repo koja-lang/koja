@@ -4,7 +4,7 @@
 //! drive the auto-imported `.eq` / `.hash` methods and the
 //! `Kernel.panic(message)` call directly, so each family is
 //! exercised through `parse → check → lower → run` without the
-//! handlers needing to be re-exported from the `expo-alpha-ir-eval`
+//! handlers needing to be re-exported from the `expo-ir-eval`
 //! public surface.
 //!
 //! Eval flattens every integer width to [`Value::Int(i64)`], so the
@@ -13,8 +13,8 @@
 //! sized param slots — exactly the same shape `tests/bitwise.rs`
 //! uses for the 48-cell `Bitwise` family.
 
-use expo_alpha_ir_eval::{RuntimeError, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{RuntimeError, Value};
 
 mod common;
 

@@ -21,7 +21,7 @@
 use std::ptr;
 use std::slice;
 
-use expo_alpha_ir::{CPtrMethod, IRFunction, IRType};
+use expo_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;

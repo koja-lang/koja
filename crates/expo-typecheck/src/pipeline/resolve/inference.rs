@@ -43,7 +43,7 @@ impl PhantomContext<'_> {
             Self::UnitVariant(variant_name) => format!("unit variant `{variant_name}`"),
         };
         format!(
-            "alpha typecheck cannot infer type parameter `{type_param_name}` of \
+            "typecheck cannot infer type parameter `{type_param_name}` of \
              `{callee_label}` from {source}",
         )
     }

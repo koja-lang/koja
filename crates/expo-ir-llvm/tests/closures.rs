@@ -14,8 +14,8 @@
 //! - **Fn-as-value adapter** dispatches through the same fat-pointer
 //!   shape with a null env.
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 

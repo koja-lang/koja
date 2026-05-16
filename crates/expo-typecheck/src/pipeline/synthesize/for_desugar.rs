@@ -19,7 +19,7 @@
 //!   (`Global.Option<T>`); a user-defined `Option<T>` in the same
 //!   package can't shadow it.
 //! - Slot ids are per-function-unique (`__it_0`, `__it_1`, …) so
-//!   nested / sibling fors don't collide via alpha's reassignment-
+//!   nested / sibling fors don't collide via the reassignment-
 //!   keeps-type rule.
 //! - The `None` arm exits via [`Statement::Break`], which the
 //!   surrounding `while` resolves under (it pushes a

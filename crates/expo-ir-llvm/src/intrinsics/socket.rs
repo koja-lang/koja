@@ -22,7 +22,7 @@
 //! [`Layouts::struct_field_ir_type`]: crate::layout::Layouts::struct_field_ir_type
 //! [`Layouts::enum_variant_payload`]: crate::layout::Layouts::enum_variant_payload
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, SocketMethod};
+use expo_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, SocketMethod};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;

@@ -10,8 +10,8 @@
 //! "compile + execute the binary, observe correct output" coverage
 //! lives in the driver crate (see `alpha_two_plus_two.rs`).
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 

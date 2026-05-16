@@ -1,16 +1,16 @@
-//! Sealed alpha-IR lowering for the [`COMPILER-NORTHSTAR.md`] pipeline.
+//! Sealed IR lowering for the [`COMPILER-NORTHSTAR.md`] pipeline.
 //!
 //! [`COMPILER-NORTHSTAR.md`]: ../../design/COMPILER-NORTHSTAR.md
 //!
 //! Two public entry points, one IR shape per usecase:
 //!
 //! - [`lower_program`] consumes a sealed
-//!   [`expo_alpha_typecheck::CheckedProgram`] whose source declared an
+//!   [`expo_typecheck::CheckedProgram`] whose source declared an
 //!   entry function (`fn main`) and returns a sealed [`IRProgram`].
 //!   This is the project-mode path; the entry point is named by an
 //!   [`expo_ast::identifier::Identifier`].
 //! - [`lower_script`] consumes a sealed
-//!   [`expo_alpha_typecheck::CheckedProgram`] whose source was parsed
+//!   [`expo_typecheck::CheckedProgram`] whose source was parsed
 //!   in `ParseMode::Script` (top-level statements live on
 //!   [`expo_ast::ast::File::body`]) and returns a sealed [`IRScript`].
 //!   This is the script-mode path; the script body *is* the entry

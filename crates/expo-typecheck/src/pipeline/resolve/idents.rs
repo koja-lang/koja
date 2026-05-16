@@ -45,7 +45,7 @@ pub(super) fn resolve_ident(
                     diagnostics.push(Diagnostic::error(
                         format!(
                             "cannot reference generic function `{name}` as a value \
-                             (alpha typecheck has no inference site for the type args)",
+                             (typecheck has no inference site for the type args)",
                         ),
                         span,
                     ));

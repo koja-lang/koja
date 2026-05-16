@@ -1,4 +1,4 @@
-//! Typecheck coverage for the alpha enum slice: declaration
+//! Typecheck coverage for the enum slice: declaration
 //! registration + lift, the three variant shapes (Unit, Tuple,
 //! Struct) at construction time, static method dispatch through an
 //! enum receiver, plus the per-feature gap diagnostics (generics,
@@ -13,13 +13,13 @@
 //! construction / static methods) so the diagnostic surface stays
 //! parallel between the two type-decl families.
 
-use expo_alpha_typecheck::{
-    CheckedProgram, EnumDefinition, FunctionSignature, GlobalKind, ResolvedEnumVariant,
-    ResolvedVariantData,
-};
 use expo_ast::ast::{EnumConstructionData, Expr, ExprKind, Item, Statement};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::{
+    CheckedProgram, EnumDefinition, FunctionSignature, GlobalKind, ResolvedEnumVariant,
+    ResolvedVariantData,
+};
 
 mod common;
 

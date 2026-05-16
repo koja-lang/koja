@@ -82,7 +82,7 @@ fn lift_enum_definition(
                 if fields.is_empty() {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "alpha typecheck does not support empty struct variants — \
+                            "typecheck does not support empty struct variants — \
                              use `{}` (a unit variant) instead of `{} {{}}`",
                             variant.name, variant.name,
                         ),
@@ -108,7 +108,7 @@ fn lift_enum_definition(
                 if types.is_empty() {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "alpha typecheck does not support empty tuple variants — \
+                            "typecheck does not support empty tuple variants — \
                              use `{}` (a unit variant) instead of `{}()`",
                             variant.name, variant.name,
                         ),

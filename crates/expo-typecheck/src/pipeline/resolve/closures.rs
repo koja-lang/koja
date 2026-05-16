@@ -204,7 +204,7 @@ fn resolve_closure_param(
         },
         ClosureParam::Destructured { span, .. } => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support destructured closure parameters".to_string(),
+                "typecheck does not yet support destructured closure parameters".to_string(),
                 *span,
             ));
             FnParam {

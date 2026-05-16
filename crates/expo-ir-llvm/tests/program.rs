@@ -2,7 +2,7 @@
 //! ([`compile_program`] / [`emit_llvm_ir`]). Pairs with
 //! `src/program.rs` in source.
 //!
-//! Each test drives the full alpha pipeline on a tiny `fn main`
+//! Each test drives the full pipeline on a tiny `fn main`
 //! fixture and asserts substrings of the produced module text. No
 //! linking, no subprocess — driver e2e tests cover that path.
 //!
@@ -19,11 +19,11 @@
 //! Substring (not full-text) assertions because inkwell may adjust
 //! attribute ordering between LLVM patch versions.
 //!
-//! [`compile_program`]: expo_alpha_ir_llvm::compile_program
-//! [`emit_llvm_ir`]: expo_alpha_ir_llvm::emit_llvm_ir
+//! [`compile_program`]: expo_ir_llvm::compile_program
+//! [`emit_llvm_ir`]: expo_ir_llvm::emit_llvm_ir
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 
@@ -34,7 +34,7 @@ use common::{
 
 // ---------------------------------------------------------------------------
 // `<>` concat: String/Binary go inline (`malloc + memcpy`), Bits
-// routes through the `__expo_alpha_concat_bits` runtime helper.
+// routes through the `__expo_concat_bits` runtime helper.
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -60,7 +60,7 @@ fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
     // The runtime concat-bits extern must NOT be declared for a
     // pure-Binary program — Binary stays inline.
     assert!(
-        !ir_text.contains("@__expo_alpha_concat_bits"),
+        !ir_text.contains("@__expo_concat_bits"),
         "Binary concat should not pull in the bits runtime helper:\n{ir_text}",
     );
 }
@@ -92,7 +92,7 @@ fn binary_literal_emits_malloc_and_byte_packing() {
     // pack-bits helper — that path is reserved for sub-byte
     // segments.
     assert!(
-        !ir_text.contains("@__expo_alpha_pack_bits"),
+        !ir_text.contains("@__expo_pack_bits"),
         "byte-aligned BinaryConstruct should not reference the bit-packer:\n{ir_text}",
     );
 }
@@ -118,16 +118,16 @@ fn sub_byte_binary_literal_routes_through_pack_bits() {
     assert_main_shape(&ir_text);
     assert_contains(
         &ir_text,
-        "declare void @__expo_alpha_pack_bits(ptr, i64, i8, i64)",
+        "declare void @__expo_pack_bits(ptr, i64, i8, i64)",
     );
-    assert_contains(&ir_text, "call void @__expo_alpha_pack_bits(");
+    assert_contains(&ir_text, "call void @__expo_pack_bits(");
 }
 
 #[test]
 fn bits_concat_helper_routes_through_runtime() {
     // `Bits` has a sub-byte-aligned bit_length and so cannot share
     // the inline `memcpy` shape — `emit_concat`'s `Bits` arm
-    // declares and calls the runtime `__expo_alpha_concat_bits`
+    // declares and calls the runtime `__expo_concat_bits`
     // helper instead.
     let source = "
         fn join(move a: Bits, move b: Bits) -> Bits
@@ -143,8 +143,8 @@ fn bits_concat_helper_routes_through_runtime() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "declare ptr @__expo_alpha_concat_bits(ptr, ptr)");
-    assert_contains(&ir_text, "call ptr @__expo_alpha_concat_bits(");
+    assert_contains(&ir_text, "declare ptr @__expo_concat_bits(ptr, ptr)");
+    assert_contains(&ir_text, "call ptr @__expo_concat_bits(");
 }
 
 // ---------------------------------------------------------------------------
@@ -153,7 +153,7 @@ fn bits_concat_helper_routes_through_runtime() {
 // With auto-print removed, these tests pin that the body compiles
 // cleanly into `__expo_user_main` and that the surrounding spawn
 // trampoline holds the expected shape. The trailing value is
-// discarded (no `__expo_alpha_print_*` calls), so there's no value-
+// discarded (no `__expo_print_*` calls), so there's no value-
 // side substring to anchor on.
 // ---------------------------------------------------------------------------
 
@@ -276,7 +276,7 @@ fn int_eq_compiles_cleanly() {
 
 #[test]
 fn int32_arithmetic_lowers_to_i32_add() {
-    // `Int32 + Int32` is now a valid alpha typecheck shape; the
+    // `Int32 + Int32` is now a valid typecheck shape; the
     // operand-width flows through IR `bin_op_result_type` and LLVM
     // `emit_int_binary_op` so the emitted instruction is `add i32`,
     // not `add i64`. Pins both the body width and the helper's
@@ -308,7 +308,7 @@ fn int32_arithmetic_lowers_to_i32_add() {
 //
 // Pin two things per scenario:
 //   1. The helper's `define` line — confirms the IR's
-//      [`expo_alpha_ir::IRSymbol::mangled`] flows directly through
+//      [`expo_ir::IRSymbol::mangled`] flows directly through
 //      `add_function`.
 //   2. The body's `call ...` line — confirms callee lookup and
 //      argument plumbing.

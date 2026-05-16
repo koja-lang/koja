@@ -6,11 +6,11 @@
 //! produces an Expo source string for a synthetic `fn main` that
 //! invokes each test, tracks pass/fail counts, and exits non-zero
 //! when anything fails. The driver splices that harness into the
-//! parsed program and runs it through the rest of the alpha
+//! parsed program and runs it through the rest of the
 //! pipeline like any other entry function.
 //!
 //! Kept backend-agnostic on purpose: this crate only depends on
-//! the AST + parser surface so both the alpha pipeline and (any
+//! the AST + parser surface so both the pipeline and (any
 //! future) v1 fallback can share the same harness shape.
 
 use expo_ast::ast::{AnnotationValue, Item};

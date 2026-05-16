@@ -1,5 +1,5 @@
 //! Binary + unary operator emission. Parallel to
-//! `expo-alpha-ir-eval/src/ops.rs`: same shape, same arm order, but
+//! `expo-ir-eval/src/ops.rs`: same shape, same arm order, but
 //! emitting to LLVM via inkwell instead of stepping in-process.
 //!
 //! `emit_binary_op` / `emit_unary_op` peek the operand
@@ -11,7 +11,7 @@
 //! the helpers all return `BasicValueEnum` (the dispatcher's public
 //! return type) instead of narrow `IntValue` / `FloatValue`.
 
-use expo_alpha_ir::{IRBinOp, IRUnaryOp};
+use expo_ir::{IRBinOp, IRUnaryOp};
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
 
@@ -43,7 +43,7 @@ pub(super) fn emit_binary_op<'ctx>(
 /// Comparisons use signed predicates — the seal pass admits `Int64`
 /// only today; threading signedness for `UInt*` is a follow-up.
 /// Match-arm order tracks `IRBinOp`'s declaration order in
-/// [`expo_alpha_ir`].
+/// [`expo_ir`].
 fn emit_int_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
     op: IRBinOp,
@@ -84,7 +84,7 @@ fn emit_int_binary_op<'ctx>(
 /// Float arithmetic + comparisons. `And` / `Or` reject — typecheck
 /// keeps Bool-only logic away from this seam. Comparisons use
 /// **ordered** predicates (`OEQ`/`OLT`/etc.) so `NaN`-on-either-side
-/// returns `false`, matching the `expo-alpha-ir-eval` interpreter
+/// returns `false`, matching the `expo-ir-eval` interpreter
 /// and v1 codegen.
 fn emit_float_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -130,7 +130,7 @@ fn emit_float_binary_op<'ctx>(
             .map(Into::into)
             .map_err(to_err),
         IRBinOp::And | IRBinOp::Or => Err(LlvmError::Codegen(format!(
-            "alpha LLVM emit: `{op:?}` is Bool-only — float operands should never reach this \
+            "LLVM emit: `{op:?}` is Bool-only — float operands should never reach this \
              path (typecheck violation)",
         ))),
     }
@@ -193,7 +193,7 @@ fn emit_string_binary_op<'ctx>(
         IRBinOp::NotEq => IntPredicate::NE,
         other => {
             return Err(LlvmError::Codegen(format!(
-                "alpha LLVM emit: `{other:?}` is not defined for `String` operands — \
+                "LLVM emit: `{other:?}` is not defined for `String` operands — \
                  typecheck violation",
             )));
         }
@@ -208,7 +208,7 @@ fn emit_string_binary_op<'ctx>(
         .basic()
         .ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "alpha LLVM emit: `{STRCMP_SYMBOL}` returned no basic value — \
+                "LLVM emit: `{STRCMP_SYMBOL}` returned no basic value — \
                  inkwell builder regression",
             ))
         })?
@@ -235,7 +235,7 @@ fn emit_float_unary_op<'ctx>(
             .map(Into::into)
             .map_err(|e| inkwell_err("emit for fneg", e)),
         IRUnaryOp::Not => Err(LlvmError::Codegen(
-            "alpha LLVM emit: `not` is Bool-only — float operand should never reach this path \
+            "LLVM emit: `not` is Bool-only — float operand should never reach this path \
              (typecheck violation)"
                 .to_string(),
         )),

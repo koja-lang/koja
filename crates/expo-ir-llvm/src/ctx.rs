@@ -23,7 +23,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use expo_alpha_ir::{IRBlockId, IRLocalId, IRSymbol, IRType};
+use expo_ir::{IRBlockId, IRLocalId, IRSymbol, IRType};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -90,10 +90,10 @@ pub(crate) struct EmitContext<'ctx> {
     current_block_map: RefCell<Option<BTreeMap<IRBlockId, BasicBlock<'ctx>>>>,
     /// Per-function tail-call-optimization frame, set by
     /// [`crate::function::define_function`] for any function whose
-    /// IR carries an [`expo_alpha_ir::IRTerminator::TailCall`].
+    /// IR carries an [`expo_ir::IRTerminator::TailCall`].
     /// Carries the synthesized loop-header LLVM block and the
     /// per-param `(local_id, type)` slots the
-    /// [`expo_alpha_ir::IRTerminator::TailCall`] terminator emitter
+    /// [`expo_ir::IRTerminator::TailCall`] terminator emitter
     /// stores its new args into before branching back to the
     /// header. `None` for non-TCO functions; the terminator emitter
     /// panics if it ever fires without a frame staged.
@@ -102,7 +102,7 @@ pub(crate) struct EmitContext<'ctx> {
 
 /// Per-function tail-call frame staged by
 /// [`crate::function::define_function`] when its IR carries a
-/// [`expo_alpha_ir::IRTerminator::TailCall`]. `loop_block` is the
+/// [`expo_ir::IRTerminator::TailCall`]. `loop_block` is the
 /// header reached by every back-edge; `param_slots[i]` is the
 /// `(local_id, type)` of the function's i-th parameter — the
 /// terminator emitter rebuilds the slot's `store` keyed at
@@ -158,7 +158,7 @@ impl<'ctx> EmitContext<'ctx> {
         let mut slot = self.tco_frame.borrow_mut();
         if slot.is_some() {
             panic!(
-                "alpha LLVM emit: nested TCO frame set without clearing the previous one — \
+                "LLVM emit: nested TCO frame set without clearing the previous one — \
                  caller must clear before re-entering",
             );
         }
@@ -170,7 +170,7 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Active TCO frame for the body being emitted, or `None` for
-    /// non-TCO bodies. The [`expo_alpha_ir::IRTerminator::TailCall`]
+    /// non-TCO bodies. The [`expo_ir::IRTerminator::TailCall`]
     /// terminator emitter calls into this; the seal pass guarantees
     /// any function carrying a `TailCall` block is set up with a
     /// frame here before its body is walked.
@@ -187,7 +187,7 @@ impl<'ctx> EmitContext<'ctx> {
         let mut slot = self.current_block_map.borrow_mut();
         if slot.is_some() {
             panic!(
-                "alpha LLVM emit: nested block map set without clearing the previous one — \
+                "LLVM emit: nested block map set without clearing the previous one — \
                  caller must clear before re-entering",
             );
         }
@@ -210,14 +210,14 @@ impl<'ctx> EmitContext<'ctx> {
             .as_ref()
             .unwrap_or_else(|| {
                 panic!(
-                    "alpha LLVM emit: block_for({block_id}) called outside a function emit — \
+                    "LLVM emit: block_for({block_id}) called outside a function emit — \
                      EmitContext::set_block_map ordering violation",
                 )
             })
             .get(&block_id)
             .unwrap_or_else(|| {
                 panic!(
-                    "alpha LLVM emit: IR block `{block_id}` not registered in the current \
+                    "LLVM emit: IR block `{block_id}` not registered in the current \
                      block map — IR seal / lower invariant violation",
                 )
             })
@@ -231,7 +231,7 @@ impl<'ctx> EmitContext<'ctx> {
         let mut slot = self.closure_frame.borrow_mut();
         if slot.is_some() {
             panic!(
-                "alpha LLVM emit: nested closure frame set without clearing the previous one — \
+                "LLVM emit: nested closure frame set without clearing the previous one — \
                  caller must clear before re-entering",
             );
         }
@@ -291,7 +291,7 @@ impl<'ctx> EmitContext<'ctx> {
         let mut slots = self.local_slots.borrow_mut();
         if slots.insert(local, ptr).is_some() {
             panic!(
-                "alpha LLVM emit: local slot `{local}` registered twice — \
+                "LLVM emit: local slot `{local}` registered twice — \
                  IR seal invariant violation",
             );
         }
@@ -303,7 +303,7 @@ impl<'ctx> EmitContext<'ctx> {
     pub(crate) fn local_slot(&self, local: IRLocalId) -> PointerValue<'ctx> {
         *self.local_slots.borrow().get(&local).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: local slot `{local}` not registered — \
+                "LLVM emit: local slot `{local}` not registered — \
                  IR seal / lower invariant violation",
             )
         })
@@ -329,7 +329,7 @@ impl<'ctx> EmitContext<'ctx> {
     pub(crate) fn enum_outer_type(&self, mangled: &str) -> StructType<'ctx> {
         self.context.get_struct_type(mangled).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: enum outer `{mangled}` not declared — \
+                "LLVM emit: enum outer `{mangled}` not declared — \
                  declare_enum_type ordering violation (must run before \
                  any struct/enum body references this symbol)",
             )

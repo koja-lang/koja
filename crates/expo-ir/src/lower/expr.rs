@@ -7,12 +7,12 @@
 //! [`super::calls`] — only the dispatcher entries here, which fan
 //! out to it.
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 use expo_ast::ast::{BinOp, Diagnostic, Expr, ExprKind, Literal, StringPart, UnaryOp};
 use expo_ast::coercion::Coercion;
 use expo_ast::identifier::{GlobalRegistryId, LocalId, Resolution, ResolvedType};
 use expo_ast::labels::expr_kind_label;
 use expo_ast::span::Span;
+use expo_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 
 use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
@@ -75,7 +75,7 @@ fn apply_value_coercion(
             let target_ir = resolved_type_to_ir_type(target, registry, &mut output.instantiations);
             let IRType::Union { members, .. } = &target_ir else {
                 panic!(
-                    "alpha IR lower: Coercion::UnionWiden target lowered to non-Union \
+                    "IR lower: Coercion::UnionWiden target lowered to non-Union \
                      `{target_ir:?}` — typecheck invariant violation",
                 );
             };
@@ -85,7 +85,7 @@ fn apply_value_coercion(
                 .position(|m| m == &member_type)
                 .unwrap_or_else(|| {
                     panic!(
-                        "alpha IR lower: Coercion::UnionWiden source type `{member_type:?}` \
+                        "IR lower: Coercion::UnionWiden source type `{member_type:?}` \
                          is not a member of target union `{target_ir:?}` — typecheck \
                          invariant violation",
                     )
@@ -121,7 +121,7 @@ fn lower_expr_inner(
                 let kind = concat_kind_from_operand(ctx.type_of(lhs)).ok_or_else(|| {
                     output.diagnostics.push(Diagnostic::error(
                         format!(
-                            "alpha IR lower: `<>` operands must be String / Binary / Bits, got `{:?}`",
+                            "IR lower: `<>` operands must be String / Binary / Bits, got `{:?}`",
                             ctx.type_of(lhs),
                         ),
                         expr.span,
@@ -205,7 +205,7 @@ fn lower_expr_inner(
                 output,
             )),
             other => panic!(
-                "alpha IR lower: bare `Ident` `{name}` reaches lower with non-Local/Global \
+                "IR lower: bare `Ident` `{name}` reaches lower with non-Local/Global \
                  resolution {other:?} — typecheck seal must have rejected this",
             ),
         },
@@ -215,7 +215,7 @@ fn lower_expr_inner(
         ExprKind::Self_ { local_id } => {
             let local_id = local_id.unwrap_or_else(|| {
                 panic!(
-                    "alpha IR lower: `self` reaches lower without a stamped LocalId — \
+                    "IR lower: `self` reaches lower without a stamped LocalId — \
                      typecheck resolve invariant violation",
                 );
             });
@@ -417,7 +417,7 @@ fn lower_expr_inner(
         other => {
             output.diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha IR does not yet lower this expression kind ({})",
+                    "IR does not yet lower this expression kind ({})",
                     expr_kind_label(other),
                 ),
                 expr.span,
@@ -484,7 +484,7 @@ fn lower_global_ident(
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let entry = registry.get(global_id).unwrap_or_else(|| {
-        panic!("alpha IR lower: global id {global_id} missing from registry — seal violation",)
+        panic!("IR lower: global id {global_id} missing from registry — seal violation",)
     });
     match &entry.kind {
         GlobalKind::Constant(_) => {
@@ -500,7 +500,7 @@ fn lower_global_ident(
             output,
         ),
         other => panic!(
-            "alpha IR lower: bare `Ident` `{name}` (id {global_id}) registers as {} — \
+            "IR lower: bare `Ident` `{name}` (id {global_id}) registers as {} — \
              typecheck seal violation",
             other.label(),
         ),
@@ -522,17 +522,17 @@ fn lower_constant_ident(
 ) -> (ValueId, IRBlockId) {
     let value = constant_value_from_registry(constant_id, registry).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: constant `{name}` (id {constant_id}) reaches lower \
+            "IR lower: constant `{name}` (id {constant_id}) reaches lower \
                  without a stamped definition or with an unsupported RHS shape — \
                  typecheck seal must have rejected this",
         );
     });
     let entry = registry.get(constant_id).unwrap_or_else(|| {
-        panic!("alpha IR lower: constant id {constant_id} missing from registry — seal violation",)
+        panic!("IR lower: constant id {constant_id} missing from registry — seal violation",)
     });
     let GlobalKind::Constant(Some(def)) = &entry.kind else {
         panic!(
-            "alpha IR lower: constant id {constant_id} ({name}) registers as {} — seal violation",
+            "IR lower: constant id {constant_id} ({name}) registers as {} — seal violation",
             entry.kind.label(),
         );
     };
@@ -569,20 +569,18 @@ fn lower_fn_as_value(
     output: &mut LowerOutput,
 ) -> (ValueId, IRBlockId) {
     let entry = registry.get(function_id).unwrap_or_else(|| {
-        panic!(
-            "alpha IR lower: fn-as-value id {function_id} missing from registry — seal violation",
-        )
+        panic!("IR lower: fn-as-value id {function_id} missing from registry — seal violation",)
     });
     let GlobalKind::Function(Some(sig)) = &entry.kind else {
         panic!(
-            "alpha IR lower: fn-as-value `{name}` (id {function_id}) registers as {} — \
+            "IR lower: fn-as-value `{name}` (id {function_id}) registers as {} — \
              typecheck seal violation",
             entry.kind.label(),
         );
     };
     if !entry.type_params.is_empty() {
         panic!(
-            "alpha IR lower: fn-as-value `{name}` (id {function_id}) is generic — typecheck \
+            "IR lower: fn-as-value `{name}` (id {function_id}) is generic — typecheck \
              must have diagnosed this before lowering",
         );
     }

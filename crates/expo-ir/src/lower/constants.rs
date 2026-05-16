@@ -4,9 +4,9 @@
 //! [`IRPackage::constants`](crate::package::IRPackage::constants) and load through
 //! [`IRInstruction::LoadConst`](crate::function::IRInstruction::LoadConst).
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 use expo_ast::ast::{Constant, Expr, ExprKind, Literal, StringPart, UnaryOp};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IRVariantTag;
@@ -52,7 +52,7 @@ pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
     }
 }
 
-/// Walk the registry's stamped [`ConstantDefinition`](expo_alpha_typecheck::registry::ConstantDefinition) for `id` into
+/// Walk the registry's stamped [`ConstantDefinition`](expo_typecheck::registry::ConstantDefinition) for `id` into
 /// an [`IRConstantValue`]. Reads the stamped definition rather than
 /// any AST `Constant.value` — both are correct, but the registry
 /// copy is what IR considers authoritative (the AST may be

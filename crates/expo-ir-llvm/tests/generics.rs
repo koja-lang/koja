@@ -1,7 +1,7 @@
 //! IR-text snapshot tests for monomorphized generic decls.
 //!
 //! Pins that every concrete instantiation surfaced by
-//! [`expo_alpha_ir::generics::instantiate`] reaches LLVM as a
+//! [`expo_ir::generics::instantiate`] reaches LLVM as a
 //! distinct named type carrying the mangled `_$arg.arg$` symbol:
 //!
 //! - `Pair<Int, String>` → `%TestApp.Pair_$Int64.String$ = type { i64, ptr }`
@@ -14,7 +14,7 @@
 //!   referencing the inner by name.
 //!
 //! The LLVM backend has zero generics-aware code: it lowers
-//! whatever decls land in the [`expo_alpha_ir::IRPackage`] map. A
+//! whatever decls land in the [`expo_ir::IRPackage`] map. A
 //! green test here confirms the closure-pass result stays
 //! observable end-to-end.
 //!
@@ -24,8 +24,8 @@
 //! primitives and the construction lives in a preceding statement
 //! whose `alloca` / `getelementptr` keep the named types live.
 
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 

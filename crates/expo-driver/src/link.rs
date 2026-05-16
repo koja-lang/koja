@@ -1,6 +1,6 @@
 //! Native linker glue for the LLVM backend.
 //!
-//! [`expo-alpha-ir-llvm`](../expo_alpha_ir_llvm/index.html) emits a
+//! [`expo-ir-llvm`](../expo_ir_llvm/index.html) emits a
 //! `.o` file; this module hands that object to `cc` along with the
 //! embedded runtime archive (and bundled BoringSSL `libcrypto.a` /
 //! `libssl.a` so `@link "ssl"` resolves without the user wiring up

@@ -4,7 +4,7 @@
 //! header; closure-typed slots delegate to
 //! [`super::closures::emit_drop_closure_env`].
 
-use expo_alpha_ir::{IRLocalId, IRType, ValueId};
+use expo_ir::{IRLocalId, IRType, ValueId};
 use inkwell::values::BasicValueEnum;
 
 use crate::ctx::EmitContext;
@@ -95,7 +95,7 @@ pub(super) fn emit_drop_local<'ctx>(
             closures::emit_drop_closure_env(ctx, local, value)
         }
         _ => panic!(
-            "alpha LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}` — \
+            "LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}` — \
              extend `emit_drop_local` when more heap types ship",
         ),
     }
@@ -134,7 +134,7 @@ pub(super) fn emit_drop_value<'ctx>(
             Ok(())
         }
         _ => panic!(
-            "alpha LLVM emit: unsupported `IRInstruction::DropValue` type {ty:?} for value \
+            "LLVM emit: unsupported `IRInstruction::DropValue` type {ty:?} for value \
              `{value}` — extend `emit_drop_value` when more heap types ship",
         ),
     }

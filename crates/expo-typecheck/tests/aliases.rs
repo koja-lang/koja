@@ -1,6 +1,6 @@
 //! `alias Pkg.Type [as Local]` validation + use-site resolution.
 //!
-//! Pins the contract surface for [`expo_alpha_typecheck::pipeline::aliases`]:
+//! Pins the contract surface for [`expo_typecheck::pipeline::aliases`]:
 //! every alias must qualify (`Package.Type`), point at a registered
 //! struct/enum/protocol, name-collide with no other alias in the
 //! file, and *not* shadow a current-package or `Global` binding
@@ -11,8 +11,8 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::{CheckFailure, CheckedProgram, check_program};
 
 mod common;
 
@@ -22,8 +22,8 @@ use common::{PACKAGE, diagnostic_messages, typecheck_file, typecheck_file_fail};
 /// stacked in the same package. Used by [`alias_is_file_private`]
 /// to prove sister files don't see each other's alias slices.
 fn check_multi_file(files: &[(&str, &str)]) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
-    sources.extend(expo_stdlib::alpha_qualified_sources());
+    let mut sources = expo_stdlib::autoimport_sources();
+    sources.extend(expo_stdlib::qualified_sources());
     for (name, body) in files {
         sources.push(SourceFile {
             package: PACKAGE.to_string(),
@@ -235,7 +235,7 @@ fn alias_is_file_private() {
 fn dotted_static_call_resolves_without_alias() {
     // Bare dotted static dispatch: `Crypto.SHA256.digest(...)` with
     // no `alias` line. Pre-PR-B this hit the
-    // "alpha typecheck does not yet support dotted type names"
+    // "typecheck does not yet support dotted type names"
     // gate; post-PR-B `classify_receiver` walks the FieldAccess
     // chain and `lookup_type` finds the qualified entry directly.
     let checked =

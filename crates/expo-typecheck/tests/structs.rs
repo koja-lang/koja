@@ -1,4 +1,4 @@
-//! Typecheck coverage for the alpha struct slice: declaration
+//! Typecheck coverage for the struct slice: declaration
 //! registration, signature lifting, struct-literal construction,
 //! field-access resolution, and static method dispatch. Includes
 //! per-feature gap diagnostics (generics, instance methods,
@@ -12,13 +12,13 @@
 //! surface forms produce identical registry entries and resolution
 //! shape.
 
-use expo_alpha_typecheck::{
-    CheckedProgram, Dispatch, FunctionSignature, GlobalKind, ResolvedStructField, StructDefinition,
-};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement, StructDecl};
 use expo_ast::identifier::GlobalRegistryId;
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::{
+    CheckedProgram, Dispatch, FunctionSignature, GlobalKind, ResolvedStructField, StructDefinition,
+};
 
 mod common;
 

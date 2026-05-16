@@ -5,13 +5,13 @@
 //! [`IRType`].
 //!
 //! Pairs with the typecheck coverage in
-//! `expo-alpha-typecheck/tests/resolve_ops.rs` (which pins the
+//! `expo-typecheck/tests/resolve_ops.rs` (which pins the
 //! diagnostic surface for cross-type and non-concat-typed operands)
-//! and the eval coverage in `expo-alpha-ir-eval/tests/concat.rs`
+//! and the eval coverage in `expo-ir-eval/tests/concat.rs`
 //! (which pins the runtime byte-for-byte result).
 
-use expo_alpha_ir::{ConcatKind, IRFunction, IRInstruction, IRType, Ownership};
 use expo_ast::util::dedent;
+use expo_ir::{ConcatKind, IRFunction, IRInstruction, IRType, Ownership};
 
 mod common;
 
@@ -94,7 +94,7 @@ fn concat_result_assigned_to_local_stamps_owned() {
     // `s = "a" <> "b"` should stamp `Ownership::Owned` on the
     // assignment's `LocalWrite` because the RHS is a concat (a
     // heap-allocating producer). This pins the
-    // [`expo_alpha_ir::lower::ownership::ownership_for_expr`]
+    // [`expo_ir::lower::ownership::ownership_for_expr`]
     // classifier's `BinOp::Concat` arm — without the Owned stamp,
     // drop emission wouldn't free the freshly-allocated payload.
     let source = "

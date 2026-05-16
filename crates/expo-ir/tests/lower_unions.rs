@@ -18,7 +18,7 @@
 //!   exactly one [`IRUnionDecl`] in the program's union map keyed
 //!   by the same mangled symbol the type carries.
 
-use expo_alpha_ir::{IRInstruction, IRType};
+use expo_ir::{IRInstruction, IRType};
 
 mod common;
 

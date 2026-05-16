@@ -1,4 +1,4 @@
-//! Pre-emit phase for [`expo_alpha_ir::IRStructDecl`]: register one
+//! Pre-emit phase for [`expo_ir::IRStructDecl`]: register one
 //! LLVM `StructType` per decl on [`super::TypeLayouts`].
 //!
 //! Two-phase across all packages so a struct can carry another
@@ -7,7 +7,7 @@
 //! [`define_struct_body`] sets each body once every package's
 //! placeholders exist.
 
-use expo_alpha_ir::IRStructDecl;
+use expo_ir::IRStructDecl;
 use inkwell::types::BasicTypeEnum;
 
 use crate::ctx::EmitContext;

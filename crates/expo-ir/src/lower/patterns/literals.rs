@@ -3,9 +3,9 @@
 //! of [`super::lower_pattern_check`] and the literal alternative
 //! arm of [`super::or_pattern::emit_or_alternative`].
 
-use expo_alpha_typecheck::LiteralCoercion;
 use expo_ast::ast::{Diagnostic, Literal};
 use expo_ast::span::Span;
+use expo_typecheck::LiteralCoercion;
 
 use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::super::ops::{const_value_type, lower_literal};
@@ -76,5 +76,5 @@ pub(super) fn emit_literal_eq_or_panic(
         block,
         &mut output.diagnostics,
     )
-    .expect("alpha IR lower: typecheck must have rejected non-lowerable literal")
+    .expect("IR lower: typecheck must have rejected non-lowerable literal")
 }

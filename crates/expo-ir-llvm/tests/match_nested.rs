@@ -4,11 +4,11 @@
 //! per non-first sibling test, tag-test-before-payload-projection
 //! ordering for enums, chained extraction at the body block for
 //! nested bindings) at the LLVM level so a regression in
-//! [`expo_alpha_ir::lower::patterns`] surfaces as a substring miss
+//! [`expo_ir::lower::patterns`] surfaces as a substring miss
 //! rather than a runtime miscompile.
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 
@@ -80,7 +80,7 @@ fn struct_partial_field_pattern_emits_only_one_field_test_no_follow_on() {
 fn nested_enum_payload_literal_orders_tag_check_before_payload_projection() {
     // `Option.Some(5)` must perform the Option tag check before
     // touching the payload's bytes. Inkwell labels carry the
-    // alpha-IR block label suffixes — pin both the entry `i8`
+    // IR block label suffixes — pin both the entry `i8`
     // tag compare (`icmp eq i8`) and the AND-field follow-on
     // block name to confirm the ordering.
     let source = "

@@ -1,9 +1,9 @@
 //! `Concat` emission. `String` and `Binary` byte-align and inline a
 //! `malloc + memcpy + memcpy + (NUL)` shape; `Bits` defers to the
-//! `__expo_alpha_concat_bits` runtime helper because sub-byte
+//! `__expo_concat_bits` runtime helper because sub-byte
 //! alignment is far cleaner in Rust than LLVM IR.
 
-use expo_alpha_ir::ConcatKind;
+use expo_ir::ConcatKind;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 
 use crate::ctx::EmitContext;
@@ -15,7 +15,7 @@ use super::inkwell_err;
 /// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
 /// and `Binary` both byte-align — the common shape is `malloc(8 +
 /// total_bytes [+1])` + two `memcpy`s + (String only) trailing
-/// `\0`. `Bits` defers to the `__expo_alpha_concat_bits` runtime
+/// `\0`. `Bits` defers to the `__expo_concat_bits` runtime
 /// helper.
 pub(super) fn emit_concat<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -32,7 +32,7 @@ pub(super) fn emit_concat<'ctx>(
                 .map_err(|e| inkwell_err(format_args!("concat_bits call"), e))?;
             let basic = result.try_as_basic_value().basic().ok_or_else(|| {
                 LlvmError::Codegen(
-                    "alpha LLVM emit: __expo_alpha_concat_bits returned void; \
+                    "LLVM emit: __expo_concat_bits returned void; \
                      runtime declaration drift?"
                         .to_string(),
                 )

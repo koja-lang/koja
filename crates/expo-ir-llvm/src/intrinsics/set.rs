@@ -4,7 +4,7 @@
 //! `T` rather than a `(K, V)` pair, but the probe / resize / state
 //! machinery is identical.
 
-use expo_alpha_ir::{IRFunction, IRType, SetMethod};
+use expo_ir::{IRFunction, IRType, SetMethod};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;

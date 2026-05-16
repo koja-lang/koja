@@ -13,8 +13,8 @@
 //! - Greedy `: Binary` tail — proves the malloc/memcpy block that
 //!   stamps the bit-length header for the new payload.
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 
@@ -73,7 +73,7 @@ fn binary_match_string_literal_segment_emits_memcmp_extern() {
 fn binary_match_signed_binding_emits_sign_extend_shl_ashr() {
     // The `signed` modifier must lower to `shl` + arithmetic `ashr`
     // (v1 always emitted an unsigned extraction and discarded the
-    // modifier — alpha fixes that by routing `BinarySign::Signed`
+    // modifier — the pipeline fixes that by routing `BinarySign::Signed`
     // through `extend_for_sign`).
     let source = "
         fn main

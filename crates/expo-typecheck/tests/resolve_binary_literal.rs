@@ -4,15 +4,15 @@
 //! Per-segment validation, byte-aligned vs sub-byte total → Binary
 //! / Bits, and feature-gap diagnostics for dynamic widths or
 //! incompatible value/modifier pairs. Pairs with the lowering
-//! coverage in `expo-alpha-ir/tests/lower_binary_literal.rs` (which
+//! coverage in `expo-ir/tests/lower_binary_literal.rs` (which
 //! pins the IR shape — `IRInstruction::BinaryConstruct` with the
 //! per-segment `bit_offset` accumulator) and the eval coverage in
-//! `expo-alpha-ir-eval/tests/binary_literal.rs` (which pins the
+//! `expo-ir-eval/tests/binary_literal.rs` (which pins the
 //! byte-for-byte runtime layout).
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

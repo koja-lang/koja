@@ -5,8 +5,8 @@
 //! callers free with the same `payload - 8` recipe used for every
 //! other Expo-emitted heap string.
 //!
-//! Single source of truth: the alpha LLVM backend's auto-print
-//! wrapper (in `expo-runtime/src/alpha.rs`) and `Debug.format`
+//! Single source of truth: the LLVM backend's auto-print
+//! wrapper (in `expo-runtime/src/intrinsics.rs`) and `Debug.format`
 //! intrinsic emitters route through these helpers, so the rendered
 //! bytes match the eval interpreter's `Value::Display` impl
 //! one-for-one.
@@ -53,7 +53,7 @@ pub extern "C" fn expo_format_bool(value: i64) -> *const u8 {
 
 /// Render a 32-bit float using Rust's `{:?}` so `1.0` round-trips
 /// as `"1.0"` (vs `{}`'s `"1"`); pairs with `Value::Float32`'s
-/// `Display` in `expo-alpha-ir-eval` for byte-exact backend
+/// `Display` in `expo-ir-eval` for byte-exact backend
 /// symmetry.
 #[unsafe(no_mangle)]
 pub extern "C" fn expo_format_f32(value: f32) -> *const u8 {

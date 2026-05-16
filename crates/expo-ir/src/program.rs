@@ -3,7 +3,7 @@
 //! that produces them.
 //!
 //! [`lower_program`] consumes a sealed
-//! [`expo_alpha_typecheck::CheckedProgram`] and either:
+//! [`expo_typecheck::CheckedProgram`] and either:
 //! - returns `Ok(IRProgram)` whose shape is **sealed** (every block
 //!   ends in a terminator, every value reference points at a
 //!   previously-defined value in the same function, the entry point
@@ -18,8 +18,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalRegistry};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
+use expo_typecheck::{CheckedProgram, GlobalRegistry};
 
 use crate::constant::IRConstantValue;
 use crate::cycle::break_type_cycles;
@@ -85,7 +85,7 @@ pub struct IRProgram {
 impl IRProgram {
     /// Lookup a function across every package by its mangled symbol.
     /// `O(packages * log functions_per_package)`; for the 1–3 packages
-    /// an alpha program ships today this is overwhelmingly cheap. A
+    /// an program ships today this is overwhelmingly cheap. A
     /// flat index lands when codegen needs hot-path lookups.
     ///
     /// Accepts any `&str`-borrowable input, so backends can pass a
@@ -154,7 +154,7 @@ impl IRProgram {
     }
 }
 
-/// Run every sub-pass in the alpha lowering phase.
+/// Run every sub-pass in the lowering phase.
 ///
 /// Sub-pass order (forced by data dependencies):
 ///
@@ -263,7 +263,7 @@ fn stage_process_entry(
         .registry
         .lookup(&Identifier::new("Global", vec!["Process".to_string()]))
         .map(|(id, _)| id)
-        .expect("alpha IR lower: `Global.Process` protocol missing from registry");
+        .expect("IR lower: `Global.Process` protocol missing from registry");
     let protocol_args = checked
         .registry
         .lookup_conformance(state_id, process_proto_id)
@@ -273,7 +273,7 @@ fn stage_process_entry(
         .to_vec();
     let [config_resolved, _msg, _reply] = protocol_args.as_slice() else {
         panic!(
-            "alpha IR lower: `Process` impl for `{}` has {} type arg(s), expected 3",
+            "IR lower: `Process` impl for `{}` has {} type arg(s), expected 3",
             state_entry.identifier,
             protocol_args.len(),
         );
@@ -293,7 +293,7 @@ fn stage_process_entry(
     let state_symbol = match &state_ir {
         IRType::Struct(symbol) => symbol.clone(),
         other => panic!(
-            "alpha IR lower: Process entry `{}` must lower to a struct state, got `{other:?}`",
+            "IR lower: Process entry `{}` must lower to a struct state, got `{other:?}`",
             state_entry.identifier,
         ),
     };
@@ -337,9 +337,9 @@ fn insert_into_owning_package(packages: &mut [IRPackage], function: IRFunction) 
         .iter()
         .position(|pkg| pkg.package == prefix)
         .unwrap_or(0);
-    let owner = packages.get_mut(index).expect(
-        "alpha IR lower: no IRPackage available to host the synthesized process entry wrapper",
-    );
+    let owner = packages
+        .get_mut(index)
+        .expect("IR lower: no IRPackage available to host the synthesized process entry wrapper");
     owner.functions.insert(function.symbol.clone(), function);
 }
 

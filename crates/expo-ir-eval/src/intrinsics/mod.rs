@@ -1,17 +1,17 @@
 //! Per-backend dispatch table for `@intrinsic` function bodies on
 //! the eval interpreter side. Mirrors the LLVM backend's
 //! `intrinsics/` shape — each registered intrinsic is keyed by its
-//! [`expo_alpha_ir::FunctionKind::Intrinsic`] payload (an
+//! [`expo_ir::FunctionKind::Intrinsic`] payload (an
 //! [`IRIntrinsicId`] -- a typed enum the lift pass mints from the
 //! function's identifier path) and routed via an exhaustive `match`
 //! to a hand-written handler.
 //!
 //! Adding a new intrinsic: extend [`IRIntrinsicId`] in
-//! `expo-alpha-ir`, drop a sibling `<name>.rs` module exporting
+//! `expo-ir`, drop a sibling `<name>.rs` module exporting
 //! `pub(super) fn <handler>`, and wire its arm in [`dispatch`]. The
 //! exhaustive match makes the wiring step compiler-checked.
 
-use expo_alpha_ir::{IRFunction, IRIntrinsicId, KernelMethod};
+use expo_ir::{IRFunction, IRIntrinsicId, KernelMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;

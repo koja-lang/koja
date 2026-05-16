@@ -2,11 +2,11 @@
 //! `icmp eq` emitter (eval flattens both to fixed-width integers).
 //! `Float` / `Float32` use `fcmp oeq` (ordered: `NaN == NaN` is
 //! false, matching IEEE 754 and source-level `==`). `String.eq`
-//! delegates to libc `strcmp`; alpha string payloads carry a
+//! delegates to libc `strcmp`; string payloads carry a
 //! trailing NUL, so byte-sequence equality matches Expo's source-
 //! level `==` semantics.
 
-use expo_alpha_ir::{EqualityImpl, IRFunction};
+use expo_ir::{EqualityImpl, IRFunction};
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
 

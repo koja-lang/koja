@@ -1,6 +1,6 @@
 //! End-to-end interpreter coverage for `Debug for String` —
 //! specifically that `escape_debug` round-trips correctly through
-//! the alpha pipeline. Regression coverage for the cross-arm
+//! the pipeline. Regression coverage for the cross-arm
 //! slot-state leak that surfaced as a SIGABRT inside the
 //! `match c` arms when `result = result <> "..."` writes piled up.
 //!
@@ -12,7 +12,7 @@
 //! shape against the exact `Debug for String` body shipped in
 //! `lib/global/src/debug.expo`.
 
-use expo_alpha_ir_eval::Value;
+use expo_ir_eval::Value;
 
 mod common;
 

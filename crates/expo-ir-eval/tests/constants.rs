@@ -1,8 +1,8 @@
 //! Runtime coverage for package-level constants: primitives inline and
 //! pooled compounds materialize through [`IRInstruction::LoadConst`].
 
-use expo_alpha_ir_eval::{EnumPayload, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{EnumPayload, Value};
 
 mod common;
 

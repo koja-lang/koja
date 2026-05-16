@@ -28,12 +28,12 @@
 //!   deserializes the payload into the arm's payload local, and
 //!   branches into the matching arm body block. The host block
 //!   ends with the dispatch — its IR-level
-//!   [`expo_alpha_ir::IRTerminator::Unreachable`] terminator is
+//!   [`expo_ir::IRTerminator::Unreachable`] terminator is
 //!   then a no-op (handled by the already-terminated guard in
 //!   [`super::emit_block`]).
 
-use expo_alpha_ir::mangling::mangled_method_name;
-use expo_alpha_ir::{
+use expo_ir::mangling::mangled_method_name;
+use expo_ir::{
     IRFunction, IRSymbol, IRType, IRVariantTag, ReceiveAfter, ReceiveArm, ReceiveTag, ValueId,
 };
 use inkwell::AddressSpace;
@@ -117,7 +117,7 @@ pub(crate) fn emit_spawn_wrapper_body<'ctx>(
     Ok(())
 }
 
-/// Synthesize the body of a [`expo_alpha_ir::FunctionKind::ProcessEntryWrapper`]
+/// Synthesize the body of a [`expo_ir::FunctionKind::ProcessEntryWrapper`]
 /// function. Extends [`emit_spawn_wrapper_body`] with an exit-code
 /// hand-off so the synthesized `main` trampoline can return a
 /// process exit status:
@@ -142,7 +142,7 @@ pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
     let code_symbol = "Global.StopReason.code";
     let code_fn = ctx.module.get_function(code_symbol).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: ProcessEntryWrapper `{}` cannot resolve StopReason method \
+            "LLVM emit: ProcessEntryWrapper `{}` cannot resolve StopReason method \
              `{code_symbol}`",
             function.symbol,
         ))
@@ -222,7 +222,7 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
     ) -> Result<Self, LlvmError> {
         let IRType::Struct(state_symbol) = state else {
             return Err(LlvmError::Codegen(format!(
-                "alpha LLVM emit: {kind_label} `{}` declared with non-struct state `{state:?}` — \
+                "LLVM emit: {kind_label} `{}` declared with non-struct state `{state:?}` — \
                  IR seal invariant violation",
                 function.symbol,
             )));
@@ -234,7 +234,7 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
             .map(|p| p.ty.clone())
             .ok_or_else(|| {
                 LlvmError::Codegen(format!(
-                    "alpha LLVM emit: {kind_label} `{}` has no config parameter",
+                    "LLVM emit: {kind_label} `{}` has no config parameter",
                     function.symbol,
                 ))
             })?;
@@ -243,14 +243,14 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
         let start_symbol = mangled_method_name(state_symbol, &[], "start", &[]);
         let start_fn = ctx.declared_function(&start_symbol).ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "alpha LLVM emit: {kind_label} `{}` cannot resolve start method `{start_symbol}`",
+                "LLVM emit: {kind_label} `{}` cannot resolve start method `{start_symbol}`",
                 function.symbol,
             ))
         })?;
         let run_symbol = mangled_method_name(state_symbol, &[], "run", &[]);
         let run_fn = ctx.declared_function(&run_symbol).ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "alpha LLVM emit: {kind_label} `{}` cannot resolve run method `{run_symbol}`",
+                "LLVM emit: {kind_label} `{}` cannot resolve run method `{run_symbol}`",
                 function.symbol,
             ))
         })?;
@@ -261,7 +261,7 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
             .get_nth_param(0)
             .ok_or_else(|| {
                 LlvmError::Codegen(format!(
-                    "alpha LLVM emit: {kind_label} `{}` declaration has no param #0",
+                    "LLVM emit: {kind_label} `{}` declaration has no param #0",
                     function.symbol,
                 ))
             })?
@@ -299,7 +299,7 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
             .and_then(|n| n.to_str().ok())
             .ok_or_else(|| {
                 LlvmError::Codegen(format!(
-                    "alpha LLVM emit: wrapper `{}` could not resolve start return type's struct \
+                    "LLVM emit: wrapper `{}` could not resolve start return type's struct \
                      name",
                     self.function_label,
                 ))
@@ -353,7 +353,7 @@ fn load_ok_state<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let ok_payload_struct = ok_payload.ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: wrapper `{}` start return type's `Ok` variant declares no payload \
+            "LLVM emit: wrapper `{}` start return type's `Ok` variant declares no payload \
              — IR seal invariant violation",
             wrapper.function_label,
         ))
@@ -385,7 +385,7 @@ fn load_err_stop_reason<'ctx>(
         .next()
         .ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "alpha LLVM emit: wrapper `{}` StopReason.code has no receiver parameter",
+                "LLVM emit: wrapper `{}` StopReason.code has no receiver parameter",
                 wrapper.function_label,
             ))
         })?
@@ -395,7 +395,7 @@ fn load_err_stop_reason<'ctx>(
         .enum_variant_types(result_outer_name, IRVariantTag(1));
     let err_payload_struct = err_payload.ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: wrapper `{}` start return type's `Err` variant declares no payload \
+            "LLVM emit: wrapper `{}` start return type's `Err` variant declares no payload \
              — IR seal invariant violation",
             wrapper.function_label,
         ))
@@ -438,7 +438,7 @@ fn store_exit_code<'ctx>(
         .map_err(|e| inkwell_err("build_int_truncate exit_code", e))?;
     let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before wrapper body emit",
+            "LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before wrapper body emit",
         ))
     })?;
     ctx.builder
@@ -490,7 +490,7 @@ pub(super) fn emit_spawn<'ctx>(
 
     let wrapper_fn = ctx.declared_function(wrapper).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: spawn target wrapper `{wrapper}` not declared",
+            "LLVM emit: spawn target wrapper `{wrapper}` not declared",
         ))
     })?;
     let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
@@ -557,12 +557,10 @@ pub(super) fn emit_receive<'ctx>(
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let host_block = ctx.builder.get_insert_block().ok_or_else(|| {
-        LlvmError::Codegen("alpha LLVM emit: Receive emitted with no insertion block".to_string())
+        LlvmError::Codegen("LLVM emit: Receive emitted with no insertion block".to_string())
     })?;
     let host_function = host_block.get_parent().ok_or_else(|| {
-        LlvmError::Codegen(
-            "alpha LLVM emit: Receive's host block has no parent function".to_string(),
-        )
+        LlvmError::Codegen("LLVM emit: Receive's host block has no parent function".to_string())
     })?;
 
     let envelope_ptr = build_receive_call(ctx, after, values)?;

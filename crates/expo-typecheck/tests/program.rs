@@ -1,14 +1,14 @@
-//! End-to-end smoke test for the alpha typecheck pipeline.
+//! End-to-end smoke test for the typecheck pipeline.
 //!
 //! Drives `parse_program → check_program` on `fn main; 2 + 2; end` and
 //! asserts the pipeline succeeds, the registry holds `TestApp.main`,
 //! and the body's `2 + 2` resolves into the preloaded `Global.Int`
 //! stdlib stub.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::ast::{Expr, ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 

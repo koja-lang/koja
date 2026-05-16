@@ -39,7 +39,7 @@ pub struct IRPackage {
     /// `pkg.functions.get(callee.mangled())`.
     pub functions: BTreeMap<IRSymbol, IRFunction>,
     /// The package label (e.g. `"TestApp"`, `"Global"`). Matches
-    /// `CheckedPackage::package` from `expo-alpha-typecheck`.
+    /// `CheckedPackage::package` from `expo-typecheck`.
     pub package: String,
     /// Struct declarations owned by this package, keyed by their
     /// stable [`IRSymbol`]. Same key shape as

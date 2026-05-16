@@ -29,10 +29,10 @@
 //!   following an unguarded catch-all, duplicate enum-variant or literal
 //!   arms, and overlapping alternatives within an or-pattern
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{ExprKind, Function, Item, Pattern, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 
@@ -1458,7 +1458,7 @@ fn match_typed_binding_against_non_union_diagnoses() {
     // Typed-binding patterns (`p: T -> ...`) only narrow over union
     // subjects. Pointing one at a non-union (here: `Int`) emits a
     // precise diagnostic naming the actual subject type rather than
-    // the legacy "feature gap" stub the alpha resolver carried
+    // the legacy "feature gap" stub the resolver carried
     // before unions landed. The companion missing-binding error
     // for `p` falls out of the failed declaration; both diagnostics
     // are pinned so a future binding-rescue rewrite still flags the

@@ -20,8 +20,8 @@
 //!   (cached across repeated references) and emit
 //!   [`IRInstruction::MakeClosure`] with no captures.
 
-use expo_alpha_ir::{FunctionKind, IRFunction, IRInstruction, IRProgram, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{FunctionKind, IRFunction, IRInstruction, IRProgram, IRType};
 
 mod common;
 

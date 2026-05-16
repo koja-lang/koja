@@ -1,5 +1,5 @@
 //! Pre-emit phase for `IRType::Union { mangled, ... }`: build one
-//! [`super::UnionLayout`] per [`expo_alpha_ir::IRUnionDecl`] on
+//! [`super::UnionLayout`] per [`expo_ir::IRUnionDecl`] on
 //! [`super::TypeLayouts`].
 //!
 //! ## Layout
@@ -12,7 +12,7 @@
 //! emits a `bitcast` from the payload buffer to the member's
 //! IRType-derived basic type at use sites.
 
-use expo_alpha_ir::{IRSymbol, IRUnionDecl};
+use expo_ir::{IRSymbol, IRUnionDecl};
 use inkwell::types::StructType;
 
 use crate::ctx::EmitContext;
@@ -50,7 +50,7 @@ fn lookup_named_struct<'ctx>(ctx: &EmitContext<'ctx>, symbol: &IRSymbol) -> Stru
         .get_struct_type(symbol.mangled())
         .unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: union outer struct `{symbol}` not declared — \
+                "LLVM emit: union outer struct `{symbol}` not declared — \
                  declare_union_type ordering violation",
             )
         })

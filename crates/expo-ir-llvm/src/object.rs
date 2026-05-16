@@ -15,7 +15,7 @@ use crate::error::LlvmError;
 /// Initialize the native target, build a target machine for the host
 /// triple + CPU + features, and write `module` to `path` as a native
 /// object file. Always emits at `OptimizationLevel::None` for the
-/// alpha slice — release-mode optimization is a follow-up.
+/// feature slice — release-mode optimization is a follow-up.
 pub(crate) fn emit_object_file(module: &Module<'_>, path: &Path) -> Result<(), LlvmError> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to initialize native target: {e}")))?;

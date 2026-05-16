@@ -8,7 +8,7 @@
 //! "skip the entry function" step — script-mode has no `fn main`
 //! item; `script.blocks` is the body that becomes `main`.
 
-use expo_alpha_ir::IRScript;
+use expo_ir::IRScript;
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;

@@ -177,7 +177,7 @@ impl ClosureState {
     /// no enclosing symbol was seeded.
     pub(crate) fn mint_symbol(&mut self) -> IRSymbol {
         let parent = self.enclosing_symbol.as_ref().expect(
-            "alpha IR lower: closure expression encountered without an enclosing function symbol",
+            "IR lower: closure expression encountered without an enclosing function symbol",
         );
         let suffix = format!("__closure{}", self.next_index);
         self.next_index += 1;
@@ -225,7 +225,7 @@ impl FnLowerCtx {
     pub(crate) fn pop_loop_exit(&mut self) {
         self.loop_exit
             .pop()
-            .expect("alpha IR lower: pop_loop_exit on empty stack — push/pop imbalance");
+            .expect("IR lower: pop_loop_exit on empty stack — push/pop imbalance");
     }
 
     /// The innermost enclosing loop's exit block, if any. `break`
@@ -286,7 +286,7 @@ impl FnLowerCtx {
     /// creation.
     pub(crate) fn entry_block(&self) -> IRBlockId {
         self.entry_block.expect(
-            "alpha IR lower: entry_block consulted before any block was opened — \
+            "IR lower: entry_block consulted before any block was opened — \
              lower_function ordering bug",
         )
     }
@@ -340,9 +340,7 @@ impl FnLowerCtx {
     /// `LocalDecl` before any `LocalWrite`.
     pub(crate) fn mark_local_written(&mut self, local: IRLocalId, ownership: Ownership) {
         let state = self.locals.get_mut(&local).unwrap_or_else(|| {
-            panic!(
-                "alpha IR lower: mark_local_written for undeclared slot `{local}` — lowering bug"
-            )
+            panic!("IR lower: mark_local_written for undeclared slot `{local}` — lowering bug")
         });
         state.moved = false;
         state.ownership = ownership;
@@ -472,7 +470,7 @@ impl FnLowerCtx {
         self.value_types
             .get(&id)
             .cloned()
-            .unwrap_or_else(|| panic!("alpha IR lower: missing type for {id} — lowering bug"))
+            .unwrap_or_else(|| panic!("IR lower: missing type for {id} — lowering bug"))
     }
 
     /// Consume the context and return the accumulated block list.
@@ -484,7 +482,7 @@ impl FnLowerCtx {
         for block in &blocks {
             if !closed.contains_key(&block.id) {
                 panic!(
-                    "alpha IR lower: block {} ({}) was opened but never had its terminator set — \
+                    "IR lower: block {} ({}) was opened but never had its terminator set — \
                      lowering bug",
                     block.id, block.label,
                 );

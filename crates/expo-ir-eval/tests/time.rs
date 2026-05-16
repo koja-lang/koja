@@ -2,14 +2,14 @@
 //! The pure-Expo bodies (`Duration.from_secs` / `from_millis` /
 //! `millis`, `DateTime.timestamp_millis`) evaluate end-to-end on
 //! the interpreter; the `@extern "C" priv fn expo_time_now_millis`
-//! routes through `expo-alpha-ir-eval`'s curated extern dispatch
+//! routes through `expo-ir-eval`'s curated extern dispatch
 //! table, which calls into `expo-runtime`'s `expo_time_now_millis`
 //! over the C ABI — the same symbol the LLVM backend would link
 //! against, so the two backends observe identical wall-clock
 //! values.
 
-use expo_alpha_ir_eval::{RuntimeError, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{RuntimeError, Value};
 
 mod common;
 

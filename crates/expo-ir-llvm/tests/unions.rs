@@ -1,5 +1,5 @@
 //! IR-text snapshot tests for the union slice in
-//! [`expo_alpha_ir_llvm::emit_script_llvm_ir`].
+//! [`expo_ir_llvm::emit_script_llvm_ir`].
 //!
 //! Three contracts are pinned:
 //!
@@ -21,8 +21,8 @@
 //! All assertions are substring-only because LLVM may shuffle
 //! attribute ordering between patch versions.
 
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 

@@ -1,6 +1,6 @@
-//! LLVM backend for sealed [`expo_alpha_ir::IRProgram`]s and
-//! [`expo_alpha_ir::IRScript`]s — peer to
-//! [`expo-alpha-ir-eval`](../expo_alpha_ir_eval/index.html) but
+//! LLVM backend for sealed [`expo_ir::IRProgram`]s and
+//! [`expo_ir::IRScript`]s — peer to
+//! [`expo-ir-eval`](../expo_ir_eval/index.html) but
 //! emitting native object code via [`inkwell`] instead of
 //! interpreting in-process.
 //!
@@ -9,7 +9,7 @@
 //! Emits a single-module LLVM IR program with one external `main`
 //! symbol of signature `i64 ()`. `main` always returns 0 — the
 //! body's value is fed to a runtime printer
-//! ([`expo-runtime/src/alpha.rs`](../../expo-runtime/src/alpha.rs))
+//! ([`expo-runtime/src/intrinsics.rs`](../../expo-runtime/src/intrinsics.rs))
 //! before the return so the binary's observable behavior matches
 //! the eval interpreter's `print value, exit 0` contract. Temporary
 //! scaffolding; goes away with `IO.puts`.
@@ -31,9 +31,9 @@
 //! Two pairs of entry points, one per IR shape:
 //!
 //! - [`compile_program`] / [`emit_llvm_ir`] for project-mode source
-//!   lowered through `expo-alpha-ir::lower_program`.
+//!   lowered through `expo-ir::lower_program`.
 //! - [`compile_script`] / [`emit_script_llvm_ir`] for script-mode
-//!   source lowered through `expo-alpha-ir::lower_script`.
+//!   source lowered through `expo-ir::lower_script`.
 //!
 //! `compile_*` writes a native object file at the requested path;
 //! linking lives in `expo-driver`.
@@ -78,7 +78,7 @@ pub use error::LlvmError;
 
 use std::path::Path;
 
-use expo_alpha_ir::{IRProgram, IRScript};
+use expo_ir::{IRProgram, IRScript};
 use inkwell::context::Context;
 
 use crate::ctx::EmitContext;

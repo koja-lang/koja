@@ -6,8 +6,8 @@
 //! `loop`) and the `br` instructions that form back-edges and
 //! `break` exits.
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 
@@ -104,7 +104,7 @@ fn while_with_string_concat_emits_alloca_for_loop_carried_slot() {
 fn loop_emits_loop_body_and_loop_exit_blocks_with_break_branch() {
     // `loop ... break ... end` lowers to `loop_body` / `loop_exit`
     // labeled blocks. The `break` becomes a `br label %loop_exit`
-    // (no condition — break is always-taken in alpha).
+    // (no condition — break is always-taken).
     let source = "
         fn main -> Int
           i = 0

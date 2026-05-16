@@ -11,12 +11,12 @@
 //! — params and return type — yielding the substituted signature
 //! [`crate::lower::package::lower_function_inner`] needs.
 
-use expo_alpha_typecheck::{FunctionSignature, ResolvedParam};
 use expo_ast::ast::{
     AssignTarget, EnumConstructionData, Expr, ExprKind, FieldPattern, Function, Pattern, Statement,
     StringPart,
 };
 use expo_ast::identifier::{GlobalRegistryId, ResolvedType};
+use expo_typecheck::{FunctionSignature, ResolvedParam};
 
 use super::substitute_resolved_type;
 

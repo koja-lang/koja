@@ -1,10 +1,10 @@
-//! Heap-box / unbox helpers for [`expo_alpha_ir::IRType::Indirect`]
+//! Heap-box / unbox helpers for [`expo_ir::IRType::Indirect`]
 //! field slots. `Indirect(T)` is stored as a pointer to a heap-
 //! allocated `T`; constructors malloc + memcpy on write, projectors
 //! load through the pointer on read. Pairs with the cycle pass in
-//! `expo-alpha-ir/src/cycle.rs`.
+//! `expo-ir/src/cycle.rs`.
 
-use expo_alpha_ir::IRType;
+use expo_ir::IRType;
 use inkwell::values::{BasicValueEnum, PointerValue};
 
 use crate::ctx::EmitContext;

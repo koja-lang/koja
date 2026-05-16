@@ -13,12 +13,10 @@
 //! diagnostic propagates back to `lower_program` /
 //! `lower_script` via the shared `diagnostics` accumulator.
 
-use expo_alpha_typecheck::{
-    GlobalKind, GlobalRegistry, StructDefinition, Substitution, substitute,
-};
 use expo_ast::ast::{AssignTarget, CompoundOp, Expr, LValue, Statement};
 use expo_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 use expo_ast::span::Span;
+use expo_typecheck::{GlobalKind, GlobalRegistry, StructDefinition, Substitution, substitute};
 
 use crate::function::{
     BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator,
@@ -185,7 +183,7 @@ fn lower_break_statement(
 ) -> Result<FlowResult, ()> {
     let exit = ctx.current_loop_exit().unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: `break` reached lowering with no enclosing loop ({span:?}) — \
+            "IR lower: `break` reached lowering with no enclosing loop ({span:?}) — \
              typecheck resolve invariant violation",
         )
     });
@@ -299,7 +297,7 @@ fn lower_field_assignment(
     let ir_local = IRLocalId::from_local_id(local_id);
     let head_ty = lvalue.head_resolved_type.clone().unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: multi-segment assignment target `{}` carries no head \
+            "IR lower: multi-segment assignment target `{}` carries no head \
              ResolvedType — typecheck resolve invariant violation",
             lvalue.segments.join("."),
         )
@@ -339,7 +337,7 @@ fn lower_field_assignment(
 
     let leaf_step = plan
         .last()
-        .expect("alpha IR lower: field-assignment plan is empty for a multi-segment lvalue");
+        .expect("IR lower: field-assignment plan is empty for a multi-segment lvalue");
     let leaf_parent = parent_values[parent_values.len() - 1];
 
     let (rhs_value, current) = lower_expr(value, ctx, block, registry, output)?;
@@ -438,7 +436,7 @@ fn build_field_chain(
         } = &current_ty
         else {
             panic!(
-                "alpha IR lower: field-assignment segment `{segment}` projects through a \
+                "IR lower: field-assignment segment `{segment}` projects through a \
                  non-struct receiver `{current_ty:?}` — typecheck resolve invariant \
                  violation",
             );
@@ -447,7 +445,7 @@ fn build_field_chain(
         let definition = registry_struct(registry, struct_id);
         let (field_index, declared) = definition.lookup_field(segment).unwrap_or_else(|| {
             panic!(
-                "alpha IR lower: field-assignment segment `{segment}` is not a declared \
+                "IR lower: field-assignment segment `{segment}` is not a declared \
                  field on the receiver struct — typecheck resolve invariant violation",
             )
         });
@@ -474,11 +472,11 @@ fn registry_struct(
     struct_id: expo_ast::identifier::GlobalRegistryId,
 ) -> &StructDefinition {
     let entry = registry.get(struct_id).unwrap_or_else(|| {
-        panic!("alpha IR lower: struct id {struct_id} missing from registry — seal violation",)
+        panic!("IR lower: struct id {struct_id} missing from registry — seal violation",)
     });
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(
-            "alpha IR lower: registry id {struct_id} (`{}`) is not a struct with a lifted \
+            "IR lower: registry id {struct_id} (`{}`) is not a struct with a lifted \
              definition — typecheck resolve invariant violation",
             entry.identifier,
         );
@@ -554,7 +552,7 @@ fn lower_compound_assignment(
 
     let head_ty = target.head_resolved_type.clone().unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: multi-segment compound-assign target `{}` carries no head \
+            "IR lower: multi-segment compound-assign target `{}` carries no head \
              ResolvedType — typecheck resolve invariant violation",
             target.segments.join("."),
         )
@@ -593,7 +591,7 @@ fn lower_compound_assignment(
 
     let leaf_step = plan
         .last()
-        .expect("alpha IR lower: compound-assign plan is empty for a multi-segment lvalue");
+        .expect("IR lower: compound-assign plan is empty for a multi-segment lvalue");
     let leaf_parent = parent_values[parent_values.len() - 1];
     let leaf_value = ctx.fresh_value(leaf_step.field_ir_type.clone());
     ctx.cfg.append(
@@ -731,7 +729,7 @@ fn move_out_for_return(ctx: &mut FnLowerCtx, block: IRBlockId, value: ValueId) -
 fn expect_lvalue(target: &AssignTarget) -> &LValue {
     let AssignTarget::LValue(lvalue) = target else {
         panic!(
-            "alpha IR lower: assignment target must be an LValue after typecheck seal \
+            "IR lower: assignment target must be an LValue after typecheck seal \
              (got {target:?})",
         );
     };
@@ -746,7 +744,7 @@ fn expect_lvalue(target: &AssignTarget) -> &LValue {
 fn expect_local_id(lvalue: &LValue) -> LocalId {
     lvalue.local_id.unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: assignment target `{}` carries no LocalId — typecheck \
+            "IR lower: assignment target `{}` carries no LocalId — typecheck \
              resolve invariant violation",
             lvalue.segments.join("."),
         )

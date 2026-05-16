@@ -2,8 +2,8 @@
 //! the eval interpreter side. Mirrors [`crate::intrinsics`] in
 //! shape: each registered extern is keyed by its C symbol name —
 //! the same string the LLVM backend declares the function under
-//! ([`expo_alpha_ir::IRExternAttrs::link_name`] when present, or
-//! [`expo_alpha_ir::IRSymbol::last_segment`] otherwise) — and routed
+//! ([`expo_ir::IRExternAttrs::link_name`] when present, or
+//! [`expo_ir::IRSymbol::last_segment`] otherwise) — and routed
 //! to a hand-written handler that calls into `expo-runtime` (or
 //! libc) over the same C ABI symbol the LLVM backend would.
 //!
@@ -20,7 +20,7 @@
 //! symbol, export `pub(super) fn <handler>`, then register
 //! `(c_symbol, handler)` in [`dispatch`]. Externs not in the table
 //! fall through with `None` so the caller can surface
-//! [`RuntimeError::ExternNotSupported`] with the alpha-side mangled
+//! [`RuntimeError::ExternNotSupported`] with the the mangled
 //! symbol attached for the diagnostic.
 
 use crate::error::RuntimeError;

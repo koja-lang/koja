@@ -448,7 +448,7 @@ The fixture still demonstrates the original ownership shape
 
 Latent at the time this doc was written; surfaced once the
 remaining stdlib packages (`Net`, `Json`) were wired into
-`ALPHA_QUALIFIED` and their `Process<…, Union<…>>` impls forced
+`QUALIFIED` and their `Process<…, Union<…>>` impls forced
 mono to substitute `A → Union<…>` inside the parametric
 `impl Debug for Pair<A, B>`. IR-lower's `receiver_struct_id`
 panicked because the receiver was `Union(…)` instead of

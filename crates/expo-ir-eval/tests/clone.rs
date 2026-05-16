@@ -19,7 +19,7 @@
 //! by the LLVM backend and the driver e2e (where mutation +
 //! independent buffers are observable through the `<>` concat path).
 
-use expo_alpha_ir_eval::Value;
+use expo_ir_eval::Value;
 
 mod common;
 

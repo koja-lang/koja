@@ -1,22 +1,23 @@
-//! Runtime helpers for the alpha LLVM backend that don't have a
-//! natural home in `scheduler.rs` (concurrency) or `format.rs`
-//! (number → string rendering):
+//! C-ABI runtime helpers called from LLVM-emitted IR. The LLVM
+//! backend names each of these as an external declaration and emits
+//! direct calls; the eval interpreter mirrors each helper's
+//! behavior in pure Rust so the two backends produce byte-identical
+//! results.
 //!
-//! - [`__expo_alpha_print_string`] — the runtime body of the
-//!   [`Global.print`](../../expo-alpha-ir-llvm/src/intrinsics/print.rs)
-//!   intrinsic. Writes the bytes of an alpha-emitted heap string
-//!   followed by a newline.
-//! - [`__expo_alpha_panic`] — the runtime body of `Kernel.panic`.
+//! - [`__expo_print_string`] — the runtime body of the
+//!   [`Global.print`](../../expo-ir-llvm/src/intrinsics/print.rs)
+//!   intrinsic. Writes the bytes of a heap string followed by a
+//!   newline.
+//! - [`__expo_panic`] — the runtime body of `Kernel.panic`.
 //!   Writes `panic: <message>\n` to stderr and aborts.
-//! - [`__expo_alpha_concat_bits`] / [`__expo_alpha_pack_bits`] —
-//!   helpers for the LLVM emitter's bit-packing paths; emitting
-//!   the sub-byte alignment logic is far cleaner in Rust than in
-//!   LLVM IR.
+//! - [`__expo_concat_bits`] / [`__expo_pack_bits`] — helpers for
+//!   the LLVM emitter's bit-packing paths; emitting the sub-byte
+//!   alignment logic is far cleaner in Rust than in LLVM IR.
 
 use std::io::{self, Write};
 
-/// Concatenate two `Bits` values produced by alpha LLVM. Reads
-/// `bit_length` from each operand's `payload - 8` header,
+/// Concatenate two `Bits` values produced by the LLVM backend.
+/// Reads `bit_length` from each operand's `payload - 8` header,
 /// allocates a fresh `[i64 bit_length][ceil((L+R)/8) bytes]` heap
 /// block, copies lhs verbatim, and bit-shifts rhs to land at the
 /// lhs trailing partial byte. Returns the new payload pointer
@@ -24,16 +25,16 @@ use std::io::{self, Write};
 /// `payload - 8` recipe used for `String` / `Binary`.
 ///
 /// Sub-byte alignment is far cleaner in Rust than LLVM IR, so the
-/// alpha LLVM backend's `IRInstruction::Concat` arm for
+/// LLVM backend's `IRInstruction::Concat` arm for
 /// `ConcatKind::Bits` calls this helper instead of inlining.
 ///
 /// # Safety
 ///
-/// Both `lhs` and `rhs` must point at alpha-emitted heap-payload
-/// pointers (i.e. 8 bytes past their `i64 bit_length` headers).
-/// Calling with any other pointer is undefined behavior.
+/// Both `lhs` and `rhs` must point at heap-payload pointers
+/// (i.e. 8 bytes past their `i64 bit_length` headers). Calling
+/// with any other pointer is undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __expo_alpha_concat_bits(lhs: *const u8, rhs: *const u8) -> *const u8 {
+pub unsafe extern "C" fn __expo_concat_bits(lhs: *const u8, rhs: *const u8) -> *const u8 {
     let l_bits = unsafe { *(lhs.offset(-8).cast::<i64>()) } as u64;
     let r_bits = unsafe { *(rhs.offset(-8).cast::<i64>()) } as u64;
     let total_bits = l_bits + r_bits;
@@ -59,7 +60,7 @@ pub unsafe extern "C" fn __expo_alpha_concat_bits(lhs: *const u8, rhs: *const u8
     }
     if l_trailing > 0 {
         // The lhs's trailing partial byte sits at `payload[l_bytes]`;
-        // copy it (low bits already zero per the alpha invariant).
+        // copy it (low bits already zero per the bit-packing invariant).
         unsafe {
             *payload.add(l_bytes) = *lhs.add(l_bytes);
         }
@@ -74,7 +75,7 @@ pub unsafe extern "C" fn __expo_alpha_concat_bits(lhs: *const u8, rhs: *const u8
 
 /// Append `length` bits from `src` (left-aligned, low-bit zero pad
 /// in the trailing partial byte) into `dest` starting at bit
-/// offset `start_bit`. Helper for [`__expo_alpha_concat_bits`];
+/// offset `start_bit`. Helper for [`__expo_concat_bits`];
 /// mirrors the eval interpreter's `append_bits` so eval / native
 /// produce byte-identical results for the same input.
 ///
@@ -119,7 +120,7 @@ unsafe fn append_bits_into(dest: *mut u8, start_bit: u64, src: *const u8, length
 }
 
 /// Pack the low `width` bits of `value` (MSB-first) into `payload`
-/// at bit offset `bit_offset`. Used by alpha LLVM's
+/// at bit offset `bit_offset`. Used by the LLVM backend's
 /// `IRInstruction::BinaryConstruct` lowering to handle sub-byte
 /// segment widths — the bit-shift loop in LLVM IR is far messier
 /// than the same logic in Rust, so the LLVM emitter delegates here.
@@ -136,7 +137,7 @@ unsafe fn append_bits_into(dest: *mut u8, start_bit: u64, src: *const u8, length
 /// `payload` must point at a writable byte buffer with at least
 /// `ceil((bit_offset + width) / 8)` bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __expo_alpha_pack_bits(
+pub unsafe extern "C" fn __expo_pack_bits(
     payload: *mut u8,
     value: i64,
     width: u8,
@@ -163,19 +164,19 @@ pub unsafe extern "C" fn __expo_alpha_pack_bits(
 }
 
 /// Abort the process with a diagnostic message. Paired with the
-/// alpha LLVM backend's `Kernel.panic` emitter — the emitter passes
-/// the `String` payload pointer (8 bytes past the v1 length header)
-/// and trails the call with `unreachable`, so this helper never has
+/// LLVM backend's `Kernel.panic` emitter — the emitter passes the
+/// `String` payload pointer (8 bytes past the length header) and
+/// trails the call with `unreachable`, so this helper never has
 /// to return. Reads the `i64` bit length from `payload-8`, writes
 /// `panic: <message>\n` to stderr, then `process::abort`s.
 ///
 /// # Safety
 ///
-/// `payload` must point at the body of an alpha-emitted string
-/// global (i.e. the byte right after the `i64 bit_length` header).
+/// `payload` must point at the body of a heap-emitted string
+/// (i.e. the byte right after the `i64 bit_length` header).
 /// Calling with any other pointer is undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __expo_alpha_panic(payload: *const u8) -> ! {
+pub unsafe extern "C" fn __expo_panic(payload: *const u8) -> ! {
     let header = unsafe { payload.offset(-8).cast::<i64>() };
     let bit_length = unsafe { *header };
     let byte_length = (bit_length / 8) as usize;
@@ -188,18 +189,18 @@ pub unsafe extern "C" fn __expo_alpha_panic(payload: *const u8) -> ! {
 }
 
 /// Print a `String`-flavored body value followed by a newline.
-/// Reads the `i64` bit-length 8 bytes before `payload` (the v1 header
+/// Reads the `i64` bit-length 8 bytes before `payload` (the header
 /// layout shared with `Binary` / `Bits`; see `IRType::String`) and
 /// writes that many UTF-8 bytes to stdout.
 ///
 /// # Safety
 ///
-/// `payload` must point at the body of an alpha-emitted string global
-/// (`emit_const_string` in `expo-alpha-ir-llvm`), i.e. the byte right
-/// after the `i64 bit_length` header. Calling with any other pointer
-/// is undefined behavior.
+/// `payload` must point at the body of a heap-emitted string
+/// global (`emit_const_string` in `expo-ir-llvm`), i.e. the byte
+/// right after the `i64 bit_length` header. Calling with any
+/// other pointer is undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __expo_alpha_print_string(payload: *const u8) {
+pub unsafe extern "C" fn __expo_print_string(payload: *const u8) {
     let header = unsafe { payload.offset(-8).cast::<i64>() };
     let bit_length = unsafe { *header };
     let byte_length = (bit_length / 8) as usize;

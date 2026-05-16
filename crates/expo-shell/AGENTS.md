@@ -1,9 +1,7 @@
-# expo-alpha-shell
+# expo-shell
 
-Interactive REPL for the alpha pipeline. Alpha-track sibling to the legacy
-`expo-shell`; the two share **no code** and **no types** — alpha is a clean
-cut and drives `expo-parser → expo-alpha-typecheck → expo-alpha-ir →
-expo-alpha-ir-eval` from scratch.
+Interactive REPL driving `expo-parser → expo-typecheck → expo-ir →
+expo-ir-eval`.
 
 ## Public surface
 
@@ -13,7 +11,7 @@ One entry point:
 pub fn run();
 ```
 
-Reads stdin until `:quit` or EOF, evaluates each input through the alpha
+Reads stdin until `:quit` or EOF, evaluates each input through the
 pipeline, and prints trailing-expression values. Recovers cleanly from
 parse / typecheck / lower / runtime errors by rolling the session back to
 its pre-input state.
@@ -28,10 +26,10 @@ read_input         -> one-input read using rustyline line-at-a-time;
                       reads continuation lines with an empty prompt until
                       is_input_complete flips true
 erase_current_line -> ANSI escape sequence (cursor up, erase line) backing
-                      the rewrite trick (lifted from v1)
+                      the rewrite trick
 Session            -> accumulating REPL state (statement history + counter)
 is_input_complete  -> token-level check: are blocks/brackets/strings closed?
-run_pipeline       -> drive one source string through the alpha pipeline
+run_pipeline       -> drive one source string through the pipeline
 format_check_failure / parse_diagnostics / format_block
                    -> render typecheck / parse failures as user-facing strings
 ```
@@ -43,8 +41,8 @@ editing + history. `read_input` decides when an input is complete via
 is incomplete (a block-opening keyword, unclosed bracket, dangling
 string), `read_input` emits `\x1b[1A\r\x1b[2K` (cursor up, erase line)
 on a TTY and reprints `expo(N)>` and the typed first line on their own
-rows — matching v1's continuation UX. Subsequent reads pass an empty
-prompt so the block reads as raw code on the terminal.
+rows. Subsequent reads pass an empty prompt so the block reads as raw
+code on the terminal.
 
 The session is whole-program today: every input causes the entire history
 to re-parse, re-typecheck, re-lower, and re-interpret. This is the simplest
@@ -75,29 +73,9 @@ and reprompts (no session-state change). `Ctrl-C` does the same.
 previous accepted inputs (multi-line blocks come back as one editable
 entry); history is in-memory only and is discarded on exit.
 
-## Promotion plan
-
-When the alpha shell grows file-input support (e.g. `pub fn eval_source(...)`
-that reads a `.expo` file), `expo-driver/src/alpha.rs::cmd_eval` collapses
-into a thin wrapper around it — same as `cmd_shell` does today for `run`.
-At that point the driver's local `run_pipeline` copy disappears and this
-crate becomes the single home for "drive a string through the alpha
-pipeline." Eventually, when alpha reaches feature parity with v1, it
-graduates to `expo-shell` and the legacy crate retires.
-
 ## Hard contract
 
-- **Zero dependency on `expo-ir`, `expo-ir-eval`, `expo-typecheck`, or
-  `expo-shell`.** Those crates are the legacy v1 path; alpha is a clean
-  cut. Use only the alpha pipeline crates.
 - **Self-contained.** No path back through `expo-driver` — the driver
   depends on this crate, never the other way round.
-- **One public function.** Today only `run()` is `pub`; the pipeline driver
-  and helpers stay private until a second consumer needs them.
-
-## What alpha covers today
-
-Scope mirrors `expo-alpha-typecheck` / `expo-alpha-ir`: integer literals,
-integer arithmetic (`+ - * / %`), boolean / comparison operators, and
-parenthesized groups. Anything richer typecheck-errors with a precise
-diagnostic, then the session rolls back and the user can retry.
+- **One public function.** Today only `run()` is `pub`; the pipeline
+  driver and helpers stay private until a second consumer needs them.

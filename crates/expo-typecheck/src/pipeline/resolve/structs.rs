@@ -43,7 +43,7 @@ pub(super) fn resolve_struct_construction(
     else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not recognize the struct type `{}`",
+                "typecheck does not recognize the struct type `{}`",
                 type_path.join("."),
             ),
             span,
@@ -64,7 +64,7 @@ pub(super) fn resolve_struct_construction(
     };
     let Some(definition) = definition else {
         panic!(
-            "alpha typecheck: struct entry `{}` reached struct-literal validation \
+            "typecheck: struct entry `{}` reached struct-literal validation \
              without a stamped definition — every struct (including stdlib stubs) \
              carries `Struct(Some(_))` after preload",
             struct_entry.identifier,

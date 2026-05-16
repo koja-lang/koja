@@ -61,7 +61,7 @@ pub(super) fn resolve_match(
     resolve_expr(subject, resolver, diagnostics);
     // NOTE: deliberately do NOT mark a bare-ident subject as moved
     // here. Literal / wildcard / enum-unit patterns compare without
-    // consuming, mirroring alpha-ir's borrow-the-subject lowering.
+    // consuming, mirroring ir's borrow-the-subject lowering.
     // A future slice that tracks per-arm binding-pattern moves can
     // surface "subject moved by an earlier binding arm" diagnostics;
     // the bare receive-and-compare case stays a borrow.
@@ -141,7 +141,7 @@ pub(super) fn resolve_match(
         && !is_match_subject_primitive(&subject_ty, resolver.registry)
     {
         diagnostics.push(Diagnostic::error(
-            "alpha typecheck does not yet admit literal `match` patterns against \
+            "typecheck does not yet admit literal `match` patterns against \
              non-primitive subjects (supported subjects: `Bool` / `String` / numeric \
              primitives)",
             subject.span,

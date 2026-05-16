@@ -1,13 +1,13 @@
 [package]
-name = "expo-alpha-ir"
-description = "Sealed IRProgram lowering for the alpha pipeline"
+name = "expo-ir"
+description = "Sealed IRProgram lowering"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
-expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
 expo-ast = { path = "../expo-ast" }
+expo-typecheck = { path = "../expo-typecheck" }
 
 [dev-dependencies]
 expo-parser = { path = "../expo-parser" }

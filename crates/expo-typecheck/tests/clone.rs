@@ -8,9 +8,9 @@
 //! and friends), and any generic-container impls. PR1 is the heap
 //! primitives only.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 

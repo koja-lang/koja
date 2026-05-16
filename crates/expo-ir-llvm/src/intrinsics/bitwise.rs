@@ -15,7 +15,7 @@
 //! truncate just collapses the same poison into the operand's
 //! native shape.
 
-use expo_alpha_ir::{BitOp, IRFunction, IntType};
+use expo_ir::{BitOp, IRFunction, IntType};
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{FunctionValue, IntValue};
 

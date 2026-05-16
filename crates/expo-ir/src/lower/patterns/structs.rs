@@ -45,7 +45,7 @@ pub(super) fn lower_struct_check(
             ..
         } => *id,
         _ => panic!(
-            "alpha IR lower: struct pattern subject has non-Global resolution after \
+            "IR lower: struct pattern subject has non-Global resolution after \
              typecheck seal",
         ),
     };
@@ -55,7 +55,7 @@ pub(super) fn lower_struct_check(
     for field in fields {
         let (field_index, declared) = definition.lookup_field(&field.name).unwrap_or_else(|| {
             panic!(
-                "alpha IR lower: struct pattern references unknown field `{}` — \
+                "IR lower: struct pattern references unknown field `{}` — \
                  typecheck invariant violation",
                 field.name,
             )
@@ -240,7 +240,7 @@ fn collect_catch_all_binds(
                     ..
                 } => *id,
                 _ => panic!(
-                    "alpha IR lower: nested struct pattern subject has non-Global \
+                    "IR lower: nested struct pattern subject has non-Global \
                      resolution after typecheck seal",
                 ),
             };
@@ -253,7 +253,7 @@ fn collect_catch_all_binds(
                 let (field_index, declared) =
                     definition.lookup_field(&field.name).unwrap_or_else(|| {
                         panic!(
-                            "alpha IR lower: nested struct pattern references unknown \
+                            "IR lower: nested struct pattern references unknown \
                              field `{}` — typecheck invariant violation",
                             field.name,
                         )
@@ -281,7 +281,7 @@ fn collect_catch_all_binds(
             }
         }
         _ => panic!(
-            "alpha IR lower: collect_catch_all_binds reached a non-catch-all pattern \
+            "IR lower: collect_catch_all_binds reached a non-catch-all pattern \
              — caller must gate via is_static_catch_all",
         ),
     }
@@ -382,7 +382,7 @@ pub(super) fn consume_inner_check(
         } => {
             assert!(
                 matches!(chain_mode, ChainMode::And),
-                "alpha IR lower: nested pattern inside a struct/enum field produced an \
+                "IR lower: nested pattern inside a struct/enum field produced an \
                  Or-chained check — typecheck-resolve admits only And-shaped nested \
                  patterns here",
             );

@@ -139,7 +139,7 @@ fn is_concrete_type(ty: &ResolvedType) -> bool {
 
 /// Override the declared return type for compiler-known divergent
 /// functions. `Global.Kernel.panic` is declared `-> Unit` in the
-/// shared stdlib source for v1 back-compat (v1 has no `Never`); alpha
+/// shared stdlib source for v1 back-compat (v1 has no `Never`); the new pipeline
 /// rewrites it to `Never` here so match arms that end in
 /// `Kernel.panic(...)` skip the arm-tail join lattice and let
 /// `Option.unwrap` / `Result.unwrap` typecheck cleanly.
@@ -406,7 +406,7 @@ fn lift_param(
             if default.is_some() {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck does not yet support default parameter values \
+                        "typecheck does not yet support default parameter values \
                          (`{identifier}.{name}`)",
                     ),
                     *span,

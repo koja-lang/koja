@@ -3,8 +3,8 @@
 //! at constant depth (no overflow on 100 000 iterations) and
 //! produce the same value-level results as the LLVM backend.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

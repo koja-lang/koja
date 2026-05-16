@@ -19,14 +19,14 @@
 //! `<type-mangled>.<method>` (no separate args list, since methods
 //! inherit the type's params).
 
-use expo_alpha_ir::{IRFunction, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{IRFunction, IRType};
 
 mod common;
 
 use common::{lower_program_source, lower_script_source};
 
-fn collect_function_names(program: &expo_alpha_ir::IRProgram) -> Vec<String> {
+fn collect_function_names(program: &expo_ir::IRProgram) -> Vec<String> {
     let mut names: Vec<String> = program
         .packages
         .iter()
@@ -37,7 +37,7 @@ fn collect_function_names(program: &expo_alpha_ir::IRProgram) -> Vec<String> {
     names
 }
 
-fn collect_script_function_names(script: &expo_alpha_ir::IRScript) -> Vec<String> {
+fn collect_script_function_names(script: &expo_ir::IRScript) -> Vec<String> {
     let mut names: Vec<String> = script
         .packages
         .iter()
@@ -48,7 +48,7 @@ fn collect_script_function_names(script: &expo_alpha_ir::IRScript) -> Vec<String
     names
 }
 
-fn function<'a>(script: &'a expo_alpha_ir::IRScript, mangled: &str) -> &'a IRFunction {
+fn function<'a>(script: &'a expo_ir::IRScript, mangled: &str) -> &'a IRFunction {
     script
         .function(mangled)
         .unwrap_or_else(|| panic!("expected function `{mangled}` in script"))

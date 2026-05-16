@@ -1,11 +1,11 @@
 //! Runtime values produced by the [`crate::Interpreter`] — variants
-//! map 1:1 onto [`expo_alpha_ir::ConstValue`] for primitives, plus a
+//! map 1:1 onto [`expo_ir::ConstValue`] for primitives, plus a
 //! [`Value::Struct`] variant carrying the receiver's
-//! [`expo_alpha_ir::IRSymbol`] and a positional `fields` vector
-//! (indexed by [`expo_alpha_ir::IRStructField::index`]) and a
+//! [`expo_ir::IRSymbol`] and a positional `fields` vector
+//! (indexed by [`expo_ir::IRStructField::index`]) and a
 //! [`Value::Enum`] variant carrying the receiver enum's
-//! [`expo_alpha_ir::IRSymbol`], the discriminant
-//! [`expo_alpha_ir::IRVariantTag`], the variant `name` (cached for
+//! [`expo_ir::IRSymbol`], the discriminant
+//! [`expo_ir::IRVariantTag`], the variant `name` (cached for
 //! `Display`), and a per-shape [`EnumPayload`]. New variants (lists,
 //! closures, …) land as the IR vocabulary grows.
 
@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
 
-use expo_alpha_ir::{IRSymbol, IRVariantTag};
+use expo_ir::{IRSymbol, IRVariantTag};
 
 /// `Map<K, V>` storage: `(key, value)` pairs in insertion order.
 /// Eval doesn't need a real hash table — linear probes over a Vec
@@ -71,7 +71,7 @@ pub enum Value {
     /// underlying buffer in place — the interpreter copies the `Rc`,
     /// not the `Vec`. Aliased reads observe the post-mutation state,
     /// matching the LLVM by-value ABI's conservative copy-on-write
-    /// behavior in practice (every alpha intrinsic that mutates
+    /// behavior in practice (every intrinsic that mutates
     /// consumes its receiver via `move self`).
     List(Rc<RefCell<Vec<Value>>>),
     /// Heap-backed associative map keyed by [`Value`]. Eval uses
@@ -110,7 +110,7 @@ pub enum Value {
 }
 
 /// Materialized payload for a [`Value::Enum`]. Mirrors
-/// [`expo_alpha_ir::IRVariantPayload`] one-to-one but carries
+/// [`expo_ir::IRVariantPayload`] one-to-one but carries
 /// already-evaluated [`Value`]s. The `Struct` arm carries
 /// `(field_name, value)` pairs in declaration order so `Display`
 /// can render named fields without a registry handle.

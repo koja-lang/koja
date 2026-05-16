@@ -10,11 +10,11 @@
 //! helper-call wiring path unique to script-mode lowering (helpers
 //! live in a synthesized package fragment).
 //!
-//! [`compile_script`]: expo_alpha_ir_llvm::compile_script
-//! [`emit_script_llvm_ir`]: expo_alpha_ir_llvm::emit_script_llvm_ir
+//! [`compile_script`]: expo_ir_llvm::compile_script
+//! [`emit_script_llvm_ir`]: expo_ir_llvm::emit_script_llvm_ir
 
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
@@ -43,7 +43,7 @@ fn bare_two_plus_two_emits_const_add_then_ret_void() {
 
 #[test]
 fn large_int_literal_compiles_with_user_main_ret_void() {
-    // 64-bit literals widen past `i32`; the alpha IR `IRType::Int`
+    // 64-bit literals widen past `i32`; the IR `IRType::Int`
     // tracks it as a 64-bit integer. With auto-print gone the only
     // observable IR-text effect is that compilation succeeds and
     // `__expo_user_main` caps with `ret void` — pinned here so a

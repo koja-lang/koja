@@ -5,12 +5,12 @@
 //! (`ownership_for_param`, the parameter-promotion `LocalWrite`
 //! stamp) key drop decisions on this field.
 
-use expo_alpha_typecheck::{
-    CheckedProgram, FunctionSignature, GlobalKind, ProtocolDefinition, ResolvedParam,
-};
 use expo_ast::ast::PassMode;
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::{
+    CheckedProgram, FunctionSignature, GlobalKind, ProtocolDefinition, ResolvedParam,
+};
 
 mod common;
 

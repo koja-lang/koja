@@ -1,7 +1,9 @@
-//! Sub-passes of the alpha typecheck phase, run in order by
+//! Sub-passes of the typecheck phase, run in order by
 //! [`crate::check_program`]:
 //!
-//! - [`collect::collect_file`] — register every top-level decl.
+//! - [`collect::collect_file_decls`] +
+//!   [`collect::collect_file_impls`] — register every top-level decl,
+//!   then every `impl` block (cross-file two-pass).
 //! - [`lift_signatures::lift_signatures`] — stamp
 //!   [`crate::registry::FunctionSignature`]s and lifted struct /
 //!   enum / protocol payloads.

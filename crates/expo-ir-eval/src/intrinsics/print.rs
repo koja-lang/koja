@@ -1,9 +1,9 @@
 //! `@intrinsic Global.print(s: String) -> Unit` — write the string
 //! to stdout with a trailing newline. Matches the LLVM-side
-//! [`__expo_alpha_print_string`] runtime contract byte-for-byte so
+//! [`__expo_print_string`] runtime contract byte-for-byte so
 //! both backends produce identical stdout for `print(...)` calls.
 //!
-//! [`__expo_alpha_print_string`]: ../../../expo-runtime/src/alpha.rs
+//! [`__expo_print_string`]: ../../../expo-runtime/src/intrinsics.rs
 
 use std::io::{self, Write};
 

@@ -10,8 +10,8 @@
 //!   with the receiver as the sole argument.
 //!
 //! Out of scope here: backend-emitted body shape (eval coverage in
-//! `expo-alpha-ir-eval/tests/clone.rs`, LLVM coverage in
-//! `expo-alpha-ir-llvm/tests/clone.rs`). Owned-vs-Unowned stamping
+//! `expo-ir-eval/tests/clone.rs`, LLVM coverage in
+//! `expo-ir-llvm/tests/clone.rs`). Owned-vs-Unowned stamping
 //! on the destination slot is not pinned — today
 //! `lower::ownership::ownership_for_expr` only flags constructor-shaped
 //! AST nodes (`Concat`, `BinaryLiteral`, closure literals, `Receive`,
@@ -23,11 +23,11 @@
 //! gap shared by every fresh-allocating helper (`String.upcase`,
 //! `String.replace`, …), not a regression.
 
-use expo_alpha_ir::{
+use expo_ast::util::dedent;
+use expo_ir::{
     BinaryMethod, BitsMethod, FunctionKind, IRFunction, IRInstruction, IRIntrinsicId, IRProgram,
     StringMethod,
 };
-use expo_ast::util::dedent;
 
 mod common;
 

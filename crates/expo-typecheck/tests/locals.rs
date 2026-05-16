@@ -1,4 +1,4 @@
-//! Typecheck coverage for the alpha locals slice: variable
+//! Typecheck coverage for the locals slice: variable
 //! declaration, reassignment, parameter references, compound
 //! assignment (`+=`, `-=`, `*=`, `/=`), and the feature-gap
 //! diagnostics that fence off out-of-scope shapes (multi-segment
@@ -20,10 +20,10 @@
 //! [`LValue::local_id`]: expo_ast::ast::LValue::local_id
 //! [`Resolution::Local`]: expo_ast::identifier::Resolution::Local
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{AssignTarget, CompoundOp, ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

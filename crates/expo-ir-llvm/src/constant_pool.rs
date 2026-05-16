@@ -1,14 +1,14 @@
 //! Flat snapshot of every package's pooled compound constants —
 //! flattened once at compile entry so [`EmitContext`] can resolve a
-//! [`expo_alpha_ir::IRInstruction::LoadConst`] without threading
+//! [`expo_ir::IRInstruction::LoadConst`] without threading
 //! `&[IRPackage]` through [`crate::emit::emit_instruction`]. Keys use
 //! [`IRSymbol`] identity (opaque to LLVM), not detached `String`/`&str`,
-//! matching [`expo_alpha_ir::IRPackage::constants`].
+//! matching [`expo_ir::IRPackage::constants`].
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use expo_alpha_ir::{IRConstantValue, IRPackage, IRSymbol};
+use expo_ir::{IRConstantValue, IRPackage, IRSymbol};
 
 #[derive(Debug)]
 pub(crate) struct ConstantPoolSnapshot {
@@ -22,7 +22,7 @@ impl ConstantPoolSnapshot {
             for (sym, val) in &pkg.constants {
                 if entries.insert(sym.clone(), val.clone()).is_some() {
                     panic!(
-                        "alpha LLVM: duplicate constant pool key `{}` while merging packages",
+                        "LLVM: duplicate constant pool key `{}` while merging packages",
                         sym,
                     );
                 }

@@ -8,9 +8,9 @@
 //! can reuse the same exit pattern without re-importing private
 //! helpers.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Expr, Statement};
 use expo_ast::identifier::ResolvedType;
+use expo_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::{ConstValue, IRType, ValueId};

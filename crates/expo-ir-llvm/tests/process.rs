@@ -1,7 +1,7 @@
 //! Coverage for the `IRInstruction::Spawn` / `IRInstruction::Receive`
-//! emit paths in [`expo_alpha_ir_llvm::emit::process`] and the
+//! emit paths in [`expo_ir_llvm::emit::process`] and the
 //! `Ref<M, R>` / `ReplyTo<R>` intrinsic emitters in
-//! [`expo_alpha_ir_llvm::intrinsics::process`]. Pins:
+//! [`expo_ir_llvm::intrinsics::process`]. Pins:
 //!
 //! - **Spawn**: serializes config to a stack alloca, calls
 //!   `expo_rt_spawn(wrapper, blob, size)`, wraps the returned pid
@@ -16,28 +16,28 @@
 //! - **Ref intrinsics**: `self_ref`, `cast`, `signal`, `kill`,
 //!   `alive?`, `send_after`, plus `ReplyTo.send` — each routes
 //!   through the matching `expo_rt_*` extern declared in
-//!   [`expo_alpha_ir_llvm::runtime`].
+//!   [`expo_ir_llvm::runtime`].
 //!
 //! Tests inline minimal `Lifecycle` / `StopReason` / `Step` /
 //! `ReplyTo` / `Ref` / `Process` definitions so the suite doesn't
 //! depend on `Global.process` being autoimported (that step lands
-//! later in the alpha-concurrency-process plan).
+//! later in the concurrency plan).
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{IRProgram, ProjectEntry, lower_program};
-use expo_alpha_ir_llvm::emit_llvm_ir;
-use expo_alpha_typecheck::check_program;
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_ir::{IRProgram, ProjectEntry, lower_program};
+use expo_ir_llvm::emit_llvm_ir;
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::check_program;
 
 const PACKAGE: &str = "TestApp";
 const APP_NAME: &str = "alpha_process_test";
 
-/// Minimal alpha-friendly stub of `process.expo`. Mirrors the
-/// stubs used by `expo-alpha-ir/tests/lower_process.rs` and
-/// `expo-alpha-typecheck/tests/process.rs`.
+/// Minimal stub of `process.expo`. Mirrors the
+/// stubs used by `expo-ir/tests/lower_process.rs` and
+/// `expo-typecheck/tests/process.rs`.
 const PROCESS_STUB: &str = "
     enum Lifecycle
       Shutdown
@@ -127,7 +127,7 @@ fn lower_process_entry(source: &str, state: &str) -> IRProgram {
 }
 
 fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    let mut sources = expo_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: "Global".to_string(),
         path: PathBuf::from("<Global.process>"),
@@ -141,7 +141,7 @@ fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
     let parsed = parse_program(sources, ParseMode::File);
     let checked = check_program(parsed).unwrap_or_else(|failure| {
         panic!(
-            "alpha typecheck failed: {} diagnostic(s):\n{}",
+            "typecheck failed: {} diagnostic(s):\n{}",
             failure.diagnostics.len(),
             failure
                 .diagnostics
@@ -234,7 +234,7 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
 
     assert_contains(&ir_text, "define void @TestApp.Counter.__spawn_wrapper(ptr");
     assert_contains(&ir_text, "loaded_config");
-    // start returns Result<Counter, StopReason>; the alpha mangler
+    // start returns Result<Counter, StopReason>; the name mangler
     // qualifies StopReason with the package it was lifted from
     // (today: `Global`, since the protocol stub lifts every type
     // declaration into the `Global` package).
@@ -531,7 +531,7 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
     assert_contains(&ir_text, "reply_value");
 }
 
-/// Minimal Process-entry fixture mirroring the alpha lang
+/// Minimal Process-entry fixture mirroring the language
 /// `process_entry` test: an `App` struct, a `Process<App, (), ()>`
 /// impl whose `start` returns the config unchanged and whose `run`
 /// terminates with `StopReason.Normal`. No PascalCase entry helper

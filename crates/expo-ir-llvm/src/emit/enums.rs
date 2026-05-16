@@ -11,9 +11,7 @@
 //! layout-aware path the instruction emitter uses, instead of
 //! GEPing raw indices into an assumed-flat outer struct.
 
-use expo_alpha_ir::{
-    EnumPayloadInit, IRSymbol, IRType, IRVariantPayload, IRVariantTag, StructFieldInit,
-};
+use expo_ir::{EnumPayloadInit, IRSymbol, IRType, IRVariantPayload, IRVariantTag, StructFieldInit};
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, PointerValue};
 
@@ -77,11 +75,11 @@ pub(crate) fn build_enum_value<'ctx>(
         }
         (None, true) => {}
         (Some(_), true) => panic!(
-            "alpha LLVM emit: enum `{ty}` variant at tag {tag} declares a payload but \
+            "LLVM emit: enum `{ty}` variant at tag {tag} declares a payload but \
              build_enum_value was called with no payload values — caller mismatch",
         ),
         (None, false) => panic!(
-            "alpha LLVM emit: enum `{ty}` variant at tag {tag} is Unit but build_enum_value \
+            "LLVM emit: enum `{ty}` variant at tag {tag} is Unit but build_enum_value \
              was called with {} payload value(s) — caller mismatch",
             boxed_values.len(),
         ),
@@ -105,13 +103,13 @@ fn resolve_struct_payload<'ctx>(
         let value = lookup(values, field.value)?;
         let slot = slots.get_mut(field.index as usize).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: struct payload field index {} out of bounds (arity {arity})",
+                "LLVM emit: struct payload field index {} out of bounds (arity {arity})",
                 field.index,
             )
         });
         if slot.replace(value).is_some() {
             panic!(
-                "alpha LLVM emit: struct payload field {} written twice — IR seal \
+                "LLVM emit: struct payload field {} written twice — IR seal \
                  invariant violation",
                 field.index,
             );
@@ -185,14 +183,14 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
     let declared_payload = ctx.layouts.enum_variant_payload(ty, tag);
     let declared_ty = declared_slot_type(&declared_payload, payload_index).unwrap_or_else(|| {
         panic!(
-            "alpha LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` payload index \
+            "LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` payload index \
              {payload_index} out of range — IR seal invariant violation",
         )
     });
     let (complete, payload_struct) = ctx.layouts.enum_variant_types(ty.mangled(), tag);
     let Some(payload_struct) = payload_struct else {
         panic!(
-            "alpha LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` but the variant declares \
+            "LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` but the variant declares \
              no payload — IR seal invariant violation",
         );
     };

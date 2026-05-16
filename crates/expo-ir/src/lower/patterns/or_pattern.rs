@@ -71,7 +71,7 @@ fn emit_or_alternative(
             output,
         ),
         other => panic!(
-            "alpha IR lower: or-alternative `{}` reached lowering — \
+            "IR lower: or-alternative `{}` reached lowering — \
              typecheck-resolve admits only Literal / EnumUnit alternatives",
             pattern_kind_label(other),
         ),

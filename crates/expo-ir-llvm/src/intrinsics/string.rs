@@ -6,7 +6,7 @@
 //! `slice`) delegate to `expo-runtime` helpers so unicode walking
 //! stays in Rust.
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, StringMethod};
+use expo_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, StringMethod};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::types::StructType;

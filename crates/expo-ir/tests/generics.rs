@@ -21,8 +21,8 @@
 //! symbol; nesting brings its own `_$..$` so depth-counting parses
 //! unambiguously.
 
-use expo_alpha_ir::{IRInstruction, IRType, IRVariantPayload};
 use expo_ast::util::dedent;
+use expo_ir::{IRInstruction, IRType, IRVariantPayload};
 
 mod common;
 
@@ -208,7 +208,7 @@ fn nested_generic_struct_yields_concrete_decls_for_outer_and_inner() {
 // Substitution coverage for control-flow expressions
 // ---------------------------------------------------------------------------
 
-/// Regression: prior to the alpha-ternary work, [`ExprKind::Cond`]
+/// Regression: prior to the ternary work, [`ExprKind::Cond`]
 /// was in `substitute_in_expr`'s no-op list, so type substitution
 /// silently skipped any `cond` arm bodies. A generic struct
 /// constructed inside a `cond` arm of a generic function would keep

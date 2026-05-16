@@ -1,4 +1,4 @@
-//! Generic monomorphization for the alpha IR pipeline.
+//! Generic monomorphization for the IR pipeline.
 //!
 //! Generics are pipeline-internal scratch state: lowering produces
 //! only concrete decls in [`crate::IRPackage`], and the typecheck
@@ -39,11 +39,11 @@ mod substitute;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use expo_alpha_typecheck::{CheckedPackage, GlobalRegistry};
 use expo_ast::ast::{Function, ImplMember, Item};
 use expo_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Identifier, Resolution, ResolvedType,
 };
+use expo_typecheck::{CheckedPackage, GlobalRegistry};
 
 use crate::lower::LowerOutput;
 use crate::lower::package::impl_target_name;
@@ -136,7 +136,7 @@ fn drain_synthesized_into_packages(packages: &mut [IRPackage], output: &mut Lowe
             .unwrap_or(0);
         let owner = packages
             .get_mut(index)
-            .expect("alpha IR generics: no IRPackage available to host synthesized function");
+            .expect("IR generics: no IRPackage available to host synthesized function");
         owner
             .functions
             .insert(synthesized.symbol.clone(), synthesized);
@@ -147,7 +147,7 @@ fn drain_synthesized_into_packages(packages: &mut [IRPackage], output: &mut Lowe
 /// node. Built once per [`instantiate`] call; covers top-level
 /// `fn`s, inline `fn` items on struct/enum decls, and methods in
 /// `impl` blocks. Skipped for v1-only [`Item`] kinds (constants,
-/// imports) — alpha doesn't lower them.
+/// imports) — the pipeline does not yet lower them.
 pub(super) type FunctionAstIndex<'a> = BTreeMap<GlobalRegistryId, &'a Function>;
 
 fn build_function_index<'a>(
@@ -249,7 +249,7 @@ pub(crate) fn substitute_resolved_type(
                 .cloned()
                 .unwrap_or_else(|| {
                     panic!(
-                        "alpha IR generics: TypeParam index {} out of range \
+                        "IR generics: TypeParam index {} out of range \
                      (owner `{owner}`, args.len() == {})",
                         index.as_u32(),
                         args.len(),

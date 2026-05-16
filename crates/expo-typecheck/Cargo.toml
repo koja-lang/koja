@@ -1,6 +1,6 @@
 [package]
-name = "expo-alpha-typecheck"
-description = "Sealed-AST typechecker for the alpha pipeline"
+name = "expo-typecheck"
+description = "Sealed-AST typechecker"
 edition.workspace = true
 license.workspace = true
 version.workspace = true

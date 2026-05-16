@@ -14,13 +14,13 @@
 //!
 //! Unregistered intrinsic ids (e.g. `@intrinsic fn missing`) used to
 //! surface at runtime as [`RuntimeError::UnknownIntrinsic`]; they
-//! now fail at lift time because [`expo_alpha_ir::IRIntrinsicId`]'s
+//! now fail at lift time because [`expo_ir::IRIntrinsicId`]'s
 //! source-axis mapper returns `None` for paths that aren't part of
 //! the registered universe. That contract is exercised by
-//! `crates/expo-alpha-ir/tests/lower_intrinsics.rs`.
+//! `crates/expo-ir/tests/lower_intrinsics.rs`.
 
-use expo_alpha_ir_eval::{RuntimeError, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{RuntimeError, Value};
 
 mod common;
 

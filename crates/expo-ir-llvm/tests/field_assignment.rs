@@ -10,8 +10,8 @@
 //! only; byte-for-byte stdout coverage of the same fixtures lives in
 //! the `expo-driver` e2e suite.
 
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 

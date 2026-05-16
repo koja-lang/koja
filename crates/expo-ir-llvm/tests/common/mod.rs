@@ -1,4 +1,4 @@
-//! Shared test scaffolding for the alpha-ir-llvm integration test
+//! Shared test scaffolding for the ir-llvm integration test
 //! suite. Each `tests/*.rs` file is its own Cargo test binary, so
 //! anything pulled in here lives behind a `mod common;` in the test
 //! file. The directory form (`tests/common/mod.rs`) keeps Cargo from
@@ -29,10 +29,10 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{IRProgram, IRScript, ProjectEntry, lower_program, lower_script};
-use expo_alpha_typecheck::{CheckedProgram, check_program};
 use expo_ast::identifier::Identifier;
+use expo_ir::{IRProgram, IRScript, ProjectEntry, lower_program, lower_script};
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::{CheckedProgram, check_program};
 
 pub const PACKAGE: &str = "TestApp";
 pub const APP_NAME: &str = "emit_test";
@@ -42,14 +42,14 @@ pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
 }
 
 pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProgram {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    let mut sources = expo_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: package.to_string(),
         path: PathBuf::from("test.expo"),
         source: source.to_string(),
     });
     let parsed = parse_program(sources, mode);
-    check_program(parsed).unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
+    check_program(parsed).unwrap_or_else(|f| panic!("typecheck failed:\n{f}"))
 }
 
 pub fn lower_program_source(source: &str) -> IRProgram {
@@ -74,7 +74,7 @@ pub fn assert_contains(ir_text: &str, needle: &str) {
     );
 }
 
-/// Pin the wrapper invariants every emitted alpha module must satisfy:
+/// Pin the wrapper invariants every emitted module must satisfy:
 ///
 /// - `define void @__expo_user_main(ptr)` carrying the user body
 ///   (always returns `ret void`; the trailing expression's value is
@@ -95,7 +95,7 @@ pub fn assert_main_shape(ir_text: &str) {
 
 /// Slice the LLVM textual IR for one function so substring asserts
 /// don't accidentally pick up matches from other defs in the same
-/// module — relevant for any test where the alpha auto-import pulls
+/// module — relevant for any test where the auto-import pulls
 /// stdlib functions (`Global.Int.band`, `DateTime.now`, …) into the
 /// emitted IR alongside the user's `main`. Returns the body between
 /// the `define ... @<name>(...) {` opening brace and the matching

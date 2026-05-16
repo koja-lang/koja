@@ -12,9 +12,9 @@
 //! by the tag-check success edge, so the `EnumPayloadFieldGet`
 //! projection is safe.
 
-use expo_alpha_typecheck::ResolvedVariantData;
 use expo_ast::ast::{FieldPattern, Pattern};
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
+use expo_typecheck::ResolvedVariantData;
 
 use super::super::ctx::{FnLowerCtx, LowerOutput};
 use super::super::enums::{
@@ -37,7 +37,7 @@ pub(super) fn lower_enum_struct_check(
     let metadata = enum_pattern_metadata(variant_name, inputs, output);
     let ResolvedVariantData::Struct(declared_fields) = metadata.variant_data else {
         panic!(
-            "alpha IR lower: enum struct pattern `{}.{variant_name}` targets a \
+            "IR lower: enum struct pattern `{}.{variant_name}` targets a \
              non-struct variant — typecheck invariant violation",
             metadata.label,
         );
@@ -85,7 +85,7 @@ pub(super) fn lower_enum_tuple_check(
     let metadata = enum_pattern_metadata(variant_name, inputs, output);
     let ResolvedVariantData::Tuple(declared_payload) = metadata.variant_data else {
         panic!(
-            "alpha IR lower: enum tuple pattern `{}.{variant_name}` targets a \
+            "IR lower: enum tuple pattern `{}.{variant_name}` targets a \
              non-tuple variant — typecheck invariant violation",
             metadata.label,
         );
@@ -219,7 +219,7 @@ fn walk_enum_tuple_elements(
 #[allow(clippy::too_many_arguments)]
 fn walk_enum_struct_fields(
     fields: &[FieldPattern],
-    declared_fields: &[expo_alpha_typecheck::ResolvedStructField],
+    declared_fields: &[expo_typecheck::ResolvedStructField],
     metadata: &EnumPatternMetadata<'_>,
     inputs: &PatternInputs<'_>,
     ctx: &mut FnLowerCtx,
@@ -235,7 +235,7 @@ fn walk_enum_struct_fields(
             .find(|(_, decl)| decl.name == field.name)
             .unwrap_or_else(|| {
                 panic!(
-                    "alpha IR lower: enum struct pattern `{}.{variant}.{name}` references \
+                    "IR lower: enum struct pattern `{}.{variant}.{name}` references \
                      unknown field — typecheck invariant violation",
                     metadata.label,
                     variant = metadata.variant_name(),
@@ -273,7 +273,7 @@ struct EnumPatternMetadata<'a> {
     label: String,
     owner: GlobalRegistryId,
     tag: IRVariantTag,
-    variant: &'a expo_alpha_typecheck::ResolvedEnumVariant,
+    variant: &'a expo_typecheck::ResolvedEnumVariant,
     variant_data: &'a ResolvedVariantData,
 }
 
@@ -300,7 +300,7 @@ fn enum_pattern_metadata<'a>(
     );
     let (variant_index, variant) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: enum `{}` has no variant `{variant_name}` — \
+            "IR lower: enum `{}` has no variant `{variant_name}` — \
              typecheck invariant violation",
             entry.identifier,
         )
@@ -310,7 +310,7 @@ fn enum_pattern_metadata<'a>(
             resolution: Resolution::Global(id),
             ..
         } => *id,
-        _ => panic!("alpha IR lower: enum subject has non-Global resolution after typecheck seal",),
+        _ => panic!("IR lower: enum subject has non-Global resolution after typecheck seal",),
     };
     EnumPatternMetadata {
         enum_symbol,

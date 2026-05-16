@@ -1,4 +1,4 @@
-//! Public entry point for the alpha typecheck phase. [`check_program`]
+//! Public entry point for the typecheck phase. [`check_program`]
 //! returns a sealed [`CheckedProgram`] on success or a
 //! [`crate::CheckFailure`] carrying diagnostics + the partial
 //! `ParsedProgram` on failure. Seal is asserted as the last sub-pass
@@ -39,7 +39,7 @@ pub struct CheckedProgram {
     pub registry: GlobalRegistry,
 }
 
-/// Run every sub-pass in the alpha typecheck phase.
+/// Run every sub-pass in the typecheck phase.
 ///
 /// Short-circuits if `parsed` already carries error-severity parse
 /// diagnostics. Otherwise runs the sub-passes in order:
@@ -90,7 +90,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     //
     // The "existing impls" set is collected per-package across all
     // files first so a hand-written `impl Debug for List<T>` in
-    // `alpha_debug_containers.expo` suppresses synthesis in
+    // `debug_containers.expo` suppresses synthesis in
     // `list.expo` (and vice versa) — without the cross-file scan
     // we'd get duplicate impls.
     for pkg in &mut packages {
@@ -98,9 +98,21 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         synthesize::derive_equality::derive_equality_package(pkg);
     }
 
+    // Collect is a cross-file two-pass: register every declared
+    // type first across every file in every package, then register
+    // impl blocks. The split lets an `impl Debug for List<T>` in
+    // `debug_containers.expo` find the `List` declared in
+    // `list.expo` regardless of file order — the alternative is
+    // dependency-ordered file walks at the driver layer, which the
+    // typechecker shouldn't care about.
     for pkg in &packages {
         for file in &pkg.files {
-            collect::collect_file(file, &pkg.package, &mut registry, &mut diagnostics);
+            collect::collect_file_decls(file, &pkg.package, &mut registry, &mut diagnostics);
+        }
+    }
+    for pkg in &packages {
+        for file in &pkg.files {
+            collect::collect_file_impls(file, &pkg.package, &mut registry, &mut diagnostics);
         }
     }
 

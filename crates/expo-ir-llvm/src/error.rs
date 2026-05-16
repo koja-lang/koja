@@ -1,4 +1,4 @@
-//! Public error type produced by the alpha LLVM backend.
+//! Public error type produced by the LLVM backend.
 
 use std::fmt;
 
@@ -20,8 +20,8 @@ pub enum LlvmError {
 impl fmt::Display for LlvmError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            LlvmError::Codegen(msg) => write!(f, "alpha LLVM codegen failed: {msg}"),
-            LlvmError::ObjectEmit(msg) => write!(f, "alpha LLVM object emit failed: {msg}"),
+            LlvmError::Codegen(msg) => write!(f, "LLVM codegen failed: {msg}"),
+            LlvmError::ObjectEmit(msg) => write!(f, "LLVM object emit failed: {msg}"),
         }
     }
 }

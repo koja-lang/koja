@@ -3,7 +3,7 @@
 //! observes the trailing [`Value`] — green tests pin that the
 //! monomorphization closure pass produces functions the interpreter
 //! can dispatch by mangled symbol without any generics-aware code
-//! inside `expo-alpha-ir-eval`.
+//! inside `expo-ir-eval`.
 //!
 //! The interpreter never sees a [`Resolution::TypeParam`] — it only
 //! consults [`IRSymbol`]s on `Call` instructions and [`IRFunction`]s
@@ -12,8 +12,8 @@
 //! concrete `id_$Int64$` decl and a `Call` against the matching
 //! mangled symbol.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

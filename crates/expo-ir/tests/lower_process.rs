@@ -13,26 +13,26 @@
 //! Tests deliberately inline minimal `Lifecycle` / `StopReason` /
 //! `ReplyTo` / `Ref` / `Process` definitions so the suite doesn't
 //! depend on `Global.process` being autoimported (that step is
-//! covered later in the alpha-concurrency plan).
+//! covered later in the concurrency plan).
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{
+use expo_ast::identifier::Identifier;
+use expo_ast::util::dedent;
+use expo_ir::{
     FunctionKind, IRBlockId, IRFunction, IRInstruction, IRProgram, IRTerminator, IRType,
     ProjectEntry, ReceiveTag, lower_program,
 };
-use expo_alpha_typecheck::check_program;
-use expo_ast::identifier::Identifier;
-use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::check_program;
 
 const PACKAGE: &str = "TestApp";
 
-/// Minimal alpha-friendly stub of `process.expo`. Mirrors the stub
-/// in `expo-alpha-typecheck/tests/process.rs` — provides every type
+/// Minimal stub of `process.expo`. Mirrors the stub
+/// in `expo-typecheck/tests/process.rs` — provides every type
 /// referenced by spawn/receive lowering. Replaced by the full
 /// `Global.process` autoimport in step 5 of the
-/// alpha-concurrency-process plan. Indented inline with the
+/// concurrency plan. Indented inline with the
 /// surrounding Rust; `lower` dedents it (along with the test
 /// source) before parsing.
 const PROCESS_STUB: &str = "
@@ -91,7 +91,7 @@ fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
 }
 
 fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    let mut sources = expo_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: "Global".to_string(),
         path: PathBuf::from("<Global.process>"),
@@ -105,7 +105,7 @@ fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
     let parsed = parse_program(sources, ParseMode::File);
     let checked = check_program(parsed).unwrap_or_else(|failure| {
         panic!(
-            "alpha typecheck failed: {} diagnostic(s):\n{}",
+            "typecheck failed: {} diagnostic(s):\n{}",
             failure.diagnostics.len(),
             failure
                 .diagnostics

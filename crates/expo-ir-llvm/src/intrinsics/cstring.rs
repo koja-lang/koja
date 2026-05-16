@@ -5,7 +5,7 @@
 //! allocation, freed by the surrounding drop pipeline at end of
 //! scope.
 
-use expo_alpha_ir::IRFunction;
+use expo_ir::IRFunction;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 
 use crate::ctx::EmitContext;

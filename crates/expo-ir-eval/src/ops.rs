@@ -15,7 +15,7 @@
 //! peeking the operand variants — typecheck guarantees both sides
 //! agree.
 
-use expo_alpha_ir::{IRBinOp, IRUnaryOp};
+use expo_ir::{IRBinOp, IRUnaryOp};
 
 use crate::error::RuntimeError;
 use crate::value::Value;

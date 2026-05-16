@@ -1,10 +1,10 @@
-mod alpha_format;
 mod backend;
 mod completion;
 mod convert;
 mod definition;
 mod diagnostics;
 mod folding;
+mod format;
 mod hover;
 mod lookup;
 mod signature_help;

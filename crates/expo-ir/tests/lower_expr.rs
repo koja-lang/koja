@@ -8,8 +8,8 @@
 //! variants get their dedicated test files (literals + ops in
 //! `lower_ops.rs`, `if`/`unless` in `lower_control_flow.rs`).
 
-use expo_alpha_ir::{IRFunction, IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{IRFunction, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
@@ -86,7 +86,7 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
     assert_eq!(
         param.ty,
         IRType::Int64,
-        "alpha lowering should stamp the param's IRType from the lifted signature",
+        "lowering should stamp the param's IRType from the lifted signature",
     );
     // The entry block emits `LocalDecl` + `LocalWrite` for param
     // promotion ahead of the body's const; both produce no `dest`,

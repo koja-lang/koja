@@ -11,10 +11,10 @@
 //!
 //! Backends consume an `IRScript` directly:
 //!
-//! - The interpreter (`expo-alpha-ir-eval`) drives `script.blocks`
+//! - The interpreter (`expo-ir-eval`) drives `script.blocks`
 //!   through the same instruction walker it uses for an
 //!   `IRFunction.blocks`, looking up callees in `script.packages`.
-//! - The LLVM backend (`expo-alpha-ir-llvm`) emits `script.blocks`
+//! - The LLVM backend (`expo-ir-llvm`) emits `script.blocks`
 //!   as the body of a host-runtime `main` function and walks
 //!   `script.packages` for non-entry function declarations.
 //!
@@ -22,7 +22,7 @@
 //! [`IRFunction`] (which carries a name, parameters, and the
 //! "user-declared" semantics that scripts deliberately don't have).
 
-use expo_alpha_typecheck::CheckedProgram;
+use expo_typecheck::CheckedProgram;
 
 use expo_ast::identifier::Identifier;
 
@@ -105,7 +105,7 @@ impl IRScript {
     }
 }
 
-/// Run every sub-pass in the alpha lowering phase against a
+/// Run every sub-pass in the lowering phase against a
 /// script-mode [`CheckedProgram`].
 ///
 /// Pure with respect to its input. Per-function feature gaps surface
@@ -153,7 +153,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
 
     let (blocks, return_type) = lowered.unwrap_or_else(|()| {
         panic!(
-            "alpha IR lower_script: body lowering returned Err(()) without pushing diagnostics — \
+            "IR lower_script: body lowering returned Err(()) without pushing diagnostics — \
              lower_body_to_blocks contract violation",
         )
     });
@@ -162,7 +162,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     if !synthesized.is_empty() {
         let target_package = body_package.unwrap_or_else(|| {
             panic!(
-                "alpha IR lower_script: script body produced synthesized closure(s) but no \
+                "IR lower_script: script body produced synthesized closure(s) but no \
                  package owns the body — lower-pass invariant violation",
             )
         });
@@ -171,7 +171,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
             .find(|pkg| pkg.package == target_package)
             .unwrap_or_else(|| {
                 panic!(
-                    "alpha IR lower_script: package `{target_package}` owns the script body \
+                    "IR lower_script: package `{target_package}` owns the script body \
                      but is missing from the lowered package list",
                 )
             });
@@ -220,7 +220,7 @@ fn locate_script_body(checked: &CheckedProgram) -> &[expo_ast::ast::Statement] {
             if let Some(stmts) = file.body.as_deref() {
                 if body.is_some() {
                     panic!(
-                        "alpha IR lower_script: more than one file carries `File.body` — \
+                        "IR lower_script: more than one file carries `File.body` — \
                          the driver must dispatch script-mode lowering on a single source",
                     );
                 }

@@ -1,5 +1,5 @@
 //! IR-text snapshot tests for the struct slice in
-//! [`expo_alpha_ir_llvm::emit_script_llvm_ir`].
+//! [`expo_ir_llvm::emit_script_llvm_ir`].
 //!
 //! Three contracts are pinned:
 //!
@@ -22,8 +22,8 @@
 //! ordering between patch versions). Byte-for-byte stdout coverage of
 //! the same fixtures lives in the `expo-driver` e2e suite.
 
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
@@ -106,7 +106,7 @@ fn struct_with_mixed_field_types_emits_each_llvm_type() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // Bool lowers to i1 in the alpha transient set; the
+    // Bool lowers to i1 in the transient set; the
     // transient-set rule lives in `seal::require_supported_type`.
     assert_contains(&ir_text, "%TestApp.Profile = type { i64, i1 }");
     assert_contains(&ir_text, "store i64 30");

@@ -8,12 +8,12 @@
 
 use std::collections::BTreeSet;
 
-use expo_alpha_typecheck::{
+use expo_ast::ast::Function;
+use expo_ast::identifier::{Identifier, ResolvedType};
+use expo_typecheck::{
     EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedVariantData,
     StructDefinition,
 };
-use expo_ast::ast::Function;
-use expo_ast::identifier::{Identifier, ResolvedType};
 
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 use crate::function::{IRFunction, IRSymbol};
@@ -40,7 +40,7 @@ pub(super) fn monomorphize(
 ) {
     let entry = registry.get(inst.template).unwrap_or_else(|| {
         panic!(
-            "alpha IR generics: instantiation template id `{}` missing from registry — \
+            "IR generics: instantiation template id `{}` missing from registry — \
              lower invariant violation",
             inst.template,
         )
@@ -101,7 +101,7 @@ pub(super) fn monomorphize(
             } else {
                 let owner_entry = registry.get(inst.owner).unwrap_or_else(|| {
                     panic!(
-                        "alpha IR generics: method template `{}` claims owner id `{}` \
+                        "IR generics: method template `{}` claims owner id `{}` \
                          which is missing from the registry",
                         entry.identifier, inst.owner,
                     )
@@ -126,7 +126,7 @@ pub(super) fn monomorphize(
             };
             let function_ast = function_index.get(&inst.template).unwrap_or_else(|| {
                 panic!(
-                    "alpha IR generics: function template `{}` registered but no AST \
+                    "IR generics: function template `{}` registered but no AST \
                      entry in CheckedProgram — generics index invariant violation",
                     entry.identifier,
                 )
@@ -147,7 +147,7 @@ pub(super) fn monomorphize(
                 .insert(decl.symbol.clone(), decl);
         }
         other => panic!(
-            "alpha IR generics: instantiation template `{}` is a {} — \
+            "IR generics: instantiation template `{}` is a {} — \
              only struct / enum / function templates can be monomorphized",
             entry.identifier,
             other.label(),
@@ -364,7 +364,7 @@ fn assert_arity(
     assert_eq!(
         expected,
         args.len(),
-        "alpha IR generics: monomorphizing `{identifier}` requires {expected} type \
+        "IR generics: monomorphizing `{identifier}` requires {expected} type \
          args, got {}",
         args.len(),
     );
@@ -380,7 +380,7 @@ fn owning_package<'a>(
         .find(|pkg| pkg.package == owner)
         .unwrap_or_else(|| {
             panic!(
-                "alpha IR generics: template `{template}` claims owner package \
+                "IR generics: template `{template}` claims owner package \
                  `{owner}` but no IRPackage with that label exists",
             )
         })

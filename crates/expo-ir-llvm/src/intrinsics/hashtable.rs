@@ -11,8 +11,8 @@
 //!
 //! Errors surface as typed [`LlvmError::Codegen`] values.
 
-use expo_alpha_ir::mangling::{global_primitive_symbol, mangled_method_name};
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag};
+use expo_ir::mangling::{global_primitive_symbol, mangled_method_name};
+use expo_ir::{IRFunction, IRSymbol, IRType, IRVariantTag};
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicTypeEnum;
@@ -1286,7 +1286,7 @@ pub(super) fn emit_set_from_list<'ctx>(
 }
 
 /// Inline the `Set.insert` body at a call site. v1 emitted a
-/// sibling function and called it; alpha avoids that round-trip by
+/// sibling function and called it; this avoids that round-trip by
 /// inlining — the per-method declared-function index isn't
 /// populated for the freshly-monomorphized `Set.insert` at the
 /// point where `from_list`'s body is being emitted.

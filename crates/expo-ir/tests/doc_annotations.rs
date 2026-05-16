@@ -7,7 +7,7 @@
 //! the same shapes earlier), so this test mainly pins behavioral
 //! parity between the two rejection sites. Negative coverage for
 //! non-`@doc` annotations lives in
-//! `expo-alpha-typecheck/tests/doc_annotations.rs` — those programs
+//! `expo-typecheck/tests/doc_annotations.rs` — those programs
 //! never reach the IR pass.
 
 use expo_ast::util::dedent;

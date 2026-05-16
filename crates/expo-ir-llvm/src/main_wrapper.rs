@@ -1,5 +1,5 @@
 //! Synthesize the host `main` entry point. Two shapes, picked per
-//! [`expo_alpha_ir::FunctionKind`] of the IR program's entry:
+//! [`expo_ir::FunctionKind`] of the IR program's entry:
 //!
 //! - **Function entry** ([`emit_as_main`]) — legacy v1 `fn main`
 //!   shape. Stamps `void __expo_user_main(i8*)` carrying the user
@@ -29,15 +29,15 @@
 //!
 //! The [`__expo_app_name`](APP_NAME_SYMBOL) global lives here
 //! because it's the same kind of "runtime convention" plumbing —
-//! emitted on every alpha-compiled binary so the runtime archive's
+//! emitted on every compiled binary so the runtime archive's
 //! panic handler links cleanly regardless of cgu partitioning.
 //!
-//! See [`expo-runtime/src/alpha.rs`](../../expo-runtime/src/alpha.rs)
+//! See [`expo-runtime/src/intrinsics.rs`](../../expo-runtime/src/intrinsics.rs)
 //! for the runtime side of these conventions.
 
 use std::collections::HashSet;
 
-use expo_alpha_ir::{IRBasicBlock, IRBlockId, IRFunction, IRTerminator, IRType};
+use expo_ir::{IRBasicBlock, IRBlockId, IRFunction, IRTerminator, IRType};
 use inkwell::AddressSpace;
 use inkwell::module::Linkage;
 
@@ -65,7 +65,7 @@ const USER_MAIN_SYMBOL: &str = "__expo_user_main";
 /// Emit `__expo_app_name` as a null-terminated C-string constant.
 /// The `expo-runtime` panic handler reads it for backtrace labels
 /// (declared there as `extern static [c_char; 0]`); every
-/// alpha-compiled binary defines it so the runtime archive links
+/// compiled binary defines it so the runtime archive links
 /// cleanly regardless of codegen-unit partitioning.
 pub(crate) fn emit_app_name_global(ctx: &EmitContext<'_>, app_name: &str) {
     let value = ctx.context.const_string(app_name.as_bytes(), true);
@@ -183,7 +183,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
 ) -> Result<(), LlvmError> {
     let config_type = entry.params.first().map(|p| &p.ty).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: process entry wrapper `{}` has no config parameter",
+            "LLVM emit: process entry wrapper `{}` has no config parameter",
             entry.symbol,
         ))
     })?;
@@ -234,7 +234,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
 
     let wrapper_fn = ctx.declared_function(&entry.symbol).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: process entry wrapper `{}` not declared before main trampoline emit",
+            "LLVM emit: process entry wrapper `{}` not declared before main trampoline emit",
             entry.symbol,
         ))
     })?;
@@ -258,7 +258,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
 
     let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before main trampoline emit",
+            "LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before main trampoline emit",
         ))
     })?;
     let exit_value = ctx
@@ -294,7 +294,7 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
 
     let user_main_fn = ctx.module.get_function(USER_MAIN_SYMBOL).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "alpha LLVM emit: `{USER_MAIN_SYMBOL}` not declared before main trampoline emit",
+            "LLVM emit: `{USER_MAIN_SYMBOL}` not declared before main trampoline emit",
         ))
     })?;
     let user_main_ptr = user_main_fn.as_global_value().as_pointer_value();
@@ -361,7 +361,7 @@ fn find_return_block(
         if matches!(block.terminator, IRTerminator::Return { .. }) {
             if found.is_some() {
                 return Err(LlvmError::Codegen(
-                    "alpha LLVM expects exactly one reachable Return-terminated block in `main`"
+                    "LLVM expects exactly one reachable Return-terminated block in `main`"
                         .to_string(),
                 ));
             }
@@ -370,8 +370,7 @@ fn find_return_block(
     }
     found.ok_or_else(|| {
         LlvmError::Codegen(
-            "alpha LLVM expects at least one reachable Return-terminated block in `main`"
-                .to_string(),
+            "LLVM expects at least one reachable Return-terminated block in `main`".to_string(),
         )
     })
 }

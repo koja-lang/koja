@@ -1,4 +1,4 @@
-//! User-actionable failure mode for the alpha typecheck phase.
+//! User-actionable failure mode for the typecheck phase.
 //!
 //! [`crate::check_program`] returns `Result<CheckedProgram,
 //! CheckFailure>`. The failure variant carries:
@@ -9,7 +9,7 @@
 //!   typecheck halts early and `diagnostics` is empty.
 //! - `partial` — best-effort reconstructed [`ParsedProgram`]. **Not
 //!   sealed** — its annotations are whatever resolve managed to
-//!   stamp before halting. LSPs and `expo alpha check` consume this
+//!   stamp before halting. LSPs and `expo check` consume this
 //!   for partial diagnostics rendering.
 //!
 //! Compiler-bug failure modes (seal invariant violations) panic
@@ -20,7 +20,7 @@ use expo_parser::ParsedProgram;
 
 /// Failure result of [`crate::check_program`].
 ///
-/// `diagnostics` carries only the diagnostics alpha typecheck emitted.
+/// `diagnostics` carries only the diagnostics typecheck emitted.
 /// Parse diagnostics live on `partial.iter().flat_map(|f|
 /// &f.diagnostics)`. When the parser already produced error-severity
 /// diagnostics, typecheck halts early and `diagnostics` is empty.

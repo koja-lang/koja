@@ -6,9 +6,9 @@
 //! introduced in `lift_signatures` (no `extern "C" priv` lookup
 //! escapes into the global namespace).
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

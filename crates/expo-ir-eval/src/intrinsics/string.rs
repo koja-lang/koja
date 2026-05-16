@@ -7,7 +7,7 @@
 
 use std::ptr;
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, StringMethod};
+use expo_ir::{IRFunction, IRSymbol, IRType, StringMethod};
 
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;

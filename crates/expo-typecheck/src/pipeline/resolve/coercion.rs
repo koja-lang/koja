@@ -4,7 +4,7 @@
 //! [`check_compatible`] whether the actual expression's resolved
 //! type flows into the declared slot, and on a [`Compatible::Coerced`]
 //! result stamps `expr.literal_coercion` via [`coercion_target_mut`]
-//! so `expo-alpha-ir`'s lowerer mints the matching narrow `Const`
+//! so `expo-ir`'s lowerer mints the matching narrow `Const`
 //! opcode.
 //!
 //! The rule: a numeric literal coerces to a sized target type iff

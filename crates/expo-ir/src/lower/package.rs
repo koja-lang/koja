@@ -8,13 +8,13 @@
 //! through [`lower_function_with_identifier`] — only the
 //! [`Identifier`] differs.
 
-use expo_alpha_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
 use expo_ast::ast::{
     Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c, is_intrinsic,
 };
 use expo_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
+use expo_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegistry};
 
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
@@ -178,7 +178,7 @@ fn impl_target_is_generic(target_name: &str, package: &str, registry: &GlobalReg
 
 /// Bare head identifier from an impl block's target. `pub(crate)` so
 /// [`crate::generics`] reuses the same shape match when building the
-/// AST function index. Mirrors alpha-typecheck's
+/// AST function index. Mirrors typecheck's
 /// `lift_signatures::impl_target_name` — both `impl X` and
 /// `impl X<...>` shapes register their methods under `[X, method_name]`.
 pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
@@ -282,7 +282,7 @@ pub(crate) fn lower_function_inner(
     let Some(body) = function.body.as_ref() else {
         output.diagnostics.push(Diagnostic::error(
             format!(
-                "alpha IR does not yet lower bodyless fn `{identifier}` (no `@intrinsic` / \
+                "IR does not yet lower bodyless fn `{identifier}` (no `@intrinsic` / \
                  `@extern \"C\"` marker — provide one or add a body)",
             ),
             function.span,
@@ -333,7 +333,7 @@ fn lower_params(
     for (index, param) in function.params.iter().enumerate() {
         let local_id = param_local_id(param).unwrap_or_else(|| {
             panic!(
-                "alpha IR lower: `{identifier}` parameter #{index} carries no `LocalId` — \
+                "IR lower: `{identifier}` parameter #{index} carries no `LocalId` — \
                  typecheck resolve must stamp one for every param before lower runs",
             )
         });
@@ -384,7 +384,7 @@ fn lower_intrinsic_params(
     for (index, param) in function.params.iter().enumerate() {
         let local_id = param_local_id(param).unwrap_or_else(|| {
             panic!(
-                "alpha IR lower: intrinsic parameter #{index} carries no `LocalId` — \
+                "IR lower: intrinsic parameter #{index} carries no `LocalId` — \
                  typecheck resolve invariant violation",
             )
         });
@@ -420,7 +420,7 @@ pub(super) fn function_signature<'a>(
     match &entry.kind {
         GlobalKind::Function(Some(sig)) => Some(sig),
         other => panic!(
-            "alpha IR lower: function `{identifier}` has no lifted signature \
+            "IR lower: function `{identifier}` has no lifted signature \
              ({}) — lift_signatures invariant violation",
             other.label(),
         ),
@@ -462,7 +462,7 @@ pub(crate) fn resolved_type_to_ir_type(
             resolution,
             type_args,
         } => panic!(
-            "alpha IR lower: resolved_type_to_ir_type received a non-Global resolution \
+            "IR lower: resolved_type_to_ir_type received a non-Global resolution \
              ({resolution:?}) — every Param must be substituted before lowering \
              (type_args: {type_args:?})",
         ),
@@ -477,7 +477,7 @@ pub(crate) fn resolved_type_to_ir_type(
             }
         }
         ResolvedType::Unresolved => {
-            panic!("alpha IR lower: resolved_type_to_ir_type received Unresolved — seal violation",)
+            panic!("IR lower: resolved_type_to_ir_type received Unresolved — seal violation",)
         }
     }
 }
@@ -489,7 +489,7 @@ fn global_to_ir_type(
     instantiations: &mut Vec<Instantiation>,
 ) -> IRType {
     let entry = registry.get(id).unwrap_or_else(|| {
-        panic!("alpha IR lower: ResolvedType id {id} missing from registry — seal violation",)
+        panic!("IR lower: ResolvedType id {id} missing from registry — seal violation",)
     });
     // Peel through `type X = ...` aliases first. Aliases stay as
     // `Named { Global(alias_id) }` in the typecheck output to keep
@@ -498,7 +498,7 @@ fn global_to_ir_type(
     if let GlobalKind::TypeAlias(Some(expansion)) = &entry.kind {
         assert!(
             type_args.is_empty(),
-            "alpha IR lower: parameterized type aliases not yet supported \
+            "IR lower: parameterized type aliases not yet supported \
              (alias `{}` was given {} type arg(s))",
             entry.identifier,
             type_args.len(),
@@ -518,7 +518,7 @@ fn global_to_ir_type(
             assert_eq!(
                 type_args.len(),
                 1,
-                "alpha IR lower: stdlib primitive `Global.CPtr` requires exactly one type \
+                "IR lower: stdlib primitive `Global.CPtr` requires exactly one type \
                  argument; got {} ({type_args:?})",
                 type_args.len(),
             );
@@ -539,7 +539,7 @@ fn global_to_ir_type(
             assert_eq!(
                 type_args.len(),
                 1,
-                "alpha IR lower: stdlib primitive `Global.List` requires exactly one type \
+                "IR lower: stdlib primitive `Global.List` requires exactly one type \
                  argument; got {} ({type_args:?})",
                 type_args.len(),
             );
@@ -556,7 +556,7 @@ fn global_to_ir_type(
             assert_eq!(
                 type_args.len(),
                 2,
-                "alpha IR lower: stdlib primitive `Global.Map` requires exactly two type \
+                "IR lower: stdlib primitive `Global.Map` requires exactly two type \
                  arguments; got {} ({type_args:?})",
                 type_args.len(),
             );
@@ -577,7 +577,7 @@ fn global_to_ir_type(
             assert_eq!(
                 type_args.len(),
                 1,
-                "alpha IR lower: stdlib primitive `Global.Set` requires exactly one type \
+                "IR lower: stdlib primitive `Global.Set` requires exactly one type \
                  argument; got {} ({type_args:?})",
                 type_args.len(),
             );
@@ -601,7 +601,7 @@ fn global_to_ir_type(
             "Int16" => Some(IRType::Int16),
             "Int32" => Some(IRType::Int32),
             // `Never` has no runtime representation. The only place
-            // an alpha expression's resolution surfaces `Never` is a
+            // an expression's resolution surfaces `Never` is a
             // fully-divergent `if`/`else`/`cond` whose merge block we
             // still synthesize for surrounding-flow continuity but
             // is never reached at runtime. Mapping to `Unit` is a
@@ -619,13 +619,13 @@ fn global_to_ir_type(
         if let Some(ir) = primitive {
             assert!(
                 type_args.is_empty(),
-                "alpha IR lower: stdlib primitive `{}` cannot carry type_args",
+                "IR lower: stdlib primitive `{}` cannot carry type_args",
                 entry.identifier,
             );
             return ir;
         }
         // Falls through to the generic struct path below for
-        // user-style `Global.*` structs from the alpha auto-import.
+        // user-style `Global.*` structs from the auto-import.
     }
     let template = IRSymbol::from_identifier(&entry.identifier);
     let translated: Vec<IRType> = type_args
@@ -645,7 +645,7 @@ fn global_to_ir_type(
         GlobalKind::Enum(_) => IRType::Enum(symbol),
         GlobalKind::Struct(_) => IRType::Struct(symbol),
         other => panic!(
-            "alpha IR lower: cannot translate `{}` ({}) to IRType yet",
+            "IR lower: cannot translate `{}` ({}) to IRType yet",
             entry.identifier,
             other.label(),
         ),

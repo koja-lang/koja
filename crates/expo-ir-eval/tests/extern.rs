@@ -4,11 +4,11 @@
 //! user at `--backend=llvm`, which does honor extern declarations.
 //!
 //! Declaring an extern fn but never calling it is fine: lowering
-//! produces an [`expo_alpha_ir::FunctionKind::Extern`] entry that
+//! produces an [`expo_ir::FunctionKind::Extern`] entry that
 //! the interpreter ignores at execution time.
 
-use expo_alpha_ir_eval::RuntimeError;
 use expo_ast::util::dedent;
+use expo_ir_eval::RuntimeError;
 
 mod common;
 
@@ -61,7 +61,7 @@ fn declaring_but_not_calling_extern_c_evaluates_normally() {
 
     let value = evaluate_program(&dedent(source))
         .expect("script that never calls the extern should evaluate cleanly");
-    assert_eq!(value, expo_alpha_ir_eval::Value::Int(7));
+    assert_eq!(value, expo_ir_eval::Value::Int(7));
 }
 
 #[test]

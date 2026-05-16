@@ -15,9 +15,9 @@
 //! produced the block. The builder owns no counters.
 //!
 //! Adapted from the v1 `CFGBuilder` (`expo-ir/src/cfg.rs`). Trimmed
-//! for the alpha slice: no loop scoping (`mark_loop`, `LoopExitOp`)
+//! for the feature slice: no loop scoping (`mark_loop`, `LoopExitOp`)
 //! since loops aren't lowered yet; no legacy `into_blocks` escape
-//! hatch since alpha has no walker that drops the closed-set.
+//! hatch since the pipeline has no walker that drops the closed-set.
 
 use std::collections::HashMap;
 

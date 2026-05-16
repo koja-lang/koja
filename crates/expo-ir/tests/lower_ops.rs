@@ -6,7 +6,7 @@
 //! The eager-lowering contract: both operands first, then a single
 //! `BinaryOp` / `UnaryOp` for the result.
 
-use expo_alpha_ir::{
+use expo_ir::{
     ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRTerminator,
     IRUnaryOp, ValueId,
 };

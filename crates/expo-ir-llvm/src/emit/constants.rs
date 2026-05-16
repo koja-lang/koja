@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{ConstValue, EnumPayloadInit, IRConstantValue, IRSymbol};
+use expo_ir::{ConstValue, EnumPayloadInit, IRConstantValue, IRSymbol};
 use inkwell::module::Linkage;
 use inkwell::values::{BasicValueEnum, PointerValue};
 
@@ -137,7 +137,7 @@ fn emit_const<'ctx>(
 /// header + NUL-terminated bytes) and return the payload pointer.
 /// Intrinsic emitters that need to mint a literal error message
 /// (`Int.parse` / `Float.parse` etc.) call this to get a String SSA
-/// value compatible with the rest of the alpha pipeline — same
+/// value compatible with the rest of the pipeline — same
 /// shape every `ConstValue::String` materializes through.
 pub(crate) fn emit_string_literal_payload<'ctx>(
     ctx: &EmitContext<'ctx>,

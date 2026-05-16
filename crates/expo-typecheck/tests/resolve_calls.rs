@@ -5,10 +5,10 @@
 //! non-identifier, and wrong-kind callees, plus return-type
 //! propagation through arithmetic.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::ast::{Expr, ExprKind, Function, Item, Literal, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 

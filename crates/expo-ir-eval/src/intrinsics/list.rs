@@ -15,7 +15,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, ListMethod};
+use expo_ir::{IRFunction, IRSymbol, IRType, ListMethod};
 
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;

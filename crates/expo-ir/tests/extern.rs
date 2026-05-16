@@ -11,8 +11,8 @@
 //!   every `@extern "C"` function, regardless of which package or
 //!   `@link "lib:sym"` shape contributed.
 
-use expo_alpha_ir::{FunctionKind, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{FunctionKind, IRType};
 
 mod common;
 

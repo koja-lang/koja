@@ -7,12 +7,12 @@
 //! them without the autoimport raising diagnostics.
 //!
 //! `Random` lives in `random.expo` and is auto-imported alongside
-//! the rest of the alpha stdlib; surface coverage for it lives in
+//! the rest of the stdlib; surface coverage for it lives in
 //! [`random`].
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 
@@ -106,7 +106,7 @@ fn random_registers_after_autoimport() {
     assert!(
         checked.registry.lookup(&id).is_some(),
         "`Random` lives in `random.expo` and is auto-imported alongside the \
-         rest of the alpha stdlib; its `bytes` body resolves through \
+         rest of the stdlib; its `bytes` body resolves through \
          `String.to_binary`, defined in `string.expo`",
     );
 }

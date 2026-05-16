@@ -1,8 +1,8 @@
 //! Direct-call emission. Closure-call dispatch lives in
 //! [`super::closures`]; this module only handles the
-//! statically-resolved [`expo_alpha_ir::IRInstruction::Call`] form.
+//! statically-resolved [`expo_ir::IRInstruction::Call`] form.
 
-use expo_alpha_ir::{IRSymbol, ValueId};
+use expo_ir::{IRSymbol, ValueId};
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 
 use crate::ctx::EmitContext;
@@ -21,7 +21,7 @@ pub(super) fn emit_call<'ctx>(
 ) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
     let function = ctx.declared_function(callee).unwrap_or_else(|| {
         panic!(
-            "alpha LLVM emit: callee `{}` not registered in the declared-functions \
+            "LLVM emit: callee `{}` not registered in the declared-functions \
              index — declaration order or seal violation",
             callee.mangled(),
         )

@@ -30,10 +30,10 @@
 //! The host block's terminator is [`crate::IRTerminator::Unreachable`]
 //! because dispatch always leaves the receive instruction.
 
-use expo_alpha_typecheck::{GlobalRegistry, RegistryEntry};
 use expo_ast::ast::{Arg, Diagnostic, Expr, ExprKind, MatchArm, Pattern, Statement};
 use expo_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
 use expo_ast::span::Span;
+use expo_typecheck::{GlobalRegistry, RegistryEntry};
 
 use crate::function::{
     FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
@@ -66,7 +66,7 @@ pub(super) fn lower_spawn(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let target = resolve_spawn_target(inner).ok_or_else(|| {
         output.diagnostics.push(Diagnostic::error(
-            "alpha IR lower: `spawn` inner must be a static `Type.start(config)` call \
+            "IR lower: `spawn` inner must be a static `Type.start(config)` call \
              (typecheck seal invariant)",
             span,
         ));
@@ -74,7 +74,7 @@ pub(super) fn lower_spawn(
 
     let config_arg = target.args.first().ok_or_else(|| {
         output.diagnostics.push(Diagnostic::error(
-            "alpha IR lower: `spawn Type.start(...)` requires a single config argument",
+            "IR lower: `spawn Type.start(...)` requires a single config argument",
             span,
         ));
     })?;
@@ -89,7 +89,7 @@ pub(super) fn lower_spawn(
     let state_symbol = struct_symbol(&state_ir_type).ok_or_else(|| {
         output.diagnostics.push(Diagnostic::error(
             format!(
-                "alpha IR lower: `spawn` receiver must lower to a struct type \
+                "IR lower: `spawn` receiver must lower to a struct type \
                  (got `{state_ir_type:?}`)",
             ),
             span,
@@ -109,7 +109,7 @@ pub(super) fn lower_spawn(
         resolved_type_to_ir_type(ref_resolution, registry, &mut output.instantiations);
     let ref_symbol = struct_symbol(&ref_ir_type).ok_or_else(|| {
         output.diagnostics.push(Diagnostic::error(
-            format!("alpha IR lower: `spawn` result must be `Ref<M, R>` (got `{ref_ir_type:?}`)",),
+            format!("IR lower: `spawn` result must be `Ref<M, R>` (got `{ref_ir_type:?}`)",),
             span,
         ));
     })?;
@@ -149,7 +149,7 @@ pub(super) fn lower_receive(
 ) -> Result<(ValueId, IRBlockId), ()> {
     if arms.is_empty() {
         output.diagnostics.push(Diagnostic::error(
-            "alpha IR lower: `receive` reaches lower with zero arms — typecheck seal violation",
+            "IR lower: `receive` reaches lower with zero arms — typecheck seal violation",
             span,
         ));
         return Err(());
@@ -205,7 +205,7 @@ pub(super) fn lower_receive(
 
 /// Lower one receive arm. Pulls the typed-binding's local id +
 /// resolved payload type off the pattern (stamped during typecheck-
-/// resolve in [`expo_alpha_typecheck::pipeline::resolve::process`]),
+/// resolve in [`expo_typecheck::pipeline::resolve::process`]),
 /// declares the corresponding payload slot in the function's entry
 /// block, then walks the arm's body in a fresh body block, branching
 /// the tail back to `merge_block` with the lattice-coerced result.
@@ -225,20 +225,20 @@ fn lower_receive_arm(
     } = &arm.pattern
     else {
         panic!(
-            "alpha IR lower: receive arm reaches lower without a TypedBinding pattern \
+            "IR lower: receive arm reaches lower without a TypedBinding pattern \
              (typecheck seal violation; got {:?})",
             arm.pattern,
         );
     };
     let local_id = local_id.unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: receive arm pattern carries no LocalId — typecheck resolve \
+            "IR lower: receive arm pattern carries no LocalId — typecheck resolve \
              invariant violation",
         );
     });
     let payload_resolution = resolved_type.as_ref().unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: receive arm pattern carries no resolved_type — typecheck resolve \
+            "IR lower: receive arm pattern carries no resolved_type — typecheck resolve \
              invariant violation",
         );
     });
@@ -247,7 +247,7 @@ fn lower_receive_arm(
         resolved_type_to_ir_type(payload_resolution, registry, &mut output.instantiations);
     let tag = receive_tag_for(payload_resolution, registry).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: receive arm payload type does not match a known envelope \
+            "IR lower: receive arm payload type does not match a known envelope \
              (typecheck seal violation): {payload_resolution:?}"
         );
     });
@@ -281,7 +281,7 @@ fn lower_receive_arm(
 
     if let Some(guard) = &arm.guard {
         output.diagnostics.push(Diagnostic::error(
-            "alpha IR lower: `receive` arms with guards are not yet supported",
+            "IR lower: `receive` arms with guards are not yet supported",
             guard.span,
         ));
         return Err(());

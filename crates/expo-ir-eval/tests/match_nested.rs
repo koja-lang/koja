@@ -2,12 +2,12 @@
 //! patterns inside struct fields and enum tuple payloads. Mirrors
 //! the five `tests/lang/types/` fixtures (`struct_pattern_*`,
 //! `nested_enum_pattern_literal`) at the eval layer so a regression
-//! in [`expo_alpha_ir::lower::patterns`] (AND-chain wiring,
+//! in [`expo_ir::lower::patterns`] (AND-chain wiring,
 //! payload-projection ordering, chained-bind extraction) fires
 //! here before the lang golden suite ever runs.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

@@ -1,7 +1,7 @@
 //! IR-text snapshot tests for monomorphized generic functions.
 //!
 //! Pins that every concrete instantiation produced by
-//! [`expo_alpha_ir::generics::instantiate`] reaches LLVM as a
+//! [`expo_ir::generics::instantiate`] reaches LLVM as a
 //! distinct `define` carrying the mangled `_$arg.arg$` symbol:
 //!
 //! - `id<Int>(x)` → `define i64 @"TestApp.id_$Int64$"(i64 %x)`
@@ -10,15 +10,15 @@
 //! - distinct args at the same call site → distinct `define`s
 //!
 //! The LLVM backend has zero generics-aware code; it lowers whatever
-//! decls land in the [`expo_alpha_ir::IRPackage::functions`] map. A
+//! decls land in the [`expo_ir::IRPackage::functions`] map. A
 //! green test here pins that the closure-pass result threads through
 //! emit unchanged.
 //!
 //! Substring-only assertions (LLVM may shuffle attribute ordering
 //! between patch versions).
 
-use expo_alpha_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
 use expo_ast::util::dedent;
+use expo_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
 
 mod common;
 

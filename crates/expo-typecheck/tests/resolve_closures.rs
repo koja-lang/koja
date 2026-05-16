@@ -7,10 +7,10 @@
 //! capture of outer locals; nested closures; and "value-of-fn-type"
 //! storage in a local binding.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{ClosureParam, Expr, ExprKind, Function, Item, PassMode, Statement};
 use expo_ast::identifier::{AnonymousKind, FnParam, Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 
@@ -270,7 +270,7 @@ fn block_closure_return_annotation_threads_to_trailing_expr() {
     // `Result.Ok(v)` in a closure whose return type is annotated
     // `Result<Int, Int>` must let the `E` slot fill from the
     // surrounding annotation — without the return-hint plumbing
-    // alpha used to fire "cannot infer type parameter `E` of
+    // used to fire "cannot infer type parameter `E` of
     // `Global.Result` from the supplied `Ok` payload" inside
     // `result.then`-style higher-order callers.
     typecheck(&dedent(

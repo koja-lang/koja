@@ -8,17 +8,17 @@
 //! is a [`ResolvedBinaryLayout`] + a `Vec<LoweredBinarySegment>`
 //! that the LLVM backend and eval interpreter both consume.
 //!
-//! Pairs with [`expo_alpha_typecheck::pipeline::resolve::binary_literal`]
+//! Pairs with [`expo_typecheck::pipeline::resolve::binary_literal`]
 //! — the two layers have to agree on width arithmetic, but the
 //! typecheck side enforces type correctness while the lower side
 //! just stamps offsets.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{
     BinaryEndianness, BinarySegment, BinarySignedness, BinaryUnit, Diagnostic, Expr, ExprKind,
     Literal, StringPart, TypeExpr,
 };
 use expo_ast::span::Span;
+use expo_typecheck::GlobalRegistry;
 
 use crate::function::{IRBlockId, IRInstruction};
 use crate::types::{
@@ -99,7 +99,7 @@ enum ClassifiedSegment {
 }
 
 /// Per-segment kind + width derivation. Mirrors
-/// [`expo_alpha_typecheck::pipeline::resolve::binary_literal::resolve_segment`]
+/// [`expo_typecheck::pipeline::resolve::binary_literal::resolve_segment`]
 /// — both call sites need the same width arithmetic to agree, so
 /// the rules live in two places (typecheck side rejects bad
 /// shapes; lower side assumes typecheck has already passed and
@@ -123,7 +123,7 @@ fn classify_segment(
                 Ok(parsed) => parsed,
                 Err(_) => {
                     diagnostics.push(Diagnostic::error(
-                        format!("alpha IR lower: invalid binary segment size literal `{n}`"),
+                        format!("IR lower: invalid binary segment size literal `{n}`"),
                         size_expr.span,
                     ));
                     return Err(());
@@ -131,7 +131,7 @@ fn classify_segment(
             },
             _ => {
                 diagnostics.push(Diagnostic::error(
-                    "alpha IR lower: dynamic-width binary segments are not yet supported",
+                    "IR lower: dynamic-width binary segments are not yet supported",
                     size_expr.span,
                 ));
                 return Err(());
@@ -157,7 +157,7 @@ fn classify_segment(
                 other => {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "alpha IR lower: unrecognized binary segment type annotation `{other}` \
+                            "IR lower: unrecognized binary segment type annotation `{other}` \
                              — typecheck must have allowed an unsupported width",
                         ),
                         literal_span,
@@ -167,7 +167,7 @@ fn classify_segment(
             });
         }
         diagnostics.push(Diagnostic::error(
-            "alpha IR lower: binary segment type annotation must be a primitive name",
+            "IR lower: binary segment type annotation must be a primitive name",
             literal_span,
         ));
         return Err(());

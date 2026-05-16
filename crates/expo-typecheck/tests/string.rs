@@ -6,9 +6,9 @@
 //! `to_int`, `to_float`, ...) register, and that user code can call
 //! into both surfaces without the autoimport raising diagnostics.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

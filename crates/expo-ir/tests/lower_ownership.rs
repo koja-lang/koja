@@ -1,13 +1,13 @@
-//! Coverage for the alpha-foundation `move`/drop pipeline at the
+//! Coverage for the foundation `move`/drop pipeline at the
 //! lowering layer:
 //!
 //! - Every existing program shape stamps `Ownership::Unowned` on its
-//!   `LocalWrite` instructions (alpha pre-filters non-heap types at
+//!   `LocalWrite` instructions (the pipeline pre-filters non-heap types at
 //!   the classifier — no expression today produces a heap-typed
 //!   value, so every site is Unowned).
 //! - `move c: String` parameter promotion stamps `Ownership::Owned`
 //!   on the slot and `move c: Int` (a stack type) stamps `Unowned`.
-//!   This pins the heap-type-aware classifier and matches alpha's
+//!   This pins the heap-type-aware classifier and matches the pipeline's
 //!   pre-filter approach (non-heap types never carry the Owned
 //!   stamp; v1 filters at drop-emission instead).
 //!
@@ -15,8 +15,8 @@
 //! the LLVM backend or eval. The smoke tests in
 //! `tests/lower_drops.rs` cover end-to-end drop-pipeline shape.
 
-use expo_alpha_ir::{IRFunction, IRInstruction, IRType, Ownership};
 use expo_ast::util::dedent;
+use expo_ir::{IRFunction, IRInstruction, IRType, Ownership};
 
 mod common;
 
@@ -86,10 +86,10 @@ fn default_borrow_param_promotion_stamps_unowned() {
 #[test]
 fn move_param_with_stack_type_stamps_unowned() {
     // `move c: Int` is a no-op semantically: `Int` is a copy type,
-    // there's no heap to free. Alpha pre-filters at the classifier
-    // and stamps Unowned. This pins that behavior so accidentally
-    // rewiring the classifier to "stamp Owned uniformly" gets
-    // caught immediately.
+    // there's no heap to free. The pipeline pre-filters at the
+    // classifier and stamps Unowned. This pins that behavior so
+    // accidentally rewiring the classifier to "stamp Owned
+    // uniformly" gets caught immediately.
     let source = "
         fn taker(move c: Int) -> Int
           c

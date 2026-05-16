@@ -7,15 +7,15 @@
 //!   symbol (`expo/crates/expo-runtime/src/system.rs`).
 //! - `DateTime.now()` calls into the extern from a non-extern body,
 //!   so the user-facing call site for `DateTime.now()` routes
-//!   through the alpha-mangled `Global.DateTime.now` symbol that in
+//!   through the name-mangled `Global.DateTime.now` symbol that in
 //!   turn invokes the C-named extern.
 //! - The pure-Expo getters (`Duration.from_millis(.)`,
 //!   `Duration.millis(self)`, `DateTime.timestamp_millis(self)`)
 //!   lower as ordinary functions; their bodies use `i64` everywhere
-//!   because alpha treats `Int` and `Int64` interchangeably.
+//!   because the pipeline treats `Int` and `Int64` interchangeably.
 
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
@@ -42,15 +42,15 @@ fn datetime_now_call_emits_extern_declare_for_runtime_symbol() {
 #[test]
 fn datetime_now_does_not_re_emit_runtime_symbol_under_alpha_mangling() {
     // The extern's link name is the function's bare last-segment
-    // (`expo_time_now_millis`), not the alpha-mangled
+    // (`expo_time_now_millis`), not the name-mangled
     // `Global.DateTime.expo_time_now_millis`. Mirror the assertion
-    // shape from `extern.rs`: confirm there's no alpha-mangled
+    // shape from `extern.rs`: confirm there's no name-mangled
     // declare leaking in alongside.
     let ir_text = emit("DateTime.now().timestamp_millis()");
 
     assert!(
         !ir_text.contains("@Global.DateTime.expo_time_now_millis"),
-        "extern declaration must use the bare C name, not the alpha mangling; got:\n{ir_text}",
+        "extern declaration must use the bare C name, not the the name mangling; got:\n{ir_text}",
     );
 }
 

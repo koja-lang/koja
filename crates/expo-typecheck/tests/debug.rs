@@ -7,9 +7,9 @@
 //! synthesized impls, what the bodies look like) lives in
 //! [`derive_debug`].
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 
@@ -73,9 +73,9 @@ fn binary_and_bits_have_debug_impls() {
 #[test]
 fn generic_container_debug_impls_register_format_method() {
     // Hand-written impls live in
-    // `lib/global/src/alpha_debug_containers.expo`. Each one stamps a
+    // `lib/global/src/debug_containers.expo`. Each one stamps a
     // `<Type>.format` entry in the registry; calling it requires
-    // monomorphization (covered in `expo-alpha-ir/tests`).
+    // monomorphization (covered in `expo-ir/tests`).
     let checked = typecheck("fn main\n  1\nend\n");
     for ty in ["List", "Map", "Option", "Pair", "Result", "Set"] {
         assert_registered(&checked, &[ty, "format"]);
@@ -86,7 +86,7 @@ fn generic_container_debug_impls_register_format_method() {
 fn universal_debug_fallback_resolves_format_on_bare_type_param() {
     // `T` has no declared bound but `T.format()` resolves through
     // the universal-Debug fallback in
-    // `expo-alpha-typecheck/src/pipeline/resolve/calls/bounded.rs`.
+    // `expo-typecheck/src/pipeline/resolve/calls/bounded.rs`.
     let source = "
         fn show<T>(value: T) -> String
           value.format()

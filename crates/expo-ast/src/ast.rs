@@ -306,9 +306,9 @@ pub enum Item {
 ///
 /// `body` is `Some(_)` only when the source was parsed in
 /// `ParseMode::Script` -- it carries top-level statements (e.g. the
-/// REPL's accumulated input). The alpha pipeline keeps `body`
+/// REPL's accumulated input). The pipeline keeps `body`
 /// populated through typecheck and seal; downstream lowering
-/// (`expo-alpha-ir::lower_script`) consumes it directly. Project-mode
+/// (`expo-ir::lower_script`) consumes it directly. Project-mode
 /// (`ParseMode::File`) sources leave `body` as `None` and put their
 /// work in `items`.
 #[derive(Debug, Clone)]
@@ -442,7 +442,7 @@ pub struct ProtocolMethod {
 /// A function parameter: either a `self` receiver or a named parameter.
 ///
 /// Both variants carry a `local_id: Option<LocalId>` slot the parser
-/// leaves as `None`; alpha typecheck's `resolve_function` stamps it in
+/// leaves as `None`; typecheck's `resolve_function` stamps it in
 /// when the param enters the per-function `LocalScope`. IR lower reads
 /// the stamped id (translating to `IRLocalId`) so body references and
 /// param-promotion `LocalDecl`/`LocalWrite`s share the same handle
@@ -652,7 +652,7 @@ pub enum ClosureParam {
         type_expr: Option<TypeExpr>,
     },
     /// A wildcard parameter: `_`. `local_id` is `None` after parse;
-    /// alpha typecheck stamps a nameless slot id so IR lower can
+    /// typecheck stamps a nameless slot id so IR lower can
     /// emit the param the same way it emits a `Name` param — the
     /// body just never reads it.
     Wildcard {
@@ -1026,7 +1026,7 @@ pub enum Pattern {
     },
     /// A typed binding: `p: Post` -- matches a union member by type
     /// and binds the unwrapped value. `local_id` is `None` after
-    /// parse and stamped by alpha typecheck-resolve when the binding
+    /// parse and stamped by typecheck-resolve when the binding
     /// enters scope (today only inside `receive` arms; `match` arms
     /// still reject typed bindings as a feature gap). The IR-side
     /// translator reads it to thread the bound name through the same
@@ -1035,13 +1035,13 @@ pub enum Pattern {
         local_id: Option<LocalId>,
         name: String,
         /// Resolved type of the bound payload, stamped by typecheck-
-        /// resolve when the pattern is admitted (today: alpha
+        /// resolve when the pattern is admitted (today: the pipeline
         /// `receive` arms via
         /// [`bind_receive_pattern`][resolver]). Lower passes consume
         /// this directly so they don't have to re-walk `type_expr`
         /// against the registry.
         ///
-        /// [resolver]: https://docs.rs/expo-alpha-typecheck
+        /// [resolver]: https://docs.rs/expo-typecheck
         resolved_type: Option<ResolvedType>,
         type_expr: TypeExpr,
         span: Span,

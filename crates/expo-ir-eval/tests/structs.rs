@@ -1,5 +1,5 @@
 //! Runtime coverage for the struct slice in
-//! [`expo_alpha_ir_eval::Interpreter`]: `IRInstruction::StructInit`
+//! [`expo_ir_eval::Interpreter`]: `IRInstruction::StructInit`
 //! materializes a [`Value::Struct`] with positional fields, and
 //! `IRInstruction::FieldGet` projects a field by index without
 //! re-cloning the receiver. Mixed-type fields (Int + Bool + String)
@@ -12,8 +12,8 @@
 //! Project-mode coverage of the same instruction set lives in
 //! `tests/interpreter.rs`.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

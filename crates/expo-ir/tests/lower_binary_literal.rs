@@ -5,10 +5,10 @@
 //! matches the sum of segment widths and whose `segments` carry
 //! per-segment `bit_offset`s in source order.
 
-use expo_alpha_ir::{
+use expo_ast::util::dedent;
+use expo_ir::{
     BinaryEndian, IRFunction, IRInstruction, IRType, LoweredBinarySegment, ResolvedBinaryLayout,
 };
-use expo_ast::util::dedent;
 
 mod common;
 

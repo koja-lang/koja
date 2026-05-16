@@ -114,7 +114,7 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
         }
         other => seal_panic(
             &format!(
-                "alpha typecheck seal does not yet recognize pattern kind `{}`",
+                "typecheck seal does not yet recognize pattern kind `{}`",
                 pattern_kind_label(other),
             ),
             pattern_span(other),

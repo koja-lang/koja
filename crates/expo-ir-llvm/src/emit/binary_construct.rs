@@ -9,11 +9,11 @@
 //!   low-byte-first for `Little`); float segments first
 //!   bit-cast through their integer type. String segments
 //!   `memcpy` straight into the payload.
-//! - **Sub-byte**: call the `__expo_alpha_pack_bits` runtime
+//! - **Sub-byte**: call the `__expo_pack_bits` runtime
 //!   helper. Bit-shift loops on a per-byte boundary inside LLVM
 //!   IR are far messier than the same logic in Rust; the helper
 //!   gives us a clean Rust home for it (mirroring how `Bits`
-//!   concat goes through `__expo_alpha_concat_bits`).
+//!   concat goes through `__expo_concat_bits`).
 //!
 //! The result heap block matches the v1 layout the entire
 //! string/binary/bits family shares: `[i64 bit_length][payload]`,
@@ -21,7 +21,7 @@
 //! caller stamps `IRType::Binary` (when `layout.byte_aligned`) or
 //! `IRType::Bits` on the destination value.
 
-use expo_alpha_ir::{BinaryEndian, LoweredBinarySegment, ResolvedBinaryLayout, ValueId};
+use expo_ir::{BinaryEndian, LoweredBinarySegment, ResolvedBinaryLayout, ValueId};
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 
@@ -237,13 +237,13 @@ fn pack_bits_segment<'ctx>(
             ],
             "pack_bits_call",
         )
-        .map_err(|e| inkwell_err(format_args!("__expo_alpha_pack_bits call"), e))?;
+        .map_err(|e| inkwell_err(format_args!("__expo_pack_bits call"), e))?;
     Ok(())
 }
 
 /// Look up an integer-typed segment value and widen it to `i64`
 /// (or truncate, for the unlikely > 64-bit case). The runtime
-/// `__expo_alpha_pack_bits` helper, the byte-pack loop, and the
+/// `__expo_pack_bits` helper, the byte-pack loop, and the
 /// float packer all operate on `i64` so segment values converge
 /// at this seam.
 fn lookup_int_widened<'ctx>(

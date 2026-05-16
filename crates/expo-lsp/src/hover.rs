@@ -6,15 +6,15 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_alpha_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 use expo_ast::ast::File;
 use expo_ast::identifier::Identifier;
+use expo_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 
-use crate::alpha_format::{
+use crate::backend::{Backend, DocumentState};
+use crate::format::{
     format_enum_def, format_function_signature, format_protocol_def, format_resolved_type,
     format_struct_def,
 };
-use crate::backend::{Backend, DocumentState};
 use crate::lookup::{self, LookupCtx, SymbolInfo};
 
 impl Backend {

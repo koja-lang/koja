@@ -5,7 +5,7 @@
 //! regression-safety guarantee that file-mode behavior is unchanged.
 //!
 //! Higher-level coverage of script-mode typechecking lives in
-//! `expo-alpha-typecheck/tests/script_mode.rs`.
+//! `expo-typecheck/tests/script_mode.rs`.
 
 use expo_ast::ast::{ExprKind, Item, Literal, Statement};
 use expo_parser::{ParseMode, parse};

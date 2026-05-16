@@ -4,12 +4,12 @@
 //! [`resolve_bounded_method_call`], stamping the protocol method's
 //! return type and validating arg arities against the protocol's
 //! `non_self_params`. Mono later substitutes through to a concrete
-//! receiver — that side lives in `expo-alpha-ir` tests.
+//! receiver — that side lives in `expo-ir` tests.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind};
 use expo_ast::ast::{Expr, ExprKind, File, Function, Item, Statement};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 

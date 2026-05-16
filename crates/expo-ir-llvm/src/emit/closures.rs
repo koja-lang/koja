@@ -11,7 +11,7 @@
 //! [`crate::ctx::EmitContext`] so `LoadCapture` can GEP into the
 //! right slot at body-emit time.
 
-use expo_alpha_ir::{IRLocalId, IRSymbol, IRType, ValueId};
+use expo_ir::{IRLocalId, IRSymbol, IRType, ValueId};
 use inkwell::AddressSpace;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
@@ -41,7 +41,7 @@ pub(super) fn emit_make_closure<'ctx>(
     }
     let body_fn = ctx.declared_function(body).unwrap_or_else(|| {
         panic!(
-            "alpha LLVM emit: closure body `{}` not registered in declared-functions \
+            "LLVM emit: closure body `{}` not registered in declared-functions \
              index — declaration order or seal violation",
             body.mangled(),
         )
@@ -123,7 +123,7 @@ pub(super) fn emit_load_capture<'ctx>(
         env_ptr,
         env_struct,
     } = ctx.closure_frame().unwrap_or_else(|| {
-        panic!("alpha LLVM emit: LoadCapture outside a closure body — seal invariant violation")
+        panic!("LLVM emit: LoadCapture outside a closure body — seal invariant violation")
     });
     let slot_ptr = ctx
         .builder
@@ -155,7 +155,7 @@ pub(super) fn emit_load_capture<'ctx>(
 /// captures *inside* the env are not recursively dropped — that
 /// needs a per-body drop function we synthesize alongside the
 /// closure body, a follow-up. Captures of heap-typed locals
-/// therefore leak today; the alpha milestone accepts the leak in
+/// therefore leak today; the current milestone accepts the leak in
 /// exchange for a simpler ABI.
 pub(super) fn emit_drop_closure_env<'ctx>(
     ctx: &EmitContext<'ctx>,

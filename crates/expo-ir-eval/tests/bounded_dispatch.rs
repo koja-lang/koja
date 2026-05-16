@@ -16,8 +16,8 @@
 //! and that the impl-block method made it into the IRPackage
 //! function table under the expected mangled name.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

@@ -25,9 +25,9 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
 use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::{CheckFailure, CheckedProgram, check_program};
 
 mod common;
 
@@ -37,14 +37,14 @@ use common::{
 };
 
 /// Multi-package driver: stack the named packages on top of the
-/// alpha autoimports + qualified slice and run the full typecheck
+/// the autoimports + qualified slice and run the full typecheck
 /// pipeline. Used by [`alias_is_visible_cross_package`] to prove
 /// `type` aliases promote to package-global entries (unlike file-
 /// private `alias Pkg.Type` lines, which the existing
 /// `alias_is_file_private` test in `tests/aliases.rs` pins).
 fn check_multi_package(packages: &[(&str, &str, &str)]) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
-    sources.extend(expo_stdlib::alpha_qualified_sources());
+    let mut sources = expo_stdlib::autoimport_sources();
+    sources.extend(expo_stdlib::qualified_sources());
     for (package, file, body) in packages {
         sources.push(SourceFile {
             package: package.to_string(),

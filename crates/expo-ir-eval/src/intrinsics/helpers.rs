@@ -3,7 +3,7 @@
 //! `result_value` / `size_of_primitive` from drifting across
 //! sibling modules.
 
-use expo_alpha_ir::{IRFunction, IRSymbol, IRType, IRVariantTag};
+use expo_ir::{IRFunction, IRSymbol, IRType, IRVariantTag};
 
 use crate::error::RuntimeError;
 use crate::value::{EnumPayload, Value};

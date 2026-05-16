@@ -239,7 +239,7 @@ fn resolve_protocol_impl_heads(
     else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck cannot find protocol on `impl ... for {}`",
+                "typecheck cannot find protocol on `impl ... for {}`",
                 target_identifier.last(),
             ),
             type_expr_span(trait_expr),

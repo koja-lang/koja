@@ -14,9 +14,9 @@
 //!   inference: comparisons / boolean logic always produce `Bool`,
 //!   arithmetic and `Neg` preserve operand width.
 
-use expo_alpha_typecheck::NumericLiteralWidth;
 use expo_ast::ast::{BinOp, Diagnostic, Literal, UnaryOp};
 use expo_ast::span::Span;
+use expo_typecheck::NumericLiteralWidth;
 
 use crate::types::{ConstValue, IRBinOp, IRType, IRUnaryOp};
 
@@ -151,7 +151,7 @@ pub(super) fn lower_bin_op(
         // the caller fails fast rather than silently miscompiling.
         BinOp::Concat => {
             diagnostics.push(Diagnostic::error(
-                "alpha IR lower: `<>` concat must route through `IRInstruction::Concat`, \
+                "IR lower: `<>` concat must route through `IRInstruction::Concat`, \
                  not `lower_bin_op` — caller dispatch bug",
                 span,
             ));

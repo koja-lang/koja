@@ -101,7 +101,7 @@ pub enum IRUnaryOp {
 /// 1:1 — the lowerer picks a variant from the operands' resolved
 /// type and the LLVM backend keys on it to choose between inline
 /// `memcpy` (byte-aligned `String` / `Binary`) and the runtime
-/// `__expo_alpha_concat_bits` helper (`Bits`'s sub-byte alignment).
+/// `__expo_concat_bits` helper (`Bits`'s sub-byte alignment).
 /// Eval keys on it to pick the matching `Value` constructor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConcatKind {
@@ -159,7 +159,7 @@ pub struct ResolvedBinaryLayout {
 /// path on `bit_offset % 8 == 0 && width % 8 == 0` to use inline
 /// `memcpy` / byte-shift loops. For sub-byte segments either field
 /// may be a non-multiple of 8 and the backend must call
-/// `__expo_alpha_pack_bits`.
+/// `__expo_pack_bits`.
 ///
 /// `value` is the SSA `ValueId` produced by lowering the
 /// segment's AST `seg.value` expression — its `IRType` is whatever
@@ -363,7 +363,7 @@ impl ConcatKind {
 /// All three are move types per `LANGUAGE.md` — owned heap storage
 /// freed at scope exit by [`crate::IRInstruction::DropLocal`]. The
 /// `is_heap_type` classifier in
-/// [`expo_alpha_ir::lower::ownership`] (alpha module) treats them
+/// [`expo_ir::lower::ownership`] (module) treats them
 /// uniformly. `CString` is a struct, not a member of this family.
 ///
 /// `Struct(symbol)` names a user-declared (non-generic) struct by

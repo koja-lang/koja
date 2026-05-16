@@ -1,5 +1,5 @@
 //! Compact tree-style registry rendering for
-//! `expo alpha check --emit-ast` as a sidecar to the AST printer.
+//! `expo check --emit-ast` as a sidecar to the AST printer.
 //!
 //! Format mirrors [`expo_ast::format_file`]: a header line with the
 //! entry count, then one indented `<id> <kind> <qualified_name> @<span>`

@@ -23,7 +23,7 @@
 
 use std::ptr;
 
-use expo_alpha_ir::{BinaryMethod, BitsMethod, IRFunction};
+use expo_ir::{BinaryMethod, BitsMethod, IRFunction};
 
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;

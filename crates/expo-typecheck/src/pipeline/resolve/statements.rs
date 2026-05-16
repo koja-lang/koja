@@ -75,7 +75,7 @@ pub(super) fn resolve_assignment(
         AssignTarget::LValue(lvalue) => lvalue,
         AssignTarget::Pattern(_) => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support pattern destructuring assignment \
+                "typecheck does not yet support pattern destructuring assignment \
                  (`[a, b] = ...`)",
                 span,
             ));
@@ -87,7 +87,7 @@ pub(super) fn resolve_assignment(
         if let Some(annotation) = type_annotation {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck does not allow type annotations on field-write \
+                    "typecheck does not allow type annotations on field-write \
                      targets (got `{}: …`)",
                     format_lvalue(lvalue),
                 ),
@@ -131,7 +131,7 @@ pub(super) fn resolve_assignment(
             if let Some(annotation) = type_annotation {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck only allows type annotations on the first declaration \
+                        "typecheck only allows type annotations on the first declaration \
                          of a local (`{name}` was already declared)",
                     ),
                     annotation_span(annotation),
@@ -396,7 +396,7 @@ fn resolve_head_local(
 /// is borrowed (or there is no enclosing `self` at all). Mirrors v1's
 /// `expo-typecheck::stmt::resolve_assignment` self-mutation gate.
 /// Other head-local names trivially pass — any local declared via a
-/// `let` or as a `move`/`borrow` regular param is mutable in alpha's
+/// `let` or as a `move`/`borrow` regular param is mutable in the pipeline's
 /// reassignment-keeps-type model.
 fn require_self_mutable(
     head_name: &str,

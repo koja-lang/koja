@@ -7,22 +7,22 @@
 //! signatures (`fn (T) -> U` parameters and returns) and cover the
 //! stdlib shape that powers `list.map` / `list.filter`.
 
-use expo_alpha_typecheck::GlobalKind;
 use expo_ast::ast::PassMode;
 use expo_ast::identifier::{
     AnonymousKind, FnParam, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
 use expo_ast::util::dedent;
+use expo_typecheck::GlobalKind;
 
 mod common;
 
 use common::{PACKAGE, typecheck_file as typecheck};
 
 fn lookup_function_signature<'a>(
-    checked: &'a expo_alpha_typecheck::CheckedProgram,
+    checked: &'a expo_typecheck::CheckedProgram,
     package: &str,
     path: &[&str],
-) -> &'a expo_alpha_typecheck::FunctionSignature {
+) -> &'a expo_typecheck::FunctionSignature {
     let identifier = Identifier::new(package, path.iter().map(|s| s.to_string()).collect());
     let (_, entry) = checked
         .registry
@@ -34,7 +34,7 @@ fn lookup_function_signature<'a>(
     signature
 }
 
-fn global_leaf(checked: &expo_alpha_typecheck::CheckedProgram, name: &str) -> ResolvedType {
+fn global_leaf(checked: &expo_typecheck::CheckedProgram, name: &str) -> ResolvedType {
     let (id, _) = checked
         .registry
         .lookup(&Identifier::new("Global", vec![name.to_string()]))
@@ -142,7 +142,7 @@ fn dotted_type_in_signature_lifts_to_qualified_global() {
     let (sha_id, _) = checked
         .registry
         .lookup(&Identifier::new("Crypto", vec!["SHA256".to_string()]))
-        .expect("`Crypto.SHA256` should be registered via ALPHA_QUALIFIED");
+        .expect("`Crypto.SHA256` should be registered via QUALIFIED");
     let expected = ResolvedType::leaf(Resolution::Global(sha_id));
     assert_eq!(signature.params[0].ty, expected);
     assert_eq!(signature.return_type, expected);

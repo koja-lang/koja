@@ -15,7 +15,7 @@
 //! string payload), `to_binary` malloc's a length-prefixed block and
 //! memcpy's `len` bytes from the source pointer.
 
-use expo_alpha_ir::{CPtrMethod, IRFunction, IRType};
+use expo_ir::{CPtrMethod, IRFunction, IRType};
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::module::Linkage;
@@ -221,7 +221,7 @@ fn emit_null_check<'ctx>(
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
-/// `to_string(self): self` — the alpha runtime requires the pointer
+/// `to_string(self): self` — the runtime requires the pointer
 /// to already point at a valid length-prefixed Expo string payload
 /// (same layout as `String`); this method is therefore a zero-cost
 /// reinterpret.
@@ -239,7 +239,7 @@ fn emit_to_string<'ctx>(
 
 /// `to_binary(self, len): Binary` — malloc a `[i64 bit_len][len bytes]`
 /// block and `memcpy` `len` bytes from the source pointer. Returns a
-/// pointer to the payload (`base + 8`) per the alpha `Binary` ABI.
+/// pointer to the payload (`base + 8`) per the `Binary` ABI.
 /// Caller retains ownership of `self`; the produced `Binary` is a
 /// fresh owned heap allocation.
 fn emit_to_binary<'ctx>(

@@ -9,16 +9,16 @@
 //! resolutions and the call-site substitutions that flow `Self`
 //! through to a concrete impl.
 
-use expo_alpha_typecheck::GlobalKind;
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::GlobalKind;
 
 mod common;
 
 use common::{PACKAGE, typecheck_file as typecheck};
 
 fn lookup_id(
-    checked: &expo_alpha_typecheck::CheckedProgram,
+    checked: &expo_typecheck::CheckedProgram,
     name: &str,
 ) -> expo_ast::identifier::GlobalRegistryId {
     checked

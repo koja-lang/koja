@@ -1,10 +1,10 @@
-//! Shared test scaffolding for the alpha-ir integration test suite.
+//! Shared test scaffolding for the ir integration test suite.
 //! Each `tests/*.rs` file is its own Cargo test binary, so anything
 //! pulled in here lives behind a `mod common;` in the test file. The
 //! directory form (`tests/common/mod.rs`) keeps Cargo from picking
 //! this up as a test target itself.
 //!
-//! Every alpha-ir test shape drives `parse → check → lower` against a
+//! Every ir test shape drives `parse → check → lower` against a
 //! single in-memory source file, so we expose:
 //!
 //! - [`PACKAGE`] — the default package every test source registers
@@ -31,12 +31,12 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_ir::{
+use expo_ast::identifier::Identifier;
+use expo_ir::{
     IRFunction, IRProgram, IRScript, LowerError, ProjectEntry, lower_program, lower_script,
 };
-use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
-use expo_ast::identifier::Identifier;
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::{CheckFailure, CheckedProgram, check_program};
 
 pub const PACKAGE: &str = "TestApp";
 
@@ -45,8 +45,7 @@ pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
 }
 
 pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProgram {
-    parse_and_check(package, source, mode)
-        .unwrap_or_else(|f| panic!("alpha typecheck failed:\n{f}"))
+    parse_and_check(package, source, mode).unwrap_or_else(|f| panic!("typecheck failed:\n{f}"))
 }
 
 pub fn typecheck_fail(source: &str, mode: ParseMode) -> CheckFailure {
@@ -55,7 +54,7 @@ pub fn typecheck_fail(source: &str, mode: ParseMode) -> CheckFailure {
 
 pub fn typecheck_fail_in(package: &str, source: &str, mode: ParseMode) -> CheckFailure {
     parse_and_check(package, source, mode).expect_err(
-        "expected alpha typecheck to fail; it succeeded (test source must produce a diagnostic)",
+        "expected typecheck to fail; it succeeded (test source must produce a diagnostic)",
     )
 }
 
@@ -64,7 +63,7 @@ fn parse_and_check(
     source: &str,
     mode: ParseMode,
 ) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    let mut sources = expo_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: package.to_string(),
         path: PathBuf::from("test.expo"),

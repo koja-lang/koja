@@ -1,5 +1,5 @@
 //! Regression coverage for the opaque-receiver shortcut in
-//! [`expo_alpha_ir::lower::calls::lower_method_call`]: when a bounded
+//! [`expo_ir::lower::calls::lower_method_call`]: when a bounded
 //! `Debug.{format, print, inspect}` call's receiver, post
 //! monomorphic substitution, resolves to an anonymous type
 //! ([`ResolvedType::Union`] or
@@ -7,7 +7,7 @@
 //! emits a constant `"..."` placeholder instead of routing through
 //! `receiver_struct_id`.
 //!
-//! The bug this guards: alpha's stdlib hands out a parametric
+//! The bug this guards: the stdlib hands out a parametric
 //! `impl Debug for Pair<A, B>` whose body calls `self.first.format()`
 //! on a type-parameter receiver. Substituting `A → Union<...>` at
 //! monomorphization time produces a method call whose receiver
@@ -22,12 +22,12 @@
 //!
 //! The behavioral contract mirrors `derive_debug`'s opaque-field
 //! rule at the AST layer
-//! ([`expo_alpha_typecheck::pipeline::synthesize::derive_debug::is_opaque_type`]):
+//! ([`expo_typecheck::pipeline::synthesize::derive_debug::is_opaque_type`]):
 //! anonymous types render as the literal `"..."`. Keep the two
 //! layers in sync.
 
-use expo_alpha_ir::IRFunction;
 use expo_ast::util::dedent;
+use expo_ir::IRFunction;
 
 mod common;
 
@@ -38,7 +38,7 @@ use common::lower_program_source;
 /// that the opaque-receiver shortcut materialized the `"..."`
 /// placeholder for the union side of a `Pair<Union, _>.format` mono.
 fn collect_string_consts(function: &IRFunction) -> Vec<String> {
-    use expo_alpha_ir::{ConstValue, IRInstruction};
+    use expo_ir::{ConstValue, IRInstruction};
     let mut out: Vec<String> = Vec::new();
     for block in &function.blocks {
         for instr in &block.instructions {
@@ -125,7 +125,7 @@ fn pair_with_function_field_format_substitutes_to_opaque_placeholder() {
         .filter(|m| m.starts_with("Global.Pair_$") && m.ends_with(".format"))
         .collect();
     // The exact mangle for a function-typed arg includes a `Fn`
-    // marker that alpha-ir can rename later; pin the search to the
+    // marker that ir can rename later; pin the search to the
     // mono that wasn't there before (anything except the bare
     // `Pair_$.Int64$.format` autoimport shape).
     let mono = program

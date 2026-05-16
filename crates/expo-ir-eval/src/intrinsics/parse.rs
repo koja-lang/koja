@@ -9,7 +9,7 @@
 //! follow v1's tag convention (`Ok = 0`, `Err = 1`) the same way
 //! `Option` does in `list.rs` / `string.rs`.
 
-use expo_alpha_ir::{IRFunction, ParseTarget};
+use expo_ir::{IRFunction, ParseTarget};
 
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;

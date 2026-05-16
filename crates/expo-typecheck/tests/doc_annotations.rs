@@ -1,6 +1,6 @@
 //! `@doc` annotations are pure metadata for `expo-doc` / `expo-fmt`.
-//! Alpha typecheck neither honors nor enforces them; it only needs to
-//! stop rejecting them as a feature gap on the decl shapes that
+//! The typechecker neither honors nor enforces them; it only needs
+//! to stop rejecting them as a feature gap on the decl shapes that
 //! historically diagnosed every annotation. Other annotation names
 //! (`@derive`, `@spec`, …) still raise the existing message.
 //!

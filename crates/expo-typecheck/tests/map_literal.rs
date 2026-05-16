@@ -5,10 +5,10 @@
 //! These tests confirm the literal's shape, the per-entry
 //! resolutions, and the bidirectional `Map<K, V>` hint flow.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{Expr, ExprKind, Item, Literal, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

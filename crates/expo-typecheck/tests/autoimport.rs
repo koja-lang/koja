@@ -1,16 +1,16 @@
-//! Smoke test that every entry in [`expo_stdlib::ALPHA_AUTOIMPORT`]
+//! Smoke test that every entry in [`expo_stdlib::AUTOIMPORT`]
 //! typechecks cleanly when prepended to a trivial user file.
 //! Failure here is the canary that a stdlib file's surface drifted
-//! from what the alpha typecheck supports.
+//! from what the typechecker supports.
 
 use std::path::PathBuf;
 
-use expo_alpha_typecheck::check_program;
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::check_program;
 
 #[test]
-fn alpha_autoimport_typechecks_with_user_main() {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
+fn autoimport_typechecks_with_user_main() {
+    let mut sources = expo_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: "TestApp".to_string(),
         path: PathBuf::from("main.expo"),
@@ -25,7 +25,7 @@ fn alpha_autoimport_typechecks_with_user_main() {
             .map(|d| d.message.clone())
             .collect();
         panic!(
-            "alpha auto-import failed to typecheck ({} diagnostic(s)):\n{}",
+            "auto-import failed to typecheck ({} diagnostic(s)):\n{}",
             messages.len(),
             messages.join("\n"),
         );

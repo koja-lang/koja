@@ -3,8 +3,8 @@
 //! return type `IRType::String`. Interpolation surfaces as a
 //! feature-gap diagnostic.
 
-use expo_alpha_ir::{ConstValue, IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{ConstValue, IRInstruction, IRTerminator, IRType};
 
 mod common;
 

@@ -6,22 +6,22 @@
 //!   `declare float @cosf(float)` (no body — the C runtime
 //!   provides the implementation at link time);
 //! - aliased `@extern "C" @link "m:cos"` declares the function
-//!   under the `link_name`, not the alpha symbol — the alpha
+//!   under the `link_name`, not the mangled symbol — the user
 //!   `IRSymbol::TestApp.cosf` resolves to LLVM `@cos`;
 //! - call sites resolve through the `IRSymbol -> FunctionValue`
-//!   index on [`expo_alpha_ir_llvm::ctx::EmitContext`], so
+//!   index on [`expo_ir_llvm::ctx::EmitContext`], so
 //!   `relay(x: Float32) -> Float32 = cosf(x)` emits
 //!   `call float @cos(...)` against the aliased name even though
-//!   the IR call carries the alpha-internal symbol;
+//!   the IR call carries the internal symbol;
 //! - `CPtr<T>` lowers to an opaque LLVM `ptr` in both parameter
 //!   and return position with no marshaling shim, so an
 //!   `@extern "C" fn write(buf: CPtr<UInt8>, len: UInt64) ->
 //!   Int32` declaration matches the C ABI directly and call
 //!   sites pass `CPtr` SSA values straight through.
 
-use expo_alpha_ir::IRScript;
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir::IRScript;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
@@ -49,7 +49,7 @@ fn bare_extern_c_emits_declare_under_bare_last_segment() {
     );
     assert!(
         !ir_text.contains(&format!("@{PACKAGE}.cosf")),
-        "extern fn declares under the bare last-segment name, not the mangled alpha \
+        "extern fn declares under the bare last-segment name, not the mangled \
          symbol; got:\n{ir_text}",
     );
 }
@@ -86,7 +86,7 @@ fn aliased_link_emits_declare_under_link_name() {
     assert_contains(&ir_text, "declare float @cos(float)");
     assert!(
         !ir_text.contains("declare float @cosf"),
-        "aliased extern must not declare under its alpha name; got:\n{ir_text}",
+        "aliased extern must not declare under its mangled name; got:\n{ir_text}",
     );
 }
 
@@ -108,10 +108,10 @@ fn call_site_resolves_through_aliased_link_name() {
 
     assert_contains(&ir_text, "declare float @cos(float)");
     assert_contains(&ir_text, "call float @cos(float");
-    // The alpha-internal name must not leak into the emitted call.
+    // The internal name must not leak into the emitted call.
     assert!(
         !ir_text.contains("@cosf("),
-        "call site should resolve through link_name `cos`, not alpha name `cosf`; got:\n{ir_text}",
+        "call site should resolve through link_name `cos`, not mangled name `cosf`; got:\n{ir_text}",
     );
 }
 

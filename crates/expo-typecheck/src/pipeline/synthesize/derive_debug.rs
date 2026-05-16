@@ -6,7 +6,7 @@
 //! the rest of typecheck (collect / lift / resolve / seal) needs no
 //! special-casing. Runs as a **pre-collect** pass in
 //! [`crate::check_program`] so the new items land before name binding;
-//! the alpha pipeline's main `synthesize` step (today: `for_desugar`)
+//! the pipeline's main `synthesize` step (today: `for_desugar`)
 //! runs after lift and only touches function bodies, so it can't
 //! introduce items.
 //!
@@ -63,7 +63,7 @@ const STRING_TYPE: &str = "String";
 ///
 /// The existing-impl scan runs across all of the package's files
 /// first so a hand-written `impl Debug for List<T>` in
-/// `alpha_debug_containers.expo` suppresses synthesis in
+/// `debug_containers.expo` suppresses synthesis in
 /// `list.expo`. A naive per-file scan would produce both the
 /// hand-written impl and a synthesized one and trip the
 /// `duplicate impl` collision in
@@ -161,7 +161,7 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
 /// `print` and `inspect` come from [`print_function`] /
 /// [`inspect_function`] and inline the same bodies the `Debug`
 /// protocol declares as defaults in `lib/global/src/debug.expo` —
-/// alpha resolve doesn't yet pull protocol default bodies into impls
+/// resolve doesn't yet pull protocol default bodies into impls
 /// that omit them, so we inline them at synthesis time.
 fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     Item::Impl(ImplBlock {

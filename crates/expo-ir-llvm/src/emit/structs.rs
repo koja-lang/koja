@@ -4,7 +4,7 @@
 //! aggregate-shape instruction in this crate threads through LLVM
 //! (see also [`crate::emit::enums`]).
 
-use expo_alpha_ir::{IRSymbol, IRType, StructFieldInit};
+use expo_ir::{IRSymbol, IRType, StructFieldInit};
 use inkwell::types::StructType;
 use inkwell::values::{BasicValueEnum, PointerValue};
 

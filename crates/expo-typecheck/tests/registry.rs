@@ -8,15 +8,15 @@
 //! (`Global.<name>` struct with an empty `StructDefinition` in the
 //! registry; user-declared structs may add fields and conformances).
 //!
-//! `typecheck_file` prepends [`expo_stdlib::ALPHA_AUTOIMPORT`], so
+//! `typecheck_file` prepends [`expo_stdlib::AUTOIMPORT`], so
 //! protocols defined there (e.g. `Bitwise`) legitimately land
 //! conformances on the primitives via `impl Bitwise for Int` and
 //! friends. The assertions below pin "no leaked fields" (which holds
 //! regardless of autoimport content) and skip the conformance check
 //! to avoid coupling registry tests to the autoimport list.
 
-use expo_alpha_typecheck::{CheckedProgram, GlobalKind, StructDefinition};
 use expo_ast::identifier::Identifier;
+use expo_typecheck::{CheckedProgram, GlobalKind, StructDefinition};
 
 mod common;
 

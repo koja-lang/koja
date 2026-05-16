@@ -19,8 +19,8 @@
 //! (`tests/intrinsics.rs`) where the emitted `lshr` vs `ashr` is
 //! observable.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 
@@ -36,7 +36,7 @@ fn run_int(source: &str) -> i64 {
 #[test]
 fn int_band_returns_bitwise_and() {
     // `0b1100 & 0b1010 = 0b1000`; binary literals exercise the
-    // alpha-IR `lower/ops.rs` radix-aware parser end-to-end.
+    // IR `lower/ops.rs` radix-aware parser end-to-end.
     let v = run_int("0b1100.band(0b1010)");
     assert_eq!(v, 0b1000);
 }

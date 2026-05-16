@@ -10,7 +10,7 @@
 //! the answer; the typed dispatch payload threads it through
 //! without re-parsing strings.
 
-use expo_alpha_ir::{BitOp, IntType};
+use expo_ir::{BitOp, IntType};
 
 use crate::error::RuntimeError;
 use crate::value::Value;

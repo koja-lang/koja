@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{
+use expo_ir::{
     FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRType,
     function_has_tail_call,
 };
@@ -29,7 +29,7 @@ use crate::intrinsics;
 use crate::types::{closure_body_signature, env_struct_type, ir_basic_type, value_basic_type};
 
 /// Declare an LLVM function for `function`. The signature mirrors
-/// the IR exactly: each [`expo_alpha_ir::IRFunctionParam::ty`]
+/// the IR exactly: each [`expo_ir::IRFunctionParam::ty`]
 /// becomes its LLVM basic type and the return type does the same.
 /// `Unit` returns / params surface as feature-gap diagnostics
 /// through [`ir_basic_type`].
@@ -37,15 +37,15 @@ use crate::types::{closure_body_signature, env_struct_type, ir_basic_type, value
 /// The LLVM symbol name is picked per-kind:
 ///
 /// - `Regular` / `Intrinsic` declare under
-///   [`expo_alpha_ir::IRSymbol::mangled`] (the alpha-internal form).
+///   [`expo_ir::IRSymbol::mangled`] (the internal form).
 /// - `Extern(attrs)` declares under
-///   [`expo_alpha_ir::IRExternAttrs::link_name`] when present, or
+///   [`expo_ir::IRExternAttrs::link_name`] when present, or
 ///   the function's bare last segment otherwise (`TestApp.cosf` →
 ///   `cosf`). The IRSymbol stays the call-site's resolution key,
 ///   regardless of the LLVM name.
 ///
 /// Idempotent: if `module.get_function(name)` already exists for a
-/// previously-seen `link_name` (multiple alpha decls of the same C
+/// previously-seen `link_name` (multiple decls of the same C
 /// symbol), reuse the existing handle rather than colliding. The
 /// returned [`FunctionValue`] is also registered in the
 /// `IRSymbol -> FunctionValue` index on `ctx` so call sites can
@@ -120,7 +120,7 @@ fn function_signature<'ctx>(
 /// emission. Pre-creates one inkwell `BasicBlock` per IR block (a
 /// no-op for `Intrinsic`'s empty `blocks`) so `Branch` / `CondBranch`
 /// terminators can resolve to a real [`BasicBlock`]. The body's
-/// [`ValueMap`] is seeded with each [`expo_alpha_ir::IRFunctionParam`]
+/// [`ValueMap`] is seeded with each [`expo_ir::IRFunctionParam`]
 /// bound to the matching `function.get_nth_param(i)` LLVM value
 /// before walking the entry block.
 pub(crate) fn define_function<'ctx>(
@@ -189,7 +189,7 @@ pub(crate) fn define_function<'ctx>(
     // Blocks unreachable from the entry block (e.g. the merge of a
     // value-producing `if`/`else` whose arms both diverge) get
     // `unreachable` instead of their natural terminator. The
-    // alpha-IR layer doesn't model `IRTerminator::Unreachable` yet;
+    // IR layer doesn't model `IRTerminator::Unreachable` yet;
     // the LLVM boundary's reachability walk is the stand-in.
     let reachable = emit::reachable_blocks(&function.blocks);
     let result = (|| -> Result<(), LlvmError> {
@@ -245,7 +245,7 @@ fn emit_entry_with_tco_split<'ctx>(
     let promotion_len = 2 * function.params.len();
     if block.instructions.len() < promotion_len {
         panic!(
-            "alpha LLVM emit: TCO entry block on `{}` is shorter ({}) than the expected \
+            "LLVM emit: TCO entry block on `{}` is shorter ({}) than the expected \
              promotion sequence ({}) — lower invariant violation",
             function.symbol,
             block.instructions.len(),
@@ -295,7 +295,7 @@ fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction)
                 debug_assert_eq!(*value, param.id);
             }
             other => panic!(
-                "alpha LLVM emit: unexpected promotion shape on `{}` at param #{index}: {other:?}",
+                "LLVM emit: unexpected promotion shape on `{}` at param #{index}: {other:?}",
                 function.symbol,
             ),
         }
@@ -310,7 +310,7 @@ fn closure_env_ptr<'ctx>(
         .get_nth_param(0)
         .unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: closure body `{}` declared no env parameter — \
+                "LLVM emit: closure body `{}` declared no env parameter — \
                  declare_function ABI invariant violation",
                 function.symbol,
             )
@@ -337,7 +337,7 @@ pub(crate) fn declare_blocks<'ctx>(
 }
 
 /// Seed a fresh [`ValueMap`] with each parameter's LLVM value, keyed
-/// by the [`expo_alpha_ir::IRFunctionParam::id`] that body lowering
+/// by the [`expo_ir::IRFunctionParam::id`] that body lowering
 /// uses. Inkwell's `get_nth_param` panics on out-of-bounds; the IR
 /// seal guarantees `params.len()` matches the LLVM function's arity,
 /// so a miss here is a compiler bug.
@@ -357,7 +357,7 @@ fn seed_params<'ctx>(
         let llvm_index = (index as u32) + llvm_offset;
         let llvm_param = llvm_function.get_nth_param(llvm_index).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: missing LLVM param #{llvm_index} on `{}` — \
+                "LLVM emit: missing LLVM param #{llvm_index} on `{}` — \
                  signature/IR arity mismatch",
                 function.symbol,
             )

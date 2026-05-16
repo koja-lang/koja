@@ -1,29 +1,29 @@
 //! Expo compiler CLI entry point.
 //!
 //! Parses the top-level subcommand and dispatches each one through
-//! either [`alpha`] (the compiler pipeline: `expo-alpha-typecheck →
-//! expo-alpha-ir → expo-alpha-ir-llvm` / `expo-alpha-ir-eval`) or
+//! either [`pipeline`] (the compiler pipeline: `expo-typecheck →
+//! expo-ir → expo-ir-llvm` / `expo-ir-eval`) or
 //! [`commands`] (frontend / filesystem tooling: `parse`, `lex`,
 //! `format`, `doc`, `new`).
 //!
-//! Source dispatch follows [`alpha::cmd_build`]'s extension rules:
-//! `.exps` files are scripts (top-level expressions, no project
-//! context); `.expo` files are project files. Omitting the file
-//! argument falls back to discovering an `expo.toml` in the
+//! Source dispatch follows [`pipeline::cmd_build`]'s extension
+//! rules: `.exps` files are scripts (top-level expressions, no
+//! project context); `.expo` files are project files. Omitting the
+//! file argument falls back to discovering an `expo.toml` in the
 //! current directory; project mode runs the full pipeline through
-//! [`expo_alpha_ir_llvm::compile_program`].
+//! [`expo_ir_llvm::compile_program`].
 //!
 //! Backend selection: `run` and `build` accept
-//! `--backend={interpreter,llvm}` (see [`alpha::Backend`]). `run`
-//! defaults to `interpreter` (fast feedback, prints the trailing
-//! value, exits 0); `build` defaults to `llvm` (only backend that
-//! produces a binary). `build --backend=interpreter` errors. A
-//! future WASM backend slots in as a third variant.
+//! `--backend={interpreter,llvm}` (see [`pipeline::Backend`]).
+//! `run` defaults to `interpreter` (fast feedback, prints the
+//! trailing value, exits 0); `build` defaults to `llvm` (only
+//! backend that produces a binary). `build --backend=interpreter`
+//! errors. A future WASM backend slots in as a third variant.
 
-mod alpha;
 mod commands;
 mod diagnostics;
 mod link;
+mod pipeline;
 pub mod project;
 
 use expo_runtime as _;
@@ -50,7 +50,7 @@ enum Command {
 
         /// Backend to drive the build through (defaults to `llvm`; `interpreter` errors since it cannot produce a binary)
         #[arg(long, value_enum, default_value = "llvm")]
-        backend: alpha::Backend,
+        backend: pipeline::Backend,
 
         /// Output binary name
         #[arg(short, long)]
@@ -129,7 +129,7 @@ enum Command {
 
         /// Backend to drive execution through (defaults to `interpreter`; `llvm` compiles + execs and forwards the exit code)
         #[arg(long, value_enum, default_value = "interpreter")]
-        backend: alpha::Backend,
+        backend: pipeline::Backend,
 
         /// Build with aggressive optimizations (LLVM backend only)
         #[arg(long)]
@@ -156,12 +156,15 @@ fn main() {
             output,
             emit_llvm,
             release,
-        } => alpha::cmd_build(file, backend, output, release, emit_llvm),
-        Command::Check { file, emit_ast } => alpha::cmd_check(file, emit_ast),
+        } => pipeline::cmd_build(file, backend, output, release, emit_llvm),
+        Command::Check { file, emit_ast } => pipeline::cmd_check(file, emit_ast),
         Command::Doc { files, output } => commands::cmd_doc(files, output, color),
-        Command::Eval { file } => {
-            alpha::cmd_run(Some(file), alpha::Backend::Interpreter, false, Vec::new())
-        }
+        Command::Eval { file } => pipeline::cmd_run(
+            Some(file),
+            pipeline::Backend::Interpreter,
+            false,
+            Vec::new(),
+        ),
         Command::Format {
             files,
             check,
@@ -175,8 +178,8 @@ fn main() {
             backend,
             release,
             args,
-        } => alpha::cmd_run(file, backend, release, args),
-        Command::Shell => alpha::cmd_shell(),
-        Command::Test => alpha::cmd_test(),
+        } => pipeline::cmd_run(file, backend, release, args),
+        Command::Shell => pipeline::cmd_shell(),
+        Command::Test => pipeline::cmd_test(),
     }
 }

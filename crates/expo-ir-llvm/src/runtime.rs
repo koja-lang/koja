@@ -2,7 +2,7 @@
 //! calls them from compiler-synthesized `@intrinsic` bodies) and
 //! [`crate::main_wrapper`]'s spawn / main-done hand-off.
 //!
-//! Each runtime helper lives in `expo-runtime/src/alpha.rs`; this
+//! Each runtime helper lives in `expo-runtime/src/intrinsics.rs`; this
 //! module owns the LLVM-side declarations so the callers stamp
 //! exactly one `module.get_function` lookup per symbol.
 
@@ -13,7 +13,7 @@ use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
 
-pub(crate) const CONCAT_BITS_SYMBOL: &str = "__expo_alpha_concat_bits";
+pub(crate) const CONCAT_BITS_SYMBOL: &str = "__expo_concat_bits";
 pub(crate) const FORMAT_BOOL_SYMBOL: &str = "expo_format_bool";
 pub(crate) const FORMAT_F32_SYMBOL: &str = "expo_format_f32";
 pub(crate) const FORMAT_F64_SYMBOL: &str = "expo_format_f64";
@@ -27,9 +27,9 @@ pub(crate) const MALLOC_SYMBOL: &str = "malloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
 pub(crate) const REALLOC_SYMBOL: &str = "realloc";
 pub(crate) const UTF8_VALIDATE_SYMBOL: &str = "expo_utf8_validate";
-pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_alpha_pack_bits";
-pub(crate) const PANIC_SYMBOL: &str = "__expo_alpha_panic";
-pub(crate) const PRINT_STRING_SYMBOL: &str = "__expo_alpha_print_string";
+pub(crate) const PACK_BITS_SYMBOL: &str = "__expo_pack_bits";
+pub(crate) const PANIC_SYMBOL: &str = "__expo_panic";
+pub(crate) const PRINT_STRING_SYMBOL: &str = "__expo_print_string";
 pub(crate) const SOCKET_RECV_FROM_SYMBOL: &str = "expo_socket_recv_from";
 pub(crate) const SOCKET_RESOLVE_SYMBOL: &str = "expo_socket_resolve";
 pub(crate) const STRCMP_SYMBOL: &str = "strcmp";
@@ -92,7 +92,7 @@ pub(crate) fn declare_runtime_format<'ctx>(
 
 /// Declare (or look up) the libc `free` extern. The drop emitter
 /// calls this once per heap-typed slot at function exit. Signature
-/// is `void(i8*)`; alpha's heap-block pointers are computed by
+/// is `void(i8*)`; the heap-block pointers are computed by
 /// adjusting the SSA payload pointer (`payload - 8`) before the
 /// call so `free` sees the allocator's block base.
 pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
@@ -159,7 +159,7 @@ pub(crate) fn declare_last_error_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functi
 
 /// Declare (or look up) the libc `malloc` extern. The concat /
 /// binary-construct emitters call this for the heap block base.
-/// Signature: `i8* malloc(i64)` (alpha targets 64-bit hosts; the
+/// Signature: `i8* malloc(i64)` (the runtime targets 64-bit hosts; the
 /// argument type matches `size_t` on those targets).
 pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(MALLOC_SYMBOL) {
@@ -255,8 +255,8 @@ pub(crate) fn declare_realloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionV
         .add_function(REALLOC_SYMBOL, signature, Some(Linkage::External))
 }
 
-/// Declare (or look up) the `__expo_alpha_concat_bits` runtime
-/// helper. Signature: `i8* __expo_alpha_concat_bits(i8* lhs_payload,
+/// Declare (or look up) the `__expo_concat_bits` runtime
+/// helper. Signature: `i8* __expo_concat_bits(i8* lhs_payload,
 /// i8* rhs_payload)`. Reads bit-lengths from each operand's `-8`
 /// header, allocates a new `[i64 bit_length][ceil((L+R)/8) bytes]`
 /// block, and bit-shifts rhs to land at the lhs trailing partial
@@ -271,8 +271,8 @@ pub(crate) fn declare_concat_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Funct
         .add_function(CONCAT_BITS_SYMBOL, signature, Some(Linkage::External))
 }
 
-/// Declare (or look up) the `__expo_alpha_pack_bits` runtime helper.
-/// Signature: `void __expo_alpha_pack_bits(i8* payload, i64 value,
+/// Declare (or look up) the `__expo_pack_bits` runtime helper.
+/// Signature: `void __expo_pack_bits(i8* payload, i64 value,
 /// i8 width, i64 bit_offset)`. Packs `width` bits of `value` into
 /// `payload` MSB-first starting at `bit_offset`. The binary-literal
 /// emitter calls this for sub-byte segment widths.
@@ -352,8 +352,8 @@ pub(crate) fn declare_string_slice_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
         .add_function(STRING_SLICE_SYMBOL, signature, Some(Linkage::External))
 }
 
-/// Declare (or look up) the `__expo_alpha_panic` runtime helper.
-/// Signature: `void __expo_alpha_panic(i8* message_payload)`. The
+/// Declare (or look up) the `__expo_panic` runtime helper.
+/// Signature: `void __expo_panic(i8* message_payload)`. The
 /// `Kernel.panic` intrinsic body calls this with the `String`
 /// payload pointer (i.e. 8 bytes past the v1 length header) and
 /// trails the call with `unreachable`. The runtime side prints

@@ -19,7 +19,7 @@
 //!   reinterpret, both layouts are identical) when aligned, or
 //!   `Result.Err("bit length is not byte-aligned")` otherwise.
 
-use expo_alpha_ir::{BinaryMethod, BitsMethod, IRFunction, IRSymbol, IRType, IRVariantTag};
+use expo_ir::{BinaryMethod, BitsMethod, IRFunction, IRSymbol, IRType, IRVariantTag};
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, FunctionValue};

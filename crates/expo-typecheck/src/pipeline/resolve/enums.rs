@@ -50,7 +50,7 @@ pub(super) fn resolve_enum_construction(
     let Some((enum_id, enum_entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not recognize the enum type `{}`",
+                "typecheck does not recognize the enum type `{}`",
                 type_path.join("."),
             ),
             span,

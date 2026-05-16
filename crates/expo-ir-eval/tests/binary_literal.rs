@@ -4,7 +4,7 @@
 //! sub-byte segments → Bits) byte-for-byte against the runtime
 //! `Value::Binary` / `Value::Bits` shapes.
 
-use expo_alpha_ir_eval::Value;
+use expo_ir_eval::Value;
 
 mod common;
 

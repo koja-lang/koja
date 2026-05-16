@@ -1,7 +1,7 @@
 //! Typed dispatch id for `@intrinsic`-annotated functions. Replaces
 //! the prior free-form `id: String` (joined from the function's
 //! identifier path) with an exhaustive enum so both backends
-//! ([`expo_alpha_ir_llvm`] and [`expo_alpha_ir_eval`]) match a
+//! ([`expo_ir_llvm`] and [`expo_ir_eval`]) match a
 //! finite, compiler-checked universe instead of re-parsing strings
 //! through ad-hoc `matches_id` / `method_for` / `op_from_id`
 //! helpers.
@@ -298,7 +298,7 @@ impl IRIntrinsicId {
     /// at codegen.
     ///
     /// Strips the package prefix and walks the remaining path. All
-    /// alpha intrinsics today are either one-segment (`print`) or
+    /// intrinsics today are either one-segment (`print`) or
     /// two-segment (`Type.method`); nested-type intrinsics would
     /// extend the match arms without changing the shape.
     pub fn from_identifier(identifier: &Identifier) -> Option<Self> {

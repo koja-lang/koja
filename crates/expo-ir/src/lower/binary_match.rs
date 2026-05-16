@@ -15,12 +15,12 @@
 //! holds when the LLVM emit phase stamps the extracted value
 //! into the slot.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{
     BinaryEndianness, BinarySegment, BinarySignedness, ExprKind, Literal, StringPart, TypeExpr,
     UnaryOp,
 };
 use expo_ast::identifier::Resolution;
+use expo_typecheck::GlobalRegistry;
 
 use crate::function::{IRBlockId, IRInstruction};
 use crate::local::IRLocalId;
@@ -116,7 +116,7 @@ fn lower_segment(
         ExprKind::Ident { resolution, name } => {
             let Resolution::Local(local_id) = resolution else {
                 panic!(
-                    "alpha IR lower: binary pattern binding `{name}` carries no \
+                    "IR lower: binary pattern binding `{name}` carries no \
                      Resolution::Local — resolver invariant violation",
                 );
             };

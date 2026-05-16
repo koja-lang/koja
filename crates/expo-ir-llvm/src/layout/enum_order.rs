@@ -21,7 +21,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use expo_alpha_ir::{IREnumDecl, IRPackage, IRStructField, IRSymbol, IRType, IRVariantPayload};
+use expo_ir::{IREnumDecl, IRPackage, IRStructField, IRSymbol, IRType, IRVariantPayload};
 
 /// Topologically sort every enum decl across `packages` so an enum
 /// E whose payload references enum F lands after F. Used by
@@ -159,7 +159,7 @@ fn collect_type_enum_refs(
         // Heap-pointer payloads — the inner type lives behind a
         // pointer and contributes no inline size dependency to the
         // outer enum chunk computation. `Indirect` is the cycle-
-        // breaking pointer minted by `expo_alpha_ir::cycle`.
+        // breaking pointer minted by `expo_ir::cycle`.
         IRType::CPtr(_)
         | IRType::Function { .. }
         | IRType::Indirect(_)

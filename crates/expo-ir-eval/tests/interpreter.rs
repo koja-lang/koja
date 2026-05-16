@@ -19,8 +19,8 @@
 //! Operator math (`apply_binary_op` / `apply_unary_op`) lives in
 //! `tests/ops.rs`, paired with `src/ops.rs`.
 
-use expo_alpha_ir_eval::{RuntimeError, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{RuntimeError, Value};
 
 mod common;
 

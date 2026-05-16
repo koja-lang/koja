@@ -5,7 +5,7 @@
 //! - [`seal_struct_decls`] runs per package and validates every
 //!   [`IRStructDecl`] in isolation — keys match, field indices are
 //!   dense in declaration order, field names are unique, every
-//!   field's `ir_type` is in the alpha transient set.
+//!   field's `ir_type` is in the transient set.
 //! - [`seal_struct_ops`] runs across the assembled
 //!   [`IRProgram`] / [`IRScript`] (call site supplies the cross-
 //!   package struct lookup) and validates every
@@ -46,12 +46,12 @@ fn seal_struct_decl(decl: &IRStructDecl) {
 
 /// Validate a named-field layout (struct decl or enum struct-variant
 /// payload) against the shared invariants: dense, declaration-order
-/// `index`es; unique field names; every `ir_type` in the alpha
+/// `index`es; unique field names; every `ir_type` in the
 /// supported set.
 ///
 /// Shared helper because both [`IRStructDecl`] and
 /// [`crate::IRVariantPayload::Struct`] reuse the same
-/// [`IRStructField`] vocabulary — the alpha enum slice's struct
+/// [`IRStructField`] vocabulary — the enum slice's struct
 /// variants are structurally a struct's field roster, and the seal
 /// surface should be identical.
 pub(super) fn seal_named_field_layout(owner: &str, fields: &[IRStructField]) {

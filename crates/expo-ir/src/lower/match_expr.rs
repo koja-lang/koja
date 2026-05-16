@@ -32,8 +32,8 @@
 //! warns on them but typecheck still admits the source) are never
 //! processed and contribute no orphan blocks to the CFG.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Expr, MatchArm};
+use expo_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::ownership::Ownership;

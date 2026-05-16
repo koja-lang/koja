@@ -1,14 +1,14 @@
-//! Human-readable rendering of alpha-pipeline types for hover and
-//! completion. Mirrors `display_resolution` in `expo-alpha-typecheck`
+//! Human-readable rendering of pipeline types for hover and
+//! completion. Mirrors `display_resolution` in `expo-typecheck`
 //! (today private); duplicated here as a small local printer rather
 //! than promoting the upstream helper.
 
-use expo_alpha_typecheck::{
+use expo_ast::ast::PassMode;
+use expo_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
+use expo_typecheck::{
     FunctionSignature, GlobalRegistry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod,
     ResolvedStructField, ResolvedVariantData,
 };
-use expo_ast::ast::PassMode;
-use expo_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 
 /// Render a [`ResolvedType`] as a short, user-facing string.
 pub(crate) fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry) -> String {

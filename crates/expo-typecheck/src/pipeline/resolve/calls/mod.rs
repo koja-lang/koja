@@ -80,7 +80,7 @@ pub(super) fn resolve_call(
         resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck only supports bare-identifier callees (got `{}`)",
+                "typecheck only supports bare-identifier callees (got `{}`)",
                 expr_kind_label(&callee.kind),
             ),
             callee.span,
@@ -785,7 +785,7 @@ fn resolve_closure_args(
 fn diagnose_named_arg(arg: &Arg, diagnostics: &mut Vec<Diagnostic>) {
     if let Some(name) = arg.name.as_ref() {
         diagnostics.push(Diagnostic::error(
-            format!("alpha typecheck does not yet support named arguments (got `{name}`)",),
+            format!("typecheck does not yet support named arguments (got `{name}`)",),
             arg.span,
         ));
     }

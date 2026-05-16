@@ -6,10 +6,10 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::File;
 use expo_ast::identifier::Identifier;
 use expo_ast::span::Span;
+use expo_typecheck::GlobalRegistry;
 
 use crate::backend::{Backend, DocumentState};
 use crate::convert::{path_to_uri, span_to_range};

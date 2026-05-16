@@ -1,9 +1,9 @@
 //! IR-text snapshot tests for the enum slice in
-//! [`expo_alpha_ir_llvm::emit_llvm_ir`].
+//! [`expo_ir_llvm::emit_llvm_ir`].
 //!
 //! Three contracts are pinned:
 //!
-//! - **Pre-emission types**: every [`expo_alpha_ir::IREnumDecl`]
+//! - **Pre-emission types**: every [`expo_ir::IREnumDecl`]
 //!   becomes three families of LLVM struct types — the outer
 //!   `%Pkg.Enum = type { [N x iAlign] }` blob, the per-variant
 //!   complete `%Pkg.Enum.Variant = type { i8, [pad x i8],
@@ -31,8 +31,8 @@
 //! static-method body that gets emitted regardless of whether the
 //! script's trailing expression references it.
 
-use expo_alpha_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
 use expo_ast::util::dedent;
+use expo_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
 
 mod common;
 

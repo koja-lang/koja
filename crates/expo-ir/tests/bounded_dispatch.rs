@@ -26,7 +26,7 @@ mod common;
 
 use common::lower_program_source;
 
-fn collect_function_names(program: &expo_alpha_ir::IRProgram) -> Vec<String> {
+fn collect_function_names(program: &expo_ir::IRProgram) -> Vec<String> {
     let mut names: Vec<String> = program
         .packages
         .iter()

@@ -1,4 +1,4 @@
-//! User-actionable failure modes for the alpha lowering phase.
+//! User-actionable failure modes for the lowering phase.
 //!
 //! Both lowering entry points ([`crate::lower_program`] and
 //! [`crate::lower_script`]) return `Result<_, LowerError>`. The

@@ -18,11 +18,11 @@
 //! - Inline + impl-block static methods on enum receivers lower to
 //!   regular package functions keyed at `<package>.<enum>.<method>`.
 
-use expo_alpha_ir::{
+use expo_ast::util::dedent;
+use expo_ir::{
     EnumPayloadInit, FunctionKind, IREnumDecl, IRInstruction, IRProgram, IRType, IRVariantPayload,
     IRVariantTag,
 };
-use expo_ast::util::dedent;
 
 mod common;
 
@@ -36,12 +36,12 @@ fn enum_decl<'a>(program: &'a IRProgram, name: &str) -> &'a IREnumDecl {
 }
 
 fn first_enum_construct(
-    block: &expo_alpha_ir::IRBasicBlock,
+    block: &expo_ir::IRBasicBlock,
 ) -> (
-    expo_alpha_ir::ValueId,
+    expo_ir::ValueId,
     &EnumPayloadInit,
     IRVariantTag,
-    &expo_alpha_ir::IRSymbol,
+    &expo_ir::IRSymbol,
 ) {
     block
         .instructions

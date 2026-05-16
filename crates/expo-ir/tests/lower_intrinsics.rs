@@ -17,10 +17,10 @@
 //! stdlib-loading slice that imports intrinsics from real `lib/`
 //! files.
 //!
-//! [`FunctionKind`]: expo_alpha_ir::FunctionKind
+//! [`FunctionKind`]: expo_ir::FunctionKind
 
-use expo_alpha_ir::{FunctionKind, IRInstruction, IRIntrinsicId, IRScript, IRTerminator, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{FunctionKind, IRInstruction, IRIntrinsicId, IRScript, IRTerminator, IRType};
 use expo_parser::ParseMode;
 
 mod common;

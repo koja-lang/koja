@@ -1,6 +1,6 @@
 //! IR lowering coverage for the `List<T>` family. Pairs against the
-//! LLVM emitters in `expo-alpha-ir-llvm/src/intrinsics/list.rs` and
-//! the eval emitters in `expo-alpha-ir-eval/src/intrinsics/list.rs`.
+//! LLVM emitters in `expo-ir-llvm/src/intrinsics/list.rs` and
+//! the eval emitters in `expo-ir-eval/src/intrinsics/list.rs`.
 //!
 //! Each fixture exercises one method on `Global.List` from a script
 //! body that uses the autoimported `list.expo` decl. Assertions
@@ -16,10 +16,10 @@
 //! The autoimported stdlib already registers `List<T>`, so the
 //! script source just calls the intrinsics directly.
 
-use expo_alpha_ir::{
+use expo_ast::util::dedent;
+use expo_ir::{
     FunctionKind, IRFunction, IRInstruction, IRIntrinsicId, IRScript, IRType, ListMethod,
 };
-use expo_ast::util::dedent;
 
 mod common;
 

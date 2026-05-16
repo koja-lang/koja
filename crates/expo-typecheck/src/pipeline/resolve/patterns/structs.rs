@@ -62,7 +62,7 @@ fn resolve_struct_metadata(
     let Some((struct_id, entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha typecheck does not recognize the struct type `{}`",
+                "typecheck does not recognize the struct type `{}`",
                 type_path.join("."),
             ),
             span,

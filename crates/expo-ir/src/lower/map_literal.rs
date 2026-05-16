@@ -5,10 +5,10 @@
 //! equivalent `MethodCall` tree here so the emitted IR is identical to
 //! a hand-written `Map.new().put(k1, v1).put(k2, v2)`.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Arg, Expr, ExprKind};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
+use expo_typecheck::GlobalRegistry;
 
 use super::calls::{MethodCallShape, lower_method_call};
 use super::ctx::{FnLowerCtx, LowerOutput};
@@ -29,7 +29,7 @@ pub(super) fn lower_map_literal(
         .map(|(id, _)| id)
         .unwrap_or_else(|| {
             panic!(
-                "alpha IR lower: map literal reaches lower without `Global.Map` in registry — \
+                "IR lower: map literal reaches lower without `Global.Map` in registry — \
                  seal violation",
             )
         });

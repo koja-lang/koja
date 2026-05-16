@@ -9,7 +9,7 @@
 //! dispatch; receiver shapes outside [`DebugImpl`] surface a typed
 //! [`RuntimeError::TypeMismatch`].
 
-use expo_alpha_ir::{DebugImpl, IntType};
+use expo_ir::{DebugImpl, IntType};
 
 use crate::error::RuntimeError;
 use crate::value::Value;

@@ -127,7 +127,7 @@ fn mangle_type(ty: &IRType) -> String {
 
 /// Build the canonical mangled [`IRSymbol`] for a union with the
 /// given (already mangled) member set. The `members` slice is
-/// expected in canonical (sorted) order — alpha typecheck's
+/// expected in canonical (sorted) order — typecheck's
 /// `canonical_union` guarantees that — so any two surface unions
 /// with the same canonical member set yield the exact same
 /// `IRSymbol`. Backends look up `IRUnionDecl` entries by this

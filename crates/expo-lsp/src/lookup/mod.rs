@@ -8,9 +8,9 @@ mod local_index;
 mod span;
 mod traverse;
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
 use expo_ast::ast::*;
 use expo_ast::identifier::Identifier;
+use expo_typecheck::{GlobalKind, GlobalRegistry};
 
 pub(crate) use local_index::LocalIndex;
 pub(crate) use span::span_contains;
@@ -55,7 +55,7 @@ pub(crate) enum SymbolInfo {
 }
 
 /// Bundle of resolved-state inputs the lookup helpers need to classify
-/// names against the alpha registry. Keeps every traversal signature a
+/// names against the type registry. Keeps every traversal signature a
 /// single `&LookupCtx` instead of threading three slots per call.
 #[derive(Clone, Copy)]
 pub(crate) struct LookupCtx<'a> {
@@ -320,7 +320,7 @@ fn doc_in_methods(functions: &[Function], type_name: &str, name: &str) -> Option
     None
 }
 
-/// Classifies an identifier by looking it up in the alpha registry,
+/// Classifies an identifier by looking it up in the type registry,
 /// returning the appropriate [`SymbolInfo`] variant. Looks first in
 /// the active package, then falls back to `Global`. Unknown names
 /// classify as [`SymbolInfo::Variable`].
@@ -367,28 +367,24 @@ fn classify_in_package(name: &str, package: &str, registry: &GlobalRegistry) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use expo_alpha_typecheck::{CheckedProgram, check_program};
     use expo_ast::util::dedent;
     use expo_parser::{ParseMode, SourceFile, parse_program};
+    use expo_typecheck::{CheckedProgram, check_program};
     use std::path::PathBuf;
 
     const PACKAGE: &str = "TestApp";
 
     fn check(source: &str) -> CheckedProgram {
-        let mut sources = expo_stdlib::alpha_autoimport_sources();
-        sources.extend(expo_stdlib::alpha_qualified_sources());
+        let mut sources = expo_stdlib::autoimport_sources();
+        sources.extend(expo_stdlib::qualified_sources());
         sources.push(SourceFile {
             package: PACKAGE.to_string(),
             path: PathBuf::from("test.expo"),
             source: dedent(source),
         });
         let parsed = parse_program(sources, ParseMode::File);
-        check_program(parsed).unwrap_or_else(|f| {
-            panic!(
-                "alpha typecheck failed: {} diagnostic(s)",
-                f.diagnostics.len()
-            )
-        })
+        check_program(parsed)
+            .unwrap_or_else(|f| panic!("typecheck failed: {} diagnostic(s)", f.diagnostics.len()))
     }
 
     fn parse_source(source: &str) -> File {
@@ -544,7 +540,7 @@ mod tests {
     /// Smoke test mirroring the hover/definition pipeline: build a
     /// `CheckedProgram`, find the symbol at the cursor on a function
     /// name's line. Exercises `find_symbol_at` end-to-end against the
-    /// alpha registry.
+    /// type registry.
     #[test]
     fn find_symbol_at_resolves_function_name() {
         let checked = check(
@@ -580,8 +576,8 @@ mod tests {
     /// path: every function param + body local lands in the index.
     #[test]
     fn local_index_records_params_and_body_locals() {
-        let mut sources = expo_stdlib::alpha_autoimport_sources();
-        sources.extend(expo_stdlib::alpha_qualified_sources());
+        let mut sources = expo_stdlib::autoimport_sources();
+        sources.extend(expo_stdlib::qualified_sources());
         let active = PathBuf::from("test.expo");
         sources.push(SourceFile {
             package: PACKAGE.to_string(),
@@ -600,8 +596,8 @@ mod tests {
 
         // Rebuild parsed for the LocalIndex (check_program consumes its
         // input; mirror diagnostics.rs::rebuild_parsed_from_checked).
-        let mut sources = expo_stdlib::alpha_autoimport_sources();
-        sources.extend(expo_stdlib::alpha_qualified_sources());
+        let mut sources = expo_stdlib::autoimport_sources();
+        sources.extend(expo_stdlib::qualified_sources());
         sources.push(SourceFile {
             package: PACKAGE.to_string(),
             path: active.clone(),

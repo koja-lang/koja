@@ -10,7 +10,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use expo_alpha_ir::{IRFunction, SetMethod};
+use expo_ir::{IRFunction, SetMethod};
 
 use crate::error::RuntimeError;
 use crate::value::{SetEntries, Value};

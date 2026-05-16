@@ -10,7 +10,7 @@
 //! either a business envelope (`Pair<M, Option<ReplyTo<R>>>`) or
 //! a lifecycle event (`Lifecycle`). Arms self-discriminate by their
 //! envelope type, so no surface union plumbing is needed; v1's
-//! `process_msg_type` envelope hint is unnecessary in alpha because
+//! `process_msg_type` envelope hint is unnecessary because
 //! every arm carries the type explicitly. Arm bodies + the optional
 //! `after` body join under the same lattice as `match` / `cond`.
 
@@ -207,7 +207,7 @@ fn bind_receive_pattern(
     } = pattern
     else {
         diagnostics.push(Diagnostic::error(
-            "alpha receive arms must use a typed-binding pattern \
+            "receive arms must use a typed-binding pattern \
              (`name: Pair<M, Option<ReplyTo<R>>>` or `name: Lifecycle`)",
             pattern_span(pattern),
         ));
@@ -227,7 +227,7 @@ fn bind_receive_pattern(
     {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha receive only supports business (`Pair<M, Option<ReplyTo<R>>>`) and \
+                "receive only supports business (`Pair<M, Option<ReplyTo<R>>>`) and \
                  lifecycle (`Lifecycle`) arms (got `{}`)",
                 display_resolution(&resolved, resolver.registry),
             ),

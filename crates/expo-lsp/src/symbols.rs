@@ -78,7 +78,7 @@ impl Backend {
 
     /// Handles `workspace/symbol` requests by searching every open
     /// document (and its sibling project files) for symbols matching
-    /// the query. The alpha pipeline no longer maintains a separate
+    /// the query. The pipeline no longer maintains a separate
     /// project-files cache — sibling state lives in each document's
     /// `parsed` bundle, so we walk those instead.
     pub(crate) async fn handle_workspace_symbol(

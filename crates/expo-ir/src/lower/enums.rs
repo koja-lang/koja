@@ -16,13 +16,13 @@
 //! registry, then hands off to the per-shape helper based on the
 //! variant's declared payload.
 
-use expo_alpha_typecheck::{
-    EnumDefinition, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedVariantData,
-};
 use expo_ast::ast::{
     AnnotationKind, Diagnostic, EnumConstructionData, EnumDecl, EnumVariant, Expr, FieldInit,
 };
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_typecheck::{
+    EnumDefinition, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedVariantData,
+};
 
 use crate::enum_decl::{
     EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag,
@@ -73,14 +73,14 @@ pub(super) fn lower_enum_decl(
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Enum(Some(definition)) = &entry.kind else {
         panic!(
-            "alpha IR lower: enum `{identifier}` has no lifted definition — \
+            "IR lower: enum `{identifier}` has no lifted definition — \
              lift_signatures invariant violation",
         );
     };
     if definition.variants.len() > usize::from(u8::MAX) + 1 {
         output.diagnostics.push(Diagnostic::error(
             format!(
-                "alpha IR does not yet lower enums with more than {} variants \
+                "IR does not yet lower enums with more than {} variants \
                  (`{}` declares {})",
                 u8::MAX as usize + 1,
                 identifier,
@@ -154,7 +154,7 @@ pub(super) fn lower_enum_construction(
     let symbol = resolved_enum_symbol(expr_resolution, registry, &mut output.instantiations);
     let (variant_index, variant) = definition.lookup_variant(variant_name).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: enum `{}` has no variant `{variant_name}` — \
+            "IR lower: enum `{}` has no variant `{variant_name}` — \
              typecheck seal must have rejected this",
             entry.identifier,
         )
@@ -174,7 +174,7 @@ pub(super) fn lower_enum_construction(
             lower_struct_variant(target, declared, fields, ctx, block, registry, output)
         }
         (declared, supplied) => panic!(
-            "alpha IR lower: enum `{}.{variant_name}` payload shape mismatch \
+            "IR lower: enum `{}.{variant_name}` payload shape mismatch \
              (declared {declared:?}, supplied {supplied:?}) — typecheck seal violation",
             entry.identifier,
         ),
@@ -193,7 +193,7 @@ pub(super) fn resolved_enum_symbol(
     match resolved_type_to_ir_type(resolution, registry, instantiations) {
         IRType::Enum(symbol) => symbol,
         other => panic!(
-            "alpha IR lower: enum construction target lowered to `{other:?}`, expected \
+            "IR lower: enum construction target lowered to `{other:?}`, expected \
              IRType::Enum — typecheck seal must have caught this",
         ),
     }
@@ -249,7 +249,7 @@ fn lower_tuple_variant(
 
 fn lower_struct_variant(
     target: VariantTarget,
-    declared: &[expo_alpha_typecheck::ResolvedStructField],
+    declared: &[expo_typecheck::ResolvedStructField],
     fields: &[FieldInit],
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
@@ -281,17 +281,17 @@ pub(super) fn enum_entry_from_resolution<'a>(
         ..
     } = resolution
     else {
-        panic!("alpha IR lower: enum construction has Unresolved resolution after typecheck seal",);
+        panic!("IR lower: enum construction has Unresolved resolution after typecheck seal",);
     };
     registry.get(*id).unwrap_or_else(|| {
-        panic!("alpha IR lower: enum id {id} missing from registry — seal invariant violation",)
+        panic!("IR lower: enum id {id} missing from registry — seal invariant violation",)
     })
 }
 
 pub(super) fn enum_definition_from_entry(entry: &RegistryEntry) -> &EnumDefinition {
     let GlobalKind::Enum(Some(definition)) = &entry.kind else {
         panic!(
-            "alpha IR lower: enum construction target `{}` has no lifted definition — \
+            "IR lower: enum construction target `{}` has no lifted definition — \
              lift_signatures invariant violation",
             entry.identifier,
         );
@@ -307,7 +307,7 @@ fn has_feature_gap(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha IR does not yet lower annotations on enum items (`@{}` on `{}`)",
+                "IR does not yet lower annotations on enum items (`@{}` on `{}`)",
                 annotation.name, decl.name,
             ),
             annotation.span,
@@ -335,7 +335,7 @@ fn variant_has_feature_gap(
                 if field.default.is_some() {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "alpha IR does not yet lower default field values on struct \
+                            "IR does not yet lower default field values on struct \
                              variants (on `{enum_name}.{}.{}`)",
                             variant.name, field.name,
                         ),

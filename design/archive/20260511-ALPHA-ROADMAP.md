@@ -126,7 +126,7 @@ _None outstanding._
   calling `self.work()` against a function-typed struct field —
   alpha-typecheck only dispatches `recv.method(...)` through method
   lookup today. Adding field-as-callable fallback unblocks
-  `Global.process` for `ALPHA_AUTOIMPORT`; until then the primitives
+  `Global.process` for `AUTOIMPORT`; until then the primitives
   ship to user code via inline `Process` / `Ref` / `ReplyTo` decls
   and the `expo_rt_*` runtime ABI.
 
@@ -483,9 +483,9 @@ ceil_byte_count)` — `String` writes a trailing `\0`, `Bits`
   driver test that aliases `Crypto.SHA256` and runs through the
   LLVM backend.
 
-- **`ALPHA_QUALIFIED` — curated qualified stdlib subset.** Parallel
-  to `ALPHA_AUTOIMPORT`, lives in `expo-stdlib/build.rs` and is
-  re-exported via `alpha_qualified_sources()`. Seeded with the
+- **`QUALIFIED` — curated qualified stdlib subset.** Parallel
+  to `AUTOIMPORT`, lives in `expo-stdlib/build.rs` and is
+  re-exported via `qualified_sources()`. Seeded with the
   `Crypto` package; `expo-driver/src/alpha.rs::bundle_with_autoimport`
   and the alpha-typecheck test helper both prepend the qualified
   set so any alpha pipeline can `alias Crypto.Type` without a
@@ -531,7 +531,7 @@ send_after}` + `ReplyTo.send` against the corresponding
   `expo_rt_main_done` invocation in alpha's `main_wrapper`
   (without it, spawned processes never run after `main`
   returns; one-line addition to mirror v1 codegen), the
-  `Global.process` entry in `ALPHA_AUTOIMPORT` (gated on
+  `Global.process` entry in `AUTOIMPORT` (gated on
   `Task<R>.run` calling `self.work()` — see the field-as-callable
   gap above), and the `task_async` / `counter_call` /
   `receive_lifecycle` end-to-end driver tests originally
@@ -659,9 +659,9 @@ CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
   today — alpha trade-off for a simpler ABI).
 
 - **Stdlib auto-import + first stdlib files (`time` / `bitwise`).**
-  `expo-stdlib` exposes `ALPHA_AUTOIMPORT` (currently
+  `expo-stdlib` exposes `AUTOIMPORT` (currently
   `Global.time` + `Global.bitwise`) plus an
-  `alpha_autoimport_sources()` helper that converts the curated
+  `autoimport_sources()` helper that converts the curated
   list into `Vec<SourceFile>`. The driver's three single-file
   parse paths (`read_and_check`, `run_script_pipeline`,
   `run_check`) prepend the curated set before parsing, and every
@@ -787,7 +787,7 @@ null?,to_binary,to_string}`, `CString.to_string`,
     `Statement::Expr` of `Never` type emits
     `IRTerminator::Unreachable`. `Random` was extracted from
     `kernel.expo` into its own `random.expo` and held back from
-    `ALPHA_AUTOIMPORT`: its `bytes` body chains
+    `AUTOIMPORT`: its `bytes` body chains
     `String.to_binary`, which lives in `string.expo` (still far
     from alpha-ready — uses `for/in`, multi-pattern `match`, and
     `List<u8>`), so eagerly typechecking it as part of the
@@ -894,7 +894,7 @@ payload_values)` helper allocas the outer, GEPs through the
     `to_cstring` surfaces `RuntimeError::Unsupported`.
   - **`Random` rides on `string.expo`'s landing.** Now that
     `String.to_binary` is alpha-ready, `random.expo` returns to
-    `ALPHA_AUTOIMPORT` (after `Global.string`, since
+    `AUTOIMPORT` (after `Global.string`, since
     `Random.bytes` chains
     `expo_random_bytes(count).to_string().to_binary()`). The
     extern `expo_random_bytes` / `expo_random_int` symbols

@@ -11,10 +11,10 @@
 //! Mismatched arm types surface a diagnostic and the surface
 //! expression resolves to `Unresolved`.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

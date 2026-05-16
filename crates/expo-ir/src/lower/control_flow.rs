@@ -12,8 +12,8 @@
 //! freshly-emitted `Const::Unit` so every edge carries a
 //! type-matching arg.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{CondArm, Expr, Statement};
+use expo_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRTerminator};
 use crate::types::{IRType, ValueId};

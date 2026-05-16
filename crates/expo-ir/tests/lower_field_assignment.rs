@@ -17,8 +17,8 @@
 //! - Heap-typed leaf overwrite (`s.name = "new"`) emits a synthetic
 //!   `DropValue` of the prior payload before the rebuild.
 
-use expo_alpha_ir::{IRFunction, IRInstruction};
 use expo_ast::util::dedent;
+use expo_ir::{IRFunction, IRInstruction};
 
 mod common;
 

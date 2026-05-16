@@ -4,8 +4,8 @@
 //! `@intrinsic to_string` declaration — all reachable from user
 //! code that round-trips through `CPtr<UInt8>.to_cstring`.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

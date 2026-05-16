@@ -6,10 +6,10 @@
 //! stamps `Set<T>` and dispatches through the normal method-call
 //! resolver.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{ExprKind, Item, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

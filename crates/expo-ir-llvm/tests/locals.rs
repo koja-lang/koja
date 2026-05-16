@@ -1,15 +1,15 @@
 //! IR-text snapshot tests for the locals slice (`emit/instruction.rs`'s
 //! `LocalDecl` / `LocalRead` / `LocalWrite` arms). LLVM's mem2sas
 //! optimization pass would normally promote these stack slots to
-//! SSA values, but the alpha pipeline disables optimizations so the
+//! SSA values, but the pipeline disables optimizations so the
 //! raw `alloca`/`store`/`load` sequence is observable in the
 //! emitted module text.
 //!
 //! Substring (not full-text) assertions because inkwell may
 //! reorder attributes / metadata between LLVM patch versions.
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 

@@ -1,13 +1,13 @@
 //! Eval coverage for `Int.parse(input: String) -> Result<Int, String>`
 //! and `Float.parse(input: String) -> Result<Float, String>` (the
-//! pure-Rust shims surfaced through `expo-alpha-ir-eval`'s
+//! pure-Rust shims surfaced through `expo-ir-eval`'s
 //! `intrinsics/parse.rs`). The Result enum is materialized directly
 //! off `function.return_type`; `Ok(value)` lands as a tuple-payload
 //! enum variant, `Err(message)` carries a `Value::String` byte
 //! payload over the same enum.
 
-use expo_alpha_ir_eval::{EnumPayload, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{EnumPayload, Value};
 
 mod common;
 

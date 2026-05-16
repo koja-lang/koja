@@ -1,14 +1,14 @@
 //! `Kernel.panic(message: String)` — abort the process with a
 //! diagnostic. v1 routed panic through the runtime's symbolicated
-//! stack-trace helper; alpha keeps the same surface (calls
-//! `__expo_alpha_panic` with the message) and falls back to libc
+//! stack-trace helper; we keep the same surface (calls
+//! `__expo_panic` with the message) and falls back to libc
 //! `abort` if the helper isn't linked. Either way the body ends in
 //! `unreachable` so LLVM treats the call as divergent — paired with
 //! the IR-level `Statement::Expr` Never-detection that caps the
 //! enclosing block with `IRTerminator::Unreachable`, the typed
 //! Never return is preserved end to end.
 
-use expo_alpha_ir::IRFunction;
+use expo_ir::IRFunction;
 use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;

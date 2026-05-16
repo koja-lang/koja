@@ -205,7 +205,7 @@ pub struct IRBasicBlock {
 }
 
 /// A typed entry-argument of an [`IRBasicBlock`]. Block parameters
-/// are the SSA join model alpha-IR uses in place of phi nodes:
+/// are the SSA join model IR uses in place of phi nodes:
 /// values flow into a block along its incoming edges via the
 /// terminating [`BranchTarget::args`] at each predecessor, and the
 /// block's body sees the joined value as a normal `ValueId`. The
@@ -277,7 +277,7 @@ pub enum IRInstruction {
     /// `bit_offset % 8` to choose between inline byte-aligned
     /// packing (fast path: integer byte-shift loop, float bit-cast
     /// then byte-shift, string `memcpy`) and the runtime
-    /// `__expo_alpha_pack_bits` helper (sub-byte shape).
+    /// `__expo_pack_bits` helper (sub-byte shape).
     BinaryConstruct {
         dest: ValueId,
         layout: ResolvedBinaryLayout,
@@ -335,7 +335,7 @@ pub enum IRInstruction {
     /// the LLVM emission shape differs:
     ///
     /// - `String` / `Binary`: inline `malloc` + two `memcpy`s.
-    /// - `Bits`: extern `__expo_alpha_concat_bits` runtime helper
+    /// - `Bits`: extern `__expo_concat_bits` runtime helper
     ///   (sub-byte alignment is far cleaner in Rust than LLVM IR).
     ///
     /// Result is freshly-allocated owned heap storage with the same
@@ -611,7 +611,7 @@ pub struct ReceiveArm {
 /// Envelope kind a receive arm matches. The runtime tags every
 /// message with a single byte at offset 0 and places the payload
 /// at offset 8; `Business == 0`, `Lifecycle == 1`. (`IORead == 2`
-/// is reserved for the future I/O fast path; alpha doesn't emit
+/// is reserved for the future I/O fast path; the pipeline does not yet emit
 /// it.)
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiveTag {

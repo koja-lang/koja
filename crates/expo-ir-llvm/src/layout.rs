@@ -17,7 +17,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{IRSymbol, IRType, IRVariantPayload, IRVariantTag};
+use expo_ir::{IRSymbol, IRType, IRVariantPayload, IRVariantTag};
 use inkwell::OptimizationLevel;
 use inkwell::module::Module;
 use inkwell::targets::{
@@ -51,7 +51,7 @@ pub(crate) struct VariantLayout<'ctx> {
 /// LLVM layout of a single union decl. `outer` is the
 /// `{ i8 tag, [N x i8] payload }` named struct; `payload_size`
 /// is `N` (the byte width of the largest member, cached on
-/// [`expo_alpha_ir::IRUnionDecl::max_payload_size`]). See
+/// [`expo_ir::IRUnionDecl::max_payload_size`]). See
 /// [`unions`] for layout details.
 pub(crate) struct UnionLayout<'ctx> {
     pub(crate) outer: StructType<'ctx>,
@@ -76,7 +76,7 @@ pub(crate) struct TypeLayouts<'ctx> {
     /// indexed by the same symbol as `enum_layouts`. Retained
     /// post-layout so intrinsic emitters can resolve "the `Ok`
     /// variant's first field of `Result_$R.E$` is `R`" without
-    /// reaching back into the program-level [`expo_alpha_ir::IREnumDecl`]
+    /// reaching back into the program-level [`expo_ir::IREnumDecl`]
     /// registry. Mirrors `struct_fields` for struct-shaped data.
     enum_variant_payloads: RefCell<BTreeMap<IRSymbol, Vec<IRVariantPayload>>>,
     union_layouts: RefCell<BTreeMap<IRSymbol, UnionLayout<'ctx>>>,
@@ -105,7 +105,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.struct_types.borrow_mut();
         if map.insert(symbol.clone(), ty).is_some() {
             panic!(
-                "alpha LLVM emit: struct type `{symbol}` registered twice — \
+                "LLVM emit: struct type `{symbol}` registered twice — \
                  lower / merge invariant violation",
             );
         }
@@ -114,7 +114,7 @@ impl<'ctx> TypeLayouts<'ctx> {
     pub(crate) fn struct_type(&self, mangled: &str) -> StructType<'ctx> {
         *self.struct_types.borrow().get(mangled).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: struct type `{mangled}` not registered — \
+                "LLVM emit: struct type `{mangled}` not registered — \
                      pre-emit ordering violation",
             )
         })
@@ -124,7 +124,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.struct_fields.borrow_mut();
         if map.insert(symbol.clone(), fields).is_some() {
             panic!(
-                "alpha LLVM emit: struct fields for `{symbol}` registered twice — \
+                "LLVM emit: struct fields for `{symbol}` registered twice — \
                  lower / merge invariant violation",
             );
         }
@@ -137,13 +137,13 @@ impl<'ctx> TypeLayouts<'ctx> {
         let map = self.struct_fields.borrow();
         let fields = map.get(struct_symbol).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: struct fields for `{struct_symbol}` not registered — \
+                "LLVM emit: struct fields for `{struct_symbol}` not registered — \
                  pre-emit ordering violation",
             )
         });
         fields.get(index).cloned().unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: struct `{struct_symbol}` has no field at index {index} — \
+                "LLVM emit: struct `{struct_symbol}` has no field at index {index} — \
                  IR seal invariant violation",
             )
         })
@@ -153,7 +153,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.enum_layouts.borrow_mut();
         if map.insert(symbol.clone(), layout).is_some() {
             panic!(
-                "alpha LLVM emit: enum layout `{symbol}` registered twice — \
+                "LLVM emit: enum layout `{symbol}` registered twice — \
                  lower / merge invariant violation",
             );
         }
@@ -167,7 +167,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.enum_variant_payloads.borrow_mut();
         if map.insert(symbol.clone(), payloads).is_some() {
             panic!(
-                "alpha LLVM emit: enum variant payloads for `{symbol}` registered twice — \
+                "LLVM emit: enum variant payloads for `{symbol}` registered twice — \
                  lower / merge invariant violation",
             );
         }
@@ -184,7 +184,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let map = self.enum_variant_payloads.borrow();
         let payloads = map.get(enum_symbol).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: enum variant payloads for `{enum_symbol}` not registered — \
+                "LLVM emit: enum variant payloads for `{enum_symbol}` not registered — \
                  pre-emit ordering violation",
             )
         });
@@ -193,7 +193,7 @@ impl<'ctx> TypeLayouts<'ctx> {
             .cloned()
             .unwrap_or_else(|| {
                 panic!(
-                    "alpha LLVM emit: enum `{enum_symbol}` has no variant at tag {tag} — \
+                    "LLVM emit: enum `{enum_symbol}` has no variant at tag {tag} — \
                      IR seal invariant violation",
                 )
             })
@@ -209,7 +209,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let map = self.enum_layouts.borrow();
         let layout = map.get(mangled).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: enum layout `{mangled}` not registered — \
+                "LLVM emit: enum layout `{mangled}` not registered — \
                  pre-emit ordering violation",
             )
         });
@@ -227,7 +227,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         self.with_enum_layout(mangled, |layout| {
             let variant = layout.variants.get(usize::from(tag.0)).unwrap_or_else(|| {
                 panic!(
-                    "alpha LLVM emit: enum `{mangled}` has no variant at tag {tag} — \
+                    "LLVM emit: enum `{mangled}` has no variant at tag {tag} — \
                      IR seal invariant violation",
                 )
             });
@@ -239,7 +239,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.union_layouts.borrow_mut();
         if map.insert(symbol.clone(), layout).is_some() {
             panic!(
-                "alpha LLVM emit: union layout `{symbol}` registered twice — \
+                "LLVM emit: union layout `{symbol}` registered twice — \
                  lower / merge invariant violation",
             );
         }
@@ -252,7 +252,7 @@ impl<'ctx> TypeLayouts<'ctx> {
         let map = self.union_layouts.borrow();
         let layout = map.get(mangled).unwrap_or_else(|| {
             panic!(
-                "alpha LLVM emit: union layout `{mangled}` not registered — \
+                "LLVM emit: union layout `{mangled}` not registered — \
                  pre-emit ordering violation",
             )
         });
@@ -265,10 +265,10 @@ impl<'ctx> TypeLayouts<'ctx> {
 /// numbers fed into enum sizing match the eventual object output.
 fn host_target_data() -> TargetData {
     Target::initialize_native(&InitializationConfig::default())
-        .expect("alpha LLVM emit: failed to initialize native target");
+        .expect("LLVM emit: failed to initialize native target");
     let triple = TargetMachine::get_default_triple();
     let target = Target::from_triple(&triple)
-        .expect("alpha LLVM emit: failed to resolve native target from triple");
+        .expect("LLVM emit: failed to resolve native target from triple");
     let cpu = TargetMachine::get_host_cpu_name().to_string();
     let features = TargetMachine::get_host_cpu_features().to_string();
     let machine = target
@@ -280,6 +280,6 @@ fn host_target_data() -> TargetData {
             RelocMode::Default,
             CodeModel::Default,
         )
-        .expect("alpha LLVM emit: failed to create native target machine");
+        .expect("LLVM emit: failed to create native target machine");
     machine.get_target_data()
 }

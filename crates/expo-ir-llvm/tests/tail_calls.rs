@@ -4,8 +4,8 @@
 //! that the back-edge stores the new args into the parameter
 //! slot's `alloca` before branching back to the loop header.
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 

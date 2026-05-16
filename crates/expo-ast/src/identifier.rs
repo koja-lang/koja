@@ -66,7 +66,7 @@ impl fmt::Display for Identifier {
     }
 }
 
-/// Opaque handle into the alpha typecheck crate's `GlobalRegistry`.
+/// Opaque handle into the typecheck crate's `GlobalRegistry`.
 ///
 /// Assigned by the registry at insertion time (sequential `u32`s in the
 /// current implementation). Callers treat it as opaque: they never
@@ -100,7 +100,7 @@ impl fmt::Display for GlobalRegistryId {
 }
 
 /// Opaque per-function handle for a local binding (parameter or
-/// `let`-introduced variable). Minted by alpha typecheck's `LocalScope`
+/// `let`-introduced variable). Minted by typecheck's `LocalScope`
 /// when a fresh name enters scope; carried by [`Resolution::Local`] on
 /// every reference site to that binding within the same function.
 ///
@@ -185,7 +185,7 @@ impl Resolution {
     }
 }
 
-/// Northstar-aligned type annotation attached to every `Expr` by alpha
+/// Northstar-aligned type annotation attached to every `Expr` by the typecheck pass
 /// typecheck.
 ///
 /// Split along the named/anonymous axis:
@@ -220,7 +220,7 @@ pub enum ResolvedType {
     /// Anonymous union of two or more types: `A | B`. Members are
     /// kept in canonical order (sorted by display, deduped, with
     /// nested unions and aliases peeled and flattened) by the
-    /// `canonical_union` constructor in alpha typecheck — the
+    /// `canonical_union` constructor in typecheck — the
     /// invariant lets equality compare member vectors elementwise.
     /// A named alias `type Pet = ...` is *not* this variant; it
     /// stays as `Named { Global(alias_id), [] }` and only peels to

@@ -41,7 +41,7 @@ pub(super) fn resolve_or_pattern(
         if !is_admitted_or_alternative(alternative) {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha typecheck only admits literal / enum-unit alternatives in \
+                    "typecheck only admits literal / enum-unit alternatives in \
                      or-patterns (got `{}`)",
                     pattern_kind_label(alternative),
                 ),

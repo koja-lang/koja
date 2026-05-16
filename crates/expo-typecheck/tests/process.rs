@@ -14,29 +14,29 @@
 //! - The receive arm binding stamps a `LocalId` on the typed
 //!   binding so IR lower can reach it.
 //!
-//! `Global.process` is not yet in `ALPHA_AUTOIMPORT`; tests prepend
+//! `Global.process` is not yet in `AUTOIMPORT`; tests prepend
 //! a minimal stub that declares the surface this slice cares about
 //! (`Lifecycle`, `StopReason`, `Step`, `ReplyTo`, `Ref`, and the
 //! `Process<C, M, R>` protocol) until step 5 of the
-//! alpha-concurrency-process plan flips the autoimport switch on the
-//! full `process.expo`. The full file pulls in shapes the alpha
+//! concurrency plan flips the autoimport switch on the
+//! full `process.expo`. The full file pulls in shapes the new pipeline
 //! pipeline doesn't support yet (`self.work()` field-as-callee in
 //! `Task<R>::run`); the stub keeps us focused on the spawn/receive
 //! surface this slice owns.
 
 use std::path::PathBuf;
 
-use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
 use expo_ast::ast::{ExprKind, Function, Item, Pattern, Statement};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::{CheckFailure, CheckedProgram, check_program};
 
 const PACKAGE: &str = "TestApp";
 
-/// Minimal alpha-friendly stub of `process.expo`. Provides every
+/// Minimal stub of `process.expo`. Provides every
 /// type referenced in this slice's spawn/receive surface; the full
-/// `process.expo` is pulled in via `ALPHA_AUTOIMPORT` after step 5.
+/// `process.expo` is pulled in via `AUTOIMPORT` after step 5.
 const PROCESS_STUB: &str = "
 enum Lifecycle
   Shutdown
@@ -84,7 +84,7 @@ end
 fn typecheck(source: &str) -> CheckedProgram {
     parse_and_check(source).unwrap_or_else(|failure| {
         panic!(
-            "alpha typecheck failed: {} diagnostic(s):\n{}",
+            "typecheck failed: {} diagnostic(s):\n{}",
             failure.diagnostics.len(),
             failure
                 .diagnostics
@@ -97,11 +97,11 @@ fn typecheck(source: &str) -> CheckedProgram {
 }
 
 fn typecheck_fail(source: &str) -> CheckFailure {
-    parse_and_check(source).expect_err("expected alpha typecheck to fail")
+    parse_and_check(source).expect_err("expected typecheck to fail")
 }
 
 fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    let mut sources = expo_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: "Global".to_string(),
         path: PathBuf::from("<Global.process>"),

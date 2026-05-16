@@ -99,7 +99,7 @@ impl LiteralCoercion {
 }
 
 /// Per-expression value-conversion coercion. Each variant pairs
-/// 1:1 with an `IRInstruction::*` variant that the alpha IR lowerer
+/// 1:1 with an `IRInstruction::*` variant that the IR lowerer
 /// emits at the annotated site. See module doc for the full design
 /// contract (annotation vs literal-fit width).
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]

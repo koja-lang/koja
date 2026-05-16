@@ -1,8 +1,8 @@
-//! Interactive REPL for the alpha pipeline.
+//! Interactive REPL for the pipeline.
 //!
-//! `expo-alpha-shell` owns the alpha-side REPL: it accumulates user input
+//! `expo-shell` owns the runtime-side REPL: it accumulates user input
 //! into a [`Session`], re-runs the whole session through
-//! `expo-parser → expo-alpha-typecheck → expo-alpha-ir → expo-alpha-ir-eval`
+//! `expo-parser → expo-typecheck → expo-ir → expo-ir-eval`
 //! on every step, and prints the trailing expression's value (if any).
 //! Each fragment is lowered as a script (`lower_script` →
 //! `Interpreter::run_script`); top-level expressions and assignments
@@ -10,21 +10,21 @@
 //! helper functions in the script's package fragment.
 //!
 //! REPL fragments have no file dimension, so the shell bypasses the
-//! `.exps` / `.expo` extension dispatch that `expo alpha {build,run,
+//! `.exps` / `.expo` extension dispatch that `expo {build,run,
 //! eval,check}` use — every fragment is unconditionally script-mode.
 //!
 //! This crate is self-contained: it owns its own pipeline driver and depends
-//! directly on the alpha pipeline crates, with no path back through
+//! directly on the pipeline crates, with no path back through
 //! `expo-driver`. Today's only public surface is [`run`] (the REPL entry
 //! point); when the shell grows file-input support it will gain an
 //! `eval_source`-style helper that the driver's `cmd_run --backend=interpreter`
 //! path can delegate to.
 //!
 //! Mirrors the v1 [`expo-shell`](https://docs.rs/expo-shell) crate's role
-//! relative to `expo eval` / `expo shell` — the alpha namespace is a clean
+//! relative to `expo eval` / `expo shell` — the mangled namespace is a clean
 //! cut from v1, not an evolution of it.
 //!
-//! Today's scope mirrors `expo-alpha-typecheck` / `expo-alpha-ir`:
+//! Today's scope mirrors `expo-typecheck` / `expo-ir`:
 //! integer literals, integer arithmetic (`+ - * / %`), boolean and
 //! comparison operators, and parenthesized groups. Richer constructs
 //! typecheck-error with a precise diagnostic.
@@ -33,23 +33,23 @@ use std::io::{self, IsTerminal, Write};
 use std::path::PathBuf;
 use std::process;
 
-use expo_alpha_ir::{IRScript, lower_script};
-use expo_alpha_ir_eval::{Interpreter, Value};
-use expo_alpha_typecheck::{CheckFailure, check_program};
 use expo_ast::ast::Diagnostic;
 use expo_ast::token::TokenKind;
+use expo_ir::{IRScript, lower_script};
+use expo_ir_eval::{Interpreter, Value};
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
+use expo_typecheck::{CheckFailure, check_program};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 
 /// Synthetic package name for the REPL session. The session re-runs
-/// the entire concatenated input history through the alpha pipeline
+/// the entire concatenated input history through the pipeline
 /// on every step; the package label flows through into any helper
 /// functions the user defines via top-level `fn` items.
 const SESSION_PACKAGE: &str = "REPL";
 
-const BANNER: &str = "expo alpha shell -- alpha IR interpreter\n\
+const BANNER: &str = "expo shell -- IR interpreter\n\
     Type :help for commands, :quit (or Ctrl-D) to exit\n";
 
 const HELP: &str = "Commands:\n  \
@@ -235,8 +235,8 @@ fn erase_current_line() {
 /// Accumulating REPL state. Each new input pushes one statement-text
 /// block; [`Session::try_eval`] concatenates the entire history into
 /// a single source string, parses it in [`ParseMode::Script`], and
-/// drives it through the alpha pipeline as an [`expo_alpha_ir::IRScript`]:
-/// `expo_alpha_ir::lower_script` produces an implicit-function body
+/// drives it through the pipeline as an [`expo_ir::IRScript`]:
+/// `expo_ir::lower_script` produces an implicit-function body
 /// for the top-level statements, and `Interpreter::run_script` runs
 /// it. Helper `fn` items the user defines land as helpers on
 /// `IRScript.packages`.
@@ -312,7 +312,7 @@ impl Session {
     }
 
     /// Synthesize the full session source and drive it through the
-    /// alpha pipeline. Returns both the sealed [`IRScript`] and the
+    /// pipeline. Returns both the sealed [`IRScript`] and the
     /// trailing value so the caller can dispatch follow-up helpers
     /// (e.g. `Debug.format` auto-print) without re-lowering.
     fn run(&self) -> Result<(IRScript, Value), String> {
@@ -330,7 +330,7 @@ impl Session {
     }
 }
 
-/// Run one source string end-to-end through the script-mode alpha
+/// Run one source string end-to-end through the script-mode
 /// pipeline. Returns the sealed [`IRScript`] alongside the trailing
 /// value so the caller can dispatch follow-up helpers (e.g.
 /// `Debug.format` auto-print) without re-lowering. On failure
@@ -339,15 +339,15 @@ impl Session {
 ///
 /// Always parses in [`ParseMode::Script`]: the REPL treats top-level
 /// statements as first-class. Helper `fn` items land on
-/// [`expo_alpha_ir::IRScript::packages`] for [`Interpreter::run_script`]
+/// [`expo_ir::IRScript::packages`] for [`Interpreter::run_script`]
 /// to resolve as call targets.
 ///
-/// Prepends [`expo_stdlib::alpha_autoimport_sources`] so REPL input
-/// sees the same `Global.*` prelude the driver and alpha tests do —
+/// Prepends [`expo_stdlib::autoimport_sources`] so REPL input
+/// sees the same `Global.*` prelude the driver and tests do —
 /// `Duration.from_secs(3).millis()` and `0b1100.band(0b1010)` work
 /// at the prompt without any imports.
 fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<(IRScript, Value), String> {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
+    let mut sources = expo_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: package.to_string(),
         path,

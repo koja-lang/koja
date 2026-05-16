@@ -1,12 +1,12 @@
 //! `@intrinsic Global.print(s: String) -> Unit` — synthesize a body
-//! that calls into the existing `__expo_alpha_print_string` runtime
+//! that calls into the existing `__expo_print_string` runtime
 //! helper. Same target the auto-print scaffolding uses for
 //! `IRType::String` trailings, so the runtime contract (read v1
 //! header at `ptr - 8`, write payload + trailing newline) is shared
 //! between user-level `print(...)` calls and the temporary
 //! auto-print wrapper.
 
-use expo_alpha_ir::IRFunction;
+use expo_ir::IRFunction;
 use inkwell::AddressSpace;
 use inkwell::values::FunctionValue;
 

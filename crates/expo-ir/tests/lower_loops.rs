@@ -30,8 +30,8 @@
 //! into the same while + match shape; [`for_lowers_via_desugar_to_while_plus_match`]
 //! pins the resulting IR end-to-end.
 
-use expo_alpha_ir::{BranchTarget, IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{BranchTarget, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
@@ -163,7 +163,7 @@ fn while_exit_block_emits_unit_and_continues_flow() {
         exit.instructions.iter().any(|i| matches!(
             i,
             IRInstruction::Const {
-                value: expo_alpha_ir::ConstValue::Unit,
+                value: expo_ir::ConstValue::Unit,
                 ..
             }
         )),
@@ -437,7 +437,7 @@ fn loop_with_break_lowers_break_as_branch_to_loop_exit() {
         exit.instructions.iter().any(|i| matches!(
             i,
             IRInstruction::Const {
-                value: expo_alpha_ir::ConstValue::Unit,
+                value: expo_ir::ConstValue::Unit,
                 ..
             }
         )),

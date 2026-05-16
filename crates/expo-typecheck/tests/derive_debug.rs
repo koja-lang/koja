@@ -1,5 +1,5 @@
 //! Coverage for the `derive_debug` synthesizer in
-//! [`expo_alpha_typecheck::pipeline::synthesize::derive_debug`]. Each
+//! [`expo_typecheck::pipeline::synthesize::derive_debug`]. Each
 //! test pins one body shape — struct with primitive fields, enum
 //! with mixed variant data, opaque-typed fields rendering as
 //! `"..."`, and the package-wide existing-impl scan that suppresses
@@ -17,7 +17,7 @@ use common::typecheck_file as typecheck;
 /// package and return the body's string parts. Panics if the type
 /// has no Debug impl or its `format` body isn't a string expression.
 fn format_string_parts(
-    checked: &expo_alpha_typecheck::CheckedProgram,
+    checked: &expo_typecheck::CheckedProgram,
     type_name: &str,
 ) -> Vec<StringPart> {
     let pkg = checked

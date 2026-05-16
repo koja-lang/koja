@@ -1,16 +1,16 @@
 [package]
-name = "expo-alpha-ir-eval"
-description = "Tree-walking interpreter for sealed expo-alpha-ir IRPrograms"
+name = "expo-ir-eval"
+description = "Tree-walking interpreter for sealed expo-ir IRPrograms"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [dependencies]
-expo-alpha-ir = { path = "../expo-alpha-ir" }
+expo-ir = { path = "../expo-ir" }
 expo-runtime = { path = "../expo-runtime" }
 
 [dev-dependencies]
-expo-alpha-typecheck = { path = "../expo-alpha-typecheck" }
 expo-ast = { path = "../expo-ast" }
 expo-parser = { path = "../expo-parser" }
 expo-stdlib = { path = "../expo-stdlib" }
+expo-typecheck = { path = "../expo-typecheck" }

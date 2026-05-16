@@ -97,7 +97,7 @@ fn resolve_segment(
     if let Some(byte_length) = string_segment_byte_length(segment) {
         if segment.size.is_some() || segment.type_ann.is_some() {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: a `String`-valued binary pattern segment cannot \
+                "typecheck: a `String`-valued binary pattern segment cannot \
                  carry a `::N` size or `:Type` annotation",
                 segment.span,
             ));
@@ -172,7 +172,7 @@ fn resolve_segment(
         }
         _ => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: binary pattern segment must be a literal, an \
+                "typecheck: binary pattern segment must be a literal, an \
                  identifier binding, `_`, or a string literal",
                 segment.span,
             ));
@@ -248,7 +248,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
     if let Some(size_expr) = &segment.size {
         if segment.unit == BinaryUnit::Byte {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: `::N byte` segment size is not supported in binary \
+                "typecheck: `::N byte` segment size is not supported in binary \
                  patterns (use `::M` bits instead)",
                 segment.span,
             ));
@@ -261,7 +261,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
                 Ok(parsed) => parsed,
                 Err(_) => {
                     diagnostics.push(Diagnostic::error(
-                        format!("alpha typecheck: invalid binary segment size literal `{n}`"),
+                        format!("typecheck: invalid binary segment size literal `{n}`"),
                         size_expr.span,
                     ));
                     return None;
@@ -269,7 +269,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
             },
             _ => {
                 diagnostics.push(Diagnostic::error(
-                    "alpha typecheck does not yet support dynamic-width binary pattern \
+                    "typecheck does not yet support dynamic-width binary pattern \
                      segments (`::n` where `n` is not a literal int)",
                     size_expr.span,
                 ));
@@ -278,7 +278,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
         };
         if bits == 0 {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: a binary segment must carry at least 1 bit",
+                "typecheck: a binary segment must carry at least 1 bit",
                 segment.span,
             ));
             return None;
@@ -289,7 +289,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
     if let Some(type_ann) = &segment.type_ann {
         let TypeExpr::Named { path, .. } = type_ann else {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck: binary pattern segment type annotation must be a \
+                "typecheck: binary pattern segment type annotation must be a \
                  primitive name",
                 segment.span,
             ));
@@ -303,7 +303,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
             "Int64" | "UInt64" => Some(64),
             "Float32" | "Float64" => {
                 diagnostics.push(Diagnostic::error(
-                    "alpha typecheck does not yet support float-extract binary pattern \
+                    "typecheck does not yet support float-extract binary pattern \
                      segments (use a sized integer or an unsigned bit width)",
                     segment.span,
                 ));
@@ -312,7 +312,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
             other => {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "alpha typecheck: binary pattern segment type annotation \
+                        "typecheck: binary pattern segment type annotation \
                          `{other}` is not a recognized primitive (expected one of: \
                          Int8/16/32/64, UInt8/16/32/64)",
                     ),

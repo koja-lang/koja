@@ -86,7 +86,7 @@ pub(super) fn seal_expr(expr: &Expr) {
         // resolve diagnoses expression-position fors; seal should
         // never see one.
         ExprKind::For { .. } => seal_panic(
-            "alpha typecheck seal saw an `ExprKind::For` after synthesize",
+            "typecheck seal saw an `ExprKind::For` after synthesize",
             expr.span,
         ),
         ExprKind::Group { expr: inner } => seal_expr(inner),
@@ -258,7 +258,7 @@ fn seal_receive_arm(arm: &MatchArm) {
         }
         other => seal_panic(
             &format!(
-                "alpha typecheck seal expected a typed-binding receive arm pattern, got `{}`",
+                "typecheck seal expected a typed-binding receive arm pattern, got `{}`",
                 pattern_kind_label(other),
             ),
             pattern_span(&arm.pattern),

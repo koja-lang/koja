@@ -3,7 +3,7 @@
 //!
 //! - `Global.print` registers as an emitter that synthesizes a
 //!   `define void @"Global.print"(ptr ...) { ... call void
-//!   @__expo_alpha_print_string(ptr ...); ret void }` shape;
+//!   @__expo_print_string(ptr ...); ret void }` shape;
 //! - the script body's call site routes through `call void
 //!   @"Global.print"(ptr ...)`;
 //! - the spawn-driven main trampoline lands `ret i64 0` after the
@@ -13,9 +13,9 @@
 //! Byte-for-byte stdout coverage lives in the lang golden suite;
 //! here we pin the static IR shape.
 
-use expo_alpha_ir::IRScript;
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir::IRScript;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
@@ -42,7 +42,7 @@ fn print_intrinsic_emits_define_void_with_runtime_call() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "define void @Global.print(ptr");
-    assert_contains(&ir_text, "call void @__expo_alpha_print_string(ptr");
+    assert_contains(&ir_text, "call void @__expo_print_string(ptr");
     assert_contains(&ir_text, "ret void");
 }
 
@@ -68,7 +68,7 @@ fn user_main_runs_print_intrinsic_then_returns_void() {
     // auto-print removed, `__expo_user_main` is the spawn thunk
     // carrying the user body; it should invoke `Global.print` and
     // cap with `ret void`. The trampoline `@main` separately holds
-    // `ret i64 0` and never invokes `__expo_alpha_print_*` directly
+    // `ret i64 0` and never invokes `__expo_print_*` directly
     // — the runtime printer is called only from inside
     // `Global.print`'s synthesized body.
     let source = "
@@ -97,13 +97,13 @@ fn user_main_runs_print_intrinsic_then_returns_void() {
     // The runtime printer must NOT appear directly in
     // `__expo_user_main` — it's reached only via `Global.print`.
     assert!(
-        !user_main_body.contains("__expo_alpha_print_"),
+        !user_main_body.contains("__expo_print_"),
         "expected `__expo_user_main` not to call the runtime printer directly; got:\n{user_main_body}",
     );
 
     let trampoline_body = extract_function_body(&ir_text, "main");
     assert!(
-        !trampoline_body.contains("__expo_alpha_print_"),
+        !trampoline_body.contains("__expo_print_"),
         "expected `@main` trampoline not to call the runtime printer directly; got:\n{trampoline_body}",
     );
 }

@@ -11,16 +11,16 @@
 //!
 //! Move tracking is deferred — field reads produce a value of the
 //! field's IRType without invalidating the receiver, matching v1
-//! and the alpha resolve sub-pass. Tightening lands with the
+//! and the resolve sub-pass. Tightening lands with the
 //! ownership slice.
 
 use std::collections::BTreeMap;
 
-use expo_alpha_typecheck::{
-    GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
-};
 use expo_ast::ast::{AnnotationKind, Diagnostic, Expr, FieldInit, StructDecl, StructField};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_typecheck::{
+    GlobalKind, GlobalRegistry, RegistryEntry, ResolvedStructField, StructDefinition,
+};
 
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
@@ -38,7 +38,7 @@ use super::package::resolved_type_to_ir_type;
 /// [`GlobalKind::Struct`] entry on the registry already carries the
 /// canonical field layout — this helper just stamps the positional
 /// indices and translates each field's
-/// [`expo_alpha_typecheck::ResolvedStructField::ty`] into an
+/// [`expo_typecheck::ResolvedStructField::ty`] into an
 /// [`IRType`].
 pub(super) fn lower_struct_decl(
     decl: &StructDecl,
@@ -53,7 +53,7 @@ pub(super) fn lower_struct_decl(
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(
-            "alpha IR lower: struct `{identifier}` has no lifted definition — \
+            "IR lower: struct `{identifier}` has no lifted definition — \
              lift_signatures invariant violation",
         );
     };
@@ -116,7 +116,7 @@ pub(super) fn resolved_struct_symbol(
     match resolved_type_to_ir_type(resolution, registry, instantiations) {
         IRType::Struct(symbol) => symbol,
         other => panic!(
-            "alpha IR lower: struct construction target lowered to `{other:?}`, expected \
+            "IR lower: struct construction target lowered to `{other:?}`, expected \
              IRType::Struct — typecheck seal must have caught this",
         ),
     }
@@ -153,7 +153,7 @@ pub(super) fn canonicalize_struct_inits(
     for (index, decl_field) in declared.iter().enumerate() {
         let value = values_by_name.remove(&decl_field.name).unwrap_or_else(|| {
             panic!(
-                "alpha IR lower: named-field construction missing field `{}` after typecheck \
+                "IR lower: named-field construction missing field `{}` after typecheck \
                  seal — resolve invariant violation",
                 decl_field.name,
             )
@@ -183,7 +183,7 @@ pub(super) fn lower_field_access(
         struct_definition_from_resolution(&receiver.resolution, registry, "field access");
     let (field_index, _) = definition.lookup_field(field).unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: field access missing field `{field}` after typecheck seal — \
+            "IR lower: field access missing field `{field}` after typecheck seal — \
              resolve invariant violation",
         )
     });
@@ -215,10 +215,10 @@ fn struct_entry_from_resolution<'a>(
         ..
     } = resolution
     else {
-        panic!("alpha IR lower: struct {role} has Unresolved resolution after typecheck seal",);
+        panic!("IR lower: struct {role} has Unresolved resolution after typecheck seal",);
     };
     registry.get(*id).unwrap_or_else(|| {
-        panic!("alpha IR lower: struct id {id} missing from registry — seal invariant violation",)
+        panic!("IR lower: struct id {id} missing from registry — seal invariant violation",)
     })
 }
 
@@ -230,7 +230,7 @@ pub(super) fn struct_definition_from_resolution<'a>(
     let entry = struct_entry_from_resolution(resolution, registry, role);
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(
-            "alpha IR lower: struct {role} target `{}` has no lifted definition — \
+            "IR lower: struct {role} target `{}` has no lifted definition — \
              lift_signatures invariant violation",
             entry.identifier,
         );
@@ -249,7 +249,7 @@ fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool
         }
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha IR does not yet lower annotations on struct items (`@{}` on `{}`)",
+                "IR does not yet lower annotations on struct items (`@{}` on `{}`)",
                 annotation.name, decl.name,
             ),
             annotation.span,
@@ -272,7 +272,7 @@ fn field_has_feature_gap(
     if field.default.is_some() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "alpha IR does not yet lower default field values (on `{struct_name}.{}`)",
+                "IR does not yet lower default field values (on `{struct_name}.{}`)",
                 field.name,
             ),
             field.span,

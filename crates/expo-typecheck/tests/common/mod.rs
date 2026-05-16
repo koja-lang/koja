@@ -1,4 +1,4 @@
-//! Shared test scaffolding for the alpha-typecheck integration test
+//! Shared test scaffolding for the typecheck integration test
 //! suite. Each `tests/*.rs` file is a separate Cargo test binary, so
 //! anything pulled in here lives behind a `mod common;` in the test
 //! file. The directory form (`tests/common/mod.rs` rather than
@@ -34,9 +34,9 @@
 
 use std::path::PathBuf;
 
-use expo_alpha_typecheck::{CheckFailure, CheckedProgram, check_program};
 use expo_ast::ast::Severity;
 use expo_parser::{ParseMode, SourceFile, parse_program};
+use expo_typecheck::{CheckFailure, CheckedProgram, check_program};
 
 pub const PACKAGE: &str = "TestApp";
 
@@ -59,7 +59,7 @@ pub fn typecheck_script_fail(source: &str) -> CheckFailure {
 pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     parse_and_check(source, mode).unwrap_or_else(|failure| {
         panic!(
-            "alpha typecheck failed on `{source}`: {} diagnostic(s):\n{failure}",
+            "typecheck failed on `{source}`: {} diagnostic(s):\n{failure}",
             failure.diagnostics.len()
         )
     })
@@ -67,13 +67,13 @@ pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
 
 pub fn typecheck_fail(source: &str, mode: ParseMode) -> CheckFailure {
     parse_and_check(source, mode).expect_err(
-        "expected alpha typecheck to fail; it succeeded (test source must produce a diagnostic)",
+        "expected typecheck to fail; it succeeded (test source must produce a diagnostic)",
     )
 }
 
 pub fn parse_and_check(source: &str, mode: ParseMode) -> Result<CheckedProgram, CheckFailure> {
-    let mut sources = expo_stdlib::alpha_autoimport_sources();
-    sources.extend(expo_stdlib::alpha_qualified_sources());
+    let mut sources = expo_stdlib::autoimport_sources();
+    sources.extend(expo_stdlib::qualified_sources());
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.expo"),

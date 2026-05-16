@@ -3,8 +3,8 @@
 //! through the SSA-pure `FieldGet → FieldSet` rebuild and update the
 //! head local's slot to the freshly-assembled struct value.
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 

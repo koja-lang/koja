@@ -33,7 +33,7 @@
 //! `ceil(remaining_bits / 8)` bytes and let the heap layout carry
 //! the exact bit count.
 
-use expo_alpha_ir::{
+use expo_ir::{
     BinaryEndian, BinarySign, IRLocalId, IRType, LoweredBinaryMatchLayout, LoweredBinaryPattern,
     ValueId,
 };
@@ -220,7 +220,7 @@ fn emit_literal_int<'ctx>(
 ) -> Result<IntValue<'ctx>, LlvmError> {
     if !bit_offset.is_multiple_of(8) || !width.is_multiple_of(8) {
         return Err(LlvmError::Codegen(format!(
-            "alpha LLVM emit: sub-byte binary literal pattern segment (bit_offset={bit_offset}, \
+            "LLVM emit: sub-byte binary literal pattern segment (bit_offset={bit_offset}, \
              width={width}) is not yet supported",
         )));
     }
@@ -315,7 +315,7 @@ fn emit_bind_int<'ctx>(
 ) -> Result<(), LlvmError> {
     if !bit_offset.is_multiple_of(8) || !width.is_multiple_of(8) {
         return Err(LlvmError::Codegen(format!(
-            "alpha LLVM emit: sub-byte binary binding pattern segment (bit_offset={bit_offset}, \
+            "LLVM emit: sub-byte binary binding pattern segment (bit_offset={bit_offset}, \
              width={width}) is not yet supported",
         )));
     }
@@ -350,7 +350,7 @@ fn emit_greedy_tail<'ctx>(
 ) -> Result<(), LlvmError> {
     if !bit_offset.is_multiple_of(8) {
         return Err(LlvmError::Codegen(format!(
-            "alpha LLVM emit: sub-byte binary greedy-tail segment (bit_offset={bit_offset}) is \
+            "LLVM emit: sub-byte binary greedy-tail segment (bit_offset={bit_offset}) is \
              not yet supported",
         )));
     }
@@ -515,7 +515,7 @@ fn narrow_to_ir_type<'ctx>(
         IRType::Int64 | IRType::UInt64 => ctx.context.i64_type(),
         other => {
             return Err(LlvmError::Codegen(format!(
-                "alpha LLVM emit: binary pattern binding can't narrow into IR type `{other:?}`",
+                "LLVM emit: binary pattern binding can't narrow into IR type `{other:?}`",
             )));
         }
     };

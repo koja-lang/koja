@@ -1,10 +1,10 @@
 //! Per-instruction dispatch. Every arm forwards to a sibling
 //! `emit/*.rs` module that owns the concrete LLVM emission for that
 //! instruction family. Keeping this file dispatch-only makes the
-//! [`expo_alpha_ir::IRInstruction`] coverage trivially auditable and
+//! [`expo_ir::IRInstruction`] coverage trivially auditable and
 //! keeps the implementations focused.
 
-use expo_alpha_ir::IRInstruction;
+use expo_ir::IRInstruction;
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;

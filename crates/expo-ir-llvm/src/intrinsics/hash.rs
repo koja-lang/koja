@@ -5,7 +5,7 @@
 //!
 //! [SplitMix64]: https://prng.di.unimi.it/splitmix64.c
 
-use expo_alpha_ir::{HashImpl, IRFunction, IRSymbol};
+use expo_ir::{HashImpl, IRFunction, IRSymbol};
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 

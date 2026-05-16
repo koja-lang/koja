@@ -3,14 +3,14 @@
 //! Recursively walks expressions and statements to locate the innermost
 //! symbol that contains the given cursor position.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::*;
 use expo_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
 use expo_ast::span::Span;
+use expo_typecheck::GlobalRegistry;
 
 use super::span::span_contains;
 use super::{LookupCtx, SymbolInfo, classify_name};
-use crate::alpha_format::format_resolved_type;
+use crate::format::format_resolved_type;
 
 /// Attempts to match a function name identifier at the cursor position.
 ///

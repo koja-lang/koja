@@ -5,10 +5,10 @@
 //! `MethodCall` tree here so the emitted IR is byte-for-byte identical
 //! to a hand-written `List.new().append(a).append(b)`.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Arg, Expr, ExprKind};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::span::Span;
+use expo_typecheck::GlobalRegistry;
 
 use super::calls::{MethodCallShape, lower_method_call};
 use super::ctx::{FnLowerCtx, LowerOutput};
@@ -29,7 +29,7 @@ pub(super) fn lower_list_literal(
         .map(|(id, _)| id)
         .unwrap_or_else(|| {
             panic!(
-                "alpha IR lower: list literal reaches lower without `Global.List` in registry — \
+                "IR lower: list literal reaches lower without `Global.List` in registry — \
                  seal violation",
             )
         });

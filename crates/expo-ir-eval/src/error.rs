@@ -2,11 +2,11 @@
 //! like division by zero, integer overflow, and type mismatches.
 //! Anything that would indicate a malformed `IRProgram` (undefined
 //! `ValueId`, missing entry, etc.) is a seal violation upstream and
-//! panics through `expo_alpha_ir::seal`, never surfaces here.
+//! panics through `expo_ir::seal`, never surfaces here.
 
 use std::fmt;
 
-use expo_alpha_ir::{IRBinOp, IRUnaryOp, ValueId};
+use expo_ir::{IRBinOp, IRUnaryOp, ValueId};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeError {
@@ -22,7 +22,7 @@ pub enum RuntimeError {
     UnaryIntegerOverflow { op: IRUnaryOp, operand: i64 },
     /// `Kernel.panic(message)` was called. The user-supplied message
     /// is preserved verbatim so tests / callers can assert on it
-    /// (mirrors the LLVM backend's `__expo_alpha_panic` runtime helper
+    /// (mirrors the LLVM backend's `__expo_panic` runtime helper
     /// printing `panic: <message>` to stderr before aborting).
     Panicked { message: String },
     /// An `@intrinsic`-tagged call resolved to a mangled symbol the
@@ -76,7 +76,7 @@ impl fmt::Display for RuntimeError {
                     f,
                     "extern \"C\" `{symbol}` is not registered in the eval \
                      dispatch table; use --backend=llvm or add a handler \
-                     in `expo-alpha-ir-eval/src/externs`",
+                     in `expo-ir-eval/src/externs`",
                 )
             }
             RuntimeError::UnreachableExecuted => write!(

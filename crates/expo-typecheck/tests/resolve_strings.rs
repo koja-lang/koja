@@ -5,10 +5,10 @@
 //! per part; `String`-typed expressions are left bare to avoid the
 //! quote-adding behavior of `String.format`.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::ast::{Expr, ExprKind, Function, Item, Statement, StringPart};
 use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

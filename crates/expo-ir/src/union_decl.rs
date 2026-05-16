@@ -137,7 +137,7 @@ where
     (size, align)
 }
 
-/// Enum payload sizing mirrors `expo-alpha-ir-llvm`'s layout: each
+/// Enum payload sizing mirrors `expo-ir-llvm`'s layout: each
 /// variant is a `{ i8 tag, [pad x i8], payload }` blob; the outer
 /// is `{ [count x iN] }` where `N = max_align * 8` and the byte
 /// count is `count * max_align >= max_complete_size`. Returns the

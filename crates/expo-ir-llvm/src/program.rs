@@ -43,7 +43,7 @@
 //! reading an opaque inner (`align 1`, `size 0`) and collapsing
 //! the outer chunk count to a single byte — wire-format wrong.
 
-use expo_alpha_ir::{FunctionKind, IRProgram};
+use expo_ir::{FunctionKind, IRProgram};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;

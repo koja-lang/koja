@@ -7,12 +7,12 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_alpha_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 use expo_ast::ast::ExprKind;
 use expo_ast::identifier::Identifier;
+use expo_typecheck::{FunctionSignature, GlobalKind, GlobalRegistry};
 
-use crate::alpha_format::format_resolved_type;
 use crate::backend::Backend;
+use crate::format::format_resolved_type;
 use crate::lookup::{LookupCtx, find_enclosing_call, traverse_receiver_type_id};
 
 impl Backend {

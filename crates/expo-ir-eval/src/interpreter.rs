@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 
-use expo_alpha_ir::{
+use expo_ir::{
     BinaryEndian, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
     IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId,
     IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
@@ -47,7 +47,7 @@ impl Interpreter {
     /// script's static [`IRScript::return_type`] is `Unit`. See
     /// [`coerce_return`] for the rationale — same shape mirrors
     /// LLVM's `void`-return coercion in
-    /// `expo_alpha_ir_llvm::emit::emit_terminator`.
+    /// `expo_ir_llvm::emit::emit_terminator`.
     pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
         let mut frame = Frame::new();
         match execute_blocks(&script.blocks, &mut frame, script)? {
@@ -60,11 +60,11 @@ impl Interpreter {
     }
 
     /// Dispatch the `Debug.format` instance for `value`, returning
-    /// the rendered UTF-8 bytes. Mirrors the symbol the alpha IR
+    /// the rendered UTF-8 bytes. Mirrors the symbol the IR
     /// lower pass would emit for `value.format()`, so the caller's
     /// output matches what a user-side `IO.puts(value.format())`
     /// would produce. Today's only caller is
-    /// [`expo_alpha_shell`]'s REPL inspect line.
+    /// [`expo_shell`]'s REPL inspect line.
     ///
     /// Drives off the runtime [`Value`] shape rather than the
     /// caller's static IR type so the lookup works without
@@ -87,7 +87,7 @@ impl Interpreter {
     ) -> Result<Option<Vec<u8>>, RuntimeError> {
         let symbol = match &value {
             Value::Enum { symbol, .. } | Value::Struct { symbol, .. } => {
-                expo_alpha_ir::mangling::debug_format_for_symbol(symbol)
+                expo_ir::mangling::debug_format_for_symbol(symbol)
             }
             Value::Binary(_)
             | Value::Bits { .. }
@@ -377,10 +377,10 @@ fn take_first_payload_field(
 ///
 /// IR lowering threads the trailing expression's SSA value through
 /// `Return { Some(id) }` even for void-returning functions — the
-/// IR comment in `expo_alpha_ir::lower::body::finalize_open_flow`
+/// IR comment in `expo_ir::lower::body::finalize_open_flow`
 /// notes the value is tracked for seal / dominator analysis but
 /// is unobservable at the type level. The LLVM backend collapses
-/// this to `ret void` in `expo_alpha_ir_llvm::emit::emit_terminator`;
+/// this to `ret void` in `expo_ir_llvm::emit::emit_terminator`;
 /// without this coercion the interpreter would propagate the
 /// trailing temp (e.g. `STDOUT.write`'s `Result<Int64, String>`
 /// inside `IO.puts`) and callers would see a richer-than-declared
@@ -443,7 +443,7 @@ fn execute_function<R: CallResolver>(
         FunctionKind::SpawnWrapper { .. } => {
             return Err(RuntimeError::Unsupported {
                 detail: format!(
-                    "spawn wrapper `{}` cannot be invoked directly under the alpha interpreter; \
+                    "spawn wrapper `{}` cannot be invoked directly under the interpreter; \
                      spawn/receive scheduling lives in the LLVM runtime",
                     function.symbol,
                 ),
@@ -584,7 +584,7 @@ fn execute_blocks<R: CallResolver>(
 
 /// Evaluate `target.args` in the predecessor's value-map and bind
 /// the resulting [`Value`]s to the target block's
-/// [`expo_alpha_ir::BlockParam::dest`] ids before stepping into the
+/// [`expo_ir::BlockParam::dest`] ids before stepping into the
 /// target. Block params are SSA defs available on entry to the
 /// block; backends bind them on edge traversal so the body's
 /// instructions see them as ordinary `ValueId`s.
@@ -941,12 +941,12 @@ fn execute_instruction<R: CallResolver>(
         }
         IRInstruction::Spawn { wrapper, .. } => Err(RuntimeError::Unsupported {
             detail: format!(
-                "`spawn` (wrapper `{wrapper}`) is not supported under the alpha interpreter; \
+                "`spawn` (wrapper `{wrapper}`) is not supported under the interpreter; \
                  process scheduling lives in the LLVM runtime",
             ),
         }),
         IRInstruction::Receive { .. } => Err(RuntimeError::Unsupported {
-            detail: "`receive` is not supported under the alpha interpreter; mailbox dispatch \
+            detail: "`receive` is not supported under the interpreter; mailbox dispatch \
                  lives in the LLVM runtime"
                 .to_string(),
         }),
@@ -1013,13 +1013,13 @@ fn execute_instruction<R: CallResolver>(
         }
         IRInstruction::BinaryMatch { .. } => {
             // Binary pattern matching is implemented in the LLVM
-            // backend; the alpha interpreter currently skips it
+            // backend; the interpreter currently skips it
             // because the only consumer (lib/global tests) runs
             // through `--backend=llvm`. Lift to a fatal panic so a
             // mis-routed eval run surfaces immediately rather than
             // silently producing a wrong result.
             panic!(
-                "alpha interpreter: IRInstruction::BinaryMatch is only supported by the \
+                "interpreter: IRInstruction::BinaryMatch is only supported by the \
                  LLVM backend — re-run with `--backend=llvm` or extend the interpreter",
             );
         }
@@ -1208,7 +1208,7 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
 /// `length` valid bits and possible zero padding in the low bits of
 /// its trailing byte) into `dest` starting at bit offset
 /// `start_bit`. Helper for [`concat_values`]'s `Bits` arm; mirrors
-/// the algorithm the LLVM `__expo_alpha_concat_bits` runtime helper
+/// the algorithm the LLVM `__expo_concat_bits` runtime helper
 /// runs at native code speed.
 fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
     if length == 0 {
@@ -1251,7 +1251,7 @@ fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
 /// integer / float bytes get endian-shuffled, string segments
 /// `memcpy` their payload, sub-byte segments funnel through
 /// [`pack_bits_into`] (the eval-side mirror of the
-/// `__expo_alpha_pack_bits` runtime helper). The buffer is
+/// `__expo_pack_bits` runtime helper). The buffer is
 /// pre-zeroed so unused trailing bits in the last byte stay zero.
 fn construct_binary_literal(
     layout: ResolvedBinaryLayout,
@@ -1367,13 +1367,13 @@ fn pack_integer_segment(
         return;
     }
     // Sub-byte: write the low `width` bits MSB-first, mirroring the
-    // runtime `__expo_alpha_pack_bits` helper. Endianness is
+    // runtime `__expo_pack_bits` helper. Endianness is
     // meaningless for non-byte-multiple widths in v1, so we only
     // honour the high-order-first convention.
     pack_bits_into(buffer, value, width, start_bit);
 }
 
-/// Eval-side mirror of the `__expo_alpha_pack_bits` runtime helper:
+/// Eval-side mirror of the `__expo_pack_bits` runtime helper:
 /// write the low `width` bits of `value` (MSB first) into `buffer`
 /// at bit offset `start_bit`. `buffer` is assumed pre-zeroed; we
 /// `or` rather than overwrite so adjacent segments that share a

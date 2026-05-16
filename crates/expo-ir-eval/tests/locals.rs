@@ -1,5 +1,5 @@
 //! Runtime coverage for the locals slice in
-//! [`expo_alpha_ir_eval::Interpreter`]. The IR's local-slot
+//! [`expo_ir_eval::Interpreter`]. The IR's local-slot
 //! instructions ([`IRInstruction::LocalDecl`] /
 //! [`IRInstruction::LocalRead`] / [`IRInstruction::LocalWrite`])
 //! lower to per-frame storage in the interpreter; these tests pin
@@ -12,8 +12,8 @@
 //! - Nested calls keep their `Frame`s isolated (one function's
 //!   slot doesn't leak into the caller's slot).
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 
@@ -108,7 +108,7 @@ fn nested_call_does_not_leak_callee_local_into_caller_frame() {
 
 #[test]
 fn local_assignment_inside_if_arm_is_visible_after_arm() {
-    // Locals in alpha are function-scoped (no block scoping yet),
+    // Locals are function-scoped (no block scoping yet),
     // so an assignment inside an `if` arm reaches the trailing
     // expression in the same function.
     let source = "

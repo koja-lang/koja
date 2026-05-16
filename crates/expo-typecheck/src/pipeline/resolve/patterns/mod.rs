@@ -161,7 +161,7 @@ pub(super) fn resolve_pattern(
         }
         Pattern::List { .. } => {
             diagnostics.push(Diagnostic::error(
-                "alpha typecheck does not yet support list patterns (blocked on alpha-IR \
+                "typecheck does not yet support list patterns (blocked on IR \
                  list ops + a stable `List<T>` layout)",
                 pattern_span(pat),
             ));

@@ -397,63 +397,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
-name = "expo-alpha-ir"
-version = "0.9.0"
-dependencies = [
- "expo-alpha-typecheck",
- "expo-ast",
- "expo-parser",
- "expo-stdlib",
-]
-
-[[package]]
-name = "expo-alpha-ir-eval"
-version = "0.9.0"
-dependencies = [
- "expo-alpha-ir",
- "expo-alpha-typecheck",
- "expo-ast",
- "expo-parser",
- "expo-runtime",
- "expo-stdlib",
-]
-
-[[package]]
-name = "expo-alpha-ir-llvm"
-version = "0.9.0"
-dependencies = [
- "expo-alpha-ir",
- "expo-alpha-typecheck",
- "expo-ast",
- "expo-parser",
- "expo-stdlib",
- "inkwell",
-]
-
-[[package]]
-name = "expo-alpha-shell"
-version = "0.9.0"
-dependencies = [
- "expo-alpha-ir",
- "expo-alpha-ir-eval",
- "expo-alpha-typecheck",
- "expo-ast",
- "expo-lexer",
- "expo-parser",
- "expo-stdlib",
- "rustyline",
-]
-
-[[package]]
-name = "expo-alpha-typecheck"
-version = "0.9.0"
-dependencies = [
- "expo-ast",
- "expo-parser",
- "expo-stdlib",
-]
-
-[[package]]
 name = "expo-ast"
 version = "0.9.0"
 
@@ -472,19 +415,19 @@ version = "0.9.0"
 dependencies = [
  "boring-sys",
  "clap",
- "expo-alpha-ir",
- "expo-alpha-ir-eval",
- "expo-alpha-ir-llvm",
- "expo-alpha-shell",
- "expo-alpha-typecheck",
  "expo-ast",
  "expo-doc",
  "expo-fmt",
+ "expo-ir",
+ "expo-ir-eval",
+ "expo-ir-llvm",
  "expo-lexer",
  "expo-parser",
  "expo-runtime",
+ "expo-shell",
  "expo-stdlib",
  "expo-test",
+ "expo-typecheck",
  "libc",
  "serde",
  "toml",
@@ -500,6 +443,40 @@ dependencies = [
 ]
 
 [[package]]
+name = "expo-ir"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-parser",
+ "expo-stdlib",
+ "expo-typecheck",
+]
+
+[[package]]
+name = "expo-ir-eval"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-ir",
+ "expo-parser",
+ "expo-runtime",
+ "expo-stdlib",
+ "expo-typecheck",
+]
+
+[[package]]
+name = "expo-ir-llvm"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-ir",
+ "expo-parser",
+ "expo-stdlib",
+ "expo-typecheck",
+ "inkwell",
+]
+
+[[package]]
 name = "expo-lexer"
 version = "0.9.0"
 dependencies = [
@@ -511,11 +488,11 @@ dependencies = [
 name = "expo-lsp"
 version = "0.9.0"
 dependencies = [
- "expo-alpha-typecheck",
  "expo-ast",
  "expo-fmt",
  "expo-parser",
  "expo-stdlib",
+ "expo-typecheck",
  "serde",
  "tokio",
  "toml",
@@ -542,6 +519,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "expo-shell"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-ir",
+ "expo-ir-eval",
+ "expo-lexer",
+ "expo-parser",
+ "expo-stdlib",
+ "expo-typecheck",
+ "rustyline",
+]
+
+[[package]]
 name = "expo-stdlib"
 version = "0.9.0"
 dependencies = [
@@ -554,6 +545,15 @@ version = "0.9.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
+]
+
+[[package]]
+name = "expo-typecheck"
+version = "0.9.0"
+dependencies = [
+ "expo-ast",
+ "expo-parser",
+ "expo-stdlib",
 ]
 
 [[package]]

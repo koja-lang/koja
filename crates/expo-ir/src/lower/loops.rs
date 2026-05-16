@@ -10,7 +10,7 @@
 //!                       └─Branch (break)──▶ exit (continue lowering)
 //! ```
 //!
-//! Loop-carried state lives in alloca slots, not block params: alpha's
+//! Loop-carried state lives in alloca slots, not block params: the pipeline's
 //! mutable bindings already model state through
 //! [`crate::IRInstruction::LocalDecl`] + [`crate::IRInstruction::LocalWrite`]
 //! against per-slot allocas, and each iteration's body re-reads /
@@ -28,8 +28,8 @@
 //! [`FnLowerCtx::pop_loop_exit`] bookkeeping that gives `break` an
 //! exit block to target.
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Expr, Statement};
+use expo_typecheck::GlobalRegistry;
 
 use crate::function::{BranchTarget, IRBlockId, IRTerminator};
 use crate::types::ValueId;

@@ -6,8 +6,8 @@
 //! Per-function fail-fast within the body is exercised end-to-end
 //! by `lower_package.rs:partial_failure_reports_only_the_failing_function_diagnostic`.
 
-use expo_alpha_ir::{IRInstruction, IRTerminator, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{IRInstruction, IRTerminator, IRType};
 
 mod common;
 

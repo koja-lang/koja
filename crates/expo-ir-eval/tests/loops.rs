@@ -6,8 +6,8 @@
 //! `break`-out-of-`loop` shape (a `loop` only exits via `break`,
 //! `return`, or `panic`).
 
-use expo_alpha_ir_eval::Value;
 use expo_ast::util::dedent;
+use expo_ir_eval::Value;
 
 mod common;
 
@@ -84,7 +84,7 @@ fn early_return_inside_while_exits_function() {
 
 #[test]
 fn while_value_is_unit() {
-    // A trailing `while` produces Unit (loops type as Unit in alpha,
+    // A trailing `while` produces Unit (loops type as Unit,
     // mirroring v1).
     let source = "
         fn main

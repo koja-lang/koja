@@ -11,11 +11,11 @@
 //!
 //! Byte-for-byte runtime coverage (clone produces an independent
 //! buffer, mutating one doesn't disturb the other) lives in the
-//! eval suite (`expo-alpha-ir-eval/tests/clone.rs`) and the driver
+//! eval suite (`expo-ir-eval/tests/clone.rs`) and the driver
 //! e2e (`crates/expo-driver/tests/alpha_two_plus_two.rs`).
 
-use expo_alpha_ir_llvm::emit_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_llvm_ir;
 
 mod common;
 

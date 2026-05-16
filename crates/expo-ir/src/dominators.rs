@@ -197,7 +197,7 @@ fn predecessor_map(blocks: &[IRBasicBlock]) -> HashMap<IRBlockId, Vec<IRBlockId>
 
 #[cfg(test)]
 mod tests {
-    //! Hand-built CFGs covering the canonical shapes the alpha
+    //! Hand-built CFGs covering the canonical shapes the pipeline
     //! lowering emits today: linear, diamond (`if`/`else`),
     //! chained-test (`cond`/`match`). Every test pins the
     //! immediate-dominator relation block-by-block so future edits

@@ -16,8 +16,8 @@
 //!   second arg). Reachable since literal-fit coercion lets the
 //!   user mint `UInt8` / `Int32` values from a literal.
 
-use expo_alpha_ir_llvm::emit_script_llvm_ir;
 use expo_ast::util::dedent;
+use expo_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
@@ -25,7 +25,7 @@ use common::{
     APP_NAME, assert_contains, extract_function_body, lower_script_source as lower_as_script,
 };
 
-/// Drive a script-shaped Expo source through the alpha pipeline,
+/// Drive a script-shaped Expo source through the pipeline,
 /// emit textual LLVM IR, and slice out the function body for the
 /// intrinsic at `symbol`. Auto-imported `Global.bitwise` definitions
 /// only land in the emitted module if their declared shape is

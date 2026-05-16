@@ -1,7 +1,7 @@
 //! `Kernel.panic(message: String)` — surface the user-supplied
 //! message as [`RuntimeError::Panicked`] so test harnesses can match
 //! on it. The LLVM backend's parallel emitter calls
-//! `__expo_alpha_panic`, which prints `panic: <message>` to stderr
+//! `__expo_panic`, which prints `panic: <message>` to stderr
 //! and aborts; the eval interpreter doesn't tear down the host
 //! process, instead it bubbles the message up the same way every
 //! other runtime error does.

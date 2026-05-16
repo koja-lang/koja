@@ -4,9 +4,9 @@
 //! shims register, and that user code can call into the public
 //! surface without the autoimport raising diagnostics.
 
-use expo_alpha_typecheck::CheckedProgram;
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::CheckedProgram;
 
 mod common;
 

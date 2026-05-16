@@ -11,14 +11,14 @@
 //! → N-1 concats) and the concat-kind invariant (always
 //! `ConcatKind::String` regardless of how the part was sourced).
 
-use expo_alpha_ir::{ConcatKind, IRInstruction, IRType};
 use expo_ast::util::dedent;
+use expo_ir::{ConcatKind, IRInstruction, IRType};
 
 mod common;
 
 use common::{function, lower_program_source as lower};
 
-fn count_string_concats(function: &expo_alpha_ir::IRFunction) -> usize {
+fn count_string_concats(function: &expo_ir::IRFunction) -> usize {
     function
         .blocks
         .iter()
@@ -35,7 +35,7 @@ fn count_string_concats(function: &expo_alpha_ir::IRFunction) -> usize {
         .count()
 }
 
-fn count_string_consts(function: &expo_alpha_ir::IRFunction) -> usize {
+fn count_string_consts(function: &expo_ir::IRFunction) -> usize {
     function
         .blocks
         .iter()
@@ -44,7 +44,7 @@ fn count_string_consts(function: &expo_alpha_ir::IRFunction) -> usize {
             matches!(
                 inst,
                 IRInstruction::Const {
-                    value: expo_alpha_ir::ConstValue::String(_),
+                    value: expo_ir::ConstValue::String(_),
                     ..
                 },
             )

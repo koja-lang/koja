@@ -7,11 +7,11 @@
 //! method that introduces its own type parameters on top of (or
 //! independent of) the receiver's. Symbol shape is
 //! `<receiver-mangled>.<method>_$<method-args>$`, minted by
-//! [`expo_alpha_ir::mangling::mangled_method_name`] at both the
+//! [`expo_ir::mangling::mangled_method_name`] at both the
 //! call site and during monomorphization so the two agree.
 
-use expo_alpha_ir::IRScript;
 use expo_ast::util::dedent;
+use expo_ir::IRScript;
 
 mod common;
 

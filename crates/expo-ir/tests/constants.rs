@@ -4,7 +4,7 @@
 
 use expo_ast::util::dedent;
 
-use expo_alpha_ir::{IRInstruction, IRProgram};
+use expo_ir::{IRInstruction, IRProgram};
 
 mod common;
 

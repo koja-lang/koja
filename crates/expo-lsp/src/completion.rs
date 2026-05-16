@@ -1,17 +1,17 @@
 //! Completion provider for the Expo LSP.
 //!
 //! Offers keyword completions, symbol completions, and dot-completions
-//! (methods and fields on a type) based on the alpha registry.
+//! (methods and fields on a type) based on the type registry.
 
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use expo_alpha_typecheck::{GlobalKind, GlobalRegistry};
 use expo_ast::ast::{ExprKind, Visibility};
 use expo_ast::identifier::GlobalRegistryId;
+use expo_typecheck::{GlobalKind, GlobalRegistry};
 
-use crate::alpha_format::{format_function_signature, format_resolved_type};
 use crate::backend::Backend;
+use crate::format::{format_function_signature, format_resolved_type};
 use crate::lookup::{LookupCtx, find_expr_at, traverse_receiver_type_id};
 
 /// Expo language keywords offered as completions.
@@ -89,7 +89,7 @@ impl Backend {
 
 /// Add completion items for a type's methods (and, for instance
 /// dispatch, its fields). `type_id` identifies the receiver's type in
-/// the alpha registry; `is_static` switches between static (`Type.x`)
+/// the type registry; `is_static` switches between static (`Type.x`)
 /// and instance (`value.x`) dispatch.
 fn add_dot_completions(
     type_id: GlobalRegistryId,
@@ -116,8 +116,8 @@ fn add_dot_completions(
             continue;
         };
         let dispatch_matches = match sig.dispatch {
-            expo_alpha_typecheck::Dispatch::Instance => !is_static,
-            expo_alpha_typecheck::Dispatch::Static => is_static,
+            expo_typecheck::Dispatch::Instance => !is_static,
+            expo_typecheck::Dispatch::Static => is_static,
         };
         if !dispatch_matches {
             continue;
@@ -242,9 +242,9 @@ fn type_params_detail(params: &[String]) -> Option<String> {
     }
 }
 
-/// Today's alpha [`FunctionSignature`] doesn't carry visibility; we
+/// Today's [`FunctionSignature`] doesn't carry visibility; we
 /// always treat it as public. Kept as a tiny helper so adding it later
 /// is a one-line change.
-fn visibility_for(_sig: &expo_alpha_typecheck::FunctionSignature) -> Visibility {
+fn visibility_for(_sig: &expo_typecheck::FunctionSignature) -> Visibility {
     Visibility::Public
 }

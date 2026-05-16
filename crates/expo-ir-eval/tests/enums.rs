@@ -1,5 +1,5 @@
 //! Runtime coverage for the enum slice in
-//! [`expo_alpha_ir_eval::Interpreter`]: `IRInstruction::EnumConstruct`
+//! [`expo_ir_eval::Interpreter`]: `IRInstruction::EnumConstruct`
 //! materializes a [`Value::Enum`] carrying the receiver's symbol,
 //! the discriminant tag, the variant name (cached for `Display`),
 //! and the per-shape [`EnumPayload`]:
@@ -12,8 +12,8 @@
 //! Plus the `Display` rendering for each shape so the runtime
 //! printer (when it gains an enum arm) sees a stable surface.
 
-use expo_alpha_ir_eval::{EnumPayload, Value};
 use expo_ast::util::dedent;
+use expo_ir_eval::{EnumPayload, Value};
 
 mod common;
 

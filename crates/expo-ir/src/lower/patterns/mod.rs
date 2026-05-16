@@ -39,10 +39,10 @@ mod literals;
 mod or_pattern;
 mod structs;
 
-use expo_alpha_typecheck::GlobalRegistry;
 use expo_ast::ast::{Diagnostic, Pattern};
 use expo_ast::identifier::{GlobalRegistryId, LocalId, ResolvedType};
 use expo_ast::labels::{pattern_kind_label, pattern_span};
+use expo_typecheck::GlobalRegistry;
 
 use crate::types::{ConstValue, IRBinOp};
 
@@ -263,7 +263,7 @@ pub(super) fn lower_pattern_check(
         } => {
             let resolved = resolved_type.as_ref().unwrap_or_else(|| {
                 panic!(
-                    "alpha IR lower: typed-binding pattern `{name}` reaches lower without a \
+                    "IR lower: typed-binding pattern `{name}` reaches lower without a \
                      resolved_type — typecheck-resolve invariant violation",
                 );
             });
@@ -272,7 +272,7 @@ pub(super) fn lower_pattern_check(
             let subject_ir = ctx.type_of(inputs.subject).clone();
             let IRType::Union { members, .. } = &subject_ir else {
                 panic!(
-                    "alpha IR lower: typed-binding pattern `{name}` reaches lower with \
+                    "IR lower: typed-binding pattern `{name}` reaches lower with \
                      non-Union subject `{subject_ir:?}` — typecheck-resolve invariant \
                      violation",
                 );
@@ -282,7 +282,7 @@ pub(super) fn lower_pattern_check(
                 .position(|m| m == &member_ir)
                 .unwrap_or_else(|| {
                     panic!(
-                        "alpha IR lower: typed-binding pattern `{name}` member \
+                        "IR lower: typed-binding pattern `{name}` member \
                          `{member_ir:?}` is not in subject union `{subject_ir:?}` — \
                          typecheck-resolve invariant violation",
                     )
@@ -317,7 +317,7 @@ pub(super) fn lower_pattern_check(
         other => {
             output.diagnostics.push(Diagnostic::error(
                 format!(
-                    "alpha IR does not yet lower match pattern `{}`",
+                    "IR does not yet lower match pattern `{}`",
                     pattern_kind_label(other),
                 ),
                 pattern_span(other),
@@ -337,7 +337,7 @@ fn lower_binding_check(
 ) {
     let id = local_id.unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: match binding `{name}` reaches lower without a stamped \
+            "IR lower: match binding `{name}` reaches lower without a stamped \
              LocalId — typecheck resolve invariant violation",
         );
     });
@@ -370,7 +370,7 @@ fn lower_binding_check(
 pub(super) fn require_local(local_id: Option<LocalId>, name: &str) -> IRLocalId {
     let id = local_id.unwrap_or_else(|| {
         panic!(
-            "alpha IR lower: pattern binding `{name}` reaches lower without a \
+            "IR lower: pattern binding `{name}` reaches lower without a \
              stamped LocalId — typecheck-resolve invariant violation",
         );
     });

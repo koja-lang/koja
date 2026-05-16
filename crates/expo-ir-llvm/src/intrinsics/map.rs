@@ -7,7 +7,7 @@
 //! occupied / `2` tombstone). Both buffers malloc on `new`, realloc
 //! on resize, and free on drop.
 
-use expo_alpha_ir::{IRFunction, IRType, MapMethod};
+use expo_ir::{IRFunction, IRType, MapMethod};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;

@@ -3,11 +3,11 @@
 //! per-feature gap diagnostics for unsupported protocol-level
 //! features (generics, `Self` returns, annotations).
 
-use expo_alpha_typecheck::{
-    CheckedProgram, Dispatch, GlobalKind, ProtocolDefinition, ResolvedProtocolMethod,
-};
 use expo_ast::identifier::Identifier;
 use expo_ast::util::dedent;
+use expo_typecheck::{
+    CheckedProgram, Dispatch, GlobalKind, ProtocolDefinition, ResolvedProtocolMethod,
+};
 
 mod common;
 
