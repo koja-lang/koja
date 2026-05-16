@@ -398,11 +398,11 @@ checksum = "dea2df4cf52843e0452895c455a1a2cfbb842a1e7329671acf418fdc53ed4c59"
 
 [[package]]
 name = "expo-ast"
-version = "0.9.0"
+version = "0.10.0"
 
 [[package]]
 name = "expo-doc"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "askama",
  "expo-ast",
@@ -411,7 +411,7 @@ dependencies = [
 
 [[package]]
 name = "expo-driver"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "boring-sys",
  "clap",
@@ -435,7 +435,7 @@ dependencies = [
 
 [[package]]
 name = "expo-fmt"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
@@ -444,7 +444,7 @@ dependencies = [
 
 [[package]]
 name = "expo-ir"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
@@ -454,7 +454,7 @@ dependencies = [
 
 [[package]]
 name = "expo-ir-eval"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-ir",
@@ -466,7 +466,7 @@ dependencies = [
 
 [[package]]
 name = "expo-ir-llvm"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-ir",
@@ -478,7 +478,7 @@ dependencies = [
 
 [[package]]
 name = "expo-lexer"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "proptest",
@@ -486,7 +486,7 @@ dependencies = [
 
 [[package]]
 name = "expo-lsp"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-fmt",
@@ -501,7 +501,7 @@ dependencies = [
 
 [[package]]
 name = "expo-parser"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-lexer",
@@ -510,7 +510,7 @@ dependencies = [
 
 [[package]]
 name = "expo-runtime"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "backtrace",
  "cc",
@@ -520,7 +520,7 @@ dependencies = [
 
 [[package]]
 name = "expo-shell"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-ir",
@@ -534,14 +534,14 @@ dependencies = [
 
 [[package]]
 name = "expo-stdlib"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-parser",
 ]
 
 [[package]]
 name = "expo-test"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
@@ -549,7 +549,7 @@ dependencies = [
 
 [[package]]
 name = "expo-typecheck"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "expo-ast",
  "expo-parser",
