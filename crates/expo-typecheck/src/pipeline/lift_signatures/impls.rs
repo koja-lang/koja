@@ -17,7 +17,8 @@ use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedTyp
 
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
-    Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition, ResolvedProtocolMethod,
+    Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
+    ResolvedProtocolMethod, VisibilityScope,
 };
 
 use super::LiftScope;
@@ -426,10 +427,17 @@ fn synthesize_default_method(
         .iter()
         .map(|p| p.name.clone())
         .collect();
+    // Synthesized protocol-default methods are always public — the
+    // protocol itself declared them, and `ProtocolMethod` doesn't
+    // carry a `Visibility` field at the AST level. They register
+    // under the target type's name like any other method.
     if !matches!(
-        scope
-            .registry
-            .insert_function(method_identifier.clone(), function.span, type_params),
+        scope.registry.insert_function(
+            method_identifier.clone(),
+            function.span,
+            type_params,
+            VisibilityScope::Public,
+        ),
         InsertOutcome::Fresh(_)
     ) {
         return;

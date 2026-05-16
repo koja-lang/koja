@@ -28,10 +28,15 @@ pub(super) struct ResolverEnv<'a> {
 impl<'a> ResolverEnv<'a> {
     /// Mint a per-function [`Resolver`] reborrowing this env's
     /// shared state alongside the function's `enclosing_type` and
-    /// freshly-constructed local scope.
+    /// freshly-constructed local scope. `enclosing_type_id` is the
+    /// receiver type's [`GlobalRegistryId`] when the function is a
+    /// method on a known type (parallel to `enclosing_type`'s
+    /// name); `None` for top-level fns and file bodies. It anchors
+    /// the `priv fn` type-private visibility check.
     pub(super) fn make_resolver<'b>(
         &'b mut self,
         enclosing_type: Option<&'b str>,
+        enclosing_type_id: Option<GlobalRegistryId>,
         self_pass_mode: Option<PassMode>,
         type_param_owners: &'b [GlobalRegistryId],
         scope: &'b mut LocalScope,
@@ -39,6 +44,7 @@ impl<'a> ResolverEnv<'a> {
         Resolver {
             current_return_type: None,
             enclosing_type,
+            enclosing_type_id,
             file_aliases: self.file_aliases,
             loop_break_seen: Vec::new(),
             loop_depth: 0,
@@ -97,6 +103,12 @@ pub(super) struct Resolver<'a> {
     /// `mem::replace` without a borrowed-vs-owned mismatch.
     pub current_return_type: Option<ResolvedType>,
     pub enclosing_type: Option<&'a str>,
+    /// Registry id of the enclosing type when the resolver is
+    /// walking a method body, parallel to `enclosing_type`'s name.
+    /// `None` for top-level functions and the file body. Anchors
+    /// the `priv fn` type-private check — a `TypePrivate(owner)`
+    /// callee is only callable when this equals `Some(owner)`.
+    pub enclosing_type_id: Option<GlobalRegistryId>,
     /// In-scope alias roster for the current file, validated by
     /// [`crate::pipeline::aliases::validate_aliases`]. Consulted by
     /// every type-name lookup before falling back to the current

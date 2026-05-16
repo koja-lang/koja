@@ -175,11 +175,30 @@ Standalone functions are only supported for `fn main` — the program entry poin
 
 ### Private Functions
 
-`priv fn` makes a function inaccessible from other modules:
+`priv fn` restricts a function's visibility based on where it's declared:
+
+- A top-level `priv fn` is **package-private**: it's callable from any file
+  in the same package, but rejected from any other package.
+- A `priv fn` declared inside a `struct`, `enum`, or `impl` body is
+  **type-private**: it's callable from any other method on the same target
+  type (whether declared in the type's decl block, an inherent `impl`, or
+  an `impl Protocol for Type` block), but rejected everywhere else.
 
 ```expo
-priv fn helper(x: Int32) -> Int32
+priv fn helper(x: Int32) -> Int32    # package-private
   x * 2
+end
+
+struct Counter
+  value: Int32
+
+  fn increment(self) -> Counter
+    Counter { value: self.tick() }    # ok: same type
+  end
+
+  priv fn tick(self) -> Int32         # type-private to Counter
+    self.value + 1
+  end
 end
 ```
 
@@ -943,7 +962,16 @@ end
 
 ### Visibility
 
-Access control is at the function level (`priv fn`), not the module level. Private functions are only callable within the file that defines them.
+Access control is at the function level (`priv fn`), not the module level:
+
+- Top-level `priv fn` is **package-private** -- callable from any file in
+  the same package, rejected from other packages.
+- `priv fn` declared inside a `struct`, `enum`, or `impl` body is
+  **type-private** -- callable from any other method on the same target
+  type (across the decl block and any inherent or protocol-impl block on
+  that type), rejected everywhere else.
+
+See [Private Functions](#private-functions) for examples.
 
 ### Aliases
 

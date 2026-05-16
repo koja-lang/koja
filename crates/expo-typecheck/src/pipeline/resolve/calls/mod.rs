@@ -40,7 +40,7 @@ use methods::{
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{
-    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
+    FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam, VisibilityScope,
 };
 
 use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
@@ -117,6 +117,7 @@ pub(super) fn resolve_call(
         ));
         return ResolvedType::unresolved();
     };
+    check_callee_visibility(entry, resolver, call_span, diagnostics);
 
     let sig = match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig.clone(),
@@ -339,6 +340,7 @@ pub(super) fn resolve_method_call(
         ));
         return MethodCallOutcome::Method(ResolvedType::unresolved());
     };
+    check_callee_visibility(method_entry, resolver, call_span, diagnostics);
 
     let sig = match function_signature(method_entry) {
         Ok(sig) => sig.clone(),
@@ -683,6 +685,84 @@ fn lookup_bare_callee<'a>(
     registry.lookup(&Identifier::new(package, vec![name.to_string()]))
 }
 
+/// Enforce the callee's [`VisibilityScope`] at the call site.
+/// Mismatches push a diagnostic on `diagnostics`; resolution still
+/// proceeds so callers see exactly one error per offending call
+/// site and downstream passes (seal, IR lower) walk a populated
+/// tree.
+fn check_callee_visibility(
+    entry: &RegistryEntry,
+    resolver: &Resolver<'_>,
+    call_span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if callee_is_visible(
+        entry.visibility,
+        entry.identifier.package(),
+        resolver.package,
+        resolver.enclosing_type_id,
+    ) {
+        return;
+    }
+    match entry.visibility {
+        VisibilityScope::Public => unreachable!("Public always passes callee_is_visible"),
+        VisibilityScope::PackagePrivate => {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "private function `{}` cannot be called from package `{}`",
+                    entry.identifier, resolver.package,
+                ),
+                format!(
+                    "`{}` is `priv fn`, callable only from package `{}` \
+                     (declared at line {})",
+                    entry.identifier,
+                    entry.identifier.package(),
+                    entry.span.start.line,
+                ),
+                call_span,
+            ));
+        }
+        VisibilityScope::TypePrivate(owner) => {
+            let owner_label = resolver
+                .registry
+                .get(owner)
+                .map(|e| e.identifier.to_string())
+                .unwrap_or_else(|| "<unknown>".to_string());
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!(
+                    "private method `{}` cannot be called from here",
+                    entry.identifier,
+                ),
+                format!(
+                    "`{}` is `priv fn`, callable only from methods on `{owner_label}` \
+                     (declared at line {})",
+                    entry.identifier, entry.span.start.line,
+                ),
+                call_span,
+            ));
+        }
+    }
+}
+
+/// Pure visibility decision: does a callee with `scope` allow a
+/// call from `caller_package` while resolving a method on
+/// `caller_type_id`? `Public` is always reachable; `PackagePrivate`
+/// requires `callee_package == caller_package`; `TypePrivate(owner)`
+/// requires `caller_type_id == Some(owner)` (same-type, across all
+/// inherent and protocol-impl blocks, since they share one id).
+fn callee_is_visible(
+    scope: VisibilityScope,
+    callee_package: &str,
+    caller_package: &str,
+    caller_type_id: Option<GlobalRegistryId>,
+) -> bool {
+    match scope {
+        VisibilityScope::Public => true,
+        VisibilityScope::PackagePrivate => callee_package == caller_package,
+        VisibilityScope::TypePrivate(owner) => caller_type_id == Some(owner),
+    }
+}
+
 /// Resolve every call argument with optional per-position expected
 /// types. Named args diagnose up front but resolution still proceeds
 /// so seal walks a populated tree. The expected type at each position
@@ -1014,5 +1094,67 @@ fn validate_local_call_signature(
                 ));
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    //! Unit coverage for [`callee_is_visible`] — the pure half of the
+    //! `priv fn` enforcement. Integration coverage lives in
+    //! `tests/visibility.rs`; the cases here pin the decision matrix
+    //! at the smallest possible API surface, including the
+    //! cross-package `PackagePrivate` rejection path that surface
+    //! syntax can't currently reach (`Pkg.fn(args)` doesn't resolve to
+    //! top-level fns today).
+    use super::callee_is_visible;
+    use crate::registry::VisibilityScope;
+    use expo_ast::identifier::GlobalRegistryId;
+
+    #[test]
+    fn public_is_always_visible() {
+        let foo = GlobalRegistryId::new(7);
+        assert!(callee_is_visible(VisibilityScope::Public, "A", "A", None));
+        assert!(callee_is_visible(VisibilityScope::Public, "A", "B", None));
+        assert!(callee_is_visible(
+            VisibilityScope::Public,
+            "A",
+            "A",
+            Some(foo)
+        ));
+    }
+
+    #[test]
+    fn package_private_matches_only_same_package() {
+        let scope = VisibilityScope::PackagePrivate;
+        assert!(callee_is_visible(scope, "Lib", "Lib", None));
+        assert!(callee_is_visible(
+            scope,
+            "Lib",
+            "Lib",
+            Some(GlobalRegistryId::new(0))
+        ));
+        assert!(!callee_is_visible(scope, "Lib", "App", None));
+        assert!(!callee_is_visible(
+            scope,
+            "Lib",
+            "App",
+            Some(GlobalRegistryId::new(0))
+        ));
+    }
+
+    #[test]
+    fn type_private_matches_only_same_owner() {
+        let foo = GlobalRegistryId::new(3);
+        let bar = GlobalRegistryId::new(4);
+        let scope = VisibilityScope::TypePrivate(foo);
+
+        assert!(callee_is_visible(scope, "A", "A", Some(foo)));
+        // Cross-package same-owner is irrelevant: type-private is
+        // anchored on identity, not package — but a type id is
+        // unique across the program so this can't actually occur.
+        assert!(callee_is_visible(scope, "A", "B", Some(foo)));
+
+        assert!(!callee_is_visible(scope, "A", "A", Some(bar)));
+        assert!(!callee_is_visible(scope, "A", "A", None));
     }
 }

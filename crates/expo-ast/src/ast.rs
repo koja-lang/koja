@@ -43,8 +43,16 @@ pub enum PassMode {
 
 /// Visibility marker on functions: `Public` (default) or `Private` (from the
 /// `priv` keyword). The enforcement scope of `Private` depends on where the
-/// function is declared -- type-internal for impl methods, file-private for
-/// top-level functions.
+/// function is declared:
+///
+/// - Top-level `priv fn` is **package-private**: callable from any file in
+///   the same package, rejected from other packages.
+/// - `priv fn` declared inside a `struct` / `enum` / `impl` body is
+///   **type-private**: callable from any other method on that same target
+///   type (across inherent and protocol-impl blocks alike), rejected
+///   everywhere else.
+///
+/// Typecheck enforces both via its internal `VisibilityScope` projection.
 ///
 /// ```expo
 /// fn public_function         # Visibility::Public (the default)
@@ -59,7 +67,9 @@ pub enum PassMode {
 pub enum Visibility {
     /// Callable from anywhere the function can be named.
     Public,
-    /// Callable only from within the function's declaration scope.
+    /// Callable only from within the function's declaration scope
+    /// (its package for top-level functions, its target type for
+    /// methods).
     Private,
 }
 

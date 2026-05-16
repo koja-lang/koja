@@ -26,12 +26,12 @@
 use expo_ast::ast::{
     Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File,
     Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl,
-    StructField, TypeAlias, TypeExpr, TypeParam,
+    StructField, TypeAlias, TypeExpr, TypeParam, Visibility,
 };
-use expo_ast::identifier::Identifier;
+use expo_ast::identifier::{GlobalRegistryId, Identifier};
 use expo_ast::span::Span;
 
-use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome};
+use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
 
 /// Pass 1 of collect: register every named decl (functions,
 /// structs, enums, protocols, constants, type aliases) so that
@@ -55,6 +55,7 @@ pub(crate) fn collect_file_decls(
                     function,
                     identifier,
                     SelfContext::RejectSelf,
+                    None,
                     registry,
                     diagnostics,
                 );
@@ -120,10 +121,18 @@ enum SelfContext {
 /// (top-level fns, inline static or instance methods, impl-block
 /// static or instance methods) so the duplicate-detection /
 /// collision-message / `self`-context paths stay in one place.
+///
+/// `owner_type` is the registry id of the enclosing `struct` / `enum`
+/// for method registrations (any `priv fn` declared inside the decl
+/// or `impl` body scopes to that type), or `None` for top-level
+/// functions (which scope to their package). Together with the
+/// function's surface `Visibility` it picks one of the three
+/// [`VisibilityScope`] variants — see [`function_visibility_scope`].
 fn register_function_with_identifier(
     function: &Function,
     identifier: Identifier,
     self_context: SelfContext,
+    owner_type: Option<GlobalRegistryId>,
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -131,7 +140,8 @@ fn register_function_with_identifier(
         return;
     }
     let type_params = type_param_names(&function.type_params);
-    match registry.insert_function(identifier, function.span, type_params) {
+    let visibility = function_visibility_scope(function.visibility, owner_type);
+    match registry.insert_function(identifier, function.span, type_params, visibility) {
         InsertOutcome::Fresh(_) => {}
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
@@ -144,6 +154,25 @@ fn register_function_with_identifier(
                 function.span,
             ));
         }
+    }
+}
+
+/// Map the surface `(Visibility, owner_type)` pair to the
+/// typecheck-internal [`VisibilityScope`]. Public functions get the
+/// `Public` variant regardless of owner; `priv fn` declared inside a
+/// type body becomes [`VisibilityScope::TypePrivate`]; a top-level
+/// `priv fn` becomes [`VisibilityScope::PackagePrivate`]. The owner
+/// id is the type the method belongs to — even an inherent or
+/// protocol-impl method on `Foo` carries `Foo`'s id, so cross-impl
+/// calls within the same type all share one scope.
+fn function_visibility_scope(
+    visibility: Visibility,
+    owner_type: Option<GlobalRegistryId>,
+) -> VisibilityScope {
+    match (visibility, owner_type) {
+        (Visibility::Public, _) => VisibilityScope::Public,
+        (Visibility::Private, Some(owner)) => VisibilityScope::TypePrivate(owner),
+        (Visibility::Private, None) => VisibilityScope::PackagePrivate,
     }
 }
 
@@ -185,8 +214,8 @@ fn register_struct(
     diagnose_struct_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
     let type_params = type_param_names(&decl.type_params);
-    match registry.insert_struct(identifier, decl.span, type_params) {
-        InsertOutcome::Fresh(_) => {}
+    let struct_id = match registry.insert_struct(identifier.clone(), decl.span, type_params) {
+        InsertOutcome::Fresh(id) => Some(id),
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
                 format!("`{}` is already defined", existing.identifier),
@@ -199,9 +228,13 @@ fn register_struct(
             ));
             // Still register inline methods even on collision: the
             // duplicate decl is itself diagnosed; methods declared
-            // under the duplicate would otherwise dangle.
+            // under the duplicate would otherwise dangle. Re-look up
+            // the existing entry's id so methods scope their
+            // visibility against whatever struct already owns the
+            // name.
+            registry.lookup(&identifier).map(|(id, _)| id)
         }
-    }
+    };
     for function in &decl.functions {
         let method_identifier =
             Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
@@ -209,6 +242,7 @@ fn register_struct(
             function,
             method_identifier,
             SelfContext::AllowSelf,
+            struct_id,
             registry,
             diagnostics,
         );
@@ -229,8 +263,8 @@ fn register_enum(
     diagnose_enum_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
     let type_params = type_param_names(&decl.type_params);
-    match registry.insert_enum(identifier, decl.span, type_params) {
-        InsertOutcome::Fresh(_) => {}
+    let enum_id = match registry.insert_enum(identifier.clone(), decl.span, type_params) {
+        InsertOutcome::Fresh(id) => Some(id),
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
                 format!("`{}` is already defined", existing.identifier),
@@ -241,8 +275,9 @@ fn register_enum(
                 ),
                 decl.span,
             ));
+            registry.lookup(&identifier).map(|(id, _)| id)
         }
-    }
+    };
     for function in &decl.functions {
         let method_identifier =
             Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
@@ -250,6 +285,7 @@ fn register_enum(
             function,
             method_identifier,
             SelfContext::AllowSelf,
+            enum_id,
             registry,
             diagnostics,
         );
@@ -279,7 +315,7 @@ fn register_impl(
         return;
     };
     let target_identifier = Identifier::new(package, vec![target_name.to_string()]);
-    let Some((_, entry)) = registry.lookup(&target_identifier) else {
+    let Some((target_id, entry)) = registry.lookup(&target_identifier) else {
         diagnostics.push(Diagnostic::error(
             format!("typecheck cannot extend unknown type `{target_name}`"),
             type_expr_span(&impl_block.target),
@@ -309,6 +345,7 @@ fn register_impl(
             function,
             method_identifier,
             SelfContext::AllowSelf,
+            Some(target_id),
             registry,
             diagnostics,
         );

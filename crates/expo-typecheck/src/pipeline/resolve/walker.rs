@@ -50,9 +50,10 @@ pub(crate) fn resolve_file(
         match item {
             Item::Function(function) => {
                 let identifier = Identifier::new(env.package, vec![function.name.clone()]);
-                resolve_function(function, &identifier, None, &mut env, diagnostics);
+                resolve_function(function, &identifier, None, None, &mut env, diagnostics);
             }
             Item::Struct(decl) => {
+                let enclosing_type_id = enclosing_type_id(env.package, &decl.name, env.registry);
                 for function in &mut decl.functions {
                     let identifier = Identifier::new(
                         env.package,
@@ -62,12 +63,14 @@ pub(crate) fn resolve_file(
                         function,
                         &identifier,
                         Some(&decl.name),
+                        enclosing_type_id,
                         &mut env,
                         diagnostics,
                     );
                 }
             }
             Item::Enum(decl) => {
+                let enclosing_type_id = enclosing_type_id(env.package, &decl.name, env.registry);
                 for function in &mut decl.functions {
                     let identifier = Identifier::new(
                         env.package,
@@ -77,6 +80,7 @@ pub(crate) fn resolve_file(
                         function,
                         &identifier,
                         Some(&decl.name),
+                        enclosing_type_id,
                         &mut env,
                         diagnostics,
                     );
@@ -96,6 +100,7 @@ pub(crate) fn resolve_file(
                     continue;
                 };
                 let target_name = target_name.to_string();
+                let enclosing_type_id = enclosing_type_id(env.package, &target_name, env.registry);
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(function) = member {
                         let identifier = Identifier::new(
@@ -106,6 +111,7 @@ pub(crate) fn resolve_file(
                             function,
                             &identifier,
                             Some(&target_name),
+                            enclosing_type_id,
                             &mut env,
                             diagnostics,
                         );
@@ -117,17 +123,33 @@ pub(crate) fn resolve_file(
     }
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
-        let mut resolver = env.make_resolver(None, None, &[], &mut scope);
+        let mut resolver = env.make_resolver(None, None, None, &[], &mut scope);
         for stmt in body.iter_mut() {
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
     }
 }
 
+/// Look up the registry id for a type declared in `package` with
+/// the bare name `name`. Used by [`resolve_file`] to capture the
+/// enclosing type's id once per decl / impl block (rather than
+/// once per method) so the resolver can anchor `priv fn`
+/// type-private checks. `None` when collect dropped the type
+/// — body resolution proceeds best-effort regardless.
+fn enclosing_type_id(
+    package: &str,
+    name: &str,
+    registry: &GlobalRegistry,
+) -> Option<GlobalRegistryId> {
+    let identifier = Identifier::new(package, vec![name.to_string()]);
+    registry.lookup(&identifier).map(|(id, _)| id)
+}
+
 fn resolve_function(
     function: &mut Function,
     identifier: &Identifier,
     enclosing_type: Option<&str>,
+    enclosing_type_id: Option<GlobalRegistryId>,
     env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -145,6 +167,7 @@ fn resolve_function(
     {
         let mut resolver = env.make_resolver(
             enclosing_type,
+            enclosing_type_id,
             self_pass_mode,
             &type_param_owners,
             &mut scope,

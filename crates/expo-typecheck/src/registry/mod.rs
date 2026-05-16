@@ -107,6 +107,12 @@ impl GlobalKind {
 /// the param is unbounded. Default at collect time is one empty inner
 /// vec per param; lift's bounds-resolve sub-pass replaces it with the
 /// resolved protocol ids via [`GlobalRegistry::set_type_param_bounds`].
+///
+/// `visibility` carries the `priv fn` enforcement scope as a
+/// [`VisibilityScope`] — see that enum for the three-case
+/// rationale. Non-function entries (structs, enums, protocols,
+/// constants, type aliases) all carry `Public`; visibility isn't
+/// a language concern for them.
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
     pub identifier: Identifier,
@@ -114,6 +120,30 @@ pub struct RegistryEntry {
     pub span: Span,
     pub type_params: Vec<String>,
     pub type_param_bounds: Vec<Vec<GlobalRegistryId>>,
+    pub visibility: VisibilityScope,
+}
+
+/// Typecheck-internal projection of the AST [`expo_ast::ast::Visibility`]
+/// plus the contextual scope where a `priv fn` was declared. Encoded as
+/// a single enum so illegal states (public-with-owner, private-with-no-
+/// scope) are unrepresentable — the surface keyword and its declaration
+/// position together pick exactly one variant.
+///
+/// - `Public` (default): no restriction; the call resolves wherever
+///   the name is reachable.
+/// - `PackagePrivate`: top-level `priv fn`. Callable from any file
+///   in the same package; the package name lives on the entry's
+///   [`Identifier`] so it doesn't need to be repeated here.
+/// - `TypePrivate(type_id)`: `priv fn` declared inside a `struct` /
+///   `enum` / `impl` body. Callable only from other methods on the
+///   same target type — including across inherent and protocol-impl
+///   blocks, since they all register at `[type, method]` and share
+///   one owner id.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum VisibilityScope {
+    Public,
+    PackagePrivate,
+    TypePrivate(GlobalRegistryId),
 }
 
 /// Outcome of an insert attempt. `Collision` carries the existing
@@ -165,7 +195,13 @@ impl GlobalRegistry {
     /// later by [`Self::set_constant_definition`]. Constants don't
     /// take type parameters, so callers always pass an empty vec.
     pub fn insert_constant(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Constant(None), span, Vec::new())
+        self.insert(
+            identifier,
+            GlobalKind::Constant(None),
+            span,
+            Vec::new(),
+            VisibilityScope::Public,
+        )
     }
 
     /// Register an enum in the `Enum(None)` state. The resolved
@@ -180,7 +216,13 @@ impl GlobalRegistry {
         span: Span,
         type_params: Vec<String>,
     ) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Enum(None), span, type_params)
+        self.insert(
+            identifier,
+            GlobalKind::Enum(None),
+            span,
+            type_params,
+            VisibilityScope::Public,
+        )
     }
 
     /// Register a function in the `Function(None)` state. The
@@ -188,13 +230,26 @@ impl GlobalRegistry {
     /// `type_params` carries the function's own declared generic
     /// params (not the enclosing struct/impl's; chained scopes are
     /// rebuilt at resolve time).
+    ///
+    /// `visibility` captures the `priv fn` enforcement scope as a
+    /// [`VisibilityScope`]: `Public` for default `fn`, or the
+    /// `PackagePrivate` / `TypePrivate(type_id)` variant that
+    /// matches where the `priv fn` was declared. See
+    /// [`VisibilityScope`] for the mapping rule.
     pub fn insert_function(
         &mut self,
         identifier: Identifier,
         span: Span,
         type_params: Vec<String>,
+        visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Function(None), span, type_params)
+        self.insert(
+            identifier,
+            GlobalKind::Function(None),
+            span,
+            type_params,
+            visibility,
+        )
     }
 
     /// Register a protocol in the `Protocol(None)` state. Method
@@ -205,7 +260,13 @@ impl GlobalRegistry {
         span: Span,
         type_params: Vec<String>,
     ) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Protocol(None), span, type_params)
+        self.insert(
+            identifier,
+            GlobalKind::Protocol(None),
+            span,
+            type_params,
+            VisibilityScope::Public,
+        )
     }
 
     /// Register a struct in the `Struct(None)` state. The
@@ -217,7 +278,13 @@ impl GlobalRegistry {
         span: Span,
         type_params: Vec<String>,
     ) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::Struct(None), span, type_params)
+        self.insert(
+            identifier,
+            GlobalKind::Struct(None),
+            span,
+            type_params,
+            VisibilityScope::Public,
+        )
     }
 
     /// Register a `type X = ...` alias in the `TypeAlias(None)`
@@ -227,7 +294,13 @@ impl GlobalRegistry {
     /// generic aliases are tracked as a future language extension
     /// in the v1-parity plan.
     pub fn insert_type_alias(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
-        self.insert(identifier, GlobalKind::TypeAlias(None), span, Vec::new())
+        self.insert(
+            identifier,
+            GlobalKind::TypeAlias(None),
+            span,
+            Vec::new(),
+            VisibilityScope::Public,
+        )
     }
 
     /// Stamp a resolved variant roster onto an enum entry. Panics
@@ -386,6 +459,7 @@ impl GlobalRegistry {
         kind: GlobalKind,
         span: Span,
         type_params: Vec<String>,
+        visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         if let Some(&id) = self.by_identifier.get(&identifier) {
             let existing = self
@@ -406,6 +480,7 @@ impl GlobalRegistry {
                 span,
                 type_params,
                 type_param_bounds,
+                visibility,
             },
         );
         InsertOutcome::Fresh(id)
