@@ -456,6 +456,7 @@ dependencies = [
 name = "expo-ir-eval"
 version = "0.10.0"
 dependencies = [
+ "boring-sys",
  "expo-ast",
  "expo-ir",
  "expo-parser",

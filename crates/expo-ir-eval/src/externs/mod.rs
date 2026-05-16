@@ -27,6 +27,7 @@ use crate::error::RuntimeError;
 use crate::value::Value;
 
 mod cptr;
+mod crypto;
 mod fd;
 mod kernel;
 mod random;
@@ -38,6 +39,20 @@ mod time;
 /// caller can surface [`RuntimeError::ExternNotSupported`].
 pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, RuntimeError>> {
     match link_name {
+        "EVP_DigestFinal_ex" => Some(crypto::evp_digest_final_ex(args)),
+        "EVP_DigestInit_ex" => Some(crypto::evp_digest_init_ex(args)),
+        "EVP_DigestUpdate" => Some(crypto::evp_digest_update(args)),
+        "EVP_MD_CTX_free" => Some(crypto::evp_md_ctx_free(args)),
+        "EVP_MD_CTX_new" => Some(crypto::evp_md_ctx_new(args)),
+        "EVP_sha1" => Some(crypto::evp_sha1(args)),
+        "EVP_sha256" => Some(crypto::evp_sha256(args)),
+        "EVP_sha384" => Some(crypto::evp_sha384(args)),
+        "EVP_sha512" => Some(crypto::evp_sha512(args)),
+        "HMAC" => Some(crypto::hmac(args)),
+        "SHA1" => Some(crypto::sha1(args)),
+        "SHA256" => Some(crypto::sha256(args)),
+        "SHA384" => Some(crypto::sha384(args)),
+        "SHA512" => Some(crypto::sha512(args)),
         "expo_cwd" => Some(system::cwd(args)),
         "expo_fd_close" => Some(fd::fd_close(args)),
         "expo_fd_read" => Some(fd::fd_read(args)),

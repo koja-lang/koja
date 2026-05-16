@@ -6,6 +6,7 @@ license.workspace = true
 version.workspace = true
 
 [dependencies]
+boring-sys = { version = "5", default-features = false }
 expo-ir = { path = "../expo-ir" }
 expo-runtime = { path = "../expo-runtime" }
 

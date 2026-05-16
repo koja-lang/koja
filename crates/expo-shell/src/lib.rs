@@ -345,9 +345,13 @@ impl Session {
 /// Prepends [`expo_stdlib::autoimport_sources`] so REPL input
 /// sees the same `Global.*` prelude the driver and tests do —
 /// `Duration.from_secs(3).millis()` and `0b1100.band(0b1010)` work
-/// at the prompt without any imports.
+/// at the prompt without any imports. Also prepends
+/// [`expo_stdlib::qualified_sources`] so qualified packages
+/// (`Crypto.SHA256`, `Net.Socket`, …) typecheck without an explicit
+/// alias — same behavior the driver gives non-`Global` compiles.
 fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<(IRScript, Value), String> {
     let mut sources = expo_stdlib::autoimport_sources();
+    sources.extend(expo_stdlib::qualified_sources());
     sources.push(SourceFile {
         package: package.to_string(),
         path,

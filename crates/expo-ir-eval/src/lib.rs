@@ -18,6 +18,13 @@
 // the rlib and the C symbols would come up undefined.
 use expo_runtime as _;
 
+// Pull `boring-sys` into the link graph so its `#[link(name =
+// "crypto", ...)]` / `#[link(name = "ssl", ...)]` attributes fire
+// and `libcrypto.a` / `libssl.a` get linked. Required for
+// [`crate::externs::crypto`] handlers that call `SHA256` / `HMAC`
+// / `EVP_*` directly. No Rust-path uses; pure link metadata.
+use boring_sys as _;
+
 mod error;
 mod externs;
 mod interpreter;
