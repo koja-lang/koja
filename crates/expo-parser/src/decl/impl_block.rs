@@ -1,10 +1,6 @@
-//! `impl Trait for Target ... end` blocks declare that `Target`
-//! implements `Trait`. The `for` clause is required: bare
-//! `impl Type` (inherent methods) is rejected with a migration
-//! diagnostic pointing the user to `extend Type`. The parser
-//! recovers by emitting an [`ExtendBlock`] so the rest of the file
-//! still type-checks meaningfully, but the original `impl`
-//! diagnostic remains the user's signal to migrate.
+//! `impl Trait for Target ... end` declares protocol conformance.
+//! Bare `impl Type` is rejected with a migration diagnostic and
+//! recovered as [`ExtendBlock`] so the rest of the file still parses.
 
 use expo_ast::ast::{ExtendBlock, ImplBlock, ImplMember, Item};
 use expo_ast::token::TokenKind;
@@ -48,11 +44,9 @@ impl Parser {
         })
     }
 
-    /// Parses the body of an `impl` or `extend` block: zero or more
-    /// `fn`/`priv fn` methods and inline `type` aliases, ending at
-    /// `end`. The caller is responsible for consuming the trailing
-    /// `end` token; this helper leaves it for the caller's
-    /// `expect(&TokenKind::End)`.
+    /// Parse the body of an `impl` or `extend` block (methods +
+    /// inline `type` aliases). Leaves the trailing `end` for the
+    /// caller to consume.
     pub(crate) fn parse_impl_members(&mut self) -> Vec<ImplMember> {
         self.skip_newlines();
         let mut members = Vec::new();

@@ -142,11 +142,9 @@ pub(super) fn lift_impl(
     );
 }
 
-/// Lift every method declared in an `extend Type ... end` block.
-/// Mirrors [`lift_impl`] minus the protocol-conformance work and
-/// routes registration through the target's own package — extends
-/// can be declared in any package, but their methods live under the
-/// target's qualified identifier.
+/// Lift every method in an `extend Type ... end` block. Like
+/// [`lift_impl`] without the protocol-conformance work, and keyed
+/// by the target's own package.
 pub(super) fn lift_extend(
     extend_block: &mut ExtendBlock,
     scope: &mut LiftScope<'_>,
@@ -223,10 +221,8 @@ fn resolve_impl_target(
     resolve_block_target(&impl_block.target, target_identifier, scope)
 }
 
-/// Shared between `lift_impl` and `lift_extend`: resolve a block's
-/// declared target type expression in a scope that lets the target's
-/// own type-params resolve (e.g. `T` in `extend Bag<T>` resolves to
-/// `TypeParam(Bag, 0)`).
+/// Shared resolver for `impl`/`extend` target type expressions:
+/// the target's own type-params resolve via [`TypeParamScope`].
 fn resolve_block_target(
     target: &TypeExpr,
     target_identifier: &Identifier,

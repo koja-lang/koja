@@ -117,11 +117,10 @@ pub struct DocStruct {
 /// stdlib) and drives cross-package sort + renderer labelling.
 ///
 /// `pending_extends` holds methods from `extend Type` blocks
-/// declared *in this package* that haven't yet been routed to
-/// their target type. `finalize_project` distributes them across
-/// every package's struct/enum rosters once all files have been
-/// ingested, so extends can target same-file types, cross-file
-/// types in the same package, or cross-package types uniformly.
+/// declared in this package that haven't yet been routed to their
+/// target type. [`finalize_project`] drains them once every file
+/// has been ingested, so same-package and cross-package targets
+/// route identically.
 #[derive(Debug)]
 pub struct DocPackage {
     pub constants: Vec<DocConstant>,
@@ -135,9 +134,8 @@ pub struct DocPackage {
     pending_extends: Vec<PendingExtend>,
 }
 
-/// A method-set from an `extend Type` block waiting to be attached
-/// to its target. The renderer never sees these — they're consumed
-/// inside `finalize_project` before the per-package sort runs.
+/// A method-set from an `extend Type` block, consumed by
+/// [`resolve_pending_extends`] before rendering.
 #[derive(Debug)]
 struct PendingExtend {
     target_package: String,
@@ -257,11 +255,9 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
     }
 }
 
-/// Finalize the project: resolve pending `extend` blocks, sort
-/// packages by `(kind tier, name)` so the user's project lands
-/// first, then sort every item kind inside each package
-/// alphabetically and rebuild the per-package flat `items` roster
-/// used by the sidebar item list.
+/// Resolve pending `extend` blocks, sort packages by
+/// `(kind tier, name)` so the user's project lands first, then sort
+/// and flatten each package's items for the sidebar.
 pub fn finalize_project(project: &mut DocProject) {
     resolve_pending_extends(project);
 
@@ -274,11 +270,9 @@ pub fn finalize_project(project: &mut DocProject) {
     }
 }
 
-/// Drain every package's `pending_extends` and attach each one's
-/// methods to the named struct or enum on the target package. An
-/// extend whose target isn't documented (e.g. a private struct, or
-/// a type from a package the driver didn't bundle) is silently
-/// dropped -- there's no stub-struct fallback.
+/// Drain every package's `pending_extends` and attach each method
+/// set to the named struct or enum. Extends whose target isn't
+/// documented (private type, unbundled package) are dropped.
 fn resolve_pending_extends(project: &mut DocProject) {
     let pendings: Vec<PendingExtend> = project
         .packages
@@ -376,15 +370,9 @@ fn annotation_string(annotations: &[expo_ast::ast::Annotation]) -> Option<String
         })
 }
 
-/// Build a [`PendingExtend`] from an `extend Type` block. The
-/// target's package comes from every segment above the tail joined
-/// with `.`: `extend Net.TCPSocket` targets package `Net`,
-/// `extend Foo.Bar.Baz` targets `Foo.Bar`. A single-segment path
-/// (`extend Counter`) targets `current_package`. The interpretation
-/// matches `expo_typecheck::pipeline::collect::extend_target_path`
-/// and `expo_ir::lower::package::extend_target_path` -- intentionally
-/// inlined here so `expo-doc` can stay a thin wrapper around AST
-/// + render without pulling in a typecheck dep.
+/// Build a [`PendingExtend`] from an `extend Type` block. Path
+/// interpretation mirrors typecheck/IR's `extend_target_path`;
+/// inlined so `expo-doc` doesn't need a typecheck dep.
 fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<PendingExtend> {
     let path = match &ext.target {
         TypeExpr::Generic { path, .. } | TypeExpr::Named { path, .. } => path,

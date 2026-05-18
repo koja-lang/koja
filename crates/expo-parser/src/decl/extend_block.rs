@@ -1,7 +1,5 @@
-//! `extend Type ... end` blocks attach additional methods (and
-//! inline `type` aliases) to `Type`. Methods are ambient: callable
-//! from any package that can name `Type`. Members share the same
-//! grammar as `impl` block members and are parsed via
+//! `extend Type ... end` attaches inherent methods to `Type`.
+//! Members share `impl`'s grammar; bodies are parsed via
 //! [`Parser::parse_impl_members`].
 
 use expo_ast::ast::{ExtendBlock, Item};

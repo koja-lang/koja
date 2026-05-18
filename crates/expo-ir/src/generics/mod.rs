@@ -144,12 +144,9 @@ fn drain_synthesized_into_packages(packages: &mut [IRPackage], output: &mut Lowe
 }
 
 /// Map every function template's `GlobalRegistryId` to its AST
-/// node. Built once per [`instantiate`] call; covers top-level
-/// `fn`s, inline `fn` items on struct/enum decls, methods in
-/// `impl Protocol for Type` blocks, and methods in `extend Type`
-/// blocks (which may target a type in a different package).
-/// Skipped for v1-only [`Item`] kinds (constants, imports) — the
-/// pipeline does not yet lower them.
+/// node. Covers top-level `fn`s, inline methods on struct/enum
+/// decls, and methods in `impl` / `extend` blocks (the latter may
+/// target another package).
 pub(super) type FunctionAstIndex<'a> = BTreeMap<GlobalRegistryId, &'a Function>;
 
 fn build_function_index<'a>(

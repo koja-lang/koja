@@ -410,10 +410,8 @@ pub struct Function {
     pub span: Span,
 }
 
-/// An `impl Protocol for Type` block: declares that `target` implements
-/// `trait_expr`. Inherent (non-protocol) methods live in [`ExtendBlock`]
-/// instead; the parser rejects bare `impl Type` with a diagnostic pointing
-/// to `extend Type`.
+/// An `impl Protocol for Type` block. Inherent methods live in
+/// [`ExtendBlock`]; bare `impl Type` is a parse error.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     pub target: TypeExpr,
@@ -422,10 +420,10 @@ pub struct ImplBlock {
     pub span: Span,
 }
 
-/// An `extend Type` block: attaches additional methods (and type aliases) to
-/// `target`. Methods are ambient — callable from any package that can name
-/// `target`. Two `extend` blocks (in any packages) declaring the same method
-/// name on the same target is a hard compile error.
+/// An `extend Type` block: attaches inherent methods (and type
+/// aliases) to `target`. Methods are ambient; duplicate method
+/// names across `extend` blocks targeting the same type are a hard
+/// compile error.
 #[derive(Debug, Clone)]
 pub struct ExtendBlock {
     pub target: TypeExpr,

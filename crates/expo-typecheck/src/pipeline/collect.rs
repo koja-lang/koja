@@ -91,10 +91,9 @@ pub(crate) fn collect_file_decls(
     }
 }
 
-/// Pass 2 of collect: register every `impl` and `extend` block. Must
-/// run after [`collect_file_decls`] has been invoked on every file in
-/// every package, so that a block in one file targeting a type
-/// declared in another file (or another package) finds its target.
+/// Pass 2: register every `impl` and `extend` block. Runs after
+/// [`collect_file_decls`] on all packages so cross-file/cross-package
+/// targets resolve.
 pub(crate) fn collect_file_impls(
     file: &File,
     package: &str,
@@ -347,15 +346,10 @@ fn register_impl(
     );
 }
 
-/// Register every method declared in an `extend Type ... end` block.
-/// The target's package may differ from the block's own package: a
-/// dotted target (`extend Net.TCPSocket`) resolves through the head
-/// segment, while a bare target (`extend Counter`) attaches methods
-/// to the local-package type. Method-name collisions surface through
-/// the same identifier-insert path that catches duplicate `fn`s on a
-/// struct's body, so two `extend` blocks (in any packages) declaring
-/// the same method on the same target produce a single diagnostic
-/// citing both spans.
+/// Register every method declared in an `extend Type ... end` block,
+/// routing the methods through the target's qualified identifier so
+/// cross-package extends land in the same collision-detection slot
+/// as same-package ones.
 fn register_extend(
     extend_block: &ExtendBlock,
     package: &str,
@@ -390,12 +384,6 @@ fn register_extend(
         ));
         return;
     }
-    // Methods live under the *target's* package and type name,
-    // regardless of where the `extend` block was authored. That's
-    // what makes extends ambient: a method declared in package
-    // `User` on `Net.TCPSocket` registers as `Net.TCPSocket.method`,
-    // so cross-package collisions naturally hit the single
-    // identifier table.
     register_block_methods(
         target_package.as_str(),
         target_name,
@@ -406,10 +394,8 @@ fn register_extend(
     );
 }
 
-/// Shared method-registration loop for `impl` and `extend` block
-/// bodies. Each `fn` member becomes
-/// `<target_package>.<target_name>.<method>`; `type` aliases are
-/// surfaced by the appropriate feature-gap diagnostic at the caller.
+/// Shared method-registration loop for `impl` and `extend` bodies.
+/// Each `fn` registers under `<target_package>.<target_name>.<method>`.
 fn register_block_methods(
     target_package: &str,
     target_name: &str,
@@ -593,13 +579,10 @@ fn simple_named_target(target: &TypeExpr) -> Option<&str> {
     }
 }
 
-/// Project an `extend Type` target [`TypeExpr`] into
-/// `(package, type_name)`. Single-segment paths (`extend Counter`)
-/// resolve against `current_package`; dotted paths (`extend Net.TCPSocket`,
-/// `extend Foo.Bar.Baz`) split at the tail, joining every segment above
-/// the tail back into a dotted package identifier. Generic args don't
-/// affect the key. Returns `None` for function types, unions, `Self`,
-/// and unit — none of which can be `extend` targets.
+/// Project an `extend Type` target into `(package, type_name)`.
+/// Single-segment paths resolve against `current_package`; dotted
+/// paths split at the tail. Returns `None` for shapes that can't be
+/// extend targets (functions, unions, `Self`, unit).
 pub(crate) fn extend_target_path<'a>(
     target: &'a TypeExpr,
     current_package: &str,
@@ -743,9 +726,7 @@ fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut V
     }
 }
 
-/// Mirror of [`diagnose_impl_member_feature_gaps`] for `extend`
-/// blocks: same unsupported shape (`type Alias = ...`), same
-/// one-diagnostic-per-member output.
+/// Mirror of [`diagnose_impl_member_feature_gaps`] for `extend`.
 fn diagnose_extend_member_feature_gaps(
     extend_block: &ExtendBlock,
     diagnostics: &mut Vec<Diagnostic>,

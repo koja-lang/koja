@@ -161,10 +161,9 @@ fn lower_impl(
     );
 }
 
-/// Lower methods declared in an `extend Type ... end` block. The
-/// target's package may differ from the file's own package; the IR
-/// keys every function under the target's qualified identifier so
-/// dispatch stays stable across the declaring + extending packages.
+/// Lower methods in an `extend Type ... end` block. Functions key
+/// off the target's qualified identifier regardless of the file's
+/// own package, keeping dispatch stable across extending packages.
 fn lower_extend(
     extend_block: &ExtendBlock,
     package: &str,
@@ -189,12 +188,9 @@ fn lower_extend(
     );
 }
 
-/// Resolve an `extend` target type expression to `(package, name)`.
-/// Mirrors `expo_typecheck::pipeline::collect::extend_target_path`
-/// (intentionally inlined — the function is small and the only thing
-/// IR needs from it is the path split). Returns `None` for shapes
-/// that can't be extend targets; typecheck has already errored on
-/// those upstream so IR just skips.
+/// Project an `extend` target into `(package, name)`. Inlined twin
+/// of `expo_typecheck::pipeline::collect::extend_target_path`; IR
+/// just skips shapes that typecheck already rejected.
 pub(crate) fn extend_target_path<'a>(
     target: &'a TypeExpr,
     current_package: &str,
@@ -209,10 +205,9 @@ pub(crate) fn extend_target_path<'a>(
     }
 }
 
-/// Shared member-lowering loop between [`lower_impl`] and
-/// [`lower_extend`]. Each `fn` member lowers into a function keyed
-/// at `<target_package>.<target_name>.<method>`; type-alias members
-/// are silently dropped (typecheck already diagnosed them).
+/// Shared member-lowering loop for [`lower_impl`] and [`lower_extend`].
+/// `fn` members key at `<target_package>.<target_name>.<method>`;
+/// type aliases are dropped.
 fn lower_block_members(
     target_package: &str,
     target_name: &str,

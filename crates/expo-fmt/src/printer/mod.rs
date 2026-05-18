@@ -459,9 +459,7 @@ impl<'a> Printer<'a> {
         ])
     }
 
-    /// Shared body formatting for `impl` and `extend` blocks: each
-    /// member on its own line, indented two spaces, with the closing
-    /// `end` flush-left on its own line.
+    /// Shared body for `impl` and `extend`: indented members + `end`.
     fn impl_member_body_to_doc(&mut self, members: &[ImplMember]) -> Doc {
         let mut body = Vec::new();
         for (i, member) in members.iter().enumerate() {

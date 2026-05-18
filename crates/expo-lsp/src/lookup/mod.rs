@@ -312,10 +312,8 @@ fn doc_in_methods(functions: &[Function], type_name: &str, name: &str) -> Option
     None
 }
 
-/// Shared helper for `Item::Impl` and `Item::Extend`: looks up a
-/// function in a block's members, matching either the bare method
-/// name (`bump`) or the mangled `Type_method` form (`Counter_bump`)
-/// the LSP receives in jump-to-def requests.
+/// Shared helper for `Item::Impl` and `Item::Extend`: match a
+/// member's bare name (`bump`) or its mangled form (`Counter_bump`).
 fn doc_in_block_members(target: &TypeExpr, members: &[ImplMember], name: &str) -> Option<String> {
     let target_name = match target {
         TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
