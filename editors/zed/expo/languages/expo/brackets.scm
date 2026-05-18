@@ -12,6 +12,7 @@
 ("struct" @open "end" @close)
 ("enum" @open "end" @close)
 ("impl" @open "end" @close)
+("extend" @open "end" @close)
 ("protocol" @open "end" @close)
 ("fn" @open "end" @close)
 ("if" @open "end" @close)

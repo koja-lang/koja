@@ -293,7 +293,7 @@ fn method_call_on_union_diagnoses() {
           x: Int
         end
 
-        impl A
+        extend A
           fn label(self) -> String
             \"a\"
           end
@@ -303,7 +303,7 @@ fn method_call_on_union_diagnoses() {
           y: Int
         end
 
-        impl B
+        extend B
           fn label(self) -> String
             \"b\"
           end

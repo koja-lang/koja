@@ -6,7 +6,7 @@ with linear probing.
 struct Map<K, V>
 end
 
-impl Map<K, V>
+extend Map<K, V>
   @doc """
   Returns `true` if the map contains no entries.
   """

@@ -10,11 +10,12 @@
 use std::collections::HashMap;
 
 use expo_ast::ast::{
-    Diagnostic, Expr, ExprKind, Function, ImplBlock, ImplMember, MatchArm, Param, Pattern,
-    ProtocolMethod, Statement, StringPart, TypeExpr, Visibility,
+    Diagnostic, Expr, ExprKind, ExtendBlock, Function, ImplBlock, ImplMember, MatchArm, Param,
+    Pattern, ProtocolMethod, Statement, StringPart, TypeExpr, Visibility,
 };
 use expo_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
+use crate::pipeline::collect::extend_target_path;
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
@@ -50,11 +51,10 @@ struct ProtocolImplScope<'a> {
     target_identifier: &'a Identifier,
     target_name: &'a str,
     /// User-supplied protocol type-args from `impl P<A, B, C> for T`,
-    /// in source order. `None` for non-generic protocols. Used by
-    /// default-method synthesis to substitute references to the
-    /// protocol's type-params (`M`, `R`, …) inside the cloned
-    /// default body before lift sees it.
-    trait_expr: Option<&'a TypeExpr>,
+    /// in source order. Used by default-method synthesis to
+    /// substitute references to the protocol's type-params (`M`,
+    /// `R`, …) inside the cloned default body before lift sees it.
+    trait_expr: &'a TypeExpr,
 }
 
 pub(super) fn lift_impl(
@@ -89,17 +89,13 @@ pub(super) fn lift_impl(
     // method-lift loop without changing behavior for the common
     // generic-aliased case.
     let resolved_target = resolve_impl_target(impl_block, &target_identifier, scope);
-    let resolved = if impl_block.trait_expr.is_some() {
-        resolve_protocol_impl_heads(
-            impl_block,
-            &target_identifier,
-            &resolved_target,
-            scope,
-            diagnostics,
-        )
-    } else {
-        None
-    };
+    let resolved = resolve_protocol_impl_heads(
+        impl_block,
+        &target_identifier,
+        &resolved_target,
+        scope,
+        diagnostics,
+    );
     let self_override = Some(&resolved_target);
     for member in &impl_block.members {
         let ImplMember::Function(function) = member else {
@@ -120,29 +116,76 @@ pub(super) fn lift_impl(
             diagnostics,
         );
     }
-    if impl_block.trait_expr.is_some() {
-        let Some(resolved) = resolved else {
-            return;
-        };
-        let target_id = scope
+    let Some(resolved) = resolved else {
+        return;
+    };
+    let target_id = scope
+        .registry
+        .lookup(&target_identifier)
+        .expect("target entry was checked above")
+        .0;
+    verify_and_synthesize_trait_impl(
+        impl_block,
+        &target_name,
+        &target_identifier,
+        &resolved,
+        bodies,
+        scope,
+        diagnostics,
+    );
+    record_target_conformance(
+        impl_block,
+        target_id,
+        &resolved,
+        scope.registry,
+        diagnostics,
+    );
+}
+
+/// Lift every method declared in an `extend Type ... end` block.
+/// Mirrors [`lift_impl`] minus the protocol-conformance work and
+/// routes registration through the target's own package — extends
+/// can be declared in any package, but their methods live under the
+/// target's qualified identifier.
+pub(super) fn lift_extend(
+    extend_block: &mut ExtendBlock,
+    scope: &mut LiftScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Some((target_package, target_name)) =
+        extend_target_path(&extend_block.target, scope.package)
+    else {
+        return;
+    };
+    let target_name = target_name.to_string();
+    let target_identifier = Identifier::new(target_package.as_str(), vec![target_name.clone()]);
+    if !matches!(
+        scope
             .registry
             .lookup(&target_identifier)
-            .expect("target entry was checked above")
-            .0;
-        verify_and_synthesize_trait_impl(
-            impl_block,
-            &target_name,
-            &target_identifier,
-            &resolved,
-            bodies,
-            scope,
-            diagnostics,
+            .map(|(_, e)| &e.kind),
+        Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
+    ) {
+        return;
+    }
+    let resolved_target = resolve_block_target(&extend_block.target, &target_identifier, scope);
+    let self_override = Some(&resolved_target);
+    for member in &extend_block.members {
+        let ImplMember::Function(function) = member else {
+            continue;
+        };
+        let method_identifier = Identifier::new(
+            target_package.as_str(),
+            vec![target_name.clone(), function.name.clone()],
         );
-        record_target_conformance(
-            impl_block,
-            target_id,
-            &resolved,
-            scope.registry,
+        lift_function_with_identifier(
+            function,
+            method_identifier,
+            SelfContext::Receiver {
+                receiver: &target_identifier,
+                self_override,
+            },
+            scope,
             diagnostics,
         );
     }
@@ -177,15 +220,22 @@ fn resolve_impl_target(
     target_identifier: &Identifier,
     scope: &LiftScope<'_>,
 ) -> ResolvedType {
+    resolve_block_target(&impl_block.target, target_identifier, scope)
+}
+
+/// Shared between `lift_impl` and `lift_extend`: resolve a block's
+/// declared target type expression in a scope that lets the target's
+/// own type-params resolve (e.g. `T` in `extend Bag<T>` resolves to
+/// `TypeParam(Bag, 0)`).
+fn resolve_block_target(
+    target: &TypeExpr,
+    target_identifier: &Identifier,
+    scope: &LiftScope<'_>,
+) -> ResolvedType {
     let owners = impl_target_owners(target_identifier, scope.registry);
     let type_params = TypeParamScope::new(&owners);
     let mut sink = Vec::new();
-    resolve_type_expr(
-        &impl_block.target,
-        type_params,
-        scope.resolution_scope(),
-        &mut sink,
-    )
+    resolve_type_expr(target, type_params, scope.resolution_scope(), &mut sink)
 }
 
 /// Owners list for any impl-block target scope: a single-entry
@@ -215,10 +265,7 @@ fn resolve_protocol_impl_heads(
     scope: &LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<ResolvedImplHeads> {
-    let trait_expr = impl_block
-        .trait_expr
-        .as_ref()
-        .expect("resolve_protocol_impl_heads called on inherent impl");
+    let trait_expr = &impl_block.trait_expr;
     // Scope rooted at the target struct/enum: `T` in `Bag<T>`
     // resolves to `TypeParam(Bag, 0)`, matching how an inline
     // method on `struct Bag<T>` would resolve `T`. The impl's free
@@ -356,7 +403,7 @@ fn verify_and_synthesize_trait_impl(
         target: &resolved.target,
         target_identifier,
         target_name,
-        trait_expr: trait_expr.as_ref(),
+        trait_expr: &trait_expr,
     };
     verify_protocol_conformance(
         impl_block,
@@ -487,7 +534,7 @@ fn substitute_protocol_type_params(
         &protocol_param_names[1..]
     };
     let trait_args = match impl_scope.trait_expr {
-        Some(TypeExpr::Generic { args, .. }) => args.as_slice(),
+        TypeExpr::Generic { args, .. } => args.as_slice(),
         _ => return,
     };
     if user_param_names.len() != trait_args.len() {

@@ -81,7 +81,7 @@ fn collect_existing_equality_impls(file: &File) -> Vec<String> {
 }
 
 fn equality_impl_target(block: &ImplBlock) -> Option<String> {
-    let trait_name = type_expr_head(block.trait_expr.as_ref()?)?;
+    let trait_name = type_expr_head(&block.trait_expr)?;
     if trait_name != EQUALITY_PROTOCOL {
         return None;
     }
@@ -133,7 +133,7 @@ fn equality_impl_block(target: TypeExpr, body_expr: Expr, span: Span) -> Item {
     let other_type = target.clone();
     Item::Impl(ImplBlock {
         target,
-        trait_expr: Some(equality_trait_expr(span)),
+        trait_expr: equality_trait_expr(span),
         members: vec![ImplMember::Function(eq_function(
             other_type, body_expr, span,
         ))],

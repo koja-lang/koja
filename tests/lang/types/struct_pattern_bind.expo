@@ -6,7 +6,7 @@ end
 struct Describer
 end
 
-impl Describer
+extend Describer
   fn describe(self, p: Point) -> String
     # Field bindings are always explicit: `name: pattern`. To bind a
     # field under a local with the same name, write `x: x` (no shorthand

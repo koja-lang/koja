@@ -116,14 +116,14 @@ fn annotation_in_protocol_must_precede_fn() {
 fn impl_body_rejects_random_decl() {
     let src = dedent(
         "
-        impl Foo
+        extend Foo
           struct Nested
           end
         end
         ",
     );
     let result = parse_failing(&src);
-    assert_message_contains(&result, "expected function or type alias in impl block");
+    assert_message_contains(&result, "expected function or type alias in block body");
 }
 
 #[test]

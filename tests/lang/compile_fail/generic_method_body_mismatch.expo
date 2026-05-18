@@ -2,7 +2,7 @@ struct Counter
   value: Int
 end
 
-impl Counter
+extend Counter
   fn bad<U>(self) -> U
     self.value + "string"
   end

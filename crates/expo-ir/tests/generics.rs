@@ -432,7 +432,7 @@ fn static_call_on_generic_struct_registers_mono_method() {
           value: T
         end
 
-        impl Box<T>
+        extend Box<T>
           fn make(v: T) -> Box<T>
             Box{value: v}
           end
@@ -485,7 +485,7 @@ fn receive_arm_typed_binding_substitutes_payload_type_during_mono() {
           x: R
         end
 
-        impl Wrap<R>
+        extend Wrap<R>
           fn make(value: R) -> Pair<Wrap<R>, R>
             Pair{first: Wrap{x: value}, second: value}
           end

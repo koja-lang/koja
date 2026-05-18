@@ -36,6 +36,7 @@ top_level_decl = struct_decl
                | enum_decl
                | protocol_decl
                | impl_block
+               | extend_block
                | function_decl
                | constant_decl
                | type_alias_decl
@@ -94,12 +95,25 @@ protocol_method = { annotation } , "fn" , IDENT , [ type_params ] ,
 
 
 (* ========================================================================== *)
-(* 4. Impl blocks                                                             *)
+(* 4. Impl and extend blocks                                                  *)
 (* ========================================================================== *)
 
-impl_block = "impl" , type_expr , [ "for" , type_expr ] ,
+(* `impl Protocol for Type` declares that Type implements Protocol. The `for`
+   clause is required -- bare `impl Type` is rejected by the parser with a
+   diagnostic pointing to `extend Type`.
+
+   `extend Type` declares additional methods (and type aliases) on Type. The
+   methods are ambient: callable from any package that can name Type. Two
+   extend blocks declaring the same method name on the same type is a hard
+   compile error, regardless of which packages they live in. *)
+
+impl_block = "impl" , type_expr , "for" , type_expr ,
              { impl_member } ,
              "end" ;
+
+extend_block = "extend" , type_expr ,
+               { impl_member } ,
+               "end" ;
 
 impl_member = function_decl
             | type_alias ;
@@ -489,9 +503,9 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, alias, break, cond, const, else, end, enum, false, fn,        *)
-(* for, if, impl, in, loop, match, move, not, priv, protocol, receive,   *)
-(* return, self, spawn, struct, true, type, unless, when, while         *)
+(* after, alias, break, cond, const, else, end, enum, extend, false,    *)
+(* fn, for, if, impl, in, loop, match, move, not, priv, protocol,        *)
+(* receive, return, self, spawn, struct, true, type, unless, when, while *)
 (*                                                                       *)
 (* Note: `and`, `or`, and `as` are contextual identifiers, not reserved  *)
 (* keywords. `and`/`or` are recognized as infix operators by the parser  *)

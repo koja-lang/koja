@@ -11,7 +11,7 @@ end
 struct Classifier
 end
 
-impl Classifier
+extend Classifier
   fn classify(self, opt: Option<TokenKind>) -> String
     # Regression for GAPS "Nested enum pattern matching with literal
     # payloads": matching `Option.None` against an arm whose pattern is

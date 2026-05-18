@@ -138,7 +138,7 @@ inside method bodies that try to return a closure as the final expression,
 because the parser hits the same `fn (` start-of-statement ambiguity:
 
 ```expo
-impl Foo
+extend Foo
   fn make(self) -> fn (Int) -> Int
     fn (x: Int) -> Int x + 1 end   # same parse error
   end
@@ -163,7 +163,7 @@ A closure created inside an `impl` method that references `self`
 declaration, not the offending closure:
 
 ```expo
-impl Counter
+extend Counter
   fn make_adder(self) -> fn (Int) -> Int
     f = fn (x: Int) -> Int
       x + self.value     # error: self used outside of impl method
@@ -188,8 +188,8 @@ Surfaced during agent compiler-fuzz testing (April 2026).
 
 ## Specialized impl loses concrete type when the type parameter recurses through itself
 
-For an `impl` specialized to a self-nested instantiation
-(`impl Box<Box<Int>>`), inner field access is type-checked using the
+For an `extend` block specialized to a self-nested instantiation
+(`extend Box<Box<Int>>`), inner field access is type-checked using the
 struct's _generic_ parameter rather than the inner concrete substitution:
 
 ```expo
@@ -197,7 +197,7 @@ struct Box<T>
   value: T
 end
 
-impl Box<Box<Int>>
+extend Box<Box<Int>>
   fn get_inner(self) -> Int
     self.value.value     # error: field access on non-struct type `T`
   end
@@ -207,7 +207,7 @@ end
 `self.value` is correctly typed as `Box<Int>`, but the next field access
 sees that inner `Box`'s declared field type as the original `T` and
 refuses the field access. Specializations to a single concrete level
-(`impl Box<Int>` where `self.value` is `Int`, or `impl Box<Inner>` for
+(`extend Box<Int>` where `self.value` is `Int`, or `extend Box<Inner>` for
 some non-generic struct `Inner`) work correctly -- the bug is specifically
 the case where the specialization substitutes the same generic shape.
 

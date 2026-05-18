@@ -64,7 +64,7 @@ const PROCESS_STUB: &str = "
       id: Int
     end
 
-    impl ReplyTo<R>
+    extend ReplyTo<R>
       @intrinsic
       fn send(self, reply: R)
     end
@@ -73,7 +73,7 @@ const PROCESS_STUB: &str = "
       id: Int
     end
 
-    impl Ref<M, R>
+    extend Ref<M, R>
       @intrinsic
       fn self_ref -> Ref<M, R>
 
@@ -307,7 +307,7 @@ fn ref_self_ref_emits_expo_rt_self_wrapped_in_ref_struct() {
     let mut source = String::from(COUNTER_PROCESS);
     source.push_str(
         "
-        impl Counter
+        extend Counter
           fn whoami -> Ref<Int, Int>
             Ref.self_ref()
           end

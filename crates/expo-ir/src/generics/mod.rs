@@ -46,7 +46,7 @@ use expo_ast::identifier::{
 use expo_typecheck::{CheckedPackage, GlobalRegistry};
 
 use crate::lower::LowerOutput;
-use crate::lower::package::impl_target_name;
+use crate::lower::package::{extend_target_path, impl_target_name};
 use crate::package::IRPackage;
 
 /// One discovered generic instantiation. Recorded by
@@ -145,9 +145,11 @@ fn drain_synthesized_into_packages(packages: &mut [IRPackage], output: &mut Lowe
 
 /// Map every function template's `GlobalRegistryId` to its AST
 /// node. Built once per [`instantiate`] call; covers top-level
-/// `fn`s, inline `fn` items on struct/enum decls, and methods in
-/// `impl` blocks. Skipped for v1-only [`Item`] kinds (constants,
-/// imports) — the pipeline does not yet lower them.
+/// `fn`s, inline `fn` items on struct/enum decls, methods in
+/// `impl Protocol for Type` blocks, and methods in `extend Type`
+/// blocks (which may target a type in a different package).
+/// Skipped for v1-only [`Item`] kinds (constants, imports) — the
+/// pipeline does not yet lower them.
 pub(super) type FunctionAstIndex<'a> = BTreeMap<GlobalRegistryId, &'a Function>;
 
 fn build_function_index<'a>(
@@ -200,6 +202,23 @@ fn index_item<'a>(
                 };
                 let identifier = Identifier::new(
                     package,
+                    vec![target_name.to_string(), function.name.clone()],
+                );
+                insert_function(map, registry, &identifier, function);
+            }
+        }
+        Item::Extend(extend_block) => {
+            let Some((target_package, target_name)) =
+                extend_target_path(&extend_block.target, package)
+            else {
+                return;
+            };
+            for member in &extend_block.members {
+                let ImplMember::Function(function) = member else {
+                    continue;
+                };
+                let identifier = Identifier::new(
+                    &target_package,
                     vec![target_name.to_string(), function.name.clone()],
                 );
                 insert_function(map, registry, &identifier, function);

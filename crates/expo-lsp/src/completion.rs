@@ -16,9 +16,9 @@ use crate::lookup::{LookupCtx, find_expr_at, traverse_receiver_type_id};
 
 /// Expo language keywords offered as completions.
 const KEYWORDS: &[&str] = &[
-    "break", "cond", "const", "else", "end", "enum", "false", "fn", "for", "if", "impl", "in",
-    "loop", "match", "move", "priv", "protocol", "receive", "return", "self", "spawn", "struct",
-    "true", "type", "unless", "when", "while",
+    "break", "cond", "const", "else", "end", "enum", "extend", "false", "fn", "for", "if", "impl",
+    "in", "loop", "match", "move", "priv", "protocol", "receive", "return", "self", "spawn",
+    "struct", "true", "type", "unless", "when", "while",
 ];
 
 impl Backend {

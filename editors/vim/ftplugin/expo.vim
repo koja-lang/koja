@@ -27,6 +27,7 @@ if exists("loaded_matchit")
         \ . '\<struct\>:\<end\>,'
         \ . '\<enum\>:\<end\>,'
         \ . '\<impl\>:\<end\>,'
+        \ . '\<extend\>:\<end\>,'
         \ . '\<protocol\>:\<end\>,'
         \ . '\<if\>:\<else\>:\<end\>,'
         \ . '\<unless\>:\<end\>,'

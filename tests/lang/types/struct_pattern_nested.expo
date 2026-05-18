@@ -6,7 +6,7 @@ end
 struct Inspector
 end
 
-impl Inspector
+extend Inspector
   # Composes the new flat struct-pattern path with the Wave 27 CFG-gated
   # enum-pattern path: `Some(Point{x: 5})` projects the payload only when
   # the outer tag check succeeds, then projects the inner field. The

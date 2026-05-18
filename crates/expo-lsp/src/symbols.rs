@@ -253,6 +253,26 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                     }
                 }
             }
+            Item::Extend(ext) => {
+                let container = type_expr_label(&ext.target);
+                for member in &ext.members {
+                    if let ImplMember::Function(f) = member
+                        && matches(&f.name)
+                    {
+                        results.push(SymbolInformation {
+                            name: f.name.clone(),
+                            kind: SymbolKind::METHOD,
+                            tags: None,
+                            deprecated: None,
+                            location: Location {
+                                uri: uri.clone(),
+                                range: span_to_range(&f.span),
+                            },
+                            container_name: Some(container.clone()),
+                        });
+                    }
+                }
+            }
         }
     }
 }
@@ -352,10 +372,35 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: target_name,
-                    detail: imp
-                        .trait_expr
-                        .as_ref()
-                        .map(|t| format!("impl {}", type_expr_label(t))),
+                    detail: Some(format!("impl {}", type_expr_label(&imp.trait_expr))),
+                    kind: SymbolKind::MODULE,
+                    tags: None,
+                    deprecated: None,
+                    range,
+                    selection_range: range,
+                    children: if children.is_empty() {
+                        None
+                    } else {
+                        Some(children)
+                    },
+                });
+            }
+            Item::Extend(ext) => {
+                let range = span_to_range(&ext.span);
+                let target_name = type_expr_label(&ext.target);
+                let children: Vec<DocumentSymbol> = ext
+                    .members
+                    .iter()
+                    .filter_map(|m| match m {
+                        ImplMember::Function(f) => Some(function_symbol(f)),
+                        _ => None,
+                    })
+                    .collect();
+
+                #[allow(deprecated)]
+                symbols.push(DocumentSymbol {
+                    name: target_name,
+                    detail: Some("extend".to_string()),
                     kind: SymbolKind::MODULE,
                     tags: None,
                     deprecated: None,

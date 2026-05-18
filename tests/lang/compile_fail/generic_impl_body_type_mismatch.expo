@@ -2,7 +2,7 @@ struct Box<T>
   value: T
 end
 
-impl Box<T>
+extend Box<T>
   fn typo(self) -> Int
     "not an int"
   end

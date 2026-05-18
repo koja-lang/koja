@@ -144,7 +144,7 @@ fn priv_method_callable_across_impl_blocks_on_same_type() {
           end
         end
 
-        impl Counter
+        extend Counter
           fn doubled(self) -> Int
             self.helper()
           end

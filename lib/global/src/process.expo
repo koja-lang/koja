@@ -71,7 +71,7 @@ struct ReplyTo<R>
   id: Int
 end
 
-impl ReplyTo<R>
+extend ReplyTo<R>
   @doc """
   Sends a reply of type `R` to the caller that initiated a synchronous call.
   """
@@ -99,7 +99,7 @@ struct Ref<M, R>
   id: Int
 end
 
-impl Ref<M, R>
+extend Ref<M, R>
   @doc """
   Returns a typed handle to the current process. Must be called from within
   a running process (inside `start`, `handle`, or `handle_signal`).
@@ -215,7 +215,7 @@ struct Task<R>
   work: fn () -> R
 end
 
-impl Task<R>
+extend Task<R>
   fn async(fun: fn () -> R) -> Ref<(), R>
     spawn Task.start(Task{work: fun})
   end

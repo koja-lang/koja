@@ -198,7 +198,8 @@ pub(crate) fn lift_signatures(
             }
         }
     }
-    // Pass 2: impls. Mutable so synthesis can push members.
+    // Pass 2: impl + extend blocks. Mutable so impl synthesis can
+    // push members.
     for pkg in packages.iter_mut() {
         let package = pkg.package.clone();
         for file in &mut pkg.files {
@@ -209,8 +210,14 @@ pub(crate) fn lift_signatures(
                 registry,
             };
             for item in &mut file.items {
-                if let Item::Impl(impl_block) = item {
-                    impls::lift_impl(impl_block, &bodies, &mut scope, diagnostics);
+                match item {
+                    Item::Impl(impl_block) => {
+                        impls::lift_impl(impl_block, &bodies, &mut scope, diagnostics);
+                    }
+                    Item::Extend(extend_block) => {
+                        impls::lift_extend(extend_block, &mut scope, diagnostics);
+                    }
+                    _ => {}
                 }
             }
         }

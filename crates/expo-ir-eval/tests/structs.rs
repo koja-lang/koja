@@ -195,7 +195,7 @@ fn impl_block_static_method_call_then_field_get_evaluates() {
           y: Int
         end
 
-        impl Point
+        extend Point
           fn origin -> Point
             Point{x: 0, y: 0}
           end
@@ -259,7 +259,7 @@ fn impl_block_instance_method_reads_self_field() {
           y: Int
         end
 
-        impl Point
+        extend Point
           fn second(self) -> Int
             self.y
           end

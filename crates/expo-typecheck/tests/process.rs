@@ -67,7 +67,7 @@ enum CallError
   ProcessDown
 end
 
-impl Ref<M, R>
+extend Ref<M, R>
   @intrinsic
   fn call(self, msg: M, timeout: Int) -> Result<R, CallError>
 
@@ -243,7 +243,7 @@ fn spawn_receiver_without_process_impl_diagnoses() {
           n: Int
         end
 
-        impl Bag
+        extend Bag
           fn start(move config: Int) -> Result<Bag, StopReason>
             Result.Ok(Bag{n: config})
           end

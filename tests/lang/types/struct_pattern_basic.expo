@@ -6,7 +6,7 @@ end
 struct Classifier
 end
 
-impl Classifier
+extend Classifier
   fn label(self, p: Point) -> String
     match p
       Point{x: 5, y: 2} -> "exact"

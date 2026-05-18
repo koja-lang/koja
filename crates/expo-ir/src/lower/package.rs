@@ -9,7 +9,8 @@
 //! [`Identifier`] differs.
 
 use expo_ast::ast::{
-    Diagnostic, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c, is_intrinsic,
+    Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c,
+    is_intrinsic,
 };
 use expo_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
@@ -112,6 +113,9 @@ pub(crate) fn lower_package(
                 Item::Impl(impl_block) => {
                     lower_impl(impl_block, &pkg.package, registry, output, &mut functions);
                 }
+                Item::Extend(extend_block) => {
+                    lower_extend(extend_block, &pkg.package, registry, output, &mut functions);
+                }
                 _ => {}
             }
         }
@@ -129,12 +133,11 @@ pub(crate) fn lower_package(
     }
 }
 
-/// Lower methods declared in an `impl Type ... end` or
-/// `impl Trait for Type ... end` block. Unsupported targets already
-/// errored upstream; IR silently skips them. Trait-impl members
-/// (including synthesized default-method bodies) lower the same as
-/// inherent ones — both register at `Package.Type.method` and the
-/// IR doesn't model the trait link.
+/// Lower methods declared in an `impl Trait for Type ... end` block.
+/// Unsupported targets already errored upstream; IR silently skips
+/// them. Synthesized default-method bodies lower like any other
+/// method — they all register at `Package.Type.method` and the IR
+/// doesn't model the trait link.
 fn lower_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -148,12 +151,82 @@ fn lower_impl(
     if impl_target_is_generic(target_name, package, registry) {
         return;
     }
-    for member in &impl_block.members {
+    lower_block_members(
+        package,
+        target_name,
+        &impl_block.members,
+        registry,
+        output,
+        functions,
+    );
+}
+
+/// Lower methods declared in an `extend Type ... end` block. The
+/// target's package may differ from the file's own package; the IR
+/// keys every function under the target's qualified identifier so
+/// dispatch stays stable across the declaring + extending packages.
+fn lower_extend(
+    extend_block: &ExtendBlock,
+    package: &str,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+    functions: &mut BTreeMap<IRSymbol, IRFunction>,
+) {
+    let Some((target_package, target_name)) = extend_target_path(&extend_block.target, package)
+    else {
+        return;
+    };
+    if impl_target_is_generic(target_name, target_package.as_str(), registry) {
+        return;
+    }
+    lower_block_members(
+        target_package.as_str(),
+        target_name,
+        &extend_block.members,
+        registry,
+        output,
+        functions,
+    );
+}
+
+/// Resolve an `extend` target type expression to `(package, name)`.
+/// Mirrors `expo_typecheck::pipeline::collect::extend_target_path`
+/// (intentionally inlined — the function is small and the only thing
+/// IR needs from it is the path split). Returns `None` for shapes
+/// that can't be extend targets; typecheck has already errored on
+/// those upstream so IR just skips.
+pub(crate) fn extend_target_path<'a>(
+    target: &'a TypeExpr,
+    current_package: &str,
+) -> Option<(String, &'a str)> {
+    match target {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => match path.as_slice() {
+            [name] => Some((current_package.to_string(), name.as_str())),
+            [head @ .., last] if !head.is_empty() => Some((head.join("."), last.as_str())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Shared member-lowering loop between [`lower_impl`] and
+/// [`lower_extend`]. Each `fn` member lowers into a function keyed
+/// at `<target_package>.<target_name>.<method>`; type-alias members
+/// are silently dropped (typecheck already diagnosed them).
+fn lower_block_members(
+    target_package: &str,
+    target_name: &str,
+    members: &[ImplMember],
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+    functions: &mut BTreeMap<IRSymbol, IRFunction>,
+) {
+    for member in members {
         let ImplMember::Function(function) = member else {
             continue;
         };
         let identifier = Identifier::new(
-            package,
+            target_package,
             vec![target_name.to_string(), function.name.clone()],
         );
         if let Some(lowered) =

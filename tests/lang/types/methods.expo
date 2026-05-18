@@ -3,7 +3,7 @@ struct Point
   y: Int
 end
 
-impl Point
+extend Point
   fn distance_squared(self) -> Int
     self.x * self.x + self.y * self.y
   end

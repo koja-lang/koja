@@ -97,6 +97,7 @@ impl<'a> Printer<'a> {
         match item {
             Item::Struct(s) => self.struct_to_doc(s),
             Item::Enum(e) => self.enum_to_doc(e),
+            Item::Extend(e) => self.extend_to_doc(e),
             Item::Function(f) => self.function_to_doc(f),
             Item::Impl(i) => self.impl_to_doc(i),
             Item::Protocol(p) => self.protocol_to_doc(p),
@@ -438,28 +439,39 @@ impl<'a> Printer<'a> {
         concat(parts)
     }
 
-    /// Formats an `impl` block (with optional protocol conformance).
+    /// Formats an `impl Protocol for Type` block.
     fn impl_to_doc(&mut self, block: &ImplBlock) -> Doc {
-        let mut parts = Vec::new();
-        parts.push(text("impl "));
-        if let Some(trait_expr) = &block.trait_expr {
-            parts.push(type_expr_to_doc(trait_expr));
-            parts.push(text(" for "));
-        }
-        parts.push(type_expr_to_doc(&block.target));
+        concat(vec![
+            text("impl "),
+            type_expr_to_doc(&block.trait_expr),
+            text(" for "),
+            type_expr_to_doc(&block.target),
+            self.impl_member_body_to_doc(&block.members),
+        ])
+    }
 
+    /// Formats an `extend Type` block.
+    fn extend_to_doc(&mut self, block: &ExtendBlock) -> Doc {
+        concat(vec![
+            text("extend "),
+            type_expr_to_doc(&block.target),
+            self.impl_member_body_to_doc(&block.members),
+        ])
+    }
+
+    /// Shared body formatting for `impl` and `extend` blocks: each
+    /// member on its own line, indented two spaces, with the closing
+    /// `end` flush-left on its own line.
+    fn impl_member_body_to_doc(&mut self, members: &[ImplMember]) -> Doc {
         let mut body = Vec::new();
-        for (i, member) in block.members.iter().enumerate() {
+        for (i, member) in members.iter().enumerate() {
             if i > 0 {
                 body.push(hardline());
             }
             body.push(hardline());
             body.push(self.impl_member_to_doc(member));
         }
-        parts.push(indent(2, concat(body)));
-        parts.push(hardline());
-        parts.push(text("end"));
-        concat(parts)
+        concat(vec![indent(2, concat(body)), hardline(), text("end")])
     }
 
     /// Formats a member inside an `impl` block (function or type alias).

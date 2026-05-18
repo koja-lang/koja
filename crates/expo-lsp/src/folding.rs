@@ -88,6 +88,21 @@ fn collect_item_folds(file: &File, ranges: &mut Vec<FoldingRange>) {
                     }
                 }
             }
+            Item::Extend(ext) => {
+                if let Some(r) = span_fold(&ext.span, Some(FoldingRangeKind::Region)) {
+                    ranges.push(r);
+                }
+                for member in &ext.members {
+                    if let ImplMember::Function(f) = member {
+                        if let Some(r) = span_fold(&f.span, Some(FoldingRangeKind::Region)) {
+                            ranges.push(r);
+                        }
+                        if let Some(body) = &f.body {
+                            collect_statement_folds(body, ranges);
+                        }
+                    }
+                }
+            }
             Item::Protocol(p) => {
                 if let Some(r) = span_fold(&p.span, Some(FoldingRangeKind::Region)) {
                     ranges.push(r);

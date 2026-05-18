@@ -17,8 +17,8 @@ use std::fmt::Write as _;
 use crate::ast::{
     AliasDecl, AnnotationValue, Arg, AssignTarget, BinOp, BinarySegment, ClosureParam, CompoundOp,
     CondArm, Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr,
-    ExprKind, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item, LValue,
-    Literal, MatchArm, Param, PassMode, Pattern, ProtocolDecl, ProtocolMethod, Statement,
+    ExprKind, ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item,
+    LValue, Literal, MatchArm, Param, PassMode, Pattern, ProtocolDecl, ProtocolMethod, Statement,
     StringPart, StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
 };
 use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
@@ -122,6 +122,7 @@ impl<'a> Printer<'a> {
             Item::Alias(alias) => self.alias(alias),
             Item::Constant(c) => self.constant(c),
             Item::Enum(e) => self.enum_decl(e),
+            Item::Extend(e) => self.extend_block(e),
             Item::Function(f) => self.function("Function", f),
             Item::Impl(i) => self.impl_block(i),
             Item::Protocol(p) => self.protocol(p),
@@ -223,12 +224,23 @@ impl<'a> Printer<'a> {
     fn impl_block(&mut self, i: &ImplBlock) {
         self.nested("ImplBlock", i.span, |p| {
             p.line(&format!("target: {}", type_expr_inline(&i.target)));
-            if let Some(trait_expr) = &i.trait_expr {
-                p.line(&format!("trait: {}", type_expr_inline(trait_expr)));
-            }
+            p.line(&format!("trait: {}", type_expr_inline(&i.trait_expr)));
             if !i.members.is_empty() {
                 p.section("members", |p| {
                     for m in &i.members {
+                        p.impl_member(m);
+                    }
+                });
+            }
+        });
+    }
+
+    fn extend_block(&mut self, e: &ExtendBlock) {
+        self.nested("ExtendBlock", e.span, |p| {
+            p.line(&format!("target: {}", type_expr_inline(&e.target)));
+            if !e.members.is_empty() {
+                p.section("members", |p| {
+                    for m in &e.members {
                         p.impl_member(m);
                     }
                 });

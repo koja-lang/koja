@@ -128,7 +128,7 @@ fn extern_with_self_receiver_is_rejected() {
           tag: Bool
         end
 
-        impl Handle
+        extend Handle
           @extern \"C\"
           fn close(self) -> Int32
         end

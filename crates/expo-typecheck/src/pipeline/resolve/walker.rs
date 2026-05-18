@@ -25,6 +25,7 @@ use expo_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, PassMod
 use expo_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
+use crate::pipeline::collect::extend_target_path;
 use crate::pipeline::lift_signatures::impl_target_name;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
@@ -111,6 +112,37 @@ pub(crate) fn resolve_file(
                             function,
                             &identifier,
                             Some(&target_name),
+                            enclosing_type_id,
+                            &mut env,
+                            diagnostics,
+                        );
+                    }
+                }
+            }
+            Item::Extend(extend_block) => {
+                // Same as the Impl arm above, but routed to the target
+                // type's package: an `extend Net.TCPSocket` block in
+                // package `User` registers its methods under
+                // `Net.TCPSocket.*`, so the resolver has to anchor
+                // identifiers there too.
+                let Some((target_package, target_name)) =
+                    extend_target_path(&extend_block.target, env.package)
+                else {
+                    continue;
+                };
+                let enclosing_type_id =
+                    enclosing_type_id(&target_package, target_name, env.registry);
+                let target_name_owned = target_name.to_string();
+                for member in &mut extend_block.members {
+                    if let ImplMember::Function(function) = member {
+                        let identifier = Identifier::new(
+                            target_package.as_str(),
+                            vec![target_name_owned.clone(), function.name.clone()],
+                        );
+                        resolve_function(
+                            function,
+                            &identifier,
+                            Some(&target_name_owned),
                             enclosing_type_id,
                             &mut env,
                             diagnostics,

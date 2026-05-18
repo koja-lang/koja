@@ -2,7 +2,7 @@ struct MyBox<T>
   value: T
 end
 
-impl MyBox<T>
+extend MyBox<T>
   fn get(self) -> T
     self.value
   end

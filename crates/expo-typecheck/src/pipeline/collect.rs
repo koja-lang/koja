@@ -24,9 +24,9 @@
 //! enforce path-len / target-exists / no-shadow rules.
 
 use expo_ast::ast::{
-    Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData, File,
-    Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod, StructDecl,
-    StructField, TypeAlias, TypeExpr, TypeParam, Visibility,
+    Annotation, AnnotationKind, Constant, Diagnostic, EnumDecl, EnumVariant, EnumVariantData,
+    ExtendBlock, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl, ProtocolMethod,
+    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, Visibility,
 };
 use expo_ast::identifier::{GlobalRegistryId, Identifier};
 use expo_ast::span::Span;
@@ -67,6 +67,7 @@ pub(crate) fn collect_file_decls(
                 register_struct(decl, package, registry, diagnostics);
             }
             Item::Impl(_) => {}
+            Item::Extend(_) => {}
             Item::Constant(constant) => {
                 register_constant(constant, package, registry, diagnostics);
             }
@@ -90,10 +91,10 @@ pub(crate) fn collect_file_decls(
     }
 }
 
-/// Pass 2 of collect: register every `impl` block. Must run after
-/// [`collect_file_decls`] has been invoked on every file in every
-/// package, so that an impl in one file targeting a type declared
-/// in another file (or another package) finds its target.
+/// Pass 2 of collect: register every `impl` and `extend` block. Must
+/// run after [`collect_file_decls`] has been invoked on every file in
+/// every package, so that a block in one file targeting a type
+/// declared in another file (or another package) finds its target.
 pub(crate) fn collect_file_impls(
     file: &File,
     package: &str,
@@ -101,8 +102,12 @@ pub(crate) fn collect_file_impls(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     for item in &file.items {
-        if let Item::Impl(impl_block) = item {
-            register_impl(impl_block, package, registry, diagnostics);
+        match item {
+            Item::Impl(impl_block) => register_impl(impl_block, package, registry, diagnostics),
+            Item::Extend(extend_block) => {
+                register_extend(extend_block, package, registry, diagnostics);
+            }
+            _ => {}
         }
     }
 }
@@ -292,14 +297,13 @@ fn register_enum(
     }
 }
 
-/// Register every method declared in an `impl Type ... end` block
-/// under `(package, [type_name, fn_name])`. Inherent and trait
-/// impls share this path — neither gets its own registry entry.
-/// Trait-impl conformance facts (`target : protocol`) are recorded
-/// at lift time onto the target's struct/enum definition; duplicate
-/// `impl P for T` blocks surface there. Multiple inherent `impl T`
-/// blocks accumulate methods on `T` (collisions surface per-method,
-/// not per-block).
+/// Register every method declared in an `impl Trait for Type` block
+/// under `(package, [type_name, fn_name])`. Conformance facts
+/// (`target : protocol`) are recorded at lift time onto the target's
+/// struct/enum definition; duplicate `impl P for T` blocks surface
+/// there. The impl's `package` is the package the block lives in,
+/// which (for now) also has to be where `Type` is declared — cross-
+/// package protocol impls are not yet supported.
 fn register_impl(
     impl_block: &ImplBlock,
     package: &str,
@@ -333,12 +337,93 @@ fn register_impl(
         ));
         return;
     }
-    for member in &impl_block.members {
+    register_block_methods(
+        package,
+        target_name,
+        target_id,
+        &impl_block.members,
+        registry,
+        diagnostics,
+    );
+}
+
+/// Register every method declared in an `extend Type ... end` block.
+/// The target's package may differ from the block's own package: a
+/// dotted target (`extend Net.TCPSocket`) resolves through the head
+/// segment, while a bare target (`extend Counter`) attaches methods
+/// to the local-package type. Method-name collisions surface through
+/// the same identifier-insert path that catches duplicate `fn`s on a
+/// struct's body, so two `extend` blocks (in any packages) declaring
+/// the same method on the same target produce a single diagnostic
+/// citing both spans.
+fn register_extend(
+    extend_block: &ExtendBlock,
+    package: &str,
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    diagnose_extend_member_feature_gaps(extend_block, diagnostics);
+    let Some((target_package, target_name)) = extend_target_path(&extend_block.target, package)
+    else {
+        diagnostics.push(Diagnostic::error(
+            "typecheck does not yet support generic or function `extend` targets".to_string(),
+            type_expr_span(&extend_block.target),
+        ));
+        return;
+    };
+    let target_identifier = Identifier::new(target_package.as_str(), vec![target_name.to_string()]);
+    let Some((target_id, entry)) = registry.lookup(&target_identifier) else {
+        diagnostics.push(Diagnostic::error(
+            format!("typecheck cannot extend unknown type `{target_identifier}`"),
+            type_expr_span(&extend_block.target),
+        ));
+        return;
+    };
+    if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "`extend` only supports structs and enums (`{}` is a {})",
+                target_identifier,
+                entry.kind.label(),
+            ),
+            type_expr_span(&extend_block.target),
+        ));
+        return;
+    }
+    // Methods live under the *target's* package and type name,
+    // regardless of where the `extend` block was authored. That's
+    // what makes extends ambient: a method declared in package
+    // `User` on `Net.TCPSocket` registers as `Net.TCPSocket.method`,
+    // so cross-package collisions naturally hit the single
+    // identifier table.
+    register_block_methods(
+        target_package.as_str(),
+        target_name,
+        target_id,
+        &extend_block.members,
+        registry,
+        diagnostics,
+    );
+}
+
+/// Shared method-registration loop for `impl` and `extend` block
+/// bodies. Each `fn` member becomes
+/// `<target_package>.<target_name>.<method>`; `type` aliases are
+/// surfaced by the appropriate feature-gap diagnostic at the caller.
+fn register_block_methods(
+    target_package: &str,
+    target_name: &str,
+    target_id: GlobalRegistryId,
+    members: &[ImplMember],
+    registry: &mut GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for member in members {
         let ImplMember::Function(function) = member else {
             continue;
         };
         let method_identifier = Identifier::new(
-            package,
+            target_package,
             vec![target_name.to_string(), function.name.clone()],
         );
         register_function_with_identifier(
@@ -508,6 +593,27 @@ fn simple_named_target(target: &TypeExpr) -> Option<&str> {
     }
 }
 
+/// Project an `extend Type` target [`TypeExpr`] into
+/// `(package, type_name)`. Single-segment paths (`extend Counter`)
+/// resolve against `current_package`; dotted paths (`extend Net.TCPSocket`,
+/// `extend Foo.Bar.Baz`) split at the tail, joining every segment above
+/// the tail back into a dotted package identifier. Generic args don't
+/// affect the key. Returns `None` for function types, unions, `Self`,
+/// and unit — none of which can be `extend` targets.
+pub(crate) fn extend_target_path<'a>(
+    target: &'a TypeExpr,
+    current_package: &str,
+) -> Option<(String, &'a str)> {
+    match target {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => match path.as_slice() {
+            [name] => Some((current_package.to_string(), name.as_str())),
+            [head @ .., last] if !head.is_empty() => Some((head.join("."), last.as_str())),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Project the AST `[TypeParam]` list down to the param-name `Vec`
 /// the registry stores. Bounds are not stamped here — `lift_signatures`
 /// resolves bound names against registered protocols once every
@@ -631,6 +737,23 @@ fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut V
         if let ImplMember::TypeAlias(alias) = member {
             diagnostics.push(Diagnostic::error(
                 "typecheck does not yet support `type` aliases inside `impl` blocks".to_string(),
+                alias.span,
+            ));
+        }
+    }
+}
+
+/// Mirror of [`diagnose_impl_member_feature_gaps`] for `extend`
+/// blocks: same unsupported shape (`type Alias = ...`), same
+/// one-diagnostic-per-member output.
+fn diagnose_extend_member_feature_gaps(
+    extend_block: &ExtendBlock,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for member in &extend_block.members {
+        if let ImplMember::TypeAlias(alias) = member {
+            diagnostics.push(Diagnostic::error(
+                "typecheck does not yet support `type` aliases inside `extend` blocks".to_string(),
                 alias.span,
             ));
         }

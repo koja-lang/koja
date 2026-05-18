@@ -42,7 +42,7 @@ fn build_project() -> DocProject {
           count: Int
         end
 
-        impl Counter
+        extend Counter
           @doc \"Bump the counter by one.\"
           fn bump
             self.count + 1
@@ -66,7 +66,7 @@ fn build_project() -> DocProject {
           state: List<Int>
         end
 
-        impl SHA256
+        extend SHA256
           @doc \"Finalize the digest.\"
           fn digest
             self.state
@@ -209,7 +209,7 @@ fn private_functions_are_hidden_everywhere() {
           end
         end
 
-        impl Container
+        extend Container
           priv fn helper_impl
             self.count
           end

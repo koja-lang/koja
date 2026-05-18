@@ -6,8 +6,9 @@
 //! - `annotation` — `@name`, `@name "value"` decorators on declarations
 //! - `constant` — `const NAME [: T] = expr`
 //! - `enum_decl` — `enum Name<...> ... end` with Unit / Tuple / Struct variants
+//! - `extend_block` — `extend Type ... end` for inherent methods (ambient visibility)
 //! - `function` — top-level `fn`, parameter lists, body presence
-//! - `impl_block` — `impl Target [for Trait] ... end` and inline `type` aliases
+//! - `impl_block` — `impl Trait for Target ... end` for protocol conformance
 //! - `protocol` — `protocol Name<...> ... end` with required/default methods
 //! - `struct_decl` — `struct Name<...> ... end` with fields + inline methods
 //!
@@ -19,6 +20,7 @@ pub(crate) mod alias;
 pub(crate) mod annotation;
 pub(crate) mod constant;
 pub(crate) mod enum_decl;
+pub(crate) mod extend_block;
 pub(crate) mod function;
 pub(crate) mod impl_block;
 pub(crate) mod protocol;

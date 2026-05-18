@@ -587,7 +587,7 @@ fn impl_block_static_method_registers_under_qualified_identifier() {
           y: Int
         end
 
-        impl Point
+        extend Point
           fn origin -> Point
             Point{x: 0, y: 0}
           end
@@ -603,11 +603,11 @@ fn impl_block_static_method_registers_under_qualified_identifier() {
 #[test]
 fn impl_block_before_struct_in_file_still_registers_methods() {
     // Two-pass collect: pass 1 registers `struct Point`, pass 2
-    // registers methods inside `impl Point`. Source order between
+    // registers methods inside `extend Point`. Source order between
     // the two declarations doesn't matter — matches the language
     // rule "all top-level decls visible everywhere".
     let source = "
-        impl Point
+        extend Point
           fn origin -> Point
             Point{x: 0, y: 0}
           end
@@ -635,7 +635,7 @@ fn inline_and_impl_static_method_with_same_name_collide() {
           end
         end
 
-        impl Point
+        extend Point
           fn origin -> Int
             1
           end
@@ -815,7 +815,7 @@ fn instance_method_in_impl_block_lifts_with_dispatch_instance() {
           x: Int
         end
 
-        impl Point
+        extend Point
           fn distance(self) -> Int
             self.x
           end
@@ -1330,7 +1330,7 @@ fn impl_with_type_alias_member_diagnoses_feature_gap() {
           x: Int
         end
 
-        impl Point
+        extend Point
           type Coord = Int
         end
         ";
@@ -1340,15 +1340,15 @@ fn impl_with_type_alias_member_diagnoses_feature_gap() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("`type` aliases inside `impl` blocks")),
-        "expected impl-typealias gap diagnostic, got {messages:?}",
+            .any(|m| m.contains("`type` aliases inside `extend` blocks")),
+        "expected extend-typealias gap diagnostic, got {messages:?}",
     );
 }
 
 #[test]
 fn impl_on_unknown_type_diagnoses() {
     let source = "
-        impl Vector
+        extend Vector
           fn zero -> Int
             0
           end
@@ -1360,8 +1360,8 @@ fn impl_on_unknown_type_diagnoses() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("cannot extend unknown type `Vector`")),
-        "expected impl-unknown-type diagnostic, got {messages:?}",
+            .any(|m| m.contains("cannot extend unknown type `TestApp.Vector`")),
+        "expected extend-unknown-type diagnostic, got {messages:?}",
     );
 }
 

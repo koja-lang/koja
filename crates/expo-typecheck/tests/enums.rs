@@ -589,7 +589,7 @@ fn impl_block_on_enum_admits_static_methods() {
           Blue
         end
 
-        impl Color
+        extend Color
           fn primary -> Color
             Color.Red
           end

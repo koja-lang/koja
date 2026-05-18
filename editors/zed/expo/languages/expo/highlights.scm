@@ -33,6 +33,7 @@
   "as"
   "const"
   "enum"
+  "extend"
   "fn"
   "impl"
   "priv"
