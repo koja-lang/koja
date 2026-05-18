@@ -8,3 +8,6 @@ license.workspace = true
 askama = "0.15"
 expo-ast = { path = "../expo-ast" }
 pulldown-cmark = "0.13"
+
+[dev-dependencies]
+expo-parser = { path = "../expo-parser" }

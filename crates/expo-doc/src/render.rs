@@ -1,11 +1,15 @@
-//! Render documentation structs into static HTML pages using askama templates.
+//! Render documentation structs into static HTML pages using
+//! Askama templates. The renderer is package-aware: every page
+//! receives the sidebar context (package roster + current
+//! package's item list + active item) so a single sidebar
+//! template can serve the root, per-package, and per-item pages.
 
 use askama::Template;
 
 use crate::extract::{
-    DocConstant, DocEnum, DocFunction, DocItem, DocProject, DocProtocol, DocStruct,
+    DocConstant, DocEnum, DocFunction, DocItem, DocPackage, DocProject, DocProtocol, DocStruct,
+    PackageKind,
 };
-use crate::style::CSS;
 
 mod filters {
     use std::fmt::Display;
@@ -42,129 +46,248 @@ mod filters {
     }
 }
 
+/// Sidebar dropdown entry. One per [`DocPackage`] in the project,
+/// in the same sort order [`crate::extract::finalize_project`]
+/// stamped onto `project.packages`.
+#[derive(Debug)]
+pub struct PackageRef<'a> {
+    /// Bare package name (matches the subdir name on disk).
+    pub name: &'a str,
+    /// Origin tier label used as the package chip text on the
+    /// root-roster page (`"project"` / `"dependency"` / `"stdlib"`).
+    pub kind_label: &'static str,
+    /// Count of documentable items in the package — drives the
+    /// brief on the root-roster row ("123 items").
+    pub item_count: usize,
+    /// `"s"` when `item_count != 1` so the template can produce
+    /// "1 item" / "2 items" without inline conditionals.
+    pub item_plural: &'static str,
+}
+
+impl<'a> PackageRef<'a> {
+    fn from_package(pkg: &'a DocPackage) -> Self {
+        let item_count = pkg.items.len();
+        Self {
+            name: &pkg.name,
+            kind_label: pkg.kind.label(),
+            item_count,
+            item_plural: if item_count == 1 { "" } else { "s" },
+        }
+    }
+}
+
 #[derive(Template)]
 #[template(path = "index.html")]
-struct IndexTemplate<'a> {
+struct RootIndexTemplate<'a> {
     active_item: Option<&'a str>,
-    all_items: &'a [DocItem],
-    css: &'a str,
-    items: &'a [DocItem],
+    current_package: Option<&'a str>,
+    dep_count: usize,
+    dep_plural: &'static str,
+    packages: Vec<PackageRef<'a>>,
     project_name: &'a str,
+    root_prefix: &'a str,
+    sidebar_items: &'a [DocItem],
+    stdlib_count: usize,
+    stdlib_plural: &'static str,
+}
+
+#[derive(Template)]
+#[template(path = "package_index.html")]
+struct PackageIndexTemplate<'a> {
+    active_item: Option<&'a str>,
+    current_package: Option<&'a str>,
+    package_kind_label: &'static str,
+    package_name: &'a str,
+    packages: Vec<PackageRef<'a>>,
+    project_name: &'a str,
+    root_prefix: &'a str,
+    sidebar_items: &'a [DocItem],
 }
 
 #[derive(Template)]
 #[template(path = "item_struct.html")]
 struct StructTemplate<'a> {
     active_item: Option<&'a str>,
-    all_items: &'a [DocItem],
-    css: &'a str,
+    current_package: Option<&'a str>,
+    packages: Vec<PackageRef<'a>>,
     project_name: &'a str,
+    root_prefix: &'a str,
     s: &'a DocStruct,
+    sidebar_items: &'a [DocItem],
 }
 
 #[derive(Template)]
 #[template(path = "item_enum.html")]
 struct EnumTemplate<'a> {
     active_item: Option<&'a str>,
-    all_items: &'a [DocItem],
-    css: &'a str,
+    current_package: Option<&'a str>,
     e: &'a DocEnum,
+    packages: Vec<PackageRef<'a>>,
     project_name: &'a str,
+    root_prefix: &'a str,
+    sidebar_items: &'a [DocItem],
 }
 
 #[derive(Template)]
 #[template(path = "item_protocol.html")]
 struct ProtocolTemplate<'a> {
     active_item: Option<&'a str>,
-    all_items: &'a [DocItem],
-    css: &'a str,
+    current_package: Option<&'a str>,
     p: &'a DocProtocol,
+    packages: Vec<PackageRef<'a>>,
     project_name: &'a str,
+    root_prefix: &'a str,
+    sidebar_items: &'a [DocItem],
 }
 
 #[derive(Template)]
 #[template(path = "item_function.html")]
 struct FunctionTemplate<'a> {
     active_item: Option<&'a str>,
-    all_items: &'a [DocItem],
-    css: &'a str,
+    current_package: Option<&'a str>,
     f: &'a DocFunction,
+    packages: Vec<PackageRef<'a>>,
     project_name: &'a str,
+    root_prefix: &'a str,
+    sidebar_items: &'a [DocItem],
 }
 
 #[derive(Template)]
 #[template(path = "item_constant.html")]
 struct ConstantTemplate<'a> {
     active_item: Option<&'a str>,
-    all_items: &'a [DocItem],
     c: &'a DocConstant,
-    css: &'a str,
+    current_package: Option<&'a str>,
+    packages: Vec<PackageRef<'a>>,
     project_name: &'a str,
+    root_prefix: &'a str,
+    sidebar_items: &'a [DocItem],
 }
 
-/// Render the main index page listing all items.
-pub fn render_index(project: &DocProject) -> String {
-    let tmpl = IndexTemplate {
+/// Build the package-roster sidebar context: same input every
+/// page receives at the root level. `sidebar_items` is empty
+/// because the root page lists packages, not items.
+fn package_refs(project: &DocProject) -> Vec<PackageRef<'_>> {
+    project
+        .packages
+        .iter()
+        .map(PackageRef::from_package)
+        .collect()
+}
+
+fn dep_stats(project: &DocProject) -> (usize, &'static str, usize, &'static str) {
+    let dep_count = project
+        .packages
+        .iter()
+        .filter(|p| p.kind == PackageKind::Dependency)
+        .count();
+    let stdlib_count = project
+        .packages
+        .iter()
+        .filter(|p| p.kind == PackageKind::Stdlib)
+        .count();
+    let dep_plural = if dep_count == 1 { "" } else { "s" };
+    let stdlib_plural = if stdlib_count == 1 { "" } else { "s" };
+    (dep_count, dep_plural, stdlib_count, stdlib_plural)
+}
+
+const EMPTY_ITEMS: &[DocItem] = &[];
+
+/// Render the top-level `doc/index.html` — the package roster.
+pub fn render_root_index(project: &DocProject) -> String {
+    let (dep_count, dep_plural, stdlib_count, stdlib_plural) = dep_stats(project);
+    let tmpl = RootIndexTemplate {
         active_item: None,
-        all_items: &project.items,
-        css: CSS,
-        items: &project.items,
-        project_name: &project.name,
+        current_package: None,
+        dep_count,
+        dep_plural,
+        packages: package_refs(project),
+        project_name: &project.project_package,
+        root_prefix: "",
+        sidebar_items: EMPTY_ITEMS,
+        stdlib_count,
+        stdlib_plural,
     };
-    tmpl.render().expect("failed to render index template")
+    tmpl.render().expect("failed to render root index template")
 }
 
-pub fn render_struct(s: &DocStruct, project: &DocProject) -> String {
+/// Render `doc/<Pkg>/index.html` — a single package's overview.
+pub fn render_package_index(pkg: &DocPackage, project: &DocProject) -> String {
+    let tmpl = PackageIndexTemplate {
+        active_item: None,
+        current_package: Some(&pkg.name),
+        package_kind_label: pkg.kind.label(),
+        package_name: &pkg.name,
+        packages: package_refs(project),
+        project_name: &project.project_package,
+        root_prefix: "../",
+        sidebar_items: &pkg.items,
+    };
+    tmpl.render()
+        .expect("failed to render package index template")
+}
+
+pub fn render_struct(s: &DocStruct, pkg: &DocPackage, project: &DocProject) -> String {
     let tmpl = StructTemplate {
-        css: CSS,
-        s,
-        all_items: &project.items,
         active_item: Some(&s.name),
-        project_name: &project.name,
+        current_package: Some(&pkg.name),
+        packages: package_refs(project),
+        project_name: &project.project_package,
+        root_prefix: "../",
+        s,
+        sidebar_items: &pkg.items,
     };
     tmpl.render().expect("failed to render struct template")
 }
 
-pub fn render_constant(c: &DocConstant, project: &DocProject) -> String {
+pub fn render_constant(c: &DocConstant, pkg: &DocPackage, project: &DocProject) -> String {
     let tmpl = ConstantTemplate {
-        css: CSS,
-        c,
-        all_items: &project.items,
         active_item: Some(&c.name),
-        project_name: &project.name,
+        c,
+        current_package: Some(&pkg.name),
+        packages: package_refs(project),
+        project_name: &project.project_package,
+        root_prefix: "../",
+        sidebar_items: &pkg.items,
     };
     tmpl.render().expect("failed to render constant template")
 }
 
-pub fn render_enum(e: &DocEnum, project: &DocProject) -> String {
+pub fn render_enum(e: &DocEnum, pkg: &DocPackage, project: &DocProject) -> String {
     let tmpl = EnumTemplate {
-        css: CSS,
-        e,
-        all_items: &project.items,
         active_item: Some(&e.name),
-        project_name: &project.name,
+        current_package: Some(&pkg.name),
+        e,
+        packages: package_refs(project),
+        project_name: &project.project_package,
+        root_prefix: "../",
+        sidebar_items: &pkg.items,
     };
     tmpl.render().expect("failed to render enum template")
 }
 
-pub fn render_function(f: &DocFunction, project: &DocProject) -> String {
+pub fn render_function(f: &DocFunction, pkg: &DocPackage, project: &DocProject) -> String {
     let tmpl = FunctionTemplate {
-        css: CSS,
-        f,
-        all_items: &project.items,
         active_item: Some(&f.name),
-        project_name: &project.name,
+        current_package: Some(&pkg.name),
+        f,
+        packages: package_refs(project),
+        project_name: &project.project_package,
+        root_prefix: "../",
+        sidebar_items: &pkg.items,
     };
     tmpl.render().expect("failed to render function template")
 }
 
-pub fn render_protocol(p: &DocProtocol, project: &DocProject) -> String {
+pub fn render_protocol(p: &DocProtocol, pkg: &DocPackage, project: &DocProject) -> String {
     let tmpl = ProtocolTemplate {
-        css: CSS,
-        p,
-        all_items: &project.items,
         active_item: Some(&p.name),
-        project_name: &project.name,
+        current_package: Some(&pkg.name),
+        p,
+        packages: package_refs(project),
+        project_name: &project.project_package,
+        root_prefix: "../",
+        sidebar_items: &pkg.items,
     };
     tmpl.render().expect("failed to render protocol template")
 }

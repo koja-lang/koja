@@ -1,14 +1,53 @@
 <nav class="sidebar">
-  <h1>{{ project_name }}</h1>
+  <h1><a href="{{ root_prefix }}index.html">{{ project_name }}</a></h1>
+
+  <div class="sidebar-search">
+    <input
+      type="search"
+      id="doc-search"
+      autocomplete="off"
+      spellcheck="false"
+      placeholder="/ to search"
+      aria-label="Search documentation"
+      data-root-prefix="{{ root_prefix }}">
+    <div id="doc-search-results" class="search-results"></div>
+  </div>
+
+  {% if let Some(pkg) = current_package %}
+  <select
+    class="sidebar-package"
+    aria-label="Package"
+    onchange="window.location.href = this.value;">
+    {% for pref in packages %}
+    <option
+      value="{{ root_prefix }}{{ pref.name }}/index.html"
+      {% if pref.name == *pkg %}selected{% endif %}>
+      {{ pref.name }}
+    </option>
+    {% endfor %}
+  </select>
 
   <ul class="sidebar-items">
-    {% for item in all_items %}
+    {% for item in sidebar_items %}
     <li>
-      <a class="sidebar-item{% if let Some(active) = active_item %}{% if item.name == *active %} active{% endif %}{% endif %}" href="{{ item.name }}.html">
+      <a class="sidebar-item{% if let Some(active) = active_item %}{% if item.name == *active %} active{% endif %}{% endif %}"
+        href="{{ root_prefix }}{{ pkg }}/{{ item.name }}.html">
         <span class="sidebar-item-name">{{ item.name }}</span>
         <span class="type-chip chip-{{ item.kind }}">{{ item.kind }}</span>
       </a>
     </li>
     {% endfor %}
   </ul>
+  {% else %}
+  <ul class="sidebar-items">
+    {% for pref in packages %}
+    <li>
+      <a class="sidebar-item" href="{{ root_prefix }}{{ pref.name }}/index.html">
+        <span class="sidebar-item-name">{{ pref.name }}</span>
+        <span class="type-chip chip-{{ pref.kind_label }}">{{ pref.kind_label }}</span>
+      </a>
+    </li>
+    {% endfor %}
+  </ul>
+  {% endif %}
 </nav>

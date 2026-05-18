@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Package private functions declared with top-level `priv fn` in files.
+- `expo doc` now includes all stdlib and dependency docs in local files.
+- Serve documentation locally with `expo doc serve`.
 
 ## [0.10.0] - 2026-05-15
 

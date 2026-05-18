@@ -25,10 +25,11 @@ mod diagnostics;
 mod link;
 mod pipeline;
 pub mod project;
+mod serve;
 
 use expo_runtime as _;
 
-use clap::{Parser, Subcommand};
+use clap::{Args, Parser, Subcommand};
 
 #[derive(Parser)]
 #[command(name = "expo", version, about = "The Expo language compiler")]
@@ -74,14 +75,7 @@ enum Command {
         emit_ast: bool,
     },
     /// Generate HTML documentation
-    Doc {
-        /// Source files or directories (omit to use expo.toml)
-        files: Vec<String>,
-
-        /// Output directory for generated HTML
-        #[arg(short, long, default_value = "doc")]
-        output: String,
-    },
+    Doc(DocArgs),
     /// Run a source file through the interpreter
     ///
     /// Thin alias for `expo run --backend=interpreter`. Prints the
@@ -145,6 +139,45 @@ enum Command {
     Test,
 }
 
+/// Arguments for `expo doc`. The optional `action` subcommand
+/// turns the bare `expo doc` into a one-shot generator and
+/// `expo doc serve` into a generate-then-host preview server.
+/// Shared flags live on the parent so they apply to both.
+#[derive(Args)]
+struct DocArgs {
+    /// Source files or directories (omit to use expo.toml)
+    files: Vec<String>,
+
+    /// Output directory for generated HTML
+    #[arg(short, long, default_value = "doc")]
+    output: String,
+
+    /// Skip bundled stdlib + path dependencies; document the project sources only
+    #[arg(long)]
+    project_only: bool,
+
+    #[command(subcommand)]
+    action: Option<DocAction>,
+}
+
+#[derive(Subcommand)]
+enum DocAction {
+    /// Rebuild docs and serve them on a local HTTP port
+    ///
+    /// Sidesteps the `file://` CORS restriction that prevents the
+    /// in-page fuzzy search from loading `search-index.json` when
+    /// opening the static tree directly in a browser.
+    Serve {
+        /// Port to bind on 127.0.0.1 (auto-picked from 8000+ if omitted)
+        #[arg(long)]
+        port: Option<u16>,
+
+        /// Skip regenerating; serve whatever's already in the output dir
+        #[arg(long)]
+        no_rebuild: bool,
+    },
+}
+
 fn main() {
     let cli = Cli::parse();
     let color = !cli.no_color && std::env::var("NO_COLOR").is_err();
@@ -158,7 +191,7 @@ fn main() {
             release,
         } => pipeline::cmd_build(file, backend, output, release, emit_llvm),
         Command::Check { file, emit_ast } => pipeline::cmd_check(file, emit_ast),
-        Command::Doc { files, output } => commands::cmd_doc(files, output, color),
+        Command::Doc(args) => dispatch_doc(args, color),
         Command::Eval { file } => pipeline::cmd_run(
             Some(file),
             pipeline::Backend::Interpreter,
@@ -181,5 +214,25 @@ fn main() {
         } => pipeline::cmd_run(file, backend, release, args),
         Command::Shell => pipeline::cmd_shell(),
         Command::Test => pipeline::cmd_test(),
+    }
+}
+
+/// Route `expo doc [...]` and `expo doc serve [...]` to the
+/// right handler. Bare `expo doc` falls through to the static
+/// generator; `expo doc serve` rebuilds (unless `--no-rebuild`)
+/// then hands the output dir to the preview server.
+fn dispatch_doc(args: DocArgs, color: bool) {
+    let DocArgs {
+        action,
+        files,
+        output,
+        project_only,
+    } = args;
+
+    match action {
+        None => commands::cmd_doc(files, output, project_only, color),
+        Some(DocAction::Serve { port, no_rebuild }) => {
+            commands::cmd_doc_serve(files, output, project_only, port, no_rebuild, color);
+        }
     }
 }

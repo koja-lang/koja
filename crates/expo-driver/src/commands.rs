@@ -49,37 +49,96 @@ pub(crate) fn load_project_or_exit(missing_message: &[&str]) -> (ProjectConfig, 
     (config, cwd)
 }
 
-/// `expo doc [file.expo ...] [-o output_dir]` -- generates HTML documentation.
-///
-/// With no arguments, looks for `expo.toml` in the current directory.
-pub fn cmd_doc(files: Vec<String>, output: String, color: bool) {
-    let (mut inputs, project_name) = discover_doc_inputs(&files);
-    inputs.sort_by(|a, b| a.1.cmp(&b.1));
+/// One source file's worth of input for `expo doc`. The
+/// `package` is the doc package the file's items will land
+/// under; `label` is the human-readable display path
+/// (filesystem path for project + dep inputs, synthetic
+/// `<Pkg.module>` marker for stdlib).
+struct DocInput {
+    kind: expo_doc::PackageKind,
+    label: String,
+    package: String,
+    source: String,
+}
 
-    let project = extract_doc_project(&inputs, &project_name, color);
-    if project.items.is_empty() {
-        println!("no items to document");
+/// `expo doc [file.expo ...] [-o output_dir]` -- generates HTML
+/// documentation.
+///
+/// Bundles the project's own sources, every path dependency's
+/// sources, and the embedded stdlib package set together so the
+/// generated tree is a one-stop browsable reference. Pass
+/// `--project-only` to skip stdlib + deps. With no positional
+/// arguments, looks for `expo.toml` in the current directory.
+pub fn cmd_doc(files: Vec<String>, output: String, project_only: bool, color: bool) {
+    if !generate_docs(&files, &output, project_only, color) {
         return;
     }
-
     let out_path = Path::new(&output);
+    println!("docs generated: {}", out_path.display());
+}
+
+/// `expo doc serve [-o output_dir] [--port N] [--no-rebuild]` --
+/// generate (unless `no_rebuild`) and then host the doc tree on
+/// `127.0.0.1`. Exists because the in-page fuzzy search reads
+/// `search-index.json` via `fetch()`, which browsers refuse for
+/// `file://` URLs; a local HTTP server is the standard workaround.
+pub fn cmd_doc_serve(
+    files: Vec<String>,
+    output: String,
+    project_only: bool,
+    port: Option<u16>,
+    no_rebuild: bool,
+    color: bool,
+) {
+    if !no_rebuild && !generate_docs(&files, &output, project_only, color) {
+        return;
+    }
+    let out_path = Path::new(&output);
+    if let Err(e) = crate::serve::run(out_path, port) {
+        eprintln!("error: {e}");
+        process::exit(1);
+    }
+}
+
+/// Drive the full discover -> parse -> extract -> render -> write
+/// pipeline. Returns `false` when there's nothing to document so
+/// the caller can decide whether to short-circuit (the bare
+/// generator prints "docs generated"; `serve` would skip starting
+/// the server). Fatal errors (output dir creation, file write)
+/// `process::exit` from inside.
+fn generate_docs(files: &[String], output: &str, project_only: bool, color: bool) -> bool {
+    let (inputs, project_package) = discover_doc_inputs(files, project_only);
+    if inputs.is_empty() {
+        println!("no source files to document");
+        return false;
+    }
+
+    let project = extract_doc_project(inputs, &project_package, color);
+    if project.packages.is_empty() {
+        println!("no items to document");
+        return false;
+    }
+
+    let out_path = Path::new(output);
     if let Err(e) = fs::create_dir_all(out_path) {
         eprintln!("error creating output directory: {e}");
         process::exit(1);
     }
 
     write_doc_files(&project, out_path);
-    println!("docs generated: {}", out_path.display());
+    true
 }
 
-/// Resolves the list of source files `expo doc` will process, as
-/// `(path, file_fqn)` pairs, plus the display name shown in the
-/// sidebar. Empty `files` means project mode (walk `src` from
-/// `expo.toml` and every dep's `src`) and uses `expo.toml`'s
-/// `name`; otherwise treat each entry as a path or a directory of
-/// `.expo` files and fall back to "Docs".
-fn discover_doc_inputs(files: &[String]) -> (Vec<(String, String)>, String) {
+/// Resolves the list of source files `expo doc` will process,
+/// returning the inputs plus the project package name (used as
+/// the sidebar header and the default-active package). Empty
+/// `files` means project mode (walk `src` from `expo.toml` and
+/// every dep's `src`); otherwise treat each entry as a path or a
+/// directory of `.expo` files. Stdlib + deps are bundled unless
+/// `project_only` is true.
+fn discover_doc_inputs(files: &[String], project_only: bool) -> (Vec<DocInput>, String) {
     let mut inputs = Vec::new();
+    let project_package;
 
     if files.is_empty() {
         let (config, cwd) = load_project_or_exit(&[
@@ -87,38 +146,57 @@ fn discover_doc_inputs(files: &[String]) -> (Vec<(String, String)>, String) {
             "Usage: expo doc <file.expo ...> [-o output_dir]",
             "  or:  create an expo.toml in the current directory",
         ]);
+        project_package = config.name.clone();
 
         for src_dir in &config.src {
             let dir = cwd.join(src_dir);
             if dir.is_dir() {
-                collect_doc_files(&dir, &dir, Some(&config.name), &mut inputs);
+                collect_doc_inputs(
+                    &dir,
+                    &config.name,
+                    expo_doc::PackageKind::Project,
+                    &mut inputs,
+                );
             }
         }
-        discover_dep_doc_inputs(&config, &cwd, &mut inputs);
-        return (inputs, config.name);
-    }
-
-    for input in files {
-        let p = Path::new(input);
-        if p.is_dir() {
-            collect_doc_files(p, p, None, &mut inputs);
-        } else {
-            let name = Path::new(input)
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-            inputs.push((input.clone(), name));
+        if !project_only {
+            discover_dep_doc_inputs(&config, &cwd, &mut inputs);
+            push_stdlib_inputs(&mut inputs);
+        }
+    } else {
+        project_package = "Docs".to_string();
+        for input in files {
+            let p = Path::new(input);
+            if p.is_dir() {
+                collect_doc_inputs(
+                    p,
+                    &project_package,
+                    expo_doc::PackageKind::Project,
+                    &mut inputs,
+                );
+            } else if let Some(text) = read_doc_input(p) {
+                inputs.push(DocInput {
+                    kind: expo_doc::PackageKind::Project,
+                    label: input.clone(),
+                    package: project_package.clone(),
+                    source: text,
+                });
+            }
+        }
+        if !project_only {
+            push_stdlib_inputs(&mut inputs);
         }
     }
-    (inputs, "Docs".to_string())
+
+    (inputs, project_package)
 }
 
-/// Walks every dependency declared in `[dependencies]` and appends
-/// its source files to `out`. Missing paths or unreadable
+/// Walks every dependency declared in `[dependencies]` and
+/// appends its source files to `out`, tagged with the dep's
+/// `expo.toml` package name. Missing paths or unreadable
 /// `expo.toml` files emit a warning and skip the dep rather than
 /// aborting the doc build.
-fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<(String, String)>) {
+fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<DocInput>) {
     for (alias, dep) in &config.dependencies {
         let dep_path = match &dep.path {
             Some(p) => cwd.join(p),
@@ -144,78 +222,122 @@ fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<(St
         for src_dir in &dep_config.src {
             let dir = dep_path.join(src_dir);
             if dir.is_dir() {
-                collect_doc_files(&dir, &dir, Some(&dep_config.name), out);
+                collect_doc_inputs(
+                    &dir,
+                    &dep_config.name,
+                    expo_doc::PackageKind::Dependency,
+                    out,
+                );
             }
         }
     }
 }
 
-/// Parses every input file and extracts doc-renderable items into a
-/// [`expo_doc::DocProject`]. Files with parse errors are reported
-/// and skipped.
+/// Append the embedded stdlib sources (`autoimport_sources` +
+/// `qualified_sources`) to `out`, each tagged with its package
+/// name and the synthetic `<Pkg.module>` path the stdlib crate
+/// already stamps onto its [`expo_parser::SourceFile`]s. Skips
+/// any package the caller has already provided (project source
+/// or path dep) — without the skip, running `expo doc` from
+/// inside a stdlib package (e.g. `expo/lib/net`) would ingest
+/// that package's files twice and double every sidebar entry.
+fn push_stdlib_inputs(out: &mut Vec<DocInput>) {
+    let already_present: std::collections::HashSet<String> =
+        out.iter().map(|i| i.package.clone()).collect();
+    let stdlib = expo_stdlib::autoimport_sources()
+        .into_iter()
+        .chain(expo_stdlib::qualified_sources());
+    for src in stdlib {
+        if already_present.contains(&src.package) {
+            continue;
+        }
+        out.push(DocInput {
+            kind: expo_doc::PackageKind::Stdlib,
+            label: src.path.display().to_string(),
+            package: src.package,
+            source: src.source,
+        });
+    }
+}
+
+/// Parses every input file and extracts doc-renderable items
+/// into a [`expo_doc::DocProject`] under the input's tagged
+/// package. Files with parse errors are reported and skipped.
 fn extract_doc_project(
-    inputs: &[(String, String)],
-    project_name: &str,
+    inputs: Vec<DocInput>,
+    project_package: &str,
     color: bool,
 ) -> expo_doc::DocProject {
-    let mut project = expo_doc::DocProject {
-        constants: Vec::new(),
-        enums: Vec::new(),
-        functions: Vec::new(),
-        items: Vec::new(),
-        name: project_name.to_string(),
-        protocols: Vec::new(),
-        structs: Vec::new(),
-    };
+    let mut project = expo_doc::DocProject::new(project_package);
 
-    for (path, _file_fqn) in inputs {
-        let source = match fs::read_to_string(path) {
-            Ok(s) => s,
-            Err(e) => {
-                eprintln!("error reading {path}: {e}");
-                process::exit(1);
-            }
-        };
-
-        let parse_result = expo_parser::parse(&source, ParseMode::File);
+    for input in inputs {
+        let parse_result = expo_parser::parse(&input.source, ParseMode::File);
         if !parse_result.errors.is_empty() {
-            render_diagnostics(path, &source, &parse_result.errors, color);
+            render_diagnostics(&input.label, &input.source, &parse_result.errors, color);
             continue;
         }
 
-        expo_doc::extract_items(&parse_result.ast, &mut project);
+        expo_doc::extract_items(&parse_result.ast, &mut project, &input.package, input.kind);
     }
 
     expo_doc::finalize_project(&mut project);
     project
 }
 
-/// Renders each item in `project` as HTML and writes it under
-/// `out_path`, plus a top-level `index.html`.
+/// Renders the project as the subdir-per-package HTML tree.
+/// Always emits `index.html` (package roster), `style.css`,
+/// `search.js`, and `search-index.json` at the root, then one
+/// subdirectory per documented package containing its
+/// `index.html` plus a page per item.
 fn write_doc_files(project: &expo_doc::DocProject, out_path: &Path) {
-    for c in &project.constants {
-        let html = expo_doc::render_constant(c, project);
-        write_doc_file(&out_path.join(format!("{}.html", c.name)), &html);
-    }
-    for e in &project.enums {
-        let html = expo_doc::render_enum(e, project);
-        write_doc_file(&out_path.join(format!("{}.html", e.name)), &html);
-    }
-    for f in &project.functions {
-        let html = expo_doc::render_function(f, project);
-        write_doc_file(&out_path.join(format!("{}.html", f.name)), &html);
-    }
-    for p in &project.protocols {
-        let html = expo_doc::render_protocol(p, project);
-        write_doc_file(&out_path.join(format!("{}.html", p.name)), &html);
-    }
-    for s in &project.structs {
-        let html = expo_doc::render_struct(s, project);
-        write_doc_file(&out_path.join(format!("{}.html", s.name)), &html);
-    }
+    write_doc_file(&out_path.join("style.css"), expo_doc::CSS);
+    write_doc_file(&out_path.join("search.js"), expo_doc::SEARCH_JS);
+    write_doc_file(
+        &out_path.join("search-index.json"),
+        &expo_doc::search_index_json(project),
+    );
+    write_doc_file(
+        &out_path.join("index.html"),
+        &expo_doc::render_root_index(project),
+    );
 
-    let index_html = expo_doc::render_index(project);
-    write_doc_file(&out_path.join("index.html"), &index_html);
+    for pkg in &project.packages {
+        if pkg.items.is_empty() {
+            continue;
+        }
+        let pkg_dir = out_path.join(&pkg.name);
+        if let Err(e) = fs::create_dir_all(&pkg_dir) {
+            eprintln!(
+                "error creating package directory {}: {e}",
+                pkg_dir.display()
+            );
+            process::exit(1);
+        }
+        write_doc_file(
+            &pkg_dir.join("index.html"),
+            &expo_doc::render_package_index(pkg, project),
+        );
+        for c in &pkg.constants {
+            let html = expo_doc::render_constant(c, pkg, project);
+            write_doc_file(&pkg_dir.join(format!("{}.html", c.name)), &html);
+        }
+        for e in &pkg.enums {
+            let html = expo_doc::render_enum(e, pkg, project);
+            write_doc_file(&pkg_dir.join(format!("{}.html", e.name)), &html);
+        }
+        for f in &pkg.functions {
+            let html = expo_doc::render_function(f, pkg, project);
+            write_doc_file(&pkg_dir.join(format!("{}.html", f.name)), &html);
+        }
+        for p in &pkg.protocols {
+            let html = expo_doc::render_protocol(p, pkg, project);
+            write_doc_file(&pkg_dir.join(format!("{}.html", p.name)), &html);
+        }
+        for s in &pkg.structs {
+            let html = expo_doc::render_struct(s, pkg, project);
+            write_doc_file(&pkg_dir.join(format!("{}.html", s.name)), &html);
+        }
+    }
 }
 
 fn write_doc_file(path: &Path, content: &str) {
@@ -226,16 +348,14 @@ fn write_doc_file(path: &Path, content: &str) {
     println!("  {}", path.display());
 }
 
-/// Recursively collects `.expo` files from a directory, building
-/// file FQNs from relative paths (e.g. `foo/bar.expo` becomes file
-/// FQN `foo.bar`). When `prefix` is `Some`, each FQN is prefixed
-/// with `{prefix}.` (e.g. `src/lexer.expo` with prefix `myproject`
-/// becomes `myproject.lexer`).
-fn collect_doc_files(
+/// Recursively collect `.expo` files from `dir`, reading each
+/// into memory and tagging it with `package` + `kind` for the
+/// doc pipeline.
+fn collect_doc_inputs(
     dir: &Path,
-    root: &Path,
-    prefix: Option<&str>,
-    out: &mut Vec<(String, String)>,
+    package: &str,
+    kind: expo_doc::PackageKind,
+    out: &mut Vec<DocInput>,
 ) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
@@ -247,26 +367,29 @@ fn collect_doc_files(
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            collect_doc_files(&path, root, prefix, out);
+            collect_doc_inputs(&path, package, kind, out);
             continue;
         }
         if path.extension().is_none_or(|ext| ext != "expo") {
             continue;
         }
-        let relative = path
-            .strip_prefix(root)
-            .unwrap_or(&path)
-            .with_extension("")
-            .components()
-            .filter_map(|c| c.as_os_str().to_str())
-            .collect::<Vec<_>>()
-            .join(".");
-        let file_fqn = match prefix {
-            Some(p) => format!("{p}.{relative}"),
-            None => relative,
-        };
-        if let Some(s) = path.to_str() {
-            out.push((s.to_string(), file_fqn));
+        if let Some(text) = read_doc_input(&path) {
+            out.push(DocInput {
+                kind,
+                label: path.display().to_string(),
+                package: package.to_string(),
+                source: text,
+            });
+        }
+    }
+}
+
+fn read_doc_input(path: &Path) -> Option<String> {
+    match fs::read_to_string(path) {
+        Ok(s) => Some(s),
+        Err(e) => {
+            eprintln!("error reading {}: {e}", path.display());
+            None
         }
     }
 }

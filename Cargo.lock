@@ -406,6 +406,7 @@ version = "0.10.0"
 dependencies = [
  "askama",
  "expo-ast",
+ "expo-parser",
  "pulldown-cmark",
 ]
 

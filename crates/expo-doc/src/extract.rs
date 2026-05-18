@@ -1,9 +1,48 @@
-//! Walk the parsed AST and extract documentation items.
+//! Walk the parsed AST and extract documentation items into a
+//! package-aware [`DocProject`].
+//!
+//! A `DocProject` is a roster of [`DocPackage`]s sorted with the
+//! user's own package first, then path dependencies, then stdlib,
+//! alphabetical within each tier. Every kind of doc item lives
+//! under exactly one package — there's no cross-package
+//! flattening — so the renderer can emit a clean
+//! `doc/<Pkg>/<Item>.html` tree and the sidebar dropdown can
+//! pivot between packages without ambiguity.
 
 use expo_ast::ast::{
     AnnotationValue, EnumDecl, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl,
     ProtocolMethod, StructDecl, TypeExpr, Visibility,
 };
+
+/// Where a [`DocPackage`] came from. Drives the cross-package sort
+/// order (project → dependency → stdlib, alphabetical within tier)
+/// and lets the renderer label package origins in the roster.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PackageKind {
+    Project,
+    Dependency,
+    Stdlib,
+}
+
+impl PackageKind {
+    /// Tier ordinal for the package sort: lower comes first.
+    fn tier(self) -> u8 {
+        match self {
+            PackageKind::Project => 0,
+            PackageKind::Dependency => 1,
+            PackageKind::Stdlib => 2,
+        }
+    }
+
+    /// Short label shown next to a package name in the roster page.
+    pub fn label(self) -> &'static str {
+        match self {
+            PackageKind::Project => "project",
+            PackageKind::Dependency => "dependency",
+            PackageKind::Stdlib => "stdlib",
+        }
+    }
+}
 
 /// Summary of a documentable item for the flat index listing.
 #[derive(Debug)]
@@ -72,25 +111,93 @@ pub struct DocStruct {
     pub type_params: Vec<String>,
 }
 
-/// All extracted documentation from a project, flattened into a single namespace.
+/// All extracted documentation for a single package: every kind of
+/// item lives here, plus a flat [`Self::items`] roster used by the
+/// sidebar item list. `kind` is the origin tier (project / dep /
+/// stdlib) and drives cross-package sort + renderer labelling.
 #[derive(Debug)]
-pub struct DocProject {
+pub struct DocPackage {
     pub constants: Vec<DocConstant>,
     pub enums: Vec<DocEnum>,
     pub functions: Vec<DocFunction>,
     pub items: Vec<DocItem>,
-    /// Display name shown in the sidebar header. Set by the driver from
-    /// `expo.toml`'s `name`, or falls back to "Docs" when running in
-    /// loose-file mode.
+    pub kind: PackageKind,
     pub name: String,
     pub protocols: Vec<DocProtocol>,
     pub structs: Vec<DocStruct>,
 }
 
-/// Extract documentation items from a parsed file into the running project.
-///
-/// Items with `@doc false` are excluded.
-pub fn extract_items(file: &File, project: &mut DocProject) {
+impl DocPackage {
+    fn new(name: String, kind: PackageKind) -> Self {
+        Self {
+            constants: Vec::new(),
+            enums: Vec::new(),
+            functions: Vec::new(),
+            items: Vec::new(),
+            kind,
+            name,
+            protocols: Vec::new(),
+            structs: Vec::new(),
+        }
+    }
+}
+
+/// Documentation for an entire project: the user's own package
+/// (named in `project_package`) plus any deps and stdlib packages
+/// the driver chose to bundle in. The renderer walks
+/// [`Self::packages`] to emit one subdir per package.
+#[derive(Debug)]
+pub struct DocProject {
+    /// Bare name of the user's own package — used as the default
+    /// landing page and to highlight the project entry in the
+    /// sidebar dropdown. Always matches one of `packages[i].name`
+    /// once the driver has called `extract_items` for at least one
+    /// project source. May be empty when running in loose-file
+    /// mode with no `expo.toml`.
+    pub project_package: String,
+    pub packages: Vec<DocPackage>,
+}
+
+impl DocProject {
+    /// Construct an empty project that the driver fills in by
+    /// repeatedly calling [`extract_items`] for each source file.
+    pub fn new(project_package: impl Into<String>) -> Self {
+        Self {
+            project_package: project_package.into(),
+            packages: Vec::new(),
+        }
+    }
+
+    /// Find-or-create the [`DocPackage`] for `name`. New packages
+    /// adopt the supplied `kind`; if the package already exists
+    /// the existing kind is preserved (first caller wins). This is
+    /// the only way new packages get added to the project — every
+    /// `extract_items` call routes through here.
+    pub fn ensure_package(&mut self, name: &str, kind: PackageKind) -> &mut DocPackage {
+        if let Some(idx) = self.packages.iter().position(|p| p.name == name) {
+            return &mut self.packages[idx];
+        }
+        self.packages.push(DocPackage::new(name.to_string(), kind));
+        self.packages.last_mut().expect("just pushed a package")
+    }
+
+    /// Find a package by name. Used by the renderer when looking
+    /// up a cross-package type reference.
+    pub fn find_package(&self, name: &str) -> Option<&DocPackage> {
+        self.packages.iter().find(|p| p.name == name)
+    }
+}
+
+/// Extract documentation items from a parsed file into `package`
+/// inside `project`. Items with `@doc false` are excluded; private
+/// top-level functions and impl methods are excluded; the impl
+/// fallthrough that synthesises a method-only stub for an unknown
+/// target only looks inside the current package's roster — cross-
+/// package impl extension isn't a real surface, so stubs land
+/// alongside the caller's other items.
+pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind: PackageKind) {
+    let pkg = project.ensure_package(package, kind);
+
     let mut local_structs: Vec<DocStruct> = Vec::new();
     let mut local_enums: Vec<DocEnum> = Vec::new();
 
@@ -99,7 +206,7 @@ pub fn extract_items(file: &File, project: &mut DocProject) {
             Item::Alias(_) => {}
             Item::Constant(c) => {
                 if let Some(dc) = extract_constant(c) {
-                    project.constants.push(dc);
+                    pkg.constants.push(dc);
                 }
             }
             Item::Enum(e) => {
@@ -108,10 +215,8 @@ pub fn extract_items(file: &File, project: &mut DocProject) {
                 }
             }
             Item::Function(f) => {
-                if f.visibility == Visibility::Public
-                    && let Some(df) = extract_function(f)
-                {
-                    project.functions.push(df);
+                if let Some(df) = extract_function(f) {
+                    pkg.functions.push(df);
                 }
             }
             Item::Impl(imp) => {
@@ -119,13 +224,13 @@ pub fn extract_items(file: &File, project: &mut DocProject) {
                     imp,
                     &mut local_structs,
                     &mut local_enums,
-                    &mut project.structs,
-                    &mut project.enums,
+                    &mut pkg.structs,
+                    &mut pkg.enums,
                 );
             }
             Item::Protocol(p) => {
                 if let Some(dp) = extract_protocol(p) {
-                    project.protocols.push(dp);
+                    pkg.protocols.push(dp);
                 }
             }
             Item::Struct(s) => {
@@ -137,65 +242,78 @@ pub fn extract_items(file: &File, project: &mut DocProject) {
         }
     }
 
-    project.structs.extend(local_structs);
-    project.enums.extend(local_enums);
+    pkg.structs.extend(local_structs);
+    pkg.enums.extend(local_enums);
 }
 
-/// Finalize the project: sort everything and build the flat item index.
+/// Finalize the project: sort packages by `(kind tier, name)` so
+/// the user's project lands first, then sort every item kind
+/// inside each package alphabetically and rebuild the per-package
+/// flat `items` roster used by the sidebar item list.
 pub fn finalize_project(project: &mut DocProject) {
-    project.constants.sort_by(|a, b| a.name.cmp(&b.name));
-    project.enums.sort_by(|a, b| a.name.cmp(&b.name));
-    project.functions.sort_by(|a, b| a.name.cmp(&b.name));
-    project.protocols.sort_by(|a, b| a.name.cmp(&b.name));
-    project.structs.sort_by(|a, b| a.name.cmp(&b.name));
+    project
+        .packages
+        .sort_by(|a, b| a.kind.tier().cmp(&b.kind.tier()).then(a.name.cmp(&b.name)));
 
-    for e in &mut project.enums {
+    for pkg in &mut project.packages {
+        finalize_package(pkg);
+    }
+}
+
+fn finalize_package(pkg: &mut DocPackage) {
+    pkg.constants.sort_by(|a, b| a.name.cmp(&b.name));
+    pkg.enums.sort_by(|a, b| a.name.cmp(&b.name));
+    pkg.functions.sort_by(|a, b| a.name.cmp(&b.name));
+    pkg.protocols.sort_by(|a, b| a.name.cmp(&b.name));
+    pkg.structs.sort_by(|a, b| a.name.cmp(&b.name));
+
+    for e in &mut pkg.enums {
         e.functions.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    for p in &mut project.protocols {
+    for p in &mut pkg.protocols {
         p.functions.sort_by(|a, b| a.name.cmp(&b.name));
     }
-    for s in &mut project.structs {
+    for s in &mut pkg.structs {
         s.functions.sort_by(|a, b| a.name.cmp(&b.name));
     }
 
-    project.items.clear();
-    for c in &project.constants {
-        project.items.push(DocItem {
+    pkg.items.clear();
+    for c in &pkg.constants {
+        pkg.items.push(DocItem {
             doc: c.doc.clone(),
             kind: "const".to_string(),
             name: c.name.clone(),
         });
     }
-    for e in &project.enums {
-        project.items.push(DocItem {
+    for e in &pkg.enums {
+        pkg.items.push(DocItem {
             doc: e.doc.clone(),
             kind: "enum".to_string(),
             name: e.name.clone(),
         });
     }
-    for f in &project.functions {
-        project.items.push(DocItem {
+    for f in &pkg.functions {
+        pkg.items.push(DocItem {
             doc: f.doc.clone(),
             kind: "fn".to_string(),
             name: f.name.clone(),
         });
     }
-    for p in &project.protocols {
-        project.items.push(DocItem {
+    for p in &pkg.protocols {
+        pkg.items.push(DocItem {
             doc: p.doc.clone(),
             kind: "protocol".to_string(),
             name: p.name.clone(),
         });
     }
-    for s in &project.structs {
-        project.items.push(DocItem {
+    for s in &pkg.structs {
+        pkg.items.push(DocItem {
             doc: s.doc.clone(),
             kind: "struct".to_string(),
             name: s.name.clone(),
         });
     }
-    project.items.sort_by(|a, b| a.name.cmp(&b.name));
+    pkg.items.sort_by(|a, b| a.name.cmp(&b.name));
 }
 
 fn annotation_string(annotations: &[expo_ast::ast::Annotation]) -> Option<String> {
@@ -228,13 +346,10 @@ fn attach_impl_functions(
 
     let mut funcs = Vec::new();
     for member in &imp.members {
-        if let ImplMember::Function(f) = member {
-            if f.visibility == Visibility::Private {
-                continue;
-            }
-            if let Some(df) = extract_function(f) {
-                funcs.push(df);
-            }
+        if let ImplMember::Function(f) = member
+            && let Some(df) = extract_function(f)
+        {
+            funcs.push(df);
         }
     }
 
@@ -289,7 +404,7 @@ fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
 }
 
 fn extract_function(f: &Function) -> Option<DocFunction> {
-    if has_doc_false(&f.annotations) {
+    if f.visibility == Visibility::Private || has_doc_false(&f.annotations) {
         return None;
     }
 

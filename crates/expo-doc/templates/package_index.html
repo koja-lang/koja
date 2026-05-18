@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{ package_name }} — Expo Docs</title>
+  {% include "head.html" %}
+</head>
+<body>
+
+{% include "theme_toggle.html" %}
+{% include "sidebar.html" %}
+
+<main class="content">
+  <div class="page-header">
+    <span class="type-chip chip-pkg">{{ package_kind_label }}</span>
+    <h1>{{ package_name }}</h1>
+  </div>
+
+  <div class="item-list">
+    {% for item in sidebar_items %}
+    <div class="item-row">
+      <span class="type-chip chip-{{ item.kind }}">{{ item.kind }}</span>
+      <a class="item-name" href="{{ item.name }}.html">{{ item.name }}</a>
+      {% if let Some(doc) = item.doc %}<span class="item-brief">{{ doc|brief }}</span>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+</main>
+
+</body>
+</html>
