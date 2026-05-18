@@ -5,9 +5,7 @@ of O(N*k) for k fragments totalling N characters.
 """
 struct StringBuilder
   parts: List<String>
-end
 
-impl StringBuilder
   fn new -> StringBuilder
     parts: List<String> = List.new()
     StringBuilder{parts: parts}

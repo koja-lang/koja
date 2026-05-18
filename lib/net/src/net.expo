@@ -62,9 +62,7 @@ POSIX socket for TCP/UDP network I/O.
 """
 struct Socket
   fd: Fd
-end
 
-impl Socket
   @doc """
   Accepts an incoming connection. Returns the client file descriptor.
   """

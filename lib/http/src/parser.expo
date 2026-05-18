@@ -8,9 +8,7 @@ bodies and chunked transfer encoding.
 struct Parser
   input: String
   pos: Int
-end
 
-impl Parser
   @doc """
   Parses a raw HTTP request string into a Request.
   Expects the full message including headers and body.

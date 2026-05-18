@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `expo doc` now includes all stdlib and dependency docs in local files.
 - Serve documentation locally with `expo doc serve`.
 
+### Changed
+
+- **Breaking**: HTTP client methods moved from the `Http` struct to top-level functions in the `HTTP` package. `Http.get(url)` becomes `HTTP.get(url)`; same for `delete`, `head`, `options`, `patch`, `post`, `put`, and `request`. Use `alias HTTP` for unqualified access, or call qualified (`HTTP.post(url, body, headers)`). The `Http` struct is removed.
+
 ## [0.10.0] - 2026-05-15
 
 ### Added

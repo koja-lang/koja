@@ -6,9 +6,7 @@ the position of the failure.
 struct Decoder
   input: String
   pos: Int
-end
 
-impl Decoder
   fn decode(input: String) -> Result<Value, String>
     d = Decoder{input: input, pos: 0}
     d = d.skip_ws()

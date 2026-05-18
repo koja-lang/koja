@@ -10,9 +10,7 @@ struct Response
   headers: Headers
   status: Status
   version: String
-end
 
-impl Response
   @doc """
   Converts the body to a Binary value.
   """

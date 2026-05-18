@@ -10,9 +10,7 @@ enum Method
   Patch
   Post
   Put
-end
 
-impl Method
   @doc """
   Parses an uppercase HTTP method string into a Method value.
   Returns an error for unrecognized methods.

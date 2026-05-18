@@ -7,9 +7,7 @@ enum Error
   InvalidUrl(String)
   ParseError(String)
   Timeout
-end
 
-impl Error
   @doc """
   Returns a human-readable description of the error.
   """

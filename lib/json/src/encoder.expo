@@ -3,9 +3,6 @@ JSON encoding: converts a Value tree into a JSON string.
 Provides both compact and pretty-printed output.
 """
 struct Encoder
-end
-
-impl Encoder
   fn encode(value: Value) -> String
     Encoder.encode_value(value)
   end

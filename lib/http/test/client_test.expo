@@ -1,7 +1,7 @@
 struct ClientTest
   @test "parse_url extracts host, port, and path"
   fn test_parse_url_basic -> Result<Bool, String>
-    match Http.parse_url("http://example.com/path")
+    match parse_url("http://example.com/path")
       Result.Ok(parts) ->
         unless parts.first == "example.com"
           return Result.Err("expected host example.com, got #{parts.first}")
@@ -24,7 +24,7 @@ struct ClientTest
 
   @test "parse_url handles custom port"
   fn test_parse_url_custom_port -> Result<Bool, String>
-    match Http.parse_url("http://localhost:3000/api")
+    match parse_url("http://localhost:3000/api")
       Result.Ok(parts) ->
         unless parts.first == "localhost"
           return Result.Err("expected localhost")
@@ -47,7 +47,7 @@ struct ClientTest
 
   @test "parse_url defaults to root path"
   fn test_parse_url_no_path -> Result<Bool, String>
-    match Http.parse_url("http://example.com")
+    match parse_url("http://example.com")
       Result.Ok(parts) ->
         unless parts.first == "example.com"
           return Result.Err("expected host example.com")
@@ -66,7 +66,7 @@ struct ClientTest
 
   @test "parse_url handles https default port"
   fn test_parse_url_https -> Result<Bool, String>
-    match Http.parse_url("https://example.com/secure")
+    match parse_url("https://example.com/secure")
       Result.Ok(parts) ->
         unless parts.second.first == 443
           return Result.Err("expected port 443, got #{parts.second.first}")
@@ -81,7 +81,7 @@ struct ClientTest
 
   @test "parse_url rejects empty host"
   fn test_parse_url_empty_host -> Result<Bool, String>
-    unless Http.parse_url("http:///path").err?()
+    unless parse_url("http:///path").err?()
       return Result.Err("expected error for empty host")
     end
 

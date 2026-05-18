@@ -5,9 +5,7 @@ header names (common for Set-Cookie, etc.).
 """
 struct Headers
   entries: List<Header>
-end
 
-impl Headers
   @doc """
   Adds a header without removing existing headers with the
   same name. Use this for headers that allow multiple values

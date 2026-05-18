@@ -9,9 +9,7 @@ struct Request
   method: Method
   path: String
   version: String
-end
 
-impl Request
   @doc """
   Converts the body to a Binary value.
   """

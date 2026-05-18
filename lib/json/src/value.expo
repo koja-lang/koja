@@ -7,9 +7,7 @@ enum Value
   String(String)
   Array(List<Value>)
   Object(List<Pair<String, Value>>)
-end
 
-impl Value
   fn null -> Value
     Value.Null
   end
@@ -39,7 +37,6 @@ impl Value
   end
 
   fn entry(key: String, value: Value) -> Pair<String, Value>
-    result: Pair<String, Value> = Pair{first: key, second: value}
-    result
+    Pair{first: key, second: value}
   end
 end
