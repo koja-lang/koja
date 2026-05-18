@@ -109,7 +109,7 @@ fn self_in_inherent_method_return_resolves_to_enclosing_struct() {
           x: Int
         end
 
-        impl Point
+        extend Point
           fn origin -> Self
             Point{x: 0}
           end

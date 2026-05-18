@@ -28,10 +28,7 @@ fn format_string_parts(
     for file in &pkg.files {
         for item in &file.items {
             let Item::Impl(block) = item else { continue };
-            let Some(trait_expr) = block.trait_expr.as_ref() else {
-                continue;
-            };
-            if !type_expr_head_eq(trait_expr, "Debug") {
+            if !type_expr_head_eq(&block.trait_expr, "Debug") {
                 continue;
             }
             if !type_expr_head_eq(&block.target, type_name) {
@@ -169,12 +166,7 @@ fn enum_synthesizes_match_body_with_per_variant_arms() {
     for file in &pkg.files {
         for item in &file.items {
             let Item::Impl(block) = item else { continue };
-            if !block
-                .trait_expr
-                .as_ref()
-                .map(|te| type_expr_head_eq(te, "Debug"))
-                .unwrap_or(false)
-            {
+            if !type_expr_head_eq(&block.trait_expr, "Debug") {
                 continue;
             }
             if !type_expr_head_eq(&block.target, "Shape") {
@@ -263,11 +255,7 @@ fn user_supplied_debug_impl_suppresses_synthesis() {
             let Item::Impl(block) = item else {
                 return false;
             };
-            block
-                .trait_expr
-                .as_ref()
-                .map(|te| type_expr_head_eq(te, "Debug"))
-                .unwrap_or(false)
+            type_expr_head_eq(&block.trait_expr, "Debug")
                 && type_expr_head_eq(&block.target, "Custom")
         })
         .count();

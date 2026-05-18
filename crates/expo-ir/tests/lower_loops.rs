@@ -265,7 +265,7 @@ fn for_lowers_via_desugar_to_while_plus_match() {
           finish: Int
         end
 
-        impl Counter
+        extend Counter
           fn length(self) -> Int
             self.finish - self.start
           end

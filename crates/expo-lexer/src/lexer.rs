@@ -152,6 +152,7 @@ impl Lexer {
             "else" => TokenKind::Else,
             "end" => TokenKind::End,
             "enum" => TokenKind::Enum,
+            "extend" => TokenKind::Extend,
             "false" => TokenKind::False,
             "fn" => TokenKind::Fn,
             "for" => TokenKind::For,

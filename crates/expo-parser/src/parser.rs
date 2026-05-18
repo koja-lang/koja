@@ -385,6 +385,7 @@ impl Parser {
             | TokenKind::At
             | TokenKind::Const
             | TokenKind::Enum
+            | TokenKind::Extend
             | TokenKind::Impl
             | TokenKind::Priv
             | TokenKind::Protocol
@@ -418,6 +419,7 @@ impl Parser {
             TokenKind::Const => Some(self.parse_constant_item(annotations)),
             TokenKind::Type => Some(self.parse_type_alias_item(annotations)),
             TokenKind::Impl if annotations.is_empty() => Some(self.parse_impl_item()),
+            TokenKind::Extend if annotations.is_empty() => Some(self.parse_extend_item()),
             TokenKind::Alias if annotations.is_empty() => Some(self.parse_alias_item()),
             _ if !annotations.is_empty() => {
                 let span = self.current_span();

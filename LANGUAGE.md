@@ -181,8 +181,8 @@ Standalone functions are only supported for `fn main` — the program entry poin
   in the same package, but rejected from any other package.
 - A `priv fn` declared inside a `struct`, `enum`, or `impl` body is
   **type-private**: it's callable from any other method on the same target
-  type (whether declared in the type's decl block, an inherent `impl`, or
-  an `impl Protocol for Type` block), but rejected everywhere else.
+  type (whether declared in the type's decl block, an `extend Type` block,
+  or an `impl Protocol for Type` block), but rejected everywhere else.
 
 ```expo
 priv fn helper(x: Int32) -> Int32    # package-private
@@ -435,12 +435,12 @@ end
 
 `Self` is a shorthand for the enclosing type in return positions. Use it instead of repeating the type name.
 
-#### Impl Blocks (Extensions)
+#### Extend Blocks
 
-`impl` blocks attach additional functions to an existing type, analogous to Swift extensions. Use `impl` for protocol conformance and adding functions from outside the type's definition:
+`extend` blocks attach additional inherent functions to an existing type, analogous to Swift extensions. Use `extend` for adding functions from outside the type's own declaration; `impl` is reserved for protocol conformance (`impl Protocol for Type`).
 
 ```expo
-impl Point
+extend Point
   fn translate(move self, dx: Int32, dy: Int32) -> Self
     self.x += dx
     self.y += dy
@@ -449,9 +449,11 @@ impl Point
 end
 ```
 
+Methods declared in an `extend` block have ambient visibility — they're callable from any package that can name the target type. Collisions on the same method name across `extend` blocks targeting the same type are a compile error.
+
 #### Static Functions
 
-Functions without `self` (either inline or in `impl` blocks) are called on the type directly:
+Functions without `self` (either inline or in `extend` blocks) are called on the type directly:
 
 ```expo
 struct Config
@@ -465,12 +467,12 @@ end
 config = Config.default()
 ```
 
-#### Concrete Impl Specialization
+#### Concrete Extend Specialization
 
-`impl` blocks can target a specific instantiation of a generic type. Methods defined in a specialized impl are only available when the type argument matches:
+`extend` blocks can target a specific instantiation of a generic type. Methods defined in a specialized extend are only available when the type argument matches:
 
 ```expo
-impl CPtr<UInt8>
+extend CPtr<UInt8>
   fn to_cstring(self) -> CString
     CString{ptr: self, len: strlen(self)}
   end
@@ -479,11 +481,11 @@ end
 
 `to_cstring` is only available on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. Calling a specialized method on the wrong type argument produces a compile error with a hint showing which specialization provides the method.
 
-Mixing concrete types and type parameters in the same impl block is not allowed:
+Mixing concrete types and type parameters in the same `extend` block is not allowed:
 
 ```expo
 # Error: mixes concrete types and type parameters
-impl Map<String, V>
+extend Map<String, V>
   fn lookup(self, key: String) -> Option<V>
     self.get(key)
   end
@@ -966,10 +968,10 @@ Access control is at the function level (`priv fn`), not the module level:
 
 - Top-level `priv fn` is **package-private** -- callable from any file in
   the same package, rejected from other packages.
-- `priv fn` declared inside a `struct`, `enum`, or `impl` body is
-  **type-private** -- callable from any other method on the same target
-  type (across the decl block and any inherent or protocol-impl block on
-  that type), rejected everywhere else.
+- `priv fn` declared inside a `struct`, `enum`, `extend`, or `impl` body
+  is **type-private** -- callable from any other method on the same target
+  type (across the decl block and any `extend` or `impl Protocol for Type`
+  block on that type), rejected everywhere else.
 
 See [Private Functions](#private-functions) for examples.
 
@@ -1154,7 +1156,7 @@ end
 `ReplyTo.reply(from, value)` is a convenience on `ReplyTo<R>` that handles the common pattern of replying only when a caller is present (skips silently for `cast` messages):
 
 ```expo
-impl ReplyTo<R>
+extend ReplyTo<R>
   fn reply(from: Option<ReplyTo<R>>, value: R)
 end
 ```

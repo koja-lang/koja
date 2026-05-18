@@ -298,6 +298,7 @@ pub enum Item {
     Alias(AliasDecl),
     Constant(Constant),
     Enum(EnumDecl),
+    Extend(ExtendBlock),
     Function(Function),
     Impl(ImplBlock),
     Protocol(ProtocolDecl),
@@ -409,16 +410,28 @@ pub struct Function {
     pub span: Span,
 }
 
-/// An `impl` block attaching methods to a struct or enum.
+/// An `impl Protocol for Type` block. Inherent methods live in
+/// [`ExtendBlock`]; bare `impl Type` is a parse error.
 #[derive(Debug, Clone)]
 pub struct ImplBlock {
     pub target: TypeExpr,
-    pub trait_expr: Option<TypeExpr>,
+    pub trait_expr: TypeExpr,
     pub members: Vec<ImplMember>,
     pub span: Span,
 }
 
-/// A member within an `impl` block.
+/// An `extend Type` block: attaches inherent methods (and type
+/// aliases) to `target`. Methods are ambient; duplicate method
+/// names across `extend` blocks targeting the same type are a hard
+/// compile error.
+#[derive(Debug, Clone)]
+pub struct ExtendBlock {
+    pub target: TypeExpr,
+    pub members: Vec<ImplMember>,
+    pub span: Span,
+}
+
+/// A member within an `impl` or `extend` block.
 #[derive(Debug, Clone)]
 pub enum ImplMember {
     Function(Function),

@@ -289,7 +289,7 @@ fn inherent_and_trait_impl_collide_on_same_method_name() {
         struct Point
         end
 
-        impl Point
+        extend Point
           fn greet(self) -> String
             \"inherent\"
           end

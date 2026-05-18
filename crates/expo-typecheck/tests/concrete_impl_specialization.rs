@@ -40,7 +40,7 @@ fn inherent_impl_on_concrete_generic_target_succeeds() {
           item: T
         end
 
-        impl Bag<Int>
+        extend Bag<Int>
           fn render(self) -> Int
             self.item
           end
@@ -63,7 +63,7 @@ fn inherent_impl_on_concrete_generic_diagnoses_mismatched_receiver() {
           item: T
         end
 
-        impl Bag<Int>
+        extend Bag<Int>
           fn render(self) -> Int
             self.item
           end
@@ -95,13 +95,13 @@ fn disjoint_method_names_on_specialized_and_generic_targets_coexist() {
           item: T
         end
 
-        impl Bag<T>
+        extend Bag<T>
           fn snapshot(self) -> Bag<T>
             self
           end
         end
 
-        impl Bag<Int>
+        extend Bag<Int>
           fn render(self) -> Int
             self.item
           end
@@ -126,13 +126,13 @@ fn duplicate_inherent_method_across_impls_diagnoses() {
           item: T
         end
 
-        impl Bag<T>
+        extend Bag<T>
           fn render(self) -> Int
             0
           end
         end
 
-        impl Bag<Int>
+        extend Bag<Int>
           fn render(self) -> Int
             self.item
           end

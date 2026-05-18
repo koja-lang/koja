@@ -258,7 +258,7 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
   end
 end
 
-impl TCPServer
+extend TCPServer
   priv fn on_io_ready(move self, io: IOReady) -> Step<Self>
     match io
       IOReady.Read(_) ->

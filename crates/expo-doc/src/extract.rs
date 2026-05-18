@@ -10,7 +10,7 @@
 //! pivot between packages without ambiguity.
 
 use expo_ast::ast::{
-    AnnotationValue, EnumDecl, File, Function, ImplBlock, ImplMember, Item, Param, ProtocolDecl,
+    AnnotationValue, EnumDecl, ExtendBlock, File, Function, ImplMember, Item, Param, ProtocolDecl,
     ProtocolMethod, StructDecl, TypeExpr, Visibility,
 };
 
@@ -115,6 +115,12 @@ pub struct DocStruct {
 /// item lives here, plus a flat [`Self::items`] roster used by the
 /// sidebar item list. `kind` is the origin tier (project / dep /
 /// stdlib) and drives cross-package sort + renderer labelling.
+///
+/// `pending_extends` holds methods from `extend Type` blocks
+/// declared in this package that haven't yet been routed to their
+/// target type. [`finalize_project`] drains them once every file
+/// has been ingested, so same-package and cross-package targets
+/// route identically.
 #[derive(Debug)]
 pub struct DocPackage {
     pub constants: Vec<DocConstant>,
@@ -125,6 +131,16 @@ pub struct DocPackage {
     pub name: String,
     pub protocols: Vec<DocProtocol>,
     pub structs: Vec<DocStruct>,
+    pending_extends: Vec<PendingExtend>,
+}
+
+/// A method-set from an `extend Type` block, consumed by
+/// [`resolve_pending_extends`] before rendering.
+#[derive(Debug)]
+struct PendingExtend {
+    target_package: String,
+    target_name: String,
+    functions: Vec<DocFunction>,
 }
 
 impl DocPackage {
@@ -138,6 +154,7 @@ impl DocPackage {
             name,
             protocols: Vec::new(),
             structs: Vec::new(),
+            pending_extends: Vec::new(),
         }
     }
 }
@@ -190,16 +207,14 @@ impl DocProject {
 
 /// Extract documentation items from a parsed file into `package`
 /// inside `project`. Items with `@doc false` are excluded; private
-/// top-level functions and impl methods are excluded; the impl
-/// fallthrough that synthesises a method-only stub for an unknown
-/// target only looks inside the current package's roster — cross-
-/// package impl extension isn't a real surface, so stubs land
-/// alongside the caller's other items.
+/// top-level functions and `extend`-block methods are excluded.
+/// `extend Type` blocks queue their methods on the current package's
+/// `pending_extends` -- `finalize_project` distributes them to the
+/// target package's struct/enum rosters once every file has been
+/// ingested. `impl Protocol for Type` blocks do not contribute
+/// documentation surface beyond the protocol's own declaration.
 pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind: PackageKind) {
     let pkg = project.ensure_package(package, kind);
-
-    let mut local_structs: Vec<DocStruct> = Vec::new();
-    let mut local_enums: Vec<DocEnum> = Vec::new();
 
     for item in &file.items {
         match item {
@@ -211,7 +226,12 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
             }
             Item::Enum(e) => {
                 if let Some(de) = extract_enum(e) {
-                    local_enums.push(de);
+                    pkg.enums.push(de);
+                }
+            }
+            Item::Extend(ext) => {
+                if let Some(pending) = make_pending_extend(ext, package) {
+                    pkg.pending_extends.push(pending);
                 }
             }
             Item::Function(f) => {
@@ -219,15 +239,7 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
                     pkg.functions.push(df);
                 }
             }
-            Item::Impl(imp) => {
-                attach_impl_functions(
-                    imp,
-                    &mut local_structs,
-                    &mut local_enums,
-                    &mut pkg.structs,
-                    &mut pkg.enums,
-                );
-            }
+            Item::Impl(_) => {}
             Item::Protocol(p) => {
                 if let Some(dp) = extract_protocol(p) {
                     pkg.protocols.push(dp);
@@ -235,28 +247,60 @@ pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind:
             }
             Item::Struct(s) => {
                 if let Some(ds) = extract_struct(s) {
-                    local_structs.push(ds);
+                    pkg.structs.push(ds);
                 }
             }
-            _ => {}
+            Item::TypeAlias(_) => {}
         }
     }
-
-    pkg.structs.extend(local_structs);
-    pkg.enums.extend(local_enums);
 }
 
-/// Finalize the project: sort packages by `(kind tier, name)` so
-/// the user's project lands first, then sort every item kind
-/// inside each package alphabetically and rebuild the per-package
-/// flat `items` roster used by the sidebar item list.
+/// Resolve pending `extend` blocks, sort packages by
+/// `(kind tier, name)` so the user's project lands first, then sort
+/// and flatten each package's items for the sidebar.
 pub fn finalize_project(project: &mut DocProject) {
+    resolve_pending_extends(project);
+
     project
         .packages
         .sort_by(|a, b| a.kind.tier().cmp(&b.kind.tier()).then(a.name.cmp(&b.name)));
 
     for pkg in &mut project.packages {
         finalize_package(pkg);
+    }
+}
+
+/// Drain every package's `pending_extends` and attach each method
+/// set to the named struct or enum. Extends whose target isn't
+/// documented (private type, unbundled package) are dropped.
+fn resolve_pending_extends(project: &mut DocProject) {
+    let pendings: Vec<PendingExtend> = project
+        .packages
+        .iter_mut()
+        .flat_map(|pkg| std::mem::take(&mut pkg.pending_extends))
+        .collect();
+
+    for pending in pendings {
+        let Some(target) = project
+            .packages
+            .iter_mut()
+            .find(|p| p.name == pending.target_package)
+        else {
+            continue;
+        };
+        if let Some(ds) = target
+            .structs
+            .iter_mut()
+            .find(|s| s.name == pending.target_name)
+        {
+            ds.functions.extend(pending.functions);
+        } else if let Some(de) = target
+            .enums
+            .iter_mut()
+            .find(|e| e.name == pending.target_name)
+        {
+            de.functions.extend(pending.functions);
+        }
     }
 }
 
@@ -326,54 +370,38 @@ fn annotation_string(annotations: &[expo_ast::ast::Annotation]) -> Option<String
         })
 }
 
-fn attach_impl_functions(
-    imp: &ImplBlock,
-    local_structs: &mut Vec<DocStruct>,
-    local_enums: &mut [DocEnum],
-    project_structs: &mut [DocStruct],
-    project_enums: &mut [DocEnum],
-) {
-    if imp.trait_expr.is_some() {
-        return;
-    }
-
-    let target_name = match &imp.target {
-        TypeExpr::Generic { path, .. } | TypeExpr::Named { path, .. } => {
-            path.last().cloned().unwrap_or_default()
-        }
-        _ => return,
+/// Build a [`PendingExtend`] from an `extend Type` block. Path
+/// interpretation mirrors typecheck/IR's `extend_target_path`;
+/// inlined so `expo-doc` doesn't need a typecheck dep.
+fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<PendingExtend> {
+    let path = match &ext.target {
+        TypeExpr::Generic { path, .. } | TypeExpr::Named { path, .. } => path,
+        _ => return None,
+    };
+    let (target_package, target_name) = match path.as_slice() {
+        [name] => (current_package.to_string(), name.clone()),
+        [head @ .., last] if !head.is_empty() => (head.join("."), last.clone()),
+        _ => return None,
     };
 
-    let mut funcs = Vec::new();
-    for member in &imp.members {
-        if let ImplMember::Function(f) = member
-            && let Some(df) = extract_function(f)
-        {
-            funcs.push(df);
-        }
+    let functions: Vec<DocFunction> = ext
+        .members
+        .iter()
+        .filter_map(|m| match m {
+            ImplMember::Function(f) => extract_function(f),
+            ImplMember::TypeAlias(_) => None,
+        })
+        .collect();
+
+    if functions.is_empty() {
+        return None;
     }
 
-    if funcs.is_empty() {
-        return;
-    }
-
-    if let Some(ds) = local_structs.iter_mut().find(|s| s.name == target_name) {
-        ds.functions.extend(funcs);
-    } else if let Some(ds) = project_structs.iter_mut().find(|s| s.name == target_name) {
-        ds.functions.extend(funcs);
-    } else if let Some(de) = local_enums.iter_mut().find(|e| e.name == target_name) {
-        de.functions.extend(funcs);
-    } else if let Some(de) = project_enums.iter_mut().find(|e| e.name == target_name) {
-        de.functions.extend(funcs);
-    } else {
-        local_structs.push(DocStruct {
-            doc: None,
-            fields: Vec::new(),
-            functions: funcs,
-            name: target_name,
-            type_params: Vec::new(),
-        });
-    }
+    Some(PendingExtend {
+        target_package,
+        target_name,
+        functions,
+    })
 }
 
 fn extract_constant(c: &expo_ast::ast::Constant) -> Option<DocConstant> {

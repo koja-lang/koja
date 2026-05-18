@@ -185,7 +185,7 @@ fn impl_block_static_method_emits_named_function_definition() {
           y: Int
         end
 
-        impl Point
+        extend Point
           fn origin -> Point
             Point{x: 0, y: 0}
           end
@@ -265,7 +265,7 @@ fn impl_block_instance_method_emits_named_function_with_self_param() {
           y: Int
         end
 
-        impl Point
+        extend Point
           fn second(self) -> Int
             self.y
           end

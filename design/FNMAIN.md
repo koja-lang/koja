@@ -391,7 +391,7 @@ The constant is defined once; the typed lookup helper pins both the name and the
 Every process mailbox already accepts two kinds of messages: business messages (`M`) and lifecycle events (`Lifecycle`). The `run()` default has two receive arms for them. But `Ref` only exposes the business channel through `cast` and `call`. `signal` exposes the lifecycle channel:
 
 ```expo
-impl Ref<M, R>
+extend Ref<M, R>
   fn cast(self, msg: M)                                # fire-and-forget business message
   fn call(self, msg: M, timeout: Int) -> Result<R, CallError>  # synchronous business message
   fn signal(self, event: Lifecycle)                     # fire-and-forget lifecycle event
@@ -741,7 +741,7 @@ impl Debug for Parser
 end
 
 # cross-file extension (in another file)
-impl Parser
+extend Parser
   fn from_file(path: String) -> Self
     content = File.read(path).unwrap()
     Parser.new(content)

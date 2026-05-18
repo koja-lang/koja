@@ -29,7 +29,7 @@ impl Enumeration<String> for String
   fn get(self, index: Int) -> Option<String>
 end
 
-impl String
+extend String
   @doc """
   Returns `true` if the string contains only ASCII alphabetic
   characters (a-z, A-Z).

@@ -47,7 +47,7 @@ fn for_emits_while_shape_and_calls_iterable_methods() {
           finish: Int
         end
 
-        impl Counter
+        extend Counter
           fn length(self) -> Int
             self.finish - self.start
           end

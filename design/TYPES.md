@@ -395,12 +395,13 @@ Depends on: enum function variants, self-hosted compiler.
   An empty product is algebraically the unit type. No separate keyword needed.
 - **`alias` replaces `type X = Y`** for transparent redirects.
 - **`union` replaces `type X = A | B`** for anonymous sums. Union types are
-  real entries in the type registry, supporting `impl`.
+  real entries in the type registry, supporting `impl` and `extend`.
 - **File = module**: no `module` keyword. The file provides the module
   boundary. One idea per file by convention.
-- **`impl` across files**: `impl Display for User` can appear in a different
-  file from `struct User`. A type is declared in one file, but `impl` blocks
-  can appear anywhere (protocol conformance, extensions from other files).
+- **`impl` and `extend` across files**: `impl Display for User` (protocol
+  conformance) and `extend User` (inherent methods) can appear in a
+  different file from `struct User`. A type is declared in one file, but
+  conformance and extension blocks can appear anywhere.
 - **Trait bounds use `&`**: generic type params can be bounded with
   `<T: Protocol>` or `<T: Proto1 & Proto2>`. `&` is the protocol
   composition operator, complementing `|` for union types. `&` has no
@@ -428,8 +429,8 @@ Depends on: enum function variants, self-hosted compiler.
 
 ## Open questions
 
-- **`impl` on `alias` types**: `alias Handler = fn(Request) -> Response`.
-  Should `impl Handler` work? Function types are structural, not nominal.
+- **`extend` on `alias` types**: `alias Handler = fn(Request) -> Response`.
+  Should `extend Handler` work? Function types are structural, not nominal.
   Naming them via `alias` doesn't change their structure.
 - **`impl` on `union` types**: if all constituents of
   `union Pet = Cat | Dog | Fish` implement `Display`, does `Pet`

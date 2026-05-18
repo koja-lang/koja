@@ -6,7 +6,7 @@ end
 struct Sieve
 end
 
-impl Sieve
+extend Sieve
   fn classify(self, p: Point) -> String
     # Partial-coverage semantics: any field omitted from the pattern is
     # an implicit wildcard. `Point{x: 5}` matches when `x == 5`

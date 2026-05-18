@@ -19,7 +19,7 @@ impl Enumeration<T> for List<T>
   fn get(self, index: Int) -> Option<T>
 end
 
-impl List<T>
+extend List<T>
   @doc """
   Returns `true` if `f` returns `true` for every element.
   Returns `true` for an empty list.

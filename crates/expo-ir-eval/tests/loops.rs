@@ -128,7 +128,7 @@ const ENUMERABLE_FIXTURE: &str = "
       finish: Int
     end
 
-    impl Counter
+    extend Counter
       fn length(self) -> Int
         self.finish - self.start
       end

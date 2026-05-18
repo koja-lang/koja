@@ -39,7 +39,7 @@ const ENUMERABLE_FIXTURE: &str = "
       finish: Int
     end
 
-    impl Counter
+    extend Counter
       fn length(self) -> Int
         self.finish - self.start
       end
@@ -329,7 +329,7 @@ fn for_with_get_returning_non_enum_diagnoses() {
           x: Int
         end
 
-        impl Bad
+        extend Bad
           fn length(self) -> Int
             1
           end
@@ -371,7 +371,7 @@ fn for_with_get_returning_wrong_enum_diagnoses_missing_some_none() {
           x: Int
         end
 
-        impl Wrong
+        extend Wrong
           fn length(self) -> Int
             1
           end

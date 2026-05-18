@@ -15,8 +15,8 @@ syn sync fromstart
 
 " --- Keywords ---------------------------------------------------------------
 
-syn keyword expoKeyword     after alias as break const end enum fn for impl in
-syn keyword expoKeyword     move priv protocol receive return spawn struct type
+syn keyword expoKeyword     after alias as break const end enum extend fn for impl
+syn keyword expoKeyword     in move priv protocol receive return spawn struct type
 syn keyword expoConditional cond else if match unless when
 syn keyword expoRepeat      for loop while
 syn keyword expoOperatorKw  and not or

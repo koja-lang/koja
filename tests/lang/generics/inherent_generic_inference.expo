@@ -7,7 +7,7 @@ struct MyPair<A, B>
   second: B
 end
 
-impl MyBox<T>
+extend MyBox<T>
   fn new(v: T) -> MyBox<T>
     MyBox{value: v}
   end

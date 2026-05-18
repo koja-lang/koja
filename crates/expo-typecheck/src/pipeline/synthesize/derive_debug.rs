@@ -112,7 +112,7 @@ fn collect_existing_debug_impls(file: &File) -> Vec<String> {
 }
 
 fn debug_impl_target(block: &ImplBlock) -> Option<String> {
-    let trait_name = type_expr_head(block.trait_expr.as_ref()?)?;
+    let trait_name = type_expr_head(&block.trait_expr)?;
     if trait_name != DEBUG_PROTOCOL {
         return None;
     }
@@ -166,7 +166,7 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
 fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     Item::Impl(ImplBlock {
         target,
-        trait_expr: Some(debug_trait_expr(span)),
+        trait_expr: debug_trait_expr(span),
         members: vec![
             ImplMember::Function(format_function(format_body, span)),
             ImplMember::Function(print_function(span)),

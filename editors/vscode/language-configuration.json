@@ -20,12 +20,12 @@
     { "open": "\"", "close": "\"" }
   ],
   "indentationRules": {
-    "increaseIndentPattern": "^\\s*(fn|if|else|for|loop|while|match|cond|receive|struct|enum|protocol|impl|unless|when|do)\\b",
+    "increaseIndentPattern": "^\\s*(fn|if|else|for|loop|while|match|cond|receive|struct|enum|protocol|impl|extend|unless|when|do)\\b",
     "decreaseIndentPattern": "^\\s*(end|else)\\b"
   },
   "folding": {
     "markers": {
-      "start": "^\\s*(fn|if|for|loop|while|match|cond|receive|struct|enum|protocol|impl)\\b",
+      "start": "^\\s*(fn|if|for|loop|while|match|cond|receive|struct|enum|protocol|impl|extend)\\b",
       "end": "^\\s*end\\b"
     }
   }

@@ -2,7 +2,7 @@ struct Box<T>
   value: T
 end
 
-impl Box<Int>
+extend Box<Int>
   fn squared(self) -> String
     self.value * self.value
   end

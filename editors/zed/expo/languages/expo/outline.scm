@@ -19,6 +19,10 @@
   "impl" @context
   target: (_) @name) @item
 
+(extend_block
+  "extend" @context
+  target: (_) @name) @item
+
 (function_declaration
   "fn" @context
   name: (_) @name) @item

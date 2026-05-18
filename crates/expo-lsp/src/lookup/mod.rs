@@ -286,21 +286,13 @@ pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
                 return span::annotation_doc(&t.annotations);
             }
             Item::Impl(imp) => {
-                let impl_type_name = match &imp.target {
-                    TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
-                        path.last().map(|s| s.as_str())
-                    }
-                    _ => None,
-                };
-                for member in &imp.members {
-                    if let ImplMember::Function(f) = member
-                        && (f.name == name
-                            || impl_type_name
-                                .map(|t| format!("{t}_{}", f.name) == name)
-                                .unwrap_or(false))
-                    {
-                        return span::annotation_doc(&f.annotations);
-                    }
+                if let Some(doc) = doc_in_block_members(&imp.target, &imp.members, name) {
+                    return Some(doc);
+                }
+            }
+            Item::Extend(ext) => {
+                if let Some(doc) = doc_in_block_members(&ext.target, &ext.members, name) {
+                    return Some(doc);
                 }
             }
             _ => {}
@@ -314,6 +306,28 @@ pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
 fn doc_in_methods(functions: &[Function], type_name: &str, name: &str) -> Option<String> {
     for f in functions {
         if f.name == name || format!("{type_name}_{}", f.name) == name {
+            return span::annotation_doc(&f.annotations);
+        }
+    }
+    None
+}
+
+/// Shared helper for `Item::Impl` and `Item::Extend`: match a
+/// member's bare name (`bump`) or its mangled form (`Counter_bump`).
+fn doc_in_block_members(target: &TypeExpr, members: &[ImplMember], name: &str) -> Option<String> {
+    let target_name = match target {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => {
+            path.last().map(|s| s.as_str())
+        }
+        _ => None,
+    };
+    for member in members {
+        if let ImplMember::Function(f) = member
+            && (f.name == name
+                || target_name
+                    .map(|t| format!("{t}_{}", f.name) == name)
+                    .unwrap_or(false))
+        {
             return span::annotation_doc(&f.annotations);
         }
     }
@@ -467,7 +481,7 @@ mod tests {
             struct Counter
             end
 
-            impl Counter
+            extend Counter
               @doc """
               Increments the counter.
               """

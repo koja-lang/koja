@@ -119,7 +119,7 @@ fn fn_with_default_param() {
 fn fn_with_self_borrow() {
     let src = dedent(
         "
-        impl Counter
+        extend Counter
           fn value(self) -> Int
             self.value
           end
@@ -128,8 +128,8 @@ fn fn_with_self_borrow() {
     );
     let file = parse_clean(&src);
     let block = match &file.items[0] {
-        Item::Impl(b) => b,
-        other => panic!("expected impl, got {other:?}"),
+        Item::Extend(b) => b,
+        other => panic!("expected extend block, got {other:?}"),
     };
     let func = match &block.members[0] {
         expo_ast::ast::ImplMember::Function(f) => f,
@@ -145,7 +145,7 @@ fn fn_with_self_borrow() {
 fn fn_with_move_self() {
     let src = dedent(
         "
-        impl Counter
+        extend Counter
           fn into_value(move self) -> Int
             self.value
           end
@@ -154,8 +154,8 @@ fn fn_with_move_self() {
     );
     let file = parse_clean(&src);
     let block = match &file.items[0] {
-        Item::Impl(b) => b,
-        other => panic!("expected impl, got {other:?}"),
+        Item::Extend(b) => b,
+        other => panic!("expected extend block, got {other:?}"),
     };
     let func = match &block.members[0] {
         expo_ast::ast::ImplMember::Function(f) => f,

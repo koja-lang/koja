@@ -311,7 +311,7 @@ fn impl_block_on_enum_lowers_static_method_into_package_function_map() {
           Blue
         end
 
-        impl Color
+        extend Color
           fn primary -> Color
             Color.Red
           end

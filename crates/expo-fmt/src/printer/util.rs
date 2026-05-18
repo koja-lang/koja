@@ -83,6 +83,7 @@ pub(super) fn item_span(item: &Item) -> &Span {
         Item::Alias(a) => &a.span,
         Item::Constant(c) => &c.span,
         Item::Enum(e) => &e.span,
+        Item::Extend(e) => &e.span,
         Item::Function(f) => &f.span,
         Item::Impl(i) => &i.span,
         Item::Protocol(p) => &p.span,

@@ -98,6 +98,18 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
                     }
                 }
             }
+            Item::Extend(extend_block) => {
+                let target_generic =
+                    impl_target_is_generic(&extend_block.target, package, registry);
+                for member in &extend_block.members {
+                    if let ImplMember::Function(function) = member
+                        && function.type_params.is_empty()
+                        && !target_generic
+                    {
+                        seal_function(function);
+                    }
+                }
+            }
             Item::Constant(constant) => {
                 seal_constant(constant, package, registry);
             }

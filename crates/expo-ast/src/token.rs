@@ -35,6 +35,7 @@ pub enum TokenKind {
     Else,
     End,
     Enum,
+    Extend,
     Fn,
     For,
     If,

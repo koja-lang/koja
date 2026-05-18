@@ -82,7 +82,7 @@ fn move_self_method_receiver_moves_the_caller_local() {
               n: Int
             end
 
-            impl Counter
+            extend Counter
               fn into_value(move self) -> Int
                 self.n
               end

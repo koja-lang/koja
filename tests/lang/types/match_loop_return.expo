@@ -2,7 +2,7 @@ struct Walker
   data: List<Int>
 end
 
-impl Walker
+extend Walker
   fn doubled_sum(self) -> Int
     # Regression: a `match` whose value is bound (forcing a real phi at
     # match_end) inside a `while` body, with one arm that `return`s and one

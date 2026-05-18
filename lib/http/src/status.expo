@@ -8,7 +8,7 @@ struct Status
   reason: String
 end
 
-impl Status
+extend Status
   @doc """
   Returns a 400 Bad Request status.
   """

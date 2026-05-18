@@ -42,7 +42,7 @@ struct CPtr<T>
   fn null?(self) -> Bool
 end
 
-impl CPtr<UInt8>
+extend CPtr<UInt8>
   @doc """
   Creates a `Binary` by copying `len` bytes from this pointer.
 

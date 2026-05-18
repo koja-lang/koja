@@ -47,7 +47,7 @@ struct Pair<A, B>
   second: B
 end
 
-impl Pair<A, B>
+extend Pair<A, B>
   fn new(first: A, second: B) -> Pair<A, B>
     Pair{first: first, second: second}
   end
@@ -61,7 +61,7 @@ struct Range
   stop: Int
 end
 
-impl Option<T>
+extend Option<T>
   @doc """
   Applies `f` to the contained value if `Some`, returns `None` otherwise.
   """
@@ -124,7 +124,7 @@ impl Option<T>
   end
 end
 
-impl Result<T, E>
+extend Result<T, E>
   @doc """
   Returns `true` if the result is `Err`.
   """
@@ -374,7 +374,7 @@ impl Hash for UInt64
   fn hash(self) -> Int
 end
 
-impl Int
+extend Int
   @doc """
   Parses a string as a 64-bit signed integer. Returns `Result.Ok(value)` on
   success, or `Result.Err(message)` if the string is not a valid integer.
@@ -383,7 +383,7 @@ impl Int
   fn parse(input: String) -> Result<Int, String>
 end
 
-impl Float
+extend Float
   @doc """
   Parses a string as a 64-bit floating-point number. Returns `Result.Ok(value)`
   on success, or `Result.Err(message)` if the string is not a valid float.
@@ -392,7 +392,7 @@ impl Float
   fn parse(input: String) -> Result<Float, String>
 end
 
-impl Binary
+extend Binary
   @doc """
   Returns the number of bytes in the binary.
   """
@@ -421,7 +421,7 @@ impl Binary
   fn to_string(self) -> Result<String, String>
 end
 
-impl Bits
+extend Bits
   @doc """
   Attempts to narrow a `Bits` value to `Binary`. Returns `Result.Ok` if
   the bit length is byte-aligned (divisible by 8), or `Result.Err` with

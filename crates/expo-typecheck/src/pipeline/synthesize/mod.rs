@@ -57,6 +57,13 @@ fn synthesize_item(item: &mut Item) {
                 }
             }
         }
+        Item::Extend(extend_block) => {
+            for member in &mut extend_block.members {
+                if let ImplMember::Function(function) = member {
+                    synthesize_function(function);
+                }
+            }
+        }
         Item::Alias(_) | Item::Constant(_) | Item::Protocol(_) | Item::TypeAlias(_) => {}
     }
 }
