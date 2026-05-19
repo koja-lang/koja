@@ -296,6 +296,49 @@ Surfaced during use-after-move test writing (May 2026).
 
 ---
 
+## `<>` concat into a returned struct field corrupts the field
+
+A `String` produced by `<>` concat, bound to a local, moved into a
+struct field, then returned from a helper function reads back as freed
+memory at the call site (or segfaults outright). Only reproduces under
+codegen — the interpreter handles it fine.
+
+```expo
+alias HTTP.Response
+alias HTTP.Status
+alias HTTP.Headers
+alias JSON.Encoder
+alias JSON.Value
+
+fn build -> Response
+  body = Value.object([Value.entry("hello", Value.string("world"))])
+  text = Encoder.encode_pretty(body) <> "\n"
+  Response{
+    body: text,
+    headers: Headers.new(),
+    status: Status.ok(),
+    version: "HTTP/1.1",
+  }
+end
+```
+
+At the call site, `r.body` reads as `"HTTP/1.1 "` (the prior struct
+field's contents leaking through) and `r.serialize()` produces a
+truncated wire message. Slightly different shapes SIGSEGV instead.
+
+Three changes each individually fix it: drop the `<>` (bind the bare
+`Encoder.encode_pretty(body)`), call `.clone()` when assigning the
+field, or inline the struct construction at the call site. The same
+code in `fn main` (no helper return) also works.
+
+**Workaround:** don't move a `<>`-built local directly into a struct
+field that crosses a function return; clone it, drop the concat, or
+build inline.
+
+Surfaced while wiring up `examples/demo_api` (May 2026).
+
+---
+
 Audited 2026-05-03
 
 # Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift

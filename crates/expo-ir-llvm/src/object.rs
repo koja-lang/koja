@@ -7,10 +7,25 @@ use std::path::Path;
 use inkwell::OptimizationLevel;
 use inkwell::module::Module;
 use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
 
 use crate::error::LlvmError;
+
+/// Default macOS deployment target baked into the emitted object's
+/// triple when `MACOSX_DEPLOYMENT_TARGET` is unset. Matches
+/// `expo-driver/src/link.rs::DEFAULT_MACOS_DEPLOYMENT_TARGET` and
+/// the workspace `MACOSX_DEPLOYMENT_TARGET` so user binaries link
+/// without `ld: warning: object file ... built for newer macOS
+/// version` mismatches when the host SDK is newer than the floor.
+#[cfg(target_os = "macos")]
+const DEFAULT_MACOS_DEPLOYMENT_TARGET: &str = "11.0";
+
+/// LLVM triple arch component for the macOS host architecture.
+#[cfg(all(target_os = "macos", target_arch = "aarch64"))]
+const MACOS_TARGET_ARCH: &str = "arm64";
+#[cfg(all(target_os = "macos", target_arch = "x86_64"))]
+const MACOS_TARGET_ARCH: &str = "x86_64";
 
 /// Initialize the native target, build a target machine for the host
 /// triple + CPU + features, and write `module` to `path` as a native
@@ -20,7 +35,7 @@ pub(crate) fn emit_object_file(module: &Module<'_>, path: &Path) -> Result<(), L
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to initialize native target: {e}")))?;
 
-    let triple = TargetMachine::get_default_triple();
+    let triple = host_triple();
     let target = Target::from_triple(&triple)
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to get target: {e}")))?;
 
@@ -46,4 +61,23 @@ pub(crate) fn emit_object_file(module: &Module<'_>, path: &Path) -> Result<(), L
     machine
         .write_to_file(module, FileType::Object, path)
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to write object file: {e}")))
+}
+
+/// Returns the LLVM triple the emitted object file declares. On
+/// macOS, pin the deployment-target portion (honoring
+/// `MACOSX_DEPLOYMENT_TARGET` if the caller has set one, otherwise
+/// [`DEFAULT_MACOS_DEPLOYMENT_TARGET`]) so the bundled crypto
+/// archives and the user binary land on the same floor; elsewhere
+/// fall back to whatever LLVM thinks the host is.
+fn host_triple() -> TargetTriple {
+    #[cfg(target_os = "macos")]
+    {
+        let version = std::env::var("MACOSX_DEPLOYMENT_TARGET")
+            .unwrap_or_else(|_| DEFAULT_MACOS_DEPLOYMENT_TARGET.to_string());
+        TargetTriple::create(&format!("{MACOS_TARGET_ARCH}-apple-macosx{version}"))
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        TargetMachine::get_default_triple()
+    }
 }

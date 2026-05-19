@@ -11,8 +11,6 @@
 //! verbosity) live on [`LinkOptions`].
 
 use std::path::Path;
-#[cfg(target_os = "macos")]
-use std::sync::OnceLock;
 use std::{env, fs, process};
 
 /// Knobs for [`link`]: release strips macOS dSYMs; `quiet`
@@ -33,29 +31,27 @@ const EMBEDDED_RUNTIME: &[u8] = include_bytes!(env!("EXPO_RUNTIME_LIB_PATH"));
 const EMBEDDED_CRYPTO: &[u8] = include_bytes!(env!("EXPO_CRYPTO_LIB_PATH"));
 const EMBEDDED_SSL: &[u8] = include_bytes!(env!("EXPO_SSL_LIB_PATH"));
 
-/// Returns the macOS product version (e.g. "26.4") for use as
-/// `MACOSX_DEPLOYMENT_TARGET`. Cached so `sw_vers` is invoked at
-/// most once per process.
+/// Default deployment target passed to the linker via
+/// `MACOSX_DEPLOYMENT_TARGET` when the env var is unset. Matches the
+/// floor used when compiling the embedded runtime
+/// (`-mmacosx-version-min=11.0` in `expo-runtime/build.rs`) and the
+/// workspace-wide `MACOSX_DEPLOYMENT_TARGET` in
+/// `expo/.cargo/config.toml` that drives `boring-sys`'s
+/// `libcrypto.a` / `libssl.a` builds. Using `sw_vers` here is
+/// tempting but produces "object file was built for newer macOS
+/// version than being linked" warnings whenever the installed Xcode
+/// SDK is newer than the host system version.
 #[cfg(target_os = "macos")]
-fn macos_version() -> &'static str {
-    static VERSION: OnceLock<String> = OnceLock::new();
-    VERSION.get_or_init(|| {
-        process::Command::new("sw_vers")
-            .arg("-productVersion")
-            .output()
-            .ok()
-            .and_then(|o| String::from_utf8(o.stdout).ok())
-            .map(|s| {
-                let s = s.trim();
-                let parts: Vec<&str> = s.splitn(3, '.').collect();
-                if parts.len() >= 2 {
-                    format!("{}.{}", parts[0], parts[1])
-                } else {
-                    s.to_string()
-                }
-            })
-            .unwrap_or_else(|| "11.0".to_string())
-    })
+const DEFAULT_MACOS_DEPLOYMENT_TARGET: &str = "11.0";
+
+/// Resolves the macOS deployment target for the link step. Honors
+/// a caller-supplied `MACOSX_DEPLOYMENT_TARGET` env var (matching
+/// `cc` / `clang` / `rustc` convention) and falls back to
+/// [`DEFAULT_MACOS_DEPLOYMENT_TARGET`].
+#[cfg(target_os = "macos")]
+fn macos_deployment_target() -> String {
+    env::var("MACOSX_DEPLOYMENT_TARGET")
+        .unwrap_or_else(|_| DEFAULT_MACOS_DEPLOYMENT_TARGET.to_string())
 }
 
 /// Links an object file with the embedded runtime library to
@@ -119,7 +115,7 @@ pub(crate) fn link(
     cmd.stderr(process::Stdio::piped());
     #[cfg(target_os = "macos")]
     {
-        cmd.env("MACOSX_DEPLOYMENT_TARGET", macos_version());
+        cmd.env("MACOSX_DEPLOYMENT_TARGET", macos_deployment_target());
     }
 
     let cleanup = |tmp: &Path, obj: &str| {

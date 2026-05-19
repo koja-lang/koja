@@ -1,0 +1,11 @@
+[env]
+# Pin a low macOS deployment target for every build script and
+# `cc`-driven C compilation in the workspace -- notably `boring-sys`,
+# which would otherwise tag its `libcrypto.a` / `libssl.a` objects
+# with whatever Xcode SDK is installed (often newer than the host's
+# system version) and produce
+#   ld: warning: object file was built for newer 'macOS' version (X)
+#   than being linked (Y)
+# warnings when we link user binaries. 11.0 matches the floor used
+# by `expo-runtime/build.rs` (`-mmacosx-version-min=11.0`).
+MACOSX_DEPLOYMENT_TARGET = "11.0"
