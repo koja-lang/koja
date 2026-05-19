@@ -1,0 +1,2 @@
+# Parser port lands here (recursive descent over `ExpoLexer` tokens).
+# Track A in Phase 5: port from `crates/expo-parser/src/`.

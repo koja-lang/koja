@@ -1,0 +1,26 @@
+@doc """
+A source comment preserved for formatting and documentation tooling.
+"""
+struct Comment
+  text: String
+  span: Span
+end
+
+@doc """
+The severity level of a compiler diagnostic.
+"""
+enum Severity
+  Error
+  Warning
+  Note
+end
+
+@doc """
+A compiler diagnostic emitted during parsing, type checking, or codegen.
+"""
+struct Diagnostic
+  severity: Severity
+  message: String
+  hint: Option<String>
+  span: Span
+end

@@ -1,0 +1,138 @@
+@doc """
+A lexed token carrying a `TokenKind` discriminant and a `Span` recording
+its source location.
+"""
+struct Token
+  kind: TokenKind
+  span: Span
+end
+
+@doc """
+The kind of a lexed token.
+
+Identifiers carry their text as a `String` payload. Literal tokens
+(`IntLit`, `FloatLit`, `StringFragment`) also carry their text.
+Keywords, operators, and delimiters are unit variants.
+"""
+enum TokenKind
+  Ident(String)
+  TypeIdent(String)
+  IntLit(String)
+  FloatLit(String)
+  StringStart
+  StringFragment(String)
+  StringEnd
+  InterpolStart
+  InterpolEnd
+  MultilineStringStart
+  MultilineStringEnd
+  True
+  False
+  After
+  Alias
+  Break
+  Cond
+  Const
+  Else
+  End
+  Enum
+  Extend
+  Fn
+  For
+  If
+  Impl
+  In
+  Loop
+  Match
+  Move
+  Not
+  Priv
+  Protocol
+  Receive
+  Return
+  SelfKw
+  Spawn
+  Struct
+  Type
+  Unless
+  When
+  While
+  Plus
+  Minus
+  Star
+  Slash
+  Percent
+  Eq
+  EqEq
+  NotEq
+  Lt
+  Gt
+  LtLt
+  LtGt
+  LtEq
+  GtGt
+  GtEq
+  PlusEq
+  MinusEq
+  StarEq
+  SlashEq
+  Arrow
+  Pipe
+  Ampersand
+  Question
+  At
+  Dot
+  LParen
+  RParen
+  LBrace
+  RBrace
+  LBracket
+  RBracket
+  Comma
+  Colon
+  ColonColon
+  Newline
+  EndOfFile
+end
+
+extend TokenKind
+  @doc """
+  Returns `true` if this token is a reserved keyword.
+  """
+  fn keyword?(self) -> Bool
+    match self
+      After -> true
+      Alias -> true
+      Break -> true
+      Cond -> true
+      Const -> true
+      Else -> true
+      End -> true
+      Enum -> true
+      Extend -> true
+      False -> true
+      Fn -> true
+      For -> true
+      If -> true
+      Impl -> true
+      In -> true
+      Loop -> true
+      Match -> true
+      Move -> true
+      Not -> true
+      Priv -> true
+      Protocol -> true
+      Receive -> true
+      Return -> true
+      SelfKw -> true
+      Spawn -> true
+      Struct -> true
+      True -> true
+      Type -> true
+      Unless -> true
+      When -> true
+      While -> true
+      _ -> false
+    end
+  end
+end
