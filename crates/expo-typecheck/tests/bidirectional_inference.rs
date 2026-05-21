@@ -320,6 +320,95 @@ fn generic_return_hint_unrelated_to_arg_type_still_errors() {
     typecheck_fail(&dedent(source));
 }
 
+// ------------------------------------------------------------------
+// Struct-field initializer positions get the declared field type as
+// their expected hint, mirroring the function-tail / arm-tail
+// propagation above. Pre-fix, `Option.None` and `[]` at field
+// positions diagnosed because the per-field walk used bare
+// `resolve_expr`.
+// ------------------------------------------------------------------
+
+#[test]
+fn option_none_in_struct_field_infers_from_declared_type() {
+    let source = "
+        struct Diagnostic
+          message: String
+          hint: Option<String>
+        end
+
+        fn main
+          d = Diagnostic{message: \"hi\", hint: Option.None}
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn empty_list_in_struct_field_infers_from_declared_type() {
+    let source = "
+        struct Bag
+          items: List<Int>
+        end
+
+        fn main
+          b = Bag{items: []}
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn generic_struct_type_args_seed_field_inits_from_outer_annotation() {
+    let source = "
+        enum Maybe<T>
+          Some(T)
+          None
+        end
+
+        struct Bag<T>
+          value: T
+          alt: Maybe<T>
+        end
+
+        fn main
+          b: Bag<Int> = Bag{value: 1, alt: Maybe.None}
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn nested_struct_field_propagates_through_two_levels() {
+    let source = "
+        struct Inner
+          deep: Option<String>
+        end
+
+        struct Outer
+          inner: Inner
+        end
+
+        fn main
+          o = Outer{inner: Inner{deep: Option.None}}
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn option_none_in_enum_struct_variant_field_infers_from_declared_type() {
+    let source = "
+        enum Event
+          Tick{at: Int, hint: Option<String>}
+        end
+
+        fn main
+          e = Event.Tick{at: 1, hint: Option.None}
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
 #[test]
 fn generic_return_hint_inside_unit_body_does_not_widen_unrelated_call() {
     // Regression for the `fn main` (Unit return) + trailing

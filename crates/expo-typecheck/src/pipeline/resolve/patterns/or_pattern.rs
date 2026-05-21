@@ -10,7 +10,7 @@
 //! cross-arm version (an alternative covered by an earlier *arm*'s
 //! pattern) lives in [`super::super::match_expr`].
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use expo_ast::ast::{Diagnostic, Pattern};
 use expo_ast::identifier::ResolvedType;
@@ -19,7 +19,7 @@ use expo_ast::span::Span;
 
 use super::super::ctx::Resolver;
 use super::literals::literal_repr;
-use super::{PatternCoverage, resolve_pattern};
+use super::{PatternCoverage, VariantWitness, resolve_pattern};
 
 pub(super) fn resolve_or_pattern(
     patterns: &mut [Pattern],
@@ -32,7 +32,7 @@ pub(super) fn resolve_or_pattern(
         diagnostics.push(Diagnostic::error("or-pattern is empty", span));
         return PatternCoverage::Other;
     }
-    let mut variant_tags: Vec<u32> = Vec::new();
+    let mut variant_fullness: BTreeMap<u32, bool> = BTreeMap::new();
     let mut all_literal = true;
     let mut all_enum_units = true;
     let mut seen_alt_literals: BTreeSet<String> = BTreeSet::new();
@@ -57,11 +57,11 @@ pub(super) fn resolve_or_pattern(
             _ => None,
         };
         match resolve_pattern(alternative, subject_ty, resolver, diagnostics) {
-            PatternCoverage::Variants(tags) => {
+            PatternCoverage::Variants(witnesses) => {
                 all_literal = false;
-                let mut all_dup = !tags.is_empty();
-                for tag in &tags {
-                    if !seen_alt_variants.insert(*tag) {
+                let mut all_dup = !witnesses.is_empty();
+                for witness in &witnesses {
+                    if !seen_alt_variants.insert(witness.tag) {
                         continue;
                     }
                     all_dup = false;
@@ -73,7 +73,14 @@ pub(super) fn resolve_or_pattern(
                         alt_span,
                     ));
                 }
-                variant_tags.extend(tags);
+                // Combined fullness per tag is the AND across every
+                // alternative covering that tag.
+                for witness in witnesses {
+                    variant_fullness
+                        .entry(witness.tag)
+                        .and_modify(|combined| *combined &= witness.full)
+                        .or_insert(witness.full);
+                }
             }
             PatternCoverage::Other => {
                 all_enum_units = false;
@@ -99,7 +106,11 @@ pub(super) fn resolve_or_pattern(
         }
     }
     if all_enum_units && !all_literal {
-        PatternCoverage::Variants(variant_tags)
+        let witnesses = variant_fullness
+            .into_iter()
+            .map(|(tag, full)| VariantWitness { full, tag })
+            .collect();
+        PatternCoverage::Variants(witnesses)
     } else {
         PatternCoverage::Other
     }

@@ -14,13 +14,16 @@ etc.). For the full design of the iterator protocol replacement, see
 **Workaround:** variable type annotations (`z: Option<Int32> = Option.None`).
 Inside monomorphized method bodies and closures with return type annotations,
 generic enum construction resolves all type parameters automatically.
+Struct-literal field positions also propagate the declared field type down
+into the initializer, so `Diagnostic{hint: Option.None}` resolves
+`Option.None` from `hint: Option<String>` with no extra annotation.
 
-Also affects generic function calls where one argument is a generic unit
-variant: `Pair.new(self, Option.None)` in a function returning
+Still affects generic free-function calls where one argument is a generic
+unit variant: `Pair.new(self, Option.None)` in a function returning
 `Pair<Lexer, Option<String>>` fails to infer `A` and `B` because the return
-type isn't propagated into the call. Workaround: use struct literals directly
-(`Pair{first: self, second: Option.None}`) where the return type annotation
-provides context, or bind with a type annotation first.
+type isn't propagated into the call. Workaround: use struct literals
+directly (`Pair{first: self, second: Option.None}`) where the field-type
+hint pins the variant, or bind with a type annotation first.
 
 ---
 

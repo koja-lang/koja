@@ -31,7 +31,7 @@ use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coe
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
-use super::structs::validate_named_fields;
+use super::structs::{validate_named_fields, walk_field_inits};
 use super::types::{display_resolution, lookup_type};
 
 pub(super) fn resolve_enum_construction(
@@ -43,11 +43,8 @@ pub(super) fn resolve_enum_construction(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    // Resolve every payload sub-expression up front so seal walks a
-    // populated tree even if the enum or variant doesn't resolve.
-    resolve_construction_data(data, resolver, diagnostics);
-
     let Some((enum_id, enum_entry)) = lookup_type(type_path, resolver.resolution_scope()) else {
+        bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck does not recognize the enum type `{}`",
@@ -59,6 +56,7 @@ pub(super) fn resolve_enum_construction(
     };
 
     let GlobalKind::Enum(definition) = &enum_entry.kind else {
+        bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot construct variant `{variant}` of `{}`: it is a {}, not an enum",
@@ -70,6 +68,7 @@ pub(super) fn resolve_enum_construction(
         return ResolvedType::unresolved();
     };
     let Some(definition) = definition else {
+        bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "internal: enum `{}` has no lifted definition",
@@ -83,12 +82,15 @@ pub(super) fn resolve_enum_construction(
     let enum_label = enum_entry.identifier.to_string();
     let type_params = enum_entry.type_params.clone();
     let Some((_, variant_def)) = definition.lookup_variant(variant) else {
+        bare_walk_construction_data(data, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!("`{enum_label}` has no variant `{variant}`"),
             span,
         ));
         return ResolvedType::leaf(Resolution::Global(enum_id));
     };
+
+    walk_construction_data_with_variant(data, &variant_def.data, resolver, diagnostics);
 
     if type_params.is_empty() {
         validate_variant_payload(&enum_label, variant_def, data, span, resolver, diagnostics);
@@ -245,7 +247,10 @@ fn substitute_variant(variant: &ResolvedEnumVariant, subst: &Substitution) -> Re
     }
 }
 
-fn resolve_construction_data(
+/// Resolve every payload sub-expression with no expected hint.
+/// Fallback for paths where the enum / variant didn't resolve, so
+/// the seal pass still walks a populated tree.
+fn bare_walk_construction_data(
     data: &mut EnumConstructionData,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -262,6 +267,25 @@ fn resolve_construction_data(
             }
         }
         EnumConstructionData::Unit => {}
+    }
+}
+
+/// Resolve payload sub-expressions, threading declared field types
+/// into the struct-variant arm so `Option.None` / `[]` / nested
+/// struct-literals in field positions get a usable expected hint.
+/// Tuple variants still bare-walk — a positional-arg version of the
+/// same hint plumbing is a follow-on.
+fn walk_construction_data_with_variant(
+    data: &mut EnumConstructionData,
+    variant_data: &ResolvedVariantData,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    match (data, variant_data) {
+        (EnumConstructionData::Struct(fields), ResolvedVariantData::Struct(declared)) => {
+            walk_field_inits(declared, fields, resolver, diagnostics);
+        }
+        (data, _) => bare_walk_construction_data(data, resolver, diagnostics),
     }
 }
 

@@ -9,7 +9,9 @@
 
 use expo_ast::ast::{Diagnostic, Expr, FieldInit};
 use expo_ast::coercion::{Coercion, LiteralCoercion};
-use expo_ast::identifier::{Identifier, Resolution, ResolvedType};
+use expo_ast::identifier::{
+    GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+};
 use expo_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
@@ -17,30 +19,30 @@ use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
 
 use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
 use super::ctx::{Callee, Resolver};
-use super::expr::resolve_expr;
-use super::inference::{PhantomContext, finalize_inference, unify_pairs};
+use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
 use super::types::{display_resolution, lookup_type, peel_alias};
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init
-/// of the right type, and no unknown fields appear. The literal's
-/// [`ResolvedType`] is always the struct's leaf type regardless of
-/// per-field mismatches so the surrounding expression stays stable.
+/// of the right type, and no unknown fields appear. Threads
+/// `expected` (the surrounding context's type hint) down so generic
+/// type-args are seeded from outside and `Option.None` / `[]` /
+/// nested struct-literals in field positions get the declared field
+/// type as their own expected hint. The literal's [`ResolvedType`]
+/// is always the struct's leaf type regardless of per-field
+/// mismatches so the surrounding expression stays stable.
 pub(super) fn resolve_struct_construction(
     type_path: &[String],
     fields: &mut [FieldInit],
+    expected: Option<&ResolvedType>,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
-    // Resolve every field-init expression up front so seal walks a
-    // populated tree even if the struct itself doesn't resolve.
-    for field in fields.iter_mut() {
-        resolve_expr(&mut field.value, resolver, diagnostics);
-    }
-
     let Some((struct_id, struct_entry)) = lookup_type(type_path, resolver.resolution_scope())
     else {
+        bare_walk_fields(fields, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck does not recognize the struct type `{}`",
@@ -52,6 +54,7 @@ pub(super) fn resolve_struct_construction(
     };
 
     let GlobalKind::Struct(definition) = &struct_entry.kind else {
+        bare_walk_fields(fields, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot construct `{}`: it is a {}, not a struct",
@@ -71,6 +74,7 @@ pub(super) fn resolve_struct_construction(
         );
     };
     if is_unconstructable_primitive(&struct_entry.identifier) {
+        bare_walk_fields(fields, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot construct primitive type `{}` with struct literal syntax",
@@ -84,6 +88,7 @@ pub(super) fn resolve_struct_construction(
     let owner = struct_entry.identifier.to_string();
     let type_params = struct_entry.type_params.clone();
     if type_params.is_empty() {
+        walk_field_inits(&definition.fields, fields, resolver, diagnostics);
         validate_named_fields(
             &owner,
             &definition.fields,
@@ -100,22 +105,19 @@ pub(super) fn resolve_struct_construction(
         label: &owner,
         type_params: &type_params,
     };
+    let seeded_subst = seed_subst_from_expected(callee, expected, resolver.registry);
+    let substituted_fields = substitute_declared_fields(&definition.fields, &seeded_subst);
+    walk_field_inits(&substituted_fields, fields, resolver, diagnostics);
     let subst = infer_struct_type_args(
         callee,
         &definition.fields,
         fields,
+        seeded_subst,
         span,
         resolver.registry,
         diagnostics,
     );
-    let substituted_fields: Vec<ResolvedStructField> = definition
-        .fields
-        .iter()
-        .map(|field| ResolvedStructField {
-            name: field.name.clone(),
-            ty: substitute(&field.ty, &subst),
-        })
-        .collect();
+    let substituted_fields = substitute_declared_fields(&definition.fields, &subst);
     validate_named_fields(
         &owner,
         &substituted_fields,
@@ -130,21 +132,114 @@ pub(super) fn resolve_struct_construction(
     }
 }
 
+/// Resolve every field-init expression with no expected hint —
+/// fallback for paths where the struct itself failed to resolve.
+/// Keeps the seal pass walking a populated tree.
+fn bare_walk_fields(
+    fields: &mut [FieldInit],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for field in fields.iter_mut() {
+        resolve_expr(&mut field.value, resolver, diagnostics);
+    }
+}
+
+/// Walk a `FieldInit` list against a substituted declared roster:
+/// for each init, look up the matching declared field and resolve
+/// its value with that field's type as the expected hint. Inits
+/// whose name doesn't match any declared field fall through to the
+/// bare walk (the unknown-field diagnostic in
+/// [`validate_named_fields`] reports them). Shared by struct
+/// construction and the struct-variant arm of enum construction.
+pub(super) fn walk_field_inits(
+    declared: &[ResolvedStructField],
+    fields: &mut [FieldInit],
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for field in fields.iter_mut() {
+        let Some((_, declared_field)) = lookup_named_field(declared, &field.name) else {
+            resolve_expr(&mut field.value, resolver, diagnostics);
+            continue;
+        };
+        resolve_expr_with_expected(
+            &mut field.value,
+            Some(&declared_field.ty),
+            resolver,
+            diagnostics,
+        );
+    }
+}
+
+fn substitute_declared_fields(
+    declared: &[ResolvedStructField],
+    subst: &Substitution,
+) -> Vec<ResolvedStructField> {
+    declared
+        .iter()
+        .map(|field| ResolvedStructField {
+            name: field.name.clone(),
+            ty: substitute(&field.ty, subst),
+        })
+        .collect()
+}
+
+/// Pre-seed an empty substitution from the surrounding context's
+/// expected type, mirroring the enum-side
+/// [`super::enums::resolve_enum_construction`] flow. Lets
+/// `pair: Pair<Int, Bool> = Pair{...}` pin `T` / `U` before any
+/// field's value is even seen, so field-init walks see fully
+/// substituted declared types.
+fn seed_subst_from_expected(
+    callee: Callee<'_>,
+    expected: Option<&ResolvedType>,
+    registry: &GlobalRegistry,
+) -> Substitution {
+    let mut subst = Substitution::single(callee.id, callee.type_params.len());
+    if let Some(hint) = expected {
+        let template = canonical_struct_template(callee.id, callee.type_params.len());
+        fill_from_expected(&template, hint, &mut subst, registry);
+    }
+    subst
+}
+
+/// Build the struct's canonical self-referential template
+/// `Named { Global(struct_id), [TypeParam(struct_id, 0..N)] }`.
+/// Mirrors `canonical_enum_template` in [`super::enums`].
+fn canonical_struct_template(struct_id: GlobalRegistryId, arity: usize) -> ResolvedType {
+    ResolvedType::Named {
+        resolution: Resolution::Global(struct_id),
+        type_args: (0..arity)
+            .map(|index| ResolvedType::Named {
+                resolution: Resolution::TypeParam {
+                    owner: struct_id,
+                    index: TypeParamIndex::new(index as u32),
+                },
+                type_args: Vec::new(),
+            })
+            .collect(),
+    }
+}
+
 /// Infer concrete `type_args` for a generic struct construction by
 /// unifying each declared field's template type against the resolved
-/// type of its corresponding field-init value. Emits one diagnostic
-/// per [`Conflict`] (T inferred to two distinct types) and one per
-/// Phantom param (no field constrains it). Slots without inference
-/// stay `None` so the caller surfaces an unresolved leaf.
+/// type of its corresponding field-init value. `seeded` is the
+/// substitution after any bidirectional fill from the surrounding
+/// expected type; payload-driven unification adds to it without
+/// overriding existing bindings. Emits one diagnostic per
+/// [`Conflict`] (T inferred to two distinct types) and one per
+/// phantom param (no field nor outer hint constrains it).
 fn infer_struct_type_args(
     callee: Callee<'_>,
     declared: &[ResolvedStructField],
     fields: &[FieldInit],
+    seeded: Substitution,
     span: Span,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Substitution {
-    let mut subst = Substitution::single(callee.id, callee.type_params.len());
+    let mut subst = seeded;
     let pairs = fields.iter().filter_map(|field| {
         let (_, declared_field) = lookup_named_field(declared, &field.name)?;
         Some((&declared_field.ty, &field.value.resolution, field.span))

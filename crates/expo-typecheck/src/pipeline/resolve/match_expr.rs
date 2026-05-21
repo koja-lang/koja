@@ -39,12 +39,12 @@ use super::walker::resolve_body_with_expected;
 use crate::registry::{EnumDefinition, GlobalRegistry};
 
 /// Rolling accumulators of "what coverage has fired so far" used to
-/// flag arm-after-arm redundancy. Each set is the dedup'd image of
-/// the coverage emitted by every prior unguarded arm — bundled so
-/// the per-arm reachability check carries a single context handle
-/// instead of three parallel set references.
+/// flag arm-after-arm redundancy. `variants` drives exhaustiveness
+/// (every witness tag); `full_variants` drives reachability (only
+/// witnesses whose inner pattern was itself a catch-all).
 #[derive(Default)]
 struct SeenCoverage {
+    full_variants: BTreeSet<u32>,
     literals: BTreeSet<String>,
     union_members: BTreeSet<String>,
     variants: BTreeSet<u32>,
@@ -105,11 +105,14 @@ pub(super) fn resolve_match(
         if arm.guard.is_none() {
             match &coverage {
                 PatternCoverage::CatchAll => has_catch_all = true,
-                PatternCoverage::Variants(tags) => {
-                    for tag in tags {
-                        seen.variants.insert(*tag);
+                PatternCoverage::Variants(witnesses) => {
+                    for witness in witnesses {
+                        seen.variants.insert(witness.tag);
+                        if witness.full {
+                            seen.full_variants.insert(witness.tag);
+                        }
+                        covered_variants.push(witness.tag);
                     }
-                    covered_variants.extend(tags);
                 }
                 PatternCoverage::UnionMember(member) => {
                     let key = display_resolution(member, resolver.registry);
@@ -244,8 +247,15 @@ fn check_arm_reachability(
     }
     match coverage {
         PatternCoverage::CatchAll => {}
-        PatternCoverage::Variants(tags) => {
-            if !tags.is_empty() && tags.iter().all(|tag| seen.variants.contains(tag)) {
+        PatternCoverage::Variants(witnesses) => {
+            // Only `full` witnesses shadow sibling arms — narrowing
+            // patterns share the outer tag without subsuming each
+            // other.
+            if !witnesses.is_empty()
+                && witnesses
+                    .iter()
+                    .all(|witness| seen.full_variants.contains(&witness.tag))
+            {
                 diagnostics.push(Diagnostic::warning(
                     "match arm is unreachable: every variant it covers is already \
                      matched by an earlier arm",

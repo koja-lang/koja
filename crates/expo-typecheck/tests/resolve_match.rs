@@ -801,15 +801,9 @@ fn match_enum_tuple_literal_payload_resolves() {
 }
 
 #[test]
-fn match_enum_tuple_with_literal_payload_is_still_full_variant_coverage_for_now() {
-    // KNOWN-SOUNDNESS-GAP: `Option.Some(5)` semantically covers
-    // only Some(5), but the current variant accounting marks the
-    // arm as full Some coverage so the lang fixture
-    // `nested_enum_pattern_literal` (multiple Some-arms with
-    // disjoint inner patterns) still typechecks without a
-    // multi-arm coverage accumulator. This test pins the looser
-    // behavior; once a coverage accumulator lands, flip the
-    // expectation to a missing-catch-all diagnostic.
+fn match_enum_tuple_with_literal_payload_still_satisfies_variant_coverage() {
+    // `Option.Some(5)` narrows but still records `Some` as covered
+    // for exhaustiveness — joint nested coverage stays TODO.
     let source = "
         fn classify(op: Option<Int>) -> Int
           match op
@@ -827,8 +821,8 @@ fn match_enum_tuple_with_literal_payload_is_still_full_variant_coverage_for_now(
 }
 
 #[test]
-fn match_enum_struct_with_literal_field_is_still_full_variant_coverage_for_now() {
-    // KNOWN-SOUNDNESS-GAP — see the tuple-variant version above.
+fn match_enum_struct_with_literal_field_still_satisfies_variant_coverage() {
+    // Mirrors the tuple-variant case for struct variants.
     let source = "
         enum Shape
           Rect{w: Int, h: Int}
@@ -848,6 +842,121 @@ fn match_enum_struct_with_literal_field_is_still_full_variant_coverage_for_now()
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
+}
+
+#[test]
+fn match_some_with_distinct_enum_payloads_does_not_warn_unreachable() {
+    // Narrowing inner patterns under the same outer variant
+    // (`Some(Color.Red)` / `Some(Color.Green)`) used to trip the
+    // cross-arm reachability check because variant coverage only
+    // tracked the outer tag.
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn classify(op: Option<Color>) -> Int
+          match op
+            Option.Some(Color.Red) -> 1
+            Option.Some(Color.Green) -> 2
+            Option.None -> 0
+            _ -> 99
+          end
+        end
+
+        fn main
+          classify(Option.Some(Color.Red))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings.is_empty(),
+        "narrowing arms under the same outer variant should not warn, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_some_binding_then_none_exhausts_without_catch_all() {
+    let source = "
+        fn classify(op: Option<Int>) -> Int
+          match op
+            Option.Some(_) -> 1
+            Option.None -> 0
+          end
+        end
+
+        fn main
+          classify(Option.None)
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings.is_empty(),
+        "Some(_) + None should be exhaustive without warnings, got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_some_binding_then_narrow_some_warns_unreachable() {
+    // `Some(x)` is a full witness for `Some` (binding is a
+    // catch-all), so the narrower `Some(Color.Red)` arm is dead.
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn classify(op: Option<Color>) -> Int
+          match op
+            Option.Some(x) -> 1
+            Option.Some(Color.Red) -> 2
+            _ -> 0
+          end
+        end
+
+        fn main
+          classify(Option.Some(Color.Red))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings
+            .iter()
+            .any(|m| m.contains("unreachable") && m.contains("variant")),
+        "expected unreachable-variant warning after Some(x), got: {warnings:?}",
+    );
+}
+
+#[test]
+fn match_distinct_some_literal_payloads_do_not_warn_unreachable() {
+    // `Some(1)` and `Some(2)` narrow on disjoint primitive
+    // literals — neither should shadow the other.
+    let source = "
+        fn classify(op: Option<Int>) -> Int
+          match op
+            Option.Some(1) -> 1
+            Option.Some(2) -> 2
+            Option.None -> 0
+          end
+        end
+
+        fn main
+          classify(Option.Some(1))
+        end
+        ";
+    let checked = typecheck(&dedent(source));
+    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    let warnings = warning_messages(&checked);
+    assert!(
+        warnings.is_empty(),
+        "narrowing literal payloads must not flag each other unreachable, got: {warnings:?}",
+    );
 }
 
 #[test]

@@ -50,10 +50,7 @@ extend Lexer
   """
   fn new(move source: String) -> Lexer
     cursor = Cursor.new(source)
-    comments: List<Comment> = []
-    errors: List<Diagnostic> = []
-    tokens: List<Token> = []
-    Lexer{comments: comments, cursor: cursor, errors: errors, tokens: tokens}
+    Lexer{comments: [], cursor: cursor, errors: [], tokens: []}
   end
 
   @doc """
@@ -115,44 +112,39 @@ extend Lexer
 
   priv fn continues_line?(self) -> Bool
     match self.last_token_kind()
-      None ->
-        true
-
-      Some(kind) ->
-        match kind
-          TokenKind.Ident(name) -> name == "and" or name == "or"
-          TokenKind.Plus -> true
-          TokenKind.Minus -> true
-          TokenKind.Star -> true
-          TokenKind.Slash -> true
-          TokenKind.Percent -> true
-          TokenKind.Not -> true
-          TokenKind.EqEq -> true
-          TokenKind.NotEq -> true
-          TokenKind.Lt -> true
-          TokenKind.Gt -> true
-          TokenKind.LtEq -> true
-          TokenKind.GtEq -> true
-          TokenKind.Eq -> true
-          TokenKind.PlusEq -> true
-          TokenKind.MinusEq -> true
-          TokenKind.StarEq -> true
-          TokenKind.SlashEq -> true
-          TokenKind.Arrow -> true
-          TokenKind.Pipe -> true
-          TokenKind.Comma -> true
-          TokenKind.Dot -> true
-          TokenKind.Colon -> true
-          TokenKind.ColonColon -> true
-          TokenKind.LtGt -> true
-          TokenKind.At -> true
-          TokenKind.LParen -> true
-          TokenKind.LBrace -> true
-          TokenKind.LBracket -> true
-          TokenKind.LtLt -> true
-          TokenKind.Newline -> true
-          _ -> false
-        end
+      None -> true
+      Some(TokenKind.Ident(name)) -> name == "and" or name == "or"
+      Some(TokenKind.Plus) -> true
+      Some(TokenKind.Minus) -> true
+      Some(TokenKind.Star) -> true
+      Some(TokenKind.Slash) -> true
+      Some(TokenKind.Percent) -> true
+      Some(TokenKind.Not) -> true
+      Some(TokenKind.EqEq) -> true
+      Some(TokenKind.NotEq) -> true
+      Some(TokenKind.Lt) -> true
+      Some(TokenKind.Gt) -> true
+      Some(TokenKind.LtEq) -> true
+      Some(TokenKind.GtEq) -> true
+      Some(TokenKind.Eq) -> true
+      Some(TokenKind.PlusEq) -> true
+      Some(TokenKind.MinusEq) -> true
+      Some(TokenKind.StarEq) -> true
+      Some(TokenKind.SlashEq) -> true
+      Some(TokenKind.Arrow) -> true
+      Some(TokenKind.Pipe) -> true
+      Some(TokenKind.Comma) -> true
+      Some(TokenKind.Dot) -> true
+      Some(TokenKind.Colon) -> true
+      Some(TokenKind.ColonColon) -> true
+      Some(TokenKind.LtGt) -> true
+      Some(TokenKind.At) -> true
+      Some(TokenKind.LParen) -> true
+      Some(TokenKind.LBrace) -> true
+      Some(TokenKind.LBracket) -> true
+      Some(TokenKind.LtLt) -> true
+      Some(TokenKind.Newline) -> true
+      _ -> false
     end
   end
 
@@ -586,12 +578,11 @@ extend Lexer
       c ->
         start = self.cursor.position()
         self.cursor = self.cursor.advance()
-        hint: Option<String> = Option.None
         self.errors = self.errors.append(
           Diagnostic{
             severity: Severity.Error,
             message: "unexpected character: '#{c}'",
-            hint: hint,
+            hint: Option.None,
             span: Span.new(start, self.cursor.position()),
           },
         )

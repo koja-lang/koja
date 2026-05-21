@@ -16,7 +16,7 @@ use expo_ast::span::Span;
 use super::super::ctx::Resolver;
 use super::super::types::{display_resolution, lookup_type};
 use super::structs::{resolve_field_patterns_unbound, walk_field_patterns};
-use super::{PatternCoverage, resolve_pattern};
+use super::{PatternCoverage, VariantWitness, resolve_pattern};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData};
 
@@ -49,7 +49,10 @@ pub(super) fn resolve_enum_unit_pattern(
             span,
         ));
     }
-    PatternCoverage::Variants(vec![variant_index])
+    PatternCoverage::Variants(vec![VariantWitness {
+        full: true,
+        tag: variant_index,
+    }])
 }
 
 pub(super) fn resolve_enum_tuple_pattern(
@@ -74,21 +77,21 @@ pub(super) fn resolve_enum_tuple_pattern(
         resolve_enum_tuple_elements_unbound(elements, resolver, diagnostics);
         return PatternCoverage::Other;
     };
+    let mut full = true;
     for (element, element_ty) in elements.iter_mut().zip(metadata.element_types.iter()) {
-        resolve_pattern(element, element_ty, resolver, diagnostics);
+        let element_coverage = resolve_pattern(element, element_ty, resolver, diagnostics);
+        if !matches!(element_coverage, PatternCoverage::CatchAll) {
+            full = false;
+        }
     }
-    // KNOWN-SOUNDNESS-GAP: marking the variant as fully covered
-    // even when an inner element narrows the match (literal /
-    // nested-enum / nested-struct pattern) lets the lang fixture
-    // `nested_enum_pattern_literal` typecheck without an explicit
-    // outer catch-all. The tightened plan (a non-catch-all inner
-    // demotes coverage to `Other`) needs a multi-arm coverage
-    // accumulator to recognize that, e.g., `Some(Ident(_))` +
-    // `Some(Number(_))` jointly cover `Some`. Until that lands,
-    // unreachable-arm warnings still fire because the cross-arm
-    // duplicate-literal accumulator in `match_expr` runs
-    // independently of this variant accounting.
-    PatternCoverage::Variants(vec![metadata.variant_index])
+    // Exhaustiveness sees the variant covered regardless of `full`.
+    // Joint nested exhaustiveness (`Some(A)` + `Some(B)` + `None`
+    // covering `Option<AB>` when `A` / `B` partition the inner enum)
+    // is still TODO — would need a Maranget-style coverage matrix.
+    PatternCoverage::Variants(vec![VariantWitness {
+        full,
+        tag: metadata.variant_index,
+    }])
 }
 
 pub(super) fn resolve_enum_struct_pattern(
@@ -113,18 +116,21 @@ pub(super) fn resolve_enum_struct_pattern(
         return PatternCoverage::Other;
     };
     let owner_label = format!("{}.{variant_name}", metadata.label);
-    // The discarded coverage is intentional — see the soundness
-    // note on `resolve_enum_tuple_pattern` for why every enum-
-    // variant pattern still marks its variant as fully covered
-    // for exhaustiveness purposes regardless of interior shapes.
-    let _ = walk_field_patterns(
+    let field_coverage = walk_field_patterns(
         &owner_label,
         fields,
         &metadata.declared,
         resolver,
         diagnostics,
     );
-    PatternCoverage::Variants(vec![metadata.variant_index])
+    // `walk_field_patterns` returns `CatchAll` only when every
+    // listed field's coverage is a catch-all (omitted fields are
+    // implicit wildcards).
+    let full = matches!(field_coverage, PatternCoverage::CatchAll);
+    PatternCoverage::Variants(vec![VariantWitness {
+        full,
+        tag: metadata.variant_index,
+    }])
 }
 
 struct EnumTuplePatternMetadata {

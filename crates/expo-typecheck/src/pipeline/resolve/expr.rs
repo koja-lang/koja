@@ -192,9 +192,14 @@ pub(super) fn resolve_expr_with_expected(
         }
         ExprKind::Spawn { expr: inner } => resolve_spawn(inner, expr.span, resolver, diagnostics),
         ExprKind::String { parts, .. } => resolve_string(parts, expr.span, resolver, diagnostics),
-        ExprKind::StructConstruction { type_path, fields } => {
-            resolve_struct_construction(type_path, fields, expr.span, resolver, diagnostics)
-        }
+        ExprKind::StructConstruction { type_path, fields } => resolve_struct_construction(
+            type_path,
+            fields,
+            expected,
+            expr.span,
+            resolver,
+            diagnostics,
+        ),
         ExprKind::Ternary {
             condition,
             then_expr,

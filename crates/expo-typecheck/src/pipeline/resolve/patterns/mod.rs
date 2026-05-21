@@ -46,15 +46,24 @@ use crate::registry::{EnumDefinition, GlobalKind, GlobalRegistry};
 
 use literals::literal_repr;
 
+/// One variant a pattern covers, with `full = true` when the inner
+/// pattern is itself a catch-all (every inhabitant of the variant
+/// matches). Narrowing inner patterns set `full = false`.
+pub(super) struct VariantWitness {
+    pub full: bool,
+    pub tag: u32,
+}
+
 /// What a pattern admits at runtime. Drives the
 /// catch-all-or-exhaustiveness rule in
 /// [`super::match_expr::resolve_match`].
 pub(super) enum PatternCoverage {
     /// Wildcard / binding — admits every value of the subject.
     CatchAll,
-    /// `EnumUnit` / `EnumTuple` (or an `Or` of those) — admits
-    /// exactly the listed variant tags.
-    Variants(Vec<u32>),
+    /// `EnumUnit` / `EnumTuple` (or an `Or` of those) — admits the
+    /// listed variant tags. Exhaustiveness uses every witness;
+    /// reachability uses only the `full` ones.
+    Variants(Vec<VariantWitness>),
     /// `TypedBinding` matched against a union subject — admits
     /// values whose runtime tag corresponds to `member`. Drives
     /// union exhaustiveness in [`super::match_expr::resolve_match`].
