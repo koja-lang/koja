@@ -72,7 +72,7 @@ use expo_ast::identifier::Identifier;
 use expo_ir::{IRProgram, IRScript, ProjectEntry, lower_program, lower_script};
 use expo_ir_eval::Interpreter;
 use expo_parser::{ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
-use expo_test::{TestCase, discover_tests, generate_harness};
+use expo_test::{HARNESS_ENTRY, TestCase, discover_tests, generate_harness};
 use expo_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
 
 use crate::commands::load_project_or_exit;
@@ -766,7 +766,7 @@ fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
 /// `expo build` for a project: parse + typecheck + lower the
 /// whole project, compile via [`expo_ir_llvm::compile_program`],
 /// and link to a binary at `output` (defaulting to
-/// `target/debug/<config.name>`). Prints the final binary path.
+/// `build/debug/<config.name>`). Prints the final binary path.
 fn build_project_and_keep(
     config: &ProjectConfig,
     root: &Path,
@@ -792,7 +792,7 @@ fn build_project_and_keep(
 /// parsed program, lower with the harness as entry, link, exec the
 /// binary, and forward its exit code. The temp binary is removed
 /// after the run so repeated invocations don't accumulate artifacts
-/// under `target/debug/`.
+/// under `build/debug/`.
 ///
 /// Diverges either way: success exits with the binary's status, any
 /// pipeline failure or launch error prints `error: …` and exits 1.
@@ -817,7 +817,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path) {
             process::exit(1);
         }
     };
-    let entry = Identifier::new(config.name.clone(), vec!["main".to_string()]);
+    let entry = Identifier::new(config.name.clone(), vec![HARNESS_ENTRY.to_string()]);
     let program = match lower_program(&checked, ProjectEntry::Function(entry)) {
         Ok(program) => program,
         Err(err) => {
@@ -826,7 +826,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path) {
         }
     };
 
-    let binary = project_target_dir(root, false)
+    let binary = project_build_dir(root, false)
         .join(format!("{}_test", config.name))
         .to_string_lossy()
         .to_string();
@@ -913,8 +913,8 @@ fn collect_test_project_sources(
 /// Diverges either way (binary status or launch error).
 fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args: &[String]) -> ! {
     let program = build_project_program(config, root);
-    let target = project_target_dir(root, release);
-    let binary = target.join(&config.name).to_string_lossy().to_string();
+    let build_dir = project_build_dir(root, release);
+    let binary = build_dir.join(&config.name).to_string_lossy().to_string();
     emit_and_link_program(&program, &config.name, &binary, &[root], release);
 
     let status = process::Command::new(&binary).args(args).status();
@@ -1113,20 +1113,20 @@ fn walk_expo_files_into(dir: &Path, out: &mut Vec<PathBuf>) {
 }
 
 /// Default output path for project builds:
-/// `<root>/target/{debug,release}/<config.name>` depending on the
+/// `<root>/build/{debug,release}/<config.name>` depending on the
 /// `release` flag.
 fn default_project_output(config: &ProjectConfig, root: &Path, release: bool) -> String {
-    project_target_dir(root, release)
+    project_build_dir(root, release)
         .join(&config.name)
         .to_string_lossy()
         .to_string()
 }
 
-fn project_target_dir(root: &Path, release: bool) -> PathBuf {
+fn project_build_dir(root: &Path, release: bool) -> PathBuf {
     let profile = if release { "release" } else { "debug" };
-    let dir = root.join("target").join(profile);
+    let dir = root.join("build").join(profile);
     fs::create_dir_all(&dir).unwrap_or_else(|e| {
-        eprintln!("error: cannot create target directory: {e}");
+        eprintln!("error: cannot create build directory: {e}");
         process::exit(1);
     });
     dir

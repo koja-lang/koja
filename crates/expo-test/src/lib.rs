@@ -3,11 +3,13 @@
 //! The driver feeds a parsed project (sources + test fixtures) into
 //! [`discover_tests`] to enumerate every `@test`-annotated function
 //! belonging to the current project. [`generate_harness`] then
-//! produces an Expo source string for a synthetic `fn main` that
-//! invokes each test, tracks pass/fail counts, and exits non-zero
-//! when anything fails. The driver splices that harness into the
-//! parsed program and runs it through the rest of the
-//! pipeline like any other entry function.
+//! produces an Expo source string for a synthetic
+//! `fn __expo_test_entry` that invokes each test, tracks pass/fail
+//! counts, and exits non-zero when anything fails. The driver
+//! splices that harness into the parsed program and lowers with
+//! [`HARNESS_ENTRY`] as the project entry, so the user's own
+//! `fn main` (if any) coexists as dead code in the test binary
+//! without colliding on the `main` name.
 //!
 //! Kept backend-agnostic on purpose: this crate only depends on
 //! the AST + parser surface so both the pipeline and (any
@@ -15,6 +17,12 @@
 
 use expo_ast::ast::{AnnotationValue, Item};
 use expo_parser::ParsedProgram;
+
+/// Name of the synthesized test-harness entry function. Reserved
+/// for the test runner; the driver passes this as the project
+/// entry when lowering test builds, so it must match the function
+/// name emitted by [`generate_harness`].
+pub const HARNESS_ENTRY: &str = "__expo_test_entry";
 
 /// A discovered `@test` function inside a struct, called as
 /// `StructName.fn_name()` from the generated harness.
@@ -120,7 +128,7 @@ pub fn generate_harness(tests: &[TestCase]) -> String {
     body.push_str("  end\n");
 
     let mut source = String::new();
-    source.push_str("fn main\n");
+    source.push_str(&format!("fn {HARNESS_ENTRY}\n"));
     source.push_str(&body);
     source.push_str("end\n");
 

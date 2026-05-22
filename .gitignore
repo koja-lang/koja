@@ -4,6 +4,8 @@
 **/doc
 **/target/debug
 **/target/release
+**/build/debug
+**/build/release
 *.o
 *.out
 *.exe

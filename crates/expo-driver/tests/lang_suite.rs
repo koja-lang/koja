@@ -443,7 +443,7 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
     let expected_path = dir.join("expected.stdout");
     assert!(expected_path.exists(), "missing {label}/expected.stdout");
 
-    let binary = dir.join("target").join("debug").join(label);
+    let binary = dir.join("build").join("debug").join(label);
 
     let build_out = {
         let mut cmd = Command::new(expo_bin());

@@ -4,4 +4,4 @@ version = "0.1.0"
 entry = "main"
 
 [dependencies]
-ExpoAST = { path = "deps/expo_ast" }
+ExpoAST = { path = "projects/expo_ast" }

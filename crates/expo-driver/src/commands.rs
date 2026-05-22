@@ -514,7 +514,11 @@ fn collect_expo_files_recursive(dir: &Path) -> Vec<PathBuf> {
 
 /// `expo new <name>` -- scaffolds a new Expo project.
 ///
-/// Creates a directory with `expo.toml` and `src/main.expo`.
+/// Creates a directory with `expo.toml`, `.gitignore`, `src/main.expo`
+/// (a small `greet` helper plus `fn main`), and `test/main_test.expo`
+/// (a placeholder `@test` exercising `greet`). `expo build` and
+/// `expo test` both succeed against the scaffold from the first
+/// command.
 pub fn cmd_new(name: String) {
     if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         eprintln!("error: project name must contain only ASCII letters, digits, and underscores");
@@ -533,6 +537,12 @@ pub fn cmd_new(name: String) {
         process::exit(1);
     });
 
+    let test_dir = project_dir.join("test");
+    fs::create_dir_all(&test_dir).unwrap_or_else(|e| {
+        eprintln!("error: cannot create directory: {e}");
+        process::exit(1);
+    });
+
     let toml_content = dedent(&format!(
         "
         [project]
@@ -546,16 +556,52 @@ pub fn cmd_new(name: String) {
         process::exit(1);
     });
 
+    let gitignore_content = dedent(
+        "
+        /build
+        /deps
+        ",
+    );
+    fs::write(project_dir.join(".gitignore"), gitignore_content).unwrap_or_else(|e| {
+        eprintln!("error: cannot write .gitignore: {e}");
+        process::exit(1);
+    });
+
     let main_content = dedent(
         "
+        fn greet(name: String) -> String
+          \"Hello, #{name}!\"
+        end
+
         fn main
-          name = \"Expo\"
-          IO.puts(\"Hello, #{name}!\")
+          IO.puts(greet(\"Expo\"))
         end
         ",
     );
     fs::write(src_dir.join("main.expo"), main_content).unwrap_or_else(|e| {
         eprintln!("error: cannot write src/main.expo: {e}");
+        process::exit(1);
+    });
+
+    let main_test_content = dedent(
+        "
+        struct MainTest
+          @test \"greet builds a greeting message\"
+          fn test_greet -> Result<Bool, String>
+            actual = greet(\"Expo\")
+            expected = \"Hello, Expo!\"
+
+            unless actual == expected
+              return Result.Err(\"expected `#{expected}`, got `#{actual}`\")
+            end
+
+            Result.Ok(true)
+          end
+        end
+        ",
+    );
+    fs::write(test_dir.join("main_test.expo"), main_test_content).unwrap_or_else(|e| {
+        eprintln!("error: cannot write test/main_test.expo: {e}");
         process::exit(1);
     });
 

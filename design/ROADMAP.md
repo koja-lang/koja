@@ -219,7 +219,7 @@ Sub-deliverables:
 - **Rust side: `--emit-ast` and `--parser=<path>` flags** -- `--emit-ast` writes the Rust parser's AST to a file (used for parity diffing and as the contract for `expoc`). `--parser=<path>` shells out to a parser binary (default behavior remains the in-process Rust parser; `--parser=expoc` opts in to the self-host).
 - **`expoc/` skeleton** -- top-level project (`expoc/expo.toml`, `expoc/src/`, `expoc/test/`). Imports the Phase 3 lexer port as the seed; adds the parser implementation alongside.
 - **Parser port** -- port the recursive-descent parser from `crates/expo-parser/src/` to `expoc/src/parser.expo`. Expected to be the largest stress test of Expo so far; surface language gaps as a side effect and fix them.
-- **Build integration** -- `just build-expoc` recipe builds `expoc` via the current `expo` binary; output is a binary in `expoc/target/`. CI builds both the Rust pipeline and `expoc`.
+- **Build integration** -- `just build-expoc` recipe builds `expoc` via the current `expo` binary; output is a binary in `expoc/build/`. CI builds both the Rust pipeline and `expoc`.
 - **Parser parity sweep** -- `just test-selfhost` recipe. For every `.expo` file in `lib/`, `tests/lang/`, `examples/`, parses via both, diffs the serialized ASTs. Zero diff = parity.
 - **Done when**: `just test-selfhost` passes for the full tree; `expo build --parser=expoc demo_api/` produces a byte-identical binary to `expo build demo_api/`. Default flip (making `--parser=expoc` mandatory) is a separate later decision.
 
