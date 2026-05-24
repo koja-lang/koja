@@ -1,48 +1,61 @@
 :root {
-  --bg: #fff;
-  --fg: #24292e;
-  --fg-muted: #586069;
-  --sidebar-bg: #201e18;
-  --sidebar-fg: #c0c8d8;
-  --sidebar-heading: #a08a6e;
-  --sidebar-link: #e0e6f0;
-  --sidebar-link-hover: #fff;
-  --border: #e1e4e8;
-  --code-bg: #f6f8fa;
-  --accent: #dd6900;
-  --accent-light: #fef3e6;
-  --signature-bg: #fdf6ef;
-  --anchor-fg: #959da5;
+  /* Koja brand palette (koja-brand-2.svg) */
+  --koja-primary: #14b8a6;
+  --koja-primary-dark: #115e59;
+  --koja-interactive: #0f766e;
+  --koja-highlight: #2dd4bf;
+  --koja-ink: #042f2e;
+  --koja-surface: #134e4a;
+  --koja-light-bg: #f0fdfa;
+  --koja-page-bg: #f8fafc;
+  --koja-muted: #64748b;
+  --koja-muted-light: #94a3b8;
+  --koja-border: #cbd5e1;
+
+  --bg: var(--koja-page-bg);
+  --fg: var(--koja-ink);
+  --fg-muted: var(--koja-muted);
+  --sidebar-bg: #011412;
+  --sidebar-fg: #e2e8f0;
+  --sidebar-heading: var(--koja-highlight);
+  --sidebar-link: #ccfbf1;
+  --sidebar-link-hover: var(--koja-light-bg);
+  --border: var(--koja-border);
+  --code-bg: var(--koja-light-bg);
+  --accent: var(--koja-primary);
+  --accent-light: var(--koja-light-bg);
+  --signature-bg: var(--koja-light-bg);
+  --anchor-fg: var(--koja-muted-light);
   --font-body: "Source Sans 3", -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
   --font-mono: "Source Code Pro", "SF Mono", SFMono-Regular, Consolas, "Liberation Mono", Menlo, monospace;
 }
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #0d1117;
-    --fg: #c9d1d9;
-    --fg-muted: #8b949e;
-    --border: #21262d;
-    --code-bg: #161b22;
-    --accent: #f0952a;
-    --accent-light: #2a1a08;
-    --signature-bg: #1a1510;
-    --anchor-fg: #484f58;
-    --sidebar-bg: #14120e;
+    --bg: var(--koja-ink);
+    --fg: var(--koja-light-bg);
+    --fg-muted: var(--koja-muted-light);
+    --border: var(--koja-primary-dark);
+    --code-bg: var(--koja-surface);
+    --accent: var(--koja-highlight);
+    --accent-light: var(--koja-surface);
+    --signature-bg: var(--koja-surface);
+    --anchor-fg: var(--koja-muted);
+    --sidebar-bg: #010807;
   }
 }
 
 :root[data-theme="dark"] {
-  --bg: #0d1117;
-  --fg: #c9d1d9;
-  --fg-muted: #8b949e;
-  --border: #21262d;
-  --code-bg: #161b22;
-  --accent: #f0952a;
-  --accent-light: #2a1a08;
-  --signature-bg: #1a1510;
-  --anchor-fg: #484f58;
-  --sidebar-bg: #14120e;
+  --bg: var(--koja-ink);
+  --fg: var(--koja-light-bg);
+  --fg-muted: var(--koja-muted-light);
+  --border: var(--koja-primary-dark);
+  --code-bg: var(--koja-surface);
+  --accent: var(--koja-highlight);
+  --accent-light: var(--koja-surface);
+  --signature-bg: var(--koja-surface);
+  --anchor-fg: var(--koja-muted);
+  --sidebar-bg: #010807;
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -76,9 +89,9 @@ a:hover { text-decoration: underline; }
 .sidebar h1 {
   font-size: 18px;
   font-weight: 700;
-  color: #fff;
+  color: var(--koja-light-bg);
   padding: 0 20px 16px;
-  border-bottom: 2px solid #dd6900;
+  border-bottom: 2px solid var(--koja-primary);
   margin-bottom: 16px;
 }
 
@@ -107,7 +120,7 @@ a:hover { text-decoration: underline; }
 }
 
 .sidebar li a.active {
-  color: #dd6900;
+  color: var(--koja-highlight);
   font-weight: 600;
 }
 
@@ -372,7 +385,7 @@ a:hover { text-decoration: underline; }
 }
 
 .sidebar-items li a.sidebar-item.active {
-  color: #dd6900;
+  color: var(--koja-highlight);
   font-weight: 600;
 }
 
@@ -422,7 +435,7 @@ a:hover { text-decoration: underline; }
 
 .theme-toggle button.active {
   background: var(--accent);
-  color: #fff;
+  color: var(--koja-ink);
 }
 
 /* Sidebar search */
@@ -450,7 +463,7 @@ a:hover { text-decoration: underline; }
 }
 
 .sidebar-search input::placeholder {
-  color: rgba(192, 200, 216, 0.45);
+  color: rgba(226, 232, 240, 0.45);
 }
 
 .search-results {
@@ -484,7 +497,7 @@ a:hover { text-decoration: underline; }
 
 .search-result:hover,
 .search-result.selected {
-  background: rgba(221, 105, 0, 0.18);
+  background: rgba(20, 184, 166, 0.18);
   color: var(--sidebar-link-hover);
   text-decoration: none;
 }
@@ -529,8 +542,8 @@ a:hover { text-decoration: underline; }
 .chip-project,
 .chip-dependency,
 .chip-stdlib {
-  background: #e0cfa8;
-  color: #6a4612;
+  background: #ccfbf1;
+  color: var(--koja-interactive);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -539,8 +552,8 @@ a:hover { text-decoration: underline; }
     .chip-project,
     .chip-dependency,
     .chip-stdlib {
-      background: #332918;
-      color: #dcb878;
+      background: var(--koja-surface);
+      color: var(--koja-highlight);
     }
   }
 }
@@ -550,8 +563,8 @@ a:hover { text-decoration: underline; }
   .chip-project,
   .chip-dependency,
   .chip-stdlib {
-    background: #332918;
-    color: #dcb878;
+    background: var(--koja-surface);
+    color: var(--koja-highlight);
   }
 }
 
