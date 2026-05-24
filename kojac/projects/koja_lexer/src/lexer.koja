@@ -1,0 +1,750 @@
+alias KojaAST.Comment
+alias KojaAST.Diagnostic
+alias KojaAST.Position
+alias KojaAST.Severity
+alias KojaAST.Span
+alias KojaAST.Token
+alias KojaAST.TokenKind
+
+@doc """
+The output of a lex pass: tokens, comments, and any errors found.
+"""
+struct LexResult
+  comments: List<Comment>
+  errors: List<Diagnostic>
+  tokens: List<Token>
+end
+
+@doc """
+Stateful scanner that walks a `Cursor` and accumulates tokens, comments,
+and diagnostics.
+"""
+struct Lexer
+  comments: List<Comment>
+  cursor: Cursor
+  errors: List<Diagnostic>
+  tokens: List<Token>
+end
+
+extend Lexer
+  @doc """
+  Tokenises `source` and returns a `LexResult` containing tokens,
+  comments, and any diagnostics.
+  """
+  fn lex(move source: String) -> LexResult
+    # -------------------------------------------------------------------
+    # Public API (alpha-sorted)
+    # -------------------------------------------------------------------
+
+    lexer = Lexer.new(source).run()
+
+    LexResult{
+      comments: lexer.comments,
+      errors: lexer.errors,
+      tokens: lexer.tokens,
+    }
+  end
+
+  @doc """
+  Creates a new Lexer positioned at the start of `source`.
+  """
+  fn new(move source: String) -> Lexer
+    cursor = Cursor.new(source)
+    Lexer{comments: [], cursor: cursor, errors: [], tokens: []}
+  end
+
+  @doc """
+  Runs the lexer to completion, returning the final state with all
+  tokens, comments, and errors accumulated.
+  """
+  fn run(move self) -> Self
+    if self.cursor.at_end?()
+      position = self.cursor.position()
+      token = Token{
+        kind: TokenKind.EndOfFile,
+        span: Span.new(position, position),
+      }
+      return self.append_token(token)
+    end
+
+    match self.cursor.peek().or("NONE")
+      "NONE" -> self
+      "{" -> self.single(TokenKind.LBrace).run()
+      "}" -> self.single(TokenKind.RBrace).run()
+      _ -> self.lex_single().run()
+    end
+  end
+
+  priv fn advance_cursor(move self) -> Self
+    # -------------------------------------------------------------------
+    # Private helpers (alpha-sorted)
+    # -------------------------------------------------------------------
+
+    self.cursor = self.cursor.advance()
+    self
+  end
+
+  priv fn append_token(move self, token: Token) -> Self
+    self.tokens = self.tokens.append(token)
+    self
+  end
+
+  priv fn at_string_end?(self, c: String, multiline: Bool) -> Bool
+    if multiline
+      c == "\"" and self.cursor.peek_next() == Option.Some("\"") and
+      self.cursor.char_at(self.cursor.offset + 2) == Option.Some("\"")
+    else
+      c == "\""
+    end
+  end
+
+  priv fn close_string(move self, multiline: Bool) -> Self
+    end_start = self.cursor.position()
+
+    if multiline
+      self.cursor = self.cursor.advance().advance().advance()
+      self.emit(TokenKind.MultilineStringEnd, end_start)
+    else
+      self.cursor = self.cursor.advance()
+      self.emit(TokenKind.StringEnd, end_start)
+    end
+  end
+
+  priv fn continues_line?(self) -> Bool
+    match self.last_token_kind()
+      None -> true
+      Some(TokenKind.Ident(name)) -> name == "and" or name == "or"
+      Some(TokenKind.Plus) -> true
+      Some(TokenKind.Minus) -> true
+      Some(TokenKind.Star) -> true
+      Some(TokenKind.Slash) -> true
+      Some(TokenKind.Percent) -> true
+      Some(TokenKind.Not) -> true
+      Some(TokenKind.EqEq) -> true
+      Some(TokenKind.NotEq) -> true
+      Some(TokenKind.Lt) -> true
+      Some(TokenKind.Gt) -> true
+      Some(TokenKind.LtEq) -> true
+      Some(TokenKind.GtEq) -> true
+      Some(TokenKind.Eq) -> true
+      Some(TokenKind.PlusEq) -> true
+      Some(TokenKind.MinusEq) -> true
+      Some(TokenKind.StarEq) -> true
+      Some(TokenKind.SlashEq) -> true
+      Some(TokenKind.Arrow) -> true
+      Some(TokenKind.Pipe) -> true
+      Some(TokenKind.Comma) -> true
+      Some(TokenKind.Dot) -> true
+      Some(TokenKind.Colon) -> true
+      Some(TokenKind.ColonColon) -> true
+      Some(TokenKind.LtGt) -> true
+      Some(TokenKind.At) -> true
+      Some(TokenKind.LParen) -> true
+      Some(TokenKind.LBrace) -> true
+      Some(TokenKind.LBracket) -> true
+      Some(TokenKind.LtLt) -> true
+      Some(TokenKind.Newline) -> true
+      _ -> false
+    end
+  end
+
+  priv fn double(move self, kind: TokenKind) -> Self
+    start = self.cursor.position()
+    self.cursor = self.cursor.advance().advance()
+    token = Token{kind: kind, span: Span.new(start, self.cursor.position())}
+    self.append_token(token)
+  end
+
+  priv fn emit(move self, kind: TokenKind, start: Position) -> Self
+    token = Token{kind: kind, span: Span.new(start, self.cursor.position())}
+    self.append_token(token)
+  end
+
+  priv fn emit_fragment(move self, text: String, frag_start: Position) -> Self
+    text == "" ? self : self.emit(TokenKind.StringFragment(text), frag_start)
+  end
+
+  priv fn escape_char(c: String) -> Option<String>
+    match c
+      "\"" -> Option.Some("\"")
+      "\\" -> Option.Some("\\")
+      "n" -> Option.Some("\n")
+      "r" -> Option.Some("\r")
+      "t" -> Option.Some("\t")
+      "#" -> Option.Some("#")
+      _ -> Option.None
+    end
+  end
+
+  priv fn keyword_or_ident(name: String) -> TokenKind
+    match name
+      "after" -> TokenKind.After
+      "alias" -> TokenKind.Alias
+      "break" -> TokenKind.Break
+      "cond" -> TokenKind.Cond
+      "const" -> TokenKind.Const
+      "else" -> TokenKind.Else
+      "end" -> TokenKind.End
+      "enum" -> TokenKind.Enum
+      "extend" -> TokenKind.Extend
+      "false" -> TokenKind.False
+      "fn" -> TokenKind.Fn
+      "for" -> TokenKind.For
+      "if" -> TokenKind.If
+      "impl" -> TokenKind.Impl
+      "in" -> TokenKind.In
+      "loop" -> TokenKind.Loop
+      "match" -> TokenKind.Match
+      "move" -> TokenKind.Move
+      "not" -> TokenKind.Not
+      "priv" -> TokenKind.Priv
+      "protocol" -> TokenKind.Protocol
+      "receive" -> TokenKind.Receive
+      "return" -> TokenKind.Return
+      "self" -> TokenKind.SelfKw
+      "spawn" -> TokenKind.Spawn
+      "struct" -> TokenKind.Struct
+      "true" -> TokenKind.True
+      "type" -> TokenKind.Type
+      "unless" -> TokenKind.Unless
+      "when" -> TokenKind.When
+      "while" -> TokenKind.While
+      _ -> TokenKind.Ident(name)
+    end
+  end
+
+  priv fn last_token_kind(self) -> Option<TokenKind>
+    self.tokens.last().map(x -> x.kind)
+  end
+
+  priv fn lex_colon(move self) -> Self
+    match self.cursor.peek_next()
+      Some(":") -> self.double(TokenKind.ColonColon)
+      _ -> self.single(TokenKind.Colon)
+    end
+  end
+
+  priv fn lex_comment(move self) -> Self
+    start = self.cursor.position()
+
+    # Skip the leading '#'
+    self.cursor = self.cursor.advance()
+
+    match self.cursor.peek()
+      Some(" ") ->
+        self.cursor = self.cursor.advance()
+        self
+
+      None ->
+        self
+    end
+
+    text_start = self.cursor.offset
+
+    while self.cursor.peek().some?() and self.cursor.peek().unwrap() != "\n"
+      self.cursor = self.cursor.advance()
+    end
+
+    length = self.cursor.offset - text_start
+    text_chars = self.cursor.chars.slice(text_start, length)
+    text = String.join(text_chars, "")
+    comment = Comment{text: text, span: Span.new(start, self.cursor.position())}
+
+    self.comments = self.comments.append(comment)
+    self
+  end
+
+  priv fn lex_decimal(move self) -> Self
+    start = self.cursor.position()
+    start_offset = self.cursor.offset
+
+    while self.cursor.peek().map(c -> Lexer.number_char?(c)).or(false)
+      self.cursor = self.cursor.advance()
+    end
+
+    starting_float? = self.cursor.peek() == Option.Some(".") and
+    self.cursor.peek_next().map(c -> c.digit?()).or(false)
+
+    if starting_float?
+      self.cursor = self.cursor.advance()
+
+      while self.cursor.peek().map(c -> Lexer.number_char?(c)).or(false)
+        self.cursor = self.cursor.advance()
+      end
+
+      name = self.cursor.text_from(start_offset)
+      return self.emit(TokenKind.FloatLit(name), start)
+    end
+
+    name = self.cursor.text_from(start_offset)
+    self.emit(TokenKind.IntLit(name), start)
+  end
+
+  priv fn lex_eq(move self) -> Self
+    match self.cursor.peek_next()
+      Some("=") -> self.double(TokenKind.EqEq)
+      _ -> self.single(TokenKind.Eq)
+    end
+  end
+
+  priv fn lex_gt(move self) -> Self
+    match self.cursor.peek_next()
+      Some(">") -> self.double(TokenKind.GtGt)
+      Some("=") -> self.double(TokenKind.GtEq)
+      _ -> self.single(TokenKind.Gt)
+    end
+  end
+
+  priv fn lex_ident(move self) -> Self
+    start = self.cursor.position()
+    start_offset = self.cursor.offset
+
+    ident_char? =
+      fn (x: String) -> Bool
+        x.alpha?() or x.digit?() or x == "_" or x == "?"
+      end
+
+    while self.cursor.peek().map(ident_char?).or(false)
+      self.cursor = self.cursor.advance()
+    end
+
+    name = self.cursor.text_from(start_offset)
+    first = self.cursor.char_at(start_offset).unwrap()
+    kind = first == first.upcase()
+      ? TokenKind.TypeIdent(name)
+      : Lexer.keyword_or_ident(name)
+    self.emit(kind, start)
+  end
+
+  priv fn lex_interp_body(move self) -> Self
+    if self.cursor.at_end?()
+      return self
+    end
+
+    if self.cursor.peek() == Option.Some("}")
+      return self
+    end
+
+    match self.cursor.peek().or("NONE")
+      "{" ->
+        self.single(TokenKind.LBrace)
+          .lex_interp_body()
+          .single(TokenKind.RBrace)
+          .lex_interp_body()
+      _ -> self.lex_single().lex_interp_body()
+    end
+  end
+
+  priv fn lex_interpolation(move self) -> Self
+    interp_start = self.cursor.position()
+    self.cursor = self.cursor.advance().advance()
+    self = self.emit(TokenKind.InterpolStart, interp_start)
+    self = self.lex_interp_body()
+    interp_end = self.cursor.position()
+    self.cursor = self.cursor.advance()
+    self.emit(TokenKind.InterpolEnd, interp_end)
+  end
+
+  priv fn lex_lt(move self) -> Self
+    match self.cursor.peek_next()
+      Some("<") -> self.double(TokenKind.LtLt)
+      Some(">") -> self.double(TokenKind.LtGt)
+      Some("=") -> self.double(TokenKind.LtEq)
+      _ -> self.single(TokenKind.Lt)
+    end
+  end
+
+  priv fn lex_minus(move self) -> Self
+    match self.cursor.peek_next()
+      Some(">") -> self.double(TokenKind.Arrow)
+      Some("=") -> self.double(TokenKind.MinusEq)
+      _ -> self.single(TokenKind.Minus)
+    end
+  end
+
+  priv fn lex_multiline_string(move self) -> Self
+    start = self.cursor.position()
+    self.cursor = self.cursor.advance().advance().advance()
+    self = self.emit(TokenKind.MultilineStringStart, start)
+    self.lex_string_body(true)
+  end
+
+  priv fn lex_newline(move self) -> Self
+    start = self.cursor.position()
+    self.cursor = self.cursor.advance()
+
+    if self.continues_line?()
+      return self
+    end
+
+    if self.next_nonws_continues?()
+      return self
+    end
+
+    match self.last_token_kind()
+      Some(TokenKind.Newline) -> return self
+      _ -> ()
+    end
+
+    self.emit(TokenKind.Newline, start)
+  end
+
+  priv fn lex_not(move self) -> Self
+    match self.cursor.peek_next()
+      Some("=") ->
+        self.double(TokenKind.NotEq)
+
+      _ ->
+        start = self.cursor.position()
+        self.errors = self.errors.append(
+          Diagnostic{
+            severity: Severity.Error,
+            message: "unexpected character '!'",
+            hint: Option.Some("use '!=' for not-equal comparison"),
+            span: Span.new(start, start),
+          },
+        )
+        self.advance_cursor()
+    end
+  end
+
+  priv fn lex_number(move self) -> Self
+    if self.cursor.peek() == Option.Some("0")
+      match self.cursor.peek_next().or("NONE")
+        "x" | "X" ->
+          hex_digit? =
+            fn (c: String) -> Bool match c
+                "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" |
+                "a" | "b" | "c" | "d" | "e" | "f" | "A" | "B" | "C" | "D" |
+                "E" | "F" | "_" ->
+                  true
+
+                _ ->
+                  false
+              end end
+
+          return self.lex_prefixed_int(
+            hex_digit?,
+            "expected hex digits after '0x'",
+            "hex literals use digits 0-9 and a-f, e.g. 0xFF",
+          )
+
+        "b" | "B" ->
+          binary_digit? =
+            fn (c: String) -> Bool c == "0" or c == "1" or c == "_" end
+
+          return self.lex_prefixed_int(
+            binary_digit?,
+            "expected binary digits after '0b'",
+            "binary literals use digits 0 and 1, e.g. 0b1010",
+          )
+
+        _ ->
+          ()
+      end
+    end
+
+    self.lex_decimal()
+  end
+
+  priv fn lex_plus(move self) -> Self
+    match self.cursor.peek_next()
+      Some("=") -> self.double(TokenKind.PlusEq)
+      _ -> self.single(TokenKind.Plus)
+    end
+  end
+
+  priv fn lex_prefixed_int(
+    move self,
+    pred: fn (String) -> Bool,
+    message: String,
+    hint: String,
+  ) -> Self
+
+    start = self.cursor.position()
+    start_offset = self.cursor.offset
+    self.cursor = self.cursor.advance().advance()
+    digit_start = self.cursor.offset
+
+    while self.cursor.peek().map(pred).or(false)
+      self.cursor = self.cursor.advance()
+    end
+
+    if self.cursor.offset == digit_start
+      self.errors = self.errors.append(
+        Diagnostic{
+          severity: Severity.Error,
+          message: message,
+          hint: Option.Some(hint),
+          span: Span.new(start, self.cursor.position()),
+        },
+      )
+      return self
+    end
+
+    name = self.cursor.text_from(start_offset)
+    self.emit(TokenKind.IntLit(name), start)
+  end
+
+  priv fn lex_single(move self) -> Self
+    match self.cursor.peek().or("NONE")
+      "NONE" ->
+        self
+
+      " " | "\t" | "\r" ->
+        self.advance_cursor()
+
+      "\n" ->
+        self.lex_newline()
+
+      "(" ->
+        self.single(TokenKind.LParen)
+
+      ")" ->
+        self.single(TokenKind.RParen)
+
+      "[" ->
+        self.single(TokenKind.LBracket)
+
+      "]" ->
+        self.single(TokenKind.RBracket)
+
+      "," ->
+        self.single(TokenKind.Comma)
+
+      "@" ->
+        self.single(TokenKind.At)
+
+      "%" ->
+        self.single(TokenKind.Percent)
+
+      "." ->
+        self.single(TokenKind.Dot)
+
+      "?" ->
+        self.single(TokenKind.Question)
+
+      "+" ->
+        self.lex_plus()
+
+      "-" ->
+        self.lex_minus()
+
+      "*" ->
+        self.lex_star()
+
+      "/" ->
+        self.lex_slash()
+
+      "=" ->
+        self.lex_eq()
+
+      "!" ->
+        self.lex_not()
+
+      "<" ->
+        self.lex_lt()
+
+      ">" ->
+        self.lex_gt()
+
+      "|" ->
+        self.single(TokenKind.Pipe)
+
+      ":" ->
+        self.lex_colon()
+
+      "#" ->
+        self.lex_comment()
+
+      "\"" ->
+        if self.cursor.peek_next() == Option.Some("\"") and
+        self.cursor.char_at(self.cursor.offset + 2) == Option.Some("\"")
+          self.lex_multiline_string()
+        else
+          self.lex_string()
+        end
+
+      "a" | "b" | "c" | "d" | "e" | "f" | "g" | "h" | "i" | "j" | "k" | "l" |
+      "m" | "n" | "o" | "p" | "q" | "r" | "s" | "t" | "u" | "v" | "w" | "x" |
+      "y" | "z" | "A" | "B" | "C" | "D" | "E" | "F" | "G" | "H" | "I" | "J" |
+      "K" | "L" | "M" | "N" | "O" | "P" | "Q" | "R" | "S" | "T" | "U" | "V" |
+      "W" | "X" | "Y" | "Z" | "_" ->
+        self.lex_ident()
+
+      "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ->
+        self.lex_number()
+
+      c ->
+        start = self.cursor.position()
+        self.cursor = self.cursor.advance()
+        self.errors = self.errors.append(
+          Diagnostic{
+            severity: Severity.Error,
+            message: "unexpected character: '#{c}'",
+            hint: Option.None,
+            span: Span.new(start, self.cursor.position()),
+          },
+        )
+        self
+    end
+  end
+
+  priv fn lex_slash(move self) -> Self
+    match self.cursor.peek_next()
+      Some("=") -> self.double(TokenKind.SlashEq)
+      _ -> self.single(TokenKind.Slash)
+    end
+  end
+
+  priv fn lex_star(move self) -> Self
+    match self.cursor.peek_next()
+      Some("=") -> self.double(TokenKind.StarEq)
+      _ -> self.single(TokenKind.Star)
+    end
+  end
+
+  priv fn lex_string(move self) -> Self
+    start = self.cursor.position()
+    self.cursor = self.cursor.advance()
+    self = self.emit(TokenKind.StringStart, start)
+    self.lex_string_body(false)
+  end
+
+  priv fn lex_string_body(move self, multiline: Bool) -> Self
+    frag_start = self.cursor.position()
+    text = ""
+
+    loop
+      if self.cursor.at_end?()
+        return self.emit_fragment(text, frag_start).unterminated_string(
+          multiline,
+          frag_start,
+        )
+      end
+
+      c = self.cursor.peek().unwrap()
+
+      if self.at_string_end?(c, multiline)
+        return self.emit_fragment(text, frag_start).close_string(multiline)
+      end
+
+      if not multiline and c == "\n"
+        return self.emit_fragment(text, frag_start).unterminated_string(
+          false,
+          frag_start,
+        )
+      end
+
+      if c == "#" and self.cursor.peek_next() == Option.Some("{")
+        self = self.emit_fragment(text, frag_start).lex_interpolation()
+        frag_start = self.cursor.position()
+        text = ""
+      else
+        if c == "\\"
+          match self.cursor.peek_next()
+            Some(next) ->
+              escaped = Lexer.escape_char(next)
+              self.cursor = self.cursor.advance().advance()
+
+              if escaped.some?()
+                text = text <> escaped.unwrap()
+              else
+                self.errors = self.errors.append(
+                  Diagnostic{
+                    severity: Severity.Error,
+                    message: "unknown escape sequence '\\#{next}'",
+                    hint: Option.Some("supported escapes: \\\\, \\\", \\n, \\r, \\t, \\#"),
+                    span: Span.new(
+                      self.cursor.position(),
+                      self.cursor.position(),
+                    ),
+                  },
+                )
+                text = text <> "\\" <> next
+              end
+
+            None ->
+              self.cursor = self.cursor.advance()
+              text = text <> "\\"
+          end
+        else
+          self.cursor = self.cursor.advance()
+          text = text <> c
+        end
+      end
+    end
+
+    self
+  end
+
+  priv fn next_nonws_continues?(self) -> Bool
+    i = self.cursor.offset
+    len = self.cursor.chars.length()
+
+    whitespace? =
+      fn (c: String) -> Bool c == " " or c == "\t" or c == "\r" end
+
+    loop
+      while i < len and self.cursor.char_at(i).map(whitespace?).or(false)
+        i = i + 1
+      end
+
+      unless i < len
+        return false
+      end
+
+      match self.cursor.char_at(i)
+        Some("#") ->
+          while i < len and self.cursor.char_at(i) != Option.Some("\n")
+            i = i + 1
+          end
+
+          if i < len
+            i = i + 1
+          end
+
+        Some("\n") ->
+          i = i + 1
+
+        _ ->
+          break
+      end
+    end
+
+    self.cursor.char_at(i) == Option.Some(".")
+  end
+
+  priv fn number_char?(c: String) -> Bool
+    match c
+      "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "_" ->
+        true
+
+      _ ->
+        false
+    end
+  end
+
+  priv fn single(move self, kind: TokenKind) -> Self
+    start = self.cursor.position()
+    self.cursor = self.cursor.advance()
+    token = Token{kind: kind, span: Span.new(start, self.cursor.position())}
+    self.append_token(token)
+  end
+
+  priv fn unterminated_string(move self, multiline: Bool, frag_start: Position)
+    -> Self
+
+    label = multiline ? "unterminated multiline string" : "unterminated string"
+    hint = multiline ? "add a closing '\"\"\"'" : "add a closing '\"'"
+    self.errors = self.errors.append(
+      Diagnostic{
+        severity: Severity.Error,
+        message: label,
+        hint: Option.Some(hint),
+        span: Span.new(frag_start, self.cursor.position()),
+      },
+    )
+    self
+  end
+end

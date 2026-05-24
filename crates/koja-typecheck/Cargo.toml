@@ -1,0 +1,13 @@
+[package]
+name = "koja-typecheck"
+description = "Sealed-AST typechecker"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-parser = { path = "../koja-parser" }
+
+[dev-dependencies]
+koja-stdlib = { path = "../koja-stdlib" }

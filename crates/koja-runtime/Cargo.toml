@@ -1,0 +1,17 @@
+[package]
+name = "koja-runtime"
+description = "Lightweight process runtime for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[lib]
+crate-type = ["rlib", "staticlib"]
+
+[dependencies]
+backtrace = "0.3"
+libc = "0.2"
+polling = "3"
+
+[build-dependencies]
+cc = "1"

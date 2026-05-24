@@ -1,7 +1,7 @@
 # Lang-suite golden gaps
 
 A triage of the `tests/lang/` fixtures that fail under
-`expo alpha run --backend=llvm`. Companion to
+`koja alpha run --backend=llvm`. Companion to
 [V1-PARITY.md](V1-PARITY.md) — that doc tracks the closed parity items;
 this doc enumerates what's still open and groups failures by root cause so
 fixing one entry unblocks a known cluster of fixtures.
@@ -24,7 +24,7 @@ natural next step is flipping `lang_suite.rs`'s runner off v1; that
 sits in a follow-up PR.
 
 The richer `IntLiteral<T>` carrier protocol (planned at
-[`literals/carrier.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/literals/carrier.rs))
+[`literals/carrier.rs`](../crates/koja-alpha-typecheck/src/pipeline/resolve/literals/carrier.rs))
 remains the long-term direction for cross-width inference (e.g.
 `let x = 42 + n` where `n: Int32` and `x` is inferred without
 annotation). Today's narrow-int rule is "matching sized operands or
@@ -63,7 +63,7 @@ distinct alpha typecheck gaps:
 
 Fixes (landed 2026-05-14):
 
-- [`expo-alpha-typecheck/src/pipeline/resolve/ops.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/ops.rs)
+- [`koja-alpha-typecheck/src/pipeline/resolve/ops.rs`](../crates/koja-alpha-typecheck/src/pipeline/resolve/ops.rs)
   `binary_type`'s arithmetic arm now flows through a new
   `numeric_arithmetic_result` helper that mirrors
   `numeric_comparison_compatible`: alias-equivalent `Int`/`Float`
@@ -72,12 +72,12 @@ Fixes (landed 2026-05-14):
   sized + Int-literal mixes via `coerce_literal_to`. `unary_type`'s
   `Neg` arm extends to every signed numeric primitive (signed sized
   ints plus `Float32`); unsigned operands stay rejected.
-- [`expo-alpha-typecheck/src/pipeline/resolve/types.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/types.rs)
+- [`koja-alpha-typecheck/src/pipeline/resolve/types.rs`](../crates/koja-alpha-typecheck/src/pipeline/resolve/types.rs)
   `is_arithmetic_type` accepts the same set so compound assignment
   (`+=`, `-=`, …) on sized operands works for free.
-- [`expo-alpha-typecheck/src/pipeline/resolve/calls/mod.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/calls/mod.rs)
+- [`koja-alpha-typecheck/src/pipeline/resolve/calls/mod.rs`](../crates/koja-alpha-typecheck/src/pipeline/resolve/calls/mod.rs)
   `infer_call_type_args` and
-  [`calls/methods.rs::infer_method_call_type_args`](../crates/expo-alpha-typecheck/src/pipeline/resolve/calls/methods.rs)
+  [`calls/methods.rs::infer_method_call_type_args`](../crates/koja-alpha-typecheck/src/pipeline/resolve/calls/methods.rs)
   speculatively try a pre-seed-then-refine pass (run
   `fill_from_expected` on a scratch substitution, then `unify_pairs`
   on the same scratch). If the speculative pass produces no
@@ -90,19 +90,19 @@ Fixes (landed 2026-05-14):
 
 Pinned by:
 
-- [`tests/resolve_ops.rs`](../crates/expo-alpha-typecheck/tests/resolve_ops.rs)
+- [`tests/resolve_ops.rs`](../crates/koja-alpha-typecheck/tests/resolve_ops.rs)
   — `same_sized_numeric_arith_resolves_to_operand_type`,
   `sized_int_plus_int_literal_resolves_to_sized`,
   `int_literal_plus_sized_int_resolves_to_sized`,
   `cross_sized_numeric_arith_is_rejected`,
   `unary_neg_on_sized_int_resolves_to_sized`,
   `unary_neg_on_unsigned_int_is_rejected`.
-- [`tests/bidirectional_inference.rs`](../crates/expo-alpha-typecheck/tests/bidirectional_inference.rs)
+- [`tests/bidirectional_inference.rs`](../crates/koja-alpha-typecheck/tests/bidirectional_inference.rs)
   — `generic_return_hint_widens_int_literal_arg_to_int32`,
   `generic_return_hint_widens_int_literal_arg_to_int8`,
   `generic_return_hint_unrelated_to_arg_type_still_errors`,
   `generic_return_hint_inside_unit_body_does_not_widen_unrelated_call`.
-- [`tests/program.rs::int32_arithmetic_lowers_to_i32_add`](../crates/expo-alpha-ir-llvm/tests/program.rs)
+- [`tests/program.rs::int32_arithmetic_lowers_to_i32_add`](../crates/koja-alpha-ir-llvm/tests/program.rs)
   — LLVM emit pins `add i32` (not `add i64`) for `Int32 + Int32`.
 
 ---
@@ -125,38 +125,38 @@ Closed (landed 2026-05-14) by threading a new `ProjectEntry` enum
 (`Function` | `Process { state }`) through the driver and lower
 pipeline, plus a dedicated synthesized wrapper in the IR backend:
 
-- [`expo-driver/src/alpha.rs`](../crates/expo-driver/src/alpha.rs)
+- [`koja-driver/src/alpha.rs`](../crates/koja-driver/src/alpha.rs)
   `resolve_project_entry` now returns `ProjectEntry`. PascalCase
   entries no longer bail; they pull the `Process<C, M, R>` impl off
   the typecheck registry and hand the state identifier to the IR.
-- [`expo-alpha-ir/src/function.rs`](../crates/expo-alpha-ir/src/function.rs)
+- [`koja-alpha-ir/src/function.rs`](../crates/koja-alpha-ir/src/function.rs)
   adds `FunctionKind::ProcessEntryWrapper { state: IRType }`,
   sibling of `SpawnWrapper`.
-  [`expo-alpha-ir/src/lower/process.rs`](../crates/expo-alpha-ir/src/lower/process.rs)
+  [`koja-alpha-ir/src/lower/process.rs`](../crates/koja-alpha-ir/src/lower/process.rs)
   synthesizes `<state>.__entry_wrapper`; `lower_program` stamps
   `entry_point` on the wrapper symbol and enqueues `start` / `run`
   `Instantiation`s.
-- [`expo-alpha-ir/src/seal/program.rs`](../crates/expo-alpha-ir/src/seal/program.rs)
+- [`koja-alpha-ir/src/seal/program.rs`](../crates/koja-alpha-ir/src/seal/program.rs)
   asserts every `ProcessEntryWrapper` resolves to a registered
   `start` / `run` method on its state struct.
-- [`expo-alpha-ir-llvm/src/emit/process.rs`](../crates/expo-alpha-ir-llvm/src/emit/process.rs)
+- [`koja-alpha-ir-llvm/src/emit/process.rs`](../crates/koja-alpha-ir-llvm/src/emit/process.rs)
   `emit_process_entry_wrapper_body` chains `start` → `run` →
   `Global.StopReason.code()` and stores the truncated `i32` into
-  the new `__expo_exit_code` global on both Ok and Err paths.
-  [`expo-alpha-ir-llvm/src/main_wrapper.rs`](../crates/expo-alpha-ir-llvm/src/main_wrapper.rs)
+  the new `__koja_exit_code` global on both Ok and Err paths.
+  [`koja-alpha-ir-llvm/src/main_wrapper.rs`](../crates/koja-alpha-ir-llvm/src/main_wrapper.rs)
   `emit_process_entry_main` builds the `i32 main(i32, ptr)` /
   `i32 main()` trampoline (signature picked off the entry's config
-  type; `List<String>` triggers the `expo_rt_build_argv` path) and
-  returns `load __expo_exit_code` after `expo_rt_main_done()`.
-- [`expo-alpha-ir-eval/src/interpreter.rs`](../crates/expo-alpha-ir-eval/src/interpreter.rs)
+  type; `List<String>` triggers the `koja_rt_build_argv` path) and
+  returns `load __koja_exit_code` after `koja_rt_main_done()`.
+- [`koja-alpha-ir-eval/src/interpreter.rs`](../crates/koja-alpha-ir-eval/src/interpreter.rs)
   dispatches `ProcessEntryWrapper` to a new `run_process_entry`
   that simulates `start` → `run` → `StopReason.code()` for the
   alpha-interpreter backend.
 
 Pinned by
-[`tests/lower_process.rs::process_entry_lowers_to_process_entry_wrapper`](../crates/expo-alpha-ir/tests/lower_process.rs)
+[`tests/lower_process.rs::process_entry_lowers_to_process_entry_wrapper`](../crates/koja-alpha-ir/tests/lower_process.rs)
 and three new cases in
-[`tests/process.rs`](../crates/expo-alpha-ir-llvm/tests/process.rs)
+[`tests/process.rs`](../crates/koja-alpha-ir-llvm/tests/process.rs)
 covering the global, both wrapper-body code paths, and the
 `List<String>` argv main signature. All four lang fixtures now
 PASS under `validate_alpha_lang.sh`.
@@ -188,16 +188,16 @@ recursion.
 
 Closed by porting v1's `Type::Indirect` shape into the alpha pipeline:
 
-- `IRType::Indirect(Box<IRType>)` lattice variant (`expo-alpha-ir
+- `IRType::Indirect(Box<IRType>)` lattice variant (`koja-alpha-ir
   /src/types.rs`), with mangling, seal, union-walk, and
   `enum_order` updates so back-edges read as a `ptr` everywhere
   layout cares.
-- New `expo-alpha-ir/src/cycle.rs` pass runs after `discover_unions`
+- New `koja-alpha-ir/src/cycle.rs` pass runs after `discover_unions`
   in `lower_program` / `lower_script`; DFS over struct fields +
   enum variant payloads, marks back-edge slots as
   `Indirect(_)`, and leaves all other slots untouched.
 - LLVM backend transparently boxes / unboxes around the indirection
-  (`expo-alpha-ir-llvm/src/emit/indirect.rs`): `emit_struct_init`,
+  (`koja-alpha-ir-llvm/src/emit/indirect.rs`): `emit_struct_init`,
   `emit_field_get`, `emit_field_set`, `build_enum_value`, and
   `emit_enum_payload_field_get` all consult the decl-recorded
   type so the storage shape stays a `ptr` while every IR caller
@@ -253,7 +253,7 @@ second bind as a conflict and emitted
 > and `MsgA`
 
 Fix (landed 2026-05-14): extend the slot re-fill check in
-[`pipeline/unify::Substitution::set`](../crates/expo-alpha-typecheck/src/pipeline/unify.rs)
+[`pipeline/unify::Substitution::set`](../crates/koja-alpha-typecheck/src/pipeline/unify.rs)
 with a one-direction `union_contains` helper — if the slot already
 holds a `ResolvedType::Union` and the incoming actual is
 [`types_equivalent`] to one of its members, accept the re-fill and
@@ -263,7 +263,7 @@ narrower slot to a later union arrival) belongs to
 unchanged.
 
 Pinned by
-[`tests/process.rs::ref_call_accepts_union_member_arg`](../crates/expo-alpha-typecheck/tests/process.rs)
+[`tests/process.rs::ref_call_accepts_union_member_arg`](../crates/koja-alpha-typecheck/tests/process.rs)
 plus a negative companion that keeps the "cannot be both"
 diagnostic firing when an arg sits outside the declared union.
 
@@ -273,22 +273,22 @@ diagnostic firing when an arg sits outside the declared union.
 "alpha typecheck does not yet support binary patterns" in the
 resolver. Now flows end-to-end:
 
-- **Typecheck** (`expo-alpha-typecheck`): new
-  [`pipeline/resolve/patterns/binary.rs`](../crates/expo-alpha-typecheck/src/pipeline/resolve/patterns/binary.rs)
+- **Typecheck** (`koja-alpha-typecheck`): new
+  [`pipeline/resolve/patterns/binary.rs`](../crates/koja-alpha-typecheck/src/pipeline/resolve/patterns/binary.rs)
   validates segments (literal-only, sized-int bindings with
   `signed` / `unsigned` / `big` / `little` modifiers, typed
   bindings via `Int8`..`UInt64`, string-literal segments, greedy
   `: Binary` / `: Bits` tails, `_::N` discards). Stamps
   `Resolution::Local` onto binding `Expr`s and registers their
   types in the arm scope so seal sees a fully-resolved AST.
-- **IR** (`expo-alpha-ir`): new `LoweredBinaryPattern` /
+- **IR** (`koja-alpha-ir`): new `LoweredBinaryPattern` /
   `LoweredBinaryMatchLayout` IR types and an
   `IRInstruction::BinaryMatch` instruction. Lower in
-  [`lower/binary_match.rs`](../crates/expo-alpha-ir/src/lower/binary_match.rs)
+  [`lower/binary_match.rs`](../crates/koja-alpha-ir/src/lower/binary_match.rs)
   re-classifies each segment, computes its `bit_offset`, and
   declares the binding's `LocalDecl` in the entry block.
-- **LLVM** (`expo-alpha-ir-llvm`): new
-  [`emit/binary_match.rs`](../crates/expo-alpha-ir-llvm/src/emit/binary_match.rs)
+- **LLVM** (`koja-alpha-ir-llvm`): new
+  [`emit/binary_match.rs`](../crates/koja-alpha-ir-llvm/src/emit/binary_match.rs)
   emits the length check (`EQ` exact / `UGE` with greedy tail),
   the byte-shift extract loop, the `signed` sign-extend (`shl` +
   arithmetic `ashr` — fixes v1's latent bug where the modifier
@@ -296,11 +296,11 @@ resolver. Now flows end-to-end:
   String-literal segments route through `memcmp`.
 
 Pinned by
-[`tests/resolve_binary_pattern.rs`](../crates/expo-alpha-typecheck/tests/resolve_binary_pattern.rs)
+[`tests/resolve_binary_pattern.rs`](../crates/koja-alpha-typecheck/tests/resolve_binary_pattern.rs)
 (13 typecheck cases including the negative paths for dynamic
 widths, byte units, float extracts, and bit-misaligned tails)
 and
-[`tests/binary_match.rs`](../crates/expo-alpha-ir-llvm/tests/binary_match.rs)
+[`tests/binary_match.rs`](../crates/koja-alpha-ir-llvm/tests/binary_match.rs)
 (6 IR-text snapshot cases including the sign-extend pinning).
 
 Out of scope (rejected with diagnostics, deferred): dynamic
@@ -310,7 +310,7 @@ greedy tails.
 
 ### `lib/global` Task / Ref<Unit, R> instantiations
 
-`lib/global/test/task_test.expo` and the wider `Task<R>` /
+`lib/global/test/task_test.koja` and the wider `Task<R>` /
 `Ref<Unit, R>` shapes failed under the LLVM backend with a chain
 of monomorphization + Unit-as-value gaps:
 
@@ -344,37 +344,37 @@ of monomorphization + Unit-as-value gaps:
 
 Fixes (landed 2026-05-14):
 
-- [`lower/calls.rs`](../crates/expo-alpha-ir/src/lower/calls.rs)
+- [`lower/calls.rs`](../crates/koja-alpha-ir/src/lower/calls.rs)
   pushes a method-targeted `Instantiation` whenever the call
   carries receiver or method type-args. Mirrors what
   `resolved_type_to_ir_type` already does for instance dispatch.
-- [`generics/substitute.rs`](../crates/expo-alpha-ir/src/generics/substitute.rs)
+- [`generics/substitute.rs`](../crates/koja-alpha-ir/src/generics/substitute.rs)
   adds `substitute_in_pattern` and threads it through the
   `ExprKind::Receive` walk so typed-binding payload types get
   rewritten.
-- [`generics/mod.rs`](../crates/expo-alpha-ir/src/generics/mod.rs)
+- [`generics/mod.rs`](../crates/koja-alpha-ir/src/generics/mod.rs)
   drains `output.synthesized_functions` after every
   `monomorphize` step and routes each to the matching
   `IRPackage` by symbol prefix.
-- [`generics/monomorphize.rs`](../crates/expo-alpha-ir/src/generics/monomorphize.rs)
+- [`generics/monomorphize.rs`](../crates/koja-alpha-ir/src/generics/monomorphize.rs)
   filters protocol-impl method names out of
   `enqueue_member_methods`. Protocol methods stay on-demand via
   `lower_method_call`'s push.
-- [`types.rs::value_basic_type`](../crates/expo-alpha-ir-llvm/src/types.rs)
+- [`types.rs::value_basic_type`](../crates/koja-alpha-ir-llvm/src/types.rs)
   maps `IRType::Unit` to an `i8` placeholder; routed through
   `function_signature` (params), `emit_local_decl` /
   `emit_local_read` (locals), `define_struct_body` (fields),
   and the `Ref<M, R>` envelope emitters in
-  [`intrinsics/process.rs`](../crates/expo-alpha-ir-llvm/src/intrinsics/process.rs).
+  [`intrinsics/process.rs`](../crates/koja-alpha-ir-llvm/src/intrinsics/process.rs).
   `emit_const_instruction` binds Unit constants to `i8 0` so
   call-site lookups resolve cleanly.
 
 Pinned by
-[`tests/generics.rs`](../crates/expo-alpha-ir/tests/generics.rs)
+[`tests/generics.rs`](../crates/koja-alpha-ir/tests/generics.rs)
 (`static_call_on_generic_struct_registers_mono_method` and
 `receive_arm_typed_binding_substitutes_payload_type_during_mono`)
 and
-[`tests/process.rs::ref_cast_with_unit_message_uses_i8_placeholder_in_envelope`](../crates/expo-alpha-ir-llvm/tests/process.rs).
+[`tests/process.rs::ref_cast_with_unit_message_uses_i8_placeholder_in_envelope`](../crates/koja-alpha-ir-llvm/tests/process.rs).
 All 163 `lib/global` tests now pass.
 
 ### Shortest-round-trip float `Debug.format` (1 fixture)
@@ -389,7 +389,7 @@ doesn't silently round away digits past the 6th decimal — the same
 choice Rust, Go, modern JS, Python `repr`, Swift, etc. all make.
 
 Fix (landed 2026-05-14): route v1's `Debug.format` for `Float` /
-`Float32` through the same `expo_format_f64` / `expo_format_f32`
+`Float32` through the same `koja_format_f64` / `koja_format_f32`
 runtime helpers alpha uses, instead of inlining `snprintf("%f")`.
 One source of truth for both backends, and the `.stdout` golden
 updated to the round-trip form (`"3.14"`).
@@ -460,7 +460,7 @@ Fixed by short-circuiting `lower_method_call` for
 placeholder, matching the AST-layer rule
 [`derive_debug::is_opaque_type`] already applies to opaque
 struct/enum fields. Pinned by
-`crates/expo-alpha-ir/tests/opaque_debug_receivers.rs`. See
+`crates/koja-alpha-ir/tests/opaque_debug_receivers.rs`. See
 [V1-PARITY §10](V1-PARITY.md#10-opaque-debug-receivers-for-anonymous-types--shipped-2026-05-13).
 
 ---
@@ -469,26 +469,26 @@ struct/enum fields. Pinned by
 
 The `ffi/` fixture's `@link "ffi_helper"` annotation expands to a
 `cc -lffi_helper` flag, but the linker had no `-L` for the project
-directory — so `libffi_helper.a` (sitting next to `expo.toml`) was
+directory — so `libffi_helper.a` (sitting next to `koja.toml`) was
 not discoverable unless the caller exported `LIBRARY_PATH=<dir>` by
 hand. The `lang_suite.rs` `lang_ffi` harness already did this, which
-masked the gap for the test runner; manual `expo run` / `expo alpha
+masked the gap for the test runner; manual `koja run` / `koja alpha
 run` from inside the project dir failed identically under both
 pipelines.
 
 Fixed by threading `extra_lib_search_paths` through
-[`pipeline::link`](../crates/expo-driver/src/pipeline.rs) so
+[`pipeline::link`](../crates/koja-driver/src/pipeline.rs) so
 project-mode callers (`build_project`, `cmd_alpha_run_project`,
-`cmd_alpha_build_project`, the `expo test` harness) pass the
-directory holding `expo.toml`. The linker emits one extra `-L<root>`
+`cmd_alpha_build_project`, the `koja test` harness) pass the
+directory holding `koja.toml`. The linker emits one extra `-L<root>`
 after the embedded-runtime `-L`, so a sibling `libfoo.a` resolves
-without any env juggling. Single-file `.expo` / `.exps` builds pass
+without any env juggling. Single-file `.koja` / `.kojs` builds pass
 `&[]` and keep their existing behavior.
 
 `@link` still requires the user to build the static archive (`cc -c`
 + `ar rcs` for now); the compiler doesn't ship a build-script
 phase. Run [`just build-ffi-fixture`](../justfile) before the
-validator script (or any manual `expo alpha run` inside
+validator script (or any manual `koja alpha run` inside
 `tests/lang/ffi/`) so `libffi_helper.a` is present when the linker
 goes looking. `cargo test ... lang_ffi` still cleans the archive
 up after itself, so the manual step is needed any time the script

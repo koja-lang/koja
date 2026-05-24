@@ -1,0 +1,22 @@
+@doc """
+A null-terminated C string. Allocated with `malloc`, must be freed
+explicitly via `free()`. Use `String.to_cstring()` to create one from
+an Koja string, and `to_string()` to convert back.
+"""
+struct CString
+  ptr: CPtr<UInt8>
+  len: Int
+
+  @doc """
+  Frees the underlying C memory.
+  """
+  fn free(move self)
+    self.ptr.free()
+  end
+
+  @doc """
+  Converts this C string to an Koja String by copying the bytes.
+  """
+  @intrinsic
+  fn to_string(self) -> String
+end

@@ -1,0 +1,11 @@
+alias KojaAST.Position
+alias KojaAST.Span
+alias KojaAST.Token
+alias KojaAST.TokenKind
+
+fn main
+  p = Position{offset: 0, line: 1, column: 1}
+  s = Span.new(p, p)
+  token = Token{kind: TokenKind.IntLit("42"), span: s}
+  IO.puts("#{token.kind}")
+end

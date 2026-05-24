@@ -2,10 +2,10 @@
 # Regenerate the IRInstruction::Stub fall-through inventory.
 #
 # Drives the Stub-retirement workflow:
-#   1. Builds + installs the current `expo` binary so all subprocess-based
+#   1. Builds + installs the current `koja` binary so all subprocess-based
 #      tests use the latest lowering code.
 #   2. Re-runs the lang_suite and stdlib package tests with
-#      `EXPO_STUB_INVENTORY_FILE` set so each compiler invocation appends
+#      `KOJA_STUB_INVENTORY_FILE` set so each compiler invocation appends
 #      its `[STUB-FALLTHROUGH]` (and `[HELPER-BAIL]`) lines to
 #      stub/stub-{driver,stdlib}.log.
 #   3. Combines + dedupes both logs into stub/stub-inventory.txt.
@@ -24,27 +24,27 @@ INVENTORY="$(pwd)/stub/stub-inventory.txt"
 
 rm -f "$DRIVER_LOG" "$STDLIB_LOG" "$INVENTORY"
 
-echo "=== installing fresh expo binary ==="
+echo "=== installing fresh koja binary ==="
 just install
 
 echo
 echo "=== running lang_suite (driver) ==="
-EXPO_STUB_INVENTORY_FILE="$DRIVER_LOG" \
+KOJA_STUB_INVENTORY_FILE="$DRIVER_LOG" \
     CARGO_TARGET_DIR=target \
-    cargo test -p expo-driver --test lang_suite -- --test-threads=1
+    cargo test -p koja-driver --test lang_suite -- --test-threads=1
 
 echo
 echo "=== running stdlib packages ==="
-export EXPO_STUB_INVENTORY_FILE="$STDLIB_LOG"
+export KOJA_STUB_INVENTORY_FILE="$STDLIB_LOG"
 stdlib_failed=0
 for pkg in lib/*/; do
     if [ -d "${pkg}test" ]; then
         name=$(basename "$pkg")
         echo "--- testing $name ---"
-        (cd "$pkg" && expo test) || stdlib_failed=1
+        (cd "$pkg" && koja test) || stdlib_failed=1
     fi
 done
-unset EXPO_STUB_INVENTORY_FILE
+unset KOJA_STUB_INVENTORY_FILE
 
 if [ "$stdlib_failed" -ne 0 ]; then
     echo "stdlib tests failed -- inventory may be incomplete" >&2

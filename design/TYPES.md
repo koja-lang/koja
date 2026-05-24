@@ -1,6 +1,6 @@
 # Type System Design
 
-Design notes for Expo's type system: algebraic foundations, planned features,
+Design notes for Koja's type system: algebraic foundations, planned features,
 and open questions. Covers both the theoretical framework and concrete future
 additions. For implemented type system features, see
 [ROADMAP.md](ROADMAP.md) "Design exploration" section.
@@ -12,8 +12,8 @@ and [ROADMAP.md](ROADMAP.md).
 
 ## Type representation and storage
 
-`Type`, `Primitive`, and `FnParam` are defined in `expo-ast` (re-exported by
-`expo-typecheck` for backwards compatibility). After typechecking, every `Expr`
+`Type`, `Primitive`, and `FnParam` are defined in `koja-ast` (re-exported by
+`koja-typecheck` for backwards compatibility). After typechecking, every `Expr`
 node carries `resolved_type: Option<Type>` -- the canonical way downstream
 consumers (codegen, LSP, formatter) access inferred type information. There is
 no separate "typed AST" struct; the same AST flows from parser through
@@ -25,13 +25,13 @@ typechecker to codegen with types populated in place.
 
 ### The four algebraic types
 
-Expo's type system maps to the four operations of type algebra:
+Koja's type system maps to the four operations of type algebra:
 
 | Keyword  | Algebra               | Type theory | Role                |
 | -------- | --------------------- | ----------- | ------------------- |
 | `struct` | \* (multiply/product) | Product     | Combine all fields  |
 | `enum`   | + (addition/sum)      | Coproduct   | Choose one variant  |
-| `fn`     | ^ (exponential)       | Exponential | Map input to output |
+| `fn`     | ^ (exponential)       | Kojanential | Map input to output |
 | `alias`  | = (redirect)          | --          | Name existing types |
 
 All three type-constructing keywords (`struct`, `enum`, `fn`) produce
@@ -43,7 +43,7 @@ A struct with zero fields is the unit type (algebraically, the empty product
 is 1). This handles the "namespace for functions" case without a separate
 keyword:
 
-```expo
+```koja
 struct IO
   fn puts(message: String)
     print(message <> "\n")
@@ -78,7 +78,7 @@ Six keywords, each with exactly one job:
 Functions live inside type bodies (inspired by Swift). The type declaration
 and its core API are one unit -- you see the type and what it does together:
 
-```expo
+```koja
 struct User
   name: String
   email: String
@@ -93,7 +93,7 @@ struct User
 end
 ```
 
-```expo
+```koja
 enum Option<T>
   Some(T)
   None
@@ -118,7 +118,7 @@ end
 cross-file extensions (Swift's `extension` pattern). Core functions go
 inline; `impl` extends from outside.
 
-```expo
+```koja
 impl Display for User
   fn to_string(self) -> String
     "User(#{self.name})"
@@ -141,7 +141,7 @@ it falls out of all three being first-class types on equal footing.
 The enum-with-function-payload case is especially interesting. An enum
 variant that carries a function creates a tagged callable:
 
-```expo
+```koja
 enum Step<T>
   Run(fn(T) -> Result<T, String>)
   Validate(fn(T) -> Bool, String)
@@ -171,7 +171,7 @@ Each algebraic type has a named (declared) form and an anonymous (inline) form:
 | ----------- | ---------------------- | ----------------------------------- | ------- |
 | Product     | `struct User`          | `{name: String, age: Int}`          | record  |
 | Sum         | `enum Option<T>`       | `union Pet = Cat \| Dog`            | union   |
-| Exponential | `fn name(...) ... end` | `x -> expr` / `fn (...) -> ... end` | closure |
+| Kojanential | `fn name(...) ... end` | `x -> expr` / `fn (...) -> ... end` | closure |
 | Unit        | `struct IO` (0 fields) | `()` (unit literal)                 |         |
 
 Every type-constructor now has both forms. The algebra is complete.
@@ -200,7 +200,7 @@ Records fill the product slot that tuples occupy in other languages,
 without the readability cost of positional access. Fields are named, so
 `{x: Int, y: Int}` is self-documenting in a way `(Int, Int)` never is.
 
-```expo
+```koja
 fn parse_header(raw: String) -> {name: String, value: String}
   // ...
 end
@@ -245,7 +245,7 @@ sum without named variants, where existing types serve as discriminators.
 
 The `union` keyword declares a real type in the registry:
 
-```expo
+```koja
 union Pet = Cat | Dog | Fish
 
 impl Display for Pet
@@ -308,7 +308,7 @@ types.
 - **Default types**: `Int`, `Float`, `String`, `List<T>`, `Map<K,V>`, `Pair<A,B>` when no type annotation is present.
 - **Infallible**: literal protocols return `Self`, not `Result`. Fallible parsing (e.g. from untrusted input) uses regular functions that return `Result`.
 - **Pair syntax**: `(a, b)` may return via `PairLiteral<A, B>` -- only pairs (arity 2). 3+ values use named structs.
-- **Implemented**: `ListLiteral<T>` with `from_list(move list: List<T>) -> Self` -- `List<T>` and `Set<T>` implement it. Defined in `lib/global/src/kernel.expo`.
+- **Implemented**: `ListLiteral<T>` with `from_list(move list: List<T>) -> Self` -- `List<T>` and `Set<T>` implement it. Defined in `lib/global/src/kernel.koja`.
 - **Implemented**: `MapLiteral<K, V>` with `from_map(move map: Map<K, V>) -> Self` -- `Map<K, V>` implements it as identity. `[key: value]` syntax and `[:]` for empty maps.
 - **Planned**: `IntLiteral`, `FloatLiteral` (enables custom `Decimal` type from float literals), `StringLiteral`, `PairLiteral<A,B>`.
 - **Fractal design**: user-defined types and built-in types have identical access to literal syntax. No two-tier system.
@@ -317,7 +317,7 @@ types.
 
 ## Identifier priming (future)
 
-Trailing prime notation (`'`) would allow `end'` as a field name and `Self'` or `String'` as enum variant names without ambiguity. Grammar change: append `[ "'" ]` to both `IDENT` and `TYPE_IDENT` rules (trailing-only, single prime). Surfaced by the `expo-ast` self-hosting port: `Span.end` had to become `Span.stop`, and enum variants like `Self`, `String`, `Bool`, `Int`, `Float` needed descriptive renames (`SelfReceiver`, `StringVal`, `BoolLit`, etc.). Leading `'` stays invalid, so `'wrongstring'` is always a syntax error. Lexer-only change, no parser/typecheck/codegen impact.
+Trailing prime notation (`'`) would allow `end'` as a field name and `Self'` or `String'` as enum variant names without ambiguity. Grammar change: append `[ "'" ]` to both `IDENT` and `TYPE_IDENT` rules (trailing-only, single prime). Surfaced by the `koja-ast` self-hosting port: `Span.end` had to become `Span.stop`, and enum variants like `Self`, `String`, `Bool`, `Int`, `Float` needed descriptive renames (`SelfReceiver`, `StringVal`, `BoolLit`, etc.). Leading `'` stays invalid, so `'wrongstring'` is always a syntax error. Lexer-only change, no parser/typecheck/codegen impact.
 
 ---
 
@@ -354,7 +354,7 @@ pipeline, it can verify that no step reads a field before a prior step sets it.
 Example: a `Pipeline<T>` built from `Step<T>` enum variants (see "Type
 composability" above):
 
-```expo
+```koja
 Pipeline.new(Registration{email: email, password_hash: "", user_id: 0})
   .step(Step.Validate(r -> r.email != "", "email required"))
   .step(Step.Run(r -> hash_password(r)))
@@ -405,7 +405,7 @@ Depends on: enum function variants, self-hosted compiler.
 - **Trait bounds use `&`**: generic type params can be bounded with
   `<T: Protocol>` or `<T: Proto1 & Proto2>`. `&` is the protocol
   composition operator, complementing `|` for union types. `&` has no
-  other meaning in Expo (no references, no address-of). Mirrors
+  other meaning in Koja (no references, no address-of). Mirrors
   TypeScript and Swift's `&` for intersection/composition.
 - **`protocol` keyword for composition**: named protocol compositions
   use `protocol Storable = Readable & Writable`. The result is a
@@ -421,7 +421,7 @@ Depends on: enum function variants, self-hosted compiler.
   protocols (intersection). `Cat & Dog` and `Debug | Hash` are compile
   errors. This avoids diamond-inheritance-style confusion and keeps
   both operators simple.
-- **No `&` for references or mutability**: Expo uses `move` for
+- **No `&` for references or mutability**: Koja uses `move` for
   ownership transfer and borrows by default. `&` is purely a
   type-level composition operator. This decision is final.
 

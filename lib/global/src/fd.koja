@@ -1,0 +1,205 @@
+@doc """
+Raw file descriptor for I/O operations.
+"""
+struct Fd
+  descriptor: Int32
+
+  @doc """
+  Suspends the current process until this file descriptor is ready.
+  Pass `true` to wait for readable, `false` to wait for writable.
+  Returns when the I/O reactor detects readiness.
+  """
+  fn block(self, readable: Bool)
+    koja_io_block(self.descriptor, readable ? 1 : 0)
+  end
+
+  @doc """
+  Closes the file descriptor.
+  """
+  fn close(move self) -> Result<String, String>
+    koja_fd_close(self.descriptor) == 0
+      ? Result.Ok("")
+      : Result.Err("close failed")
+  end
+
+  @doc """
+  Reads up to `count` bytes from the file descriptor.
+  Returns the data read as a string, or an error message.
+  """
+  fn read(self, count: Int) -> Result<String, String>
+    ptr = koja_fd_read(self.descriptor, count)
+    ptr.null?() ? Result.Err("read failed") : Result.Ok(ptr.to_string())
+  end
+
+  @doc """
+  Removes this file descriptor from I/O readiness monitoring.
+  No further `IOReady` messages will be delivered for this fd.
+  """
+  fn unwatch(self)
+    koja_rt_unwatch_fd(self.descriptor)
+  end
+
+  @doc """
+  Registers this file descriptor for I/O readiness notifications.
+  When the fd becomes ready, an `IOReady` message is delivered to
+  the current process's mailbox. Uses oneshot mode: after one event
+  fires, `watch` must be called again to re-register.
+
+  Interest: 0 = readable, 1 = writable.
+  """
+  fn watch(self, interest: Int)
+    koja_rt_watch_fd(self.descriptor, interest)
+  end
+
+  @doc """
+  Writes the given string data to the file descriptor.
+  Returns the number of bytes written, or an error message.
+  """
+  fn write(self, data: String) -> Result<Int, String>
+    bin = data.to_binary()
+    result = koja_fd_write(self.descriptor, bin.ptr(), bin.byte_size())
+    result >= 0 ? Result.Ok(result) : Result.Err("write failed")
+  end
+
+  @extern "C"
+  priv fn koja_fd_close(fd: Int32) -> Int32
+
+  @extern "C"
+  priv fn koja_fd_read(fd: Int32, count: Int64) -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn koja_fd_write(fd: Int32, data: CPtr<UInt8>, len: Int64) -> Int64
+
+  @extern "C"
+  priv fn koja_io_block(fd: Int32, readable: Int64)
+
+  @extern "C"
+  priv fn koja_rt_unwatch_fd(fd: Int32)
+
+  @extern "C"
+  priv fn koja_rt_watch_fd(fd: Int32, interest: Int64)
+end
+
+@doc """
+The mode used when opening a file: `Read`, `Write`, or `Append`.
+"""
+enum FileMode
+  Read
+  Write
+  Append
+end
+
+@doc """
+A file handle backed by a file descriptor.
+"""
+struct File
+  fd: Fd
+
+  @doc """
+  Closes the file handle.
+  """
+  fn close(move self) -> Result<String, String>
+    self.fd.close()
+  end
+
+  @doc """
+  Deletes the file at the given path.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn delete(path: String) -> Result<String, String>
+    cs = path.to_cstring()
+    result = koja_file_delete(cs.ptr)
+    cs.free()
+    result >= 0 ? Result.Ok("ok") : Result.Err("delete failed")
+  end
+
+  @doc """
+  Returns true if a file exists at the given path.
+  """
+  fn exists?(path: String) -> Bool
+    cs = path.to_cstring()
+    result = koja_file_exists(cs.ptr)
+    cs.free()
+    result == 1
+  end
+
+  @doc """
+  Opens a file with the given mode. Returns a File handle or an error message.
+
+  Modes:
+  - FileMode.Read    — open for reading (file must exist)
+  - FileMode.Write   — open for writing (create/truncate)
+  - FileMode.Append  — open for appending (create if needed)
+  """
+  fn open(path: String, mode: FileMode) -> Result<File, String>
+    mode_int =
+      match mode
+        FileMode.Read -> 0
+        FileMode.Write -> 1
+        FileMode.Append -> 2
+      end
+
+    cs = path.to_cstring()
+    fd = koja_file_open(cs.ptr, mode_int)
+    cs.free()
+    fd >= 0
+      ? Result.Ok(File{fd: Fd{descriptor: fd}})
+      : Result.Err("open failed")
+  end
+
+  @doc """
+  Reads the entire contents of a file at the given path as a string.
+  This is a convenience method that opens, reads, and closes the file.
+  Returns the file contents or an error message.
+  """
+  fn read(path: String) -> Result<String, String>
+    cs = path.to_cstring()
+    ptr = koja_file_read_all(cs.ptr)
+    cs.free()
+    ptr.null?() ? Result.Err("read failed") : Result.Ok(ptr.to_string())
+  end
+
+  @doc """
+  Renames (moves) a file from source to destination.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn rename(source: String, destination: String) -> Result<String, String>
+    src_cs = source.to_cstring()
+    dst_cs = destination.to_cstring()
+    result = koja_file_rename(src_cs.ptr, dst_cs.ptr)
+    src_cs.free()
+    dst_cs.free()
+    result >= 0 ? Result.Ok("ok") : Result.Err("rename failed")
+  end
+
+  @doc """
+  Writes content to the file at the given path, creating or truncating it.
+  Returns Ok("ok") on success or an error message.
+  """
+  fn write(path: String, content: String) -> Result<String, String>
+    path_cs = path.to_cstring()
+    content_cs = content.to_cstring()
+    result = koja_file_write_all(path_cs.ptr, content_cs.ptr)
+    path_cs.free()
+    content_cs.free()
+    result >= 0 ? Result.Ok("ok") : Result.Err("write failed")
+  end
+
+  @extern "C"
+  priv fn koja_file_delete(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_exists(path: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_open(path: CPtr<UInt8>, mode: Int64) -> Int32
+
+  @extern "C"
+  priv fn koja_file_read_all(path: CPtr<UInt8>) -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn koja_file_rename(src: CPtr<UInt8>, dst: CPtr<UInt8>) -> Int64
+
+  @extern "C"
+  priv fn koja_file_write_all(path: CPtr<UInt8>, content: CPtr<UInt8>) -> Int64
+end

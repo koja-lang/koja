@@ -1,6 +1,6 @@
-# ExpoIR Roadmap
+# KojaIR Roadmap
 
-Forward-looking roadmap for the ExpoIR refactor. Tracks where the
+Forward-looking roadmap for the KojaIR refactor. Tracks where the
 intermediate-representation work stands today, what slices remain, and
 the design invariants that have governed the work so far. The original
 SIL-style design prose and the full Wave 1-17 narrative live in
@@ -16,7 +16,7 @@ lowering shape; Slice 4 (Wave 31) layered on the typed
 value-producing `lower_*` helper now publishes the operand's
 resolved [`Type`] alongside the operand itself. Slice 5 (Wave 32)
 introduced [`crate::FnLowerState::local_types`] (the LLVM-free
-typed-locals mirror of `expo-codegen`'s
+typed-locals mirror of `koja-codegen`'s
 `Compiler.fn_state.variables`), populated at every binding site
 (method/free param entry, `bind_for_pattern`, executor
 `StoreLocal { is_decl: true }`, legacy `compile_assignment` fresh
@@ -27,7 +27,7 @@ operand-context value-producing control-flow expressions
 (`if`/`else`, `cond` with `else`, ternary): typecheck now
 publishes a meaningful arm-joined result type via the local
 `arm_type_meaningful` predicate (the
-[`expo_ast::types::Type::is_known`] quirk no longer suppresses
+[`koja_ast::types::Type::is_known`] quirk no longer suppresses
 `Type::Named { type_args, .. }` with non-empty args), and
 [`crate::Lowerer::lower_expr_to_operand`] routes those three
 forms directly to the existing typed lowering helpers
@@ -40,7 +40,7 @@ helper. Match arm bodies now support nested control flow
 control-flow expressions inside match arms works without the
 post-Slice-3 1-block restriction. The pre-codegen elaboration
 seam ships as [`crate::elaborate::elaborate_program`] (no-op
-today), wired into [`expo_codegen::compile_modules`]'s
+today), wired into [`koja_codegen::compile_modules`]'s
 `run_codegen` between `synthesize_all_formats` and
 `define_functions`. Every operand-shaped lowering helper takes
 `(&mut CFGBuilder, IRBlockId)` and returns
@@ -140,7 +140,7 @@ What we do _not_ have yet (next-step pointers in **bold**):
   working through Slice 8.
 - **`compile_assignment`'s three transitional forks** (list-literal
   RHS, destructuring pattern, unannotated assignment) still live
-  in `expo-codegen/src/stmt.rs`. Retire with Slice 7 (the
+  in `koja-codegen/src/stmt.rs`. Retire with Slice 7 (the
   elaboration pass + typed assignment plumbing makes them
   redundant).
 - **Implicit-union arm-join is "first meaningful arm" only.**
@@ -185,9 +185,9 @@ are summarized inline below.
   `closure_counter` migration.
 - **Phase 2 -- Decision-type extraction (done, Wave 7 + folded).** 39
   `Resolved*` types live in
-  [`expo-ir::resolved`](../crates/expo-ir/src/resolved/) across 16
-  modules. `expo-codegen` consumes them via thin `compile_*` wrappers.
-- **Phase 3 -- `expo-ir` crate (done as scoped).** 24 `lower::*` modules
+  [`koja-ir::resolved`](../crates/koja-ir/src/resolved/) across 16
+  modules. `koja-codegen` consumes them via thin `compile_*` wrappers.
+- **Phase 3 -- `koja-ir` crate (done as scoped).** 24 `lower::*` modules
   host the lift surface; `resolved/`, `lower/`, identity newtypes,
   `TypeLayouts`, `FnLowerState` all live here. The instruction
   containers were deliberately deferred -- they emerged bottom-up from
@@ -226,7 +226,7 @@ are summarized inline below.
   `self.origin.x`) by delegating to the existing
   `emit_chain_field_access` helper. The IR-side classifier reaches
   the codegen-side variables map through a new `LocalBindings` trait
-  on `LowerCtx` / `Lowerer`, so `expo-ir` stays LLVM-free while still
+  on `LowerCtx` / `Lowerer`, so `koja-ir` stays LLVM-free while still
   honoring the precedence `compile_expr` uses today. See the
   `Phase 4e` entry in section 4 for the per-change detail.
 - **Phase 4f Slice 3 -- `if`/`else` + ternary (done, Wave 21).** The
@@ -368,7 +368,7 @@ are summarized inline below.
   `Lowerer::lower_tail_expr_to_operand` helper threaded through
   the immediately-emitted call instruction (transparent through
   `ExprKind::Group`). Two source-level callers --
-  `Statement::Return` in `crates/expo-codegen/src/stmt.rs` and
+  `Statement::Return` in `crates/koja-codegen/src/stmt.rs` and
   the last-statement-implicit-return in
   `compile_function_body` -- swap their `mark_tail` /
   `clear_tail` brackets for a `compile_tail_expr` call that
@@ -378,9 +378,9 @@ are summarized inline below.
   status is now passed explicitly only at the trailing
   expression. The TCO rewrite logic (drop live variables, store
   args into `param_allocas`, branch to `tco_loop`) moves from
-  `crates/expo-codegen/src/structs.rs` into a new
+  `crates/koja-codegen/src/structs.rs` into a new
   `emit_tail_call_back_edge` helper in
-  `crates/expo-codegen/src/control/instructions.rs`'s
+  `crates/koja-codegen/src/control/instructions.rs`'s
   `emit_method_call`, gated on the IR instruction's `tail`
   field plus `FnLowerState::is_self_call`. The
   `tail_position`, `mark_tail`, `clear_tail`, `save_tail`,
@@ -401,7 +401,7 @@ are summarized inline below.
   `emit_terminator` pipeline. Three new `IRInstruction` variants land:
   `StoreLocal { name, value, ty, is_decl, ownership }` covers
   alloca+store for fresh let-bindings (with `Ownership` -- itself
-  moved into `expo-ir` -- pre-classified at lowering time) and
+  moved into `koja-ir` -- pre-classified at lowering time) and
   reassignments to existing slots; `StoreField { base_name,
 base_type, steps, value, ty }` walks the `ResolvedFieldStep`
   chain shared with `IRInstruction::FieldChain` to assign multi-
@@ -427,8 +427,8 @@ target_union }` lifts the recorded `Coercion::UnionWiden` so the
   Pure-semantic helpers (`ownership_for_expr`, `infer_type_from_expr`
   and its supporting `infer_static_method_return_type` /
   `infer_instance_method_return_type` / `infer_receiver_type`) move
-  from `expo-codegen::stmt` into
-  `expo-ir::lower::{ownership, inference}`; codegen retains a thin
+  from `koja-codegen::stmt` into
+  `koja-ir::lower::{ownership, inference}`; codegen retains a thin
   `infer_type_from_expr_codegen` wrapper that bridges
   `Compiler.fn_state.variables` to the IR helper through the
   existing `LocalBindings`-style closure pattern.
@@ -500,10 +500,10 @@ struct_key, field_index, field_ty, name_hint }` mirrors
   block. Single-way principle: construction is named-only
   (`Point{x: 5, y: 2}`), so destructuring is too. Regression locked
   in via four tests under `tests/lang/types/`:
-  [struct_pattern_basic.expo](../tests/lang/types/struct_pattern_basic.expo),
-  [struct_pattern_partial.expo](../tests/lang/types/struct_pattern_partial.expo),
-  [struct_pattern_bind.expo](../tests/lang/types/struct_pattern_bind.expo),
-  [struct_pattern_nested.expo](../tests/lang/types/struct_pattern_nested.expo).
+  [struct_pattern_basic.koja](../tests/lang/types/struct_pattern_basic.koja),
+  [struct_pattern_partial.koja](../tests/lang/types/struct_pattern_partial.koja),
+  [struct_pattern_bind.koja](../tests/lang/types/struct_pattern_bind.koja),
+  [struct_pattern_nested.koja](../tests/lang/types/struct_pattern_nested.koja).
 - **Sidebar -- Pattern-CFG gating for nested-enum-literal payloads
   (done, Wave 27).** Resolves the GAPS "Nested enum pattern matching
   with literal payloads" segfault that the Slice 5b match rework had
@@ -538,7 +538,7 @@ failure_target, blocks)` is the per-arm imperative driver; flat
   retains the same payload-deref vulnerability for those surfaces;
   lifting them to the gated CFG builder is tracked separately.
   Regression locked in via
-  [tests/lang/types/nested_enum_pattern_literal.expo](../tests/lang/types/nested_enum_pattern_literal.expo).
+  [tests/lang/types/nested_enum_pattern_literal.koja](../tests/lang/types/nested_enum_pattern_literal.koja).
 
 ---
 
@@ -550,10 +550,10 @@ to plan a slice.
 ### 3a. Lift status by construct
 
 After Wave 30, the 8 control-flow constructs all converge on the
-recursive [`crate::Lowerer::lower_*`](../crates/expo-ir/src/lower/)
+recursive [`crate::Lowerer::lower_*`](../crates/koja-ir/src/lower/)
 methods (each takes `&mut CFGBuilder, IRBlockId` and returns
 `(Option<IRBlockId>, IROperand)`) plus the single fn-wide
-[`walk_function_blocks`](../crates/expo-codegen/src/control/mod.rs)
+[`walk_function_blocks`](../crates/koja-codegen/src/control/mod.rs)
 walker. The per-construct IR wrapper types (`IRUnless`, `IRIf`,
 `IRIfElse`, `IRTernary`, `IRCond`, `IRMatch`, `IRWhile`, `IRLoop`,
 `IRFor`) and their per-construct emit walkers are all deleted.
@@ -619,7 +619,7 @@ commit `60618c0`: every non-generic user free function (top-level
 `fn foo`) registers as `Free`, every non-generic user impl method
 registers as `Method` (matching the kinds the monomorphize planner
 already wrote for generics), every per-type `debug` format emitter
-registers as `Intrinsic`, the LLVM `main` / `__expo_user_main` pair
+registers as `Intrinsic`, the LLVM `main` / `__koja_user_main` pair
 registers as `MainEntry`, and `Extern` is reserved for genuinely
 foreign-linked symbols carrying `ExternAttrs` sufficient for any
 backend to declare and link them without consulting the LLVM module.
@@ -644,11 +644,11 @@ invariant 12).
 The load-bearing seams every future slice extends:
 
 - `Lowerer::lower_expr_to_operand` in
-  [`expo-ir::lower::values`](../crates/expo-ir/src/lower/values.rs) --
+  [`koja-ir::lower::values`](../crates/koja-ir/src/lower/values.rs) --
   the single `IRInstruction::Stub` constructor; every operand-shaped
   expression flows through here.
 - `execute_instructions` in
-  [`expo-codegen::control::instructions`](../crates/expo-codegen/src/control/instructions.rs)
+  [`koja-codegen::control::instructions`](../crates/koja-codegen/src/control/instructions.rs)
   -- the single `IRInstruction` walker; new instruction variants get
   an arm here. Takes an `Option<&block_map>` (required when the
   instruction sequence may contain `IRInstruction::Phi`) and a
@@ -656,7 +656,7 @@ The load-bearing seams every future slice extends:
   threads entry / then / else / merge through one shared map) can
   share SSA values across successive invocations.
 - `IRInstruction::Phi` in
-  [`expo-ir::values`](../crates/expo-ir/src/values.rs) -- the
+  [`koja-ir::values`](../crates/koja-ir/src/values.rs) -- the
   canonical IR-level value-merging primitive. `incomings:
 Vec<(IRBlockId, IROperand)>` ties merge-time values to their
   predecessor blocks; the codegen executor synthesizes
@@ -669,29 +669,29 @@ Vec<(IRBlockId, IROperand)>` ties merge-time values to their
   synthesized at emit time for `if`/`else` (where statement-bodied
   arms make pre-staging impossible until Phase 4g).
 - `emit_terminator` in
-  [`expo-codegen::control::terminator`](../crates/expo-codegen/src/control/terminator.rs)
+  [`koja-codegen::control::terminator`](../crates/koja-codegen/src/control/terminator.rs)
   -- the single `IRTerminator` walker.
 - `Compiler::register_function` / `register_extern` /
   `register_free` / `register_intrinsic` / `register_main_entry` /
   `register_method` / `register_thunk` in
-  [`expo-codegen::compiler`](../crates/expo-codegen/src/compiler.rs) --
+  [`koja-codegen::compiler`](../crates/koja-codegen/src/compiler.rs) --
   the single declared-callable seam. Each variant of `IRFunctionKind`
   has exactly one registration helper; the six helpers cannot drift
   because they all funnel into `register_function`'s dual write
   (`IRProgram` + LLVM-handle map).
 - `Compiler::lowerer()` in the same file -- the single per-function
   `Lowerer<'a>` constructor.
-- [`expo-ir::lower::LocalBindings`](../crates/expo-ir/src/lower/ctx.rs)
+- [`koja-ir::lower::LocalBindings`](../crates/koja-ir/src/lower/ctx.rs)
   trait -- the single seam through which IR lowering asks "is this
   name an in-scope local binding, and if so, what's its type?".
-  Implemented by `expo-codegen::compiler::FnState` (forwarding to
+  Implemented by `koja-codegen::compiler::FnState` (forwarding to
   `fn_state.variables`); installed on `LowerCtx.locals` /
   `Lowerer.locals` by every `Compiler::lower_ctx*` /
-  `Compiler::lowerer` constructor. Keeps `expo-ir` LLVM-free without
+  `Compiler::lowerer` constructor. Keeps `koja-ir` LLVM-free without
   forcing a parallel binding mirror -- the codegen-side variables map
   remains the source of truth.
 - `Lowerer::lower_statement` / `lower_statements` in
-  [`expo-ir::lower::statements`](../crates/expo-ir/src/lower/statements.rs)
+  [`koja-ir::lower::statements`](../crates/koja-ir/src/lower/statements.rs)
   -- the single statement-lowering seam introduced by Phase 4g
   Slice 1. Returns `(Vec<IRInstruction>, Option<IRTerminator>)`;
   the terminator is `Some` only for `Return` / `Break`. Driven
@@ -699,7 +699,7 @@ Vec<(IRBlockId, IROperand)>` ties merge-time values to their
   per-construct body lift in Slice 2 and the function-body emit
   lift in Slice 7.
 - `Lowerer::lower_pattern_into_arm` in
-  [`expo-ir::lower::patterns`](../crates/expo-ir/src/lower/patterns.rs)
+  [`koja-ir::lower::patterns`](../crates/koja-ir/src/lower/patterns.rs)
   -- the per-arm pattern CFG builder. Imperatively writes blocks
   into the arm's `check_blocks: Vec<IRBasicBlock>` buffer, gating
   every constructor pattern (`EnumStruct` / `EnumTuple` /
@@ -718,9 +718,9 @@ failure_target)` so payload-load primitives never run when the
   `receive` / `expr matches Pattern` entry point) still uses;
   lifting the single-pattern path to the gated CFG builder is the
   remaining followup tracked separately.
-- [`expo-ir::FnLowerState.loop_exit`](../crates/expo-ir/src/fn_state.rs)
+- [`koja-ir::FnLowerState.loop_exit`](../crates/koja-ir/src/fn_state.rs)
   paired with
-  [`FnState.loop_exit_blocks`](../crates/expo-codegen/src/compiler.rs)
+  [`FnState.loop_exit_blocks`](../crates/koja-codegen/src/compiler.rs)
   -- the dual stack the loop emit walkers maintain via `enter_loop` /
   `leave_loop`. The IR-side `Vec<IRBlockId>` lets `Lowerer::lower_break_stmt`
   resolve the target block id at lowering time; the LLVM-bound
@@ -810,12 +810,12 @@ link_name }`. `ExternAbi` is a single-variant enum (`C`) so future
   `@extern "C"` and `@link "lib"` / `@link "lib:symbol"`. Both
   user-FFI registration sites in `compiler.rs` (free fn and method
   paths) now thread these attrs through `register_extern`.
-- ~~`__expo_user_main` and `debug.rs` formatting helpers are
+- ~~`__koja_user_main` and `debug.rs` formatting helpers are
   misclassified as `Extern` today because they happen to register
-  without a normal Expo AST.~~ **Done** -- new unit variant
+  without a normal Koja AST.~~ **Done** -- new unit variant
   `IRFunctionKind::MainEntry` covers both the LLVM `main` C entry
-  (which calls `expo_rt_spawn(__expo_user_main, ...)`) and
-  `__expo_user_main` itself; doc comment notes the variant is
+  (which calls `koja_rt_spawn(__koja_user_main, ...)`) and
+  `__koja_user_main` itself; doc comment notes the variant is
   transitional pending `fn main` retirement. The `debug.rs`
   per-primitive (`call_format` PrimitiveIntrinsic fallback) and
   per-user-type (`begin_synthesis`) format emitters now register as
@@ -828,11 +828,11 @@ link_name }`. `ExternAbi` is a single-variant enum (`C`) so future
   monomorphize planner uses (with empty `subst`); both call sites
   now branch on `is_extern_c_decl` and route to the appropriate
   helper. `Counter.count_down` and `fn main`'s body holder
-  (`__expo_user_main`) are correctly typed in IR.
+  (`__koja_user_main`) are correctly typed in IR.
 
 **Outcome.** `IRProgram` now honestly classifies every callable.
 `Extern` means precisely "linker resolves this and `ExternAttrs`
-tells you how"; `Free` / `Method` carry an Expo AST regardless of
+tells you how"; `Free` / `Method` carry an Koja AST regardless of
 whether the function is generic; `Intrinsic` covers any method-keyed
 backend-emitted body (stdlib types and per-user-type derived
 methods alike); `MainEntry` flags the transitional `fn main`
@@ -868,21 +868,21 @@ nearly-end-to-end typed IR on day one.
   per hop because `FieldLoad` only sees opaque struct-value
   receivers.~~ **Done** -- new `IRInstruction::FieldChain` carries
   `base_name` + `base_type` + `Vec<ResolvedFieldStep>` and delegates
-  to `expo-codegen::structs::emit_chain_field_access` (already
+  to `koja-codegen::structs::emit_chain_field_access` (already
   existed but had no IR consumer). `Lowerer::lower_field_access_or_stub`
   now tries `resolve_chain_steps` first; on success it emits one
   `FieldChain` (one GEP chain through the binding's alloca, one final
   `load_maybe_indirect`); on failure it falls back to the recursive
-  `FieldLoad` path. Verified on `tests/lang/cross_ref/src/shape.expo`
+  `FieldLoad` path. Verified on `tests/lang/cross_ref/src/shape.koja`
   -- `self.origin.x` lowers to two chained GEPs through `self`'s
   alloca with one final load, no `tmp_struct` scratch alloca.
-- ~~`expo-ir` cannot reach into codegen's
+- ~~`koja-ir` cannot reach into codegen's
   `Compiler.fn_state.variables` to know which `Ident` names are
   in-scope locals; mirroring the map across every codegen mutation
   site (closures, match arms, generic monomorphization,
   save-and-restore patterns) would be invasive and easy to drift.~~
   **Done** -- new `LocalBindings` trait in
-  [`expo-ir::lower::ctx`](../crates/expo-ir/src/lower/ctx.rs)
+  [`koja-ir::lower::ctx`](../crates/koja-ir/src/lower/ctx.rs)
   provides a single `type_of(&str) -> Option<Type>` query. Codegen's
   `FnState` implements it (forwarding to `variables.get(name).map(|(_, ty, _)| ty.clone())`);
   every `Compiler::lower_ctx*` / `Compiler::lowerer` constructor
@@ -926,7 +926,7 @@ it lifts as part of the slice that needs it.
   through to `Ok(None)` when either arm is statement-only or
   diverges -- mirroring the legacy `compile_if` behavior. The new
   `Phi` instruction's LLVM type is derived from the first
-  materialized incoming value rather than the resolved Expo type,
+  materialized incoming value rather than the resolved Koja type,
   because `to_llvm_type` rejects `Type::Named` carrying inferred
   `Unknown` type args (common in stdlib `Result` pipelines) while
   the LLVM-side type is always concrete by the time the value lands
@@ -950,7 +950,7 @@ value_map`. **Outcome.** `compile_if`'s else branch and
   must produce a matching-LLVM-typed value, or the construct returns
   `Ok(None)` for no-production / `Err` for partial-production --
   the latter is defensive since typecheck enforces consistency at
-  the source level via `expo-typecheck::expr::infer_expr`).
+  the source level via `koja-typecheck::expr::infer_expr`).
   `IRInstruction::Phi` is reused unchanged. Known semantic wart
   preserved as-is: divergent arms (early `return` / `panic`) mixed
   with value-producing arms hit the partial-production error path
@@ -1032,7 +1032,7 @@ x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
     `lower_pattern_to_instructions` + `execute_instructions` path,
     so receive arms and match arms share one pattern-emission
     pipeline. Bindings stay in the check block (not the body) so
-    Expo guards (`Some(v) when v > 0`) can reference them; per-arm
+    Koja guards (`Some(v) when v > 0`) can reference them; per-arm
     scoping is enforced by a `fn_state.variables` clone/restore
     wrapping each arm's check + body in `emit_match_unified` and
     `compile_receive_arms`. The 5b lift moved binding _setup_
@@ -1098,14 +1098,14 @@ x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
   - `param_allocas` LLVM-side scaffolding in `compile_method_body`
     is unchanged -- it's the rewrite target, orthogonal to the IR
     flag. LLVM IR for `Counter.count_down` (the
-    `tests/lang/functions/tail_call.expo` regression) confirms
+    `tests/lang/functions/tail_call.koja` regression) confirms
     the self-recursive call is rewritten to `br label %tco_loop`
     byte-for-byte as before.
 
 ### Phase 4g -- Function bodies in IR
 
 The structural cut. `IRFunction` stops carrying
-`expo_ast::ast::Function` bodies and starts carrying
+`koja_ast::ast::Function` bodies and starts carrying
 `Vec<IRBasicBlock>`; `compile_statement`, `compile_function_body`,
 and `compile_method_body` lift to IR; the nine per-construct IR
 types (`IRUnless`, `IRIf`, `IRIfElse`, `IRTernary`, `IRCond`,
@@ -1160,7 +1160,7 @@ compiler trim).
   / `StoreField { base_name, base_type, steps, value, ty }`
   preceded by an optional `IRInstruction::UnionWrap { dest, value, source_ty, target_union }`
   for recorded `Coercion::UnionWiden`. `Ownership` itself moves
-  from `expo-codegen::drop` into `expo-ir::ownership` so the
+  from `koja-codegen::drop` into `koja-ir::ownership` so the
   enum is reachable from the LLVM-free Lowerer.
   `loop_exit_stack: Vec<BasicBlock>` retires from `FnState` in
   favor of paired stacks: `FnLowerState.loop_exit: Vec<IRBlockId>`
@@ -1173,8 +1173,8 @@ compiler trim).
   `infer_type_from_expr` (with its supporting
   `infer_static_method_return_type` /
   `infer_instance_method_return_type` /
-  `infer_receiver_type`) move from `expo-codegen::stmt` into
-  `expo-ir::lower::{ownership, inference}`; codegen retains a
+  `infer_receiver_type`) move from `koja-codegen::stmt` into
+  `koja-ir::lower::{ownership, inference}`; codegen retains a
   thin `infer_type_from_expr_codegen` wrapper that bridges
   `Compiler.fn_state.variables` to the IR helper through the
   existing `LocalBindings`-style closure pattern.
@@ -1360,21 +1360,21 @@ entry point.
   Population sites (every fresh local writes both
   `fn_state.variables` and `fn_lower.local_types`):
   - method / free function param entry
-    ([`expo-codegen/src/generics.rs::compile_method_body`] /
+    ([`koja-codegen/src/generics.rs::compile_method_body`] /
     [`emit_ir_function`])
   - `bind_for_pattern` (for-loop element binding)
-  - executor [`expo_ir::IRInstruction::StoreLocal { is_decl: true }`]
-    ([`expo-codegen/src/control/instructions.rs::emit_store_local`])
-  - legacy [`expo-codegen/src/stmt.rs::compile_assignment`]
+  - executor [`koja_ir::IRInstruction::StoreLocal { is_decl: true }`]
+    ([`koja-codegen/src/control/instructions.rs::emit_store_local`])
+  - legacy [`koja-codegen/src/stmt.rs::compile_assignment`]
     fresh-decl branch (both LValue and Pattern targets)
-  - IR-side [`expo-ir/src/lower/statements.rs::Lowerer::store_local`]
+  - IR-side [`koja-ir/src/lower/statements.rs::Lowerer::store_local`]
     fresh-decl branch
   - pattern-binder lowerings in
-    [`expo-ir/src/lower/patterns.rs`]: `ResolvedPattern::Bind` and
+    [`koja-ir/src/lower/patterns.rs`]: `ResolvedPattern::Bind` and
     `ResolvedPattern::UnionMember` in both
     `lower_pattern_into_arm` and `lower_resolved_pattern`.
     Side-effect refactor:
-    [`expo-codegen/src/control/instructions.rs::emit_store_local`]
+    [`koja-codegen/src/control/instructions.rs::emit_store_local`]
     re-decides `is_decl` at runtime
     (`is_decl || !variables.contains_key(name)`) to preserve
     per-branch declaration semantics; lowering's flat
@@ -1392,7 +1392,7 @@ entry point.
   typed lowering helpers (no Stub round-trip); per-arm
   [`IRInstruction::UnionWrap`] pre-staging extends from match
   to the other three constructs via a shared decision helper.
-  - **Typecheck arm-join (`expo-typecheck/src/expr.rs`).** Adds
+  - **Typecheck arm-join (`koja-typecheck/src/expr.rs`).** Adds
     `arm_type_meaningful(ty)` (mirrors the existing
     `arg_ty_participates_in_unification` in the same file) and
     swaps it in at the four arm-join sites (`Match`, `Cond`,
@@ -1407,11 +1407,11 @@ entry point.
     planned next step but needs the monomorphization pipeline
     to register ad-hoc arm-derived unions; not in this slice.
   - **Operand seam routing
-    ([`expo-ir/src/lower/values.rs`]).**
+    ([`koja-ir/src/lower/values.rs`]).**
     [`crate::Lowerer::lower_expr_to_operand_with_tail`] gains
-    arms for [`expo_ast::ast::ExprKind::If { else_body: Some }`],
-    [`expo_ast::ast::ExprKind::Ternary`], and
-    [`expo_ast::ast::ExprKind::Cond { else_body: Some }`] that
+    arms for [`koja_ast::ast::ExprKind::If { else_body: Some }`],
+    [`koja_ast::ast::ExprKind::Ternary`], and
+    [`koja_ast::ast::ExprKind::Cond { else_body: Some }`] that
     call `lower_if_else` / `lower_ternary` / `lower_cond`
     directly with `result_ty = expr.resolved_type`. The
     statement-only forms (`If` without `else`, `Cond` without
@@ -1434,7 +1434,7 @@ entry point.
     are tagged transitional -- the elaboration pass (Slice 7)
     subsumes them with a generic phi-incoming coercion walk.
   - **Multi-block match arm bodies
-    ([`expo-ir/src/lower/patterns.rs`]).** The post-Slice-3
+    ([`koja-ir/src/lower/patterns.rs`]).** The post-Slice-3
     1-block guard on match arm bodies is lifted: `LoweredMatchArm`
     now carries `body_blocks: Vec<IRBasicBlock>` plus
     `body_exit: Option<IRBlockId>`. `build_match_arm_body`
@@ -1445,7 +1445,7 @@ entry point.
     `if`/`else` / `cond` / `ternary` inside a match arm body
     now mints additional blocks into the same builder.
   - **Void-call lift fix
-    ([`expo-codegen/src/control/mod.rs`]).**
+    ([`koja-codegen/src/control/mod.rs`]).**
     `walk_function_blocks_seeded` treats a `Local` result
     operand whose id was never registered in the value map as
     statement-shaped (returns `Ok(None)`), mirroring the
@@ -1453,14 +1453,14 @@ entry point.
     handling. Surfaced when the IR-routed ternary turned a
     previously single-block call lift into multi-block, and the
     void call's dest was correctly skipped by `emit_call`.
-  - **Elaboration seam ([`expo-ir/src/elaborate.rs`]).** Empty
+  - **Elaboration seam ([`koja-ir/src/elaborate.rs`]).** Empty
     `pub fn elaborate_program(_: &mut IRProgram) -> Result<(), String>`,
-    re-exported from `expo-ir`'s root and called in
-    `expo_codegen::compile_modules::run_codegen` between
+    re-exported from `koja-ir`'s root and called in
+    `koja_codegen::compile_modules::run_codegen` between
     `synthesize_all_formats` and `define_functions`. No
     behavior change today; the seam exists so Slice 7 can
     fill in the body without relocating call sites.
-    Validation: 25/25 lang, 56/56 expo-typecheck, 246/246
+    Validation: 25/25 lang, 56/56 koja-typecheck, 246/246
     stdlib, `cargo clippy --workspace --all-targets` clean,
     `just doit` green.
 
@@ -1472,7 +1472,7 @@ entry point.
   retires; bodies live in `blocks: Vec<IRBasicBlock>` populated
   at planning / declare time. `emit_ir_function` /
   `emit_ir_impl_method` in
-  [`expo-codegen/src/generics.rs`](../crates/expo-codegen/src/generics.rs)
+  [`koja-codegen/src/generics.rs`](../crates/koja-codegen/src/generics.rs)
   walk `IRFunction.blocks` via `walk_function_blocks` after a
   thin `setup_function_frame` helper handles entry block /
   param allocas / debug `push_function` / `type_subst`
@@ -1483,7 +1483,7 @@ entry point.
   `infer_type_from_expr_codegen` all retire. The
   `compile_method_body` `mem::take` / restore plumbing on
   `variables` / `local_types` / `type_subst` (in
-  [`generics.rs`](../crates/expo-codegen/src/generics.rs))
+  [`generics.rs`](../crates/koja-codegen/src/generics.rs))
   goes with it. `compile_statement` / `compile_expr` survive
   this slice as transitional walkers for two remaining
   consumers: closure body emission and `receive` arm emission
@@ -1493,7 +1493,7 @@ entry point.
   `compile_expr` Stub backdoor.
   Param names + span info migrate to a per-function metadata
   struct so debug emission keeps source positions.
-  `fn main` / `__expo_user_main` route through the standard IR
+  `fn main` / `__koja_user_main` route through the standard IR
   pipeline.
 
   _Match operand-seam routing._ Match still routes through
@@ -1551,7 +1551,7 @@ entry point.
   protocol coercions and per-phi-incoming widening into
   `IRProgram` (per-arm `UnionWrap` staging in
   [`crate::Lowerer::build_arm_union_wrap`] retires);
-  `expo-codegen` performs no AST traversal for top-level
+  `koja-codegen` performs no AST traversal for top-level
   function bodies (closure bodies and `receive` arms remain
   on `compile_body_as_value` until Slice 8;
   [`IRInstruction::Stub`] retires in Phase 4h).
@@ -1579,7 +1579,7 @@ entry point.
      live in `blocks: Vec<IRBasicBlock>` populated at planning
      / declare time. `emit_ir_function` /
      `emit_ir_impl_method` in
-     [`expo-codegen/src/generics.rs`] walk `IRFunction.blocks`
+     [`koja-codegen/src/generics.rs`] walk `IRFunction.blocks`
      via `walk_function_blocks` after a thin
      `setup_function_frame` helper handles entry block / param
      allocas / debug `push_function` / `type_subst`
@@ -1595,7 +1595,7 @@ entry point.
      Stub executor; Slice 8 closes the statement seam.
   2. **Match operand-seam routing.** Match still routes through
      [`IRInstruction::Stub`] for the operand-context entry
-     ([`expo-ir/src/lower/values.rs::lower_expr_to_operand_with_tail`]
+     ([`koja-ir/src/lower/values.rs::lower_expr_to_operand_with_tail`]
      has no `Match` arm). The codegen `compile_match` shim
      does the LLVM alloca + value-map seed before calling
      `lower_match_expr`. Add an
@@ -1650,7 +1650,7 @@ entry point.
 
 - **Slice 8 -- Statement seam closure-out
   (Proposed, after Slice 7).** Retires `compile_body_as_value`
-  ([`expo-codegen/src/control/mod.rs`](../crates/expo-codegen/src/control/mod.rs))
+  ([`koja-codegen/src/control/mod.rs`](../crates/koja-codegen/src/control/mod.rs))
   and the `compile_statement` / `compile_expr` AST walkers'
   remaining role as statement-body walkers. After Slice 7,
   those two walkers survive only to serve closure body
@@ -1663,7 +1663,7 @@ entry point.
   [`crate::Lowerer::lower_body_as_value`] returns
   [`crate::lower::values::OperandResult`]
   (`(Option<IRBlockId>, IROperand, Type)`) by walking the
-  trailing [`expo_ast::ast::Statement::Expr`] through
+  trailing [`koja_ast::ast::Statement::Expr`] through
   [`crate::Lowerer::lower_expr_to_operand`] and the rest
   through [`crate::Lowerer::lower_statement`]. Mirrors what
   [`crate::Lowerer::lower_statements_for_value`] does for the
@@ -1672,7 +1672,7 @@ entry point.
   closure / receive sites.
 
   _Closure body emission._ `compile_closure_core`
-  ([`expo-codegen/src/expr.rs`](../crates/expo-codegen/src/expr.rs))
+  ([`koja-codegen/src/expr.rs`](../crates/koja-codegen/src/expr.rs))
   positions the LLVM builder at the closure's function entry
   block, then walks the body through `lower_body_as_value` +
   `walk_function_blocks` (instead of `compile_body_as_value`).
@@ -1682,7 +1682,7 @@ entry point.
   `closure_id` reform.
 
   _Receive arm emission._ `compile_receive`
-  ([`expo-codegen/src/processes.rs`](../crates/expo-codegen/src/processes.rs))
+  ([`koja-codegen/src/processes.rs`](../crates/koja-codegen/src/processes.rs))
   walks each arm body through `lower_body_as_value` +
   `walk_function_blocks` (replacing the per-arm
   `compile_body_as_value` call). Receive arm scoping stays
@@ -1721,7 +1721,7 @@ entry point.
   Retires `Compiler.current_package` because every IR element
   already carries its package via `TypeIdentifier` /
   `FunctionIdentifier`
-  ([`expo-ast/src/identifier.rs`](../crates/expo-ast/src/identifier.rs))
+  ([`koja-ast/src/identifier.rs`](../crates/koja-ast/src/identifier.rs))
   -- by Slice 7 emission walks `IRProgram.function_order` and
   reads each callable's package off its identifier; no ambient
   field on `Compiler` is needed once the data is properly
@@ -1740,13 +1740,13 @@ entry point.
   `Compiler.closure_site_path`, `LowerCtx.closure_site_path`,
   and `Lowerer.closure_site_path` fields delete along with the
   `define_functions` save/restore at
-  [`compiler.rs:1295-1298`](../crates/expo-codegen/src/compiler.rs).
+  [`compiler.rs:1295-1298`](../crates/koja-codegen/src/compiler.rs).
   The two production `unreachable!()` sites are addressed:
-  [`expo-ir/src/lower/closures.rs:53`](../crates/expo-ir/src/lower/closures.rs)
+  [`koja-ir/src/lower/closures.rs:53`](../crates/koja-ir/src/lower/closures.rs)
   (the "all annotated" closure-params case) becomes a typed
   `LoweredClosureParam` enum that makes the case structurally
   absent;
-  [`expo-codegen/src/expr.rs:369-370`](../crates/expo-codegen/src/expr.rs)
+  [`koja-codegen/src/expr.rs:369-370`](../crates/koja-codegen/src/expr.rs)
   (`Literal::String` in `compile_literal`) is documented for
   retirement when string literals lift in Phase 4h, not deleted
   in this slice. The decision to keep `IRProgram` flat (no
@@ -1754,7 +1754,7 @@ entry point.
   discovery: per-package iteration is a cheap filter on flat
   registries (`program.functions.values().filter(|f|
 f.mangled.package() == pkg)`); per-file metadata isn't needed
-  at the IR level (files are pure organization in Expo, debug
+  at the IR level (files are pure organization in Koja, debug
   info flows through `DebugContext`, imports/aliases through
   `TypeContext`). `Compiler` becomes a pure consumer of
   `IRProgram` with no per-module ambient state. **Done when**
@@ -1820,13 +1820,13 @@ become IR-pass diagnostics.
 
 ### Phase 7 -- `CodeEmitter` protocol + second backend
 
-Define the backend protocol (Rust trait during bootstrap; Expo
+Define the backend protocol (Rust trait during bootstrap; Koja
 protocol once self-hosted). The LLVM backend becomes the first
 implementation, not a special case. Cranelift backend for the REPL is
 the natural validation target. Aligns with
 [`ROADMAP.md`](ROADMAP.md) Phase 5 (REPL) and Phase 6A (self-hosting).
 **Done when** a second backend compiles a non-trivial program through
-ExpoIR with no regressions on the LLVM backend.
+KojaIR with no regressions on the LLVM backend.
 
 ### Phase 8 -- ARC for shared types
 
@@ -1853,7 +1853,7 @@ ships in the stdlib backed by `shared_*` instructions.
 ## 5. Design and refactoring invariants
 
 The load-bearing rules every future session must internalize before
-touching `expo-ir` or the IR-side of `expo-codegen`. Each one is the
+touching `koja-ir` or the IR-side of `koja-codegen`. Each one is the
 rule plus the concrete behavior it forbids.
 
 1. **SIL-style, not MIR-style.** High-level operations (`switch_enum`,
@@ -1862,8 +1862,8 @@ rule plus the concrete behavior it forbids.
    match to manual tag loads + payload offset arithmetic in the IR.
 
 2. **Two-bucket migration discipline.** Every piece migrated into
-   `expo-ir` answers "IR data + its query methods" or "lowering scratch
-   state." Forbids: rebuilding `Compiler` inside `expo-ir` one index at
+   `koja-ir` answers "IR data + its query methods" or "lowering scratch
+   state." Forbids: rebuilding `Compiler` inside `koja-ir` one index at
    a time. Once `IRProgram` exists, lookups are methods on `IRProgram`,
    not separate registries.
 
@@ -1918,14 +1918,14 @@ rule plus the concrete behavior it forbids.
     parameter, not on `LowerCtx`. Forbids: stuffing the IR output
     container into the ambient context bundle. The `LocalBindings`
     seam exists by necessity (variable storage is LLVM-bound and
-    cannot move into `expo-ir`); ad-hoc closures into other LLVM-side
+    cannot move into `koja-ir`); ad-hoc closures into other LLVM-side
     state still stay short, one-shot, and at the codegen call site.
 
-11. **Mangling, identities, and registries live in `expo-ir`.** Once a
+11. **Mangling, identities, and registries live in `koja-ir`.** Once a
     registry exists in `IRProgram`, the matching `function_exists` /
     `is_struct_constructor` / `variable_type` closure into codegen
     retires. Forbids: keeping closures alive after their backing
-    registry has moved to `expo-ir`.
+    registry has moved to `koja-ir`.
 
 12. **One-callable-one-`IRFunction`-with-honest-kind.** Every
     callable symbol in the program -- user, monomorphized,
@@ -1935,7 +1935,7 @@ rule plus the concrete behavior it forbids.
     exceptions (thunks, stdlib intrinsic methods,
     `resolve_generic_call`'s registry consult). Wave 19 closed the
     `register_extern` catch-all that misclassified non-generic user
-    free fns / methods, the `__expo_user_main` entry pair, and
+    free fns / methods, the `__koja_user_main` entry pair, and
     per-type debug helpers. Forbids: LLVM-only callable side tables;
     using `register_extern` as a "declare without committing to a
     kind" shortcut. New misclassification would be a regression,
@@ -1985,7 +1985,7 @@ rule plus the concrete behavior it forbids.
     [`crate::FnLowerState::local_types`] (Wave 32).** The IR
     lowerer's view of in-scope local bindings comes from the
     LLVM-free `local_types` map on `FnLowerState`, not from
-    `expo-codegen`'s LLVM-alloca-bound `Compiler.fn_state.variables`.
+    `koja-codegen`'s LLVM-alloca-bound `Compiler.fn_state.variables`.
     [`crate::lower::ctx::LocalBindings`] is impl'd directly on
     `FnLowerState`; the lowerer's `Self::ctx().locals`
     re-borrows the same `&FnLowerState`. Every binding site
@@ -2005,9 +2005,9 @@ rule plus the concrete behavior it forbids.
 16. **Typecheck publishes meaningful arm-joined result types
     for value-context control-flow constructs (Wave 33).**
     `match` / `if`/`else` / `cond` / `ternary`'s arm-join
-    site in `expo-typecheck/src/expr.rs::infer_expr` uses the
+    site in `koja-typecheck/src/expr.rs::infer_expr` uses the
     local `arm_type_meaningful` predicate -- not
-    [`expo_ast::types::Type::is_known`] -- to decide whether
+    [`koja_ast::types::Type::is_known`] -- to decide whether
     an arm's tail type seeds the construct's `result_type`.
     `is_known` returns false for `Type::Named { type_args, .. }`
     with non-empty args (e.g. `List<IPAddress>`); the relaxed
@@ -2016,7 +2016,7 @@ rule plus the concrete behavior it forbids.
     file and keeps `Type::is_known` strict for its ~52 other
     callers. Forbids: lowering or codegen re-deriving
     control-flow result types from per-arm typechecker info
-    (the [`expo_ir::lower::values::OperandResult`] `Type`
+    (the [`koja_ir::lower::values::OperandResult`] `Type`
     slot is the source of truth for the published value's
     type; `expr.resolved_type` is the source of truth for the
     construct's joined type).

@@ -1,0 +1,213 @@
+struct FileTest
+  @test "read /dev/null returns empty string"
+  fn test_read_dev_null -> Result<Bool, String>
+    match File.read("/dev/null")
+      Result.Ok(contents) ->
+        contents.empty?()
+          ? Result.Ok(true)
+          : Result.Err("expected empty, got '#{contents}'")
+      Result.Err(msg) -> Result.Err("read /dev/null failed: #{msg}")
+    end
+  end
+
+  @test "read nonexistent file returns Err"
+  fn test_read_nonexistent -> Result<Bool, String>
+    match File.read("/tmp/nonexistent_koja_file_test_12345")
+      Result.Ok(_) -> Result.Err("expected Err for nonexistent file")
+      Result.Err(_) -> Result.Ok(true)
+    end
+  end
+
+  @test "write and read roundtrip"
+  fn test_write_read_roundtrip -> Result<Bool, String>
+    path = "/tmp/koja_file_test_write.txt"
+
+    match File.write(path, "hello from koja")
+      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    match File.read(path)
+      Result.Err(msg) ->
+        File.delete(path)
+        return Result.Err("read back failed: #{msg}")
+
+      Result.Ok(contents) ->
+        File.delete(path)
+
+        unless contents == "hello from koja"
+          return Result.Err("expected 'hello from koja', got '#{contents}'")
+        end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "open for read on /dev/null succeeds"
+  fn test_open_read -> Result<Bool, String>
+    match File.open("/dev/null", FileMode.Read)
+      Result.Ok(file) ->
+        _ = file.close()
+        Result.Ok(true)
+
+      Result.Err(msg) ->
+        Result.Err("open /dev/null failed: #{msg}")
+    end
+  end
+
+  @test "open nonexistent file for read returns Err"
+  fn test_open_nonexistent -> Result<Bool, String>
+    match File.open("/tmp/nonexistent_koja_file_test_12345", FileMode.Read)
+      Result.Ok(_) -> Result.Err("expected Err for nonexistent file")
+      Result.Err(_) -> Result.Ok(true)
+    end
+  end
+
+  @test "open for write, write via fd, read back"
+  fn test_open_write -> Result<Bool, String>
+    path = "/tmp/koja_file_test_handle_write.txt"
+
+    match File.open(path, FileMode.Write)
+      Result.Err(msg) -> return Result.Err("open for write failed: #{msg}")
+      Result.Ok(file) -> file.fd.write("handle write")
+    end
+
+    match File.read(path)
+      Result.Err(msg) ->
+        File.delete(path)
+        return Result.Err("read back failed: #{msg}")
+
+      Result.Ok(contents) ->
+        File.delete(path)
+
+        unless contents == "handle write"
+          return Result.Err("expected 'handle write', got '#{contents}'")
+        end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "open for append adds to existing content"
+  fn test_open_append -> Result<Bool, String>
+    path = "/tmp/koja_file_test_append.txt"
+
+    match File.write(path, "first")
+      Result.Err(msg) -> return Result.Err("initial write failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    match File.open(path, FileMode.Append)
+      Result.Err(msg) ->
+        File.delete(path)
+        return Result.Err("open for append failed: #{msg}")
+
+      Result.Ok(file) ->
+        file.fd.write(" second")
+    end
+
+    match File.read(path)
+      Result.Err(msg) ->
+        File.delete(path)
+        return Result.Err("read appended failed: #{msg}")
+
+      Result.Ok(contents) ->
+        File.delete(path)
+
+        unless contents == "first second"
+          return Result.Err("expected 'first second', got '#{contents}'")
+        end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "exists? returns true for /dev/null"
+  fn test_exists_true -> Result<Bool, String>
+    File.exists?("/dev/null")
+      ? Result.Ok(true)
+      : Result.Err("expected /dev/null to exist")
+  end
+
+  @test "exists? returns false for nonexistent file"
+  fn test_exists_false -> Result<Bool, String>
+    File.exists?("/tmp/nonexistent_koja_file_test_99999")
+      ? Result.Err("expected nonexistent file to not exist")
+      : Result.Ok(true)
+  end
+
+  @test "delete removes a file"
+  fn test_delete -> Result<Bool, String>
+    path = "/tmp/koja_file_test_delete.txt"
+
+    match File.write(path, "delete me")
+      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    match File.delete(path)
+      Result.Err(msg) -> return Result.Err("delete failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    if File.exists?(path)
+      return Result.Err("file still exists after delete")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "rename moves a file"
+  fn test_rename -> Result<Bool, String>
+    src = "/tmp/koja_file_test_rename_src.txt"
+    dst = "/tmp/koja_file_test_rename_dst.txt"
+
+    match File.write(src, "rename me")
+      Result.Err(msg) -> return Result.Err("write failed: #{msg}")
+      Result.Ok(_) -> ()
+    end
+
+    match File.rename(src, dst)
+      Result.Err(msg) ->
+        File.delete(src)
+        return Result.Err("rename failed: #{msg}")
+
+      Result.Ok(_) ->
+        ()
+    end
+
+    if File.exists?(src)
+      File.delete(dst)
+      return Result.Err("source still exists after rename")
+    end
+
+    match File.read(dst)
+      Result.Err(msg) ->
+        File.delete(dst)
+        return Result.Err("read renamed failed: #{msg}")
+
+      Result.Ok(contents) ->
+        File.delete(dst)
+
+        unless contents == "rename me"
+          return Result.Err("expected 'rename me', got '#{contents}'")
+        end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "close returns Ok"
+  fn test_close -> Result<Bool, String>
+    match File.open("/dev/null", FileMode.Read)
+      Result.Err(msg) ->
+        Result.Err("open failed: #{msg}")
+
+      Result.Ok(file) ->
+        match file.close()
+          Result.Ok(_) -> Result.Ok(true)
+          Result.Err(msg) -> Result.Err("close failed: #{msg}")
+        end
+    end
+  end
+end

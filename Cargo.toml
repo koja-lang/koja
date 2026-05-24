@@ -1,21 +1,21 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/expo-ast",
-    "crates/expo-doc",
-    "crates/expo-driver",
-    "crates/expo-fmt",
-    "crates/expo-ir",
-    "crates/expo-ir-eval",
-    "crates/expo-ir-llvm",
-    "crates/expo-lexer",
-    "crates/expo-lsp",
-    "crates/expo-parser",
-    "crates/expo-runtime",
-    "crates/expo-shell",
-    "crates/expo-stdlib",
-    "crates/expo-test",
-    "crates/expo-typecheck",
+    "crates/koja-ast",
+    "crates/koja-doc",
+    "crates/koja-driver",
+    "crates/koja-fmt",
+    "crates/koja-ir",
+    "crates/koja-ir-eval",
+    "crates/koja-ir-llvm",
+    "crates/koja-lexer",
+    "crates/koja-lsp",
+    "crates/koja-parser",
+    "crates/koja-runtime",
+    "crates/koja-shell",
+    "crates/koja-stdlib",
+    "crates/koja-test",
+    "crates/koja-typecheck",
 ]
 
 [workspace.package]

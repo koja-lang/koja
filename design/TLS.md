@@ -1,7 +1,7 @@
 # TLS Support
 
 Design for adding TLS (client and server) to the `net` package.
-BoringSSL's `libssl.a` provides the implementation; Expo's C FFI
+BoringSSL's `libssl.a` provides the implementation; Koja's C FFI
 provides the bindings. No new compiler intrinsics are required.
 
 ---
@@ -11,10 +11,10 @@ provides the bindings. No new compiler intrinsics are required.
 TLS is built from four independent changes:
 
 1. **Build system** -- embed `libssl.a` alongside `libcrypto.a`
-2. **Runtime** -- export one new C function: `expo_io_block`
-3. **Stdlib (`Global`)** -- add `Fd.block` so Expo code can suspend on I/O
-4. **Stdlib (`net`)** -- add `tls.expo` with BoringSSL FFI bindings,
-   and modify `tcp.expo` to integrate TLS into `TCPSocket`
+2. **Runtime** -- export one new C function: `koja_io_block`
+3. **Stdlib (`Global`)** -- add `Fd.block` so Koja code can suspend on I/O
+4. **Stdlib (`net`)** -- add `tls.koja` with BoringSSL FFI bindings,
+   and modify `tcp.koja` to integrate TLS into `TCPSocket`
 
 Each piece is described below with exact file paths and code.
 
@@ -25,7 +25,7 @@ Each piece is described below with exact file paths and code.
 The compiler already embeds `libcrypto.a` from BoringSSL (built by
 `boring-sys`). `libssl.a` lives in the same build directory.
 
-### `expo/crates/expo-driver/build.rs`
+### `expo/crates/koja-driver/build.rs`
 
 Add a second search for `libssl.a`, using the same `find_file` helper
 and the same `build_dir` that locates `libcrypto.a`:
@@ -38,18 +38,18 @@ let ssl_lib_path = find_file(&build_dir, "libssl.a").unwrap_or_else(|| {
     )
 });
 println!(
-    "cargo:rustc-env=EXPO_SSL_LIB_PATH={}",
+    "cargo:rustc-env=KOJA_SSL_LIB_PATH={}",
     ssl_lib_path.display()
 );
 println!("cargo:rerun-if-changed={}", ssl_lib_path.display());
 ```
 
-### `expo/crates/expo-driver/src/pipeline.rs`
+### `expo/crates/koja-driver/src/pipeline.rs`
 
 Embed and write the library at link time, mirroring `EMBEDDED_CRYPTO`:
 
 ```rust
-const EMBEDDED_SSL: &[u8] = include_bytes!(env!("EXPO_SSL_LIB_PATH"));
+const EMBEDDED_SSL: &[u8] = include_bytes!(env!("KOJA_SSL_LIB_PATH"));
 ```
 
 In the `link` function, after writing `libcrypto.a`:
@@ -59,50 +59,50 @@ fs::write(tmp_dir.join("libssl.a"), EMBEDDED_SSL)
     .expect("failed to write embedded ssl library");
 ```
 
-The `@link "ssl:SYMBOL"` annotations in Expo code will cause the linker
+The `@link "ssl:SYMBOL"` annotations in Koja code will cause the linker
 pipeline to pass `-lssl` automatically (via `collect_link_libraries`).
 
 ---
 
-## 2. Runtime: export `expo_io_block`
+## 2. Runtime: export `koja_io_block`
 
 BoringSSL's `SSL_connect`, `SSL_read`, `SSL_write`, etc. return
 `SSL_ERROR_WANT_READ` / `SSL_ERROR_WANT_WRITE` when the underlying
-socket isn't ready. The TLS code needs to suspend the Expo process
+socket isn't ready. The TLS code needs to suspend the Koja process
 until the fd is ready, then retry -- exactly what the runtime's
 internal `io_block` function does.
 
-### `expo/crates/expo-runtime/src/fs.rs`
+### `expo/crates/koja-runtime/src/fs.rs`
 
 Add one function (4 lines) at the end of the file:
 
 ```rust
 #[unsafe(no_mangle)]
-pub extern "C" fn expo_io_block(fd: i64, readable: i64) {
+pub extern "C" fn koja_io_block(fd: i64, readable: i64) {
     let interest = if readable != 0 { Interest::Readable } else { Interest::Writable };
     io_block(fd as i32, interest);
 }
 ```
 
 This is a thin C ABI wrapper around the existing `io_block`. Since
-`libexpo_runtime.a` is always linked, Expo code can call this via
+`libkoja_runtime.a` is always linked, Koja code can call this via
 `@extern "C"` without needing `@link`.
 
 ---
 
 ## 3. Stdlib: `Fd.block`
 
-### `expo/lib/global/src/fd.expo`
+### `expo/lib/global/src/fd.koja`
 
 Add to the `impl Fd` block (after `unwatch`):
 
-```expo
+```koja
 fn block(self, readable: Bool)
-  expo_io_block(self.descriptor, readable ? 1 : 0)
+  koja_io_block(self.descriptor, readable ? 1 : 0)
 end
 
 @extern "C"
-priv fn expo_io_block(fd: Int64, readable: Int64)
+priv fn koja_io_block(fd: Int64, readable: Int64)
 ```
 
 **Notes:**
@@ -116,14 +116,14 @@ priv fn expo_io_block(fd: Int64, readable: Int64)
 
 ---
 
-## 4. Stdlib: `net/src/tls.expo`
+## 4. Stdlib: `net/src/tls.koja`
 
 New file with three sections: config struct, BoringSSL FFI bindings,
-and high-level Expo functions.
+and high-level Koja functions.
 
 ### 4a. `TLSConfig`
 
-```expo
+```koja
 struct TLSConfig
   cert_path: String
   key_path: String
@@ -167,9 +167,9 @@ Required BoringSSL functions:
 | `SSL_get_error`                    | Get error code after failed operation |
 | `SSL_shutdown`                     | Shut down TLS session                 |
 
-Example binding (follow the sha256.expo pattern):
+Example binding (follow the sha256.koja pattern):
 
-```expo
+```koja
 @extern "C" @link "ssl:SSL_CTX_new"
 priv fn ssl_ctx_new(method: CPtr<UInt8>) -> CPtr<UInt8>
 
@@ -183,7 +183,7 @@ All SSL/SSL_CTX pointers are represented as `CPtr<UInt8>` (opaque).
 
 Top-level (not inside a struct -- `const` is only valid at top level):
 
-```expo
+```koja
 const SSL_ERROR_WANT_READ: Int64 = 2
 const SSL_ERROR_WANT_WRITE: Int64 = 3
 const SSL_FILETYPE_PEM: Int64 = 1
@@ -195,7 +195,7 @@ The `TLS` struct provides five public functions. Each function that
 retries on `WANT_READ`/`WANT_WRITE` must follow this pattern to avoid
 a type mismatch in `cond` arms (all arms must produce the same type):
 
-```expo
+```koja
 # WRONG -- cond arms have different types (() vs Result)
 cond
   err == SSL_ERROR_WANT_READ -> fd.block(true)     # returns ()
@@ -262,11 +262,11 @@ No retry loop needed for shutdown -- best-effort.
 
 ## 5. `TCPSocket` integration
 
-### `expo/lib/net/src/tcp.expo`
+### `expo/lib/net/src/tcp.koja`
 
 #### Add fields
 
-```expo
+```koja
 struct TCPSocket
   socket: Socket
   ssl: CPtr<UInt8>
@@ -279,26 +279,26 @@ constructed: `connect`, `connect_addr`, `TCPListener.accept`,
 
 #### New functions
 
-```expo
+```koja
 fn connect_tls(host: String, port: Int) -> Result<TCPSocket, String>
 ```
 
 Convenience: `connect` then `upgrade_tls`.
 
-```expo
+```koja
 fn upgrade_tls(move self, hostname: String) -> Result<TCPSocket, String>
 ```
 
 Calls `TLS.connect(self.socket.fd, hostname)`. On success, sets
 `self.ssl` and `self.ssl_ctx` from the returned pair.
 
-```expo
+```koja
 fn accept_tls(move self, config: TLSConfig) -> Result<TCPSocket, String>
 ```
 
 Calls `TLS.accept(self.socket.fd, config)`. Same pattern.
 
-```expo
+```koja
 fn tls?(self) -> Bool
 ```
 
@@ -308,7 +308,7 @@ Returns `not self.ssl.null?()`.
 
 **`read`**: dispatch based on `self.ssl.null?()`:
 
-```expo
+```koja
 fn read(self, count: Int) -> Result<String, String>
   if self.ssl.null?()
     self.socket.fd.read(count)
@@ -323,7 +323,7 @@ end
 **`close`**: if TLS is active, call `TLS.shutdown` first, then close
 the underlying socket:
 
-```expo
+```koja
 fn close(move self) -> Result<String, String>
   if not self.ssl.null?()
     TLS.shutdown(self.ssl, self.ssl_ctx)
@@ -336,14 +336,14 @@ end
 
 ## 6. HTTP client HTTPS support
 
-### `expo/lib/http/src/client.expo`
+### `expo/lib/http/src/client.koja`
 
 In `Http.request`, after parsing the URL: if the scheme is `https://`,
 use `TCPSocket.connect_tls` instead of `TCPSocket.connect`. The URL
 parser already detects `https://` and sets port 443. You need to
 thread the `host` through to `connect_tls` for SNI.
 
-```expo
+```koja
 socket =
   if url.starts_with?("https://")
     match TCPSocket.connect_tls(host.clone(), port)
@@ -421,7 +421,7 @@ After implementation, run:
 
 - `cargo fmt` (Rust formatting)
 - `cargo clippy --workspace` (zero warnings)
-- `expo format` (Expo formatting, if applicable)
+- `koja format` (Koja formatting, if applicable)
 
 ---
 
@@ -429,10 +429,10 @@ After implementation, run:
 
 | File                                      | Change                                                            |
 | ----------------------------------------- | ----------------------------------------------------------------- |
-| `expo/crates/expo-driver/build.rs`        | Find `libssl.a`, set env var                                      |
-| `expo/crates/expo-driver/src/pipeline.rs` | Embed + write `libssl.a`                                          |
-| `expo/crates/expo-runtime/src/fs.rs`      | Add `expo_io_block` (4 lines)                                     |
-| `expo/lib/global/src/fd.expo`                | Add `Fd.block` + extern decl                                      |
-| `expo/lib/net/src/tls.expo`               | **New file**: TLSConfig, FFI bindings, TLS operations             |
-| `expo/lib/net/src/tcp.expo`               | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
-| `expo/lib/http/src/client.expo`           | Use `connect_tls` for https:// URLs                               |
+| `expo/crates/koja-driver/build.rs`        | Find `libssl.a`, set env var                                      |
+| `expo/crates/koja-driver/src/pipeline.rs` | Embed + write `libssl.a`                                          |
+| `expo/crates/koja-runtime/src/fs.rs`      | Add `koja_io_block` (4 lines)                                     |
+| `expo/lib/global/src/fd.koja`                | Add `Fd.block` + extern decl                                      |
+| `expo/lib/net/src/tls.koja`               | **New file**: TLSConfig, FFI bindings, TLS operations             |
+| `expo/lib/net/src/tcp.koja`               | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
+| `expo/lib/http/src/client.koja`           | Use `connect_tls` for https:// URLs                               |

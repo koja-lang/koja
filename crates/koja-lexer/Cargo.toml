@@ -1,0 +1,12 @@
+[package]
+name = "koja-lexer"
+description = "Tokenizer for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+
+[dev-dependencies]
+proptest = "1.11.0"

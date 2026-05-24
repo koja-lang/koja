@@ -1,0 +1,106 @@
+struct EncodeTest
+  @test "encode null"
+  fn test_encode_null -> Result<Bool, String>
+    result = Encoder.encode(Value.null())
+
+    unless result == "null"
+      return Result.Err("expected \"null\", got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode true"
+  fn test_encode_true -> Result<Bool, String>
+    result = Encoder.encode(Value.bool(true))
+
+    unless result == "true"
+      return Result.Err("expected \"true\", got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode false"
+  fn test_encode_false -> Result<Bool, String>
+    result = Encoder.encode(Value.bool(false))
+
+    unless result == "false"
+      return Result.Err("expected \"false\", got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode integer"
+  fn test_encode_int -> Result<Bool, String>
+    result = Encoder.encode(Value.int(42))
+
+    unless result == "42"
+      return Result.Err("expected \"42\", got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode string"
+  fn test_encode_string -> Result<Bool, String>
+    result = Encoder.encode(Value.string("hello"))
+
+    unless result == "\"hello\""
+      return Result.Err("expected '\"hello\"', got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode empty array"
+  fn test_encode_empty_array -> Result<Bool, String>
+    items: List<Value> = List.new()
+    result = Encoder.encode(Value.array(items))
+
+    unless result == "[]"
+      return Result.Err("expected \"[]\", got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode array with elements"
+  fn test_encode_array -> Result<Bool, String>
+    result = Encoder.encode(
+      Value.array([Value.int(1), Value.int(2), Value.int(3)]),
+    )
+
+    unless result == "[1,2,3]"
+      return Result.Err("expected \"[1,2,3]\", got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode empty object"
+  fn test_encode_empty_object -> Result<Bool, String>
+    entries: List<Pair<String, Value>> = List.new()
+    result = Encoder.encode(Value.object(entries))
+
+    unless result == "{}"
+      return Result.Err("expected \"{}\", got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "encode object"
+  fn test_encode_object -> Result<Bool, String>
+    result = Encoder.encode(
+      Value.object([Value.entry("name", Value.string("koja"))]),
+    )
+
+    unless result == "{\"name\":\"koja\"}"
+      return Result.Err("expected '{\"name\":\"koja\"}', got #{result}")
+    end
+
+    Result.Ok(true)
+  end
+end

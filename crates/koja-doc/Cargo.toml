@@ -1,0 +1,13 @@
+[package]
+name = "koja-doc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+askama = "0.15"
+koja-ast = { path = "../koja-ast" }
+pulldown-cmark = "0.13"
+
+[dev-dependencies]
+koja-parser = { path = "../koja-parser" }

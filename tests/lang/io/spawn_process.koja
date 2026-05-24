@@ -1,0 +1,52 @@
+struct WorkerConfig
+  label: String
+end
+
+enum WorkerMsg
+  Greet(String)
+  Add(Int, Int)
+  Stop
+end
+
+struct Worker
+  label: String
+end
+
+impl Process<WorkerConfig, WorkerMsg, String> for Worker
+  fn start(move config: WorkerConfig) -> Result<Self, StopReason>
+    Result.Ok(Worker{label: config.label})
+  end
+
+  fn handle(move self, msg: WorkerMsg, from: Option<ReplyTo<String>>)
+    -> Step<Self>
+
+    match msg
+      WorkerMsg.Greet(name) ->
+        "#{self.label}: Hello, #{name}!".print()
+        Step.Continue(self)
+
+      WorkerMsg.Add(a, b) ->
+        result = a + b
+        "#{self.label}: Sum: #{result}".print()
+        Step.Continue(self)
+
+      WorkerMsg.Stop ->
+        "#{self.label}: Stopped.".print()
+
+        match from
+          Option.Some(r) -> r.send("done")
+          Option.None -> ()
+        end
+
+        Step.Continue(self)
+    end
+  end
+end
+
+fn main
+  w = spawn Worker.start(WorkerConfig{label: "w1"})
+  w.cast(WorkerMsg.Greet("Koja"))
+  w.cast(WorkerMsg.Add(10, 32))
+  # Last message uses call to ensure the worker finishes before main exits.
+  w.call(WorkerMsg.Stop, 5000)
+end

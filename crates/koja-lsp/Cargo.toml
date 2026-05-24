@@ -1,0 +1,21 @@
+[package]
+name = "koja-lsp"
+description = "Language Server Protocol implementation for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "koja-lsp"
+path = "src/main.rs"
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-fmt = { path = "../koja-fmt" }
+koja-parser = { path = "../koja-parser" }
+koja-stdlib = { path = "../koja-stdlib" }
+koja-typecheck = { path = "../koja-typecheck" }
+serde = { version = "1", features = ["derive"] }
+tokio = { version = "1", features = ["full"] }
+toml = "0.8"
+tower-lsp-server = "0.23"

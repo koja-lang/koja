@@ -1,0 +1,14 @@
+[package]
+name = "koja-ir"
+description = "Sealed IRProgram lowering"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-typecheck = { path = "../koja-typecheck" }
+
+[dev-dependencies]
+koja-parser = { path = "../koja-parser" }
+koja-stdlib = { path = "../koja-stdlib" }

@@ -1,11 +1,11 @@
 # Alpha Roadmap
 
 Sequencing for getting `expo/lib/global/src/` compiling end-to-end through
-the alpha pipeline (`expo-alpha-typecheck` → `expo-alpha-ir` →
-`expo-alpha-ir-llvm` / `expo-alpha-ir-eval`).
+the alpha pipeline (`koja-alpha-typecheck` → `koja-alpha-ir` →
+`koja-alpha-ir-llvm` / `koja-alpha-ir-eval`).
 
 The goal is **stdlib parity, not v1 parity**: alpha needs the surface area
-that `lib/global/src/*.expo` exercises. Anything outside the auto-imported
+that `lib/global/src/*.koja` exercises. Anything outside the auto-imported
 package (Net, HTTP, JSON, …) is explicitly deferred — the stdlib stays
 enum-first and structurally as-is; this doc just enumerates which compiler
 features have to land for it to type-check and lower.
@@ -18,14 +18,14 @@ For pipeline shape and seal contracts, see
 
 ## Goal: compile the stdlib
 
-Concrete success criterion: `expo alpha check` and `expo alpha run` (where
+Concrete success criterion: `koja alpha check` and `koja alpha run` (where
 applicable — concurrency primitives stay stubbed) succeed on every file
 under `expo/lib/global/src/`:
 
 ```
-bitwise.expo  cptr.expo    cstring.expo  debug.expo  fd.expo
-io.expo       kernel.expo  list.expo     map.expo    process.expo
-set.expo      string.expo  system.expo   time.expo
+bitwise.koja  cptr.koja    cstring.koja  debug.koja  fd.koja
+io.koja       kernel.koja  list.koja     map.koja    process.koja
+set.koja      string.koja  system.koja   time.koja
 2356 LOC total
 ```
 
@@ -35,22 +35,22 @@ Today they don't, by a lot. The audit below enumerates why.
 
 ## Audit method
 
-For each `.expo` source under `lib/global/src/`, grep for the language
+For each `.koja` source under `lib/global/src/`, grep for the language
 constructs it uses (`match`, `for`, closure types, `<>` concat, ternary,
 `@extern`, generic impls, …), then cross-reference against the
 `"alpha (typecheck|IR|LLVM) does not yet ..."` diagnostics in
-`crates/expo-alpha-*/src/`. Anything the stdlib reaches for that alpha
+`crates/koja-alpha-*/src/`. Anything the stdlib reaches for that alpha
 diagnoses (or silently mishandles) is a blocker.
 
 The full list of "not yet" diagnostics lives in:
 
-- `expo-alpha-typecheck/src/pipeline/collect.rs`
-- `expo-alpha-typecheck/src/pipeline/lift_signatures/{functions,types,constants}.rs`
-- `expo-alpha-typecheck/src/pipeline/resolve/{expr,ops,statements,strings}.rs`
+- `koja-alpha-typecheck/src/pipeline/collect.rs`
+- `koja-alpha-typecheck/src/pipeline/lift_signatures/{functions,types,constants}.rs`
+- `koja-alpha-typecheck/src/pipeline/resolve/{expr,ops,statements,strings}.rs`
   (note: `resolve/calls/` is now its own submodule — see
   `mod.rs`, `methods.rs`, `bounded.rs`)
-- `expo-alpha-ir/src/lower/{expr,ops,body,structs,enums,package,calls,closures}.rs`
-- `expo-alpha-ir-llvm/src/{emit/mod,emit/instruction,main_wrapper}.rs`
+- `koja-alpha-ir/src/lower/{expr,ops,body,structs,enums,package,calls,closures}.rs`
+- `koja-alpha-ir-llvm/src/{emit/mod,emit/instruction,main_wrapper}.rs`
   (note: `emit/` is now broken out into per-instruction-family
   siblings — `emit/{closures,enums,structs,locals,calls,concat,constants}.rs`)
 
@@ -122,20 +122,20 @@ _None outstanding._
 - ~~**`spawn` and `receive` in IR.**~~ **Shipped through LLVM emit.**
   See the new "Concurrency primitives" entry under "Already supported"
   for the full feature description. The remaining stdlib gap is _not_
-  the primitives themselves but `Task<R>.run` in `process.expo`
+  the primitives themselves but `Task<R>.run` in `process.koja`
   calling `self.work()` against a function-typed struct field —
   alpha-typecheck only dispatches `recv.method(...)` through method
   lookup today. Adding field-as-callable fallback unblocks
   `Global.process` for `AUTOIMPORT`; until then the primitives
   ship to user code via inline `Process` / `Ref` / `ReplyTo` decls
-  and the `expo_rt_*` runtime ABI.
+  and the `koja_rt_*` runtime ABI.
 
 - **End-to-end concurrency execution.** Spawning works at the LLVM
-  level (`expo_rt_spawn` returns a real PID, the wrapper is
+  level (`koja_rt_spawn` returns a real PID, the wrapper is
   ABI-correct), but the alpha `main_wrapper.rs` does not call
-  `expo_rt_main_done()` after the body runs, so spawned processes
+  `koja_rt_main_done()` after the body runs, so spawned processes
   never actually execute. v1 codegen always emits the `main_done`
-  call (`expo-codegen/src/compiler.rs:1257`); alpha needs the same
+  call (`koja-codegen/src/compiler.rs:1257`); alpha needs the same
   one-line addition before the trailing `ret i64 0`. Pair this
   with the field-as-callable fix above to land the
   `task_async` / `counter_call` / `receive_lifecycle` end-to-end
@@ -165,12 +165,12 @@ LoadCapture}`, and `FunctionKind::Closure { env_layout }` for
   `DropLocal { ty: Function }`. Backend symmetry: eval and LLVM
   produce identical results for higher-order calls, captureless
   closures, single/double/heap captures, and fn-as-value adapters.
-  Pinned by `crates/expo-alpha-typecheck/tests/resolve_closures.rs`,
-  `crates/expo-alpha-ir/tests/lower_closures.rs`,
-  `crates/expo-alpha-ir-eval/tests/closures.rs`,
-  `crates/expo-alpha-ir-llvm/tests/closures.rs`, and the
+  Pinned by `crates/koja-alpha-typecheck/tests/resolve_closures.rs`,
+  `crates/koja-alpha-ir/tests/lower_closures.rs`,
+  `crates/koja-alpha-ir-eval/tests/closures.rs`,
+  `crates/koja-alpha-ir-llvm/tests/closures.rs`, and the
   `\*\_closure*_`/`__higher_order__`/`__fn_as_value_\*`driver
-tests in`crates/expo-driver/tests/alpha_two_plus_two.rs`.
+tests in`crates/koja-driver/tests/alpha_two_plus_two.rs`.
   **Out**: recursive drops of nested heap captures inside the
   env block (the env itself frees, but heap-typed captures inside
   it leak today — alpha milestone trade-off for a simpler ABI; a
@@ -186,12 +186,12 @@ tests in`crates/expo-driver/tests/alpha_two_plus_two.rs`.
   domain check (`Bag<Int>::greet` vs `Bag<String>::greet`), dual-scope
   inference (receiver scope + method scope) at every call site.
   Substitution drives end-to-end through monomorphization
-  (`expo-alpha-ir/src/generics/`) and name-mangling
+  (`koja-alpha-ir/src/generics/`) and name-mangling
   (`Bag_$Int64$.greet`). Pinned by
   `concrete_impl_specialization.rs`, `bounded_dispatch.rs`,
   `generic_method_inference.rs`, `trait_impl_domain.rs`, and
-  `substitution.rs` across `expo-alpha-typecheck`, `expo-alpha-ir`,
-  and `expo-alpha-ir-llvm`. **Out**: generic protocol methods
+  `substitution.rs` across `koja-alpha-typecheck`, `koja-alpha-ir`,
+  and `koja-alpha-ir-llvm`. **Out**: generic protocol methods
   (i.e. `protocol P { fn m<U>(...) }`) — separate slice; no stdlib
   use.
 
@@ -202,10 +202,10 @@ tests in`crates/expo-driver/tests/alpha_two_plus_two.rs`.
   Exhaustiveness checking on enum subjects with `Bool`
   specialization. Reachability / redundancy diagnostics (dead
   arms, duplicates, overlaps) as warnings. Pinned by
-  `crates/expo-alpha-typecheck/tests/resolve_match.rs`,
-  `crates/expo-alpha-ir/tests/lower_match.rs`,
-  `crates/expo-alpha-ir-eval/tests/interpreter.rs`,
-  `crates/expo-alpha-ir-llvm/tests/control_flow.rs`. **Out**:
+  `crates/koja-alpha-typecheck/tests/resolve_match.rs`,
+  `crates/koja-alpha-ir/tests/lower_match.rs`,
+  `crates/koja-alpha-ir-eval/tests/interpreter.rs`,
+  `crates/koja-alpha-ir-llvm/tests/control_flow.rs`. **Out**:
   `Pattern::Binary` (gated on binary literals; tracked as Phase 7
   of [20260511-ALPHA-MATCH-PLAN.md](20260511-ALPHA-MATCH-PLAN.md)).
 
@@ -216,24 +216,24 @@ bit_length][payload]` layout (no NUL, ceil-rounded bytes for
   `Bits`). The polymorphic `<>` concat operator typechecks against
   any of the three (same-type operands, same-type result), with
   `String`/`Binary` lowering to inline `malloc` + `memcpy` and
-  `Bits` deferring to `__expo_alpha_concat_bits` for sub-byte
+  `Bits` deferring to `__koja_alpha_concat_bits` for sub-byte
   alignment. `<<segments>>` literal syntax handles integer
   (signed/unsigned, big/little, literal `::N` widths including
   sub-byte), float (`: Float32` / `: Float64`), string segments,
   and the type-annotation form (`: Int16` ≡ `::16 signed big`);
   byte-aligned segments pack inline, sub-byte segments call
-  `__expo_alpha_pack_bits`. Total bits `% 8 == 0` → `Binary`,
+  `__koja_alpha_pack_bits`. Total bits `% 8 == 0` → `Binary`,
   else `Bits`. Move/drop integration: heap-typed slots are
   `Owned` at write sites and emit `DropLocal` at scope exit (one
   shape across all three types — `free(payload - 8)`). Auto-print
-  routes `String` → `__expo_alpha_print_string`, `Binary` →
-  `__expo_alpha_print_binary`, `Bits` → `__expo_alpha_print_bits`,
+  routes `String` → `__koja_alpha_print_string`, `Binary` →
+  `__koja_alpha_print_binary`, `Bits` → `__koja_alpha_print_bits`,
   with byte-identical output between LLVM and the eval interpreter.
-  Pinned by `crates/expo-alpha-typecheck/tests/resolve_binary_literal.rs`,
-  `crates/expo-alpha-ir/tests/lower_binary_literal.rs`,
-  `crates/expo-alpha-ir-eval/tests/binary_literal.rs`,
-  `crates/expo-alpha-ir-llvm/tests/program.rs`, and the e2e
-  driver tests in `crates/expo-driver/tests/alpha_two_plus_two.rs`
+  Pinned by `crates/koja-alpha-typecheck/tests/resolve_binary_literal.rs`,
+  `crates/koja-alpha-ir/tests/lower_binary_literal.rs`,
+  `crates/koja-alpha-ir-eval/tests/binary_literal.rs`,
+  `crates/koja-alpha-ir-llvm/tests/program.rs`, and the e2e
+  driver tests in `crates/koja-driver/tests/alpha_two_plus_two.rs`
   (`*_string_concat_*`, `*_binary_literal_*`, `*_bits_literal_*`).
   Alpha **leapfrogs v1 here** for `Bits` — v1's `resolve_binary_segments`
   rejects sub-byte segments and forces `Primitive::Binary`; alpha
@@ -247,11 +247,11 @@ bit_length][payload]` layout (no NUL, ceil-rounded bytes for
   not on the alpha critical path).
 
 - **Const with struct literals.** `const STDOUT: Fd = Fd{descriptor: 1}`
-  (used in `io.expo`) is wired end-to-end:
+  (used in `io.koja`) is wired end-to-end:
   `lift_signatures/constants.rs::struct_construction_type` validates
   non-generic struct literals;
   `lower/constants.rs::lower_constant_value` pools them as
-  `IRConstantValue::Struct`. The `io.expo` STDIN / STDOUT / STDERR
+  `IRConstantValue::Struct`. The `io.koja` STDIN / STDOUT / STDERR
   constants are blocked _only_ by the numeric-coercion blocker (the
   `1` literal is `Int`, `Fd.descriptor: Int32`, strict-equality
   rejects). The diagnostic at `lift_signatures/constants.rs:261` is
@@ -260,7 +260,7 @@ bit_length][payload]` layout (no NUL, ceil-rounded bytes for
 
 - **Compound assignment (`+=`, `-=`).** Wired through both typecheck
   (`resolve/statements.rs::Statement::CompoundAssign`) and IR
-  (`lower/body.rs:126`). `string.expo` exercises `i += 1` / `i -= 1`
+  (`lower/body.rs:126`). `string.koja` exercises `i += 1` / `i -= 1`
   in 9 places, all already supported. (`<>=` isn't a token in the
   language — every string-concat in stdlib is the long form
   `result = result <> rhs`.)
@@ -356,9 +356,9 @@ Small; can land in any order or batched into one PR each.
   `const Fd{descriptor: …}` constants and lets driver/eval tests
   construct narrow-width values from int literals (the
   previously-removed narrow-width arms in
-  `expo-alpha-ir-eval/tests/bitwise.rs` and
-  `expo-alpha-ir-llvm/tests/bitwise.rs` are restored, plus
-  `crates/expo-alpha-typecheck/tests/literal_coercion.rs` pins the
+  `koja-alpha-ir-eval/tests/bitwise.rs` and
+  `koja-alpha-ir-llvm/tests/bitwise.rs` are restored, plus
+  `crates/koja-alpha-typecheck/tests/literal_coercion.rs` pins the
   fit/overflow/sign-mismatch matrix end-to-end).
 - ~~**`move` parameters in typecheck signatures.**~~ **Shipped.**
   `lift_signatures` propagates the surface `PassMode` verbatim
@@ -366,30 +366,30 @@ Small; can land in any order or batched into one PR each.
   stamps `Owned` on `Move` heap-typed slots, and parameter
   promotion threads the ownership through to the function-exit
   `DropLocal` emission. Pinned by
-  `crates/expo-alpha-typecheck/tests/pass_mode.rs` and the
+  `crates/koja-alpha-typecheck/tests/pass_mode.rs` and the
   alpha move/drop foundation slice's IR / eval / LLVM tests.
 - ~~**String literals in IR.**~~ **Shipped.** End-to-end through
   `lower/expr.rs` (string literal arm), `emit_const_payload`
   (shared `[i64 bit_length][payload bytes][\0]` heap layout), and
-  `__expo_alpha_print_string` for auto-print. Landed alongside
+  `__koja_alpha_print_string` for auto-print. Landed alongside
   the strings/binary/bits slice (see "Already supported").
 - ~~**`<>` concat operator.**~~ **Shipped.** `IRInstruction::Concat`
   with per-`ConcatKind` emission (inline `malloc`/`memcpy` for
-  `String`/`Binary`, `__expo_alpha_concat_bits` runtime helper for
+  `String`/`Binary`, `__koja_alpha_concat_bits` runtime helper for
   `Bits`). Same slice as String literals.
 
 ### Phase 4 — Concurrency (optional)
 
-- Required only for `process.expo` to type-check & lower. `spawn` and
+- Required only for `process.koja` to type-check & lower. `spawn` and
   `receive` already have AST nodes and runtime support in v1.
 - Eval can stub: panic on `spawn`, never-receive on `receive`. The
-  goal is for `expo alpha check` to pass on `process.expo`, not for
+  goal is for `koja alpha check` to pass on `process.koja`, not for
   the alpha eval to actually run processes.
-- LLVM emits `expo_rt_spawn` / `expo_rt_receive*` calls (same symbols
+- LLVM emits `koja_rt_spawn` / `koja_rt_receive*` calls (same symbols
   v1 codegen uses).
 
-After Phase 4, `expo alpha check expo/lib/global/src/*.expo` should be
-fully green. Phases 1–3 alone get every non-`process.expo` file green,
+After Phase 4, `koja alpha check expo/lib/global/src/*.koja` should be
+fully green. Phases 1–3 alone get every non-`process.koja` file green,
 which is most of the stdlib by line count.
 
 ---
@@ -429,19 +429,19 @@ What's shipped since the last audit:
   `protocol Clone { fn clone(self) -> Self }` decl plus three
   `@intrinsic impl Clone for {String,Binary,Bits}` blocks against
   the shared `[i64 bit_length][payload]` heap layout. Backend
-  implementations live in `expo-alpha-ir-llvm/src/intrinsics/heap_clone.rs`
+  implementations live in `koja-alpha-ir-llvm/src/intrinsics/heap_clone.rs`
   (one shared `emit_payload_clone` keyed on `(with_nul,
 ceil_byte_count)` — `String` writes a trailing `\0`, `Bits`
   rounds the byte count up via `(bits + 7) >> 3` to keep the
-  trailing partial byte) and `expo-alpha-ir-eval/src/intrinsics/{string,binary}.rs`
+  trailing partial byte) and `koja-alpha-ir-eval/src/intrinsics/{string,binary}.rs`
   (`Vec<u8>::clone` for the runtime values). New
   `IRIntrinsicId::{String,Binary,Bits}(_::Clone)` variants in
-  `expo-alpha-ir/src/intrinsic_id.rs` keep the typed dispatch
+  `koja-alpha-ir/src/intrinsic_id.rs` keep the typed dispatch
   exhaustive on both backends. Pinned by
-  `crates/expo-alpha-typecheck/tests/clone.rs`,
-  `crates/expo-alpha-ir/tests/lower_clone.rs`,
-  `crates/expo-alpha-ir-eval/tests/clone.rs`,
-  `crates/expo-alpha-ir-llvm/tests/clone.rs`, and the
+  `crates/koja-alpha-typecheck/tests/clone.rs`,
+  `crates/koja-alpha-ir/tests/lower_clone.rs`,
+  `crates/koja-alpha-ir-eval/tests/clone.rs`,
+  `crates/koja-alpha-ir-llvm/tests/clone.rs`, and the
   `alpha_run_{llvm,interpreter}_script_string_clone_independent_buffers`
   driver tests (clone + concat + reuse the source — observable
   proof of independent buffers). **Out**: the universal-Clone
@@ -457,7 +457,7 @@ ceil_byte_count)` — `String` writes a trailing `\0`, `Bits`
   regression).
 
 - **Alias imports — `alias Pkg.Type [as Local]`, end-to-end with
-  shadow-as-error.** `expo-alpha-typecheck/src/pipeline/aliases.rs`
+  shadow-as-error.** `koja-alpha-typecheck/src/pipeline/aliases.rs`
   validates each file's alias decls against the post-collect
   registry (path length ≥ 2, target exists as struct/enum/protocol,
   no duplicate local names, no shadowing of current-package or
@@ -473,7 +473,7 @@ ceil_byte_count)` — `String` writes a trailing `\0`, `Bits`
   pass via `ResolverEnv` / `Resolver` (which now also carries
   `current_file: &Path` as load-bearing infrastructure for the
   upcoming `priv` slice). Pinned by
-  `crates/expo-alpha-typecheck/tests/aliases.rs` (13 tests
+  `crates/koja-alpha-typecheck/tests/aliases.rs` (13 tests
   covering alias-to-Global, alias-as, default-local-name, unknown-
   package / unknown-type, path-too-short, multi-segment-target
   fall-through, duplicate-name, shadow-Global / shadow-current-
@@ -484,9 +484,9 @@ ceil_byte_count)` — `String` writes a trailing `\0`, `Bits`
   LLVM backend.
 
 - **`QUALIFIED` — curated qualified stdlib subset.** Parallel
-  to `AUTOIMPORT`, lives in `expo-stdlib/build.rs` and is
+  to `AUTOIMPORT`, lives in `koja-stdlib/build.rs` and is
   re-exported via `qualified_sources()`. Seeded with the
-  `Crypto` package; `expo-driver/src/alpha.rs::bundle_with_autoimport`
+  `Crypto` package; `koja-driver/src/alpha.rs::bundle_with_autoimport`
   and the alpha-typecheck test helper both prepend the qualified
   set so any alpha pipeline can `alias Crypto.Type` without a
   per-test stub. **Pragmatic stand-in for incremental package
@@ -501,34 +501,34 @@ ceil_byte_count)` — `String` writes a trailing `\0`, `Bits`
 - **Concurrency primitives — `spawn` / `receive` + `Ref<M, R>` /
   `ReplyTo<R>` intrinsics, end-to-end through LLVM emit.**
   `ExprKind::Spawn` and `ExprKind::Receive` are wired through
-  `expo-alpha-typecheck` (`pipeline/resolve/process.rs` +
+  `koja-alpha-typecheck` (`pipeline/resolve/process.rs` +
   `pipeline/seal/expressions.rs`, with the typed-binding tag
-  discrimination on receive arms), through `expo-alpha-ir`
+  discrimination on receive arms), through `koja-alpha-ir`
   (`IRInstruction::{Spawn, Receive}`,
   `FunctionKind::SpawnWrapper`, the `IRIntrinsicId::{Ref,
 ReplyTo}` typed dispatch family, and the `lower/process.rs`
   lowering that synthesizes a wrapper body per spawned state
-  type), and through `expo-alpha-ir-llvm` (`emit/process.rs`
-  emits `expo_rt_spawn` / `expo_rt_receive` /
-  `expo_rt_receive_timeout` calls and synthesizes the C-ABI
+  type), and through `koja-alpha-ir-llvm` (`emit/process.rs`
+  emits `koja_rt_spawn` / `koja_rt_receive` /
+  `koja_rt_receive_timeout` calls and synthesizes the C-ABI
   `void(*)(i8*)` wrapper body that loads the config, calls
   `<state>.start`, branches on the `Result` enum's tag, and
   chains into `<state>.run` on `Ok`; `intrinsics/process.rs`
   handles `Ref.{self_ref, cast, signal, kill, alive?,
 send_after}` + `ReplyTo.send` against the corresponding
-  `expo_rt_*` externs declared in `runtime.rs`). Eval stubs
+  `koja_rt_*` externs declared in `runtime.rs`). Eval stubs
   every concurrency intrinsic as `RuntimeError::Unsupported` —
   alpha-eval is single-threaded and in-process; the LLVM
   backend is the source of truth for runtime semantics. Pinned
-  by `crates/expo-alpha-typecheck/tests/process.rs`,
-  `crates/expo-alpha-ir/tests/lower_process.rs`, and
-  `crates/expo-alpha-ir-llvm/tests/process.rs` (10 tests
+  by `crates/koja-alpha-typecheck/tests/process.rs`,
+  `crates/koja-alpha-ir/tests/lower_process.rs`, and
+  `crates/koja-alpha-ir-llvm/tests/process.rs` (10 tests
   covering spawn-wrapper synthesis, receive arm dispatch,
   timeout-driven `after` branches, and every implemented
   `Ref` / `ReplyTo` method). **Out**: `Ref.call` (synchronous
   request/reply — needs the runtime's matching reply-channel
   primitive surfaced; stubbed with a `Codegen` error today),
-  `expo_rt_main_done` invocation in alpha's `main_wrapper`
+  `koja_rt_main_done` invocation in alpha's `main_wrapper`
   (without it, spawned processes never run after `main`
   returns; one-line addition to mirror v1 codegen), the
   `Global.process` entry in `AUTOIMPORT` (gated on
@@ -545,7 +545,7 @@ send_after}` + `ReplyTo.send` against the corresponding
   trait-impl domain check, bounded-method dispatch (`t.method()`
   against type-param bounds), and dual-scope inference (receiver
   scope + method scope). Substitution drives end-to-end through
-  monomorphization (`expo-alpha-ir/src/generics/`) and
+  monomorphization (`koja-alpha-ir/src/generics/`) and
   name-mangling (`Bag_$Int64$.greet`). Single representation:
   `Resolution::TypeParam { owner, index }` plus
   `substitute_resolved_type(ty, subst, owner)`.
@@ -585,9 +585,9 @@ send_after}` + `ReplyTo.send` against the corresponding
   interpreter mirrors the same drops. Heap-type taxonomy
   (`is_heap_type`) covers `String` / `Binary` / `Bits`, ready to
   extend as new heap types ship. Pinned by
-  `crates/expo-alpha-typecheck/tests/pass_mode.rs`,
-  the move/drop unit tests across `expo-alpha-ir/tests/` and
-  `expo-alpha-ir-llvm/tests/`, and the eval `value_drops`
+  `crates/koja-alpha-typecheck/tests/pass_mode.rs`,
+  the move/drop unit tests across `koja-alpha-ir/tests/` and
+  `koja-alpha-ir-llvm/tests/`, and the eval `value_drops`
   coverage. **Out**: borrow-checker proper (uniqueness +
   use-after-move diagnostics) — separate slice; the lattice is
   the substrate.
@@ -599,7 +599,7 @@ send_after}` + `ReplyTo.send` against the corresponding
   layout under an opaque `i8*` SSA pointer; the `<>` operator
   typechecks polymorphically across the three; `<<segments>>`
   literals support per-segment endian / signedness / sub-byte
-  widths (with `__expo_alpha_pack_bits` runtime helper for
+  widths (with `__koja_alpha_pack_bits` runtime helper for
   bit-level packing). Move/drop integration is shared across all
   three heap types — the `Ownership` lattice flags heap-typed
   writes as `Owned` and emits `DropLocal { ty }` at scope exit.
@@ -659,7 +659,7 @@ CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
   today — alpha trade-off for a simpler ABI).
 
 - **Stdlib auto-import + first stdlib files (`time` / `bitwise`).**
-  `expo-stdlib` exposes `AUTOIMPORT` (currently
+  `koja-stdlib` exposes `AUTOIMPORT` (currently
   `Global.time` + `Global.bitwise`) plus an
   `autoimport_sources()` helper that converts the curated
   list into `Vec<SourceFile>`. The driver's three single-file
@@ -680,10 +680,10 @@ CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
   receiver-type prefix) and truncates the `Int64`-typed shift
   count to the operand width on narrow receivers; eval flattens
   every width to `Value::Int(i64)` and branches `bsr` signedness
-  on the same prefix parse. `time.expo` ships pure-Expo (Duration
+  on the same prefix parse. `time.koja` ships pure-Koja (Duration
   arithmetic + DateTime field projections) with the
-  `@extern "C" priv fn expo_time_now_millis` declaration inside
-  `DateTime` linking against `expo-runtime`'s C symbol — the
+  `@extern "C" priv fn koja_time_now_millis` declaration inside
+  `DateTime` linking against `koja-runtime`'s C symbol — the
   Phase 3 mechanical glue surface for stdlib-side externs lands
   here, validated by an e2e driver test that actually links and
   runs `DateTime.now().timestamp_millis()`. Two type-checker
@@ -696,22 +696,22 @@ CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
   widths only; (2) bare-call resolution prioritizes the enclosing
   struct/enum scope before falling back to package scope, so
   sibling `priv fn`s call by their bare name without
-  qualification (the standard stdlib idiom in `system.expo` /
-  `fd.expo` / etc.); the escape hatch for callers who really want
+  qualification (the standard stdlib idiom in `system.koja` /
+  `fd.koja` / etc.); the escape hatch for callers who really want
   the package-level function is full qualification
   (`Global.foo()`). Generalizes to nested types when those land —
   each level wins over the next outward one. Primitive stubs in
   `with_stdlib_stubs` were promoted from `Struct(None)` to
   `Struct(Some(empty_def))` so `record_conformance` accepts them
-  (`bitwise.expo` impls `Bitwise for Int` etc. at preload time).
+  (`bitwise.koja` impls `Bitwise for Int` etc. at preload time).
   Hex/binary/underscored int literals (`0xFF`, `0b1010`,
   `1_000_000`) lower correctly through alpha-IR's
   `parse_int_literal` (the lexer already handled them; the IR's
   `text.parse::<i64>()` was decimal-only). Pinned by
-  `crates/expo-alpha-typecheck/tests/alpha_autoimport.rs`,
-  `crates/expo-alpha-ir/tests/lower_ops.rs` (radix coverage),
-  `crates/expo-alpha-ir-eval/tests/{bitwise,time}.rs`,
-  `crates/expo-alpha-ir-llvm/tests/{bitwise,time}.rs`, and the
+  `crates/koja-alpha-typecheck/tests/alpha_autoimport.rs`,
+  `crates/koja-alpha-ir/tests/lower_ops.rs` (radix coverage),
+  `crates/koja-alpha-ir-eval/tests/{bitwise,time}.rs`,
+  `crates/koja-alpha-ir-llvm/tests/{bitwise,time}.rs`, and the
   `*_bitwise_*` / `*_duration_*` / `*_datetime_now_*` driver
   tests. **Out**: the remaining 7 stdlib files
   (`cptr` / `fd` / `io` / `kernel` / `list` / `map` / `set` /
@@ -730,7 +730,7 @@ CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
     stays opaque end-to-end, no string parsing at call sites. The
     monomorphizer enqueues triples `(struct_id, struct_args,
 method_args)` so each cell mints exactly once. Pinned by
-    `crates/expo-alpha-ir/tests/method_generics.rs`.
+    `crates/koja-alpha-ir/tests/method_generics.rs`.
   - **Preload stubs for `Option<T>` / `CPtr<T>`** dropped — the
     autoimport's source definitions are now the canonical surface
     for both, so `Result<T, E>` / `Pair<A, B>` / `Range` and the
@@ -753,9 +753,9 @@ method_args)` so each cell mints exactly once. Pinned by
     variants (`Result.Ok(5)` against `Result<Int, String>`)
     resolve their type parameters from the surrounding context,
     so `Option.map` / `Option.then` / `Result.map` / `Result.then`
-    use their pure-Expo source bodies rather than the temporary
+    use their pure-Koja source bodies rather than the temporary
     `@intrinsic` stopgap. Pinned by
-    `crates/expo-alpha-typecheck/tests/bidirectional_inference.rs`.
+    `crates/koja-alpha-typecheck/tests/bidirectional_inference.rs`.
   - **Concrete-pinned `impl_args` on `FunctionSignature`** so
     bare static calls inside `impl CPtr<UInt8>` (`strlen` from
     `to_cstring`) mangle as `Global.CPtr_$UInt8$.strlen` — the
@@ -764,7 +764,7 @@ method_args)` so each cell mints exactly once. Pinned by
     receiver is a `Self` static method without explicit type
     args.
   - **Backend intrinsic + extern emitters** for the families
-    `kernel.expo` / `cptr.expo` / `cstring.expo` introduce —
+    `kernel.koja` / `cptr.koja` / `cstring.koja` introduce —
     `Equality.eq` × 9 widths, `Hash.hash` × 9 widths,
     `Kernel.panic`, `CPtr.{alloc,free,null,offset,read,write,
 null?,to_binary,to_string}`, `CString.to_string`,
@@ -772,13 +772,13 @@ null?,to_binary,to_string}`, `CString.to_string`,
     `Int.parse` / `Float.parse` — register in both backends.
     LLVM emitters mirror the v1 inline-IR shapes (SplitMix64 for
     `Hash`, `icmp eq` for `Equality`, `malloc` / `free` /
-    `memcpy` for `CPtr`, `__expo_alpha_panic` for `Kernel.panic`).
+    `memcpy` for `CPtr`, `__koja_alpha_panic` for `Kernel.panic`).
     Eval implementations cover the cases that fit `Value`'s
     in-process shape (`Equality.eq`, `Hash.hash`, `Kernel.panic`,
     `Binary.byte_size` / `to_bits`); CPtr / Result-returning
     intrinsics route to a clean `RuntimeError::Unsupported` with
     a pointer to `--backend=llvm`. The eval extern table grew a
-    shim for `expo_kernel_exit` (live FFI into `expo-runtime`)
+    shim for `koja_kernel_exit` (live FFI into `koja-runtime`)
     plus an explicit `Unsupported` row for `strlen`
     (CPtr-trafficking). LLVM-side SSA hygiene tightened:
     `IRTerminator::Return { value: Some }` against a void-returning
@@ -786,13 +786,13 @@ null?,to_binary,to_string}`, `CString.to_string`,
     void-typed call results don't get registered), and
     `Statement::Expr` of `Never` type emits
     `IRTerminator::Unreachable`. `Random` was extracted from
-    `kernel.expo` into its own `random.expo` and held back from
+    `kernel.koja` into its own `random.koja` and held back from
     `AUTOIMPORT`: its `bytes` body chains
-    `String.to_binary`, which lives in `string.expo` (still far
+    `String.to_binary`, which lives in `string.koja` (still far
     from alpha-ready — uses `for/in`, multi-pattern `match`, and
     `List<u8>`), so eagerly typechecking it as part of the
     autoimport surface would break the whole pipeline. v1 still
-    picks up `random.expo` through the unfiltered `SOURCES`
+    picks up `random.koja` through the unfiltered `SOURCES`
     list. **Out**: typed-local bidirectional inference
     (`p: CPtr<UInt8> = CPtr.alloc(8)` still fails to infer `T`).
     Result / Option construction in eval intrinsics' return slots
@@ -800,9 +800,9 @@ null?,to_binary,to_string}`, `CString.to_string`,
     today, so `Int.parse` / `Float.parse` / `Binary.to_string` /
     `Bits.to_binary` are stubbed `Unsupported` on eval and
     `unreachable` on LLVM. Pinned by
-    `crates/expo-alpha-typecheck/tests/{kernel,cptr,cstring}.rs`,
-    `crates/expo-alpha-ir-eval/tests/kernel.rs`,
-    `crates/expo-alpha-ir-llvm/tests/intrinsics.rs`, and the
+    `crates/koja-alpha-typecheck/tests/{kernel,cptr,cstring}.rs`,
+    `crates/koja-alpha-ir-eval/tests/kernel.rs`,
+    `crates/koja-alpha-ir-llvm/tests/intrinsics.rs`, and the
     `*_result_ok_map_unwrap_*` driver tests.
 
 - **Stdlib slice 3: `list` / `string` / `random` autoimport.**
@@ -829,7 +829,7 @@ null?,to_binary,to_string}`, `CString.to_string`,
     see `ExprKind::List`. Empty `[]` with an annotated target
     (`my_list: List<Int> = []`) inherits `T` from the typed-local
     annotation via the existing bidirectional inference seam.
-    Pinned by `crates/expo-alpha-typecheck/tests/list_literal.rs`.
+    Pinned by `crates/koja-alpha-typecheck/tests/list_literal.rs`.
   - **Typed enum intrinsic dispatch via `IRIntrinsicId`.**
     `FunctionKind::Intrinsic` now carries an `IRIntrinsicId`
     enum with nested `KernelMethod` / `CPtrMethod` /
@@ -845,17 +845,17 @@ null?,to_binary,to_string}`, `CString.to_string`,
     once at IR build time, never at emit time. The IR-level
     extern surface picked up the libc-direct symbols the list /
     string emitters consume (`malloc`, `realloc`, `memcpy`,
-    `free`, `strcmp`, `expo_string_get` / `_length` / `_slice`).
+    `free`, `strcmp`, `koja_string_get` / `_length` / `_slice`).
   - **List runtime ports v1's libc-direct shape.** The LLVM
-    intrinsic emitters in `expo-alpha-ir-llvm/src/intrinsics/list.rs`
-    mirror `expo-codegen::list` one-to-one: `new`/`append` call
+    intrinsic emitters in `koja-alpha-ir-llvm/src/intrinsics/list.rs`
+    mirror `koja-codegen::list` one-to-one: `new`/`append` call
     `malloc`/`realloc`/`memcpy` directly, `get` returns
     `Option<T>` via the layout-aware enum construction helper
     (see `build_enum_value` below), `pop` returns
     `Pair<Option<T>, List<T>>`, `concat` / `slice` /
     `replace_at` follow the same shape. Eval mints
     `Value::List(Rc<RefCell<Vec<Value>>>)` and routes through
-    `expo-alpha-ir-eval/src/intrinsics/list.rs`. Both backends
+    `koja-alpha-ir-eval/src/intrinsics/list.rs`. Both backends
     cover all ten `ListMethod` variants.
   - **`build_enum_value` factored out of `emit_enum_construct`.**
     Intrinsic emitters that mint `Option::Some(_)` / `None` /
@@ -885,31 +885,31 @@ payload_values)` helper allocas the outer, GEPs through the
     the SSA pointer at the payload (header sits 8 bytes back).
     LLVM emits inline for `byte_length` / `to_binary` (header
     arithmetic only) and delegates the codepoint-aware
-    `length` / `get` / `slice` to `expo_string_length` /
-    `_get` / `_slice` in `expo-runtime` so Unicode walking
+    `length` / `get` / `slice` to `koja_string_length` /
+    `_get` / `_slice` in `koja-runtime` so Unicode walking
     stays in Rust. `Equality.eq` for `String` calls `strcmp`;
     `Hash.hash` for `String` is FNV-1a inlined. `to_cstring`
     allocates a null-terminated `CString` via `malloc` +
     `memcpy`. Eval mirrors with Rust `str` primitives;
     `to_cstring` surfaces `RuntimeError::Unsupported`.
-  - **`Random` rides on `string.expo`'s landing.** Now that
-    `String.to_binary` is alpha-ready, `random.expo` returns to
+  - **`Random` rides on `string.koja`'s landing.** Now that
+    `String.to_binary` is alpha-ready, `random.koja` returns to
     `AUTOIMPORT` (after `Global.string`, since
     `Random.bytes` chains
-    `expo_random_bytes(count).to_string().to_binary()`). The
-    extern `expo_random_bytes` / `expo_random_int` symbols
-    already live in `expo-runtime::system`, so the LLVM path
+    `koja_random_bytes(count).to_string().to_binary()`). The
+    extern `koja_random_bytes` / `koja_random_int` symbols
+    already live in `koja-runtime::system`, so the LLVM path
     links cleanly; eval surfaces them as
     `RuntimeError::ExternNotSupported`.
 
-  Pinned by `crates/expo-alpha-typecheck/tests/{string,random,
+  Pinned by `crates/koja-alpha-typecheck/tests/{string,random,
 list_literal,kernel}.rs`,
-  `crates/expo-alpha-ir/tests/lower_list.rs`,
-  `crates/expo-alpha-ir-llvm/tests/intrinsics.rs`
+  `crates/koja-alpha-ir/tests/lower_list.rs`,
+  `crates/koja-alpha-ir-llvm/tests/intrinsics.rs`
   (option/pair-aware GEP shape under chunked-outer enum layout),
   and the `*_list_literal_length_*` / `*_list_get_unwrap_*` /
   `*_string_length_*` / `*_random_int_fixed_*` driver tests in
-  `crates/expo-driver/tests/alpha_two_plus_two.rs`. **Out**:
+  `crates/koja-driver/tests/alpha_two_plus_two.rs`. **Out**:
   `Map<K, V>` / `Set<T>` intrinsic surface (next slice); the
   deferred typed-local / runtime narrowing slice still holds
   (`p: CPtr<UInt8> = CPtr.alloc(8)` won't infer `T`).
@@ -934,7 +934,7 @@ list_literal,kernel}.rs`,
   - **`Value::String(Vec<u8>)`** replaces the old
     `Value::String(String)` so eval can carry the same arbitrary
     byte payloads v1's String type allows. `Random.bytes`'s
-    `expo_random_bytes(count).to_string().to_binary()` chain
+    `koja_random_bytes(count).to_string().to_binary()` chain
     flows raw entropy through a `String` value without the
     interpreter rejecting non-UTF-8 payloads — codepoint-walking
     methods (`length`, `get`, `slice`, `parse`) validate UTF-8
@@ -943,14 +943,14 @@ list_literal,kernel}.rs`,
     `to_binary`, `to_cstring`, `Concat<String>`) work
     unconditionally.
   - **Per-stdlib-file extern modules.**
-    `expo-alpha-ir-eval/src/externs/` now matches the
-    `lib/global/src/*.expo` layout one-to-one
-    (`cptr.rs` ↔ `cptr.expo`'s `strlen`; `kernel.rs` ↔
-    `kernel.expo`'s `expo_kernel_exit`; `random.rs` ↔
-    `random.expo`'s `expo_random_bytes` + `expo_random_int`;
-    `time.rs` ↔ `time.expo`'s `expo_time_now_millis`). Each
+    `koja-alpha-ir-eval/src/externs/` now matches the
+    `lib/global/src/*.koja` layout one-to-one
+    (`cptr.rs` ↔ `cptr.koja`'s `strlen`; `kernel.rs` ↔
+    `kernel.koja`'s `koja_kernel_exit`; `random.rs` ↔
+    `random.koja`'s `koja_random_bytes` + `koja_random_int`;
+    `time.rs` ↔ `time.koja`'s `koja_time_now_millis`). Each
     handler `unsafe extern "C"`-declares its C symbol and calls
-    straight into `expo-runtime` (or libc for `strlen` / `malloc`
+    straight into `koja-runtime` (or libc for `strlen` / `malloc`
     / `free`), giving eval byte-equivalent behaviour to the
     LLVM backend for the auto-imported externs.
   - **CPtr intrinsic family lands end-to-end on eval.**
@@ -966,7 +966,7 @@ to_binary, to_string}` are all implemented; `alloc` /
   - **`String.to_cstring` + `CString.to_string`** round-trip
     through `malloc` / `memcpy` like the LLVM backend (the
     `RuntimeError::Unsupported` stubs are gone). `Binary.ptr`
-    allocates a length-prefixed Expo-string buffer the caller
+    allocates a length-prefixed Koja-string buffer the caller
     owns; `Binary.to_string` / `Bits.to_binary` /
     `Int.parse` / `Float.parse` construct `Result<T, E>` /
     `Option<T>` values via the new
@@ -975,10 +975,10 @@ enum_return_symbol}` shared helpers (deduped from the
     earlier list / string handlers).
 
   Pinned by
-  `crates/expo-alpha-ir-eval/tests/{cptr,parse,random}.rs` and
+  `crates/koja-alpha-ir-eval/tests/{cptr,parse,random}.rs` and
   the `*_random_int_fixed_*` / `*_random_bytes_size_*` /
   `*_int_parse_*` driver tests in
-  `crates/expo-driver/tests/alpha_two_plus_two.rs`. **Out**:
+  `crates/koja-driver/tests/alpha_two_plus_two.rs`. **Out**:
   the LLVM-side `Int.parse` / `Float.parse` runtime helpers
   still trap (eval is ahead of the LLVM backend here); the
   `Map<K, V>` / `Set<T>` slice still owns the next intrinsic
@@ -1008,7 +1008,7 @@ inference through typed-local annotations + a `.to_int8()` /
 slice of stdlib intrinsics (building toward `map` / `set` /
 `io` / `fd` / `system`), and the optional Phase 4 concurrency
 slice (`spawn` / `receive`); after those,
-`expo alpha check expo/lib/global/src/*.expo` should be fully
+`koja alpha check expo/lib/global/src/*.koja` should be fully
 green.
 
 ---

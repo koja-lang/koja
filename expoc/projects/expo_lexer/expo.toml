@@ -1,6 +1,0 @@
-[project]
-name = "ExpoLexer"
-version = "0.1.0"
-
-[dependencies]
-ExpoAST = { path = "../expo_ast" }

@@ -1,11 +1,11 @@
-# Expo Concurrency Model
+# Koja Concurrency Model
 
-Expo has two concurrency primitives: **tasks** and **actors**. They exist as
+Koja has two concurrency primitives: **tasks** and **actors**. They exist as
 separate language-level concepts because they serve different purposes, have
 different performance characteristics, and interact with ownership differently.
 
 Most languages unify concurrency into a single primitive (goroutines, BEAM
-processes, OS threads). Expo separates them because in native compiled code
+processes, OS threads). Koja separates them because in native compiled code
 without a VM, the cost difference between a short-lived concurrent computation
 and a long-lived stateful entity is significant. The language should honor that
 distinction rather than force everything through the same abstraction.
@@ -59,7 +59,7 @@ worker process (~3-4x peak).
 
 **In-place mutation (future):**
 
-For cases where 2x memory is unacceptable, Expo will support ownership
+For cases where 2x memory is unacceptable, Koja will support ownership
 splitting. Instead of borrowing read-only, the parent splits a collection into
 owned non-overlapping pieces, moves each to a task, and reassembles the
 results:
@@ -340,14 +340,14 @@ candidates inspired by Erlang's proven model:
   runtime (tokio), but there's no restart mechanism. Supervision is entirely
   application-level.
 
-Expo provides supervision as a standard library feature with the same
+Koja provides supervision as a standard library feature with the same
 semantics Erlang developers rely on, without the VM overhead.
 
 ---
 
 ## Ownership at concurrency boundaries
 
-The interaction between ownership and concurrency is where Expo's model
+The interaction between ownership and concurrency is where Koja's model
 differs most from existing languages. The rules are simple:
 
 ### Tasks: borrow or move
@@ -401,7 +401,7 @@ send(worker, move large_payload)   # ownership transfers, zero-copy
 
 ### What this replaces
 
-| Pattern                     | Rust               | Go                | Erlang           | Expo        |
+| Pattern                     | Rust               | Go                | Erlang           | Koja        |
 | --------------------------- | ------------------ | ----------------- | ---------------- | ----------- |
 | Concurrent read access      | `Arc<RwLock<T>>`   | mutex + goroutine | copy per process | task borrow |
 | Hand off data to worker     | `move` + `'static` | channel send      | copy (message)   | actor move  |
@@ -410,7 +410,7 @@ send(worker, move large_payload)   # ownership transfers, zero-copy
 
 The "task borrow" row is the key differentiator. Rust can't do it because
 spawned tasks require `'static`. Erlang can't do it because processes are
-isolated. Go can't do it safely because goroutines share mutable state. Expo
+isolated. Go can't do it safely because goroutines share mutable state. Koja
 can do it because structured concurrency + ownership proves safety at compile
 time.
 
@@ -424,7 +424,7 @@ naive approach is routing all reads through a single cache actor. This
 serializes reads and creates a bottleneck at scale.
 
 The stdlib will provide a concurrent shared map where reads borrow and writes
-move, fitting Expo's ownership model (working name `shared_map` -- needs a
+move, fitting Koja's ownership model (working name `shared_map` -- needs a
 proper name):
 
 ```
@@ -451,7 +451,7 @@ uses sharded locks or lock-free algorithms internally, but the programmer
 never sees that.
 
 This is cleaner than Erlang's ETS, which copies data on every read and allows
-concurrent writes that can race. Expo borrows on read (zero-copy) and moves
+concurrent writes that can race. Koja borrows on read (zero-copy) and moves
 on write (no races by construction).
 
 **Guidance:** for broadcasting large payloads to multiple actors, prefer
@@ -462,7 +462,7 @@ rather than cloning and sending the payload to each actor.
 
 ## The runtime
 
-Expo does not have a virtual machine. The runtime is a native library linked
+Koja does not have a virtual machine. The runtime is a native library linked
 into the compiled binary -- similar to Go's runtime, not the BEAM.
 
 **Components:**
@@ -532,7 +532,7 @@ annotation for the vast majority of actors.
 The separation between tasks and actors directly impacts memory consumption at
 scale.
 
-|                      | BEAM (Elixir) | Go       | Rust + tokio | Expo (projected) |
+|                      | BEAM (Elixir) | Go       | Rust + tokio | Koja (projected) |
 | -------------------- | ------------- | -------- | ------------ | ---------------- |
 | Bare binary RSS      | 40-60 MB      | 3-5 MB   | 1-3 MB       | 2-5 MB           |
 | Small service        | 50-150 MB     | 10-30 MB | 5-15 MB      | 5-20 MB          |
@@ -543,7 +543,7 @@ scale.
 
 BEAM's overhead comes from the VM infrastructure (interpreter, per-process GC,
 atom table, code server, distribution protocol), not from the actor model
-itself. Expo drops all of that. The runtime is a scheduler and a mailbox
+itself. Koja drops all of that. The runtime is a scheduler and a mailbox
 system.
 
 The critical optimization: most concurrent work in backend services is
@@ -579,7 +579,7 @@ concurrent programming:
 - **Go** designed goroutines and channels as day-one features. GC was chosen
   specifically to make concurrency easy.
 
-Expo takes the concurrency-first approach: the actor model and task primitives
+Koja takes the concurrency-first approach: the actor model and task primitives
 are the primary design drivers, and ownership rules are shaped to serve them.
 The ownership questions ("who can borrow across a spawn?", "what can cross an
 actor boundary?", "when is data freed after an actor crash?") have clean
@@ -601,11 +601,11 @@ More importantly, the two primitives enable different ownership rules:
 If everything were a single primitive, you'd have to pick one rule. Erlang
 picks "copy everything" (safe but expensive). Rust picks "move everything +
 `'static`" (safe but verbose). Go picks "share everything" (easy but unsafe).
-Expo picks the right rule for each case.
+Koja picks the right rule for each case.
 
 ### No mutable borrows, ever
 
-Expo has exactly two access modes: "I own it and can do anything" or "I'm
+Koja has exactly two access modes: "I own it and can do anything" or "I'm
 borrowing it and can only read." Concurrency does not add a third mode. Tasks
 that need to mutate data receive ownership of it (via `split_owned`), not a
 mutable borrow. This keeps the ownership model simple and avoids the complexity
@@ -638,7 +638,7 @@ documents the design exploration so far.
 
 ### The core tension
 
-Within a single thread, Expo's ownership model is clean: borrow by default,
+Within a single thread, Koja's ownership model is clean: borrow by default,
 `move` for ownership transfer, `clone()` when both sides need a copy. But
 `spawn` crosses a thread boundary, which introduces a question that doesn't
 exist for regular function calls: **what happens to the data in the parent
@@ -748,8 +748,8 @@ implicit clones (Erlang model) or implicit joins (structured borrow model),
 hidden behavior at the spawn boundary is surprising. The developer should
 always be able to tell what happens to their data by reading the code.
 
-**`move` is Expo's unique advantage over Erlang.** Erlang's only option at
-process boundaries is copy. Expo can offer zero-copy ownership transfer
+**`move` is Koja's unique advantage over Erlang.** Erlang's only option at
+process boundaries is copy. Koja can offer zero-copy ownership transfer
 via `move`, which is strictly better -- same ergonomic default (clone), with
 an optimization path Erlang physically cannot offer.
 
@@ -776,7 +776,7 @@ concurrency right committed fully to one model early:
   are possible and the GC has latency costs.
 
 Languages that deferred the concurrency/ownership decision (Python, Java,
-C++) have concurrency models that feel permanently bolted on. Expo is
+C++) have concurrency models that feel permanently bolted on. Koja is
 exploring this design space before building the runtime specifically to
 avoid that outcome.
 
@@ -803,7 +803,7 @@ The CAP theorem captures the same constraint: you cannot have consistency
 (independent execution) all at once. Pick two.
 
 This is why distributed consensus is hard -- it's the same design tension,
-just at network scale. And it suggests a design principle: whatever Expo
+just at network scale. And it suggests a design principle: whatever Koja
 picks for task ownership should rhyme with how data works at the actor level
 and the distributed level. If the patterns are consistent across scales,
 the developer's intuition transfers up -- from threads to actors to

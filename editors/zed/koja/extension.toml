@@ -1,0 +1,18 @@
+id = "koja"
+name = "Koja"
+description = "Syntax highlighting and language-server support for the Koja programming language."
+version = "0.1.0"
+authors = ["Henry Popp <hello@hpopp.dev>"]
+schema_version = 1
+
+# The grammar lives in a sibling repository. During development we
+# point at the local checkout; once `tree-sitter-koja` is published
+# this should switch to a public `https://...` URL with the same
+# pinned commit.
+[grammars.koja]
+repository = "file:///Users/hpopp/Work/koja-lang/tree-sitter-koja"
+commit = "54e3666037e41df5e27167123dee80cea95ec02a"
+
+[language_servers.koja-lsp]
+name = "Koja LSP"
+languages = ["Koja"]

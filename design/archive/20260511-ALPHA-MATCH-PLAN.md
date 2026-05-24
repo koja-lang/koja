@@ -4,12 +4,12 @@ Design + sequencing for `match` in the alpha pipeline.
 
 `match` is the highest-priority stdlib blocker per
 [20260511-ALPHA-ROADMAP.md](20260511-ALPHA-ROADMAP.md): every `Option`/`Result`-flavored stdlib
-file (`kernel.expo`, `process.expo`, `list.expo`, `io.expo`, `fd.expo`,
-`string.expo`) reaches for it. The good news is that **the AST is already
+file (`kernel.koja`, `process.koja`, `list.koja`, `io.koja`, `fd.koja`,
+`string.koja`) reaches for it. The good news is that **the AST is already
 fully fleshed out** (`Pattern` enum, `MatchArm`, `ExprKind::Match`,
 `Statement::Pattern`, `AssignTarget::Pattern`), the **spec is settled**
 (LANGUAGE.md §632–701), and **v1 has a working reference implementation**
-across `expo-typecheck/src/pattern.rs` and `expo-ir/src/{resolved,lower}/`.
+across `koja-typecheck/src/pattern.rs` and `koja-ir/src/{resolved,lower}/`.
 The work is "transcribe + adapt to alpha conventions," not "design."
 
 For the surface spec, see [LANGUAGE.md §Pattern Matching](../LANGUAGE.md).
@@ -25,15 +25,15 @@ For pipeline shape and seal contracts, see
   the same merge-with-`BlockParam` shape `if`/`cond`/`ternary` use. Lowering
   emits the linear-chain CFG (one test block per gated arm, an unconditional
   branch for the catch-all). End-to-end coverage: typecheck
-  (`expo-alpha-typecheck/tests/resolve_match.rs`), IR lowering
-  (`expo-alpha-ir/tests/lower_match.rs`), interpreter
-  (`expo-alpha-ir-eval/tests/interpreter.rs` `match_*` section), LLVM
-  (`expo-alpha-ir-llvm/tests/control_flow.rs` `match_*` section).
+  (`koja-alpha-typecheck/tests/resolve_match.rs`), IR lowering
+  (`koja-alpha-ir/tests/lower_match.rs`), interpreter
+  (`koja-alpha-ir-eval/tests/interpreter.rs` `match_*` section), LLVM
+  (`koja-alpha-ir-llvm/tests/control_flow.rs` `match_*` section).
 - **Architectural change shipped alongside Phase 1.** Alpha IR seal moved
   from strict per-block SSA to dominance-based SSA. Cooper-Harvey-Kennedy
   immediate-dominator computation lives in
-  `expo-alpha-ir/src/dominators.rs`; the seal walk in
-  `expo-alpha-ir/src/seal/function.rs::seal_ssa` walks the dominator tree
+  `koja-alpha-ir/src/dominators.rs`; the seal walk in
+  `koja-alpha-ir/src/seal/function.rs::seal_ssa` walks the dominator tree
   top-down threading a defined-value set, so a value defined in a
   dominating block is in scope for every dominated use without explicit
   threading. This is the SIL/LLVM model. The match subject lives in entry
@@ -112,7 +112,7 @@ StructField}` discriminator and `PatternCheck::CatchAll { binds }` so
   `Pattern::Constructor` AST node in place to `Pattern::EnumTuple`
   (or `Pattern::EnumUnit` when the variant is a unit and the
   shorthand has no arguments) before re-entering `resolve_pattern`.
-  Seal, the `expo-alpha-ir/src/generics/substitute.rs` walker, and
+  Seal, the `koja-alpha-ir/src/generics/substitute.rs` walker, and
   `lower/patterns.rs` therefore see only `EnumTuple` / `EnumUnit`
   and need no new arms; the rewrite synthesizes a single-segment
   `type_path` from the registered enum's identifier so seal's
@@ -152,7 +152,7 @@ LANGUAGE.md pins these properties:
 
 ## Stdlib pattern survey
 
-Grepping `expo/lib/global/src/*.expo` (29 `match` arms across the stdlib)
+Grepping `expo/lib/global/src/*.koja` (29 `match` arms across the stdlib)
 narrows the actually-blocking pattern subset sharply:
 
 - **Used**: `Pattern::EnumUnit` (`Option.None`, `StopReason.Normal`),
@@ -173,10 +173,10 @@ So the **stdlib-unblocking phase is small**: wildcard + binding + literal
 
 ## v1 audit — what to keep, what to rebuild
 
-### v1 typecheck (`expo-typecheck/src/pattern.rs`, ~820 LOC)
+### v1 typecheck (`koja-typecheck/src/pattern.rs`, ~820 LOC)
 
 A single file that implements the entire pattern spec. Largely
-**transcribable as-is** into `expo-alpha-typecheck/src/pipeline/resolve/`:
+**transcribable as-is** into `koja-alpha-typecheck/src/pipeline/resolve/`:
 
 - `check_pattern(pat, subject_type, ctx, env)` — recursive validator. Walks
   pattern structure, validates type compatibility, **inserts bindings into
@@ -199,7 +199,7 @@ small files (`resolve/structs.rs`, `resolve/enums.rs`, `resolve/calls.rs`).
 The transcription should produce `resolve/patterns.rs` + `resolve/match.rs`
 following that convention, not a single 800-LOC file.
 
-### v1 IR lowering (`expo-ir/src/{lower,resolved}/patterns*.rs`, ~2.1K LOC)
+### v1 IR lowering (`koja-ir/src/{lower,resolved}/patterns*.rs`, ~2.1K LOC)
 
 This is the big one, and the part where v1's nastiness shows. Two key
 takeaways:
@@ -353,21 +353,21 @@ binding terminal arm).
 
 - **AST.** `Pattern::Binding` carries an `Option<LocalId>` slot the
   resolver stamps (mirroring `Param::Regular` / `ExprKind::Self_`).
-  Pattern label + span helpers live in `expo-ast/src/labels.rs`.
-- **Seal (typecheck).** `expo-alpha-typecheck/src/pipeline/seal.rs`
+  Pattern label + span helpers live in `koja-ast/src/labels.rs`.
+- **Seal (typecheck).** `koja-alpha-typecheck/src/pipeline/seal.rs`
   walks the match subject + every arm pattern + arm body.
   `seal_pattern` is the new leaf-recursive helper.
-- **Resolve.** `expo-alpha-typecheck/src/pipeline/resolve/match_expr.rs`
+- **Resolve.** `koja-alpha-typecheck/src/pipeline/resolve/match_expr.rs`
   - `resolve/patterns.rs`. Subject and arm bodies resolve unchanged;
     arm tails join through the same `join_arm_tails` helper
     `if`/`cond`/`ternary` already use (visibility was lifted to
     `pub(super)`). Guards and any non-Phase-1 pattern shape diagnose
     as `feature gap` errors.
 - **Substitute.** `ExprKind::Match` was pulled out of the no-op list
-  in `expo-alpha-ir/src/generics/substitute.rs`; subject + arm bodies
+  in `koja-alpha-ir/src/generics/substitute.rs`; subject + arm bodies
   walk for type substitution. Pattern nodes carry no `ResolvedType`
   slot in Phase 1 so the pattern walk is a no-op there.
-- **IR lower.** `expo-alpha-ir/src/lower/match_expr.rs` +
+- **IR lower.** `koja-alpha-ir/src/lower/match_expr.rs` +
   `lower/patterns.rs`. The subject lowers once into the entry block;
   patterns translate to a `PatternCheck` enum (`CatchAll` |
   `Predicate { value }`); the CFG is a linear chain — one
@@ -378,7 +378,7 @@ binding terminal arm).
   `LocalDecl` + `LocalWrite` of the subject `ValueId` so existing
   local-slot lowering handles reads. The shared
   `coerce_arm_value` / `emit_unit` / `lower_result_ty` helpers were
-  lifted into `expo-alpha-ir/src/lower/arms.rs` and are reused by
+  lifted into `koja-alpha-ir/src/lower/arms.rs` and are reused by
   `if`/`cond`/`ternary` and now `match`.
 - **String equality** got real LLVM lowering: `BinaryOp::Eq` on
   `IRType::String` lowers to `strcmp(a, b) == 0`. Eval's value-equality
@@ -407,14 +407,14 @@ The stdlib-unblocking slice. Shipped May 2026.
   `Pattern::Or` were already wired up.
 - **IR.** `IRInstruction::EnumTagGet { dest, value, ty }` and
   `IRInstruction::EnumPayloadFieldGet { dest, value, tag, payload_index, field_type, ty }`
-  in `expo-alpha-ir/src/function.rs`. Seal coverage in
-  `expo-alpha-ir/src/seal/enums.rs` validates `tag` is in range,
+  in `koja-alpha-ir/src/function.rs`. Seal coverage in
+  `koja-alpha-ir/src/seal/enums.rs` validates `tag` is in range,
   `payload_index` is in the matched variant's payload, and `field_type`
   matches the decl. `IRTerminator::Unreachable` joins
   `Branch` / `CondBranch` / `Return` on the terminator side; lowering
   emits it on the failure edge of an exhaustive enum match. The seal's
   successor / arity walks accept it as an exit terminator.
-- **Resolve.** `expo-alpha-typecheck/src/pipeline/resolve/patterns.rs`
+- **Resolve.** `koja-alpha-typecheck/src/pipeline/resolve/patterns.rs`
   grew per-shape helpers: `resolve_enum_unit_pattern`,
   `resolve_enum_tuple_pattern`, `resolve_or_pattern`. Each returns a
   `PatternCoverage` (`CatchAll` / `Variants(Vec<u32>)` / `Other`) so
@@ -424,7 +424,7 @@ The stdlib-unblocking slice. Shipped May 2026.
   restricted to wildcard / binding; or-alternatives restricted to
   literal / EnumUnit (no bindings).
 - **Per-arm scope.** `LocalScope::snapshot`/`restore` in
-  `expo-alpha-typecheck/src/pipeline/local_scope.rs` mints a fresh
+  `koja-alpha-typecheck/src/pipeline/local_scope.rs` mints a fresh
   scope for each arm body and unwinds pattern bindings on exit, so two
   consecutive arms binding `x` get distinct `LocalId`s.
 - **Exhaustiveness.** `resolve_match.rs` keeps the strict catch-all
@@ -432,9 +432,9 @@ The stdlib-unblocking slice. Shipped May 2026.
   variant-coverage check; missing variants surface as a diagnostic
   listing every uncovered name.
 - **Seal walk.** `seal_pattern` in
-  `expo-alpha-typecheck/src/pipeline/seal.rs` recurses into `EnumTuple`
+  `koja-alpha-typecheck/src/pipeline/seal.rs` recurses into `EnumTuple`
   elements, `Or` alternatives, and the enum-path metadata.
-- **IR lowering.** `expo-alpha-ir/src/lower/patterns.rs` gained a
+- **IR lowering.** `koja-alpha-ir/src/lower/patterns.rs` gained a
   `PatternCheck::Tests { steps, payload_binds }` variant alongside the
   existing `CatchAll`. A single test step covers `Literal` / `EnumUnit` /
   `EnumTuple`; `Or` produces a chain of steps via fresh
@@ -442,7 +442,7 @@ The stdlib-unblocking slice. Shipped May 2026.
   `EnumTagGet` + `Const(Int8)` + `BinaryOp::Eq`; tuple bindings build a
   `PayloadBind` list the driver emits as `EnumPayloadFieldGet` +
   `LocalWrite` at the head of the body block (success edge only).
-- **IR match driver.** `expo-alpha-ir/src/lower/match_expr.rs` now
+- **IR match driver.** `koja-alpha-ir/src/lower/match_expr.rs` now
   iterates the test chain when wiring an arm: every interior step's
   failure edge points to the next step, the last step's failure edge
   goes to the next arm's first test block (or, when there is no next
@@ -450,13 +450,13 @@ The stdlib-unblocking slice. Shipped May 2026.
   is `IRTerminator::Unreachable`). The trap block is lazily minted
   once per match and shared across every exhausted-edge in the same
   match.
-- **Eval.** `expo-alpha-ir-eval/src/interpreter.rs` interprets
+- **Eval.** `koja-alpha-ir-eval/src/interpreter.rs` interprets
   `EnumTagGet` directly off the runtime `Value::Enum.tag` and
   `EnumPayloadFieldGet` off the matching variant's `EnumPayload`.
   Tag-mismatch on a payload-field-get panics (gated-CFG invariant
   violation). Reaching `IRTerminator::Unreachable` raises
   `RuntimeError::UnreachableExecuted`.
-- **LLVM.** `expo-alpha-ir-llvm/src/emit/instruction.rs` spills the
+- **LLVM.** `koja-alpha-ir-llvm/src/emit/instruction.rs` spills the
   SSA enum to a fresh outer-typed alloca, GEPs through the variant's
   `complete` struct (field 0 for the tag, field 2 then payload-struct
   field-N for payload reads), and loads as `i8` / `field_type`
@@ -480,7 +480,7 @@ Shipped May 2026. Surface: `pattern when expr -> body`.
 - **IR.** No new instructions, no new terminators. Guards reuse the
   existing `Branch` / `CondBranch` vocabulary.
 - **Resolve.**
-  `expo-alpha-typecheck/src/pipeline/resolve/match_expr.rs` resolves
+  `koja-alpha-typecheck/src/pipeline/resolve/match_expr.rs` resolves
   the guard expr after the pattern (and so under the same per-arm
   `LocalScope::snapshot` window the body uses), and runs it through
   the lifted `require_bool_condition` helper from `control_flow.rs`.
@@ -490,12 +490,12 @@ Shipped May 2026. Surface: `pattern when expr -> body`.
   primitive-subject catch-all rule.
 - **Seal.** `seal_expr` walks `arm.guard` between the pattern walk
   and the body walk in
-  `expo-alpha-typecheck/src/pipeline/seal.rs`'s `ExprKind::Match`
+  `koja-alpha-typecheck/src/pipeline/seal.rs`'s `ExprKind::Match`
   arm.
-- **Substitute.** `expo-alpha-ir/src/generics/substitute.rs` walks
+- **Substitute.** `koja-alpha-ir/src/generics/substitute.rs` walks
   `arm.guard` for type-arg substitution alongside the body so guards
   inside generic decls are specialized correctly.
-- **IR lowering.** `expo-alpha-ir/src/lower/match_expr.rs` mints a
+- **IR lowering.** `koja-alpha-ir/src/lower/match_expr.rs` mints a
   fresh `match_guard_<index>` block when `arm.guard.is_some()` and
   uses it as the success target for the pattern test chain (instead
   of the body block). Payload binds emit at the head of that guard
@@ -527,7 +527,7 @@ gate as `EnumTuple` payloads).
   declaration position (matching what
   `seal::enums::seal_payload_field_index` already validates for the
   `Struct` payload arm); plain-struct destructures reuse `FieldGet`.
-- **Resolve.** `expo-alpha-typecheck/src/pipeline/resolve/patterns.rs`
+- **Resolve.** `koja-alpha-typecheck/src/pipeline/resolve/patterns.rs`
   grew `resolve_enum_struct_pattern` and `resolve_struct_pattern`,
   plus a shared `walk_field_patterns` helper that performs the
   per-field name lookup, duplicate / unknown / non-binding diagnostics,
@@ -538,10 +538,10 @@ gate as `EnumTuple` payloads).
   `Pattern::EnumStruct` returns `PatternCoverage::Variants(vec![tag])`,
   contributing to coverage exactly like `EnumTuple`.
 - **Seal.** `seal_pattern` in
-  `expo-alpha-typecheck/src/pipeline/seal.rs` recurses into the
+  `koja-alpha-typecheck/src/pipeline/seal.rs` recurses into the
   per-field patterns of both `EnumStruct` and `Struct`, and validates
   the type-path is non-empty.
-- **IR lowering.** `expo-alpha-ir/src/lower/patterns.rs` generalized
+- **IR lowering.** `koja-alpha-ir/src/lower/patterns.rs` generalized
   `PayloadBind` to carry a `BindSource::{EnumPayload, StructField}`
   discriminator and grew `PatternCheck::CatchAll { binds }`. Three new
   per-shape helpers — `lower_enum_struct_check`, `lower_struct_check`,
@@ -550,7 +550,7 @@ gate as `EnumTuple` payloads).
   binds in the success block on both `CatchAll` and `Tests`, and
   `emit_payload_binds` switches on `BindSource` to pick the right
   `*FieldGet` instruction.
-- **Substitute.** `expo-alpha-ir/src/generics/substitute.rs` is
+- **Substitute.** `koja-alpha-ir/src/generics/substitute.rs` is
   unchanged; the new pattern shapes carry no `ResolvedType` slots
   (only paths and named-field patterns), so the existing no-op
   pattern walk still applies.
@@ -586,7 +586,7 @@ exhaustiveness errors, and `Bool` primitive structural exhaustiveness.
   `Global.Bool` and the seen-literal set contains both `true` and
   `false`, suppress the missing-catch-all error. `Int` / `Float` /
   `String` keep the catch-all rule (no finite domain).
-- **Plumbing.** `expo-alpha-typecheck::check_program` short-circuits on
+- **Plumbing.** `koja-alpha-typecheck::check_program` short-circuits on
   `Severity::Error` only and `CheckedProgram` carries a `pub
   diagnostics: Vec<Diagnostic>` field, so warnings ride the success
   path alongside the registered packages. Lowering is unchanged: the
@@ -604,7 +604,7 @@ to its qualified form so the rest of the match pipeline never sees
 `Pattern::Constructor`.
 
 - **Resolver rewrite.** A new `resolve_constructor_pattern` helper in
-  [`resolve/patterns.rs`](expo/crates/expo-alpha-typecheck/src/pipeline/resolve/patterns.rs)
+  [`resolve/patterns.rs`](expo/crates/koja-alpha-typecheck/src/pipeline/resolve/patterns.rs)
   pulls the subject's enum out of the registry, looks the variant up
   by name, and swaps the AST node in place to either
   `Pattern::EnumTuple` (when the variant is tuple-shaped) or
@@ -623,9 +623,9 @@ to its qualified form so the rest of the match pipeline never sees
 - **Seal / lower / substitute.** No changes — they already handle
   the post-rewrite shapes. The defense-in-depth panics on
   `Pattern::Constructor` in
-  [`seal.rs`](expo/crates/expo-alpha-typecheck/src/pipeline/seal.rs)
+  [`seal.rs`](expo/crates/koja-alpha-typecheck/src/pipeline/seal.rs)
   and
-  [`lower/patterns.rs`](expo/crates/expo-alpha-ir/src/lower/patterns.rs)
+  [`lower/patterns.rs`](expo/crates/koja-alpha-ir/src/lower/patterns.rs)
   become statically unreachable for valid sources.
 - **Deferred shapes.** `Pattern::List` (blocked on alpha-IR list ops
   + a stable `List<T>` layout contract) and `Pattern::TypedBinding`

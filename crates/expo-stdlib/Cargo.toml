@@ -1,9 +1,0 @@
-[package]
-name = "expo-stdlib"
-description = "Embedded standard library sources for the Expo language"
-edition.workspace = true
-license.workspace = true
-version.workspace = true
-
-[dependencies]
-expo-parser = { path = "../expo-parser" }

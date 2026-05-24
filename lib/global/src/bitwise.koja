@@ -1,0 +1,269 @@
+@doc """
+Bitwise operations for integer types.
+
+Provides six methods: `band` (AND), `bor` (OR), `bxor` (XOR), `bnot` (NOT),
+`bsl` (shift left), and `bsr` (shift right). All integer types implement
+`Bitwise` via compiler intrinsics.
+
+Bitwise operations are methods rather than symbolic operators. Koja reserves
+`<<`/`>>` for binary literals, `|` for union types, and `&` is unused. Using
+named methods avoids ambiguity and reads clearly in context:
+
+    flags.band(0x01) != 0
+    permissions.bor(read_flag)
+    value.bsl(4)
+
+Any type can implement `Bitwise` by delegating to its underlying integer
+representation.
+"""
+protocol Bitwise
+  @doc """
+  Returns the bitwise AND of `self` and `other`.
+
+      5.band(3)  # => 1
+  """
+  fn band(self, other: Self) -> Self
+
+  @doc """
+  Returns the bitwise OR of `self` and `other`.
+
+      5.bor(3)  # => 7
+  """
+  fn bor(self, other: Self) -> Self
+
+  @doc """
+  Returns the bitwise XOR of `self` and `other`.
+
+      5.bxor(3)  # => 6
+  """
+  fn bxor(self, other: Self) -> Self
+
+  @doc """
+  Returns the bitwise NOT (one's complement) of `self`.
+
+      0.bnot()  # => -1
+  """
+  fn bnot(self) -> Self
+
+  @doc """
+  Returns `self` shifted left by `n` bit positions.
+
+      1.bsl(4)  # => 16
+  """
+  fn bsl(self, n: Int) -> Self
+
+  @doc """
+  Returns `self` shifted right by `n` bit positions.
+
+      16.bsr(4)  # => 1
+  """
+  fn bsr(self, n: Int) -> Self
+end
+
+impl Bitwise for Int
+  @doc "Returns the bitwise AND of two 64-bit integers."
+  @intrinsic
+  fn band(self, other: Int) -> Int
+
+  @doc "Returns the bitwise OR of two 64-bit integers."
+  @intrinsic
+  fn bor(self, other: Int) -> Int
+
+  @doc "Returns the bitwise XOR of two 64-bit integers."
+  @intrinsic
+  fn bxor(self, other: Int) -> Int
+
+  @doc "Returns the bitwise NOT of a 64-bit integer."
+  @intrinsic
+  fn bnot(self) -> Int
+
+  @doc "Shifts a 64-bit integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> Int
+
+  @doc "Arithmetically shifts a 64-bit integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> Int
+end
+
+impl Bitwise for Int8
+  @doc "Returns the bitwise AND of two 8-bit integers."
+  @intrinsic
+  fn band(self, other: Int8) -> Int8
+
+  @doc "Returns the bitwise OR of two 8-bit integers."
+  @intrinsic
+  fn bor(self, other: Int8) -> Int8
+
+  @doc "Returns the bitwise XOR of two 8-bit integers."
+  @intrinsic
+  fn bxor(self, other: Int8) -> Int8
+
+  @doc "Returns the bitwise NOT of an 8-bit integer."
+  @intrinsic
+  fn bnot(self) -> Int8
+
+  @doc "Shifts an 8-bit integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> Int8
+
+  @doc "Arithmetically shifts an 8-bit integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> Int8
+end
+
+impl Bitwise for Int16
+  @doc "Returns the bitwise AND of two 16-bit integers."
+  @intrinsic
+  fn band(self, other: Int16) -> Int16
+
+  @doc "Returns the bitwise OR of two 16-bit integers."
+  @intrinsic
+  fn bor(self, other: Int16) -> Int16
+
+  @doc "Returns the bitwise XOR of two 16-bit integers."
+  @intrinsic
+  fn bxor(self, other: Int16) -> Int16
+
+  @doc "Returns the bitwise NOT of a 16-bit integer."
+  @intrinsic
+  fn bnot(self) -> Int16
+
+  @doc "Shifts a 16-bit integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> Int16
+
+  @doc "Arithmetically shifts a 16-bit integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> Int16
+end
+
+impl Bitwise for Int32
+  @doc "Returns the bitwise AND of two 32-bit integers."
+  @intrinsic
+  fn band(self, other: Int32) -> Int32
+
+  @doc "Returns the bitwise OR of two 32-bit integers."
+  @intrinsic
+  fn bor(self, other: Int32) -> Int32
+
+  @doc "Returns the bitwise XOR of two 32-bit integers."
+  @intrinsic
+  fn bxor(self, other: Int32) -> Int32
+
+  @doc "Returns the bitwise NOT of a 32-bit integer."
+  @intrinsic
+  fn bnot(self) -> Int32
+
+  @doc "Shifts a 32-bit integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> Int32
+
+  @doc "Arithmetically shifts a 32-bit integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> Int32
+end
+
+impl Bitwise for UInt8
+  @doc "Returns the bitwise AND of two 8-bit unsigned integers."
+  @intrinsic
+  fn band(self, other: UInt8) -> UInt8
+
+  @doc "Returns the bitwise OR of two 8-bit unsigned integers."
+  @intrinsic
+  fn bor(self, other: UInt8) -> UInt8
+
+  @doc "Returns the bitwise XOR of two 8-bit unsigned integers."
+  @intrinsic
+  fn bxor(self, other: UInt8) -> UInt8
+
+  @doc "Returns the bitwise NOT of an 8-bit unsigned integer."
+  @intrinsic
+  fn bnot(self) -> UInt8
+
+  @doc "Shifts an 8-bit unsigned integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> UInt8
+
+  @doc "Logically shifts an 8-bit unsigned integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> UInt8
+end
+
+impl Bitwise for UInt16
+  @doc "Returns the bitwise AND of two 16-bit unsigned integers."
+  @intrinsic
+  fn band(self, other: UInt16) -> UInt16
+
+  @doc "Returns the bitwise OR of two 16-bit unsigned integers."
+  @intrinsic
+  fn bor(self, other: UInt16) -> UInt16
+
+  @doc "Returns the bitwise XOR of two 16-bit unsigned integers."
+  @intrinsic
+  fn bxor(self, other: UInt16) -> UInt16
+
+  @doc "Returns the bitwise NOT of a 16-bit unsigned integer."
+  @intrinsic
+  fn bnot(self) -> UInt16
+
+  @doc "Shifts a 16-bit unsigned integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> UInt16
+
+  @doc "Logically shifts a 16-bit unsigned integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> UInt16
+end
+
+impl Bitwise for UInt32
+  @doc "Returns the bitwise AND of two 32-bit unsigned integers."
+  @intrinsic
+  fn band(self, other: UInt32) -> UInt32
+
+  @doc "Returns the bitwise OR of two 32-bit unsigned integers."
+  @intrinsic
+  fn bor(self, other: UInt32) -> UInt32
+
+  @doc "Returns the bitwise XOR of two 32-bit unsigned integers."
+  @intrinsic
+  fn bxor(self, other: UInt32) -> UInt32
+
+  @doc "Returns the bitwise NOT of a 32-bit unsigned integer."
+  @intrinsic
+  fn bnot(self) -> UInt32
+
+  @doc "Shifts a 32-bit unsigned integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> UInt32
+
+  @doc "Logically shifts a 32-bit unsigned integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> UInt32
+end
+
+impl Bitwise for UInt64
+  @doc "Returns the bitwise AND of two 64-bit unsigned integers."
+  @intrinsic
+  fn band(self, other: UInt64) -> UInt64
+
+  @doc "Returns the bitwise OR of two 64-bit unsigned integers."
+  @intrinsic
+  fn bor(self, other: UInt64) -> UInt64
+
+  @doc "Returns the bitwise XOR of two 64-bit unsigned integers."
+  @intrinsic
+  fn bxor(self, other: UInt64) -> UInt64
+
+  @doc "Returns the bitwise NOT of a 64-bit unsigned integer."
+  @intrinsic
+  fn bnot(self) -> UInt64
+
+  @doc "Shifts a 64-bit unsigned integer left by `n` positions."
+  @intrinsic
+  fn bsl(self, n: Int) -> UInt64
+
+  @doc "Logically shifts a 64-bit unsigned integer right by `n` positions."
+  @intrinsic
+  fn bsr(self, n: Int) -> UInt64
+end

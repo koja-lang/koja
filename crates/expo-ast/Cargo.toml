@@ -1,6 +1,0 @@
-[package]
-name = "expo-ast"
-description = "AST type definitions for the Expo language"
-edition.workspace = true
-license.workspace = true
-version.workspace = true

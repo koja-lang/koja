@@ -1,0 +1,13 @@
+[package]
+name = "koja-parser"
+description = "Recursive descent parser for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-lexer = { path = "../koja-lexer" }
+
+[dev-dependencies]
+proptest = "1.11.0"

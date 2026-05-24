@@ -7,5 +7,5 @@
 #   ld: warning: object file was built for newer 'macOS' version (X)
 #   than being linked (Y)
 # warnings when we link user binaries. 11.0 matches the floor used
-# by `expo-runtime/build.rs` (`-mmacosx-version-min=11.0`).
+# by `koja-runtime/build.rs` (`-mmacosx-version-min=11.0`).
 MACOSX_DEPLOYMENT_TARGET = "11.0"

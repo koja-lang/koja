@@ -1,0 +1,32 @@
+[package]
+name = "koja-driver"
+description = "CLI frontend for the Koja language compiler"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[[bin]]
+name = "koja"
+path = "src/main.rs"
+
+[dependencies]
+boring-sys = { version = "5", default-features = false }
+clap = { version = "4.6.0", features = ["derive"] }
+koja-ast = { path = "../koja-ast" }
+koja-doc = { path = "../koja-doc" }
+koja-fmt = { path = "../koja-fmt" }
+koja-ir = { path = "../koja-ir" }
+koja-ir-eval = { path = "../koja-ir-eval" }
+koja-ir-llvm = { path = "../koja-ir-llvm" }
+koja-lexer = { path = "../koja-lexer" }
+koja-parser = { path = "../koja-parser" }
+koja-runtime = { path = "../koja-runtime" }
+koja-shell = { path = "../koja-shell" }
+koja-stdlib = { path = "../koja-stdlib" }
+koja-test = { path = "../koja-test" }
+koja-typecheck = { path = "../koja-typecheck" }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+[dev-dependencies]
+libc = "0.2"

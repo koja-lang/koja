@@ -1,0 +1,4 @@
+[project]
+name = "koja"
+version = "0.1.0"
+src = ["std"]
