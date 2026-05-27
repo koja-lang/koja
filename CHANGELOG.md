@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: Renamed the language and toolchain from Expo to Koja. Binaries are `koja` and `koja-lsp`; manifests are `koja.toml` / `koja.lock`; source files use `.koja` (modules) and `.kojs` (scripts). Update project manifests, file extensions, build scripts, editor configs, and any references to `expo`, `expoc`, `.expo`, `.exps`, or `expo.toml`.
 - **Breaking**: Project build output moved from `<project>/target/<profile>/` to `<project>/build/<profile>/`. Update any tooling or `.gitignore` entries referencing `<project>/target/`.
 - **Breaking**: HTTP client methods moved from the `Http` struct to top-level functions in the `HTTP` package. `Http.get(url)` becomes `HTTP.get(url)`; same for `delete`, `head`, `options`, `patch`, `post`, `put`, and `request`. Use `alias HTTP` for unqualified access, or call qualified (`HTTP.post(url, body, headers)`). The `Http` struct is removed.
 - **Breaking**: Bare `impl Type` blocks are renamed to `extend Type`. `impl` is now reserved for protocol conformance (`impl Protocol for Type`); writing `impl Point` produces a compile error pointing to `extend Point`. Methods declared in `extend` blocks have ambient visibility (callable from any package that can name the target type), and collisions on the same method name across `extend` blocks targeting the same type are a hard compile error. Update every inherent `impl Type ... end` to `extend Type ... end`; protocol implementations are unchanged.
