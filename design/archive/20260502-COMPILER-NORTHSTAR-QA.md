@@ -10,8 +10,8 @@ questions.
 
 The codebase has accumulated multiple parallel mechanisms for the
 same job (most notably: generic instantiation discovery happens in
-`expo-ir/src/closure/`, in `expo-ir/src/lower/` IR lifters, **and**
-in `expo-codegen/src/generics.rs` lazy backfill). Multiple AI
+`koja-ir/src/closure/`, in `koja-ir/src/lower/` IR lifters, **and**
+in `koja-codegen/src/generics.rs` lazy backfill). Multiple AI
 sessions have implemented similar things in different places because
 the architectural responsibilities aren't pinned down anywhere
 authoritative. The next refactor needs a single load-bearing doc
@@ -46,31 +46,31 @@ test). Aspirational claims are forbidden.
 These terms recur and are easy to conflate. Definitions used in
 this doc (and to be reused in `COMPILER-NORTHSTAR.md`):
 
-- **Lowerer.** The `expo-ir::Lowerer` struct and its per-function
+- **Lowerer.** The `koja-ir::Lowerer` struct and its per-function
   state. Owns the AST→IR translation work for one function body.
 - **`lower::*` helpers.** The free functions in
-  `expo-ir/src/lower/` (e.g. `lower_method_call_or_stub`,
+  `koja-ir/src/lower/` (e.g. `lower_method_call_or_stub`,
   `lower_static_call_or_stub`). Per-AST-node translation logic
   invoked by the `Lowerer`.
 - **Closure pass.** The whole-program walk in
-  `expo-ir/src/closure/` that discovers which generic instantiations
+  `koja-ir/src/closure/` that discovers which generic instantiations
   the source actually references and registers them in `IRProgram`
   via the planners.
 - **Planners.** The `monomorphize_*` functions in
-  `expo-ir/src/lower/monomorphize.rs`. They take a generic decl + a
+  `koja-ir/src/lower/monomorphize.rs`. They take a generic decl + a
   type-arg vector and append a specialized `IRStruct` / `IREnum` /
   `IRFunction` to `IRProgram`. LLVM-free; idempotent.
 - **Discovery.** Deciding _which_ generic instantiations exist at
   all. (Distinct from monomorphization, which is _producing_ the
   specialized decl once you know it's needed.)
-- **Lazy backfill.** `expo-codegen/src/generics.rs`'s current
+- **Lazy backfill.** `koja-codegen/src/generics.rs`'s current
   fallback: when codegen encounters a mangled symbol that isn't
   registered, it calls a planner on the spot. Going away (per D1).
 - **Seal.** `seal_program(&IRProgram) -> Result<(),
 SealViolation>`. A pass that asserts the invariants the rest of
   the pipeline relies on. Runs after the closure pass.
 - **Sealed `IRProgram`.** An `IRProgram` that has passed `seal`. The
-  promised input shape for `expo-codegen` and `expo-ir-eval`.
+  promised input shape for `koja-codegen` and `koja-ir-eval`.
 
 ## Open questions (load-bearing)
 
@@ -84,15 +84,15 @@ These were enumerated up front. Resolution status tracked here.
 3. **Where does generic instantiation discovery live?** —
    RESOLVED. Closure pass exclusively; the `lower::*` helpers are
    pure translators that trust the registry.
-4. **What does `expo-codegen` know about types?** — RESOLVED.
+4. **What does `koja-codegen` know about types?** — RESOLVED.
    Codegen consumes only the sealed `IRProgram` and builds its own
    indices.
 5. **Is `IRProgram` one type with stages, or multiple types with
    translations?** — RESOLVED. Single `IRProgram` type with
    progressively tighter invariants enforced by passes; seal is a
    runtime check at one well-defined seam.
-6. **Does `expo-ir-eval` consume the same `IRProgram` as
-   `expo-codegen`?** — RESOLVED. Yes; same sealed `IRProgram`, no
+6. **Does `koja-ir-eval` consume the same `IRProgram` as
+   `koja-codegen`?** — RESOLVED. Yes; same sealed `IRProgram`, no
    IR construct for dynamic dispatch. Interactive REPL debugging is
    interpreter-binary machinery on top of sealed IR.
 7. **Where does `Coercion::*` get lowered out of the IR?** —
@@ -100,13 +100,13 @@ These were enumerated up front. Resolution status tracked here.
    becomes an explicit `IRInstruction`; sealed `IRProgram` carries
    no coercion metadata on operands; `apply_coercion` in codegen
    gets deleted.
-8. **What's the relationship between `expo-typecheck` and
-   `expo-ir`'s `lower::types`?** — RESOLVED. Typecheck delivers a
+8. **What's the relationship between `koja-typecheck` and
+   `koja-ir`'s `lower::types`?** — RESOLVED. Typecheck delivers a
    sealed AST with all value-level decisions recorded as
-   annotations on AST nodes; expo-ir validates nothing about
+   annotations on AST nodes; koja-ir validates nothing about
    names/types/overloads/coercions; `lower::types`'s name- and
    type-resolution helpers get deleted; the per-function
-   substitution helper stays in expo-ir as specialization machinery.
+   substitution helper stays in koja-ir as specialization machinery.
 
 ## Decisions
 
@@ -118,10 +118,10 @@ authoritative.
 
 Mechanical consequences (each one is a grep or a deletion target):
 
-- `expo-codegen/src/generics.rs` lazy backfill paths get **deleted**,
+- `koja-codegen/src/generics.rs` lazy backfill paths get **deleted**,
   not gated. That includes the four sites that bump `lazy_mono_count`
   and the `lazy_mono_count` field itself.
-- `expo-codegen` never calls `monomorphize_*`. Grep-checkable.
+- `koja-codegen` never calls `monomorphize_*`. Grep-checkable.
 - The `&|_| false` callback in `lower_static_call_or_stub` (and any
   similar "this might not be registered yet" callback in the IR
   lifter) becomes `&|id| program.contains_*(id)`. The IR lifter
@@ -149,9 +149,9 @@ Two-part decision.
 **Part A: `fn main` is legacy and going away.** The target language
 has two entry-point conventions:
 
-1. An expo project that defines `Process.run` as the entry method.
+1. An koja project that defines `Process.run` as the entry method.
 2. A single-file shell-style execution that evaluates the whole file
-   (no `main`; `expo-ir-eval` consumes this directly).
+   (no `main`; `koja-ir-eval` consumes this directly).
 
 `fn main` exists today as a transitional convention and is slated
 for deletion once the two target conventions are wired up.
@@ -192,19 +192,19 @@ Mechanical consequences:
 - `IRFunctionKind::MainEntry` is **deleted**. The user `fn main`
   body becomes a normal `IRFunctionKind::Free`; the entry-point
   field points at it. The closure pass walks it like any other Free
-  function; the `__expo_user_main` `pending-mono` bails dissolve
+  function; the `__koja_user_main` `pending-mono` bails dissolve
   rather than getting worked around.
 - The synthesized C-callable `int main(...)` shim becomes a
   codegen concern, not an IR concern. Codegen reads
   `program.entry_point` once at emission start, dispatches on the
   variant, and synthesizes its own backend-specific shim (`int main`
   for LLVM, a callable handle for eval).
-- `expo-ir-eval` reads `entry_point` once, looks up the entry
-  function, interprets from there. No magic-named `__expo_*` lookup.
+- `koja-ir-eval` reads `entry_point` once, looks up the entry
+  function, interprets from there. No magic-named `__koja_*` lookup.
 - `seal_program` asserts `entry_point.referenced_function` exists
   in `functions` and is non-generic.
 - The `if func.name == "main"` conditionals scattered through
-  `expo-codegen/src/compiler.rs` collapse to one `match
+  `koja-codegen/src/compiler.rs` collapse to one `match
 program.entry_point { ... }` at one well-defined emission point.
 
 Migration sequencing (plan-doc territory, not northstar territory,
@@ -216,7 +216,7 @@ but worth recording so we don't forget):
 3. Migrate test programs from `fn main` to the new conventions.
 4. Delete `fn main` parsing/lowering support.
 5. Delete `IRFunctionKind::MainEntry`.
-6. Delete `expo-codegen/src/generics.rs` lazy backfill (the closure
+6. Delete `koja-codegen/src/generics.rs` lazy backfill (the closure
    pass is now actually authoritative).
 7. Promote `seal_program` from warning to panic.
 
@@ -244,7 +244,7 @@ In the destination architecture:
   (closure pass missed it) and surfaces as a panic with a useful
   diagnostic ("closure pass missed `<mangled>` referenced from
   `<enclosing fn>` at `<span>`"). It does not silently fall back.
-- The **lazy backfill** in `expo-codegen/src/generics.rs` is deleted
+- The **lazy backfill** in `koja-codegen/src/generics.rs` is deleted
   (per D1).
 
 Mechanical consequences (each is a deletion or a grep target):
@@ -294,9 +294,9 @@ Cost to flag:
   investment in closure-pass coverage _before_ the `Ok(None)` paths
   can be deleted, or test failures will block the migration.
 
-### D4. `expo-codegen` consumes only the sealed `IRProgram` and builds its own indices
+### D4. `koja-codegen` consumes only the sealed `IRProgram` and builds its own indices
 
-`expo-codegen` does not import `expo-typecheck`. It does not hold a
+`koja-codegen` does not import `koja-typecheck`. It does not hold a
 `&TypeContext`. The `Compiler.type_ctx` field is deleted.
 
 `IRProgram` is **data**, deliberately spartan. It exposes the
@@ -312,18 +312,18 @@ LLVM codegen these are roughly:
 - `FunctionIdentifier` → `inkwell::values::FunctionValue`
 - whatever else turns out to be useful for fast emission.
 
-For `expo-ir-eval` the indices are different (interpreter handles,
+For `koja-ir-eval` the indices are different (interpreter handles,
 not LLVM values). For a hypothetical future backend (Cranelift,
 WASM, native interpreter, whatever) they're whatever that backend
 needs. `IRProgram` stays out of it.
 
 Mechanical contract (each is a grep target):
 
-- `rg 'expo_typecheck' expo/crates/expo-codegen/src/` — must be
+- `rg 'koja_typecheck' expo/crates/koja-codegen/src/` — must be
   empty (or only basic re-exported types if those are routed through
-  `expo-ir`).
-- `rg 'type_ctx' expo/crates/expo-codegen/src/` — must be empty.
-- `rg 'TypeContext' expo/crates/expo-codegen/src/` — must be empty.
+  `koja-ir`).
+- `rg 'type_ctx' expo/crates/koja-codegen/src/` — must be empty.
+- `rg 'TypeContext' expo/crates/koja-codegen/src/` — must be empty.
 
 The four families of current `c.type_ctx` use that codegen will
 need to migrate, with their fixes:
@@ -347,15 +347,15 @@ need to migrate, with their fixes:
 
 Downstream consequence — the cross-crate `LowerCtx` API:
 
-`LowerCtx` (`expo-ir/src/lower/ctx.rs`) currently bundles
+`LowerCtx` (`koja-ir/src/lower/ctx.rs`) currently bundles
 `type_ctx`, `fn_lower`, `package`, `layouts`, `closure_site_path`
-and is constructed _by codegen_ to call into `expo-ir`'s `lower::*`
+and is constructed _by codegen_ to call into `koja-ir`'s `lower::*`
 helpers for the lazy backfill. Once D1 deletes the lazy backfill
 and D4 forbids codegen from holding `type_ctx`, codegen has no
 business constructing a `LowerCtx`. The cross-crate calls into
-`lower::*` go away. `LowerCtx` becomes private to `expo-ir`.
+`lower::*` go away. `LowerCtx` becomes private to `koja-ir`.
 
-That collapses `expo-ir`'s public surface dramatically. The
+That collapses `koja-ir`'s public surface dramatically. The
 post-migration export list is roughly:
 
 - `IRProgram`, `IRFunction`, `IRStruct`, `IREnum`, `IRInstruction`,
@@ -374,13 +374,13 @@ D3 and D4 are mutually reinforcing in the same way D1+D2 are: D3
 shrinks what `lower::*` does (so `LowerCtx` can shrink), and D4
 forbids the cross-crate API that drove `LowerCtx`'s current shape.
 
-### D5. `expo-ir-eval` and `expo-codegen` consume the same sealed `IRProgram`; no dynamic-dispatch IR construct
+### D5. `koja-ir-eval` and `koja-codegen` consume the same sealed `IRProgram`; no dynamic-dispatch IR construct
 
 Both backends consume the same data type with the same invariants.
 Eval interprets it; codegen emits LLVM. Neither needs a special
 construct the other doesn't.
 
-Underpinning this: **all polymorphic dispatch in expo is expressed
+Underpinning this: **all polymorphic dispatch in koja is expressed
 through generics, and generics are mandatorily monomorphized
 (D1).** There is no `dyn Trait` / trait objects, no inheritance
 polymorphism, no duck typing. Every call site in a sealed
@@ -435,7 +435,7 @@ be settled in the northstar doc.
 
 ### D6. Single `IRProgram` type with progressively tightened invariants; seal is a runtime check
 
-`IRProgram` is one struct in `expo-ir/src/program.rs`. It does not
+`IRProgram` is one struct in `koja-ir/src/program.rs`. It does not
 gain a phase parameter (`IRProgram<Sealed>`) and does not get split
 into per-stage variants (`RawIRProgram` → `MonomorphizedIRProgram`
 → `SealedIRProgram`).
@@ -478,7 +478,7 @@ Rationale (why A over B/C from the discussion):
 - `From` plumbing for split types would be many hundreds of lines
   of mechanical translation code that adds zero semantic value.
 - Swift / SIL works this way and scales to a much larger IR
-  surface than expo-lang's.
+  surface than koja-lang's.
 
 Open follow-up (Q10): incremental compilation. **Resolved as D7.**
 Per-package source-lowering is cacheable; closure pass and seal
@@ -509,7 +509,7 @@ in their return shape (no more `Ok(None) → Stub` paths).
 The unit of source-lowering caching is the **package** (collection
 of files that share a namespace, e.g. the user's project, each
 stdlib package, each third-party dependency). It is not the file,
-not the module (expo has no modules), and not the function.
+not the module (koja has no modules), and not the function.
 
 This matches the language's own granularity: within a package all
 types are mutually visible (no imports); across packages, types
@@ -545,7 +545,7 @@ lower_program(packages: &[IRPackage], entry: EntryPointSpec,
     // returns sealed IRProgram
 ```
 
-- **`IRPackage`** is a new type in `expo-ir/src/program.rs` (or a
+- **`IRPackage`** is a new type in `koja-ir/src/program.rs` (or a
   sibling module). It is the source-lowering output of a single
   package and the unit of disk-caching.
 - **`IRProgram` is never cached**, only reconstructed. The
@@ -618,20 +618,20 @@ assertions, cross-package optimization passes), it goes in
 
 ### D8. Coercions are typecheck annotations; lowered to explicit IR instructions; codegen never sees them
 
-`Coercion` (defined in `expo-typecheck/src/context.rs`) is a
+`Coercion` (defined in `koja-typecheck/src/context.rs`) is a
 **typecheck-layer concept**. It records a decision the type
 checker made: "the value at this site needs widening / wrapping /
 conversion before it can flow to its consumer." It exists only as
 metadata attached to AST nodes.
 
-The `lower::*` helpers in `expo-ir` are **responsible for translating
+The `lower::*` helpers in `koja-ir` are **responsible for translating
 every `Coercion` annotation into an explicit `IRInstruction`** at the
 exact site the coercion was annotated. By the time AST→IR lowering
 finishes for an expression, all `Coercion` metadata has been
 consumed and emitted as IR instructions. The sealed `IRProgram`
 contains zero coercion metadata anywhere in its operand graph.
 
-`expo-codegen` (and `expo-ir-eval`) **never branch on
+`koja-codegen` (and `koja-ir-eval`) **never branch on
 `Coercion::*`**. Each backend just emits the `IRInstruction` it sees,
 one per coercion kind, with a direct LLVM (or interpreter) pattern.
 
@@ -644,18 +644,18 @@ instruction to LLVM with no branching on coercion semantics.
 
 Mechanical commitments:
 
-- **`Coercion` enum stays in `expo-typecheck`.** It is the type
+- **`Coercion` enum stays in `koja-typecheck`.** It is the type
   checker's vocabulary for telling the lowerer what conversions
-  are needed. It does not appear in any `expo-ir` or
-  `expo-codegen` type signature.
+  are needed. It does not appear in any `koja-ir` or
+  `koja-codegen` type signature.
 - **One `IRInstruction::*` variant per `Coercion::*` variant.**
   Today: `Coercion::UnionWiden` ↔ `IRInstruction::UnionWrap`. Any
-  new `Coercion` variant added to `expo-typecheck` must be paired,
+  new `Coercion` variant added to `koja-typecheck` must be paired,
   in the same change, with a new `IRInstruction` and the
   corresponding lowerer emission. Grep-checkable: every `Coercion`
-  variant should appear in `expo-ir/src/lower/coercion.rs`'s
+  variant should appear in `koja-ir/src/lower/coercion.rs`'s
   staging dispatch.
-- **`expo-codegen/src/stmt.rs::apply_coercion` is deleted**, not
+- **`koja-codegen/src/stmt.rs::apply_coercion` is deleted**, not
   relocated. Its current `UnionWiden` arm is the last surviving
   instance of the operand-metadata anti-pattern and is the
   concrete unblock for D4 (codegen as pure emission).
@@ -687,7 +687,7 @@ Why this works (mirroring the Swift rationale):
 What this rules out:
 
 - Storing `Coercion` on `Operand` or any other IR-side type.
-- "Just-in-time" coercion application in `expo-codegen` (the
+- "Just-in-time" coercion application in `koja-codegen` (the
   current `apply_coercion` shape).
 - A single generic `IRInstruction::Coerce(Coercion)` that pushes
   the coercion-kind switch into the backend. Each coercion gets
@@ -698,34 +698,34 @@ What this rules out:
   neither imports `Coercion`.
 
 Future-AI guidance: if you find yourself adding a `Coercion::*`
-variant to `expo-typecheck`, the next file you touch is
-`expo-ir/src/lower/coercion.rs` (paired emitter) and the next
-after that is `expo-ir`'s instruction enum (paired
+variant to `koja-typecheck`, the next file you touch is
+`koja-ir/src/lower/coercion.rs` (paired emitter) and the next
+after that is `koja-ir`'s instruction enum (paired
 `IRInstruction::*`). If you find yourself reaching for
-`apply_coercion` in `expo-codegen`, stop — the answer is to lift
-the coercion at its `expo-ir` lowering site, not to interpret it
+`apply_coercion` in `koja-codegen`, stop — the answer is to lift
+the coercion at its `koja-ir` lowering site, not to interpret it
 in the backend.
 
 Migration note: today there is exactly one `Coercion` variant
 (`UnionWiden`) and the lift is approximately 70% complete (Slices
 1 and 2 covered method-call args/receivers and free/static call
 args). Finishing Q7 is mechanical: walk remaining
-`apply_coercion` call sites, find the corresponding `expo-ir`
+`apply_coercion` call sites, find the corresponding `koja-ir`
 lowerer, add `stage_union_widen` (or its successor in
 `coercion.rs`), delete `apply_coercion`, add the seal assertion.
 This is a near-term slice once the northstar is drafted.
 
 ### D9. Typecheck delivers a sealed AST; annotations are identity handles; consumers build their own indices
 
-The `typecheck → expo-ir` boundary mirrors the `expo-ir →
-expo-codegen` boundary established by D1 + D6. Typecheck delivers
-a **sealed AST** to expo-ir; expo-ir validates nothing about
+The `typecheck → koja-ir` boundary mirrors the `koja-ir →
+koja-codegen` boundary established by D1 + D6. Typecheck delivers
+a **sealed AST** to koja-ir; koja-ir validates nothing about
 names, types, overloads, dispatch, or coercions — those decisions
 are already made and recorded on AST nodes.
 
-This generalizes D4 ("expo-codegen consumes only the sealed
+This generalizes D4 ("koja-codegen consumes only the sealed
 `IRProgram` and builds its own indices") to **all** downstream
-consumers of typecheck output: expo-ir (for lowering), the LSP
+consumers of typecheck output: koja-ir (for lowering), the LSP
 (for editor operations), formatters, doc-gen tools, anything
 else. The AST + its annotations are the substrate; each consumer
 builds its own purpose-shaped indices over those annotations.
@@ -737,13 +737,13 @@ Two interpretations of "sealed AST" exist:
 - **Sealed-A (Swift-style):** typecheck resolves all _value-level_
   decisions (names, types, overloads, coercions, `resolved_type`
   at every Expr). Generic decls remain with type-parameter
-  references; _specialization_ is expo-ir's job (per D1).
+  references; _specialization_ is koja-ir's job (per D1).
 - **Sealed-B (Rust MIR-style):** typecheck also discovers required
   monomorphizations and produces N specialized AST copies per
-  generic decl. expo-ir lowers each with no substitutions left.
+  generic decl. koja-ir lowers each with no substitutions left.
 
 This decision commits to **Sealed-A**. Specialization stays in
-expo-ir (closure pass + planners); typecheck doesn't take on
+koja-ir (closure pass + planners); typecheck doesn't take on
 LLVM-mangling concerns; the migration from current code is
 incremental rather than a wholesale typecheck rewrite.
 
@@ -776,7 +776,7 @@ structural commitment.
 
 #### One identifier type
 
-`TypeIdentifier` (already defined in `expo-ast/src/identifier.rs`)
+`TypeIdentifier` (already defined in `koja-ast/src/identifier.rs`)
 gets a small structural extension:
 
 ```rust
@@ -793,7 +793,7 @@ across builds, `qualified_name` round-trip) is preserved.
 This single identifier type identifies anything _bound_ in the
 program — types, functions, methods, fields, variants, locals,
 type parameters, anonymous closures, all of them. (Functions
-have function types in expo's model; calling the struct
+have function types in koja's model; calling the struct
 `TypeIdentifier` still fits.)
 
 The path is the lexical containment chain. Examples:
@@ -894,7 +894,7 @@ Concrete deletions (4 of 6 functions):
 | `resolve_name_current` | Deleted. Same.                                                                                                                                                     |
 | `resolve_type_expr`    | Deleted. Every `TypeExpr` carries its resolved `Type` post-typecheck.                                                                                              |
 | `id_for`               | Deleted. The fallback exists only because typecheck doesn't always populate; after D9 it always does.                                                              |
-| `monomorphize_type`    | **Stays** in expo-ir (per-fn substitution under specialization context, not name resolution). Renamed for clarity (`substitute_in_current_fn_context` or similar). |
+| `monomorphize_type`    | **Stays** in koja-ir (per-fn substitution under specialization context, not name resolution). Renamed for clarity (`substitute_in_current_fn_context` or similar). |
 | `type_name_from_expr`  | Trivial utility, no architectural concern.                                                                                                                         |
 
 #### `seal_ast` runtime check
@@ -908,7 +908,7 @@ annotation is `Some(_)` and every `Expr.resolved_type` is
 populated. Mirrors `seal_program` from D1/D6.
 
 The seal applies on the **typecheck-success path**: `typecheck OK
-→ seal_ast → expo-ir`. Typecheck-_failure_ ASTs have `None`
+→ seal_ast → koja-ir`. Typecheck-_failure_ ASTs have `None`
 annotations on partially-resolved nodes; they're consumed by the
 LSP best-effort and never enter the lowering pipeline. The LSP
 never calls `seal_ast`; it operates on whatever annotations are
@@ -964,7 +964,7 @@ path: ["map", "T", "iter"] })` — first segment names the type
 parameter binding (a path under the enclosing fn), the rest
 chains as normal.
 
-Specialization (in expo-ir) rewrites generic-bound forms to
+Specialization (in koja-ir) rewrites generic-bound forms to
 concrete forms during monomorphization: `["map", "T", "iter"]`
 becomes `["List", "iter"]` when T = List. The closure pass and
 planners are exactly the right home for this rewrite.
@@ -977,10 +977,10 @@ special enum variant needed.
 
 D9 is the largest single migration in the northstar — it adds
 fields to AST nodes, requires typecheck to populate them, and
-requires migrating all the lookup callers in expo-ir. Sequenced
+requires migrating all the lookup callers in koja-ir. Sequenced
 **after** D1's loud-failure migration completes, so the
-`expo-ir → expo-codegen` boundary is solid before retargeting at
-the `typecheck → expo-ir` boundary.
+`koja-ir → koja-codegen` boundary is solid before retargeting at
+the `typecheck → koja-ir` boundary.
 
 Strangler-fig sequence:
 
@@ -998,7 +998,7 @@ Vec<String>` (mechanical rename + update construction sites).
    `lower::types.rs`.
 6. Define `seal_ast`; flip lower's contract to require sealed
    input; ship the assertion as panic-on-violation per D1.
-7. Move `expo-typecheck` two-pass structure (collect decls →
+7. Move `koja-typecheck` two-pass structure (collect decls →
    typecheck bodies) into explicit phases if not already, so
    forward references resolve correctly when populating
    annotations.
@@ -1017,7 +1017,7 @@ future-AI doesn't see the rename as a structural change later.
 The pipeline is a strict linear sequence between sealed outputs:
 
 ```text
-Parse → Typecheck → expo-ir → expo-codegen
+Parse → Typecheck → koja-ir → koja-codegen
 ```
 
 Each arrow either crosses a sealed boundary (the latter two) or
@@ -1030,12 +1030,12 @@ happens) — become **sub-passes within typecheck**, ordered by
 their data dependencies.
 
 This applies the same fractal pattern that D6 established for
-expo-ir to typecheck: each pipeline-level phase has internal
+koja-ir to typecheck: each pipeline-level phase has internal
 multi-pass machinery converging on a sealed output; pipeline
 boundaries are between *sealed outputs*, not between *kinds of
 work*.
 
-The crate name `expo-typecheck` stays (renaming is mechanical
+The crate name `koja-typecheck` stays (renaming is mechanical
 churn for limited gain), but the conceptual phase is **semantic
 analysis** (or "the frontend") since typecheck is now its primary
 but not sole responsibility. There's even a defensible argument
@@ -1048,7 +1048,7 @@ phase.
 #### Sub-pass order
 
 ```text
-expo-typecheck (semantic-analysis phase):
+koja-typecheck (semantic-analysis phase):
   strip-cfg     -> remove @cfg-excluded nodes; no type info needed
   collect       -> register all surviving top-level decls; assign
                    TypeIdentifier per D9
@@ -1077,22 +1077,22 @@ The order is forced by data dependencies, not preference:
 
 #### Mechanical commitments
 
-- **Pipeline shape.** `Parse → Typecheck → expo-ir → expo-codegen`.
-  Four phases. Two seal-asserted handoffs (typecheck → expo-ir,
-  expo-ir → expo-codegen). Parser output is raw AST; first thing
+- **Pipeline shape.** `Parse → Typecheck → koja-ir → koja-codegen`.
+  Four phases. Two seal-asserted handoffs (typecheck → koja-ir,
+  koja-ir → koja-codegen). Parser output is raw AST; first thing
   typecheck does is its own internal sub-passes culminating in a
   seal.
 - **Top-level preprocess crate is abolished.** Whatever it does
-  today moves into `expo-typecheck` under the appropriate
+  today moves into `koja-typecheck` under the appropriate
   sub-pass. During migration the crate may stay temporarily with
   responsibilities tagged for relocation; long-term it disappears.
 - **Synthesized AST nodes are first-class.** Once synthesize
   produces them, the resolve / check / annotate / seal sub-passes
   treat them identically to user-written nodes. No "this is a
   synthesized node" branching anywhere downstream of synthesize.
-- **One owner of all AST mutation.** After D10, `expo-typecheck`
+- **One owner of all AST mutation.** After D10, `koja-typecheck`
   owns every AST mutation between parse and seal. Downstream
-  consumers (expo-ir, LSP, formatter, doc-gen) read only.
+  consumers (koja-ir, LSP, formatter, doc-gen) read only.
 
 #### Decision procedure for new AST transformations
 
@@ -1105,7 +1105,7 @@ When a new transformation is proposed, find its slot mechanically:
 3. Does it produce nodes that themselves need checking?
    → before resolve.
 4. Does it touch invariants the seal asserts?
-   → it doesn't belong in typecheck; it belongs in expo-ir or
+   → it doesn't belong in typecheck; it belongs in koja-ir or
      later.
 
 This is mechanical. No architectural debate required.
@@ -1116,7 +1116,7 @@ This is mechanical. No architectural debate required.
   phases, two seals, fits in your head. Adding intermediate
   phases would require establishing new seal contracts at each
   new boundary, which compounds.
-- **Fractal symmetry between phases.** Both typecheck and expo-ir
+- **Fractal symmetry between phases.** Both typecheck and koja-ir
   internally do collect-style → transformation(s) → check-style →
   seal. Same shape, different vocabularies. Future-AI sees one
   pattern, not two.
@@ -1143,7 +1143,7 @@ This is mechanical. No architectural debate required.
   cycle within typecheck. If a real use case demands this, the
   fix is to iterate (synthesize → resolve → check → synthesize
   → resolve → check → ...) until fixed point — same convergence
-  pattern expo-ir uses for monomorphization. Cross that bridge
+  pattern koja-ir uses for monomorphization. Cross that bridge
   if/when it appears; today's needs (strip-cfg, default impls)
   don't.
 
@@ -1162,7 +1162,7 @@ Mostly mechanical relocation:
 
 Future-AI guidance: when adding a new AST transformation, walk
 the decision procedure. When adding a new IR transformation, the
-equivalent procedure for expo-ir (per D6) applies. If you find
+equivalent procedure for koja-ir (per D6) applies. If you find
 yourself wanting a fifth top-level pipeline phase, stop — the
 answer is almost always a new sub-pass within an existing phase.
 
@@ -1238,7 +1238,7 @@ drops the plan claimed:
   closure pass extensions are registering things but new
   monomorphized bodies introduce more sites that themselves bail).
 - `lower_call_or_stub pending-mono`: 9 → 9 (unchanged; all in
-  `__expo_user_main` whose body the closure pass cannot see).
+  `__koja_user_main` whose body the closure pass cannot see).
 
 The Phase 0 substitution-threading change (passing `IRFunction.subst`
 through the visitor) is genuinely useful plumbing for any future

@@ -1,8 +1,8 @@
-# Expo
+# Koja
 
 > A language for humans and AI.
 
-Expo is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model.
+Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model.
 
 For the full language specification, see [LANGUAGE.md](LANGUAGE.md).
 
@@ -22,7 +22,7 @@ brew install llvm@18
 2. Clone the repository.
 
 ```sh
-git clone https://github.com/hpopp/expo-lang && cd expo-lang/expo
+git clone https://github.com/hpopp/koja-lang && cd expo-lang/expo
 ```
 
 3. Build the compiler.
@@ -36,14 +36,14 @@ cargo build
 4. Run the hello world example.
 
 ```sh
-./target/debug/expo run examples/hello.expo
+./target/debug/koja run examples/hello.koja
 ```
 
 ## Language Overview
 
 ### Functions
 
-```expo
+```koja
 fn add(a: Int32, b: Int32) -> Int32
   a + b
 end
@@ -55,7 +55,7 @@ end
 
 ### Structs and Functions
 
-```expo
+```koja
 struct Point
   x: Int32
   y: Int32
@@ -75,7 +75,7 @@ end
 
 ### Enums and Pattern Matching
 
-```expo
+```koja
 enum Shape
   Circle(Int32)
   Rect(Int32, Int32)
@@ -91,7 +91,7 @@ end
 
 ### Generics
 
-```expo
+```koja
 fn identity<T>(x: T) -> T
   x
 end
@@ -104,7 +104,7 @@ end
 
 ### Ownership and Move Semantics
 
-```expo
+```koja
 struct Config
   name: String
 end
@@ -127,7 +127,7 @@ end
 
 ### Protocols
 
-```expo
+```koja
 protocol Greeter
   fn greet(self) -> String
 end
@@ -141,7 +141,7 @@ end
 
 ### Closures and Higher-Order Functions
 
-```expo
+```koja
 fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
   f(x)
 end
@@ -154,7 +154,7 @@ end
 
 ### Collections and Iteration
 
-```expo
+```koja
 fn main
   list: List<Int32> = List.new().append(1).append(2).append(3)
 
@@ -166,7 +166,7 @@ end
 
 ### Control Flow
 
-```expo
+```koja
 fn classify(n: Int32) -> String
   cond
     n > 100 -> "big"
@@ -190,15 +190,15 @@ end
 Build and run the test suite.
 
 ```sh
-cargo build && ./target/debug/expo run tests/test_build.expo
+cargo build && ./target/debug/koja run tests/test_build.koja
 ```
 
 ### Formatting
 
-Expo source files can be formatted with the built-in formatter.
+Koja source files can be formatted with the built-in formatter.
 
 ```sh
-./target/debug/expo format --write <file.expo>
+./target/debug/koja format --write <file.koja>
 ```
 
 ## License

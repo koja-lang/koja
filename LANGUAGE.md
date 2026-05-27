@@ -1,6 +1,6 @@
-# Expo Language Reference
+# Koja Language Reference
 
-Expo is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
+Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
 
 ---
 
@@ -31,7 +31,7 @@ Expo is a statically typed, compiled language targeting native binaries via LLVM
 
 Line comments start with `#` and extend to the end of the line. There are no block comments.
 
-```expo
+```koja
 # This is a comment
 x = 42  # inline comment
 ```
@@ -73,7 +73,7 @@ Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 
 ### Numeric Literals
 
-```expo
+```koja
 42          # decimal integer
 3.14        # floating point
 0xFF        # hexadecimal
@@ -94,16 +94,16 @@ Newlines terminate statements. Line continuation is implicit after binary operat
 
 Variables are declared by assignment. No `let`, `var`, or `mut` keywords.
 
-```expo
+```koja
 x = 42
-name = "expo"
+name = "koja"
 ```
 
 ### Type Annotations
 
 Optional type annotations follow the variable name with a colon:
 
-```expo
+```koja
 x: Int32 = 42
 z: Option<Int32> = Option.None
 list: List<Int32> = List.new()
@@ -113,7 +113,7 @@ Annotations are required when the type cannot be inferred (e.g. generic enum uni
 
 ### Compound Assignment
 
-```expo
+```koja
 x += 1
 x -= 2
 x *= 3
@@ -124,7 +124,7 @@ x /= 4
 
 Assignment moves ownership for non-copy types. The original variable is no longer usable:
 
-```expo
+```koja
 p1 = Point{x: 1, y: 2}
 p2 = p1
 # p1 is moved -- using it here is a compile error
@@ -132,7 +132,7 @@ p2 = p1
 
 Reassignment brings a variable back to live:
 
-```expo
+```koja
 p1 = Point{x: 3, y: 4}  # p1 is live again
 ```
 
@@ -140,10 +140,10 @@ p1 = Point{x: 3, y: 4}  # p1 is live again
 
 Module-level constants are declared with `const`. Values can be literals (int, float, string, bool), enum unit variants, or struct literals whose fields are all constant expressions:
 
-```expo
+```koja
 const MAX = 100
 const PI = 3.14
-const NAME = "expo"
+const NAME = "koja"
 const DEBUG = false
 const HEADING = Direction.North
 const ORIGIN = Point{x: 0, y: 0}
@@ -151,7 +151,7 @@ const ORIGIN = Point{x: 0, y: 0}
 
 An optional type annotation is supported for generic inference:
 
-```expo
+```koja
 const EMPTY: Option<Int> = Option.None
 ```
 
@@ -163,7 +163,7 @@ Constants are inlined at every usage site.
 
 Functions are declared with `fn`. The last expression is the implicit return value.
 
-```expo
+```koja
 fn add(a: Int32, b: Int32) -> Int32
   a + b
 end
@@ -184,7 +184,7 @@ Standalone functions are only supported for `fn main` — the program entry poin
   type (whether declared in the type's decl block, an `extend Type` block,
   or an `impl Protocol for Type` block), but rejected everywhere else.
 
-```expo
+```koja
 priv fn helper(x: Int32) -> Int32    # package-private
   x * 2
 end
@@ -206,7 +206,7 @@ end
 
 Explicit `return` is available for early exits:
 
-```expo
+```koja
 fn find(items: List<Int32>, target: Int32) -> Bool
   for item in items
     if item == target
@@ -221,7 +221,7 @@ end
 
 Parameters borrow by default (read-only). Use `move` to take ownership:
 
-```expo
+```koja
 fn borrow(c: Config) -> String
   c.name                 # read-only access
 end
@@ -239,7 +239,7 @@ end
 
 ### `if` / `else`
 
-```expo
+```koja
 if x > 3
   "greater".print()
 else
@@ -253,7 +253,7 @@ There is no `else if`. For multi-way branching, use [`cond`](#cond).
 
 ### `while`
 
-```expo
+```koja
 i = 0
 while i < 10
   i.print()
@@ -263,7 +263,7 @@ end
 
 ### `loop` / `break`
 
-```expo
+```koja
 i = 0
 loop
   if i >= 5
@@ -277,7 +277,7 @@ end
 
 Iterates over any type implementing the `Enumeration<T>` protocol:
 
-```expo
+```koja
 list: List<Int32> = List.new()
 list = list.append(1)
 list = list.append(2)
@@ -292,7 +292,7 @@ The loop variable is bound directly to each element -- no unwrapping needed.
 
 ### Ternary
 
-```expo
+```koja
 y = x > 2 ? "big" : "small"
 ```
 
@@ -332,7 +332,7 @@ All numeric primitives and `Bool` are **copy types** -- assignment duplicates th
 
 #### Single-Line Strings
 
-```expo
+```koja
 "hello world"
 "tab:\there"
 "quote: \"yes\""
@@ -343,8 +343,8 @@ Escape sequences: `\"`, `\\`, `\n`, `\r`, `\t`, `\#`.
 
 #### String Interpolation
 
-```expo
-name = "expo"
+```koja
+name = "koja"
 "hello #{name}".print()
 "1 + 2 = #{1 + 2}".print()
 ```
@@ -355,7 +355,7 @@ Interpolation expressions are enclosed in `#{}` and can contain any expression.
 
 Triple-quoted strings with automatic dedent based on closing delimiter position:
 
-```expo
+```koja
 msg = """
   first line
   second line
@@ -368,7 +368,7 @@ Multiline strings support the same escape sequences and interpolation as single-
 
 #### Declaration
 
-```expo
+```koja
 struct Point
   x: Int32
   y: Int32
@@ -377,13 +377,13 @@ end
 
 #### Construction
 
-```expo
+```koja
 p = Point{x: 1, y: 2}
 ```
 
 Short structs format inline. Long structs break across lines with trailing commas:
 
-```expo
+```koja
 config = Config{
   name: "production",
   port: 8080,
@@ -393,7 +393,7 @@ config = Config{
 
 #### Field Access
 
-```expo
+```koja
 p.x.print()
 p.y.print()
 ```
@@ -402,7 +402,7 @@ p.y.print()
 
 Functions can be defined directly inside `struct` bodies alongside fields:
 
-```expo
+```koja
 struct Point
   x: Int32
   y: Int32
@@ -423,7 +423,7 @@ Point.origin().x.print()
 
 `self` borrows by default (read-only). Use `move self` for mutating functions that return the modified value:
 
-```expo
+```koja
 struct Counter
   value: Int
 
@@ -439,7 +439,7 @@ end
 
 `extend` blocks attach additional inherent functions to an existing type, analogous to Swift extensions. Use `extend` for adding functions from outside the type's own declaration; `impl` is reserved for protocol conformance (`impl Protocol for Type`).
 
-```expo
+```koja
 extend Point
   fn translate(move self, dx: Int32, dy: Int32) -> Self
     self.x += dx
@@ -455,7 +455,7 @@ Methods declared in an `extend` block have ambient visibility — they're callab
 
 Functions without `self` (either inline or in `extend` blocks) are called on the type directly:
 
-```expo
+```koja
 struct Config
   port: Int
 
@@ -471,7 +471,7 @@ config = Config.default()
 
 `extend` blocks can target a specific instantiation of a generic type. Methods defined in a specialized extend are only available when the type argument matches:
 
-```expo
+```koja
 extend CPtr<UInt8>
   fn to_cstring(self) -> CString
     CString{ptr: self, len: strlen(self)}
@@ -483,7 +483,7 @@ end
 
 Mixing concrete types and type parameters in the same `extend` block is not allowed:
 
-```expo
+```koja
 # Error: mixes concrete types and type parameters
 extend Map<String, V>
   fn lookup(self, key: String) -> Option<V>
@@ -498,7 +498,7 @@ end
 
 Enums support unit, tuple, and struct variants:
 
-```expo
+```koja
 enum Direction
   North
   South
@@ -514,14 +514,14 @@ end
 
 #### Construction
 
-```expo
+```koja
 d = Direction.North
 s = Shape.Circle(5)
 ```
 
 Within a `match` arm on the same enum, the type prefix can be omitted for unit variants:
 
-```expo
+```koja
 fn opposite(dir: Direction) -> String
   match dir
     North -> "south"
@@ -536,7 +536,7 @@ end
 
 Enums can also define functions directly in their body:
 
-```expo
+```koja
 enum Direction
   North
   South
@@ -558,7 +558,7 @@ end
 
 Enums can reference themselves through generic containers like `List<T>`:
 
-```expo
+```koja
 enum Expr
   Num(Int)
   Add(Expr, Expr)
@@ -570,7 +570,7 @@ end
 
 A value that can be one of several types. Use `|` between types:
 
-```expo
+```koja
 fn display(item: Post | Comment | Ad) -> String
   match item
     _ -> "an item"
@@ -580,13 +580,13 @@ end
 
 Use `type` to name a union:
 
-```expo
+```koja
 type Pet = Cat | Dog | Fish
 ```
 
 A member type widens to the union automatically:
 
-```expo
+```koja
 c = Cat{name: "Whiskers"}
 pet: Pet = c
 ```
@@ -597,7 +597,7 @@ Order doesn't matter -- `Post | Comment` and `Comment | Post` are the same type.
 
 #### Generic Functions
 
-```expo
+```koja
 fn identity<T>(x: T) -> T
   x
 end
@@ -610,7 +610,7 @@ Type arguments are inferred at call sites from arguments and type annotations.
 
 #### Generic Structs
 
-```expo
+```koja
 struct Pair<A, B>
   first: A
   second: B
@@ -621,7 +621,7 @@ p = Pair{first: 10, second: "hello"}
 
 #### Generic Enums
 
-```expo
+```koja
 enum Option<T>
   Some(T)
   None
@@ -630,7 +630,7 @@ end
 
 Generic enum unit variants require a type annotation for inference:
 
-```expo
+```koja
 z: Option<Int32> = Option.None
 ```
 
@@ -638,7 +638,7 @@ z: Option<Int32> = Option.None
 
 Type annotations on variables drive generic type inference:
 
-```expo
+```koja
 list: List<Int32> = List.new()  # infers T = Int32
 ```
 
@@ -654,7 +654,7 @@ Generics compile via monomorphization -- the compiler generates specialized nati
 
 Pattern matching with exhaustiveness checking:
 
-```expo
+```koja
 result = match x
   1 -> "one"
   2 -> "two"
@@ -664,7 +664,7 @@ end
 
 Patterns: literals (integers, floats, booleans, strings), wildcards (`_`), variable bindings, nested patterns, enum and struct destructuring. Guards use `when`:
 
-```expo
+```koja
 match x
   Option.Some(v) when v > 5 -> "big"
   Option.Some(_) -> "small"
@@ -674,7 +674,7 @@ end
 
 Struct destructuring works for both plain structs and enum-struct variants. Field syntax is always `name: pattern` -- there is no shorthand form. To bind a field under its own name, write `x: x`. Unlisted fields are implicit wildcards, and an empty `{}` matches any value of that type:
 
-```expo
+```koja
 struct Point
   x: Int
   y: Int
@@ -695,7 +695,7 @@ end
 
 String literals can be used as patterns:
 
-```expo
+```koja
 fn classify(c: String) -> String
   match c
     "0" -> "zero"
@@ -707,7 +707,7 @@ end
 
 OR patterns combine multiple patterns in a single arm with `|`:
 
-```expo
+```koja
 match n
   1 | 2 | 3 -> "small"
   4 | 5 | 6 -> "medium"
@@ -723,9 +723,9 @@ Variable bindings inside OR patterns are disallowed.
 
 ### `cond`
 
-Multi-branch conditional. Expo has no `else if`; `cond` is the idiomatic way to chain conditions. Requires an `else` arm:
+Multi-branch conditional. Koja has no `else if`; `cond` is the idiomatic way to chain conditions. Requires an `else` arm:
 
-```expo
+```koja
 fn classify(n: Int32) -> String
   cond
     n > 100 -> "big"
@@ -739,7 +739,7 @@ end
 
 Arms can use any boolean expression, including method calls:
 
-```expo
+```koja
 cond
   c.digit?() -> handle_digit(c)
   c.whitespace?() -> skip_whitespace()
@@ -756,7 +756,7 @@ end
 
 Closures use `fn (...) -> T ... end` syntax, mirroring function signatures:
 
-```expo
+```koja
 double = fn (x: Int32) -> Int32 x * 2 end
 
 add = fn (a: Int32, b: Int32) -> Int32
@@ -766,7 +766,7 @@ end
 
 Closure parameters support `move` to take ownership, matching the function parameter convention:
 
-```expo
+```koja
 consume = fn (move data: String) -> Int data.length() end
 ```
 
@@ -774,7 +774,7 @@ consume = fn (move data: String) -> Int data.length() end
 
 Short closures use `param -> expr` syntax with parameter types inferred from the calling context:
 
-```expo
+```koja
 option.map(x -> x + 1)
 list.filter(n -> n > 3)
 names.map(name -> name.upcase())
@@ -789,7 +789,7 @@ Closures capture variables from their enclosing scope:
 - Copy types (primitives, `Bool`) are duplicated.
 - Move types (structs, enums, `String`) are moved -- the original variable is consumed.
 
-```expo
+```koja
 multiplier = 3
 triple = fn (x: Int32) -> Int32
   x * multiplier    # multiplier is copied (Int32 is a copy type)
@@ -802,7 +802,7 @@ Captured closures use heap-allocated environment structs that are automatically 
 
 Function types are written as `fn (ParamTypes) -> ReturnType`:
 
-```expo
+```koja
 fn apply(x: Int32, f: fn (Int32) -> Int32) -> Int32
   f(x)
 end
@@ -814,7 +814,7 @@ apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 
 `fn (T) -> U` borrows `T`. `fn (move T) -> U` takes ownership of `T`:
 
-```expo
+```koja
 fn map<U>(move self, f: fn (move T) -> U) -> Option<U>
 ```
 
@@ -822,7 +822,7 @@ fn map<U>(move self, f: fn (move T) -> U) -> Option<U>
 
 ## Ownership and Borrowing
 
-Expo uses single-owner move semantics with borrow-by-default function parameters. There is no garbage collector, no `Box`, `Rc`, or `Arc` in user code, and no lifetime annotations.
+Koja uses single-owner move semantics with borrow-by-default function parameters. There is no garbage collector, no `Box`, `Rc`, or `Arc` in user code, and no lifetime annotations.
 
 ### Rules
 
@@ -837,7 +837,7 @@ Expo uses single-owner move semantics with borrow-by-default function parameters
 
 `clone()` is available on all types. It produces a new owned copy without moving the original:
 
-```expo
+```koja
 p = Point{x: 10, y: 20}
 q = p.clone()
 consume(q)    # q is moved
@@ -852,7 +852,7 @@ The compiler inserts deterministic cleanup at scope boundaries. `List<T>` backin
 
 All numeric primitives, `Bool`, `()`, and function pointers are copy types. Assignment duplicates the value:
 
-```expo
+```koja
 a = 42
 b = a     # a is still live
 ```
@@ -861,7 +861,7 @@ b = a     # a is still live
 
 Field access is always a borrow -- it never moves the struct or the field. You can read fields freely without consuming the owner:
 
-```expo
+```koja
 struct Wrapper
   name: String
   count: Int
@@ -875,13 +875,13 @@ w.name.print()    # w is still live -- no move occurred
 
 This extends to chained access and method calls. Calling a borrow-`self` method through a field borrows the field through the struct:
 
-```expo
+```koja
 w.name.length()   # borrows name, calls length -- w is still live
 ```
 
 To mutate a field, use reassignment. The right-hand side borrows the field, transforms it, and the result is written back:
 
-```expo
+```koja
 w.name = w.name.upcase()
 w.name.print()              # "HELLO"
 ```
@@ -892,7 +892,7 @@ w.name.print()              # "HELLO"
 
 Protocols define behavioral contracts. Types implement protocols via `impl Protocol for Type`.
 
-```expo
+```koja
 protocol Greeter
   fn greet(self) -> String
 end
@@ -916,7 +916,7 @@ The compiler validates completeness (all protocol functions must be implemented)
 
 Generic type parameters can be constrained to types implementing specific protocols using `:` syntax:
 
-```expo
+```koja
 fn say_hello<T: Greeter>(animal: T) -> String
   animal.greet()
 end
@@ -924,7 +924,7 @@ end
 
 Multiple bounds use `&` (the protocol composition operator, complementing `|` for union types):
 
-```expo
+```koja
 fn describe_and_greet<T: Greeter & Description>(animal: T) -> String
   animal.describe() <> " says " <> animal.greet()
 end
@@ -948,15 +948,15 @@ Protocol dispatch is static via monomorphization -- no vtables, no dynamic dispa
 
 ## Modules
 
-Each `.expo` file is a module. In a project (defined by `expo.toml`), all types and public functions across all files are visible in every file -- no imports needed.
+Each `.koja` file is a module. In a project (defined by `koja.toml`), all types and public functions across all files are visible in every file -- no imports needed.
 
-```expo
-# src/helper.expo
+```koja
+# src/helper.koja
 fn add(a: Int, b: Int) -> Int
   a + b
 end
 
-# src/main.expo
+# src/main.koja
 fn main
   Helper.add(3, 4).print()
 end
@@ -979,7 +979,7 @@ See [Private Functions](#private-functions) for examples.
 
 When using types from qualified standard library packages or dependency packages, `alias` creates a file-private shorthand:
 
-```expo
+```koja
 alias Net.TCPSocket
 alias JSON.Decoder
 alias JSON.Encoder as JSONEncoder
@@ -1002,13 +1002,13 @@ Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
 ## Concurrency
 
-Expo uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are moved (ownership transfer, zero-copy) -- there is no shared mutable state.
+Koja uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are moved (ownership transfer, zero-copy) -- there is no shared mutable state.
 
 ### `Task<R>`
 
 The simplest way to run concurrent work. Wraps a closure, runs it in a spawned process, and returns the result:
 
-```expo
+```koja
 ref = Task.async(fn -> expensive_computation() end)
 result = Task.await(ref)  # Result<R, CallError>, times out after 5000ms
 ```
@@ -1019,7 +1019,7 @@ result = Task.await(ref)  # Result<R, CallError>, times out after 5000ms
 
 For stateful, long-lived processes, implement the `Process` protocol. `C` is the config type, `M` is the message type, `R` is the reply type.
 
-```expo
+```koja
 protocol Process<C, M, R>
   fn new(config: C) -> Self
   fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
@@ -1034,7 +1034,7 @@ end
 
 `run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when a `StopReason` is returned:
 
-```expo
+```koja
 fn run(move self) -> StopReason
   receive
     pair: Pair<M, Option<ReplyTo<R>>> ->
@@ -1048,7 +1048,7 @@ end
 
 A complete process example:
 
-```expo
+```koja
 enum CounterMsg
   Increment
   Decrement
@@ -1082,7 +1082,7 @@ count = ref.call(CounterMsg.Increment, 5000)
 
 `Lifecycle` abstracts OS signals into a platform-agnostic enum:
 
-```expo
+```koja
 enum Lifecycle
   Shutdown    # SIGTERM
   Interrupt   # SIGINT
@@ -1092,7 +1092,7 @@ end
 
 `StopReason` represents intentional process termination:
 
-```expo
+```koja
 enum StopReason
   Normal      # process finished its work
   Shutdown    # process was told to stop
@@ -1101,7 +1101,7 @@ end
 
 The `ExitStatus` protocol maps a `StopReason` to an OS exit code (only relevant for the entry process):
 
-```expo
+```koja
 protocol ExitStatus
   fn code(self) -> Int
 end
@@ -1109,7 +1109,7 @@ end
 
 `ExitReason` is what a supervisor sees when a child stops:
 
-```expo
+```koja
 enum ExitReason
   Normal
   Shutdown
@@ -1121,7 +1121,7 @@ end
 
 `spawn` returns a typed handle to the running process. `M` is the message type the process accepts; `R` is the reply type.
 
-```expo
+```koja
 struct Ref<M, R>
   id: Int
 end
@@ -1135,7 +1135,7 @@ Operations on a process handle:
 - `kill()` -- immediately terminates the process. No signal is sent.
 - `alive?() -> Bool` -- returns `true` if the process is still running.
 
-```expo
+```koja
 ref.cast(CounterMsg.Increment)
 result = ref.call(CounterMsg.Increment, 5000)
 ref.signal(Lifecycle.Shutdown)
@@ -1145,7 +1145,7 @@ ref.signal(Lifecycle.Shutdown)
 
 When a process receives a `call`, the handler gets a `ReplyTo<R>` channel to send the response back. The type `R` is enforced at compile time.
 
-```expo
+```koja
 struct ReplyTo<R>
   id: Int
 end
@@ -1155,7 +1155,7 @@ end
 
 `ReplyTo.reply(from, value)` is a convenience on `ReplyTo<R>` that handles the common pattern of replying only when a caller is present (skips silently for `cast` messages):
 
-```expo
+```koja
 extend ReplyTo<R>
   fn reply(from: Option<ReplyTo<R>>, value: R)
 end
@@ -1163,7 +1163,7 @@ end
 
 Call it with the handler's `from` parameter directly:
 
-```expo
+```koja
 ReplyTo.reply(from, self.count)
 ```
 
@@ -1171,7 +1171,7 @@ ReplyTo.reply(from, self.count)
 
 The underlying keywords that power the process model. `spawn` creates a new lightweight process and returns a `Ref`. `receive` blocks the current process until a message arrives:
 
-```expo
+```koja
 receive
   pair: Pair<M, Option<ReplyTo<R>>> ->
     # handle the message
@@ -1192,7 +1192,7 @@ The following types and functions are available in every module.
 
 Available on all types. Produces a new owned value:
 
-```expo
+```koja
 copy = original.clone()
 ```
 
@@ -1204,7 +1204,7 @@ Core runtime operations.
 
 Terminates the process immediately with the given exit code. `0` indicates success; any non-zero value indicates failure.
 
-```expo
+```koja
 Kernel.exit(0)
 ```
 
@@ -1212,13 +1212,13 @@ Kernel.exit(0)
 
 Aborts the process with the given message and a symbolicated stack trace. Never returns. Used internally by `unwrap()` on `Option.None` and `Result.Err`.
 
-```expo
+```koja
 Kernel.panic("something went wrong")
 ```
 
 ### `Option<T>`
 
-```expo
+```koja
 enum Option<T>
   Some(T)
   None
@@ -1227,7 +1227,7 @@ end
 
 Functions: `unwrap()`, `or(default)`, `some?()`, `none?()`, `map(fn (T) -> U)`, `then(fn (T) -> Option<U>)`.
 
-```expo
+```koja
 x = Option.Some(42)
 x.unwrap().print()       # 42
 x.or(0).print()          # 42
@@ -1242,7 +1242,7 @@ mapped.unwrap().print()   # 420
 
 ### `Result<T, E>`
 
-```expo
+```koja
 enum Result<T, E>
   Ok(T)
   Err(E)
@@ -1251,7 +1251,7 @@ end
 
 Functions: `unwrap()`, `or(default)`, `ok?()`, `err?()`, `map(fn (T) -> U)`, `then(fn (T) -> Result<U, E>)`.
 
-```expo
+```koja
 ok: Result<Int32, Int32> = Result.Ok(42)
 ok.unwrap().print()       # 42
 
@@ -1261,7 +1261,7 @@ err.or(99).print()        # 99
 
 ### `Pair<A, B>`
 
-```expo
+```koja
 struct Pair<A, B>
   first: A
   second: B
@@ -1270,7 +1270,7 @@ end
 
 Fields: `first`, `second`.
 
-```expo
+```koja
 p: Pair<Int, String> = Pair{first: 10, second: "hello"}
 p.first.print()    # 10
 p.second.print()   # hello
@@ -1282,7 +1282,7 @@ Generic struct literals like `Pair{first: x, second: y}` infer their type parame
 
 An inclusive range with `start` and `stop` endpoints.
 
-```expo
+```koja
 struct Range
   start: Int
   stop: Int
@@ -1291,7 +1291,7 @@ end
 
 Used by `String.slice` for substring extraction:
 
-```expo
+```koja
 greeting = "hello world"
 hello = greeting.slice(Range{start: 0, stop: 4})
 hello.print()  # "hello"
@@ -1301,7 +1301,7 @@ hello.print()  # "hello"
 
 Dynamically-sized, heap-backed collection. Compiler intrinsic backed by C's `malloc`/`realloc`/`free`.
 
-```expo
+```koja
 list: List<Int32> = List.new()
 list = list.append(10)
 list = list.append(20)
@@ -1326,7 +1326,7 @@ Functions:
 - `any?(self, f: fn (T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for at least one element.
 - `all?(self, f: fn (T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for every element. Returns `true` for an empty list.
 
-```expo
+```koja
 nums = [1, 2, 3, 4, 5]
 doubled = nums.map(fn (n: Int) -> Int n * 2 end)
 evens = nums.filter(fn (n: Int) -> Bool n % 2 == 0 end)
@@ -1340,7 +1340,7 @@ List literals (`[a, b, c]`) are backed by the `ListLiteral<T>` protocol. See [Li
 
 A generic hash map. Keys must implement `Hash` and `Equality`. Uses open addressing with linear probing.
 
-```expo
+```koja
 m: Map<String, Int> = Map.new()
 m = m.put("a", 1)
 m = m.put("b", 2)
@@ -1368,7 +1368,7 @@ Map literals (`[key: value, ...]`) are backed by the `MapLiteral<K, V>` protocol
 
 A generic hash set of unique elements. Elements must implement `Hash` and `Equality`. Uses open addressing with linear probing.
 
-```expo
+```koja
 s: Set<Int> = Set.new()
 s = s.insert(1)
 s = s.insert(2)
@@ -1389,7 +1389,7 @@ Functions:
 
 `Set<T>` implements `ListLiteral<T>`, so list literal syntax constructs a set when the target type is `Set<T>`:
 
-```expo
+```koja
 names: Set<String> = ["alice", "bob", "alice"]  # Set with 2 elements
 ```
 
@@ -1397,7 +1397,7 @@ names: Set<String> = ["alice", "bob", "alice"]  # Set with 2 elements
 
 `String` implements `Enumeration<String>`, so strings can be iterated character-by-character with `for`:
 
-```expo
+```koja
 for c in "hello"
   c.print()
 end
@@ -1432,7 +1432,7 @@ Functions:
 - `upcase(self) -> String` -- returns a copy with ASCII lowercase letters converted to uppercase.
 - `whitespace?(self) -> Bool` -- returns `true` if the string contains only whitespace characters (space, `\n`, `\r`, `\t`).
 
-```expo
+```koja
 s = "hello world"
 s.length().print()                            # 11
 s.get(0).unwrap().print()                     # "h"
@@ -1454,7 +1454,7 @@ s.slice(Range{start: 0, stop: 4}).print()     # "hello"
 
 Binary and bitstring literals use `<<>>` syntax with comma-separated segments:
 
-```expo
+```koja
 header = <<0x48, 0x65, 0x6C, 0x6C, 0x6F>>
 wide = <<0x0102::16>>
 le = <<0x0102::16 little>>
@@ -1468,7 +1468,7 @@ Segment modifiers: `::N` (bit width), `::N byte` (byte width), `signed`/`unsigne
 
 Binary patterns destructure byte sequences in `match`:
 
-```expo
+```koja
 match packet
   <<tag::8, length::16, rest: Binary>> -> handle(tag, rest)
   _ -> "no match".print()
@@ -1490,7 +1490,7 @@ Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns t
 - `CPtr<UInt8>.to_binary(self, len: Int) -> Binary` -- creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed.
 - `Bits.to_binary(self) -> Result<Binary, String>` -- narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
 
-```expo
+```koja
 bin = "hello".to_binary()
 bits = bin.to_bits()
 roundtrip = bits.to_binary().unwrap().to_string().unwrap()
@@ -1503,7 +1503,7 @@ roundtrip.print()  # "hello"
 
 A raw file descriptor for low-level I/O:
 
-```expo
+```koja
 struct Fd
   descriptor: Int
 end
@@ -1519,7 +1519,7 @@ Functions:
 
 Higher-level file operations wrapping `Fd`:
 
-```expo
+```koja
 struct File
   fd: Fd
 end
@@ -1535,7 +1535,7 @@ Functions:
 - `File.rename(source: String, destination: String) -> Result<String, String>` -- renames (moves) a file.
 - `close(move self) -> Result<String, String>` -- closes the file handle.
 
-```expo
+```koja
 content = File.read("config.txt").unwrap()
 content.print()
 ```
@@ -1551,7 +1551,7 @@ Functions:
 - `IO.write(message: String)` -- writes to stdout without a trailing newline.
 - `IO.gets(prompt: String) -> String` -- prints `prompt` and reads a line from stdin (without the trailing newline).
 
-```expo
+```koja
 IO.puts("hello")
 name = IO.gets("What is your name? ")
 IO.puts("Hello, #{name}!")
@@ -1564,7 +1564,7 @@ Static functions on `Int` and `Float` for parsing strings:
 - `Int.parse(input: String) -> Result<Int, String>` -- parses a string as a 64-bit signed integer.
 - `Float.parse(input: String) -> Result<Float, String>` -- parses a string as a 64-bit float.
 
-```expo
+```koja
 x = Int.parse("42").unwrap()
 x.print()  # 42
 
@@ -1577,7 +1577,7 @@ err.err?().print()  # true
 
 ### `Enumeration<T>` Protocol
 
-```expo
+```koja
 protocol Enumeration<T>
   fn length(self) -> Int
   fn get(self, index: Int) -> Option<T>
@@ -1588,7 +1588,7 @@ Any type implementing `Enumeration<T>` can be used with `for` loops. `List<T>` a
 
 ### `Equality` Protocol
 
-```expo
+```koja
 protocol Equality
   fn eq(self, other: Self) -> Bool
 end
@@ -1598,7 +1598,7 @@ Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, a
 
 ### `Hash` Protocol
 
-```expo
+```koja
 protocol Hash
   fn hash(self) -> Int
 end
@@ -1608,7 +1608,7 @@ Required for keys in `Map<K, V>` and elements in `Set<T>`. Implemented for all n
 
 ### `Bitwise` Protocol
 
-```expo
+```koja
 protocol Bitwise
   fn band(self, other: Self) -> Self
   fn bor(self, other: Self) -> Self
@@ -1619,9 +1619,9 @@ protocol Bitwise
 end
 ```
 
-Bitwise operations are methods rather than symbolic operators. Expo reserves `<<`/`>>` for binary literals, `|` for union types, and `&` for protocol composition in trait bounds. All integer types implement `Bitwise`.
+Bitwise operations are methods rather than symbolic operators. Koja reserves `<<`/`>>` for binary literals, `|` for union types, and `&` for protocol composition in trait bounds. All integer types implement `Bitwise`.
 
-```expo
+```koja
 flags = 0b1010
 (flags.band(0b1100)).print()  # 8  (0b1000)
 flags.bor(0b0001).print()   # 11 (0b1011)
@@ -1631,7 +1631,7 @@ flags.bor(0b0001).print()   # 11 (0b1011)
 
 ### `Debug` Protocol
 
-```expo
+```koja
 protocol Debug
   fn format(self) -> String
   fn print(self)                # default: IO.puts(self.format())
@@ -1643,7 +1643,7 @@ end
 
 `Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
-```expo
+```koja
 p = Point{x: 1, y: 2}
 p.print()                       # Point{x: 1, y: 2}
 "point is #{p}".print()         # "point is Point{x: 1, y: 2}"
@@ -1654,7 +1654,7 @@ User{name: "alice"}.print()     # User{name: "alice"}
 
 For raw, unquoted output use `IO.puts` directly (it writes its `String` argument verbatim and adds a newline):
 
-```expo
+```koja
 IO.puts("hello")                # hello
 IO.puts(p.format())             # Point{x: 1, y: 2}
 ```
@@ -1665,7 +1665,7 @@ List and map literals are backed by protocols, allowing custom types to opt into
 
 **`ListLiteral<T>`** -- the compiler builds a `List<T>` from `[a, b, c]` and passes it to `from_list`:
 
-```expo
+```koja
 protocol ListLiteral<T>
   fn from_list(move list: List<T>) -> Self
 end
@@ -1675,7 +1675,7 @@ end
 
 **`MapLiteral<K, V>`** -- the compiler builds a `Map<K, V>` from `[k: v, ...]` and passes it to `from_map`:
 
-```expo
+```koja
 protocol MapLiteral<K, V>
   fn from_map(move map: Map<K, V>) -> Self
 end
@@ -1687,13 +1687,13 @@ end
 
 ## C FFI
 
-Expo can call C functions via the `@extern "C"` annotation. FFI declarations live on structs (types are namespaces). No `unsafe` keyword -- safety is the wrapper author's responsibility.
+Koja can call C functions via the `@extern "C"` annotation. FFI declarations live on structs (types are namespaces). No `unsafe` keyword -- safety is the wrapper author's responsibility.
 
 ### Declaring Extern Functions
 
 `@extern "C"` on a function marks it as a C declaration. `@link "libname"` tells the linker which library provides the symbol (`-l libname`). Extern functions live inside structs, which serve as namespaces.
 
-```expo
+```koja
 struct FFI
   @extern "C" @link "mylib"
   fn add_numbers(a: Int32, b: Int32) -> Int32
@@ -1706,13 +1706,13 @@ result = FFI.add_numbers(3, 4)
 result.print()
 ```
 
-Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Expo functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
+Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
 
 ### Symbol Naming
 
-When the C symbol name differs from the Expo function name, use `@link "lib:symbol"` to specify the C symbol after a colon:
+When the C symbol name differs from the Koja function name, use `@link "lib:symbol"` to specify the C symbol after a colon:
 
-```expo
+```koja
 struct Crypto
   @extern "C" @link "crypto:EVP_sha256"
   priv fn evp_sha256() -> CPtr<UInt8>
@@ -1722,13 +1722,13 @@ struct Crypto
 end
 ```
 
-`@link "crypto"` (without a colon) uses the Expo function name as the C symbol. `@link "crypto:SHA256"` links to the C symbol `SHA256` while the Expo function name is `sha256_raw`. This keeps all Expo function names in proper `snake_case` regardless of the C library's naming conventions.
+`@link "crypto"` (without a colon) uses the Koja function name as the C symbol. `@link "crypto:SHA256"` links to the C symbol `SHA256` while the Koja function name is `sha256_raw`. This keeps all Koja function names in proper `snake_case` regardless of the C library's naming conventions.
 
 ### `CPtr<T>`
 
 A raw C pointer type. `Copy` semantics (just a machine word). No ownership tracking -- the compiler will not auto-free memory behind a `CPtr<T>`.
 
-```expo
+```koja
 struct CPtr<T>
   fn null() -> CPtr<T>
   fn alloc(count: Int) -> CPtr<T>
@@ -1742,7 +1742,7 @@ end
 
 `alloc` and `free` use C's `malloc` and `free`. All methods are compiler intrinsics.
 
-```expo
+```koja
 buf: CPtr<Int32> = CPtr.alloc(4)
 buf.write(42)
 buf.read().print()
@@ -1758,16 +1758,16 @@ Type annotations on the variable drive generic inference for static methods like
 
 A null-terminated C string for FFI interop. Allocated with `malloc`, must be freed explicitly.
 
-```expo
+```koja
 struct CString
   ptr: CPtr<UInt8>
   len: Int
 end
 ```
 
-Convert between Expo strings and C strings:
+Convert between Koja strings and C strings:
 
-```expo
+```koja
 name = "hello"
 cs = name.to_cstring()
 cs.len.print()
@@ -1778,13 +1778,13 @@ back = cs.to_string()
 cs.free()
 ```
 
-`String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies the bytes back into an Expo `String`. The original string is unaffected by either conversion.
+`String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies the bytes back into an Koja `String`. The original string is unaffected by either conversion.
 
 ### Passing Pointers to C
 
 `CPtr<T>` is accepted in `@extern "C"` signatures, enabling pointer-passing FFI:
 
-```expo
+```koja
 struct FFI
   @extern "C" @link "mylib"
   fn fill_array(buf: CPtr<Int32>, count: Int32, value: Int32)
@@ -1802,7 +1802,7 @@ buf.free()
 
 For string-accepting C functions, pass `cs.ptr` (the `CPtr<UInt8>`) and `cs.len`:
 
-```expo
+```koja
 cs = "hello".to_cstring()
 FFI.some_c_function(cs.ptr, cs.len)
 cs.free()
@@ -1816,7 +1816,7 @@ cs.free()
 
 Documents a function, struct, or enum:
 
-```expo
+```koja
 @doc "Adds two integers."
 fn add(a: Int32, b: Int32) -> Int32
   a + b
@@ -1825,13 +1825,13 @@ end
 
 `@doc false` excludes an item from generated documentation.
 
-Doc strings support Markdown and are rendered by `expo doc`.
+Doc strings support Markdown and are rendered by `koja doc`.
 
 ### `@test`
 
-Marks a function as a test case. `expo test` discovers and runs all `@test`-annotated functions in `src/` and `test/` directories.
+Marks a function as a test case. `koja test` discovers and runs all `@test`-annotated functions in `src/` and `test/` directories.
 
-```expo
+```koja
 @test
 fn test_addition
   result = add(2, 3)
@@ -1857,7 +1857,7 @@ The following features are designed but not yet compiled to native code. They ar
 
 Bump-allocated regions with bulk-free semantics. Designed but not implemented -- `arena` is not a reserved keyword today, and the surface syntax will be reintroduced when the runtime allocator work lands. See the "Future: Arena blocks (post-v1)" section in `design/ROADMAP.md`:
 
-```expo
+```koja
 result = arena
   # all allocations in here are bulk-freed at block exit
   # only explicitly cloned values escape
@@ -1868,7 +1868,7 @@ end
 
 Irrefutable struct destructuring on assignment:
 
-```expo
+```koja
 Config{name, port} = load_config()
 ```
 
@@ -1884,28 +1884,28 @@ Language-native typed pipelines for backend business logic with step-ordered typ
 
 | Command       | Description                                       |
 | ------------- | ------------------------------------------------- |
-| `expo new`    | Scaffold a new project directory                  |
-| `expo build`  | Compile to a native binary via LLVM               |
-| `expo run`    | Build and execute in one step                     |
-| `expo check`  | Type check without compiling                      |
-| `expo test`   | Run `@test`-annotated functions                   |
-| `expo format` | Opinionated code formatter (`--write`, `--check`) |
-| `expo doc`    | Generate static HTML documentation                |
-| `expo lex`    | Dump tokens                                       |
-| `expo parse`  | Dump AST                                          |
+| `koja new`    | Scaffold a new project directory                  |
+| `koja build`  | Compile to a native binary via LLVM               |
+| `koja run`    | Build and execute in one step                     |
+| `koja check`  | Type check without compiling                      |
+| `koja test`   | Run `@test`-annotated functions                   |
+| `koja format` | Opinionated code formatter (`--write`, `--check`) |
+| `koja doc`    | Generate static HTML documentation                |
+| `koja lex`    | Dump tokens                                       |
+| `koja parse`  | Dump AST                                          |
 
 ### Project Scaffolding
 
-`expo new <name>` creates a project directory with the following structure:
+`koja new <name>` creates a project directory with the following structure:
 
 ```
 my_app/
-  expo.toml
+  koja.toml
   src/
-    main.expo
+    main.koja
 ```
 
-The `expo.toml` file defines the project configuration:
+The `koja.toml` file defines the project configuration:
 
 ```toml
 [project]
@@ -1928,4 +1928,4 @@ Real-time diagnostics, document formatting, hover (type signatures + `@doc`), an
 
 ### Formatter
 
-Zero-config, opinionated. `expo format --write` reformats in place, `expo format --check` exits non-zero if formatting differs. The formatter handles escape re-encoding for round-trip correctness and preserves annotations.
+Zero-config, opinionated. `koja format --write` reformats in place, `koja format --check` exits non-zero if formatting differs. The formatter handles escape re-encoding for round-trip correctness and preserves annotations.

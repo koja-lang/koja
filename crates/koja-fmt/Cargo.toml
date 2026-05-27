@@ -1,0 +1,13 @@
+[package]
+name = "koja-fmt"
+description = "Opinionated code formatter for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-parser = { path = "../koja-parser" }
+
+[dev-dependencies]
+proptest = "1.11.0"

@@ -23,15 +23,15 @@ import { join } from "path";
 
 let client: LanguageClient | undefined;
 
-function getExpoBinary(): string {
-  const config = workspace.getConfiguration("expo");
-  return config.get<string>("path", "") || "expo";
+function getKojaBinary(): string {
+  const config = workspace.getConfiguration("koja");
+  return config.get<string>("path", "") || "koja";
 }
 
 function createClient(): LanguageClient {
-  const config = workspace.getConfiguration("expo.lsp");
+  const config = workspace.getConfiguration("koja.lsp");
   const configPath = config.get<string>("path", "");
-  const command = configPath || "expo-lsp";
+  const command = configPath || "koja-lsp";
 
   const serverOptions: ServerOptions = {
     command,
@@ -39,18 +39,18 @@ function createClient(): LanguageClient {
   };
 
   const clientOptions: LanguageClientOptions = {
-    documentSelector: [{ scheme: "file", language: "expo" }],
+    documentSelector: [{ scheme: "file", language: "koja" }],
   };
 
   return new LanguageClient(
-    "expo-lsp",
-    "Expo Language Server",
+    "koja-lsp",
+    "Koja Language Server",
     serverOptions,
     clientOptions,
   );
 }
 
-function runExpoCommand(subcommand: string) {
+function runKojaCommand(subcommand: string) {
   const editor = window.activeTextEditor;
   if (!editor) {
     window.showErrorMessage("No active file to run.");
@@ -58,8 +58,8 @@ function runExpoCommand(subcommand: string) {
   }
 
   const doc = editor.document;
-  if (doc.languageId !== "expo") {
-    window.showErrorMessage("Active file is not an Expo file.");
+  if (doc.languageId !== "koja") {
+    window.showErrorMessage("Active file is not an Koja file.");
     return;
   }
 
@@ -69,11 +69,11 @@ function runExpoCommand(subcommand: string) {
   }
 
   doc.save().then(() => {
-    const binary = getExpoBinary();
+    const binary = getKojaBinary();
     const filePath = doc.uri.fsPath;
     const terminal =
-      window.terminals.find((t) => t.name === "Expo") ||
-      window.createTerminal("Expo");
+      window.terminals.find((t) => t.name === "Koja") ||
+      window.createTerminal("Koja");
     terminal.show();
     terminal.sendText(`${binary} ${subcommand} "${filePath}"`);
   });
@@ -84,7 +84,7 @@ export function activate(context: ExtensionContext) {
   client.start();
 
   context.subscriptions.push(
-    commands.registerCommand("expo.restartServer", async () => {
+    commands.registerCommand("koja.restartServer", async () => {
       if (client) {
         try {
           await client.stop();
@@ -97,23 +97,23 @@ export function activate(context: ExtensionContext) {
       await client.start();
     }),
 
-    commands.registerCommand("expo.runFile", () => {
-      runExpoCommand("run");
+    commands.registerCommand("koja.runFile", () => {
+      runKojaCommand("run");
     }),
 
-    commands.registerCommand("expo.buildFile", () => {
-      runExpoCommand("build");
+    commands.registerCommand("koja.buildFile", () => {
+      runKojaCommand("build");
     }),
 
-    languages.registerDocumentFormattingEditProvider("expo", {
+    languages.registerDocumentFormattingEditProvider("koja", {
       provideDocumentFormattingEdits(
         document: TextDocument,
         _options: FormattingOptions,
         _token: CancellationToken,
       ): TextEdit[] {
-        const binary = getExpoBinary();
+        const binary = getKojaBinary();
         const text = document.getText();
-        const tmpFile = join(tmpdir(), `expo-fmt-${Date.now()}.expo`);
+        const tmpFile = join(tmpdir(), `koja-fmt-${Date.now()}.koja`);
 
         try {
           writeFileSync(tmpFile, text, "utf-8");

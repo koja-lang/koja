@@ -1,6 +1,6 @@
 # Compiler Northstar
 
-The destination architecture for the Expo compiler. This is **not** a
+The destination architecture for the Koja compiler. This is **not** a
 trajectory doc; it describes the system as it should exist, not how
 to get there from where it is today.
 
@@ -15,17 +15,17 @@ see `archive/20260502-COMPILER-NORTHSTAR-QA.md`.
 
 ```text
                   (sealed AST + GlobalRegistry)    (sealed IRProgram)
-expo-parser → expo-typecheck ──────────────────→ expo-ir ──────────────→ expo-ir-llvm
-                                                                       ↘ expo-ir-eval
+koja-parser → koja-typecheck ──────────────────→ koja-ir ──────────────→ koja-ir-llvm
+                                                                       ↘ koja-ir-eval
 ```
 
 Five crates (counting both backends), four logical phases. Two
-seal-asserted handoffs (`expo-typecheck → expo-ir`, `expo-ir →
-backend`). The `expo-parser → expo-typecheck` handoff is raw AST;
-the first sub-pass `expo-typecheck` runs is its own internal work
+seal-asserted handoffs (`koja-typecheck → koja-ir`, `koja-ir →
+backend`). The `koja-parser → koja-typecheck` handoff is raw AST;
+the first sub-pass `koja-typecheck` runs is its own internal work
 on that raw AST.
 
-(`expo-lexer` exists as an implementation detail of `expo-parser`
+(`koja-lexer` exists as an implementation detail of `koja-parser`
 and is not noted in the pipeline; it is not a phase boundary.)
 
 Each pipeline-level phase is a single logical phase that internally
@@ -61,15 +61,15 @@ Definitions used throughout this doc.
   sequential `u32` today). Built during the `collect` and
   `lift_signatures` sub-passes, frozen at seal, then consumed by
   ir (and the LSP) as part of the sealed substrate.
-- **Sealed `IRProgram`.** The output of the expo-ir phase. No
+- **Sealed `IRProgram`.** The output of the koja-ir phase. No
   `Stub` instructions; every callee is resolved to a registered
   symbol; every coercion has been emitted as an explicit
   `IRInstruction`. Asserted by `seal_program`.
-- **Closure pass.** The whole-program walk in `expo-ir/src/closure/`
+- **Closure pass.** The whole-program walk in `koja-ir/src/closure/`
   that discovers which generic instantiations the source actually
   references and registers them via the planners.
 - **Planners.** The `monomorphize_*` functions in
-  `expo-ir/src/lower/monomorphize.rs`. Take a generic decl + a
+  `koja-ir/src/lower/monomorphize.rs`. Take a generic decl + a
   type-arg vector and append a specialized `IRStruct` / `IREnum` /
   `IRFunction` to `IRProgram`. LLVM-free; idempotent.
 - **`IRPackage`.** A per-package fragment produced by source
@@ -97,19 +97,19 @@ Definitions used throughout this doc.
   (pre-resolve) state. Each variant carries an opaque handle whose
   numeric derivation is an implementation detail.
 
-## Phase 1: `expo-parser`
+## Phase 1: `koja-parser`
 
 Input: source text (per file).
 Output: raw AST (per file).
 
-`expo-parser` produces an AST faithfully reflecting the source. No
+`koja-parser` produces an AST faithfully reflecting the source. No
 semantic analysis. No name resolution. No type inference. No
 synthesis.
 
-`expo-parser` does not fail-fast on semantic errors that aren't
-syntactic; those are `expo-typecheck`'s job.
+`koja-parser` does not fail-fast on semantic errors that aren't
+syntactic; those are `koja-typecheck`'s job.
 
-## Phase 2: `expo-typecheck` (the semantic-analysis phase)
+## Phase 2: `koja-typecheck` (the semantic-analysis phase)
 
 Input: raw AST + build configuration (target, cfg flags, etc.).
 Output: `CheckedProgram` — the sealed pair (sealed AST +
@@ -117,7 +117,7 @@ Output: `CheckedProgram` — the sealed pair (sealed AST +
 `Resolution` and `resolution: ResolvedType`; the registry holds the
 canonical decl metadata that those handles dereference into.
 
-Crate name `expo-typecheck` for implementation continuity. The phase
+Crate name `koja-typecheck` for implementation continuity. The phase
 is conceptually broader than its name — it does name and type
 resolution, lifting of signatures and lifted struct / enum / protocol
 payloads onto the registry, surface-shape synthesis, type checking,
@@ -126,7 +126,7 @@ annotation, and sealing. There is no separate "preprocess" phase.
 ### Sub-pass order
 
 ```text
-expo-typecheck:
+koja-typecheck:
   collect          -> two passes across all files. collect_file_decls
                       registers named decls (types, functions, etc.)
                       into the GlobalRegistry. collect_file_impls runs
@@ -166,7 +166,7 @@ When a new transformation is proposed, find its slot mechanically:
 5. Does it produce nodes that themselves need resolution?
    → before resolve.
 6. Does it touch invariants the seal asserts?
-   → it doesn't belong in typecheck; it belongs in expo-ir or later.
+   → it doesn't belong in typecheck; it belongs in koja-ir or later.
 
 ### What typecheck owns
 
@@ -182,7 +182,7 @@ When a new transformation is proposed, find its slot mechanically:
 ### What typecheck does not own
 
 - Generic specialization (monomorphization). Generic decls remain
-  in the sealed AST with type-parameter references; expo-ir
+  in the sealed AST with type-parameter references; koja-ir
   specializes them.
 - Default protocol impl bodies (Debug, etc.). The registry knows
   which protocols a type conforms to, but the synthesized impl
@@ -203,12 +203,12 @@ recursively, and asserts every `RegistryEntry` in the
 hard invariant, not advisory.
 
 The seal applies on the **typecheck-success path**: typecheck OK →
-`seal_ast` → expo-ir. Typecheck-_failure_ outputs (partial
+`seal_ast` → koja-ir. Typecheck-_failure_ outputs (partial
 annotations, diagnostics attached) are consumed by the LSP
 best-effort and never enter the lowering pipeline. The LSP never
 calls `seal_ast`.
 
-## Phase 3: expo-ir (the lowering phase)
+## Phase 3: koja-ir (the lowering phase)
 
 Input: `CheckedProgram` — the sealed (AST + `GlobalRegistry`) pair
 from typecheck.
@@ -217,7 +217,7 @@ Output: sealed `IRProgram`.
 ### Sub-pass order
 
 ```text
-expo-ir:
+koja-ir:
   collect-package -> per-package source-lowering produces an IRPackage
                      fragment (cacheable per package per the
                      incremental-compilation section)
@@ -253,7 +253,7 @@ intent (the function is pure with respect to its inputs); the
 on-disk cache layer is not yet implemented and lives behind the
 `lower_program` shell today.
 
-### What expo-ir owns
+### What koja-ir owns
 
 - Translation of sealed AST to IR instructions.
 - Generic specialization (the closure pass discovers; planners
@@ -264,17 +264,17 @@ on-disk cache layer is not yet implemented and lives behind the
 - Construction of the entry-point reference in the resulting
   `IRProgram`.
 
-### What expo-ir does not own
+### What koja-ir does not own
 
-- Name resolution (typecheck did it; expo-ir reads annotations).
+- Name resolution (typecheck did it; koja-ir reads annotations).
 - Type resolution (typecheck did it).
 - Overload resolution (typecheck did it).
-- Coercion _decisions_ (typecheck made them; expo-ir emits the
+- Coercion _decisions_ (typecheck made them; koja-ir emits the
   corresponding instructions).
 
 ### `lower::*` helpers contract
 
-The free functions in `expo-ir/src/lower/` are **pure translators**
+The free functions in `koja-ir/src/lower/` are **pure translators**
 under this architecture:
 
 - They do not discover generics or bail on unregistered symbols.
@@ -289,7 +289,7 @@ under this architecture:
 pub(crate) fn seal_program(program: &IRProgram)
 ```
 
-Implemented in `expo-ir/src/seal/program.rs` as a top-level walk
+Implemented in `koja-ir/src/seal/program.rs` as a top-level walk
 that delegates to focused helpers (`seal_program_entry_wrappers`,
 `seal_program_calls`, `seal_program_closure_ops`,
 `seal_program_enum_ops`, `seal_program_struct_ops`,
@@ -305,20 +305,20 @@ that delegates to focused helpers (`seal_program_entry_wrappers`,
 
 `seal_program` panics on violation; it is not advisory.
 
-## Phase 4a: expo-ir-llvm (LLVM emission)
+## Phase 4a: koja-ir-llvm (LLVM emission)
 
 Input: sealed `IRProgram`.
 Output: LLVM IR / object code.
 
-### What expo-ir-llvm owns
+### What koja-ir-llvm owns
 
 - Translation of each `IRInstruction` to its LLVM emission pattern.
-- expo-ir-llvm builds **its own indices** over the sealed
+- koja-ir-llvm builds **its own indices** over the sealed
   `IRProgram` (mangled-name → `FunctionValue`, struct → LLVM type,
-  etc.). It does not import any expo-ir or expo-typecheck
+  etc.). It does not import any koja-ir or koja-typecheck
   side-tables.
 
-### What expo-ir-llvm does not own
+### What koja-ir-llvm does not own
 
 - Any monomorphization. There is no lazy backfill. There is no
   `lazy_mono_count`. If a callee resolves to a symbol not present
@@ -327,16 +327,16 @@ Output: LLVM IR / object code.
 - Any interpretation of `Coercion::*`. The backend does not import
   `Coercion`. Each `IRInstruction` has a single direct LLVM
   emission pattern.
-- Any imports of `expo-typecheck`. The sealed `IRProgram` is the
+- Any imports of `koja-typecheck`. The sealed `IRProgram` is the
   full input contract.
 
-## Phase 4b: expo-ir-eval (interpreter)
+## Phase 4b: koja-ir-eval (interpreter)
 
 Input: sealed `IRProgram`.
 Output: side effects from running the program (or returned values
 in REPL mode).
 
-Sibling to `expo-ir-llvm`, not sequential. Both backends consume
+Sibling to `koja-ir-llvm`, not sequential. Both backends consume
 the same sealed `IRProgram` and follow the same pattern: each
 `IRInstruction` has one direct emission/interpretation; no
 fallback paths; no awareness of `Coercion::*`.
@@ -403,7 +403,7 @@ pub enum Resolution {
 - `Global` indexes into the `GlobalRegistry`.
 - `Local` indexes into the enclosing function's `LocalScope` (minted
   when parameters or `let`-introduced names enter scope). `LocalId`
-  does not cross the IR boundary; expo-ir defines a sibling
+  does not cross the IR boundary; koja-ir defines a sibling
   `IRLocalId` and translates one-to-one at lower time.
 - `TypeParam` references one of an owning generic decl's type
   parameter slots. Seal asserts this variant only appears inside
@@ -464,7 +464,7 @@ Not in a parallel side-table. Choices:
 
 ### Coercions
 
-`Coercion` (defined in `expo-ast/src/coercion.rs`) is a
+`Coercion` (defined in `koja-ast/src/coercion.rs`) is a
 typecheck-layer vocabulary. It records "the value at this site
 needs widening / wrapping / conversion before it can flow to its
 consumer."
@@ -475,7 +475,7 @@ consumer."
   corresponding `IRInstruction` at the exact site.
 - The sealed `IRProgram` contains zero `Coercion` metadata on any
   operand.
-- `expo-ir-llvm` and `expo-ir-eval` do not import `Coercion`.
+- `koja-ir-llvm` and `koja-ir-eval` do not import `Coercion`.
 - Adding a new `Coercion` variant requires adding the paired
   `IRInstruction` and lowerer emitter in the same change.
 
@@ -485,7 +485,7 @@ literal width fitting (`UInt8 = 4` minting the const at `u8`
 width rather than the default `i64`). Width fitting is structurally
 distinct from value-conversion coercion: it changes the materialized
 constant, not the data-flow shape. See the module doc in
-`expo-ast/src/coercion.rs` for the full rationale.
+`koja-ast/src/coercion.rs` for the full rationale.
 
 ### Polymorphism
 
@@ -509,7 +509,7 @@ The compiler uses three seal pass-throughs:
 | Seal                    | Phase     | Asserts                                                                    |
 | ----------------------- | --------- | -------------------------------------------------------------------------- |
 | `seal_ast`              | typecheck | every `Expr.resolution` resolved; every `RegistryEntry` complete           |
-| `seal_program`          | expo-ir   | no `Stub`; every callee registered; no `Coercion` metadata; entry resolved |
+| `seal_program`          | koja-ir   | no `Stub`; every callee registered; no `Coercion` metadata; entry resolved |
 | (codegen/eval implicit) | backend   | one match arm per `IRInstruction`; no fallback paths                       |
 
 The seal contract is `panic on violation`. Seal failures indicate
@@ -532,10 +532,10 @@ Convention:
 
 | Command      | Available `--emit-*`                                                     |
 | ------------ | ------------------------------------------------------------------------ |
-| `expo lex`   | `--emit-tokens`                                                          |
-| `expo parse` | `--emit-ast` (raw AST; annotations all `None`)                           |
-| `expo check` | `--emit-ast` (sealed AST; annotations populated)                         |
-| `expo build` | `--emit-package`, `--emit-ir`, `--emit-llvm`, `--emit-asm`, `--emit-obj` |
+| `koja lex`   | `--emit-tokens`                                                          |
+| `koja parse` | `--emit-ast` (raw AST; annotations all `None`)                           |
+| `koja check` | `--emit-ast` (sealed AST; annotations populated)                         |
+| `koja build` | `--emit-package`, `--emit-ir`, `--emit-llvm`, `--emit-asm`, `--emit-obj` |
 
 The same artifact name (`--emit-ast` on both `parse` and `check`)
 is intentional: same printer, different content. The seal state
@@ -543,10 +543,10 @@ is what differs.
 
 Mechanical commitments:
 
-- Output goes to stdout by default (`expo check --emit-ast | jq
+- Output goes to stdout by default (`koja check --emit-ast | jq
 ...` is composable). `-o <file>` redirects to a file when the
   caller wants persistent output.
-- Each emit short-circuits the command. `expo build --emit-ir`
+- Each emit short-circuits the command. `koja build --emit-ir`
   does not also produce a binary; if both are wanted, run the
   command twice. Avoids output-collision design.
 - Format conventions per artifact: tokens are one-per-line; ASTs
@@ -609,9 +609,9 @@ purpose-shaped lookups on top:
 
 | Consumer          | Sealed input                  | Builds                                                                  |
 | ----------------- | ----------------------------- | ----------------------------------------------------------------------- |
-| `expo-ir-llvm`    | sealed `IRProgram`            | mangled-name → `FunctionValue`, struct → LLVM type, etc.                |
-| `expo-ir-eval`    | sealed `IRProgram`            | mangled-name → interpreter handle, etc.                                 |
-| `expo-ir` (lower) | sealed AST + `GlobalRegistry` | per-function substitution context, mono registry, IR symbol table, etc. |
+| `koja-ir-llvm`    | sealed `IRProgram`            | mangled-name → `FunctionValue`, struct → LLVM type, etc.                |
+| `koja-ir-eval`    | sealed `IRProgram`            | mangled-name → interpreter handle, etc.                                 |
+| `koja-ir` (lower) | sealed AST + `GlobalRegistry` | per-function substitution context, mono registry, IR symbol table, etc. |
 | LSP               | sealed AST + `GlobalRegistry` | name → references, file → symbols, ID → def site, etc.                  |
 | (future) tools    | sealed AST + `GlobalRegistry` | whatever they need                                                      |
 
@@ -634,7 +634,7 @@ pub enum ProjectEntry {
 ```
 
 `ProjectEntry::Function` covers both `fn main` (the legacy-support
-window) and script entry — `.exps` files lower to a synthesized
+window) and script entry — `.kojs` files lower to a synthesized
 top-level function with the same shape, so the original `EntryPoint`
 plan's separate `Eval` variant was folded into `Function` once
 scripts started lowering this way. `ProjectEntry::Process` carries
@@ -657,16 +657,16 @@ process / spawn wrappers).
 
 The following are grep/assertion-checkable in CI:
 
-- `expo-ir-llvm` does not import `expo-typecheck`. Grep:
-  `rg "use expo_typecheck" expo/crates/expo-ir-llvm/`
-- `expo-ir-llvm` does not call any `monomorphize_*` planner. Grep:
-  `rg "monomorphize_" expo/crates/expo-ir-llvm/`
+- `koja-ir-llvm` does not import `koja-typecheck`. Grep:
+  `rg "use koja_typecheck" expo/crates/koja-ir-llvm/`
+- `koja-ir-llvm` does not call any `monomorphize_*` planner. Grep:
+  `rg "monomorphize_" expo/crates/koja-ir-llvm/`
 - No `lazy_mono_count` field or its increment sites exist.
 - `IRInstruction::Stub` does not exist.
-- No `Ok(None)` paths in `expo-ir/src/lower/` that fall through to
+- No `Ok(None)` paths in `koja-ir/src/lower/` that fall through to
   `Stub` emission.
-- `expo-ir-llvm/src/stmt.rs::apply_coercion` does not exist.
-- `expo-ir-llvm` does not import `Coercion`.
+- `koja-ir-llvm/src/stmt.rs::apply_coercion` does not exist.
+- `koja-ir-llvm` does not import `Coercion`.
 - For every `Coercion::*` variant, a paired `IRInstruction::*`
   variant exists. Grep both enums and diff the variant lists.
 - `seal_program` is called exactly once in the lowering pipeline,
@@ -690,7 +690,7 @@ typecheck," see the next section.
 
 ### A new IR transformation
 
-Add it as a sub-pass in expo-ir, ordered between existing
+Add it as a sub-pass in koja-ir, ordered between existing
 sub-passes by data dependencies. If it must run after the closure
 pass and before seal, it lands in elaborate. If it must run before
 the closure pass, it lands earlier.
@@ -698,7 +698,7 @@ the closure pass, it lands earlier.
 ### A new `IRInstruction` variant
 
 Add the corresponding emission patterns to both backends
-(`expo-ir-llvm` and `expo-ir-eval`) in the same change. If the
+(`koja-ir-llvm` and `koja-ir-eval`) in the same change. If the
 instruction materializes a coercion, also add the paired
 `Coercion::*` variant to typecheck and the staging emitter to the
 lowerer.
@@ -708,7 +708,7 @@ lowerer.
 Same change: add the paired `IRInstruction::*` variant and the
 lowerer's staging emitter. Both backends gain emission patterns
 for the new instruction. The variant should not require any code
-change in `expo-ir-llvm` other than the new instruction's
+change in `koja-ir-llvm` other than the new instruction's
 emission pattern.
 
 ### A new top-level pipeline phase
@@ -780,7 +780,7 @@ authoritative):
 - `archive/20260502-COMPILER.md` — earlier self-hosted compiler
   architecture sketch (Phase 6A material; will be revisited under
   the northstar when self-hosting begins).
-- `archive/20260502-EXPOIR-ROADMAP.md` — superseded ExpoIR
+- `archive/20260502-EXPOIR-ROADMAP.md` — superseded KojaIR
   roadmap.
 - `archive/20260427-EXPOIR.md` — original SIL-style design notes.
 

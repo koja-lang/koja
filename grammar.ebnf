@@ -1,5 +1,5 @@
 (* ========================================================================== *)
-(* Expo Language Grammar -- EBNF Specification                                *)
+(* Koja Language Grammar -- EBNF Specification                                *)
 (* ========================================================================== *)
 (*                                                                            *)
 (* Notation:                                                                  *)
@@ -20,17 +20,17 @@
 (* 1. Program structure                                                       *)
 (* ========================================================================== *)
 
-(* Two entry points, one shared grammar. `.expo` files (compilation units in
-   an `expo.toml` project) enter via `program` and contain only declarations
+(* Two entry points, one shared grammar. `.koja` files (compilation units in
+   an `koja.toml` project) enter via `program` and contain only declarations
    -- the runtime entry point is the function (or Process type) named by
-   the project's `entry = "..."` in `expo.toml`. `.exps` files (exposcript)
+   the project's `entry = "..."` in `koja.toml`. `.kojs` files (koja script)
    enter via `script`, where bare statements are accepted at the top level;
    the driver hoists those statements into an implicit `fn main` before the
    rest of the pipeline. Every production below is shared between the two
    modes. *)
 
-program = { top_level_decl } ;                              (* .expo *)
-script  = { top_level_decl | statement } ;                  (* .exps *)
+program = { top_level_decl } ;                              (* .koja *)
+script  = { top_level_decl | statement } ;                  (* .kojs *)
 
 top_level_decl = struct_decl
                | enum_decl
@@ -269,7 +269,7 @@ closure_param_short = IDENT , [ ":" , type_expr ]
                     | "_" ;
 
 (* Function references are bare identifiers -- no sigil needed.
-   Since Expo has no function overloading, a bare function name
+   Since Koja has no function overloading, a bare function name
    unambiguously refers to the function. foo() calls it, foo references it.
    This is handled by the IDENT rule in primary. *)
 

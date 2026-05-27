@@ -1,6 +1,6 @@
 # C Foreign Function Interface
 
-Design notes for Expo's C FFI: calling C libraries from Expo code. The
+Design notes for Koja's C FFI: calling C libraries from Koja code. The
 compiler already calls C internally (the runtime is a C library, codegen
 emits calls via intrinsics). The FFI exposes this capability to user code.
 
@@ -10,10 +10,10 @@ emits calls via intrinsics). The FFI exposes this capability to user code.
 
 - **Primary**: wrapper packages (argon2, sqlite, openssl) where end users
   never touch FFI. The package author writes the bindings; consumers call
-  safe Expo functions.
+  safe Koja functions.
 - **Secondary**: inline FFI for any developer calling C directly from
   application code.
-- **Non-goal**: calling Expo from C. Callback support (passing Expo
+- **Non-goal**: calling Koja from C. Callback support (passing Koja
   closures to C functions that expect function pointers) is a separate
   future topic.
 
@@ -30,7 +30,7 @@ structs or individual functions. No new keywords. No new block syntax.
 No function bodies are allowed -- having a body is a compile error. The
 struct is purely a namespace for C symbols.
 
-```expo
+```koja
 @link "argon2"
 @extern "C"
 struct Argon2C
@@ -50,12 +50,12 @@ end
 `@link "argon2"` on the struct applies to all functions inside. Produces
 `-l argon2` at link time.
 
-### Function-level: C bindings alongside Expo code
+### Function-level: C bindings alongside Koja code
 
 `@extern "C"` on an individual function marks that specific function as
-a C binding. It can coexist with normal Expo functions in the same struct.
+a C binding. It can coexist with normal Koja functions in the same struct.
 
-```expo
+```koja
 struct Argon2
   @link "argon2" @extern "C"
   priv fn argon2id_hash_encoded(
@@ -99,7 +99,7 @@ end
 
 Multiple annotations on a declaration, either stacked or inline:
 
-```expo
+```koja
 @link "argon2" @extern "C"
 priv fn argon2id_hash_encoded(...) -> Int32
 
@@ -118,7 +118,7 @@ self-delimiting boundary -- no separator needed between annotations.
 - **Struct-level `@extern "C"`**: every function is a C declaration. Bodies
   are a compile error.
 - **Function-level `@extern "C"`**: this function is a C declaration. Can
-  coexist with Expo functions in the same struct.
+  coexist with Koja functions in the same struct.
 - **Visibility**: author's choice. `fn` (public) or `priv fn` (hidden),
   same as any other function.
 - **Protocol conflicts**: if a function name in an `@extern "C"` struct
@@ -128,7 +128,7 @@ self-delimiting boundary -- no separator needed between annotations.
 
 ### Why structs, not blocks
 
-Types are the namespace boundary in Expo. Files are transparent -- all
+Types are the namespace boundary in Koja. Files are transparent -- all
 types are collected into a flat namespace. Extern functions must live on
 a type to be referenceable from other files. A standalone `extern "C"`
 block would produce orphaned functions with no namespace.
@@ -146,13 +146,13 @@ Explicit `CString` type with manual conversion. No automatic marshaling.
 
 - `string.to_cstring() -> CString` -- copies and null-terminates
 - `cstring.to_string() -> String` -- copies until null byte, produces
-  Expo String
+  Koja String
 
-```expo
+```koja
 pwd = "hunter2"
-pwd_c = pwd.to_cstring()       # Expo String -> CString
+pwd_c = pwd.to_cstring()       # Koja String -> CString
 c_result = some_c_function(pwd_c.ptr())
-expo_str = c_result.to_string() # CString -> Expo String
+koja_str = c_result.to_string() # CString -> Koja String
 ```
 
 ### `CString` ownership (decided)
@@ -215,10 +215,10 @@ crash the VM." A buggy NIF crashes the entire BEAM VM -- all processes,
 all supervision trees, everything. And yet the ecosystem has been fine
 with convention-based safety.
 
-Expo's situation is strictly better: a bad FFI call crashes one OS
+Koja's situation is strictly better: a bad FFI call crashes one OS
 process, not a shared VM. If "write good wrappers, test thoroughly"
 works for Erlang where the blast radius is the entire runtime, it works
-for Expo.
+for Koja.
 
 ### Why not `unsafe`
 
@@ -232,26 +232,26 @@ not the internal call sites.
 ### Convention
 
 Package authors typically make raw C bindings `priv fn` and expose safe
-Expo functions as the public API. This is convention, not enforcement --
+Koja functions as the public API. This is convention, not enforcement --
 authors who want to expose raw bindings can use `fn` deliberately.
 
 ---
 
 ## Open: Ownership boundary
 
-Expo has ownership + move semantics. C has neither. The FFI boundary is
+Koja has ownership + move semantics. C has neither. The FFI boundary is
 where these models collide.
 
-### Passing Expo values to C
+### Passing Koja values to C
 
 Primitives (`Int32`, `UInt32`, `Float`, `Bool`) are straightforward --
 they're passed by value, same as C. No ownership questions.
 
 For pointers (`CPtr<T>`): the pointer value is copied (it's `Copy`). The
-Expo side retains no ownership of what's behind the pointer.
+Koja side retains no ownership of what's behind the pointer.
 
 For strings: `to_cstring()` creates a copy via `malloc`. The original
-Expo `String` is unaffected. The `CString` is a new allocation that
+Koja `String` is unaffected. The `CString` is a new allocation that
 must be freed via `CString.free()` or `cs.ptr.free()`.
 
 ### Receiving values from C
@@ -259,14 +259,14 @@ must be freed via `CString.free()` or `cs.ptr.free()`.
 Primitives: returned by value, no ownership issues.
 
 Pointers: C returns a `CPtr<T>`. Who allocated the memory? The C library
-(via `malloc`). Who frees it? The Expo code must call `ptr.free()` (which
-calls `free()`). The Expo runtime will not auto-free memory behind a
+(via `malloc`). Who frees it? The Koja code must call `ptr.free()` (which
+calls `free()`). The Koja runtime will not auto-free memory behind a
 `CPtr<T>`.
 
 ### Key principle
 
 `CPtr<T>` is an explicit opt-in to manual memory management. It's the
-escape hatch. Normal Expo code never touches `CPtr` -- only FFI wrapper
+escape hatch. Normal Koja code never touches `CPtr` -- only FFI wrapper
 authors do.
 
 ### Open questions
@@ -283,9 +283,9 @@ authors do.
 
 ### Direct mappings
 
-Expo already has fixed-width integer types that map directly to C:
+Koja already has fixed-width integer types that map directly to C:
 
-| Expo      | C                   | Size          |
+| Koja      | C                   | Size          |
 | --------- | ------------------- | ------------- |
 | `Int8`    | `int8_t`            | 1 byte        |
 | `Int16`   | `int16_t`           | 2 bytes       |
@@ -303,8 +303,8 @@ Expo already has fixed-width integer types that map directly to C:
 
 ### The `Int` footgun
 
-Expo's `Int` is 64-bit. C's `int` is 32-bit. A developer wrapping a C
-function that takes `int` might reach for `Int` (the Expo default) and
+Koja's `Int` is 64-bit. C's `int` is 32-bit. A developer wrapping a C
+function that takes `int` might reach for `Int` (the Koja default) and
 silently pass a 64-bit value. The compiler should warn or error when
 `Int` is used in an `@extern "C"` signature.
 
@@ -325,8 +325,8 @@ Options:
 
 ### Open: function pointers as callback params
 
-Expo has `fn(T) -> U` as a closure type (fat pointer: function + env).
-C function pointers are thin (just the function address). Passing an Expo
+Koja has `fn(T) -> U` as a closure type (fat pointer: function + env).
+C function pointers are thin (just the function address). Passing an Koja
 closure to C doesn't work without a trampoline.
 
 Options:
@@ -337,11 +337,11 @@ Options:
 
 ### Open: C enums
 
-C enums are integers. Expo enums are tagged unions. No direct mapping.
+C enums are integers. Koja enums are tagged unions. No direct mapping.
 
 Options:
 
-- Don't support C enum types -- use `Int32` and define Expo constants
+- Don't support C enum types -- use `Int32` and define Koja constants
 - Support a `@compat "C"` enum that's just a named integer (no payloads)
 - Defer
 
@@ -350,15 +350,15 @@ Options:
 ## `CPtr<T>` design (implemented)
 
 Raw pointer type. `Copy` (just a machine word). No ownership tracking.
-The Expo compiler will not auto-free memory behind a `CPtr<T>`.
+The Koja compiler will not auto-free memory behind a `CPtr<T>`.
 
 Named `CPtr` (not `Ptr`) to signal that this is a C interop type --
-it uses `malloc`/`free`, not the Expo runtime allocator. Normal Expo
+it uses `malloc`/`free`, not the Koja runtime allocator. Normal Koja
 code never touches `CPtr` -- only FFI wrapper authors do.
 
 ### API
 
-```expo
+```koja
 CPtr.null()          # -> CPtr<T>    null pointer
 CPtr.alloc(count)    # -> CPtr<T>    malloc(count * sizeof(T))
 ptr.free()           # free(ptr)     move self, no return
@@ -392,10 +392,10 @@ the FFI boundary as values (not pointers to opaque types).
 memory layout, but the annotation is extensible to other formats
 (e.g. `@compat "packed"` for wire-format structs, `@compat "json"` for
 derived serialization). `@extern "C"` structs get C layout implicitly.
-Expo methods on `@compat "C"` structs go in `impl` blocks -- the struct
-body is C territory, `impl` extends it with Expo behavior.
+Koja methods on `@compat "C"` structs go in `impl` blocks -- the struct
+body is C territory, `impl` extends it with Koja behavior.
 
-```expo
+```koja
 @compat "C"
 struct Timespec
   tv_sec: Int
@@ -432,21 +432,21 @@ time. Multiple `@link` annotations link multiple libraries.
 
 #### Symbol naming: `@link "lib:symbol"`
 
-When the C symbol name differs from the Expo function name, append
+When the C symbol name differs from the Koja function name, append
 `:symbol` to the link string. The part before the colon is the library
 name; the part after is the C symbol used in the LLVM `declare`:
 
-```expo
+```koja
 @extern "C" @link "crypto:SHA256"
 priv fn sha256_raw(data: CPtr<UInt8>, len: Int64, out: CPtr<UInt8>) -> CPtr<UInt8>
 ```
 
 This produces `-l crypto` at link time and emits `declare ... @SHA256(...)`
-in the LLVM IR, while the Expo function name `sha256_raw` follows
+in the LLVM IR, while the Koja function name `sha256_raw` follows
 `snake_case` conventions. When the colon is absent (`@link "crypto"`),
-the Expo function name is used as the C symbol.
+the Koja function name is used as the C symbol.
 
-### `expo.toml` `[link]` table
+### `koja.toml` `[link]` table
 
 For library search paths, static archives, and platform-specific options
 that don't belong in source code:
@@ -461,8 +461,8 @@ frameworks = ["Security"]  # macOS
 ### Open questions
 
 - Is `@link` on the source sufficient, or is the `[link]` table in
-  `expo.toml` also needed? (Probably both -- `@link` for the common
-  case, `expo.toml` for search paths and platform specifics.)
+  `koja.toml` also needed? (Probably both -- `@link` for the common
+  case, `koja.toml` for search paths and platform specifics.)
 - macOS frameworks (`-framework Security`) need special handling.
 - Static vs dynamic linking: always dynamic by default? Allow
   `@link static "argon2"`?
@@ -499,13 +499,13 @@ C interop via bridging headers. Objective-C types automatically bridge.
 Pros: seamless for Apple platform libraries. Cons: tightly coupled to
 the Apple ecosystem, bridging header complexity.
 
-### What Expo takes
+### What Koja takes
 
 - **From Rust**: explicit declarations (no magic comments or header
   parsing). The developer writes the binding signature.
 - **From all of them**: wrapper packages as the primary pattern. End
   users don't touch FFI.
-- **Expo's own path**: annotations on structs instead of keyword blocks.
+- **Koja's own path**: annotations on structs instead of keyword blocks.
   Types as namespaces. No `unsafe` (open question, but leaning away).
   Multiple annotations per declaration (stacked or inline).
 
@@ -521,12 +521,12 @@ follow the same pattern:
 1. Parse the extern function signature (no body)
 2. Type-check parameter and return types against FFI-compatible types
 3. Codegen: `module.add_function("argon2id_hash_encoded", fn_type, None)`
-   with unmangled C name (no Expo name mangling)
+   with unmangled C name (no Koja name mangling)
 4. Call sites emit a normal LLVM `call` to the declared function
 5. Linker: collect all `@link` libraries, pass as `-l` flags to `cc`
 
 The extern function name in LLVM IR must match the C symbol exactly.
-Expo's name mangling (which prefixes module/type names) is skipped for
+Koja's name mangling (which prefixes module/type names) is skipped for
 extern declarations.
 
 ---
@@ -543,7 +543,7 @@ implementations. `@when` is the conditional compilation mechanism.
 `@when` is an annotation that takes a condition expression. The condition
 is a simple comparison: a build variable, an operator, and a string literal.
 
-```expo
+```koja
 @when os == "macos"
 @extern "C" @link "system"
 fn getentropy(buf: CPtr<UInt8>, len: Int64) -> Int32
@@ -564,7 +564,7 @@ Supported operators: `==`, `!=`.
 
 `@when` composes with other annotations (stacked or inline):
 
-```expo
+```koja
 @when os == "macos"
 @extern "C" @link "system"
 fn getentropy(buf: CPtr<UInt8>, len: Int64) -> Int32
@@ -634,7 +634,7 @@ to accept strings and `false`.
 
 ### Future extensions
 
-- **`expo_version`**: `@when expo_version >= "0.9"` for API migration
+- **`koja_version`**: `@when koja_version >= "0.9"` for API migration
   across compiler versions. Requires compiler-internal semver comparison
   logic (not the stdlib `Version` type, since annotations are evaluated
   before the type system exists). Additional operators `>=`, `<=`, `>`, `<`

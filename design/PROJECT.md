@@ -1,9 +1,9 @@
 # Project Layout: Build Artifacts, Dependencies, and Execution Contexts
 
-Design notes for how an Expo project organizes itself on disk: where
+Design notes for how an Koja project organizes itself on disk: where
 source, dependencies, and tool-generated artifacts live; how builds
-profile differently from how they scope; how `expo test` slots into the
-profile/scope model; and how script execution (`.exps`) handles the
+profile differently from how they scope; how `koja test` slots into the
+profile/scope model; and how script execution (`.kojs`) handles the
 absence of a project context. The goal is a layout where each directory
 has a single clear lifecycle, every part is independently regenerable
 from a higher-up piece, and the LSP / dev experience is uniform whether
@@ -13,12 +13,12 @@ you're touching stdlib, a third-party dep, or your own source.
 
 ## Top-level layout
 
-A fully-wired Expo package looks like:
+A fully-wired Koja package looks like:
 
 ```
 my_package/
-  expo.toml         -- declared deps, package metadata
-  expo.lock         -- pinned exact versions (committed)
+  koja.toml         -- declared deps, package metadata
+  koja.lock         -- pinned exact versions (committed)
   src/              -- source code
   test/             -- integration tests (optional sibling dir)
   deps/             -- materialized deps + stdlib (gitignored)
@@ -36,15 +36,15 @@ Each piece has a clear lifecycle:
 
 | Piece       | Lifecycle                                              | Gitignored |
 | ----------- | ------------------------------------------------------ | ---------- |
-| `expo.toml` | hand-edited                                            | no         |
-| `expo.lock` | tool-managed, committed for reproducibility            | no         |
+| `koja.toml` | hand-edited                                            | no         |
+| `koja.lock` | tool-managed, committed for reproducibility            | no         |
 | `src/`      | hand-edited                                            | no         |
 | `test/`     | hand-edited                                            | no         |
-| `deps/`     | materialized from `expo.lock` + registry / install dir | yes        |
+| `deps/`     | materialized from `koja.lock` + registry / install dir | yes        |
 | `build/`    | rebuilt from `deps/` + source                          | yes        |
 
 The layering matters: `build/` regenerates from `deps/`, `deps/`
-regenerates from `expo.lock`, `expo.lock` regenerates from `expo.toml` +
+regenerates from `koja.lock`, `koja.lock` regenerates from `koja.toml` +
 the registry. Any tier can be `rm -rf`'d without losing work; the next
 tier up rebuilds it.
 
@@ -63,7 +63,7 @@ Three live conventions in the broader ecosystem:
 | `build/` (plain)       | Gradle, CMake, npm scripts, Flutter | Most language-neutral, most discoverable               |
 | `.build/` (hidden)     | Swift PM, Stack, Crystal            | Hides build artifacts from `ls`; can confuse new users |
 
-`build/` wins on three counts: it's language-neutral (Expo isn't Elixir
+`build/` wins on three counts: it's language-neutral (Koja isn't Elixir
 or Rust by inheritance), it doesn't collide with the Cargo `target/`
 that the rust-side compiler workspace uses, and it's the most boring
 choice — which is the right vibe for tool-generated output.
@@ -75,10 +75,10 @@ Inside `build/`, the first tier is the **build profile**: `debug` or
 
 | Profile   | Default backend              | Use                         |
 | --------- | ---------------------------- | --------------------------- |
-| `debug`   | `expo-ir-eval` (interpreter) | Inner dev loop, `expo test` |
-| `release` | `expo-codegen` (LLVM)        | Shipping, `expo build`      |
+| `debug`   | `koja-ir-eval` (interpreter) | Inner dev loop, `koja test` |
+| `release` | `koja-codegen` (LLVM)        | Shipping, `koja build`      |
 
-The dual-backend story is a real Expo advantage: the interpreter gives
+The dual-backend story is a real Koja advantage: the interpreter gives
 sub-100ms feedback for tests and dev runs; LLVM gives optimized native
 binaries for shipping. Profiles pick the backend; everything else
 follows.
@@ -118,7 +118,7 @@ is actively moving away from it via runtime config.
 
 Cargo splits them: profile is a build-dir tier, scope is handled via
 `[dev-dependencies]` and `cfg`, runtime env is not the build tool's
-problem. Expo follows Cargo's split.
+problem. Koja follows Cargo's split.
 
 ### Profile × scope, not env tiers
 
@@ -126,8 +126,8 @@ The two axes that actually exist:
 
 |                     | default scope                           | test scope                                           |
 | ------------------- | --------------------------------------- | ---------------------------------------------------- |
-| **debug profile**   | `expo run` / `expo check` (interpreter) | `expo test` (interpreter, fast)                      |
-| **release profile** | `expo build` (LLVM, ship)               | `expo test --release` (LLVM, validates codegen path) |
+| **debug profile**   | `koja run` / `koja check` (interpreter) | `koja test` (interpreter, fast)                      |
+| **release profile** | `koja build` (LLVM, ship)               | `koja test --release` (LLVM, validates codegen path) |
 
 This matrix dictates the build dir layout. No `build/dev/`, no
 `build/prod/`. Runtime environment is whatever the program decides at
@@ -136,16 +136,16 @@ compiler doesn't branch on it; the build tool doesn't either.
 
 ### Why a test scope but not a test profile
 
-`expo test` could conceivably be its own profile (Mix-style), but
+`koja test` could conceivably be its own profile (Mix-style), but
 scope-not-profile gives a strict superpower: **you can run the same
 tests through either backend.**
 
 ```
-expo test              # debug profile + test scope = fast iterate
-expo test --release    # release profile + test scope = codegen smoke
+koja test              # debug profile + test scope = fast iterate
+koja test --release    # release profile + test scope = codegen smoke
 ```
 
-A bug in `expo-codegen` won't surface under `expo-ir-eval`. The reverse
+A bug in `koja-codegen` won't surface under `koja-ir-eval`. The reverse
 is also true. Running tests through only one backend silently leaves
 the other untested. Making test a scope keeps both available without
 duplication.
@@ -164,22 +164,22 @@ re-download everything." That's a friction point Cargo deliberately
 avoids and Mix users routinely complain about. Keep them separate so
 nuking `build/` is always a no-cost local operation.
 
-### `expo.toml` + `expo.lock`
+### `koja.toml` + `koja.lock`
 
 Standard modern shape:
 
-- `expo.toml` declares deps with version constraints (e.g. `^1.2`).
-- `expo.lock` pins exact resolved versions for reproducibility.
-- `deps/` is the materialized view of `expo.lock` + the registry.
-- Commit `expo.toml` and `expo.lock`; gitignore `deps/`.
+- `koja.toml` declares deps with version constraints (e.g. `^1.2`).
+- `koja.lock` pins exact resolved versions for reproducibility.
+- `deps/` is the materialized view of `koja.lock` + the registry.
+- Commit `koja.toml` and `koja.lock`; gitignore `deps/`.
 
 ### Path deps vs registry deps
 
-`expo.toml` supports both:
+`koja.toml` supports both:
 
 ```toml
 [dependencies]
-expo_ast = { path = "../expo_ast" }   -- in-tree workspace member
+koja_ast = { path = "../koja_ast" }   -- in-tree workspace member
 http_client = "1.2"                    -- fetched from registry
 ```
 
@@ -211,7 +211,7 @@ weirdness. Switch to hardlinks later if disk pressure becomes real.
 ### The uniformity principle
 
 Stdlib is just packages. `Global`, `Http`, `Json`, `Net` — these are
-real Expo packages with `expo.toml` and `src/`, materialized into
+real Koja packages with `koja.toml` and `src/`, materialized into
 `deps/` like any third-party dep. The compiler resolves them through
 the same lookup path as user deps.
 
@@ -220,12 +220,12 @@ in the LSP doesn't take you anywhere unless you've separately installed
 rust-src and configured rust-analyzer. Every Rust dev knows this. Most
 other modern languages (Go, Elixir, Python, Zig, Swift, OCaml) ship
 stdlib as readable source and uniform IDE jump-to-source just works.
-Expo joins that group.
+Koja joins that group.
 
 ### Versioning rides the compiler
 
 Stdlib version is auto-derived from compiler version and written into
-`expo.lock` on first build. Users can't independently pin stdlib —
+`koja.lock` on first build. Users can't independently pin stdlib —
 that way lies subtle UB from version-skew between compiler intrinsics
 and stdlib shapes. Compiler upgrade → lock changes → `deps/global/`
 re-materializes.
@@ -236,8 +236,8 @@ Two modes the compiler needs to support, distinguished by an env var:
 
 | Mode         | Stdlib source                                  | When             |
 | ------------ | ---------------------------------------------- | ---------------- |
-| Compiler-dev | `EXPO_STDLIB_PATH` → `expo/lib/`               | Inside this repo |
-| User         | Install location (`~/.expo/<version>/stdlib/`) | Everywhere else  |
+| Compiler-dev | `KOJA_STDLIB_PATH` → `expo/lib/`               | Inside this repo |
+| User         | Install location (`~/.koja/<version>/stdlib/`) | Everywhere else  |
 
 Compiler-dev mode skips materialization entirely — you're editing stdlib
 in place and need the resolver to read the in-tree source directly.
@@ -274,15 +274,15 @@ under an override doesn't waste hours.
 
 ## Test execution
 
-### `expo test` semantics
+### `koja test` semantics
 
-When `expo test` fires:
+When `koja test` fires:
 
-1. Resolve the dep graph including `[test-dependencies]` from `expo.toml`.
+1. Resolve the dep graph including `[test-dependencies]` from `koja.toml`.
 2. Include items annotated `@test "..."` and everything under `test/`.
 3. Lower to IR, key the artifacts in `build/<profile>/test/cache/`.
 4. Generate or select a test runner entry point.
-5. Execute: under debug, hand IR to `expo-ir-eval`; under release,
+5. Execute: under debug, hand IR to `koja-ir-eval`; under release,
    codegen and run the binary.
 6. Report results.
 
@@ -295,7 +295,7 @@ test feedback loop comes from.
 Tests are declared with an annotation that carries a human-readable
 description, not a function name:
 
-```expo
+```koja
 @test "encodes empty string as two quotes"
 fn _ ->
   result = Encoder.encode("")
@@ -313,13 +313,13 @@ identifier abuse. Tests live in either:
 Both kinds participate in the test scope; the directory choice is an
 ergonomic axis. Most languages support both shapes (Rust's `#[cfg(test)]`
 
-- `tests/`, Go's `_test.go` + integration packages); Expo does the same.
+- `tests/`, Go's `_test.go` + integration packages); Koja does the same.
 
 ### Concurrency by default
 
-Tests run as separate Expo processes, in parallel, supervised. The
+Tests run as separate Koja processes, in parallel, supervised. The
 BEAM-flavored process model makes this essentially free: even release
-builds spawn processes cheaply, since Expo processes are runtime-level,
+builds spawn processes cheaply, since Koja processes are runtime-level,
 not OS-level.
 
 Implications baked into the runner from day one:
@@ -345,16 +345,16 @@ Implications baked into the runner from day one:
 
 ### Two resolution modes
 
-Scripts (`.exps` files) don't have an `expo.toml`, `deps/`, or
+Scripts (`.kojs` files) don't have an `koja.toml`, `deps/`, or
 `build/`. They need a different resolution path. The "stdlib is just
 a package" promise is contextual to projects; scripts live in a
 fallback mode that every script-capable language has.
 
 |                 | Project mode                           | Script mode                                    |
 | --------------- | -------------------------------------- | ---------------------------------------------- |
-| Stdlib location | `deps/global/` (materialized)          | install location (`~/.expo/<version>/stdlib/`) |
-| Cache location  | `build/<profile>/cache/` (per-project) | `~/.expo/<version>/cache/` (global)            |
-| Deps            | `expo.toml` + `expo.lock` + `deps/`    | none initially (see future work)               |
+| Stdlib location | `deps/global/` (materialized)          | install location (`~/.koja/<version>/stdlib/`) |
+| Cache location  | `build/<profile>/cache/` (per-project) | `~/.koja/<version>/cache/` (global)            |
+| Deps            | `koja.toml` + `koja.lock` + `deps/`    | none initially (see future work)               |
 | Backend default | debug = interpreter, release = LLVM    | interpreter, always                            |
 
 This isn't really "compiler magic" in a deep sense — it's just runtime
@@ -363,9 +363,9 @@ Perl, and Deno all use. Different lookup path, same physical bytes.
 
 ### First-run warming
 
-The first `expo run foo.exps` after a compiler install parses +
+The first `koja run foo.kojs` after a compiler install parses +
 typechecks stdlib once and caches `.est` / `.eir` into
-`~/.expo/<version>/cache/`. Every subsequent script run reads those
+`~/.koja/<version>/cache/`. Every subsequent script run reads those
 caches — no re-parse, no re-typecheck. Startup is dominated by
 parsing the user's script, not the stdlib.
 
@@ -374,10 +374,10 @@ is the bar for shebang ergonomics.
 
 ### LSP duality
 
-The LSP needs the same dual-mode resolution. Opening a `.exps` file
+The LSP needs the same dual-mode resolution. Opening a `.kojs` file
 with no enclosing project, it resolves stdlib via the install location
 instead of `deps/`. Jump-to-source still works — it just points into
-`~/.expo/<version>/stdlib/global/src/option.expo` instead of the
+`~/.koja/<version>/stdlib/global/src/option.koja` instead of the
 project-local `deps/global/...`. Same source, different filesystem
 path; user experience identical.
 
@@ -391,8 +391,8 @@ care.
 Deno, Python (PEP 723), and Elixir (`Mix.install`) have all converged
 on an ergonomic pattern for scripts that need one or two libraries:
 
-```expo
-#!/usr/bin/env expo
+```koja
+#!/usr/bin/env koja
 @deps {
   http_client: "1.2",
   json: "1.0",
@@ -406,11 +406,11 @@ print(Encoder.encode(response.body))
 ```
 
 The compiler sees `@deps`, resolves through the global registry,
-caches at `~/.expo/<version>/script-cache/<dep>@<version>/`, runs the
+caches at `~/.koja/<version>/script-cache/<dep>@<version>/`, runs the
 script. First run downloads; subsequent runs are instant.
 
 Not a v1 feature. Worth keeping the design space open by not
-hard-requiring `expo.toml` for any dep resolution.
+hard-requiring `koja.toml` for any dep resolution.
 
 ---
 
@@ -420,7 +420,7 @@ hard-requiring `expo.toml` for any dep resolution.
 
 If two projects on the same machine pin different compiler versions
 (via asdf or similar), they need different stdlib materializations.
-The global install layout (`~/.expo/<version>/stdlib/`) keys on
+The global install layout (`~/.koja/<version>/stdlib/`) keys on
 compiler version, so this works out — but the `deps/global/` _inside_
 a project is also version-specific. Switching the compiler version
 the project uses should re-materialize `deps/global/` from the new
@@ -440,7 +440,7 @@ the user-facing model.
 `chmod -R a-w deps/` prevents accidental edits from clobbering "source
 of truth" deps. A user editing stdlib in `deps/global/` and getting a
 permission-denied is much better feedback than silently working until
-the next `expo install` wipes their changes. Worth getting right from
+the next `koja install` wipes their changes. Worth getting right from
 day one.
 
 ### Test output interleaving
@@ -461,7 +461,7 @@ test suites in the wild:
 - `@test "..." @serial` (stacked annotations)
 
 Stacked annotations would generalize to other axes (`@slow`, `@flaky`,
-etc.) and feels Expo-idiomatic. Probably the right call, but worth
+etc.) and feels Koja-idiomatic. Probably the right call, but worth
 making the decision explicit.
 
 ---
@@ -479,7 +479,7 @@ specifically, in the context of:
 - The `.est` / `.eir` sealed-artifact format that makes incremental
   compilation work across packages.
 - The cookbook-not-packages distribution model from `PACKAGE.md` —
-  `expo.toml` deps remain for sharing code between your own projects;
+  `koja.toml` deps remain for sharing code between your own projects;
   the cookbook is for community reference implementations.
 
 ---
@@ -487,24 +487,24 @@ specifically, in the context of:
 ## Summary
 
 1. **`build/` for artifacts, `deps/` for sources, both gitignored.**
-   The four-piece model (`expo.toml`, `expo.lock`, `deps/`, `build/`)
+   The four-piece model (`koja.toml`, `koja.lock`, `deps/`, `build/`)
    layers cleanly: each tier regenerates from the next one up.
 2. **Profile-based subdirs only.** `build/debug/` and `build/release/`.
    No `build/dev/`, no `build/prod/`. Runtime environment is the
    program's concern, not the build tool's.
 3. **Two axes: profile × scope.** Profile is debug vs release. Scope
-   is default vs test. `expo test` is a scope, not a profile, which
+   is default vs test. `koja test` is a scope, not a profile, which
    means tests can run through either backend.
 4. **Debug → interpreter, release → LLVM.** The dual-backend split
    gives sub-100ms test feedback under debug and validates the codegen
-   path under `expo test --release`.
+   path under `koja test --release`.
 5. **Stdlib is just packages.** Materialized into `deps/` like any
    third-party dep, resolved through the same path. LSP jump-to-source
    works uniformly. Versioning rides the compiler.
 6. **Scripts use install-location stdlib + a global cache.** Different
    resolution mode, same physical bytes. First-run warms the cache;
    subsequent runs start in under 100ms.
-7. **Tests are concurrent by default.** Process-per-test via Expo's
+7. **Tests are concurrent by default.** Process-per-test via Koja's
    runtime-level process model, supervised, with per-process output
    buffering. Serial is the opt-out, not the default.
 8. **`@test "description"` carries human-readable test names.**

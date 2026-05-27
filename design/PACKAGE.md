@@ -1,6 +1,6 @@
 # Code Distribution: Cookbook, Not Packages
 
-Design notes for how Expo distributes reusable code. The traditional
+Design notes for how Koja distributes reusable code. The traditional
 package model (registry, versioning, dependency resolution) assumes
 humans copy exact code into their projects. AI code generation
 changes that assumption. This document proposes an alternative.
@@ -11,9 +11,9 @@ changes that assumption. This document proposes an alternative.
 
 ### For a closed-source language
 
-Expo is closed-source. Every first-party package must be too. Git-based
+Koja is closed-source. Every first-party package must be too. Git-based
 distribution requires SSH keys or API tokens for private repos. Every
-developer who wants to use `expo-http` needs credentials configured.
+developer who wants to use `koja-http` needs credentials configured.
 CI pipelines need deploy keys. Onboarding friction compounds with each
 dependency.
 
@@ -56,36 +56,36 @@ because there's no dependency -- only reference material.
 
 ## The cookbook model
 
-A single git repository (`expo-cookbook`) containing well-written,
-tested, documented Expo implementations of common tasks.
+A single git repository (`koja-cookbook`) containing well-written,
+tested, documented Koja implementations of common tasks.
 
 ```
-expo-cookbook/
+koja-cookbook/
   postgres/
-    connect.expo          -- TCP connect, startup message, auth
-    query.expo            -- simple query protocol
-    prepared.expo         -- prepared statements
-    types.expo            -- OID to Expo type mapping
+    connect.koja          -- TCP connect, startup message, auth
+    query.koja            -- simple query protocol
+    prepared.koja         -- prepared statements
+    types.koja            -- OID to Koja type mapping
     README.md             -- protocol documentation
 
   websocket/
-    handshake.expo        -- HTTP upgrade
-    frame.expo            -- frame encode/decode
-    client.expo           -- full client example
+    handshake.koja        -- HTTP upgrade
+    frame.koja            -- frame encode/decode
+    client.koja           -- full client example
 
   btree/
-    node.expo             -- on-disk node layout
-    insert.expo           -- insertion with splitting
-    search.expo           -- key lookup
+    node.koja             -- on-disk node layout
+    insert.koja           -- insertion with splitting
+    search.koja           -- key lookup
 
   redis/
-    client.expo           -- RESP protocol, connection, commands
+    client.koja           -- RESP protocol, connection, commands
 
   patterns/
-    rest_api.expo         -- HTTP server with JSON routes
-    worker_pool.expo      -- supervised process pool
-    rate_limiter.expo     -- token bucket with processes
-    cache.expo            -- TTL cache as a process
+    rest_api.koja         -- HTTP server with JSON routes
+    worker_pool.koja      -- supervised process pool
+    rate_limiter.koja     -- token bucket with processes
+    cache.koja            -- TTL cache as a process
 ```
 
 ### What's in the cookbook vs. what's in stdlib
@@ -106,31 +106,31 @@ cookbook entry.
 ### Contribution model
 
 Open source, even though the language is closed-source. Cookbook
-entries are `.expo` files -- they're source text, not compiler
+entries are `.koja` files -- they're source text, not compiler
 internals. Anyone can read and contribute.
 
-1. Someone writes a Redis client in Expo
-2. They submit an MR to `expo-cookbook`
+1. Someone writes a Redis client in Koja
+2. They submit an MR to `koja-cookbook`
 3. It gets reviewed for correctness, style, and documentation quality
 4. It's merged and auto-published to the docs site
 5. No release process, no semver, no changelog per entry
 
-The barrier to contribution is writing one good `.expo` file with
+The barrier to contribution is writing one good `.koja` file with
 doc comments. Not maintaining a library with issues, releases, and
 backwards compatibility.
 
-### Relationship to stdlib and `expo.toml`
+### Relationship to stdlib and `koja.toml`
 
-Stdlib, the cookbook, and `expo.toml` dependencies serve different
+Stdlib, the cookbook, and `koja.toml` dependencies serve different
 purposes:
 
 | Mechanism        | Purpose                          | Ships with compiler | Versioned           |
 | ---------------- | -------------------------------- | ------------------- | ------------------- |
 | `Global.*`          | Language primitives              | Yes                 | Yes (with compiler) |
 | Cookbook         | Reference implementations        | No (separate repo)  | No                  |
-| `expo.toml` deps | Shared code between own projects | N/A                 | By git ref          |
+| `koja.toml` deps | Shared code between own projects | N/A                 | By git ref          |
 
-`expo.toml` local path and git dependencies remain useful for sharing
+`koja.toml` local path and git dependencies remain useful for sharing
 code between your own projects (a monorepo with shared types, an
 internal library used across services). The cookbook doesn't replace
 that -- it replaces the _community package ecosystem_.
@@ -139,9 +139,9 @@ that -- it replaces the _community package ecosystem_.
 
 ## The docs site
 
-### `expo doc` as the unified interface
+### `koja doc` as the unified interface
 
-`expo doc` already generates HTML for stdlib. Extending it to also
+`koja doc` already generates HTML for stdlib. Extending it to also
 generate pages for cookbook entries creates a single browsable site
 that serves as:
 
@@ -193,7 +193,7 @@ DOM. Screen readers see it. No JavaScript required.
 ### Site structure
 
 ```
-docs.expo-lang.dev/
+docs.koja-lang.dev/
 
   std/                        -- stdlib reference
     String
@@ -210,7 +210,7 @@ docs.expo-lang.dev/
     ...
 ```
 
-Two top-level sections. Stdlib is organized by type (existing `expo
+Two top-level sections. Stdlib is organized by type (existing `koja
 doc` output). Cookbook entries are organized by name, each with its own
 page containing description, API surface, examples, and collapsible
 full source.
@@ -222,7 +222,7 @@ patterns, WebSocket client).
 ### Hosting
 
 GitHub Pages, built by CI on merge to `main`. The cookbook repo
-contains `.expo` source files and metadata. CI runs `expo doc` (or
+contains `.koja` source files and metadata. CI runs `koja doc` (or
 an extended variant) to generate the static site. No server, no
 database, no infrastructure to maintain.
 
@@ -233,7 +233,7 @@ database, no infrastructure to maintain.
 ### Building something new
 
 1. Developer: "I need a Postgres client"
-2. Goes to docs.expo-lang.dev, searches "postgres"
+2. Goes to docs.koja-lang.dev, searches "postgres"
 3. Finds the Postgres cookbook entry with docs, examples, full source
 4. Either:
    - Tells AI: "Build me a Postgres client, reference this page"
@@ -253,8 +253,8 @@ database, no infrastructure to maintain.
 
 1. Developer builds something useful (a MessagePack encoder, a rate
    limiter, an S3 client)
-2. Extracts the implementation into clean, well-documented `.expo` files
-3. Submits an MR to `expo-cookbook`
+2. Extracts the implementation into clean, well-documented `.koja` files
+3. Submits an MR to `koja-cookbook`
 4. After review: merged, CI rebuilds the site, entry is live
 
 ---
@@ -294,7 +294,7 @@ entry.
 Without versioning, how do entries stay current? The same way any open
 source project stays current: active maintainership and community
 contributions. If an entry gets stale, someone submits a better one.
-The barrier is low (one MR with `.expo` files), so the cost of
+The barrier is low (one MR with `.koja` files), so the cost of
 replacement is low.
 
 The absence of backwards compatibility concerns actually helps here.
@@ -314,7 +314,7 @@ The roadmap currently lists:
 
 Under the cookbook model:
 
-- **Package manager**: reduced scope. `expo.toml` `[deps]` with local
+- **Package manager**: reduced scope. `koja.toml` `[deps]` with local
   paths (already working) and git URLs remain for sharing code between
   your own projects. No public registry, no lock file, no version
   resolution.
@@ -351,7 +351,7 @@ browsing surfaces questions you didn't know to ask.
 2. **Cookbook repo.** Community-contributed reference implementations
    in a single git repository. Open source, even though the language
    is closed-source.
-3. **`expo doc` as the site.** Extended to generate pages for cookbook
+3. **`koja doc` as the site.** Extended to generate pages for cookbook
    entries alongside stdlib. Browsable, searchable, like a registry
    without the registry.
 4. **Dual-audience HTML.** `<details>` tags make source code
@@ -359,10 +359,10 @@ browsing surfaces questions you didn't know to ask.
 5. **No versioning.** Entries improve continuously. Nobody's build
    breaks because there are no dependencies -- only reference
    material.
-6. **`expo.toml` deps remain.** For sharing code between your own
+6. **`koja.toml` deps remain.** For sharing code between your own
    projects via local paths and git URLs. Not for community
    distribution.
-7. **Contribution via MR.** Low barrier (one `.expo` file), no
+7. **Contribution via MR.** Low barrier (one `.koja` file), no
    maintenance burden (no releases, no backwards compatibility).
 
 The model: distribute knowledge, not code. The AI is the translator

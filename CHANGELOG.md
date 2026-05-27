@@ -10,12 +10,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Package private functions declared with top-level `priv fn` in files.
-- `expo doc` now includes all stdlib and dependency docs in local files.
-- Serve documentation locally with `expo doc serve`.
-- `expo new` now scaffolds a `.gitignore`, a `test/` directory, and a `test/main_test.expo` placeholder.
+- `koja doc` now includes all stdlib and dependency docs in local files.
+- Serve documentation locally with `koja doc serve`.
+- `koja new` now scaffolds a `.gitignore`, a `test/` directory, and a `test/main_test.koja` placeholder.
 
 ### Changed
 
+- **Breaking**: Renamed the language and toolchain from Expo to Koja. Binaries are `koja` and `koja-lsp`; manifests are `koja.toml` / `koja.lock`; source files use `.koja` (modules) and `.kojs` (scripts). Update project manifests, file extensions, build scripts, editor configs, and any references to `expo`, `expoc`, `.expo`, `.exps`, or `expo.toml`.
 - **Breaking**: Project build output moved from `<project>/target/<profile>/` to `<project>/build/<profile>/`. Update any tooling or `.gitignore` entries referencing `<project>/target/`.
 - **Breaking**: HTTP client methods moved from the `Http` struct to top-level functions in the `HTTP` package. `Http.get(url)` becomes `HTTP.get(url)`; same for `delete`, `head`, `options`, `patch`, `post`, `put`, and `request`. Use `alias HTTP` for unqualified access, or call qualified (`HTTP.post(url, body, headers)`). The `Http` struct is removed.
 - **Breaking**: Bare `impl Type` blocks are renamed to `extend Type`. `impl` is now reserved for protocol conformance (`impl Protocol for Type`); writing `impl Point` produces a compile error pointing to `extend Point`. Methods declared in `extend` blocks have ambient visibility (callable from any package that can name the target type), and collisions on the same method name across `extend` blocks targeting the same type are a hard compile error. Update every inherent `impl Type ... end` to `extend Type ... end`; protocol implementations are unchanged.
@@ -24,19 +25,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Compiler rewritten around a four-phase sealed pipeline -- `expo-parser → expo-typecheck → expo-ir → expo-ir-llvm` / `expo-ir-eval`. The new pipeline unlocks the interpreter backend, the REPL, script mode, and faster `expo run` iteration; the LLVM backend continues to produce native binaries with the same feature surface.
-- `expo shell` -- interactive REPL backed by the new interpreter. Multi-line input for blocks (`struct`, `enum`, `fn`, ...), up-arrow history within the session, and `:help` / `:quit` / `:reset` / `:state` commands. The trailing value of each input is rendered via `Debug.format()`, so `42`, `[1, 2, 3]`, and `User{name: "alice"}` all print without ceremony. No imports needed for stdlib calls (`Duration.from_secs(3).millis()` works at the prompt).
-- `.exps` script files -- top-level expressions and statements, no `fn main` required. `.expo` remains the project / module file extension; `.exps` is the script-only sibling that targets the interpreter by default.
-- `expo eval <script>` -- one-shot script evaluation. Equivalent to `expo run --backend=interpreter` on a `.exps` file.
-- `--backend={interpreter, llvm}` on `expo run` and `expo build`. `expo run` now defaults to the interpreter for millisecond startup; pass `--backend=llvm` for native execution. `expo build` defaults to and requires `llvm` (the interpreter does not produce a binary).
+- Compiler rewritten around a four-phase sealed pipeline -- `koja-parser → koja-typecheck → koja-ir → koja-ir-llvm` / `koja-ir-eval`. The new pipeline unlocks the interpreter backend, the REPL, script mode, and faster `koja run` iteration; the LLVM backend continues to produce native binaries with the same feature surface.
+- `koja shell` -- interactive REPL backed by the new interpreter. Multi-line input for blocks (`struct`, `enum`, `fn`, ...), up-arrow history within the session, and `:help` / `:quit` / `:reset` / `:state` commands. The trailing value of each input is rendered via `Debug.format()`, so `42`, `[1, 2, 3]`, and `User{name: "alice"}` all print without ceremony. No imports needed for stdlib calls (`Duration.from_secs(3).millis()` works at the prompt).
+- `.kojs` script files -- top-level expressions and statements, no `fn main` required. `.koja` remains the project / module file extension; `.kojs` is the script-only sibling that targets the interpreter by default.
+- `koja eval <script>` -- one-shot script evaluation. Equivalent to `koja run --backend=interpreter` on a `.kojs` file.
+- `--backend={interpreter, llvm}` on `koja run` and `koja build`. `koja run` now defaults to the interpreter for millisecond startup; pass `--backend=llvm` for native execution. `koja build` defaults to and requires `llvm` (the interpreter does not produce a binary).
 - `JSON` promoted to qualified stdlib package. Ships with the compiler -- no `[dependencies]` entry needed. `JSON.Value` (renamed from `JSONValue`), `JSON.Encoder`, `JSON.Decoder`, `JSON.StringBuilder`. Use `alias JSON.Value` or `JSON.Value.object(...)` to access.
-- `Crypto` qualified stdlib package. Full SHA family via direct BoringSSL C FFI (`@extern "C"` + `@link "crypto"`). `SHA1`, `SHA256`, `SHA384`, `SHA512` -- each with one-shot `digest(data)` and streaming (`new`, `update`, `finalize`) APIs. `HMAC` with `sha1`, `sha256`, `sha384`, `sha512` methods. All functions accept and return `Binary`. No Rust shims -- Expo calls BoringSSL's C API directly. `libcrypto.a` is embedded in the compiler binary and written to the link temp dir alongside `libexpo_runtime.a`.
+- `Crypto` qualified stdlib package. Full SHA family via direct BoringSSL C FFI (`@extern "C"` + `@link "crypto"`). `SHA1`, `SHA256`, `SHA384`, `SHA512` -- each with one-shot `digest(data)` and streaming (`new`, `update`, `finalize`) APIs. `HMAC` with `sha1`, `sha256`, `sha384`, `sha512` methods. All functions accept and return `Binary`. No Rust shims -- Koja calls BoringSSL's C API directly. `libcrypto.a` is embedded in the compiler binary and written to the link temp dir alongside `libkoja_runtime.a`.
 - `TCPSocket` -- ergonomic TCP client. `connect(host, port)` resolves DNS and establishes a connection. `connect_addr(addr)` for direct address connections. `read(count)`, `write(data)`, `close()`.
 - `TCPListener` -- TCP server listener. `bind(port)` listens on all interfaces, `bind_addr(addr)` for specific addresses. `accept()` returns a `TCPSocket` for each incoming connection.
-- `UDPSocket` -- connectionless UDP socket. `bind(port)` or `bind_addr(addr)` to receive, `send_to(data, addr)` and `recv_from(count)` for datagram I/O. All three types are pure Expo wrappers over `Socket` -- no new intrinsics.
+- `UDPSocket` -- connectionless UDP socket. `bind(port)` or `bind_addr(addr)` to receive, `send_to(data, addr)` and `recv_from(count)` for datagram I/O. All three types are pure Koja wrappers over `Socket` -- no new intrinsics.
 - `CPtr<T>` -- raw C pointer type for FFI interop. `Copy` semantics (just a machine word). Methods: `CPtr.null()`, `CPtr.alloc(count)`, `ptr.free()`, `ptr.offset(n)`, `ptr.read()`, `ptr.write(value)`, `ptr.null?()`. Backed by `malloc`/`free`. All methods are compiler intrinsics.
-- `CString` -- null-terminated C string type with `ptr: CPtr<UInt8>` and `len: Int` fields. `String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies bytes back into an Expo `String`. `CString.free()` releases the underlying memory.
-- `CPtr<T>` accepted in `@extern "C"` signatures, enabling pointer-passing FFI with C libraries. Expo-allocated buffers can be passed to C functions that read or write through pointers.
+- `CString` -- null-terminated C string type with `ptr: CPtr<UInt8>` and `len: Int` fields. `String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies bytes back into an Koja `String`. `CString.free()` releases the underlying memory.
+- `CPtr<T>` accepted in `@extern "C"` signatures, enabling pointer-passing FFI with C libraries. Koja-allocated buffers can be passed to C functions that read or write through pointers.
 - Concrete impl specialization -- `impl Type<ConcreteArg>` blocks define methods only available for a specific type argument. `impl CPtr<UInt8>` adds `to_cstring()` without affecting other `CPtr<T>` instantiations. Targeted error messages when specialized methods are called on the wrong type argument.
 - Bare function calls within a type now resolve same-type methods. `@extern "C"` private functions declared inline in a struct can be called by name from sibling methods in the same type.
 - Plain struct patterns in `match` arms: `match p  Point{x: 5, y: 2} -> ...  end`. Unlisted fields are implicit wildcards (`Point{x: 5}` matches any `y`); empty `Point{}` matches any value of that struct type. Composes with existing patterns, including nested constructors (`Some(Point{x: 5})`) and the Wave 27 enum-pattern CFG-gating that already protects payload projections.
@@ -52,15 +53,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Binary.ptr()` intrinsic. Returns a `CPtr<UInt8>` to the underlying byte data, enabling zero-copy pointer passing to C FFI functions.
 - `CPtr<UInt8>.to_binary(len)` intrinsic. Creates a `Binary` by copying `len` bytes from a raw pointer. Allocates the 8-byte bit-length header and payload, matching the internal Binary/String layout.
 - `String.escape_debug(self) -> String` -- escapes backslashes, double quotes, and the `\n`/`\r`/`\t` whitespace escapes so the result is round-trippable as a quoted string literal. Used by `Debug.format` for `String` and available standalone.
-- `@link "lib:symbol"` convention for C symbol naming. When the C symbol differs from the Expo function name, append `:symbol` to the `@link` string (e.g. `@link "crypto:SHA256"` for an Expo function named `sha256_raw`). Keeps all Expo function names in `snake_case` regardless of the C library's conventions. The part before the colon is the library name for `-l` flags; the part after is the LLVM function declaration name.
-- `--emit-ast` on `expo parse` and `expo check`. Dumps the raw AST (`parse`) or the sealed, type-annotated AST (`check`) to stdout for tooling and debugging. Pairs with the existing `--emit-llvm` on `expo build`.
-- BoringSSL integration in `expo-driver`. Builds BoringSSL via `boring-sys` directly in the driver's build script. `libcrypto.a` is located, embedded via `include_bytes!`, and written to the link temp dir at compile time.
-- `expo-stdlib` build script auto-discovers `.expo` files under `expo/lib/`. Adding a new stdlib package is just creating a directory with an `expo.toml` and `src/` -- no Rust code changes needed.
+- `@link "lib:symbol"` convention for C symbol naming. When the C symbol differs from the Koja function name, append `:symbol` to the `@link` string (e.g. `@link "crypto:SHA256"` for an Koja function named `sha256_raw`). Keeps all Koja function names in `snake_case` regardless of the C library's conventions. The part before the colon is the library name for `-l` flags; the part after is the LLVM function declaration name.
+- `--emit-ast` on `koja parse` and `koja check`. Dumps the raw AST (`parse`) or the sealed, type-annotated AST (`check`) to stdout for tooling and debugging. Pairs with the existing `--emit-llvm` on `koja build`.
+- BoringSSL integration in `koja-driver`. Builds BoringSSL via `boring-sys` directly in the driver's build script. `libcrypto.a` is located, embedded via `include_bytes!`, and written to the link temp dir at compile time.
+- `koja-stdlib` build script auto-discovers `.koja` files under `expo/lib/`. Adding a new stdlib package is just creating a directory with an `koja.toml` and `src/` -- no Rust code changes needed.
 
 ### Changed
 
 - **Breaking**: `Process<C, M, R>` protocol redesigned. `new(config) -> Self` replaced by `start(move config) -> Result<Self, StopReason>` -- initialization now runs in the child process context after spawn. `handle` and `handle_signal` return `Step<Self>` instead of `Self | StopReason`. `spawn T.new(config)` becomes `spawn T.start(config)`.
-- **Breaking**: Package names are now PascalCase with uppercased acronyms, matching the casing of the types they hold. The auto-imported `std` package is renamed to `Global`; qualified packages move from lowercase to PascalCase (`net` → `Net`, `http` → `HTTP`, `json` → `JSON`, `crypto` → `Crypto`). Update `expo.toml` `name = "..."`, all `alias <pkg>.<Type>` declarations (`alias Net.TCPSocket`, `alias HTTP.Request`, `alias JSON.Decoder`), and any qualified references in expressions and types (`Net.TCPSocket.connect(...)`, `fn build -> HTTP.Headers`). Directory names on disk stay snake_case (`lib/net/`, `lib/http/`); only `lib/std/` is renamed to `lib/global/` to match its new package name.
+- **Breaking**: Package names are now PascalCase with uppercased acronyms, matching the casing of the types they hold. The auto-imported `std` package is renamed to `Global`; qualified packages move from lowercase to PascalCase (`net` → `Net`, `http` → `HTTP`, `json` → `JSON`, `crypto` → `Crypto`). Update `koja.toml` `name = "..."`, all `alias <pkg>.<Type>` declarations (`alias Net.TCPSocket`, `alias HTTP.Request`, `alias JSON.Decoder`), and any qualified references in expressions and types (`Net.TCPSocket.connect(...)`, `fn build -> HTTP.Headers`). Directory names on disk stay snake_case (`lib/net/`, `lib/http/`); only `lib/std/` is renamed to `lib/global/` to match its new package name.
 - **Breaking**: Networking types (`TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`) moved from the auto-imported `Global` package to the qualified `Net` package. Use `alias Net.TCPSocket` or `Net.TCPSocket.connect(...)` to access them.
 - **Breaking**: `JSONValue` renamed to `Value` in the `JSON` package. `JSON.JSONValue` becomes `JSON.Value`. All constructor methods updated (`Value.string(...)`, `Value.object(...)`, etc.).
 - **Breaking**: Struct field patterns are always `name: pattern` -- the shorthand `Point{x, y}` (binding under the field's own name) is gone. Write `Point{x: x, y: y}` to bind under the same name, or `Point{x: _}` / omit the field for "don't care". This applies to both plain struct patterns and enum-struct variant patterns (`Shape.Rect{width: width, height: height}`); the explicit form mirrors construction syntax (`Point{x: 5, y: 2}` was already named-only).
@@ -75,7 +76,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - LSP go-to-definition on methods uses the typed AST instead of name-suffix matching, so dispatch on the actual receiver type now resolves correctly.
 - Parser emits partial `FieldAccess` nodes for incomplete `foo.` expressions, improving editor completion at the dot position.
 - The parser now accepts PascalCase segments anywhere in `alias` paths, not just for the trailing type name. `alias Net.Socket` parses as expected.
-- `expo-stdlib`'s build script reads each package's canonical `name` from its `expo.toml` instead of inferring it from the directory name. Package directory names are now incidental; only `name = "..."` matters.
+- `koja-stdlib`'s build script reads each package's canonical `name` from its `koja.toml` instead of inferring it from the directory name. Package directory names are now incidental; only `name = "..."` matters.
 
 ### Fixed
 
@@ -90,17 +91,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Inline functions in struct/enum bodies -- `fn` and `priv fn` can now appear directly inside `struct` and `enum` bodies alongside fields and variants. `impl` blocks remain for extensions and protocol conformance.
 - Process lifecycle -- new `Lifecycle` enum (`Shutdown`, `Interrupt`, `Reload`), `StopReason`, `ExitStatus` protocol, and `handle_lifecycle` method on the `Process` protocol. OS signals (`SIGTERM`, `SIGINT`, `SIGHUP`) are delivered as typed messages to the entry process.
-- Process entry point -- `entry = "App"` in `expo.toml` designates a `Process<C, M, R>` implementation as the program entry point. Exit codes map through `ExitStatus` (`Normal -> 0`, `Shutdown -> 1`). When `C` is `List<String>`, command-line arguments are passed automatically.
+- Process entry point -- `entry = "App"` in `koja.toml` designates a `Process<C, M, R>` implementation as the program entry point. Exit codes map through `ExitStatus` (`Normal -> 0`, `Shutdown -> 1`). When `C` is `List<String>`, command-line arguments are passed automatically.
 - Multi-threaded scheduler -- the runtime now runs N worker threads (cgroup-aware on Linux). Existing programs gain multi-core scheduling with no code changes. Graceful shutdown and deadlock detection included.
 - I/O reactor -- non-blocking socket I/O via kqueue (macOS) and epoll (Linux). Processes suspend on `EAGAIN` and resume when the fd is ready.
 - Trait bounds -- `<T: Protocol>` constrains type parameters. Multiple bounds use `&` (`<T: Debug & Hash>`). Bounds are verified at call sites with clear error messages.
 - `Random` type -- `Random.bytes(count)` for cryptographically secure random bytes, `Random.int(min, max)` for a random integer in an inclusive range. Auto-imported from `std.kernel`.
 - Closure `move` params -- closures now support `move` on parameters (`fn (move x: T) -> U ... end`), matching regular function syntax.
 - `alias` keyword -- file-private shorthands for package types. `alias json.Decoder` or `alias json.Decoder as JSONDecoder`.
-- Local path dependencies -- `[dependencies]` in `expo.toml` with `path` support for local packages.
-- Test runner -- `expo test` discovers and runs `@test`-annotated functions. Optional description: `@test "adds two numbers"`.
-- `expo new <name>` -- scaffolds a new project with `expo.toml` and `src/main.expo`.
-- Debug and release builds -- DWARF debug info in all builds. `expo build --release` enables LLVM `-O3` optimizations. `.dSYM` bundles on macOS.
+- Local path dependencies -- `[dependencies]` in `koja.toml` with `path` support for local packages.
+- Test runner -- `koja test` discovers and runs `@test`-annotated functions. Optional description: `@test "adds two numbers"`.
+- `koja new <name>` -- scaffolds a new project with `koja.toml` and `src/main.koja`.
+- Debug and release builds -- DWARF debug info in all builds. `koja build --release` enables LLVM `-O3` optimizations. `.dSYM` bundles on macOS.
 - Stacktraces on panic -- formatted stacktraces with source locations, demangled names, and contextual hints (e.g., "use `.or(default)` or pattern match to handle None safely").
 - `std.process` module -- process types (`Ref`, `ReplyTo`, `Task`, `Process` protocol) moved from `std.kernel` to a dedicated module.
 - `std.socket` module -- `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`. TCP and UDP socket creation, bind, connect, listen, accept, send/receive, and DNS resolution.
@@ -110,18 +111,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `System` type -- `System.get_env`, `System.set_env`, `System.cwd`, `System.hostname`.
 - `DateTime` and `Duration` types -- `DateTime.now()`, `Duration.from_secs()`, `Duration.from_millis()`.
 - `Binary.byte_size()` and debug formatting for `Binary` and `Bits`.
-- Vim plugin -- auto-indentation, `matchit` support, and `:make` integration with `expo check`.
+- Vim plugin -- auto-indentation, `matchit` support, and `:make` integration with `koja check`.
 
 ### Changed
 
-- Project config is now `expo.toml` (TOML-based), replacing `project.expo`.
+- Project config is now `koja.toml` (TOML-based), replacing `project.koja`.
 
 ### Removed
 
 - Windows support -- the runtime now targets Unix only (macOS + Linux).
 - `import` keyword -- all types and public functions are visible in every file. The transparent file model replaces imports.
 - `@moduledoc` annotation -- use `@doc` on individual types instead.
-- Module-grouped doc output -- `expo doc` now produces a flat type namespace.
+- Module-grouped doc output -- `koja doc` now produces a flat type namespace.
 
 ### Fixed
 
@@ -133,7 +134,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Project system -- `project.expo` config file defines `name`, `version`, source dirs, and entry module. `expo build`, `expo run`, and `expo check` detect it automatically. The project name is the module namespace (`import my_app.server` resolves `src/server.expo`).
+- Project system -- `project.koja` config file defines `name`, `version`, source dirs, and entry module. `koja build`, `koja run`, and `koja check` detect it automatically. The project name is the module namespace (`import my_app.server` resolves `src/server.koja`).
 - File I/O -- `File.read(path)` reads an entire file, `File.open(path, mode)` returns a handle for streaming access, `File.close(move self)` releases it. Lower-level `Fd` type for raw descriptor operations. All return `Result<T, String>`.
 - String standard library -- `alpha?`, `at`, `codepoints`, `contains?`, `downcase`, `empty?`, `ends_with?`, `graphemes`, `join`, `replace`, `reverse`, `split`, `starts_with?`, `to_float`, `to_int`, `trim`, `trim_end`, `trim_start`, `upcase`, `whitespace?`.
 - Binary and bitstring literals -- `Binary` and `Bits` types with `<<>>` syntax for construction and pattern matching. Segment modifiers for bit-width, endianness, signedness, and type annotations. String segments in binary literals (`<<"HTTP/1.1 ", rest: Binary>>`). `<>` concatenation for `Binary`, `Bits`, and `String`. `Bitwise` protocol (`band`, `bor`, `bxor`, `bnot`, `bsl`, `bsr`) on all integer types.
@@ -148,14 +149,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `List.last()` -- returns `Option<T>`.
 - Methods on primitive types -- `impl` blocks on built-in types (`String`, `Int`, etc.).
 - Warning when the return value of a `move self` method is discarded. Suggests reassignment to capture the result.
-- `expo build --emit-llvm` -- dumps LLVM IR to stdout instead of producing an executable.
-- Self-hosted lexer -- the Expo lexer rewritten in Expo, compiled by the Rust bootstrap. Produces identical token output to the Rust lexer, validating the language for real-world use.
+- `koja build --emit-llvm` -- dumps LLVM IR to stdout instead of producing an executable.
+- Self-hosted lexer -- the Koja lexer rewritten in Koja, compiled by the Rust bootstrap. Produces identical token output to the Rust lexer, validating the language for real-world use.
 
 ### Changed
 
 - `List.push` renamed to `List.append` -- better reflects functional semantics (returns a new list).
 - `List.get` and `String.get` now return `Option<T>` instead of panicking on out-of-bounds.
-- `Eof` token renamed to `EndOfFile` in `expo lex` output.
+- `Eof` token renamed to `EndOfFile` in `koja lex` output.
 
 ### Fixed
 
@@ -183,7 +184,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Recursive types -- structs and enums can reference themselves (linked lists, trees). Automatic cycle detection, heap indirection, and cleanup on drop.
 - Typed constants -- `const NAME: Type = expr` with optional type annotations for generic inference.
 - LSP: autocomplete (keywords, symbols, imports), signature help, document symbols, hover/go-to-definition on type names in match patterns and constant annotations.
-- VS Code: "Expo: Run File" and "Expo: Build File" commands, `expo.path` setting.
+- VS Code: "Koja: Run File" and "Koja: Build File" commands, `koja.path` setting.
 
 ### Changed
 
@@ -197,7 +198,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Integer literals in binary operations coerce to match the other operand's width. Method arguments on monomorphized generic types are properly coerced.
 - Generic struct literals infer type arguments from field-access types. Generic enum unit variants resolve correctly inside methods with their own type parameters. Generic struct construction from local variables works with function type parameters.
 - `Pair<Unit, T>` and similar types with zero-sized fields keep LLVM field indices aligned with layout metadata.
-- `expo` CLI reliably links the embedded process runtime across Cargo target directories.
+- `koja` CLI reliably links the embedded process runtime across Cargo target directories.
 - Vim: multiline docstring highlighting stays consistent when scrolling.
 
 ## [0.6.0] - 2026-03-18
@@ -237,7 +238,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `clone()` and drop insertion -- `clone()` produces a new owned value without moving the original. Drop insertion provides deterministic cleanup at scope boundaries: `List<T>` backing buffers and captured closure environments are freed automatically.
 - Static functions on `impl` blocks -- functions without a `self` parameter are called on the type directly (`List.new()`, `Option.None`). No special syntax needed; just omit `self`.
 - Annotation-driven type inference for generics -- `list: List<Int32> = List.new()` infers `T = Int32` from the variable's type annotation.
-- VS Code extension: syntax highlighting for ` ```expo ` fenced code blocks in Markdown files.
+- VS Code extension: syntax highlighting for ` ```koja ` fenced code blocks in Markdown files.
 
 ### Fixed
 
@@ -282,12 +283,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Qualified imports (`math.add(1, 2)`) -- module-prefixed function calls now type-check and compile. Both `add(1, 2)` and `math.add(1, 2)` work after `import math`.
 - Import conflict detection -- errors on duplicate names from different imports and duplicate module qualifiers.
 - Ternary expressions (`condition ? then : else`), with nested ternaries disallowed.
-- `expo doc` command -- generates static HTML documentation from `@doc` and `@moduledoc` annotations. Supports `@doc false` and `@moduledoc false` to exclude items. Renders markdown in doc strings via pulldown-cmark. Uses askama templates for HTML generation.
-- Documentation generator supports recursive directory input (`expo doc src/`) with dotted module names derived from file paths (e.g. `src/what/util.expo` becomes `what.util`).
+- `koja doc` command -- generates static HTML documentation from `@doc` and `@moduledoc` annotations. Supports `@doc false` and `@moduledoc false` to exclude items. Renders markdown in doc strings via pulldown-cmark. Uses askama templates for HTML generation.
+- Documentation generator supports recursive directory input (`koja doc src/`) with dotted module names derived from file paths (e.g. `src/what/util.koja` becomes `what.util`).
 - Global sidebar navigation across all module pages with active module highlighting.
 - Brand-colored documentation theme (burnt orange `#dd6900` + warm charcoal) with Source Sans 3 / Source Code Pro typography.
 - LSP: hover and go-to-definition for qualified calls (`math.add()` shows signature and docs from the source module).
-- LSP: nested module path resolution (`import what.util` correctly resolves to `what/util.expo`).
+- LSP: nested module path resolution (`import what.util` correctly resolves to `what/util.koja`).
 - LSP: closure body traversal for hover and go-to-definition inside closures.
 - Vim/VSCode syntax highlighting for module names in imports and qualified calls.
 
@@ -341,12 +342,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Compound assignment (`+=`, `-=`, `*=`, `/=`).
 - String literals.
 - Polymorphic `print()` builtin.
-- `expo build` -- compile to native binary via LLVM.
-- `expo run` -- build and execute in one step.
-- `expo check` -- type check without compiling.
-- `expo format` -- opinionated code formatter (`--check`, `--write`).
-- `expo parse` -- dump AST.
-- `expo lex` -- dump tokens.
+- `koja build` -- compile to native binary via LLVM.
+- `koja run` -- build and execute in one step.
+- `koja check` -- type check without compiling.
+- `koja format` -- opinionated code formatter (`--check`, `--write`).
+- `koja parse` -- dump AST.
+- `koja lex` -- dump tokens.
 - Structured error messages with source context, underlines, and hints.
 - Colored output with `--no-color` flag and `NO_COLOR` env var support.
 - VS Code / Cursor syntax highlighting extension.

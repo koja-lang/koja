@@ -1,0 +1,16 @@
+[package]
+name = "koja-ir-llvm"
+description = "LLVM backend for sealed koja-ir IRPrograms"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ir = { path = "../koja-ir" }
+inkwell = { version = "0.8", features = ["llvm18-1"] }
+
+[dev-dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-parser = { path = "../koja-parser" }
+koja-stdlib = { path = "../koja-stdlib" }
+koja-typecheck = { path = "../koja-typecheck" }

@@ -1,0 +1,6 @@
+[package]
+name = "koja-ast"
+description = "AST type definitions for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true

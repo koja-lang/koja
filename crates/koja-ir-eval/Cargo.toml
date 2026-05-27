@@ -1,0 +1,17 @@
+[package]
+name = "koja-ir-eval"
+description = "Tree-walking interpreter for sealed koja-ir IRPrograms"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+boring-sys = { version = "5", default-features = false }
+koja-ir = { path = "../koja-ir" }
+koja-runtime = { path = "../koja-runtime" }
+
+[dev-dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-parser = { path = "../koja-parser" }
+koja-stdlib = { path = "../koja-stdlib" }
+koja-typecheck = { path = "../koja-typecheck" }

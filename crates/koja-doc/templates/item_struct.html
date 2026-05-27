@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{ s.name }} — Koja Docs</title>
+  {% include "head.html" %}
+</head>
+<body>
+
+{% include "theme_toggle.html" %}
+{% include "sidebar.html" %}
+
+<main class="content">
+  <div class="page-header">
+    <span class="type-chip chip-struct">struct</span>
+    <h1>{{ s.name }}{% if !s.type_params.is_empty() %}&lt;{{ s.type_params.join(", ") }}&gt;{% endif %}</h1>
+  </div>
+
+  {% if let Some(doc) = s.doc %}
+  <div class="detail-doc">{{ doc|md }}</div>
+  {% endif %}
+
+  {% if !s.fields.is_empty() %}
+  <h2 class="section-heading">Fields</h2>
+  <ul class="fields-list">
+    {% for f in s.fields %}
+    <li><span class="field-name">{{ f.name }}</span> <span class="field-type">{{ f.type_name }}</span></li>
+    {% endfor %}
+  </ul>
+  {% endif %}
+
+  {% if !s.functions.is_empty() %}
+  <h2 class="section-heading">Functions</h2>
+  <div class="summary">
+    {% for f in s.functions %}
+    <div class="summary-row">
+      <div class="summary-name"><a href="#fn-{{ f.name }}">{{ f.name }}</a></div>
+      {% if let Some(doc) = f.doc %}<div class="summary-brief">{{ doc|brief }}</div>{% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% for f in s.functions %}
+  {% include "function_detail.html" %}
+  {% endfor %}
+  {% endif %}
+</main>
+
+</body>
+</html>

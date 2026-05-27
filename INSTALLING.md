@@ -1,6 +1,6 @@
-# Installing the Expo Compiler
+# Installing the Koja Compiler
 
-This document covers building the Expo compiler from source on macOS and Linux. For a quick overview of the language, see [README.md](README.md).
+This document covers building the Koja compiler from source on macOS and Linux. For a quick overview of the language, see [README.md](README.md).
 
 ## Requirements
 
@@ -29,20 +29,20 @@ This is the primary supported configuration.
 
 ```sh
 brew install llvm@18
-git clone https://github.com/hpopp/expo-lang && cd expo-lang/expo
+git clone https://github.com/hpopp/koja-lang && cd expo-lang/expo
 
 export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
 
-cargo build -p expo-runtime
-cargo build -p expo-runtime --release
-cargo build --release -p expo-driver
+cargo build -p koja-runtime
+cargo build -p koja-runtime --release
+cargo build --release -p koja-driver
 
-cp target/release/expo ~/.local/bin/expo
-codesign --force -s - ~/.local/bin/expo
+cp target/release/koja ~/.local/bin/koja
+codesign --force -s - ~/.local/bin/koja
 ```
 
-The two-step `expo-runtime` build is intentional: the driver's `build.rs` searches for `libexpo_runtime.a` in both the debug and release build directories. `codesign` is required on macOS so the kernel doesn't kill the binary on launch.
+The two-step `koja-runtime` build is intentional: the driver's `build.rs` searches for `libkoja_runtime.a` in both the debug and release build directories. `codesign` is required on macOS so the kernel doesn't kill the binary on launch.
 
 ## Linux (Debian / Ubuntu — rustup + apt)
 
@@ -66,15 +66,15 @@ sudo apt install -y \
 Pin `llvm-sys` to the apt-installed LLVM and build:
 
 ```sh
-git clone https://github.com/hpopp/expo-lang && cd expo-lang/expo
+git clone https://github.com/hpopp/koja-lang && cd expo-lang/expo
 
 export LLVM_SYS_181_PREFIX="$(llvm-config-18 --prefix)"
 
-cargo build -p expo-runtime
-cargo build -p expo-runtime --release
-cargo build --release -p expo-driver
+cargo build -p koja-runtime
+cargo build -p koja-runtime --release
+cargo build --release -p koja-driver
 
-cp target/release/expo ~/.local/bin/expo
+cp target/release/koja ~/.local/bin/koja
 ```
 
 ## Linux (Linuxbrew)
@@ -83,22 +83,22 @@ Use this path if your Rust toolchain also comes from Homebrew. The build flow mi
 
 ```sh
 brew install llvm@18
-git clone https://github.com/hpopp/expo-lang && cd expo-lang/expo
+git clone https://github.com/hpopp/koja-lang && cd expo-lang/expo
 
 export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
 
-cargo build -p expo-runtime
-cargo build -p expo-runtime --release
-cargo build --release -p expo-driver
+cargo build -p koja-runtime
+cargo build -p koja-runtime --release
+cargo build --release -p koja-driver
 
-cp target/release/expo ~/.local/bin/expo
+cp target/release/koja ~/.local/bin/koja
 ```
 
 ## Verifying the install
 
 ```sh
-expo run examples/hello.expo
+koja run examples/hello.koja
 ```
 
 You should see `hello, world!` printed to stdout.
@@ -139,15 +139,15 @@ sudo apt install -y clang-18 libclang-18-dev
 
 For tooling consistency, match the LLVM version (`-18`) rather than installing the unversioned `clang` metapackage.
 
-### SIGSEGV inside `llvm::X86ReadAdvanceTable` when running `expo run`
+### SIGSEGV inside `llvm::X86ReadAdvanceTable` when running `koja run`
 
-You almost certainly have Homebrew Rust + apt LLVM (the unsupported combination from the toolchain compatibility table). Symptoms are a bare `Segmentation fault` with no Rust output, killing the host driver before it produces the user binary. `expo check` and `expo parse` succeed because they don't reach LLVM.
+You almost certainly have Homebrew Rust + apt LLVM (the unsupported combination from the toolchain compatibility table). Symptoms are a bare `Segmentation fault` with no Rust output, killing the host driver before it produces the user binary. `koja check` and `koja parse` succeed because they don't reach LLVM.
 
 Confirm the diagnosis:
 
 ```sh
 which rustc                                       # /home/linuxbrew/.linuxbrew/bin/rustc → bad
-ldd ./target/release/expo | grep -iE 'brew|llvm'  # mixed paths → bad
+ldd ./target/release/koja | grep -iE 'brew|llvm'  # mixed paths → bad
 ```
 
 Fix by collapsing to a single ecosystem. The cleanest is rustup + apt LLVM:

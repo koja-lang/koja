@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <title>{{ c.name }} — Koja Docs</title>
+  {% include "head.html" %}
+</head>
+<body>
+
+{% include "theme_toggle.html" %}
+{% include "sidebar.html" %}
+
+<main class="content">
+  <div class="page-header">
+    <span class="type-chip chip-const">const</span>
+    <h1>{{ c.name }}</h1>
+  </div>
+
+  {% if let Some(doc) = c.doc %}
+  <div class="detail-doc">{{ doc|md }}</div>
+  {% endif %}
+</main>
+
+</body>
+</html>

@@ -1,0 +1,9 @@
+[package]
+name = "koja-stdlib"
+description = "Embedded standard library sources for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-parser = { path = "../koja-parser" }

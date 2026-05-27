@@ -1,6 +1,6 @@
 # Binaries and Bits
 
-Expo's binary system enables bit-level data construction and pattern matching --
+Koja's binary system enables bit-level data construction and pattern matching --
 the same capability that makes Erlang/Elixir dominant in protocol work, compiled
 to native shift-and-mask operations with zero overhead.
 
@@ -21,7 +21,7 @@ Three distinct types for text and raw data:
 All three are **distinct types** with no subtype relationships. Moving between
 them requires explicit conversion:
 
-```expo
+```koja
 # Widening (always succeeds, zero-cost)
 bytes = text.to_binary()           # String → Binary
 bits = bytes.to_bits()             # Binary → Bits
@@ -44,7 +44,7 @@ The `<<>>` literal infers its type from the total bit count of its segments:
 - Total bits is a multiple of 8 → **`Binary`**
 - Total bits is not a multiple of 8 → **`Bits`**
 
-```expo
+```koja
 <<0xFF, 0x00>>              # 16 bits → Binary
 <<1::1, 0::1, 1::1>>       # 3 bits → Bits
 <<flag::3, data::5>>       # 8 bits → Binary (byte-aligned total)
@@ -55,7 +55,7 @@ All segment sizes are integer literals, so the compiler always knows the total
 at compile time. To force `Bits` on a byte-aligned literal, use a type
 annotation or a trailing `_: Bits` in patterns:
 
-```expo
+```koja
 # Type annotation in construction
 my_bits: Bits = <<flag::3, data::5>>
 
@@ -71,7 +71,7 @@ end
 
 The `<<segments...>>` syntax constructs binary and bitstring values:
 
-```expo
+```koja
 <<0x48, 0x65, 0x6C, 0x6C, 0x6F>>   # 5-byte Binary: "Hello" in ASCII
 <<1::1, 0::1, 1::1, 0::1>>          # 4-bit Bits value: 0b1010
 <<0xFF, 0x00, length::16>>          # 4-byte Binary: two literal bytes + a 16-bit integer
@@ -92,7 +92,7 @@ identical.
 
 Literal values that don't fit in their segment size are compile errors:
 
-```expo
+```koja
 <<256>>           # compile error: 256 does not fit in 8 bits
 <<-1>>            # compile error: -1 does not fit in 8 unsigned bits
 <<256::16>>       # ok: 256 fits in 16 bits
@@ -107,7 +107,7 @@ Modifiers are lowercase, space-separated, and appear after the size specifier:
 - **`big`** / **`little`** -- byte order for multi-byte segments.
   Default: **big-endian** (network byte order).
 
-```expo
+```koja
 <<temperature::16 signed big>>     # 16-bit signed big-endian integer
 <<port::16 unsigned big>>          # 16-bit unsigned big-endian integer
 <<value::32 little>>               # 32-bit value in little-endian byte order
@@ -127,7 +127,7 @@ Built-in segment types:
 - **`: Float32`** -- 32-bit IEEE 754 single-precision float.
 - **`: Float64`** -- 64-bit IEEE 754 double-precision float.
 
-```expo
+```koja
 <<3.14: Float32>>                   # 32-bit IEEE 754 float
 <<3.14: Float64>>                   # 64-bit IEEE 754 float
 <<padded: Bool, 0::7>>              # 1-bit boolean flag + 7 padding bits
@@ -143,7 +143,7 @@ bits as `Int` (the default integer type) -- convenient for ad-hoc numeric fields
 `<<>>` is an empty binary. It is a valid expression anywhere -- you can assign
 it, pass it to functions, return it:
 
-```expo
+```koja
 empty: Binary = <<>>
 send(<<>>)
 ```
@@ -152,7 +152,7 @@ send(<<>>)
 
 The `<>` operator concatenates values of the same type:
 
-```expo
+```koja
 header = <<0x01, 0x02>>
 payload = <<0x03, 0x04>>
 frame = header <> payload           # <<0x01, 0x02, 0x03, 0x04>>
@@ -181,7 +181,7 @@ In practice, the conversion boundary is architecturally natural. Text-based
 protocols (HTTP, JSON, WebSocket) validate UTF-8 once at the boundary, then
 work entirely in `String`-land:
 
-```expo
+```koja
 fn handle_request(data: Binary) -> Result<Response, Error>
   text = String.from_binary(data)?
   Json.parse(text)
@@ -196,7 +196,7 @@ Binary protocols (HTTP/2 frames, DNS, TLS) stay in `Binary`-land and extract
 String literals can appear inside `<<>>` for construction and pattern matching.
 The compiler knows the byte length of a string literal at compile time:
 
-```expo
+```koja
 # Construction: embed a string literal in a binary
 packet = <<0x01, "hello", 0x00>>
 
@@ -212,7 +212,7 @@ compile time. Use `.to_binary()` and `<>` concatenation instead.
 
 ### No Char type
 
-Expo has no dedicated character type. A single-codepoint `String` serves the
+Koja has no dedicated character type. A single-codepoint `String` serves the
 same purpose -- fractal design means the same type works at every scale.
 
 - `String.at(n)` returns `Option<String>` (a single-codepoint string).
@@ -226,7 +226,7 @@ same purpose -- fractal design means the same type works at every scale.
 
 String ranges (`"a".."z"`) work as codepoint ranges in match patterns:
 
-```expo
+```koja
 match ch
   "a".."z" | "A".."Z" | "_" -> lex_ident()
   "0".."9" -> lex_number()
@@ -245,9 +245,9 @@ the same type.
 
 ### Ranges
 
-Expo has one range operator: `..`, always inclusive on both ends.
+Koja has one range operator: `..`, always inclusive on both ends.
 
-```expo
+```koja
 # Pattern matching -- the primary use case
 match ch
   "a".."z" -> :lowercase       # includes "z"
@@ -264,7 +264,7 @@ for i in 0..n-1                 # 0 through n-1
 
 One operator, one behavior. Inclusive ranges are natural for pattern matching
 (the most common use case) and for readable numeric sequences (`1..10`).
-Numeric loops like `for i in 0..n` are rare in idiomatic Expo -- most loops
+Numeric loops like `for i in 0..n` are rare in idiomatic Koja -- most loops
 iterate collections directly (`for item in list`). The occasional `0..n-1`
 is explicit about intent and doesn't justify a second operator.
 
@@ -276,16 +276,16 @@ values ordered by codepoint number.
 
 ## Bitwise operations
 
-Bitwise operations are methods, not symbol operators. Expo uses `<<>>` for
+Bitwise operations are methods, not symbol operators. Koja uses `<<>>` for
 binary literals, and keeping `<<`/`>>` free of any other meaning avoids the
 collision that C-family languages have between shift operators and binary
 delimiters. All other bit-manipulation symbols (`&`, `|`, `^`, `~`) stay
-unused -- `&` doesn't exist in Expo (see `archive/20260323-MEMORY.md`), `|` is reserved for
+unused -- `&` doesn't exist in Koja (see `archive/20260323-MEMORY.md`), `|` is reserved for
 union types, and `^` is available for a future pin operator.
 
 Instead, bitwise operations are defined by the `Bitwise` protocol:
 
-```expo
+```koja
 protocol Bitwise
   fn band(self, other: Self) -> Self
   fn bor(self, other: Self) -> Self
@@ -298,7 +298,7 @@ end
 
 `Int` is the built-in implementation:
 
-```expo
+```koja
 flags.band(0x01) != 0              # bitwise AND
 flags.bor(0x08)                    # bitwise OR
 a.bxor(b)                         # bitwise XOR
@@ -309,7 +309,7 @@ a.bsr(2)                          # bit shift right
 
 Because these are protocol methods, any struct can implement `Bitwise`:
 
-```expo
+```koja
 struct Permissions
   value: Int
 end
@@ -375,7 +375,7 @@ names bind.
   a variable-length payload, match the fixed-width header, then use `.take()`
   and `.drop()` on the remainder:
 
-```expo
+```koja
 match buffer
   <<length::24, type::8, rest: Binary>> ->
     payload = rest.take(length)
@@ -460,13 +460,13 @@ Binary = { ptr: *const u8, offset: usize, length: usize }
 Pattern matching creates a new view triple -- increment offset, decrement
 length, done. O(1), no allocation, no copy.
 
-This works because of Expo's process model:
+This works because of Koja's process model:
 
 - Each process has its own arena. Binary data received from a socket or read
   from a file is allocated in the process's arena.
 - Pattern matching creates views within the same arena. All views share the
   arena's lifetime.
-- Cross-process sends copy at the boundary. This is already how Expo handles
+- Cross-process sends copy at the boundary. This is already how Koja handles
   all process-to-process data transfer.
 - When the arena is freed (process exits, request completes), all views and
   backing buffers are freed together. No reference counting, no dangling views.
@@ -483,7 +483,7 @@ HTTP/2 frames have a fixed 9-byte header: 24-bit length, 8-bit type, 8-bit
 flags, 1 reserved bit, 31-bit stream ID. Binary pattern matching parses this
 directly, with the frame type as a literal constant in each arm:
 
-```expo
+```koja
 fn process_buffer(socket: Socket, buffer: Binary) -> Unit
   match buffer
     <<_::24, 0::8, flags::8, _::1, sid::31, rest: Binary>> ->

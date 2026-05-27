@@ -1,0 +1,76 @@
+@doc """
+System-level operations for interacting with the OS environment.
+
+Provides access to environment variables, the current working directory,
+and the machine hostname.
+"""
+struct System
+  @doc """
+  Returns the current working directory as an absolute path.
+  """
+  fn cwd -> Result<String, String>
+    ptr = koja_cwd()
+
+    if ptr.null?()
+      Result.Err("failed to get current directory")
+    else
+      cs = ptr.to_cstring()
+      result = cs.to_string()
+      cs.free()
+      Result.Ok(result)
+    end
+  end
+
+  @doc """
+  Returns the value of the environment variable `key`, or `Option.None`
+  if the variable is not set.
+  """
+  fn get_env(key: String) -> Option<String>
+    key_cs = key.to_cstring()
+    ptr = koja_get_env(key_cs.ptr)
+    key_cs.free()
+
+    if ptr.null?()
+      Option.None
+    else
+      cs = ptr.to_cstring()
+      result = cs.to_string()
+      cs.free()
+      Option.Some(result)
+    end
+  end
+
+  @doc """
+  Returns the system hostname.
+  """
+  fn hostname -> String
+    ptr = koja_hostname()
+    cs = ptr.to_cstring()
+    result = cs.to_string()
+    cs.free()
+    result
+  end
+
+  @doc """
+  Sets the environment variable `key` to `value`.
+  """
+  fn set_env(key: String, value: String)
+    key_cs = key.to_cstring()
+    val_cs = value.to_cstring()
+    koja_set_env(key_cs.ptr, val_cs.ptr)
+    key_cs.free()
+    val_cs.free()
+  end
+
+  @extern "C"
+  priv fn koja_cwd -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn koja_get_env(key: CPtr<UInt8>) -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn koja_hostname -> CPtr<UInt8>
+
+  @extern "C"
+  priv fn koja_set_env(key: CPtr<UInt8>, val: CPtr<UInt8>)
+end

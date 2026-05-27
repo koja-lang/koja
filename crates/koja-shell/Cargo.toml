@@ -1,0 +1,16 @@
+[package]
+name = "koja-shell"
+description = "Interactive REPL"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-ir = { path = "../koja-ir" }
+koja-ir-eval = { path = "../koja-ir-eval" }
+koja-lexer = { path = "../koja-lexer" }
+koja-parser = { path = "../koja-parser" }
+koja-stdlib = { path = "../koja-stdlib" }
+koja-typecheck = { path = "../koja-typecheck" }
+rustyline = { version = "18.0.0", features = ["derive"] }

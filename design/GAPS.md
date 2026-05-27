@@ -1,6 +1,6 @@
 # Known Compiler Gaps
 
-Known limitations, bugs, and workarounds in the Expo compiler. New gaps
+Known limitations, bugs, and workarounds in the Koja compiler. New gaps
 should be added here as they're discovered (agent testing, self-hosting,
 etc.). For the full design of the iterator protocol replacement, see
 [TYPES.md](TYPES.md).
@@ -61,7 +61,7 @@ single-arg tuple variants. Multi-arg tuple variants render only the variant
 name and recursive payloads through deeply-nested constructions print only
 the head:
 
-```expo
+```koja
 enum Shape
   Circle(Int)
   Rect(Int, Int)
@@ -71,7 +71,7 @@ print(Shape.Circle(5))    # "Circle(5)"        (correct)
 print(Shape.Rect(3, 4))   # "Rect"             (payload dropped)
 ```
 
-```expo
+```koja
 enum Expr
   Num(Int)
   Add(Expr, Expr)
@@ -81,7 +81,7 @@ print(Expr.Add(Expr.Num(1), Expr.Num(2)))   # "Add"
 print(Expr.Num(1))                          # "Num(1)"
 ```
 
-The single-arg path in `expo-codegen/src/debug.rs` works; the multi-arg
+The single-arg path in `koja-codegen/src/debug.rs` works; the multi-arg
 case appears to short-circuit before formatting the tuple body. Fix should
 also exercise nested cases (variant inside variant) since printing is the
 default debug surface.
@@ -96,7 +96,7 @@ A `type` alias whose RHS is a union of unions leaves the inner alias
 unexpanded in the type checker, causing both arm-membership errors and a
 spurious `unknown` member in the union:
 
-```expo
+```koja
 type AB = A | B
 type ABC = AB | C
 
@@ -128,7 +128,7 @@ assignment, return, or call) is misparsed as a nested function declaration
 and produces a cascade of errors complaining about a missing identifier
 between `fn` and `(`:
 
-```expo
+```koja
 fn main
   fn (x: Int) -> Int x + 1 end   # error: expected identifier, found LParen
   print("ok")
@@ -140,7 +140,7 @@ The issue is purely syntactic -- assigning the closure first
 inside method bodies that try to return a closure as the final expression,
 because the parser hits the same `fn (` start-of-statement ambiguity:
 
-```expo
+```koja
 extend Foo
   fn make(self) -> fn (Int) -> Int
     fn (x: Int) -> Int x + 1 end   # same parse error
@@ -165,7 +165,7 @@ A closure created inside an `impl` method that references `self`
 "self used outside of impl method" error pointing at the struct
 declaration, not the offending closure:
 
-```expo
+```koja
 extend Counter
   fn make_adder(self) -> fn (Int) -> Int
     f = fn (x: Int) -> Int
@@ -195,7 +195,7 @@ For an `extend` block specialized to a self-nested instantiation
 (`extend Box<Box<Int>>`), inner field access is type-checked using the
 struct's _generic_ parameter rather than the inner concrete substitution:
 
-```expo
+```koja
 struct Box<T>
   value: T
 end
@@ -227,9 +227,9 @@ Surfaced during agent compiler-fuzz testing (April 2026).
 Declaring a `struct` or `enum` inside another `struct`/`enum` body, accessed
 via dotted syntax (`MyApp.Config`, `Lexer.Token`, `Json.Decoder`), is not
 supported. The struct/enum body parser in
-`expo-parser/src/decl.rs` only accepts fields and inline `fn` methods --
+`koja-parser/src/decl.rs` only accepts fields and inline `fn` methods --
 nested type items would need to be allowed in the same loop. Collection in
-`expo-typecheck/src/collect.rs` would need to recurse into bodies and
+`koja-typecheck/src/collect.rs` would need to recurse into bodies and
 register nested decls under their dotted name.
 
 The naming machinery is already friendly: `TypeIdentifier.name` is an
@@ -241,7 +241,7 @@ changes. Identity stays at `(package, name)` -- no `DefId` overhaul needed
 The two real obstacles:
 
 1. **`path.len() == 2` resolver assumption.**
-   `expo-typecheck/src/types.rs::resolve_type_expr_full` treats a 2-segment
+   `koja-typecheck/src/types.rs::resolve_type_expr_full` treats a 2-segment
    path as `package.Type`. We'd need a third precedence rule for
    `OuterType.NestedType` and a tie-break when both interpretations exist
    (e.g. an aliased package whose name shadows a local type).
@@ -249,7 +249,7 @@ The two real obstacles:
 2. **`Foo.Bar` ambiguity with enum variants.**
    The parser sends both `Color.Red` (variant) and `MyApp.Config` (would-be
    nested type) down the same enum-construction AST shape. Today
-   `expo-typecheck/src/expr.rs::infer_enum_construction` only succeeds if
+   `koja-typecheck/src/expr.rs::infer_enum_construction` only succeeds if
    the head is an enum; the fallback would need to also try resolving the
    path as a nested type when followed by a struct literal or in type
    position.
@@ -277,7 +277,7 @@ declaration is silently dropped and the rest of the file resolves
 against an empty body. No diagnostic, no parse error, just a missing
 function.
 
-```expo
+```koja
 fn run(cond: Bool) -> Int    # `cond` is a keyword
   greeting = "hello"
   consume(greeting)
@@ -306,7 +306,7 @@ struct field, then returned from a helper function reads back as freed
 memory at the call site (or segfaults outright). Only reproduces under
 codegen — the interpreter handles it fine.
 
-```expo
+```koja
 alias HTTP.Response
 alias HTTP.Status
 alias HTTP.Headers
@@ -346,9 +346,9 @@ Audited 2026-05-03
 
 # Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift
 
-Inventory of every discrepancy between `expo-ast`, `expo-parser`,
+Inventory of every discrepancy between `koja-ast`, `koja-parser`,
 `grammar.ebnf`, `LANGUAGE.md`, `design/ROADMAP.md`, and downstream
-`expo-ir` / `expo-codegen` (as of the v1 pipeline). Grouped by category
+`koja-ir` / `koja-codegen` (as of the v1 pipeline). Grouped by category
 so each item can be triaged independently: remove the cruft, tighten
 the AST, or just reconcile the docs.
 
@@ -357,10 +357,10 @@ the AST, or just reconcile the docs.
 ### B1. `AssignTarget::Pattern` with non-trivial patterns
 
 - **Grammar:** [grammar.ebnf:150-152](../grammar.ebnf) `assignment = IDENT, ":", type_expr, "=", expr | lvalue, "=", expr | pattern, "=", expr`.
-- **AST:** [ast.rs:410-415](../crates/expo-ast/src/ast.rs) `AssignTarget::LValue | AssignTarget::Pattern`.
-- **Parser reality:** `try_expr_to_pattern` ([stmt.rs:146-157](../crates/expo-parser/src/stmt.rs)) only accepts `Ident` (→ `Binding`) and `_` (→ `Wildcard`). List, struct, enum, and OR patterns on assignment LHS are _not_ parseable today.
-- **Typecheck:** `AssignTarget::Pattern(_) => {}` is empty ([stmt.rs:130-131](../crates/expo-typecheck/src/stmt.rs)).
-- **Codegen:** errors with `destructuring patterns not yet supported` ([stmt.rs:278-280](../crates/expo-codegen/src/stmt.rs)) for anything non-trivial.
+- **AST:** [ast.rs:410-415](../crates/koja-ast/src/ast.rs) `AssignTarget::LValue | AssignTarget::Pattern`.
+- **Parser reality:** `try_expr_to_pattern` ([stmt.rs:146-157](../crates/koja-parser/src/stmt.rs)) only accepts `Ident` (→ `Binding`) and `_` (→ `Wildcard`). List, struct, enum, and OR patterns on assignment LHS are _not_ parseable today.
+- **Typecheck:** `AssignTarget::Pattern(_) => {}` is empty ([stmt.rs:130-131](../crates/koja-typecheck/src/stmt.rs)).
+- **Codegen:** errors with `destructuring patterns not yet supported` ([stmt.rs:278-280](../crates/koja-codegen/src/stmt.rs)) for anything non-trivial.
 - **LANGUAGE.md lines 1831-1836:** "parsed and/or type-checked" — overstates.
 
 **Action:** tighten `AssignTarget` to
@@ -372,8 +372,8 @@ parsed yet".
 ### B2. `ClosureParam::Destructured` inside `ShortClosure`
 
 - **Grammar:** line 246-247 allows `(a, b) -> expr`.
-- **Parser:** `expr_to_closure_params` ([construct.rs:474-492](../crates/expo-parser/src/construct.rs)) handles only `Ident`, `_`, and single-element `Group`. A parenthesized list short closure collides with `parse_paren_expr` tuple rejection.
-- **Block `Closure`:** `Destructured` _is_ produced from `parse_closure_params` ([construct.rs:424-435](../crates/expo-parser/src/construct.rs)). So the variant isn't dead overall — just dead for short closures.
+- **Parser:** `expr_to_closure_params` ([construct.rs:474-492](../crates/koja-parser/src/construct.rs)) handles only `Ident`, `_`, and single-element `Group`. A parenthesized list short closure collides with `parse_paren_expr` tuple rejection.
+- **Block `Closure`:** `Destructured` _is_ produced from `parse_closure_params` ([construct.rs:424-435](../crates/koja-parser/src/construct.rs)). So the variant isn't dead overall — just dead for short closures.
 
 **Action:** either remove destructured-form from `closure_param_short`
 in grammar, or implement it. Grammar line 246-247 is the liar today.
@@ -385,7 +385,7 @@ in grammar, or implement it. Grammar line 246-247 is the liar today.
 ### C1. `cond` mandatory `else`
 
 - **Grammar:** lines 279-284 say `cond` is `{ cond_arm } end` with no else arm.
-- **Parser:** `parse_cond_expr` ([control.rs:167-203](../crates/expo-parser/src/control.rs)) **requires** an `else -> ...` terminal arm.
+- **Parser:** `parse_cond_expr` ([control.rs:167-203](../crates/koja-parser/src/control.rs)) **requires** an `else -> ...` terminal arm.
 
 **Action:** update grammar.ebnf to reflect parser truth
 (`cond_expr = "cond" , { cond_arm } , "else" , "->" , match_body , "end"`).
@@ -393,21 +393,21 @@ in grammar, or implement it. Grammar line 246-247 is the liar today.
 ### C2. Missing `move` modifier on `closure_param`
 
 - **Grammar:** lines 238-241 — no `move`.
-- **Parser:** accepts `move` for block closure params ([construct.rs:418-422](../crates/expo-parser/src/construct.rs)).
+- **Parser:** accepts `move` for block closure params ([construct.rs:418-422](../crates/koja-parser/src/construct.rs)).
 
 **Action:** add `[ "move" ]` to `closure_param` in grammar.ebnf.
 
 ### C3. `constant_decl` accepts TypeIdent as name
 
 - **Grammar:** line 472 — `IDENT` only.
-- **Parser:** [decl.rs:657-661](../crates/expo-parser/src/decl.rs) — accepts `Ident | TypeIdent`.
+- **Parser:** [decl.rs:657-661](../crates/koja-parser/src/decl.rs) — accepts `Ident | TypeIdent`.
 
 **Action:** tighten parser to match grammar (constants must be `IDENT`).
 
 ### C4. Pattern literals and multiline strings
 
 - **Grammar:** `pattern → literal → multiline_string_lit` legal.
-- **Parser:** `parse_literal_pattern` ([pattern.rs:74-95](../crates/expo-parser/src/pattern.rs)) handles `StringStart` only, not `MultilineStringStart`.
+- **Parser:** `parse_literal_pattern` ([pattern.rs:74-95](../crates/koja-parser/src/pattern.rs)) handles `StringStart` only, not `MultilineStringStart`.
 
 **Action:** trivial parser fix (a few lines) or disallow in grammar.
 Probably fix the parser since the feature is cheap.
@@ -419,7 +419,7 @@ Probably fix the parser since the feature is cheap.
 ### D1. `Process` protocol surface (biggest documented lie)
 
 - **LANGUAGE.md:** shows `fn new(config: C) -> Self`, `handle -> Self | StopReason`, default `run` dispatching `Pair<M, Option<ReplyTo<R>>>` (lines ~991-1042).
-- **Reality:** stdlib has `fn start(move config: C) -> Result<Self, StopReason>`, `handle -> Step<Self>`, and `run` also dispatches `Lifecycle` ([process.expo:162-206](../lib/global/src/process.expo)). Typecheck requires `spawn Type.start(config)` form ([expr.rs:312-318](../crates/expo-typecheck/src/expr.rs)).
+- **Reality:** stdlib has `fn start(move config: C) -> Result<Self, StopReason>`, `handle -> Step<Self>`, and `run` also dispatches `Lifecycle` ([process.koja:162-206](../lib/global/src/process.koja)). Typecheck requires `spawn Type.start(config)` form ([expr.rs:312-318](../crates/koja-typecheck/src/expr.rs)).
 
 **Action:** rewrite the Concurrency section to match reality — `start`
 not `new`, `Step<Self>` not union, mention `Lifecycle` and
@@ -435,13 +435,13 @@ matching today's Process protocol.
 ### D4. `receive ... after` underdocumented
 
 - LANGUAGE.md lines 1133-1139 show only the mailbox arm.
-- Parser supports `after timeout -> body` and codegen emits `expo_rt_receive_timeout`.
+- Parser supports `after timeout -> body` and codegen emits `koja_rt_receive_timeout`.
 
 **Action:** add an `after` example.
 
 ### D5. `Ref<M, R>` missing `send_after`
 
-- Stdlib exposes `send_after(self, msg, delay_ms)` at [process.expo:147-154](../lib/global/src/process.expo).
+- Stdlib exposes `send_after(self, msg, delay_ms)` at [process.koja:147-154](../lib/global/src/process.koja).
 - LANGUAGE.md lists cast / call / signal / kill / alive? only.
 
 **Action:** add `send_after` to the Ref API list.
@@ -449,7 +449,7 @@ matching today's Process protocol.
 ### D7. `Debug` auto-derive for generics is degraded
 
 - LANGUAGE.md ~1603 says Debug is auto-derived "for all types with rich formatting".
-- Reality: generic types get a type-name-only `format` because `<A: Debug>` bounds aren't inferred ([synthesize.rs:13-23](../crates/expo-typecheck/src/synthesize.rs)).
+- Reality: generic types get a type-name-only `format` because `<A: Debug>` bounds aren't inferred ([synthesize.rs:13-23](../crates/koja-typecheck/src/synthesize.rs)).
 
 **Action:** note the generics limitation in docs.
 
@@ -477,7 +477,7 @@ shorthand-in-struct-pattern work.
 
 ### F1. `Annotation.value` has 2 variants but grammar allows 3
 
-- **AST:** `AnnotationValue::String | False` ([ast.rs:69-75](../crates/expo-ast/src/ast.rs)).
+- **AST:** `AnnotationValue::String | False` ([ast.rs:69-75](../crates/koja-ast/src/ast.rs)).
 - **Grammar:** line 442-444 includes `string_lit | multiline_string_lit | "false"`.
 - `String` variant holds both single-line and multiline — parser collapses. OK in practice, but grammar suggests a distinction that doesn't exist.
 

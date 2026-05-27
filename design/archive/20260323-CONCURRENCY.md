@@ -13,7 +13,7 @@ records the decisions that emerged from that exploration.
 
 20260313-CONCURRENCY.md proposed that tasks could borrow data from their parent scope,
 enabled by structured concurrency proving the parent outlives the task. This was
-framed as Expo's key advantage over Erlang — zero-copy reads across tasks.
+framed as Koja's key advantage over Erlang — zero-copy reads across tasks.
 
 After deeper analysis of the compiler implications, this model is being dropped.
 Task borrows introduce significant complexity for a theoretical advantage that
@@ -46,14 +46,14 @@ primitives is lifetime and weight, not ownership rules:
 
 ## Why move is the real advantage over Erlang
 
-The original framing ("task borrows are Expo's advantage over Erlang") was
+The original framing ("task borrows are Koja's advantage over Erlang") was
 wrong. The real advantage is simpler and more fundamental: **move**.
 
 Erlang's limitation isn't that it copies — it's that copying is the _only_
 option. Every message, every spawn, every process boundary: full deep copy, no
 exceptions. The BEAM's per-process heap isolation makes this unavoidable.
 
-Expo offers choice:
+Koja offers choice:
 
 - **Move** when the sender is done with the data. Zero cost. Ownership
   transfers. The value doesn't exist in the sender's scope anymore. Erlang
@@ -239,7 +239,7 @@ Fan-out has properties that match actors, not tasks:
 - Natural fit for supervision (restart failed workers).
 - Backpressure via bounded worker pools.
 
-A stdlib `async_map` function can be built in userland Expo once `spawn` and
+A stdlib `async_map` function can be built in userland Koja once `spawn` and
 task-handle `.await()` exist. It doesn't need to be a language primitive.
 
 ### Backpressure
@@ -295,7 +295,7 @@ Compare to other languages:
 | Erlang   | Deep copy of request per message    | GC pressure per request     |
 | Go       | Shared pointer to request           | Data race risk              |
 | Rust     | `Arc<Request>` + `Send + 'static`   | Safe but verbose            |
-| Expo     | Move the request, move the response | Zero-copy, zero annotations |
+| Koja     | Move the request, move the response | Zero-copy, zero annotations |
 
 ---
 
@@ -334,7 +334,7 @@ See [ROADMAP.md](../ROADMAP.md) Phase 3 Track B "Runtime" section for the full s
 protocol design. Key points summarized here:
 
 - The runtime is a **protocol interface**, not a monolith. The scheduler, I/O
-  reactor, and actor lifecycle manager are defined as Expo protocols with
+  reactor, and actor lifecycle manager are defined as Koja protocols with
   default implementations.
 - Tasks, actors, and the scheduler are **co-designed** as one system. The
   scheduler protocol shapes how tasks yield, how actors are preempted, and how
@@ -427,7 +427,7 @@ is exactly why Erlang chose untyped mailboxes.
 **Typed subjects / channels (Gleam-style).** Separate the typed channel from the
 process. A process creates `Subject<T>` handles for specific conversations.
 Rejected — these are essentially Go channels by another name, and introduce
-channel lifecycle management complexity. Expo's philosophy is "the process IS the
+channel lifecycle management complexity. Koja's philosophy is "the process IS the
 channel."
 
 **Turbofished `receive<T>()`.** The mailbox is heterogeneous. Each `receive` call
@@ -479,7 +479,7 @@ Union types solve the mailbox problem, but they're far more broadly useful:
   for accepting related but distinct types.
 
 Implementation-wise, union types are anonymous enums — the same tagged union
-representation Expo already uses for named enums. `A | B` is an unnamed enum
+representation Koja already uses for named enums. `A | B` is an unnamed enum
 where the variants are the types themselves. Same codegen, same pattern matching,
 same exhaustiveness checking.
 
@@ -504,7 +504,7 @@ as-process design will be revisited when concurrency work resumes.
 The current typed mailbox system infers `M` from the **caller's** `Process<M>`
 annotation at the spawn site:
 
-```expo
+```koja
 pid: Process<Msg> = spawn worker
 ```
 
@@ -529,7 +529,7 @@ Three problems:
 First idea: move M to the spawned function's return type. The function declares
 what messages it handles, and `spawn` infers `Process<M>` from it:
 
-```expo
+```koja
 fn worker() -> Msg
   match receive
     Msg.Greet(name) -> print(name)
@@ -588,7 +588,7 @@ Lowercase `ref` was a keyword modifier (removed); PascalCase `Ref<M, R>` is a
 type. Follows the convention: lowercase keywords modify, PascalCase names are
 types.
 
-```expo
+```koja
 protocol Process<C, M, R>
   fn new(config: C) -> Self
 
@@ -602,7 +602,7 @@ protocol Process<C, M, R>
 end
 ```
 
-> **Rename note:** `init` was renamed to `new` (aligns with Expo's struct
+> **Rename note:** `init` was renamed to `new` (aligns with Koja's struct
 > constructor convention -- `Map.new()`, `Set.new()`), and `start` was renamed
 > to `run` (describes the internal receive loop, not external control like
 > Elixir's `GenServer.start_link`). Old names appear in earlier design sections.
@@ -629,7 +629,7 @@ extensions, Kotlin interface defaults).
 
 A struct becomes a process by implementing `Process<C, M, R>`:
 
-```expo
+```koja
 struct CounterConfig
   initial_count: Int
 end
@@ -670,7 +670,7 @@ directly — `new` handles that.
 
 Spawning:
 
-```expo
+```koja
 fn main
   pid: Ref<CounterMsg, Int> = spawn Counter.new(CounterConfig{initial_count: 0})
   pid.cast(CounterMsg.Increment)
@@ -720,7 +720,7 @@ messages, catch-all). These can be unified.
 
 On the caller side, `Ref<M, R>` provides `cast` and `call`:
 
-```expo
+```koja
 impl Ref<M, R>
   fn cast(self, msg: M)
     self.send(msg, Option.None)
@@ -742,7 +742,7 @@ with `from = Some(self())` and blocks on `receive` with an `after` clause until
 the handler replies or the timeout expires. Returns `Option<R>` — `Some(reply)`
 on success, `None` on timeout.
 
-```expo
+```koja
 pid.cast(CounterMsg.Increment)                    # fire and forget
 count = pid.call(CounterMsg.GetCount, 5000)      # blocks, returns Option<Int>
 ```
@@ -750,7 +750,7 @@ count = pid.call(CounterMsg.GetCount, 5000)      # blocks, returns Option<Int>
 On the receiving side, the default `run` impl receives a `Pair<M, Option<Ref<R>>>`
 and dispatches to `handle`:
 
-```expo
+```koja
 fn run(move self)
   pair = receive
   new_self = self.handle(pair.first, pair.second)
@@ -789,7 +789,7 @@ require a catch-all handler to not crash the process.
 Not every process needs state or config. The simplest process is an empty struct
 with a unit config:
 
-```expo
+```koja
 struct Printer end
 
 impl Process<(), String, ()> for Printer
@@ -816,9 +816,9 @@ same spawn, same API.
 
 ### GenServer parallel
 
-The protocol model is GenServer expressed in Expo's type system:
+The protocol model is GenServer expressed in Koja's type system:
 
-| Elixir GenServer                    | Expo Process protocol                                          |
+| Elixir GenServer                    | Koja Process protocol                                          |
 | ----------------------------------- | -------------------------------------------------------------- |
 | `handle_call(msg, from, state)`     | `fn handle(move self, msg: M, from: Option<Ref<R>>)` with Some |
 | `handle_cast(msg, state)`           | same `fn handle`, with `from` = None                           |
@@ -884,7 +884,7 @@ The protocol model supersedes:
 - **System signals — decided.** Exit signals are regular typed messages, not a
   separate callback or protocol. `ExitSignal` is a stdlib struct:
 
-  ```expo
+  ```koja
   struct ExitSignal
     pid: Pid
     reason: ExitReason
@@ -911,7 +911,7 @@ The protocol model supersedes:
   not application developers. Application developers use stdlib Supervisor
   abstractions that handle monitoring internally.
 
-  ```expo
+  ```koja
   enum PoolCmd
     Scale(Int)
   end
@@ -951,7 +951,7 @@ The protocol model supersedes:
 - **Process discovery and registration.** Monitoring, named processes, and
   registries are all the same problem: how do you get a handle to a process you
   didn't spawn? In Erlang, this is trivial because pids are untyped — a registry
-  is just `name -> pid`. In Expo, refs are typed (`Ref<M, R>`), so discovery
+  is just `name -> pid`. In Koja, refs are typed (`Ref<M, R>`), so discovery
   must bridge type-erased storage (`Pid`) and type-safe retrieval (`Ref<M, R>`).
 
   Two levels:
@@ -973,7 +973,7 @@ The protocol model supersedes:
   abstractions on top. Same layering as supervision.
 
 - **Supervision, child specs, and application startup.** In Elixir, a child spec
-  is `{Module, args}` — the module name and the init params. In Expo, the
+  is `{Module, args}` — the module name and the init params. In Koja, the
   equivalent is an instance of the config struct. The config struct IS the child
   spec — it carries everything needed to start a process. The M and R come from
   the struct's `Process<C, M, R>` impl.
@@ -988,7 +988,7 @@ GenServer` auto-defining `child_spec/1`, config structs implement a protocol
   that produces a uniform `ChildSpec` struct. The protocol bridges typed configs
   to type-erased child specs via a closure:
 
-  ```expo
+  ```koja
   struct ChildSpec
     start: fn() -> Pid
     strategy: RestartStrategy
@@ -1002,7 +1002,7 @@ GenServer` auto-defining `child_spec/1`, config structs implement a protocol
   The `Process` protocol provides `child_spec` as a third default implementation
   (alongside `run`):
 
-  ```expo
+  ```koja
   protocol Process<C, M, R>
     fn new(config: C) -> Self
     fn handle(move self, msg: M, from: Option<Ref<R>>) -> Self
@@ -1028,7 +1028,7 @@ GenServer` auto-defining `child_spec/1`, config structs implement a protocol
 
   Application startup looks like Elixir:
 
-  ```expo
+  ```koja
   fn main()
     children = [
       Counter.child_spec(CounterConfig{initial_count: 0}),
@@ -1069,7 +1069,7 @@ GenServer` auto-defining `child_spec/1`, config structs implement a protocol
 
   The API:
 
-  ```expo
+  ```koja
   handle = Task.async(fn() -> expensive_computation() end)
   // ... do other work ...
   result = handle.await()
@@ -1083,7 +1083,7 @@ GenServer` auto-defining `child_spec/1`, config structs implement a protocol
 
   For fire-and-forget, don't await:
 
-  ```expo
+  ```koja
   Task.async(fn() -> send_notification_email() end)
   ```
 
@@ -1108,7 +1108,7 @@ A static method on `Process` that returns `Ref<M, R>` for the calling process.
 Scoped under `Process` to avoid collision with the instance `self` parameter in
 method bodies:
 
-```expo
+```koja
 fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self
   self.count          # struct field access — the instance
   Process.self()      # process identity — the Ref
@@ -1127,12 +1127,12 @@ namespace for future additions:
 - `Process.alive?(ref)` — liveness check
 - `Process.exit(ref, reason)` — termination
 
-Implementation: emits `expo_rt_self()` (returns raw pid), wraps in `Ref<M, R>`.
+Implementation: emits `koja_rt_self()` (returns raw pid), wraps in `Ref<M, R>`.
 Inside a `handle` function, the compiler knows M and R from the
 `impl Process<C, M, R>` declaration. This is the primary use case — the
 GenServer self-tick pattern:
 
-```expo
+```koja
 fn handle(move self, msg: TimerMsg, from: Option<ReplyTo<()>>) -> Self
   match msg
     TimerMsg.Tick ->
@@ -1154,7 +1154,7 @@ with unit. If union widening is later needed, the type system handles it.
 **M = SystemMsg** — main receives system-level messages. The runtime translates
 OS signals into typed messages delivered to pid=1:
 
-```expo
+```koja
 enum SystemMsg
   Shutdown        # SIGTERM — Kubernetes pod termination, docker stop
   Interrupt       # SIGINT — Ctrl+C
@@ -1170,7 +1170,7 @@ signal handlers, no callbacks — just messages in a typed mailbox.
 This is `String[] args` from Java, but hidden until needed through progressive
 disclosure:
 
-```expo
+```koja
 # Simple script — no ceremony
 fn main
   print("hello")

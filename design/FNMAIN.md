@@ -6,11 +6,11 @@
 
 ### What changes
 
-The original design achieves consistency by **restriction**: no free functions, period; `.expo` for structured modules and `.exps` for scripts; entry-as-`Process`-impl-on-a-type with a casing trick (`entry = "App"` vs `entry = "main"`) to disambiguate.
+The original design achieves consistency by **restriction**: no free functions, period; `.koja` for structured modules and `.kojs` for scripts; entry-as-`Process`-impl-on-a-type with a casing trick (`entry = "App"` vs `entry = "main"`) to disambiguate.
 
-This revision achieves consistency by **permission**, around one observation: every named container in Expo is type-shaped, and the same `.` member-lookup rule applies recursively. Packages are types too -- degenerate ones with no fields or variants, only members.
+This revision achieves consistency by **permission**, around one observation: every named container in Koja is type-shaped, and the same `.` member-lookup rule applies recursively. Packages are types too -- degenerate ones with no fields or variants, only members.
 
-That single move dissolves the `.expo` / `.exps` split, the casing trick, the "Free function codegen gap" ([GAPS.md](GAPS.md)), and most of the nested-types / local-types deferrals ([GAPS.md](GAPS.md)).
+That single move dissolves the `.koja` / `.kojs` split, the casing trick, the "Free function codegen gap" ([GAPS.md](GAPS.md)), and most of the nested-types / local-types deferrals ([GAPS.md](GAPS.md)).
 
 ### The unifying rule
 
@@ -30,26 +30,26 @@ Recursion bottoms out at primitives. Files have no place in this hierarchy -- th
 
 ### Concrete rules
 
-**Packages are PascalCase and comptime-only.** `std` → `Global`, `net` → `Net`, `expo_http` → `Expo.HTTP`. PascalCase (with uppercased acronyms) eliminates the lowercase package-vs-fn ambiguity that would otherwise block free functions at file top-level. Packages are erased after typecheck -- no runtime `Package` type, no member tables, no metadata. Anywhere you'd want to pass a package as a value, write a generic with a protocol bound instead.
+**Packages are PascalCase and comptime-only.** `std` → `Global`, `net` → `Net`, `koja_http` → `Koja.HTTP`. PascalCase (with uppercased acronyms) eliminates the lowercase package-vs-fn ambiguity that would otherwise block free functions at file top-level. Packages are erased after typecheck -- no runtime `Package` type, no member tables, no metadata. Anywhere you'd want to pass a package as a value, write a generic with a protocol bound instead.
 
 **Free functions are members of the implicit package.** A `fn keyword?(s: String) -> Bool ... end` at file top-level in package `MyApp` is the same as defining a fn member of the `MyApp` package-type. Codegen treats it identically to an inline fn on any other type. No special "free function" path.
 
 **Files are organization.** Multiple files in the same package contribute to the same package-type's member table. Renaming, splitting, or merging files does not change semantics. There is no implicit "file struct," no per-file `main`, no file-scoped visibility.
 
-**One file extension: `.expo`.** `.exps` is removed. The script case is a single `.expo` file with a `fn main`:
+**One file extension: `.koja`.** `.kojs` is removed. The script case is a single `.koja` file with a `fn main`:
 
-```expo
-# hello.expo
+```koja
+# hello.koja
 fn main
   IO.puts("hi")
 end
 ```
 
-`expo run hello.expo` treats the file as a one-file package, looks up `main`, calls it. Top-level statements remain forbidden everywhere -- the existence of `fn main` _is_ the script idiom. This preserves the "no surprises on import" property: qualifying into another package never executes its top-level code, because there is no top-level code to execute.
+`koja run hello.koja` treats the file as a one-file package, looks up `main`, calls it. Top-level statements remain forbidden everywhere -- the existence of `fn main` _is_ the script idiom. This preserves the "no surprises on import" property: qualifying into another package never executes its top-level code, because there is no top-level code to execute.
 
-**One-file packages take their name from the filename.** Running `expo run hello.expo` without an `expo.toml` defines a one-file package `Hello` -- the filename converted to PascalCase (`lexer_demo.expo` → `LexerDemo`). The file's members are accessible internally without qualification (`main`, `keyword?`, `Lexer`); externally they would be `Hello.main`, `Hello.Lexer`, though "external" rarely applies to a script. A one-file package has exactly one file -- additional files belong to a real package defined by `expo.toml`.
+**One-file packages take their name from the filename.** Running `koja run hello.koja` without an `koja.toml` defines a one-file package `Hello` -- the filename converted to PascalCase (`lexer_demo.koja` → `LexerDemo`). The file's members are accessible internally without qualification (`main`, `keyword?`, `Lexer`); externally they would be `Hello.main`, `Hello.Lexer`, though "external" rarely applies to a script. A one-file package has exactly one file -- additional files belong to a real package defined by `koja.toml`.
 
-**Entry resolution has no casing trick.** The `entry` field in `expo.toml` names a member of the entry package. The compiler resolves it: if it's a fn, the runtime calls it; if it's a type implementing `Process`, the runtime constructs and spawns it.
+**Entry resolution has no casing trick.** The `entry` field in `koja.toml` names a member of the entry package. The compiler resolves it: if it's a fn, the runtime calls it; if it's a type implementing `Process`, the runtime constructs and spawns it.
 
 ```toml
 [project]
@@ -60,14 +60,14 @@ entry = "Run"        # fn at package top-level → call
 
 Both names are PascalCase by package-member convention; the kind is read from the declaration, not from the name.
 
-**Dispatch is always protocols + generics.** Packages stay comptime. The "module as value" pattern in Elixir (`apply(MyMod, :run, args)`) exists because Elixir lacks compile-time generic dispatch. Expo has both -- anywhere you'd want to pass a package as a value, you instead write `fn run<T: Runnable>(x: T)` and let the type system dispatch statically.
+**Dispatch is always protocols + generics.** Packages stay comptime. The "module as value" pattern in Elixir (`apply(MyMod, :run, args)`) exists because Elixir lacks compile-time generic dispatch. Koja has both -- anywhere you'd want to pass a package as a value, you instead write `fn run<T: Runnable>(x: T)` and let the type system dispatch statically.
 
 ### Comparison to the prior model
 
 | Prior model (preserved below)                              | This revision                                                        |
 | ---------------------------------------------------------- | -------------------------------------------------------------------- |
 | No free functions, period                                  | Free functions are package members; same machinery as inline fns     |
-| `.expo` vs `.exps`                                         | One extension; scripts are `.expo` files with `fn main`              |
+| `.koja` vs `.kojs`                                         | One extension; scripts are `.koja` files with `fn main`              |
 | `entry = "main"` vs `entry = "App"` casing-as-semantics    | Entry is a named member; compiler resolves kind from the declaration |
 | Files are bags of decls; package is a flat namespace label | Package is a type; files are organization only                       |
 | Nested types / local types in fns deferred                 | Same machinery as package-as-type; falls out without separate design |
@@ -87,7 +87,7 @@ Both names are PascalCase by package-member convention; the kind is read from th
 
 - Stdlib package names rename to PascalCase. One-shot mechanical rewrite touching every import.
 - Existing free-function workarounds (wrapping helpers in dummy `impl` blocks) inline back to package level without ceremony.
-- `.exps` never ships; the script case is `fn main`-in-a-`.expo`-file from day one.
+- `.kojs` never ships; the script case is `fn main`-in-a-`.koja`-file from day one.
 - GAPS entries that close as side effects:
   - "Free function codegen gap" -- free fns become package members; existing codegen path handles them.
   - "Nested types deferred" -- the `(package, name)` identity model extends to package-nested types.
@@ -104,7 +104,7 @@ Both names are PascalCase by package-member convention; the kind is read from th
 
 ## Problem
 
-`fn main` is the only free-floating function in Expo. All other functions must live inside `impl` blocks. This creates a fractal design inconsistency: the first thing every user learns is the one pattern that doesn't generalize. AI agents hit this hard -- they see `fn main` and assume free functions work everywhere, leading to codegen crashes when they try.
+`fn main` is the only free-floating function in Koja. All other functions must live inside `impl` blocks. This creates a fractal design inconsistency: the first thing every user learns is the one pattern that doesn't generalize. AI agents hit this hard -- they see `fn main` and assume free functions work everywhere, leading to codegen crashes when they try.
 
 The language has three related open questions:
 
@@ -118,31 +118,31 @@ This doc proposes a unified answer to all three.
 
 ## Two modes: projects and scripts
 
-Expo has two execution modes with different file extensions and different semantics.
+Koja has two execution modes with different file extensions and different semantics.
 
-### `.expo` files -- structured modules
+### `.koja` files -- structured modules
 
-`.expo` files contain type definitions, `impl` blocks, constants, and protocol conformance. No top-level statements. No `fn main`. Every function lives on a type. These are the files that make up a compiled project.
+`.koja` files contain type definitions, `impl` blocks, constants, and protocol conformance. No top-level statements. No `fn main`. Every function lives on a type. These are the files that make up a compiled project.
 
-### `.exps` files -- scripts
+### `.kojs` files -- scripts
 
-`.exps` files are scripts. The entire file body executes as a function -- like a bash script. Top-level statements, inline type definitions, no boilerplate. Run with `expo run script.exps`.
+`.kojs` files are scripts. The entire file body executes as a function -- like a bash script. Top-level statements, inline type definitions, no boilerplate. Run with `koja run script.kojs`.
 
-```expo
-# hello.exps
-IO.puts("Hello, Expo!")
+```koja
+# hello.kojs
+IO.puts("Hello, Koja!")
 ```
 
-This is Expo's equivalent of Elixir's `.exs` files. Scripts are for exploration, one-offs, and learning. They use real Expo semantics -- same types, same ownership, same `impl` blocks -- but the file itself is the entry point.
+This is Koja's equivalent of Elixir's `.exs` files. Scripts are for exploration, one-offs, and learning. They use real Koja semantics -- same types, same ownership, same `impl` blocks -- but the file itself is the entry point.
 
 ### Why two modes
 
 The split exists because projects and scripts have different needs:
 
-- **Projects** need structure, consistency, and the full `Process` model. The entry point is a type specified in `expo.toml`. No special cases.
+- **Projects** need structure, consistency, and the full `Process` model. The entry point is a type specified in `koja.toml`. No special cases.
 - **Scripts** need zero ceremony. The file is the function body. No project config, no type scaffolding, no process protocol.
 
-Conflating the two (allowing top-level statements in `.expo` files, or requiring `Process` in scripts) would compromise both.
+Conflating the two (allowing top-level statements in `.koja` files, or requiring `Process` in scripts) would compromise both.
 
 ---
 
@@ -150,14 +150,14 @@ Conflating the two (allowing top-level statements in `.expo` files, or requiring
 
 ### Status: partially implemented
 
-The dual entry mode is implemented. The `entry` field in `expo.toml` determines behavior by casing:
+The dual entry mode is implemented. The `entry` field in `koja.toml` determines behavior by casing:
 
 - **lowercase** (`entry = "main"`) -- existing behavior: resolves to a module file containing `fn main`
 - **PascalCase** (`entry = "App"`) -- new behavior: names a type that implements `Process<C, M, R>`, codegen generates a C `main` that constructs and spawns it
 
-Both modes coexist. Existing projects and tests are unchanged. The `fn main` path will be removed once `.exps` scripts are implemented (see below).
+Both modes coexist. Existing projects and tests are unchanged. The `fn main` path will be removed once `.kojs` scripts are implemented (see below).
 
-### `expo.toml`
+### `koja.toml`
 
 ```toml
 [project]
@@ -170,8 +170,8 @@ The `entry` field names the type whose `Process` implementation the runtime invo
 
 ### Entry type
 
-```expo
-# src/app.expo
+```koja
+# src/app.koja
 struct App
   name: String
 end
@@ -206,10 +206,10 @@ end
 
 ### What this gives you
 
-- **argv as config (implemented):** when `C = List<String>`, the runtime converts `argc`/`argv` (skipping the program name) into an Expo `List<String>` and passes it to `new`. Other config types are zero-initialized.
+- **argv as config (implemented):** when `C = List<String>`, the runtime converts `argc`/`argv` (skipping the program name) into an Koja `List<String>` and passes it to `new`. Other config types are zero-initialized.
 - **OS signals as lifecycle events (deferred):** `Lifecycle.Shutdown`, `Lifecycle.Interrupt`, `Lifecycle.Reload` are dispatched to `handle_signal`. Graceful shutdown is an override of the default implementation. Not yet implemented -- requires a two-mailbox model in the runtime.
-- **Exit codes via protocol (implemented):** the entry type's `StopReason` implements `ExitStatus`, mapping to OS exit codes. Default: `Normal -> 0`, `Shutdown -> 1`. Custom exit codes via `ExitStatus` protocol implementation. The spawn wrapper captures `run`'s return value, calls `ExitStatus.code()`, and stores the result in a global `@__expo_exit_code` that C `main` reads after `expo_rt_main_done()`.
-- **Supervision:** the entry type can spawn child processes in `new`. `expo new --sup` scaffolds a supervision tree.
+- **Exit codes via protocol (implemented):** the entry type's `StopReason` implements `ExitStatus`, mapping to OS exit codes. Default: `Normal -> 0`, `Shutdown -> 1`. Custom exit codes via `ExitStatus` protocol implementation. The spawn wrapper captures `run`'s return value, calls `ExitStatus.code()`, and stores the result in a global `@__koja_exit_code` that C `main` reads after `koja_rt_main_done()`.
+- **Supervision:** the entry type can spawn child processes in `new`. `koja new --sup` scaffolds a supervision tree.
 
 ### No special cases
 
@@ -223,7 +223,7 @@ The entry type example above uses `Lifecycle`, `StopReason`, and `handle_signal`
 
 ### Lifecycle
 
-```expo
+```koja
 enum Lifecycle
   Shutdown
   Interrupt
@@ -239,7 +239,7 @@ The entry process receives `Lifecycle` events from the OS runtime. Supervised ch
 
 The `Process` protocol has two dispatch points: `handle` for business messages, `handle_signal` for lifecycle events.
 
-```expo
+```koja
 protocol Process<C, M, R>
   fn new(config: C) -> Self
 
@@ -263,7 +263,7 @@ This mirrors `run`, which also has a default implementation that most processes 
 
 ### StopReason
 
-```expo
+```koja
 enum StopReason
   Normal
   Shutdown
@@ -279,13 +279,13 @@ There is no `Error` variant. Unrecoverable errors are panics -- the process cras
 
 ### ExitStatus
 
-```expo
+```koja
 protocol ExitStatus
   fn code(self) -> Int
 end
 ```
 
-`ExitStatus` maps a stop reason to an OS exit code. Only the entry process needs this -- it's the boundary between the Expo runtime and the OS.
+`ExitStatus` maps a stop reason to an OS exit code. Only the entry process needs this -- it's the boundary between the Koja runtime and the OS.
 
 `StopReason` has a default `ExitStatus` implementation: `Normal -> 0`, `Shutdown -> 1`. User types can implement `ExitStatus` for custom exit codes (e.g., distinguishing between graceful shutdown and specific failure modes).
 
@@ -295,7 +295,7 @@ end
 
 ### ExitReason
 
-```expo
+```koja
 enum ExitReason
   Normal
   Shutdown
@@ -312,7 +312,7 @@ end
 
 The supervisor stores an opaque handle per child -- a closure that captures the child's `Ref` and sends `Lifecycle` into the child's mailbox:
 
-```expo
+```koja
 struct ChildHandle
   send_lifecycle: fn (Lifecycle) -> ()
 end
@@ -341,7 +341,7 @@ Processes find each other through refs, not names. There are three patterns, mat
 
 **Static supervisor:** children are known at compile time. The supervisor holds each child's `Ref` as a struct field and passes refs to siblings through config:
 
-```expo
+```koja
 struct AppSupervisor
   db: Ref<DbMsg, DbResult>
   cache: Ref<CacheMsg, CacheResult>
@@ -357,7 +357,7 @@ No strings, no registry. Struct fields are the names. Typo `self.dv` instead of 
 
 **DynamicSupervisor:** children are created at runtime (one per connection, one per job). The supervisor is type-parameterized -- all children share the same `M` and `R` types. `start_child` returns the `Ref` to the caller, who stores it in their own state:
 
-```expo
+```koja
 struct DynamicSupervisor<C, M, R>
   fn start_child(move self, config: C) -> Pair<Self, Ref<M, R>>
   fn stop_child(move self, ref: Ref<M, R>) -> Self
@@ -368,7 +368,7 @@ The DynamicSupervisor's job is supervision (start, monitor, restart), not lookup
 
 **Global registry (optional):** for well-known cross-cutting singletons (logger, metrics) where config threading is awkward. Uses constant strings to avoid typos:
 
-```expo
+```koja
 const DB_POOL = "db_pool"
 
 Process.register(ref, DB_POOL)
@@ -390,7 +390,7 @@ The constant is defined once; the typed lookup helper pins both the name and the
 
 Every process mailbox already accepts two kinds of messages: business messages (`M`) and lifecycle events (`Lifecycle`). The `run()` default has two receive arms for them. But `Ref` only exposes the business channel through `cast` and `call`. `signal` exposes the lifecycle channel:
 
-```expo
+```koja
 extend Ref<M, R>
   fn cast(self, msg: M)                                # fire-and-forget business message
   fn call(self, msg: M, timeout: Int) -> Result<R, CallError>  # synchronous business message
@@ -398,11 +398,11 @@ extend Ref<M, R>
 end
 ```
 
-`signal` maps directly to the runtime's `expo_rt_send_lifecycle(pid, variant)`, which pushes lifecycle events to the **front** of the mailbox (priority delivery). The runtime already uses this path for OS signals to PID 1 -- `signal` generalizes it so any process can send lifecycle events to any other process it holds a `Ref` to.
+`signal` maps directly to the runtime's `koja_rt_send_lifecycle(pid, variant)`, which pushes lifecycle events to the **front** of the mailbox (priority delivery). The runtime already uses this path for OS signals to PID 1 -- `signal` generalizes it so any process can send lifecycle events to any other process it holds a `Ref` to.
 
 This is the mechanism supervisors use for cooperative shutdown. The supervisor doesn't need to know `M` or `R` to shut down a child -- it captures `ref.signal` in a closure at spawn time:
 
-```expo
+```koja
 struct ChildHandle
   signal: fn (Lifecycle) -> ()
   id: Int
@@ -413,7 +413,7 @@ end
 
 `Ref.call` currently returns `Option<R>`, which conflates two failure modes: the process timed out (it's busy or slow) vs. the process is dead. These require different responses -- retry vs. escalate. `CallError` distinguishes them:
 
-```expo
+```koja
 enum CallError
   Timeout
   ProcessDown
@@ -434,19 +434,19 @@ The runtime detects `ProcessDown` by checking the target process's state before 
 
 Cooperative shutdown via `signal(Lifecycle.Shutdown)` depends on the target process handling the event. If the process is stuck -- infinite loop in a handler, deadlocked on a `call` to a dead process -- it will never respond. The supervisor needs an escape hatch.
 
-```expo
+```koja
 ref.kill()
 ```
 
 `kill` is uncooperative. The runtime marks the process as `Dead`, frees all memory owned by it, and (once monitoring is implemented) sends `ExitSignal` to any watchers. It does not go through the mailbox. It does not call `handle_signal`. The process simply stops existing.
 
-This is safe because Expo has no shared mutable state. Every allocation belongs to exactly one process. Kill it, free everything, no other process is affected.
+This is safe because Koja has no shared mutable state. Every allocation belongs to exactly one process. Kill it, free everything, no other process is affected.
 
-`kill` is an instance method on `Ref<M, R>`. You need a handle to kill a process -- you can't kill by raw pid. This is consistent with Expo's typed-handles philosophy and eliminates the need for a separate `Pid` type. The supervisor holds refs (or closures capturing refs) for every child.
+`kill` is an instance method on `Ref<M, R>`. You need a handle to kill a process -- you can't kill by raw pid. This is consistent with Koja's typed-handles philosophy and eliminates the need for a separate `Pid` type. The supervisor holds refs (or closures capturing refs) for every child.
 
 The supervisor's shutdown loop:
 
-```expo
+```koja
 for child in self.children.reverse()
   child.handle.signal(Lifecycle.Shutdown)
   match self.wait_for_exit(child.id, child.shutdown_timeout)
@@ -488,7 +488,7 @@ This is a problem for I/O-driven processes. A TCP listener that accepts
 connections and receives data needs to push events to its owner without
 being asked. In Erlang, any process can send to any other process it knows
 the pid of -- the mailbox is untyped, so `Pid ! {tcp, Socket, Data}` just
-works. In Expo, mailboxes are typed: the runtime can't inject a message
+works. In Koja, mailboxes are typed: the runtime can't inject a message
 unless it matches the process's declared message type `M`.
 
 ### `Ref.self()` -- the missing primitive
@@ -496,7 +496,7 @@ unless it matches the process's declared message type `M`.
 A static function on `Ref` that returns a typed handle to the current
 process:
 
-```expo
+```koja
 impl Ref<M, R>
   fn self() -> Ref<M, R>
     panic("intrinsic")
@@ -507,7 +507,7 @@ end
 The caller provides the type via annotation, same as `CPtr.alloc()` or
 `List.new()`:
 
-```expo
+```koja
 me: Ref<AppMsg | TcpEvent, String> = Ref.self()
 ```
 
@@ -520,7 +520,7 @@ compile-time -- the runtime representation is just the integer pid.
 A process that handles both business messages and I/O events declares `M`
 as a union:
 
-```expo
+```koja
 enum AppMsg
   DoWork(String)
 end
@@ -667,7 +667,7 @@ No blocking calls steal control from the actor model.
 
 ## Error handling philosophy
 
-Expo's error model has three layers, each progressively less precise:
+Koja's error model has three layers, each progressively less precise:
 
 1. **Types are the first line of defense.** `Result<T, E>`, `Option<T>`, and exhaustive `match` catch most errors at compile time. If a function can fail, its return type says so. The caller must handle the failure case -- the compiler enforces it.
 
@@ -675,7 +675,7 @@ Expo's error model has three layers, each progressively less precise:
 
 3. **Supervision is the safety net.** When a process does crash, the supervisor sees `ExitReason.Crashed(msg)` and restarts it according to the configured strategy. This handles the cases that types and careful programming cannot predict.
 
-This differs from Erlang's "let it crash" philosophy. In Erlang, crashes are routine -- processes crash and restart as a normal control flow mechanism. In Expo, static types mean most error conditions are handled at compile time. Crashes should be rare, not routine. Supervision exists for the genuinely unexpected, not as a substitute for error handling.
+This differs from Erlang's "let it crash" philosophy. In Erlang, crashes are routine -- processes crash and restart as a normal control flow mechanism. In Koja, static types mean most error conditions are handled at compile time. Crashes should be rare, not routine. Supervision exists for the genuinely unexpected, not as a substitute for error handling.
 
 ---
 
@@ -685,7 +685,7 @@ Functions can be defined directly inside `struct` and `enum` bodies. `impl` beco
 
 ### Struct with inline functions
 
-```expo
+```koja
 struct Parser
   input: String
   pos: Int
@@ -708,7 +708,7 @@ end
 
 ### Enum with inline functions
 
-```expo
+```koja
 enum Token
   Num(Float)
   Plus
@@ -732,7 +732,7 @@ end
 1. **Protocol conformance:** `impl Protocol for Type` -- adding protocol methods to a type.
 2. **Cross-file extension:** `impl Type` in a different file -- adding methods from outside the defining file.
 
-```expo
+```koja
 # protocol conformance
 impl Debug for Parser
   fn format(self) -> String
@@ -759,14 +759,14 @@ Existing `impl Type` blocks in the same file as the type definition can be inlin
 
 ---
 
-## Scripts (`.exps`)
+## Scripts (`.kojs`)
 
 ### Semantics
 
-A `.exps` file is a function body. The compiler wraps its contents into an anonymous entry point for codegen. This is an implementation detail -- the user just writes statements.
+A `.kojs` file is a function body. The compiler wraps its contents into an anonymous entry point for codegen. This is an implementation detail -- the user just writes statements.
 
-```expo
-# calculator.exps
+```koja
+# calculator.kojs
 struct Calc
   result: Float
 
@@ -787,21 +787,21 @@ Scripts can define types inline and use them immediately. Types defined in a scr
 ### Running scripts
 
 ```bash
-expo run hello.exps       # compile and execute
+koja run hello.kojs       # compile and execute
 ```
 
-No `expo.toml` needed. No project structure. The file extension `.exps` tells the compiler to use script mode.
+No `koja.toml` needed. No project structure. The file extension `.kojs` tells the compiler to use script mode.
 
 ### Script limitations
 
 - No multi-file support. A script is a single file.
 - No dependency imports. Scripts use only the standard library.
 - No `@test` annotations. Tests live in projects.
-- No `expo build` output. Scripts are run, not compiled to binaries.
+- No `koja build` output. Scripts are run, not compiled to binaries.
 
 ### REPL
 
-The REPL (ROADMAP.md, lines 352-359) uses `.exps` semantics. A REPL session is an interactive script:
+The REPL (ROADMAP.md, lines 352-359) uses `.kojs` semantics. A REPL session is an interactive script:
 
 - Type definitions and statements are entered interactively.
 - Types persist across REPL inputs.
@@ -812,9 +812,9 @@ The REPL (ROADMAP.md, lines 352-359) uses `.exps` semantics. A REPL session is a
 
 ## Function-scoped types (future exploration)
 
-Since `.exps` files already allow types inside a function body (the script _is_ a function body), the fractal design question is: can _any_ function body define types?
+Since `.kojs` files already allow types inside a function body (the script _is_ a function body), the fractal design question is: can _any_ function body define types?
 
-```expo
+```koja
 struct DataPipeline
 
   fn process(move self, raw: List<String>) -> List<Record>
@@ -838,20 +838,20 @@ Function-scoped types would be visible only within the enclosing function body. 
 
 ---
 
-## Impact on `expo new`
+## Impact on `koja new`
 
-`expo new my_app` scaffolds:
+`koja new my_app` scaffolds:
 
 ```
 my_app/
-  expo.toml
+  koja.toml
   src/
-    app.expo
+    app.koja
 ```
 
-Where `src/app.expo` is:
+Where `src/app.koja` is:
 
-```expo
+```koja
 struct App
 end
 
@@ -864,7 +864,7 @@ impl Process<List<String>, AppMsg, ()> for App
   end
 
   fn handle(move self, msg: AppMsg, from: Option<ReplyTo<()>>) -> Self | StopReason
-    IO.puts("Hello, Expo!")
+    IO.puts("Hello, Koja!")
     self
   end
 end
@@ -872,7 +872,7 @@ end
 
 `handle_signal` is not shown -- the default implementation is sufficient for a hello world.
 
-And `expo.toml` is:
+And `koja.toml` is:
 
 ```toml
 [project]
@@ -881,27 +881,27 @@ name = "my_app"
 version = "0.1.0"
 ```
 
-Future: `expo new my_app --sup` scaffolds a supervision tree with child specs in `new`.
+Future: `koja new my_app --sup` scaffolds a supervision tree with child specs in `new`.
 
 ---
 
 ## Impact on test files
 
-Test files use `@test` annotations on functions inside types. They are `.expo` files with no top-level statements. No change needed.
+Test files use `@test` annotations on functions inside types. They are `.koja` files with no top-level statements. No change needed.
 
 ---
 
 ## Cross-references
 
-- **archive/20260403-IMPORT.md, lines 585-595:** Open question about removing top-level functions -- this doc answers it. No free functions in `.expo` files. Top-level statements exist only in `.exps` scripts.
+- **archive/20260403-IMPORT.md, lines 585-595:** Open question about removing top-level functions -- this doc answers it. No free functions in `.koja` files. Top-level statements exist only in `.kojs` scripts.
 - **archive/20260403-IMPORT.md, lines 203-205:** Top-level functions in flat scope -- eliminated. All functions on types.
-- **archive/20260403-PROCESS.md, lines 256-281:** `fn main` vs `Process` split -- resolved. Projects always use `Process`. Scripts use `.exps`.
+- **archive/20260403-PROCESS.md, lines 256-281:** `fn main` vs `Process` split -- resolved. Projects always use `Process`. Scripts use `.kojs`.
 - **archive/20260403-PROCESS.md, lines 304-312 / ROADMAP.md, lines 304-312:** `fn main` as `Process<C,M,R>` -- the entry type _is_ the `Process` impl. argv as config, lifecycle events via `handle_signal`, exit codes via `ExitStatus` protocol.
 - **ROADMAP.md, lines 514-521:** Open question about `impl Type` migrating to inline functions -- this doc proposes it.
 - **ROADMAP.md, lines 538-542:** Type system philosophy, inline functions on types -- addressed here.
 - **ROADMAP.md, lines 544-551:** Namespace unification -- compatible, modules and types both own functions.
-- **ROADMAP.md, lines 352-359:** REPL design -- uses `.exps` script semantics.
-- **archive/20260403-PROJECT.md, lines 555-557:** Entry file may have top-level statements -- replaced: `.expo` files never have top-level statements; `.exps` files always do.
+- **ROADMAP.md, lines 352-359:** REPL design -- uses `.kojs` script semantics.
+- **archive/20260403-PROJECT.md, lines 555-557:** Entry file may have top-level statements -- replaced: `.koja` files never have top-level statements; `.kojs` files always do.
 
 ---
 
@@ -918,7 +918,7 @@ these two cases to decide restart strategy:
 - **Panic crash**: the process called `panic()` or hit an unrecoverable
   error. The supervisor needs a different notification.
 
-`ExitReason.Crashed(String)` is defined in `lib/global/src/process.expo` but runtime
+`ExitReason.Crashed(String)` is defined in `lib/global/src/process.koja` but runtime
 delivery is not yet designed. Options:
 
 **Option A: separate crash notification.** The runtime sends a different
@@ -953,7 +953,7 @@ terms. The supervisor inspects the reason to decide on restart.
 When a child process exits or crashes, the supervisor needs to know.
 `ExitSignal` carries `pid: Pid` and `reason: ExitReason`:
 
-```expo
+```koja
 type SupervisorMsg = SupervisorCmd | ExitSignal
 ```
 
@@ -988,22 +988,22 @@ This interacts with the `handle_signal` design: the supervisor sends
 
 | Today                                             | Proposed                                                                       |
 | ------------------------------------------------- | ------------------------------------------------------------------------------ |
-| `fn main` is a special free-floating function     | Entry point is a `Process` impl specified in `expo.toml` (TBD: `project.exps`) |
+| `fn main` is a special free-floating function     | Entry point is a `Process` impl specified in `koja.toml` (TBD: `project.kojs`) |
 | Functions defined in separate `impl` blocks       | Functions defined inline in `struct`/`enum` bodies                             |
 | `impl Type` for primary methods                   | `impl` reserved for extensions and protocol conformance                        |
 | Free functions disallowed (except `fn main`)      | No free functions, period. Consistent rule.                                    |
-| Hello world requires `fn main` ceremony           | Hello world: `IO.puts("Hello!")` in a `.exps` script                           |
-| One file extension (`.expo`)                      | Two: `.expo` (structured modules) and `.exps` (scripts)                        |
-| REPL is a separate design question                | REPL is `.exps` semantics, interactive                                         |
+| Hello world requires `fn main` ceremony           | Hello world: `IO.puts("Hello!")` in a `.kojs` script                           |
+| One file extension (`.koja`)                      | Two: `.koja` (structured modules) and `.kojs` (scripts)                        |
+| REPL is a separate design question                | REPL is `.kojs` semantics, interactive                                         |
 | OS signals handled ad-hoc (`Signal` placeholder)  | `Lifecycle` enum with `handle_signal` default impl on `Process`                |
 | Exit codes as reply type (`ExitCode` placeholder) | `StopReason` enum, `ExitStatus` protocol for OS exit code mapping              |
 | No supervision model                              | `ExitReason` for supervisors, `Lifecycle` propagation, fractal dispatch        |
 
 ---
 
-## TBD: `project.exps` replacing `expo.toml`
+## TBD: `project.kojs` replacing `koja.toml`
 
-The introduction of `.exps` scripts opens the possibility of replacing `expo.toml` with `project.exps` -- a script that evaluates to a `Project` struct. This would be analogous to Elixir's `mix.exs`: the project config is written in the language itself, with the ability to compute values (e.g., reading a version from a file). The compiler would execute `project.exps` to obtain the `Project` struct before compiling the project. Design details deferred.
+The introduction of `.kojs` scripts opens the possibility of replacing `koja.toml` with `project.kojs` -- a script that evaluates to a `Project` struct. This would be analogous to Elixir's `mix.exs`: the project config is written in the language itself, with the ability to compute values (e.g., reading a version from a file). The compiler would execute `project.kojs` to obtain the `Project` struct before compiling the project. Design details deferred.
 
 ### Status: exploration
 

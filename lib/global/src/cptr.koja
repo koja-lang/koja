@@ -1,0 +1,74 @@
+struct CPtr<T>
+  @doc """
+  Allocates memory for `count` elements of type T using C's malloc.
+  """
+  @intrinsic
+  fn alloc(count: Int) -> CPtr<T>
+
+  @doc """
+  Returns a null pointer.
+  """
+  @intrinsic
+  fn null -> CPtr<T>
+
+  @doc """
+  Frees the memory at this pointer using C's free.
+  """
+  @intrinsic
+  fn free(move self)
+
+  @doc """
+  Returns a pointer offset by `n` elements from this pointer.
+  """
+  @intrinsic
+  fn offset(self, n: Int) -> CPtr<T>
+
+  @doc """
+  Reads the value at this pointer.
+  """
+  @intrinsic
+  fn read(self) -> T
+
+  @doc """
+  Writes a value to this pointer.
+  """
+  @intrinsic
+  fn write(self, value: T)
+
+  @doc """
+  Returns `true` if this pointer is null.
+  """
+  @intrinsic
+  fn null?(self) -> Bool
+end
+
+extend CPtr<UInt8>
+  @doc """
+  Creates a `Binary` by copying `len` bytes from this pointer.
+
+  The caller retains ownership of the pointer.
+  """
+  @intrinsic
+  fn to_binary(self, len: Int) -> Binary
+
+  @doc """
+  Reinterprets this pointer as an Koja `String`. The pointer must already
+  point to a valid length-prefixed Koja string payload (as allocated by
+  the runtime). This is a zero-cost operation.
+  """
+  @intrinsic
+  fn to_string(move self) -> String
+
+  @doc """
+  Wraps this pointer in a `CString` by computing the length with `strlen`.
+
+  The pointer must be a valid null-terminated C string. The caller is
+  responsible for freeing the result.
+  """
+  fn to_cstring(self) -> CString
+    CString{ptr: self, len: strlen(self)}
+  end
+
+  @extern "C"
+  priv fn strlen(s: CPtr<UInt8>) -> Int64
+end

@@ -1,6 +1,6 @@
 # Standard Library Design
 
-Design notes for Expo's standard library architecture: package hierarchy,
+Design notes for Koja's standard library architecture: package hierarchy,
 auto-import rules, networking stack, HTTP vocabulary types, randomness,
 cryptographic primitives, and the 20-year rule for stdlib inclusion.
 
@@ -36,7 +36,7 @@ The compiler auto-imports them into every module -- no prefix needed:
 
 These types require a package-qualified path. Use `alias` to shorten:
 
-```expo
+```koja
 alias Net.TCPSocket
 alias HTTP.Request
 
@@ -58,21 +58,21 @@ Networking with TLS as a capability on `TCPSocket`, not a separate type.
 
 ### Types
 
-- **`Net.TCPSocket`** -- **implemented** (in `Net.expo`).
+- **`Net.TCPSocket`** -- **implemented** (in `Net.koja`).
   `connect(host, port)` resolves DNS and connects, `connect_addr(addr)`
   for direct connections, `read(count)`, `write(data)`, `close()`.
   TLS via `upgrade_tls(config)` (`move self -> Self`) or the
   convenience factory `connect_tls(host, port, config)` (pending).
   One type handles both plain and encrypted connections.
-- **`Net.TCPListener`** -- **implemented** (in `Net.expo`).
+- **`Net.TCPListener`** -- **implemented** (in `Net.koja`).
   `bind(port)` or `bind_addr(addr)`, `accept()` (returns `TCPSocket`).
   Sets `SO_REUSEADDR` and listens with backlog 128 automatically.
-- **`Net.UDPSocket`** -- **implemented** (in `Net.expo`).
+- **`Net.UDPSocket`** -- **implemented** (in `Net.koja`).
   `bind(port)` or `bind_addr(addr)`, `send_to(data, addr)`,
   `recv_from(count)`. Datagram-oriented, no connection ceremony.
 - **`Net.TLSConfig`** -- certificate options, verification settings. Passed
   to `upgrade_tls` or `connect_tls`. Pending implementation.
-- **`Net.Socket`** -- raw POSIX socket primitives (in `Net.expo`).
+- **`Net.Socket`** -- raw POSIX socket primitives (in `Net.koja`).
   Rarely used directly -- `TCPSocket` and `UDPSocket` wrap it.
 
 ### TLS as upgrade, not separate type
@@ -83,7 +83,7 @@ require every socket-accepting function to handle `TCPSocket | TLSSocket`.
 
 Instead, TLS is a capability added to `TCPSocket`:
 
-```expo
+```koja
 alias Net.TCPSocket
 alias Net.TLSConfig
 
@@ -94,12 +94,12 @@ conn.write(request_bytes)
 
 This mirrors how TLS actually works at the protocol level -- you start with
 a TCP connection and negotiate TLS on top. The `move self -> Self` idiom
-makes this feel natural in Expo.
+makes this feel natural in Koja.
 
 ### Implementation
 
-`TCPSocket`, `TCPListener`, and `UDPSocket` are implemented in pure Expo
-in `Net.expo`, wrapping the raw `Socket` primitives. Access requires
+`TCPSocket`, `TCPListener`, and `UDPSocket` are implemented in pure Koja
+in `Net.koja`, wrapping the raw `Socket` primitives. Access requires
 qualified names (`Net.TCPSocket`) or `alias Net.TCPSocket`. TLS wraps a system library
 (LibreSSL/OpenSSL/BoringSSL) via C FFI (see [FFI.md](FFI.md)). Programs
 that don't call `upgrade_tls` don't pull in TLS dependencies.
@@ -157,7 +157,7 @@ naturally.
 
 Promoted from standalone package to stdlib. Ships with the compiler,
 accessed via qualified names (`JSON.Value`) or `alias JSON.Value`.
-Implemented in pure Expo with 17 tests covering encoder and decoder.
+Implemented in pure Koja with 17 tests covering encoder and decoder.
 
 - `JSON.Value` enum -- `Null`, `Bool`, `Int`, `Float`, `String`, `Array`, `Object`.
   Convenience constructors: `Value.string(s)`, `Value.int(n)`, `Value.object(entries)`, etc.
@@ -167,13 +167,13 @@ Implemented in pure Expo with 17 tests covering encoder and decoder.
 
 ---
 
-## `Random` (implemented -- in `lib/global/src/kernel.expo`)
+## `Random` (implemented -- in `lib/global/src/kernel.koja`)
 
 OS-level randomness. Not crypto-specific -- random numbers are used for games,
 tests, shuffling, UUID generation, and any non-deterministic behavior.
 
 Decided against a separate `Random` package -- too small (two functions), too
-fundamental. Lives in `lib/global/src/kernel.expo`, auto-imported into every
+fundamental. Lives in `lib/global/src/kernel.koja`, auto-imported into every
 module.
 
 ### API
@@ -185,7 +185,7 @@ module.
 ### Implementation
 
 Wraps the OS entropy source (`getrandom(2)` on Linux, `getentropy(2)` on macOS)
-via runtime intrinsics (`expo_random_bytes`, `expo_random_int`). No userspace
+via runtime intrinsics (`koja_random_bytes`, `koja_random_int`). No userspace
 PRNG -- always OS-quality randomness. Programs that never call `Random.*` pay
 nothing.
 
@@ -291,7 +291,7 @@ net.TCPSocket      same type, now encrypted
 
 `crypto` and TLS are siblings -- both wrap the same system C library
 (OpenSSL's `libcrypto` and `libssl` respectively) but have no dependency
-on each other at the Expo level.
+on each other at the Koja level.
 
 Each layer builds on the one below. `HTTP.Server` uses `Net.TCPListener`;
 `HTTP.Client` opens a `Net.TCPSocket`. The raw `Net.Socket` stays available
@@ -315,6 +315,6 @@ The result: every library invented its own.
 `Plug.Conn` eventually became the de facto server-side standard, but only
 because Phoenix won the framework war -- not because of any stdlib decision.
 
-If Expo's `http` package ships `Request` and `Response` from day one, this
+If Koja's `http` package ships `Request` and `Response` from day one, this
 fragmentation never happens. The stdlib defines the vocabulary; packages
 define the behavior.

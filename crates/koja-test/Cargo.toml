@@ -1,0 +1,10 @@
+[package]
+name = "koja-test"
+description = "Test discovery + harness synthesis for the Koja compiler"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+koja-ast = { path = "../koja-ast" }
+koja-parser = { path = "../koja-parser" }

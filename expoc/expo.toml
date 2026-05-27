@@ -1,7 +1,0 @@
-[project]
-name = "ExpoCompiler"
-version = "0.1.0"
-entry = "main"
-
-[dependencies]
-ExpoAST = { path = "projects/expo_ast" }

@@ -1,0 +1,38 @@
+const MAX = 100
+const PI = 3.14
+const NAME = "koja"
+const DEBUG = false
+
+enum Direction
+  North
+  South
+  East
+  West
+end
+
+struct Point
+  x: Int
+  y: Int
+end
+
+const HEADING = Direction.North
+const ORIGIN = Point{x: 0, y: 0}
+
+fn direction_name(d: Direction) -> String
+  match d
+    North -> "north"
+    South -> "south"
+    East -> "east"
+    West -> "west"
+  end
+end
+
+MAX.print()
+PI.print()
+NAME.print()
+DEBUG.print()
+(MAX + 1).print()
+
+direction_name(HEADING).print()
+ORIGIN.x.print()
+ORIGIN.y.print()

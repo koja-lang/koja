@@ -1,10 +1,10 @@
 # Eval Process Scheduler
 
-Design for a real process scheduler inside `expo-ir-eval` so the
+Design for a real process scheduler inside `koja-ir-eval` so the
 interpreter implements `spawn` / `receive` / mailboxes / supervision
 the same way the LLVM-emitted runtime does. Closes the last
 intentional parity gap between the two backends and unlocks
-`expo shell` running a project as if it were a compiled binary.
+`koja shell` running a project as if it were a compiled binary.
 
 This is a destination doc, not a trajectory. Every claim reduces
 to a behavior the LLVM runtime already exhibits, plus a Rust
@@ -18,18 +18,18 @@ touching `IRInstruction::Spawn`, `IRInstruction::Receive`, or
 returns `RuntimeError::Unsupported` and bails. That carve-out
 forces a sharp split:
 
-- LLVM mode: real Expo program, with processes.
+- LLVM mode: real Koja program, with processes.
 - Eval mode: synchronous subset only.
 
 The split shows up in three concrete places we want to close:
 
-1. **`expo shell` of a project.** Today the shell is a synchronous
+1. **`koja shell` of a project.** Today the shell is a synchronous
    REPL — handy for stdlib helpers and pure functions, useless
    for prodding a running actor system. The goal is: open
-   `expo shell` inside a project that names a `Process` entry,
+   `koja shell` inside a project that names a `Process` entry,
    the entry boots, and the REPL talks to it via the same `Ref`
    handles user code uses.
-2. **`expo eval` of process-using scripts.** Currently fails
+2. **`koja eval` of process-using scripts.** Currently fails
    immediately. Should succeed and produce the same observable
    output as the compiled binary.
 3. **Iteration speed.** Tests of actor logic shouldn't need a
@@ -46,12 +46,12 @@ exit-code semantics.
 
 | Axis | LLVM runtime | Eval scheduler |
 | ---- | ------------ | -------------- |
-| Concurrency primitive | Cooperative coroutines on N worker OS threads | One OS thread per Expo process |
-| Process body | Native function pointer dispatched via `expo_rt_spawn` | `IRFunction` interpreted on the thread |
+| Concurrency primitive | Cooperative coroutines on N worker OS threads | One OS thread per Koja process |
+| Process body | Native function pointer dispatched via `koja_rt_spawn` | `IRFunction` interpreted on the thread |
 | Mailbox | `VecDeque<Vec<u8>>` of byte-serialized messages | `crossbeam::channel::Sender<Envelope>` carrying typed `Value` |
-| Yield point | `expo_rt_receive` swaps stacks back to the worker loop | `recv` blocks the OS thread |
-| Lifecycle priority | Front-of-queue insert via `expo_rt_send_lifecycle` | Two channels per process: lifecycle (priority) + business |
-| Reactor / I/O | `polling`-based reactor wakes blocked processes on fd readiness | Reactor unchanged — eval reuses `expo-runtime`'s reactor as-is |
+| Yield point | `koja_rt_receive` swaps stacks back to the worker loop | `recv` blocks the OS thread |
+| Lifecycle priority | Front-of-queue insert via `koja_rt_send_lifecycle` | Two channels per process: lifecycle (priority) + business |
+| Reactor / I/O | `polling`-based reactor wakes blocked processes on fd readiness | Reactor unchanged — eval reuses `koja-runtime`'s reactor as-is |
 | PID space | `i64` minted by scheduler under `SCHED.lock()` | `i64` minted by eval scheduler under its own `Mutex` |
 | Termination | `Process` removed from `SCHED.processes`, mailbox freed | Thread joined, registry entry removed, channels dropped |
 
@@ -78,12 +78,12 @@ Three options for layering concurrency on top:
   that don't need >1000 concurrent processes.
 - **Custom green threads matching the runtime's coroutines.**
   Highest fidelity. ~1000 LOC of new scheduler code to mirror
-  what `expo-runtime/src/scheduler.rs` already does.
+  what `koja-runtime/src/scheduler.rs` already does.
 
 We pick the first. The interpreter doesn't change shape; only the
 `Spawn` / `Receive` instruction handlers grow. If we ever need to
 scale eval to thousands of concurrent processes (we don't today,
-and probably won't — that's what `expo build` is for), the
+and probably won't — that's what `koja build` is for), the
 scheduler can be swapped without touching the interpreter; the
 public eval API doesn't expose the threading model.
 
@@ -92,7 +92,7 @@ public eval API doesn't expose the threading model.
 LLVM mailboxes hold `[i8 tag][i8* payload]` byte sequences. The
 sender memcpys the message struct into the buffer; the receiver
 memcpys it back into a typed local. The byte-level shape is
-internal — no Expo-level construct observes it.
+internal — no Koja-level construct observes it.
 
 Eval has a richer in-process value model (`Value::Struct`,
 `Value::Enum`, `Value::String`, etc.) and runs entirely in one
@@ -140,7 +140,7 @@ behavior.
 
 Two channels per process: business + lifecycle. `Receive` reads
 from lifecycle first, falls through to business if empty.
-Mirrors `expo_rt_receive`'s priority-queue semantics where
+Mirrors `koja_rt_receive`'s priority-queue semantics where
 lifecycle messages are inserted at the front. Implementation:
 
 ```rust
@@ -175,12 +175,12 @@ in eval:
    structurally (call `state.start(config)` then `state.run()`)
    instead of going through the LLVM-shaped `void(*)(i8*)` thunk.
 3. Mint a PID, allocate channels, register in the scheduler.
-4. `thread::Builder::new().name(format!("expo-pid-{pid}"))
+4. `thread::Builder::new().name(format!("koja-pid-{pid}"))
    .spawn(move || run_process(pid, wrapper, config))`.
 5. Return `Value::Struct(Ref { id: pid })` matching `ref_type`'s
    layout.
 
-`run_process` is the Rust-side entry of every Expo process:
+`run_process` is the Rust-side entry of every Koja process:
 
 1. Set the `CURRENT_PID` thread-local.
 2. Call the state struct's `start(config)` method. On
@@ -221,7 +221,7 @@ specific diagnostic.
 
 ### Lifecycle / OS signals
 
-Same scheme as `expo-runtime/src/scheduler.rs`: per-signal
+Same scheme as `koja-runtime/src/scheduler.rs`: per-signal
 `AtomicBool` flag set by a `sigaction` handler, polled from the
 worker loop, delivered into PID 1's lifecycle channel.
 Implementation extracts the runtime's currently-private
@@ -263,17 +263,17 @@ user code calls `Kernel.panic(...)`. Eval today surfaces these as
 2. Translated into `ExitReason::Crashed(panic_msg)`.
 3. Delivered to monitors as if it were a normal termination.
 
-The `expo shell` thread sees panics through the same exit-signal
+The `koja shell` thread sees panics through the same exit-signal
 machinery, so a crashed REPL-spawned process surfaces a
 diagnostic in the prompt rather than tearing the whole shell
 down.
 
 ## Shell ergonomics
 
-`expo shell` inside a project:
+`koja shell` inside a project:
 
 1. Compile the project IR (eval-mode, no LLVM emit).
-2. If `expo.toml` declares `entry = "App"` for some `App`
+2. If `koja.toml` declares `entry = "App"` for some `App`
    implementing `Process`, scheduler spawns it as PID 1.
 3. REPL prompt has access to all top-level definitions plus
    PID-1's `Ref` exposed as `App` (or the entry name).
@@ -309,7 +309,7 @@ plumbing above.
 
 ## Implementation phases
 
-1. **Scheduler skeleton.** `expo-ir-eval/src/scheduler.rs` with
+1. **Scheduler skeleton.** `koja-ir-eval/src/scheduler.rs` with
    the registry, channels, `run_process` entry, PID minting.
    No interpreter changes yet — just the data structures and a
    smoke test that creates a registry, spawns a thread that
@@ -331,7 +331,7 @@ plumbing above.
 7. **OS signal integration for PID 1.** Tested by sending
    `SIGINT` to the eval test process and asserting the entry
    sees `Lifecycle::Interrupt`.
-8. **`expo shell` project mode.** Wire the scheduler boot into
+8. **`koja shell` project mode.** Wire the scheduler boot into
    the shell command. Tested manually + a small CLI integration
    test that drives the REPL via stdin and asserts entry
    process startup.
@@ -349,18 +349,18 @@ Greppable / assertable invariants:
   detail: ... receive ... }` no longer fire on any
   process-using stdlib fixture. Grep `tests/lang/process_*` for
   `--backend=interpreter` skips and remove them.
-- `expo eval` of every `tests/lang/process_*/main.expo` produces
-  identical stdout to `expo run` of the same fixture. Pinned by a
+- `koja eval` of every `tests/lang/process_*/main.koja` produces
+  identical stdout to `koja run` of the same fixture. Pinned by a
   diff-based golden test.
-- `expo-ir-eval` does not import `expo-ir-llvm` (parity must not
+- `koja-ir-eval` does not import `koja-ir-llvm` (parity must not
   flow through the LLVM backend). Grep:
-  `rg "use expo_ir_llvm" expo/crates/expo-ir-eval/`.
-- Eval scheduler thread names match `expo-pid-{N}` (debugger
+  `rg "use koja_ir_llvm" expo/crates/koja-ir-eval/`.
+- Eval scheduler thread names match `koja-pid-{N}` (debugger
   visibility; sanity check during shell sessions).
 - `Interpreter::run_program` accepts both `ProjectEntry::Function`
   and `ProjectEntry::Process { state }` — no `unimplemented!()`
   on the Process arm.
-- `lib/global/src/process.expo`'s test suite passes under both
+- `lib/global/src/process.koja`'s test suite passes under both
   backends. Today the `process` package's test directory is
   skipped in eval mode; that exclusion is removed.
 
@@ -371,9 +371,9 @@ Greppable / assertable invariants:
 - `expo/design/FNMAIN.md` — process model, lifecycle semantics,
   `StopReason` / `ExitStatus` / supervisor design that this doc
   defers to.
-- `expo/crates/expo-runtime/src/scheduler.rs` — the LLVM-side
+- `expo/crates/koja-runtime/src/scheduler.rs` — the LLVM-side
   reference implementation. When in doubt about observable
   semantics, the runtime is the spec.
-- `expo/crates/expo-ir-eval/src/interpreter.rs` — the
+- `expo/crates/koja-ir-eval/src/interpreter.rs` — the
   `Spawn` / `Receive` arms that today return `Unsupported`.
   These are the surgical sites for phases 2-3.
