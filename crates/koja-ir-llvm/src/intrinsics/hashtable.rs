@@ -820,6 +820,198 @@ fn emit_rehash_loop<'ctx>(
     Ok(())
 }
 
+/// `fn clone(self) -> Self` for both `Map<K, V>` and `Set<T>` —
+/// allocate fresh buffers, `memcpy` the states (just `u8` per slot),
+/// then walk every slot and clone `K` (and `V` for `Map`) through
+/// the type's mangled `.clone` fn. The new entries buffer holds
+/// independently-owned values so the cloned table can be mutated /
+/// dropped without aliasing the original.
+///
+/// For element types whose Clone impl resolves to a value passthrough
+/// (Copy primitives whose `fn clone(self) -> Self  self  end` body
+/// reads-and-returns), we still emit the call — the function exists
+/// and inlines away under the optimizer; the alternative (open-
+/// coding a "Copy or not" decision here) duplicates the universal-
+/// Clone contract from the synthesizer. See [`resolve_clone_fn`] for
+/// the receiver-symbol shape per [`IRType`] arm.
+pub(super) fn emit_table_clone<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    layout: &HashtableLayout<'_>,
+) -> Result<(), LlvmError> {
+    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
+
+    let (src_entries, src_states, length, capacity) =
+        extract_table_fields(ctx, function, llvm_function)?;
+
+    let entries_bytes = ctx
+        .builder
+        .build_int_mul(
+            capacity,
+            i64_ty.const_int(layout.entry_size, false),
+            "entries_bytes",
+        )
+        .map_err(|e| codegen_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+    let malloc = declare_malloc_extern(ctx);
+    let dst_entries = call_malloc(ctx, function, malloc, entries_bytes, "dst_entries")?;
+    let dst_states = call_malloc(ctx, function, malloc, capacity, "dst_states")?;
+
+    let memcpy = declare_memcpy_extern(ctx);
+    ctx.builder
+        .build_call(
+            memcpy,
+            &[dst_states.into(), src_states.into(), capacity.into()],
+            "",
+        )
+        .map_err(|e| {
+            codegen_err(
+                format_args!("build_call memcpy states for `{}`", function.symbol),
+                e,
+            )
+        })?;
+
+    let key_clone_fn = resolve_clone_fn(ctx, function, layout.key_ty)?;
+    let key_basic_ty = ir_basic_type(ctx, layout.key_ty)?;
+    let value_clone_fn = match layout.value_ty {
+        Some(v_ty) => Some(resolve_clone_fn(ctx, function, v_ty)?),
+        None => None,
+    };
+    let value_basic_ty = match layout.value_ty {
+        Some(v_ty) => Some(ir_basic_type(ctx, v_ty)?),
+        None => None,
+    };
+
+    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "emit_table_clone called with no insertion block for `{}`",
+            function.symbol,
+        ))
+    })?;
+    let loop_head = ctx.context.append_basic_block(llvm_function, "clone_loop");
+    let loop_body = ctx.context.append_basic_block(llvm_function, "clone_body");
+    let do_clone = ctx.context.append_basic_block(llvm_function, "do_clone");
+    let next = ctx.context.append_basic_block(llvm_function, "clone_next");
+    let done = ctx.context.append_basic_block(llvm_function, "clone_done");
+
+    ctx.builder
+        .build_unconditional_branch(loop_head)
+        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+
+    ctx.builder.position_at_end(loop_head);
+    let idx_phi = ctx
+        .builder
+        .build_phi(i64_ty, "idx")
+        .map_err(|e| codegen_err(format_args!("build_phi for `{}`", function.symbol), e))?;
+    idx_phi.add_incoming(&[(&i64_ty.const_zero(), entry_block)]);
+    let idx = idx_phi.as_basic_value().into_int_value();
+    let idx_done = ctx
+        .builder
+        .build_int_compare(IntPredicate::UGE, idx, capacity, "idx_done")
+        .map_err(|e| {
+            codegen_err(
+                format_args!("build_int_compare for `{}`", function.symbol),
+                e,
+            )
+        })?;
+    ctx.builder
+        .build_conditional_branch(idx_done, done, loop_body)
+        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+
+    ctx.builder.position_at_end(loop_body);
+    let s_ptr = unsafe {
+        ctx.builder
+            .build_gep(i8_ty, src_states, &[idx], "s_ptr")
+            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
+    };
+    let s_val = ctx
+        .builder
+        .build_load(i8_ty, s_ptr, "s_val")
+        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?
+        .into_int_value();
+    let is_occ = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            s_val,
+            i8_ty.const_int(STATE_OCCUPIED, false),
+            "is_occ",
+        )
+        .map_err(|e| {
+            codegen_err(
+                format_args!("build_int_compare for `{}`", function.symbol),
+                e,
+            )
+        })?;
+    ctx.builder
+        .build_conditional_branch(is_occ, do_clone, next)
+        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+
+    ctx.builder.position_at_end(do_clone);
+    let src_entry_ptr = entry_pointer(ctx, function, src_entries, idx, layout.entry_size)?;
+    let dst_entry_ptr = entry_pointer(ctx, function, dst_entries, idx, layout.entry_size)?;
+
+    let src_key = ctx
+        .builder
+        .build_load(key_basic_ty, src_entry_ptr, "src_key")
+        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?;
+    let dst_key = call_clone(ctx, function, key_clone_fn, src_key, "dst_key")?;
+    ctx.builder
+        .build_store(dst_entry_ptr, dst_key)
+        .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
+
+    if let (Some(v_basic), Some(v_clone)) = (value_basic_ty, value_clone_fn) {
+        let src_v_ptr = unsafe {
+            ctx.builder
+                .build_gep(
+                    i8_ty,
+                    src_entry_ptr,
+                    &[i64_ty.const_int(layout.key_size, false)],
+                    "src_v_ptr",
+                )
+                .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
+        };
+        let dst_v_ptr = unsafe {
+            ctx.builder
+                .build_gep(
+                    i8_ty,
+                    dst_entry_ptr,
+                    &[i64_ty.const_int(layout.key_size, false)],
+                    "dst_v_ptr",
+                )
+                .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
+        };
+        let src_val = ctx
+            .builder
+            .build_load(v_basic, src_v_ptr, "src_val")
+            .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?;
+        let dst_val = call_clone(ctx, function, v_clone, src_val, "dst_val")?;
+        ctx.builder
+            .build_store(dst_v_ptr, dst_val)
+            .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
+    }
+
+    ctx.builder
+        .build_unconditional_branch(next)
+        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+
+    ctx.builder.position_at_end(next);
+    let idx_next = ctx
+        .builder
+        .build_int_add(idx, i64_ty.const_int(1, false), "idx_next")
+        .map_err(|e| codegen_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
+    let next_block = ctx.builder.get_insert_block().unwrap();
+    idx_phi.add_incoming(&[(&idx_next, next_block)]);
+    ctx.builder
+        .build_unconditional_branch(loop_head)
+        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+
+    ctx.builder.position_at_end(done);
+    let result = build_table_struct(ctx, function, dst_entries, dst_states, length, capacity)?;
+    ret_struct(ctx, function, result)
+}
+
 pub(super) fn emit_map_put<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -1769,6 +1961,92 @@ fn resolve_hash_eq<'ctx>(
 /// convention; struct types reuse their already-mangled symbol so
 /// per-monomorphization impls (`MyApp.Pair_$Int.String$.hash`) hit
 /// the same lookup path.
+/// Resolve the monomorphized `clone` function for `elem_ty` — the
+/// universal-`Clone` contract guarantees every type lands here with
+/// a callable impl (intrinsic for `String` / `Binary` / `Bits` /
+/// `Map` / `Set`, hand-written in `.koja` for primitives + `List` +
+/// `CPtr`, synthesized for user structs and enums). Surfaces a clean
+/// codegen error when the receiver shape isn't one we know how to
+/// mangle (e.g. function-typed `V` in a `Map<K, fn () -> R>` —
+/// that's a follow-up).
+fn resolve_clone_fn<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    elem_ty: &IRType,
+) -> Result<FunctionValue<'ctx>, LlvmError> {
+    let (template, args) = clone_receiver_symbol(elem_ty).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "type `{elem_ty:?}` does not have a callable `clone` shape for `{}`",
+            function.symbol,
+        ))
+    })?;
+    let clone_symbol = mangled_method_name(&template, &args, "clone", &[]);
+    ctx.declared_function(&clone_symbol).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "type `{elem_ty:?}` does not implement Clone (no `{}` function) for `{}`",
+            clone_symbol, function.symbol,
+        ))
+    })
+}
+
+/// Receiver template + args for [`mangled_method_name`] on `clone`.
+/// Generic shapes (`List<T>`, `Map<K, V>`, `Set<T>`, `CPtr<T>`)
+/// reconstruct the receiver pair so the result mangles through the
+/// same path as the original `impl Clone for T` block. Already-
+/// mangled struct / enum symbols pass through verbatim with empty
+/// args — monomorphization stamps the full generic instantiation
+/// into the symbol root before codegen sees the type.
+fn clone_receiver_symbol(elem_ty: &IRType) -> Option<(IRSymbol, Vec<IRType>)> {
+    Some(match elem_ty {
+        IRType::Binary => (global_primitive_symbol("Binary"), Vec::new()),
+        IRType::Bits => (global_primitive_symbol("Bits"), Vec::new()),
+        IRType::Bool => (global_primitive_symbol("Bool"), Vec::new()),
+        IRType::CPtr(inner) => (global_primitive_symbol("CPtr"), vec![(**inner).clone()]),
+        IRType::Enum(symbol) | IRType::Struct(symbol) => (symbol.clone(), Vec::new()),
+        IRType::Float32 => (global_primitive_symbol("Float32"), Vec::new()),
+        IRType::Float64 => (global_primitive_symbol("Float"), Vec::new()),
+        IRType::Int8 => (global_primitive_symbol("Int8"), Vec::new()),
+        IRType::Int16 => (global_primitive_symbol("Int16"), Vec::new()),
+        IRType::Int32 => (global_primitive_symbol("Int32"), Vec::new()),
+        IRType::Int64 => (global_primitive_symbol("Int"), Vec::new()),
+        IRType::List(inner) => (global_primitive_symbol("List"), vec![(**inner).clone()]),
+        IRType::Map { key, value } => (
+            global_primitive_symbol("Map"),
+            vec![(**key).clone(), (**value).clone()],
+        ),
+        IRType::Set(inner) => (global_primitive_symbol("Set"), vec![(**inner).clone()]),
+        IRType::String => (global_primitive_symbol("String"), Vec::new()),
+        IRType::UInt8 => (global_primitive_symbol("UInt8"), Vec::new()),
+        IRType::UInt16 => (global_primitive_symbol("UInt16"), Vec::new()),
+        IRType::UInt32 => (global_primitive_symbol("UInt32"), Vec::new()),
+        IRType::UInt64 => (global_primitive_symbol("UInt64"), Vec::new()),
+        IRType::Unit => (global_primitive_symbol("Unit"), Vec::new()),
+        IRType::Function { .. } | IRType::Indirect(_) | IRType::Union { .. } => return None,
+    })
+}
+
+fn call_clone<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    clone_fn: FunctionValue<'ctx>,
+    value: BasicValueEnum<'ctx>,
+    name: &str,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    ctx.builder
+        .build_call(clone_fn, &[value.into()], name)
+        .map_err(|e| {
+            codegen_err(
+                format_args!("build_call clone for `{}`", function.symbol),
+                e,
+            )
+        })?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!("clone returned no value for `{}`", function.symbol))
+        })
+}
+
 fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
     Some(match key_ty {
         IRType::Bool => global_primitive_symbol("Bool"),

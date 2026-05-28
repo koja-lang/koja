@@ -1,0 +1,15 @@
+struct Bag
+  label: String
+  scores: List<Int>
+end
+
+fn main
+  bag = Bag{label: "alpha", scores: [1, 2, 3]}
+  twin = bag.clone()
+  bag.scores = bag.scores.replace_at(0, 99)
+  bag.label.print()
+  bag.scores.length().print()
+  twin.label.print()
+  twin.scores.length().print()
+  twin.scores.get(0).unwrap().print()
+end

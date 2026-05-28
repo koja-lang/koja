@@ -204,3 +204,22 @@ impl ListLiteral<T> for List<T>
   @intrinsic
   fn from_list(move list: List<T>) -> Self
 end
+
+impl Clone for List<T>
+  @doc """
+  Returns a fresh, independently-owned list whose elements are each
+  cloned via `T.clone()`. Mutating the clone (or the original) after
+  the call leaves the other side untouched. Hand-written in `.koja`
+  because `for item in self` already iterates the list — no need for
+  an `@intrinsic` walk like `Map` / `Set` require.
+  """
+  fn clone(self) -> Self
+    result: List<T> = List.new()
+
+    for item in self
+      result = result.append(item.clone())
+    end
+
+    result
+  end
+end

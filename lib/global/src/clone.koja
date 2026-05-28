@@ -1,18 +1,26 @@
 @doc """
-Explicit value duplication for heap-typed primitives.
+Explicit value duplication. `clone` produces a fresh, independently-
+owned copy of `self`. The source stays live (`self` borrows by
+default), so callers can keep the original alongside the new copy —
+the canonical use is paying for an extra owned slot when the move-
+by-default lattice would otherwise consume the source (e.g. storing
+the same `String` into two different struct fields).
 
-`clone` produces a fresh, independently-owned copy of `self`. The
-source stays live (`self` borrows by default), so callers can keep
-the original alongside the new copy — the canonical use is paying
-for an extra owned slot when the move-by-default lattice would
-otherwise consume the source (e.g. storing the same `String` into
-two different struct fields).
+Every type implements `Clone`:
 
-For value-typed primitives (`Int`, `Float`, `Bool`, …) the move
-lattice already permits free reuse, so they don't need a `Clone`
-impl. Generic containers (`List<T>`, `Map<K, V>`, …) get their
-hand-written impls in a follow-up slice; until then,
-`.clone()` is only defined for the heap primitives below.
+- Copy primitives (`Int`, `Float`, `Bool`, `()`, fixed-width integers
+  / floats) bottom out to a value-passthrough — `clone` just returns
+  `self` since reading a Copy value already duplicates it.
+- Heap primitives (`String`, `Binary`, `Bits`) deep-copy their
+  backing buffers through `@intrinsic` bodies below.
+- User structs and enums get an auto-derived
+  `impl Clone for T` from the typechecker's synthesize pass
+  (`derive_clone`) — clones each field / payload through `.clone()`.
+- Generic containers (`List<T>`, `Map<K, V>`, `Set<T>`) ship their
+  own impls — `list.koja` walks the buffer and clones each element;
+  `map.koja` / `set.koja` use `@intrinsic` to walk their hash table
+  internals and call the monomorphized `K.clone()` / `V.clone()`
+  per occupied entry.
 """
 protocol Clone
   fn clone(self) -> Self
@@ -31,4 +39,88 @@ end
 impl Clone for Bits
   @intrinsic
   fn clone(self) -> Self
+end
+
+impl Clone for Bool
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Int
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Int8
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Int16
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Int32
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Int64
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for UInt8
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for UInt16
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for UInt32
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for UInt64
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Float
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Float32
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Float64
+  fn clone(self) -> Self
+    self
+  end
+end
+
+impl Clone for Unit
+  fn clone(self) -> Self
+    self
+  end
 end

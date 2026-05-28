@@ -101,11 +101,29 @@ pub fn assert_main_shape(ir_text: &str) {
 /// the `define ... @<name>(...) {` opening brace and the matching
 /// `}` (assumes well-formed LLVM IR with no nested `}` lines, which
 /// holds for everything we emit today).
+///
+/// Anchored on the `define ` prefix so substring searches don't
+/// snap to call sites — `@Global.String.clone(` appears as both a
+/// `define` line and a `call` line once auto-derived `Clone` impls
+/// invoke it from synthesized bodies.
 pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {
-    let header = format!("@{name}(");
-    let header_idx = ir_text
-        .find(&header)
-        .unwrap_or_else(|| panic!("function `@{name}` not found in IR:\n{ir_text}"));
+    let header = "define ";
+    let needle = format!("@{name}(");
+    let mut search_from = 0;
+    let header_idx = loop {
+        let Some(rel) = ir_text[search_from..].find(header) else {
+            panic!("function `@{name}` not found in IR:\n{ir_text}");
+        };
+        let define_idx = search_from + rel;
+        let line_end = ir_text[define_idx..]
+            .find('\n')
+            .map(|i| define_idx + i)
+            .unwrap_or(ir_text.len());
+        if ir_text[define_idx..line_end].contains(&needle) {
+            break define_idx;
+        }
+        search_from = line_end;
+    };
     let open = ir_text[header_idx..]
         .find('{')
         .unwrap_or_else(|| panic!("opening brace of `@{name}` missing in IR:\n{ir_text}"))
