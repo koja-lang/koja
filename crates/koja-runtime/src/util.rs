@@ -80,14 +80,10 @@ pub struct KojaList {
     pub capacity: i64,
 }
 
-/// Builds a `List<String>` from C `argc`/`argv`, converting each argument
-/// into a length-prefixed Koja string.
-///
-/// # Safety
-/// `argv` must contain at least `argc` valid, NUL-terminated C strings.
 /// Builds a `List<String>` from C `argc`/`argv` (skipping `argv[0]`, the
-/// program name) and writes the result into `out`. Uses an output pointer
-/// to avoid struct-return ABI mismatches on AArch64.
+/// program name), converting each argument into a length-prefixed Koja
+/// string and writing the result into `out`. Uses an output pointer to
+/// avoid struct-return ABI mismatches on AArch64.
 ///
 /// # Safety
 /// `argv` must contain at least `argc` valid, NUL-terminated C strings.

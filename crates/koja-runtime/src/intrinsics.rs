@@ -16,6 +16,21 @@
 
 use std::io::{self, Write};
 
+/// Borrows the bytes of a heap-emitted Koja string/`Binary` body.
+/// Reads the `i64` bit-length from the 8-byte header at `payload - 8`
+/// and returns a slice over the corresponding byte count.
+///
+/// # Safety
+///
+/// `payload` must point at the body of a heap-emitted string (the byte
+/// right after the `i64 bit_length` header). Calling with any other
+/// pointer is undefined behavior.
+unsafe fn string_payload_bytes<'a>(payload: *const u8) -> &'a [u8] {
+    let bit_length = unsafe { *payload.offset(-8).cast::<i64>() };
+    let byte_length = (bit_length / 8) as usize;
+    unsafe { std::slice::from_raw_parts(payload, byte_length) }
+}
+
 /// Concatenate two `Bits` values produced by the LLVM backend.
 /// Reads `bit_length` from each operand's `payload - 8` header,
 /// allocates a fresh `[i64 bit_length][ceil((L+R)/8) bytes]` heap
@@ -177,10 +192,7 @@ pub unsafe extern "C" fn __koja_pack_bits(
 /// Calling with any other pointer is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __koja_panic(payload: *const u8) -> ! {
-    let header = unsafe { payload.offset(-8).cast::<i64>() };
-    let bit_length = unsafe { *header };
-    let byte_length = (bit_length / 8) as usize;
-    let bytes = unsafe { std::slice::from_raw_parts(payload, byte_length) };
+    let bytes = unsafe { string_payload_bytes(payload) };
     let mut stderr = io::stderr().lock();
     let _ = stderr.write_all(b"panic: ");
     let _ = stderr.write_all(bytes);
@@ -201,10 +213,7 @@ pub unsafe extern "C" fn __koja_panic(payload: *const u8) -> ! {
 /// other pointer is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __koja_print_string(payload: *const u8) {
-    let header = unsafe { payload.offset(-8).cast::<i64>() };
-    let bit_length = unsafe { *header };
-    let byte_length = (bit_length / 8) as usize;
-    let bytes = unsafe { std::slice::from_raw_parts(payload, byte_length) };
+    let bytes = unsafe { string_payload_bytes(payload) };
     let mut stdout = io::stdout().lock();
     let _ = stdout.write_all(bytes);
     let _ = stdout.write_all(b"\n");

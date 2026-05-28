@@ -20,7 +20,7 @@ use std::time::Duration;
 
 use polling::{Event, Events, PollMode, Poller};
 
-use crate::ffi::koja_context_switch;
+use crate::ffi::{EAGAIN, get_errno, koja_context_switch};
 use crate::scheduler::{
     CURRENT_PID, IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE, ProcessState, SCHED, SCHED_SP,
     SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
@@ -260,4 +260,27 @@ pub fn io_block(fd: i32, interest: Interest) {
     }
 
     deregister(fd);
+}
+
+/// Runs a non-blocking syscall, suspending the process on `EAGAIN`
+/// until `fd` is ready for `interest` and then retrying. Returns the
+/// syscall's non-negative result, or the OS error captured at the
+/// point of a non-`EAGAIN` failure. Callers own success handling and
+/// error reporting (e.g. `set_last_error`).
+pub(crate) fn block_until_ready(
+    fd: i32,
+    interest: Interest,
+    mut syscall: impl FnMut() -> isize,
+) -> io::Result<isize> {
+    loop {
+        let n = syscall();
+        if n >= 0 {
+            return Ok(n);
+        }
+        if get_errno() == EAGAIN {
+            io_block(fd, interest);
+            continue;
+        }
+        return Err(io::Error::last_os_error());
+    }
 }

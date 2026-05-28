@@ -15,7 +15,7 @@ use crate::ffi::{
     libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket, malloc,
     set_nonblocking,
 };
-use crate::reactor::{Interest, io_block};
+use crate::reactor::{Interest, block_until_ready, io_block};
 use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_binary, set_last_error};
 
 /// Accepts a connection on a listening socket. If no connection is
@@ -23,18 +23,18 @@ use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_binary, set_last_erro
 /// client fd (also set to non-blocking), or -1 on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_socket_accept(fd: i32) -> i32 {
-    loop {
-        let client = unsafe { libc_accept(fd, ptr::null_mut(), ptr::null_mut()) };
-        if client >= 0 {
+    match block_until_ready(fd, Interest::Readable, || unsafe {
+        libc_accept(fd, ptr::null_mut(), ptr::null_mut()) as isize
+    }) {
+        Ok(client) => {
+            let client = client as i32;
             set_nonblocking(client);
-            return client;
+            client
         }
-        if get_errno() == EAGAIN {
-            io_block(fd, Interest::Readable);
-            continue;
+        Err(e) => {
+            set_last_error(e);
+            -1
         }
-        set_last_error(io::Error::last_os_error());
-        return -1;
     }
 }
 
@@ -157,26 +157,21 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
     let mut sender_addr: SockaddrIn = unsafe { mem::zeroed() };
     let mut addr_len = mem::size_of::<SockaddrIn>() as u32;
 
-    let n = loop {
-        let n = unsafe {
-            libc_recvfrom(
-                fd,
-                buf.as_mut_ptr(),
-                count as usize,
-                0,
-                &mut sender_addr as *mut SockaddrIn as *mut u8,
-                &mut addr_len,
-            )
-        };
-        if n >= 0 {
-            break n;
+    let n = match block_until_ready(fd, Interest::Readable, || unsafe {
+        libc_recvfrom(
+            fd,
+            buf.as_mut_ptr(),
+            count as usize,
+            0,
+            &mut sender_addr as *mut SockaddrIn as *mut u8,
+            &mut addr_len,
+        )
+    }) {
+        Ok(n) => n,
+        Err(e) => {
+            set_last_error(e);
+            return ptr::null_mut();
         }
-        if get_errno() == EAGAIN {
-            io_block(fd, Interest::Readable);
-            continue;
-        }
-        set_last_error(io::Error::last_os_error());
-        return ptr::null_mut();
     };
 
     let data_len = n as usize;
@@ -284,26 +279,21 @@ pub unsafe extern "C" fn koja_socket_send_to(
         }
     };
 
-    loop {
-        let sent = unsafe {
-            libc_sendto(
-                fd,
-                data_ptr,
-                data_len,
-                0,
-                &addr as *const SockaddrIn as *const u8,
-                addr_len,
-            )
-        };
-        if sent >= 0 {
-            return sent as i64;
+    match block_until_ready(fd, Interest::Writable, || unsafe {
+        libc_sendto(
+            fd,
+            data_ptr,
+            data_len,
+            0,
+            &addr as *const SockaddrIn as *const u8,
+            addr_len,
+        )
+    }) {
+        Ok(sent) => sent as i64,
+        Err(e) => {
+            set_last_error(e);
+            -1
         }
-        if get_errno() == EAGAIN {
-            io_block(fd, Interest::Writable);
-            continue;
-        }
-        set_last_error(io::Error::last_os_error());
-        return -1;
     }
 }
 

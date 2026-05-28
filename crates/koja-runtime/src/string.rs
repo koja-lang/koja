@@ -1,6 +1,5 @@
 //! String and binary manipulation runtime functions.
 
-use std::alloc;
 use std::ffi::{CStr, c_char};
 use std::ptr;
 use std::slice;
@@ -8,14 +7,23 @@ use std::str;
 
 use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_koja_string};
 
+/// Decodes a NUL-terminated C string pointer into `&str`. Panics on
+/// invalid UTF-8; every Koja `String` is valid UTF-8 by construction.
+///
+/// # Safety
+/// `ptr` must point to a valid NUL-terminated string.
+unsafe fn cstr_str<'a>(ptr: *const u8) -> &'a str {
+    let cstr = unsafe { CStr::from_ptr(ptr as *const c_char) };
+    str::from_utf8(cstr.to_bytes()).unwrap()
+}
+
 /// Attempts to parse a NUL-terminated string as a 64-bit float.
 ///
 /// # Safety
 /// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_float_parse(ptr: *const u8, out: *mut f64) -> i64 {
-    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
-    let s = str::from_utf8(s.to_bytes()).unwrap();
+    let s = unsafe { cstr_str(ptr) };
     match s.trim().parse::<f64>() {
         Ok(v) => {
             unsafe { *out = v };
@@ -66,8 +74,7 @@ pub unsafe extern "C" fn koja_format_binary(ptr: *const u8, is_bits: i64) -> *co
 /// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
-    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
-    let s = str::from_utf8(s.to_bytes()).unwrap();
+    let s = unsafe { cstr_str(ptr) };
     match s.trim().parse::<i64>() {
         Ok(v) => {
             unsafe { *out = v };
@@ -83,24 +90,13 @@ pub unsafe extern "C" fn koja_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
 /// `ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_string_get(ptr: *const u8, index: i64) -> *const u8 {
-    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
-    let s = str::from_utf8(s.to_bytes()).unwrap();
+    let s = unsafe { cstr_str(ptr) };
     let Some(ch) = s.chars().nth(index as usize) else {
         return ptr::null();
     };
     let mut buf = [0u8; 4];
     let encoded = ch.encode_utf8(&mut buf);
-    let byte_len = encoded.len();
-    unsafe {
-        let layout = alloc::Layout::from_size_align(8 + byte_len + 1, 8).unwrap();
-        let base = alloc::alloc(layout);
-        let bit_len = (byte_len as i64) * 8;
-        ptr::copy_nonoverlapping(&bit_len as *const i64 as *const u8, base, 8);
-        let payload = base.add(8);
-        ptr::copy_nonoverlapping(encoded.as_ptr(), payload, byte_len);
-        *payload.add(byte_len) = 0;
-        payload
-    }
+    unsafe { alloc_koja_string(encoded.as_bytes()) }
 }
 
 /// Returns the number of Unicode scalar values (codepoints) in a NUL-terminated
@@ -110,8 +106,7 @@ pub unsafe extern "C" fn koja_string_get(ptr: *const u8, index: i64) -> *const u
 /// `ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_string_length(ptr: *const u8) -> i64 {
-    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
-    let s = str::from_utf8(s.to_bytes()).unwrap();
+    let s = unsafe { cstr_str(ptr) };
     s.chars().count() as i64
 }
 
@@ -121,8 +116,7 @@ pub unsafe extern "C" fn koja_string_length(ptr: *const u8) -> i64 {
 /// `ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_string_slice(ptr: *const u8, start: i64, stop: i64) -> *const u8 {
-    let s = unsafe { CStr::from_ptr(ptr as *const c_char) };
-    let s = str::from_utf8(s.to_bytes()).unwrap();
+    let s = unsafe { cstr_str(ptr) };
     let len = s.chars().count();
 
     let start = (start as usize).min(len);
@@ -143,18 +137,7 @@ pub unsafe extern "C" fn koja_string_slice(ptr: *const u8, start: i64, stop: i64
             .unwrap_or(s.len())
     };
     let slice = &s[byte_start..byte_end];
-    let byte_len = slice.len();
-
-    unsafe {
-        let layout = alloc::Layout::from_size_align(8 + byte_len + 1, 8).unwrap();
-        let base = alloc::alloc(layout);
-        let bit_len = (byte_len as i64) * 8;
-        ptr::copy_nonoverlapping(&bit_len as *const i64 as *const u8, base, 8);
-        let payload = base.add(8);
-        ptr::copy_nonoverlapping(slice.as_ptr(), payload, byte_len);
-        *payload.add(byte_len) = 0;
-        payload
-    }
+    unsafe { alloc_koja_string(slice.as_bytes()) }
 }
 
 /// Validates that `len` bytes starting at `ptr` are valid UTF-8.

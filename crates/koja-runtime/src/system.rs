@@ -5,18 +5,25 @@ use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(target_os = "macos")]
+use crate::ffi::libc_getentropy;
 use crate::ffi::libc_gethostname;
-use crate::util::set_last_error;
+#[cfg(target_os = "linux")]
+use crate::ffi::libc_getrandom;
+use crate::util::{alloc_binary, set_last_error};
+
+/// Allocates a NUL-terminated C string copy of `s` and hands ownership
+/// to the caller as a raw payload pointer. Panics on an interior NUL,
+/// which OS paths and environment values never contain.
+fn into_raw_cstring(s: impl Into<Vec<u8>>) -> *const u8 {
+    CString::new(s).unwrap().into_raw() as *const u8
+}
 
 /// Returns the current working directory, or null on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_cwd() -> *const u8 {
     match env::current_dir() {
-        Ok(path) => {
-            let s = path.to_string_lossy().into_owned();
-            let c = CString::new(s).unwrap();
-            c.into_raw() as *const u8
-        }
+        Ok(path) => into_raw_cstring(path.to_string_lossy().into_owned()),
         Err(e) => {
             set_last_error(e);
             ptr::null()
@@ -36,10 +43,7 @@ pub unsafe extern "C" fn koja_get_env(key_ptr: *const u8) -> *const u8 {
         Err(_) => return ptr::null(),
     };
     match env::var(key) {
-        Ok(val) => {
-            let c = CString::new(val).unwrap();
-            c.into_raw() as *const u8
-        }
+        Ok(val) => into_raw_cstring(val),
         Err(_) => ptr::null(),
     }
 }
@@ -50,13 +54,10 @@ pub extern "C" fn koja_hostname() -> *const u8 {
     let mut buf = [0u8; 256];
     let ret = unsafe { libc_gethostname(buf.as_mut_ptr() as *mut c_char, buf.len()) };
     if ret != 0 {
-        let c = CString::new("unknown").unwrap();
-        return c.into_raw() as *const u8;
+        return into_raw_cstring("unknown");
     }
     let len = buf.iter().position(|&b| b == 0).unwrap_or(0);
-    let s = String::from_utf8_lossy(&buf[..len]).into_owned();
-    let c = CString::new(s).unwrap();
-    c.into_raw() as *const u8
+    into_raw_cstring(String::from_utf8_lossy(&buf[..len]).into_owned())
 }
 
 /// Sets the environment variable `key` to `value`.
@@ -97,14 +98,14 @@ fn fill_random(buf: *mut u8, len: usize) {
         #[cfg(target_os = "macos")]
         {
             let chunk = remaining.min(256);
-            let ret = unsafe { crate::ffi::libc_getentropy(dest, chunk) };
+            let ret = unsafe { libc_getentropy(dest, chunk) };
             assert!(ret == 0, "getentropy failed");
             offset += chunk;
         }
 
         #[cfg(target_os = "linux")]
         {
-            let n = unsafe { crate::ffi::libc_getrandom(dest, remaining, 0) };
+            let n = unsafe { libc_getrandom(dest, remaining, 0) };
             assert!(n > 0, "getrandom failed");
             offset += n as usize;
         }
@@ -119,7 +120,7 @@ pub extern "C" fn koja_random_bytes(count: i64) -> *mut u8 {
     if len > 0 {
         fill_random(buf.as_mut_ptr(), len);
     }
-    crate::util::alloc_binary(&buf)
+    alloc_binary(&buf)
 }
 
 /// Returns a random integer in the inclusive range [min, max].
