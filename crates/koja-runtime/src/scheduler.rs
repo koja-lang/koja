@@ -15,27 +15,10 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
-
-// ---------------------------------------------------------------------------
-// Mailbox tag and IOReady layout constants
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub(crate) const TAG_BUSINESS: u8 = 0;
-pub(crate) const TAG_LIFECYCLE: u8 = 1;
-pub(crate) const TAG_IO_READY: u8 = 2;
-
-pub(crate) const TAG_HEADER_SIZE: usize = 8;
-
-pub(crate) const LIFECYCLE_BUF_SIZE: usize = 16;
-
-pub(crate) const IO_READY_BUF_SIZE: usize = 24;
-pub(crate) const IO_READY_VARIANT_OFFSET: usize = 8;
-pub(crate) const IO_READY_FD_OFFSET: usize = 16;
-
-pub(crate) const IO_READY_READ: u8 = 0;
-pub(crate) const IO_READY_WRITE: u8 = 1;
-pub(crate) const IO_READY_ERROR: u8 = 2;
+use crate::wire::{
+    Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
+    TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE,
+};
 
 // ---------------------------------------------------------------------------
 // Signal handling state
@@ -110,13 +93,15 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
         buf
     };
 
+    let envelope = Envelope::new(buf, LIFECYCLE_BUF_SIZE);
     {
         let mut guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
-        if idx >= guard.processes.len() {
+        if !guard.deliverable(idx) {
+            envelope.free();
             return;
         }
-        guard.processes[idx].mailbox.push_front(buf);
+        guard.processes[idx].mailbox.push_front(envelope);
         if guard.processes[idx].state == ProcessState::Blocked {
             guard.processes[idx].state = ProcessState::Runnable;
         }
@@ -167,6 +152,17 @@ pub(crate) enum ProcessState {
     Dead,
 }
 
+/// An `mmap`-backed process stack: a `PROT_NONE` guard page at the
+/// lowest address (the growth end, since stacks grow down) followed by
+/// the usable region. Held on each [`Process`] so the mapping can be
+/// released when the process dies.
+struct ProcessStack {
+    /// Base of the whole mapping (start of the guard page).
+    base: *mut u8,
+    /// Total mapped bytes: guard page + usable stack.
+    size: usize,
+}
+
 /// A single lightweight Koja process.
 ///
 /// Each process has its own stack, a FIFO mailbox of raw message buffers,
@@ -183,8 +179,11 @@ pub(crate) struct Process {
     id: i64,
     /// Heap-allocated initial state passed to `func` on first entry.
     init_state: *mut u8,
-    /// FIFO queue of heap-allocated message buffers delivered via `send`.
-    mailbox: VecDeque<*mut u8>,
+    /// Byte length of the `init_state` allocation, needed to deallocate
+    /// it on death. `0` when `init_state` is null.
+    init_state_len: usize,
+    /// FIFO queue of message envelopes delivered via `send`.
+    mailbox: VecDeque<Envelope>,
     /// Claim flag: `true` from the moment a worker switches into this
     /// process until that same worker has persisted the post-yield `sp`.
     ///
@@ -199,6 +198,8 @@ pub(crate) struct Process {
     /// Saved stack pointer. Written by `koja_context_switch` when the
     /// process yields, read when a worker resumes it.
     sp: *mut u8,
+    /// The process's `mmap`-backed stack, unmapped when the process dies.
+    stack: ProcessStack,
     /// Current lifecycle state, driven by the scheduler and runtime intrinsics.
     pub(crate) state: ProcessState,
 }
@@ -206,6 +207,63 @@ pub(crate) struct Process {
 /// Process contains raw pointers that are heap-allocated and not
 /// thread-affine, so cross-thread transfer is safe.
 unsafe impl Send for Process {}
+
+impl Process {
+    /// Removes a dead process's reclaimable resources from its slot,
+    /// nulling/zeroing/emptying them so the actual frees can happen
+    /// after the `SCHED` lock is dropped. Idempotent: a second call
+    /// returns an empty [`Reclaim`] whose [`Reclaim::free`] is a no-op,
+    /// so a kill racing the worker loop reclaims at most once.
+    fn take_resources(&mut self) -> Reclaim {
+        let reclaim = Reclaim {
+            init_state: self.init_state,
+            init_state_len: self.init_state_len,
+            mailbox: std::mem::take(&mut self.mailbox),
+            stack: ProcessStack {
+                base: self.stack.base,
+                size: self.stack.size,
+            },
+        };
+        self.init_state = ptr::null_mut();
+        self.init_state_len = 0;
+        self.stack = ProcessStack {
+            base: ptr::null_mut(),
+            size: 0,
+        };
+        reclaim
+    }
+}
+
+/// Resources taken from a dead process, freed once the `SCHED` lock is
+/// no longer held. Produced by [`Process::take_resources`].
+struct Reclaim {
+    init_state: *mut u8,
+    init_state_len: usize,
+    mailbox: VecDeque<Envelope>,
+    stack: ProcessStack,
+}
+
+/// Reclaim owns raw pointers detached from a [`Process`]; freeing them
+/// off the scheduler thread is sound.
+unsafe impl Send for Reclaim {}
+
+impl Reclaim {
+    /// Frees every undelivered mailbox envelope, unmaps the stack, and
+    /// deallocates `init_state`. All parts are empty/null-safe, so this
+    /// is sound on an already-reclaimed `Reclaim`.
+    fn free(mut self) {
+        for envelope in self.mailbox.drain(..) {
+            envelope.free();
+        }
+        free_process_stack(self.stack);
+        if !self.init_state.is_null() && self.init_state_len > 0 {
+            unsafe {
+                let layout = alloc::Layout::from_size_align(self.init_state_len, 8).unwrap();
+                alloc::dealloc(self.init_state, layout);
+            }
+        }
+    }
+}
 
 /// A pending delayed message, delivered when `fire_at` has elapsed.
 struct Timer {
@@ -238,6 +296,30 @@ impl Scheduler {
             processes: Vec::new(),
             timers: Vec::new(),
         }
+    }
+
+    /// Whether `idx` names a process that can still receive mail: in
+    /// range and not yet `Dead`. Sends to a missing or dead target are
+    /// dropped (and their envelopes freed) rather than queued onto a
+    /// mailbox that will never be drained again.
+    fn deliverable(&self, idx: usize) -> bool {
+        idx < self.processes.len() && self.processes[idx].state != ProcessState::Dead
+    }
+
+    /// Cancels every pending timer aimed at `pid`, freeing its staged
+    /// message buffer. Called when a process dies so a delayed `send`
+    /// neither fires onto a dead mailbox nor leaks its staging buffer.
+    fn cancel_timers_for(&mut self, pid: i64) {
+        self.timers.retain(|timer| {
+            if timer.target_pid != pid {
+                return true;
+            }
+            unsafe {
+                let layout = alloc::Layout::from_size_align(timer.msg_len, 8).unwrap();
+                alloc::dealloc(timer.msg_buf, layout);
+            }
+            false
+        });
     }
 }
 
@@ -322,19 +404,53 @@ unsafe extern "C" fn process_trampoline() {
     }
 }
 
-/// Heap-allocates a [`STACK_SIZE`] byte stack (16-byte aligned) and
-/// initialises it so the first context switch lands in
-/// [`process_trampoline`].
-fn allocate_process_stack() -> *mut u8 {
+/// Maps a fresh [`STACK_SIZE`] process stack with a `PROT_NONE` guard
+/// page at the growth (low-address) end and initialises it so the first
+/// context switch lands in [`process_trampoline`]. Returns the mapping
+/// handle (for later [`free_process_stack`]) plus the initial stack
+/// pointer. Aborts on mapping failure, matching the old allocator.
+fn allocate_process_stack() -> (ProcessStack, *mut u8) {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    let size = page + STACK_SIZE;
+    let oom = || alloc::handle_alloc_error(alloc::Layout::from_size_align(size, page).unwrap());
+
+    let base = unsafe {
+        libc::mmap(
+            ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        )
+    };
+    if base == libc::MAP_FAILED {
+        oom();
+    }
+
+    // Guard the lowest page: a downward-growing stack that overruns its
+    // usable region faults here instead of corrupting adjacent memory.
+    if unsafe { libc::mprotect(base, page, libc::PROT_NONE) } != 0 {
+        unsafe { libc::munmap(base, size) };
+        oom();
+    }
+
+    let base = base as *mut u8;
+    // `mmap` returns page-aligned memory, so `base + size` is 16-aligned.
+    let stack_top = unsafe { base.add(size) };
+    let sp = unsafe { init_process_stack(stack_top, process_trampoline) };
+    (ProcessStack { base, size }, sp)
+}
+
+/// Releases a stack mapping previously returned by
+/// [`allocate_process_stack`]. A null base (a process whose stack was
+/// already reclaimed) is a no-op.
+fn free_process_stack(stack: ProcessStack) {
+    if stack.base.is_null() {
+        return;
+    }
     unsafe {
-        let layout = alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap();
-        let base = alloc::alloc(layout);
-        if base.is_null() {
-            alloc::handle_alloc_error(layout);
-        }
-        let stack_top = base.add(STACK_SIZE);
-        let stack_top = ((stack_top as usize) & !15) as *mut u8;
-        init_process_stack(stack_top, process_trampoline)
+        libc::munmap(stack.base as *mut libc::c_void, stack.size);
     }
 }
 
@@ -413,12 +529,17 @@ fn worker_loop() {
                     );
                     buf
                 };
+                let envelope = Envelope::new(buf, total);
                 let idx = (timer.target_pid - 1) as usize;
-                if idx < guard.processes.len() {
-                    guard.processes[idx].mailbox.push_back(buf);
+                if guard.deliverable(idx) {
+                    guard.processes[idx].mailbox.push_back(envelope);
                     if guard.processes[idx].state == ProcessState::Blocked {
                         guard.processes[idx].state = ProcessState::Runnable;
                     }
+                } else {
+                    // Target vanished or died between scheduling and firing;
+                    // don't push onto a dead mailbox or leak the buffer.
+                    envelope.free();
                 }
             } else {
                 i += 1;
@@ -444,18 +565,36 @@ fn worker_loop() {
             let saved_sp = unsafe { *yield_sp_ptr };
             let mut guard = SCHED.lock().unwrap();
             let idx = (pid - 1) as usize;
+            // A process that just ran its final switch-out is now `Dead`.
+            // Detach its stack + init_state here (under the lock) so the
+            // unmap/dealloc can run after the lock is dropped. Safe: the
+            // process already switched off its own stack to get here.
+            let mut reclaim = None;
             if idx < guard.processes.len() {
                 guard.processes[idx].sp = saved_sp;
                 guard.processes[idx].on_cpu = false;
+                if guard.processes[idx].state == ProcessState::Dead {
+                    reclaim = Some(guard.processes[idx].take_resources());
+                    guard.cancel_timers_for(pid);
+                }
             }
 
-            if !guard.processes.is_empty() && guard.processes[0].state == ProcessState::Dead {
+            let shutdown =
+                !guard.processes.is_empty() && guard.processes[0].state == ProcessState::Dead;
+            if shutdown {
                 SHUTDOWN.store(true, Ordering::Relaxed);
-                drop(guard);
-                WORK_AVAILABLE.notify_all();
-                break;
             }
             drop(guard);
+
+            if shutdown {
+                WORK_AVAILABLE.notify_all();
+            }
+            if let Some(reclaim) = reclaim {
+                reclaim.free();
+            }
+            if shutdown {
+                break;
+            }
             continue;
         }
 
@@ -567,8 +706,8 @@ pub extern "C" fn koja_rt_receive() -> *const u8 {
 
     {
         let mut guard = SCHED.lock().unwrap();
-        if let Some(msg) = guard.processes[idx].mailbox.pop_front() {
-            return msg as *const u8;
+        if let Some(envelope) = guard.processes[idx].mailbox.pop_front() {
+            return envelope.buffer as *const u8;
         }
         guard.processes[idx].state = ProcessState::Blocked;
     }
@@ -583,7 +722,7 @@ pub extern "C" fn koja_rt_receive() -> *const u8 {
     guard.processes[idx]
         .mailbox
         .pop_front()
-        .map(|p| p as *const u8)
+        .map(|envelope| envelope.buffer as *const u8)
         .unwrap_or(ptr::null())
 }
 
@@ -598,8 +737,8 @@ pub extern "C" fn koja_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
 
     {
         let mut guard = SCHED.lock().unwrap();
-        if let Some(msg) = guard.processes[idx].mailbox.pop_front() {
-            return msg as *const u8;
+        if let Some(envelope) = guard.processes[idx].mailbox.pop_front() {
+            return envelope.buffer as *const u8;
         }
         guard.processes[idx].state = ProcessState::Blocked;
         guard.processes[idx].deadline =
@@ -617,7 +756,7 @@ pub extern "C" fn koja_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
     guard.processes[idx]
         .mailbox
         .pop_front()
-        .map(|p| p as *const u8)
+        .map(|envelope| envelope.buffer as *const u8)
         .unwrap_or(ptr::null())
 }
 
@@ -650,13 +789,15 @@ pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
         buf
     };
 
+    let envelope = Envelope::new(buf, total);
     {
         let mut guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
-        if idx >= guard.processes.len() {
+        if !guard.deliverable(idx) {
+            envelope.free();
             return;
         }
-        guard.processes[idx].mailbox.push_back(buf);
+        guard.processes[idx].mailbox.push_back(envelope);
         if guard.processes[idx].state == ProcessState::Blocked {
             guard.processes[idx].state = ProcessState::Runnable;
         }
@@ -692,13 +833,15 @@ pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
         buf
     };
 
+    let envelope = Envelope::new(buf, IO_READY_BUF_SIZE);
     {
         let mut guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
-        if idx >= guard.processes.len() {
+        if !guard.deliverable(idx) {
+            envelope.free();
             return;
         }
-        guard.processes[idx].mailbox.push_back(buf);
+        guard.processes[idx].mailbox.push_back(envelope);
         if guard.processes[idx].state == ProcessState::Blocked {
             guard.processes[idx].state = ProcessState::Runnable;
         }
@@ -759,22 +902,42 @@ pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
     }
 }
 
-/// Immediately marks a process as `Dead`. Its mailbox is drained and
-/// its stack is deallocated. No signal is sent -- the process gets no
-/// chance to run cleanup. This is the "last resort" termination primitive.
+/// Immediately marks a process as `Dead`, reclaiming its stack and
+/// initial state. No signal is sent -- the process gets no chance to run
+/// cleanup. This is the "last resort" termination primitive.
+///
+/// If the target is currently executing on another worker (`on_cpu`),
+/// all of its resources -- stack, initial state, and any undelivered
+/// mailbox envelopes -- are reclaimed by that worker when it switches
+/// out; otherwise they are freed here. Nested heap inside a discarded
+/// payload is not yet freed (it waits on the deferred drop-glue work;
+/// see the message/envelope-lifecycle design).
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_kill(pid: i64) {
-    let mut guard = SCHED.lock().unwrap();
-    let idx = (pid - 1) as usize;
-    if idx >= guard.processes.len() {
-        return;
+    let reclaim = {
+        let mut guard = SCHED.lock().unwrap();
+        let idx = (pid - 1) as usize;
+        if idx >= guard.processes.len() {
+            return;
+        }
+        if guard.processes[idx].state == ProcessState::Dead {
+            return;
+        }
+        guard.processes[idx].state = ProcessState::Dead;
+        guard.cancel_timers_for(pid);
+        // Reclaiming a stack a worker is still running on would be a
+        // use-after-free; in that case let the owning worker reclaim on
+        // switch-out (it sees `Dead` after persisting `sp`). The mailbox
+        // rides along so its envelopes are freed exactly once.
+        if guard.processes[idx].on_cpu {
+            None
+        } else {
+            Some(guard.processes[idx].take_resources())
+        }
+    };
+    if let Some(reclaim) = reclaim {
+        reclaim.free();
     }
-    let proc = &mut guard.processes[idx];
-    if proc.state == ProcessState::Dead {
-        return;
-    }
-    proc.state = ProcessState::Dead;
-    proc.mailbox.clear();
 }
 
 /// Spawns a new lightweight process that will call `fn_ptr(state)`.
@@ -791,19 +954,23 @@ pub unsafe extern "C" fn koja_rt_spawn(
     state_ptr: *const u8,
     state_len: i64,
 ) -> i64 {
-    let heap_state = if state_len > 0 && !state_ptr.is_null() {
-        let len = state_len as usize;
+    let heap_state_len = if state_len > 0 && !state_ptr.is_null() {
+        state_len as usize
+    } else {
+        0
+    };
+    let heap_state = if heap_state_len > 0 {
         unsafe {
-            let layout = alloc::Layout::from_size_align(len, 8).unwrap();
+            let layout = alloc::Layout::from_size_align(heap_state_len, 8).unwrap();
             let buf = alloc::alloc(layout);
-            ptr::copy_nonoverlapping(state_ptr, buf, len);
+            ptr::copy_nonoverlapping(state_ptr, buf, heap_state_len);
             buf
         }
     } else {
         ptr::null_mut()
     };
 
-    let sp = allocate_process_stack();
+    let (stack, sp) = allocate_process_stack();
 
     let id = {
         let mut guard = SCHED.lock().unwrap();
@@ -814,9 +981,11 @@ pub unsafe extern "C" fn koja_rt_spawn(
             func: fn_ptr,
             id,
             init_state: heap_state,
+            init_state_len: heap_state_len,
             mailbox: VecDeque::new(),
             on_cpu: false,
             sp,
+            stack,
             state: ProcessState::Created,
         });
         id

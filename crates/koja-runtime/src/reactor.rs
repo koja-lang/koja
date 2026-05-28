@@ -22,9 +22,9 @@ use polling::{Event, Events, PollMode, Poller};
 
 use crate::ffi::{EAGAIN, get_errno, koja_context_switch};
 use crate::scheduler::{
-    CURRENT_PID, IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE, ProcessState, SCHED, SCHED_SP,
-    SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
+    CURRENT_PID, ProcessState, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
 };
+use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
 /// Whether the reactor should wake for readable or writable readiness.
 #[derive(Clone, Copy)]

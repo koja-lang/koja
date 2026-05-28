@@ -17,3 +17,4 @@ mod socket;
 mod string;
 mod system;
 mod util;
+mod wire;

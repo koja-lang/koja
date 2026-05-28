@@ -524,14 +524,15 @@ pub(super) fn emit_spawn<'ctx>(
 
 // ----- IRInstruction::Receive ----------------------------------------------
 
-/// Byte offset of the payload inside an envelope buffer. The
-/// runtime allocates `8` bytes for the tag (with padding) before
-/// the payload; this constant is the single source of truth on the
-/// LLVM side. Mirrors `TAG_HEADER_SIZE` in
-/// `koja-runtime/src/scheduler.rs`. Per-arm tag bytes
-/// (`Lifecycle = 1`, `Business = 0`) ride through
-/// [`ReceiveTag::wire_byte`] so the LLVM and runtime sides agree
-/// at a single source of truth.
+/// Byte offset of the payload inside an envelope buffer. The runtime
+/// reserves `8` bytes for the tag (with padding) before the payload.
+///
+/// This conforms to the envelope wire ABI, whose authoritative
+/// definition is `TAG_HEADER_SIZE` in `koja-runtime/src/wire.rs`. It
+/// mirrors that value by spec — the same way the `koja_rt_*` extern
+/// declarations mirror the runtime's function signatures — rather than
+/// importing a shared type. Per-arm tag bytes ride through
+/// [`ReceiveTag::wire_byte`], which conforms to the same ABI.
 const ENVELOPE_PAYLOAD_OFFSET: u64 = 8;
 
 /// Emit a single `IRInstruction::Receive`. Calls `koja_rt_receive`
