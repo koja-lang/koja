@@ -70,7 +70,7 @@ fn run_with_timeout(configure: impl FnOnce(&mut Command)) -> (String, String, i3
                 let _ = child.wait();
                 return (
                     String::new(),
-                    "test timed out (killed after 30s)".to_string(),
+                    format!("test timed out (killed after {}s)", TEST_TIMEOUT.as_secs()),
                     -1,
                 );
             }

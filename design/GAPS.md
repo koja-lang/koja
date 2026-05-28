@@ -30,6 +30,121 @@ Re-confirmed 2026-05-27 on both backends; diagnostic now reads
 
 ---
 
+## Process scheduler corrupts callee-saved registers across yield
+
+`tests/lang/io/multi_process.koja` is flaky: in a 500-run stress test of
+the standalone binary it crashed 32 times (6.4%) with hard signals
+(27 × SIGSEGV, 3 × SIGBUS, 2 × SIGTRAP). `koja run` was masking these as
+plain `exit code 1` because `pipeline.rs` does
+`status.code().unwrap_or(1)` and a signal-terminated child has
+`code() == None`. The flake therefore looks like a logical race in the
+language tests, but it's actually a memory-safety bug in the runtime.
+
+**Symptom 1 — dominant pattern (7/8 inspected crashes).** Thread 2 (a
+worker) faults with `pc = 0`, `lr = 0`, `fp = 0`, `sp = stack_top`. The
+register snapshot is the canonical "post-`ret`-with-LR=0" shape:
+`x20 = Coordinator.__spawn_wrapper+44`,
+`x24 = koja_runtime::scheduler::process_trampoline+188`. So
+`process_trampoline` finished, executed `ret`, and `x30` was loaded as
+0 from its prologue's saved frame.
+
+**Symptom 2 — the smoking gun (1/8 crashes).** SIGSEGV inside
+`pthread_mutex_lock+12` with the frame chain
+`pthread_mutex_lock → std::sys::pal::unix::sync::mutex::Mutex::lock →
+koja_rt_receive+320 → multi_process.Coordinator.run+128`. The
+`FAR` register contained `0x6c756d20676e6f70` — which, byte-reversed,
+is the ASCII string `"pong mul"` (the first 8 bytes of
+`"pong multi"`, the Ponger's reply message). `x23 = 0x10578e938`, a
+heap address whose first 8 bytes are those exact characters.
+
+**Root cause.** Disassembling `_koja_rt_receive`:
+
+```text
+sub  sp, sp, #0x60
+stp  x24, x23, [sp, #0x20]          ; saves caller's x23
+...
+adrp x23, 0x1002a8000
+add  x23, x23, #0x730               ; x23 = &SCHED (OnceBox<Mutex<...>>)
+...
+bl   koja_context_switch            ; yields when mailbox empty
+ldapr x0, [x23]                     ; x23 must still be &SCHED here
+bl   std::sys::pal::unix::sync::mutex::Mutex::lock
+```
+
+After the yield, `x23` was a heap pointer (the address of a
+`String` payload containing `"pong multi"`), not `&SCHED`. The
+dereference loaded the first 8 bytes of the string into `x0`, which
+`pthread_mutex_lock` then treated as a mutex pointer and dereferenced —
+SIGSEGV.
+
+For `x23` to be wrong after the resume, one of two things happened:
+
+1. **`koja_context_switch` saved/restored the wrong frame** — i.e. the
+   process's saved `sp` in `Scheduler::processes[idx].sp` was stale or
+   pointed at a frame from a *different* yield site (e.g. the frame
+   from a previous yield inside `koja_rt_receive_timeout` during
+   `p.call`, where `x23` legitimately holds the panic-state flag
+   address, not `&SCHED`).
+2. **`process_trampoline`'s callee-saved register window leaks across
+   the Rust↔Koja boundary** — Rust's `bl` to compiled Koja code lets
+   the Koja function clobber `x19–x28` freely; on the way back out,
+   the trampoline's `ldp` restores them from its own prologue frame.
+   But the *yielding* path goes through `koja_context_switch`, which
+   saves whatever `x19–x28` happen to be live at the yield point.
+   When that yield is inside `koja_rt_receive_timeout` (called from
+   the `Ref.call` intrinsic emitted inline in Koja-generated code),
+   the saved `x23` is whatever the surrounding Koja frame had there
+   — possibly a `String` pointer in flight.
+
+Theory 1 is more likely: the scheduler updates `processes[idx].sp` on
+yield, but if there's a window where two yields race against the
+`SCHED` mutex (the mutex is dropped *before* the context switch and
+reacquired afterwards in `worker_loop`), the saved `sp` from yield N
+could be read by the resume that paired with yield N-1. The "post-ret
+with LR=0" cases (symptom 1) match this: the frame loaded into
+`x19–x30` was *the trampoline's own initial frame*, where `x30` was
+the `process_trampoline` entry stub's return-to-nowhere slot, not a
+real saved LR.
+
+**Surface area:**
+- `koja/crates/koja-runtime/src/scheduler.rs` — `worker_loop`,
+  `process_trampoline`, `koja_rt_receive`, `koja_rt_receive_timeout`,
+  `YIELD_SP`/`SCHED_SP` TLS handling.
+- `koja/crates/koja-runtime/src/arch/aarch64.s` — `koja_context_switch`
+  frame layout (160-byte save area at `sp-160..sp`).
+- `koja/crates/koja-ir-llvm/src/intrinsics/process.rs` — `Ref.call`
+  emits an inline call to `koja_rt_receive_timeout` from within
+  Koja-compiled frames, so the yield happens with Koja-managed
+  register state.
+
+**Next investigative steps:**
+1. Add a debug assertion in `worker_loop`: after reading
+   `saved_sp = *yield_sp_ptr`, verify it points within
+   `processes[idx].stack_bottom..stack_top`. A mismatch confirms the
+   wrong-frame theory.
+2. Instrument `koja_context_switch` (debug build) to log
+   `(pid, sp_in, sp_out, x23_at_yield)` and dump on resume mismatch.
+3. Audit the `SCHED.lock()` drop-and-reacquire pattern in
+   `worker_loop` — between the drop and the context-switch is a window
+   where another worker can pick the same process if state bookkeeping
+   isn't tight.
+4. Confirm `init_process_stack` writes the *trampoline*'s expected
+   16-byte FP/LR pair at the slot the trampoline's `ldp` will read —
+   off-by-one between "saved-frame layout used by context_switch" and
+   "saved-frame layout used by trampoline prologue/epilogue" would
+   explain symptom 1 directly.
+
+**Workaround until fixed:** none reliable; the test passes ~94% of
+runs but should not be enabled in CI gating until the scheduler is
+fixed. `koja run` masking signal exits as `1` should also be fixed so
+future crashes don't look like benign flakes.
+
+Audited 2026-05-28 via 500-iteration stress run on the standalone
+binary at `/tmp/mp_bin` plus inspection of eight macOS CrashReporter
+`.ips` files in `~/Library/Logs/DiagnosticReports/`.
+
+---
+
 ## Iteration protocol limits (`Enumeration<T>`)
 
 `Enumeration<T>` requires `length()` + `get(index)`, locking `for` to

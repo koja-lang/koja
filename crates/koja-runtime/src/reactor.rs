@@ -215,18 +215,34 @@ pub extern "C" fn koja_rt_unwatch_fd(fd: i32) {
     }
 }
 
+/// Drops `fd` from the reactor's `registered` / `watched` maps so
+/// fd-number reuse can't collide with stale entries. Idempotent.
+/// Does not wake any process currently `WaitingIo` on `fd`, so
+/// close-while-blocked from another worker will strand that worker.
+pub(crate) fn release_fd(fd: i32) {
+    let Some(reactor) = REACTOR.get() else {
+        return;
+    };
+    let key = WATCH_KEY_OFFSET + fd as usize;
+    reactor.watched.lock().unwrap().remove(&key);
+
+    let mut reg = reactor.registered.lock().unwrap();
+    if reg.remove(&fd) {
+        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+        let _ = reactor.poller.delete(borrowed);
+    }
+}
+
 /// Suspends the current process until `fd` is ready for the given
-/// [`Interest`].
+/// [`Interest`]. Called from runtime I/O paths on `EAGAIN`.
 ///
-/// Called by runtime I/O functions when a syscall returns `EAGAIN`.
-/// Registers the fd with the reactor, sets the process to `WaitingIo`,
-/// and context-switches back to the scheduler. Returns when a worker
-/// resumes this process after the reactor detects readiness.
+/// State must be set to `WaitingIo` **before** `register`: the
+/// reactor's wake guard checks `state == WaitingIo`, so a state of
+/// `Running` at fire time silently drops the event and the process
+/// parks forever. Reverse order means at worst a spurious resume.
 pub fn io_block(fd: i32, interest: Interest) {
     let pid = CURRENT_PID.with(|c| c.get());
     let idx = (pid - 1) as usize;
-
-    register(fd, interest, pid);
 
     {
         let mut guard = SCHED.lock().unwrap();
@@ -234,6 +250,8 @@ pub fn io_block(fd: i32, interest: Interest) {
             guard.processes[idx].state = ProcessState::WaitingIo;
         }
     }
+
+    register(fd, interest, pid);
 
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };

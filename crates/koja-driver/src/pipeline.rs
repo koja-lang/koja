@@ -64,8 +64,11 @@
 use std::collections::BTreeSet;
 use std::ffi::OsStr;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 use std::process;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::Identifier;
@@ -832,14 +835,54 @@ fn run_project_tests(config: &ProjectConfig, root: &Path) {
         .to_string();
     emit_and_link_program(&program, &config.name, &binary, &[root], false);
 
-    let status = process::Command::new(&binary).status();
+    let status = run_test_binary_with_timeout(&binary, TEST_BINARY_TIMEOUT);
     let _ = fs::remove_file(&binary);
 
     match status {
-        Ok(status) => process::exit(status.code().unwrap_or(1)),
-        Err(err) => {
+        TestBinaryOutcome::Exited(code) => process::exit(code),
+        TestBinaryOutcome::TimedOut => {
+            eprintln!(
+                "error: test binary `{binary}` exceeded {}s timeout and was killed",
+                TEST_BINARY_TIMEOUT.as_secs(),
+            );
+            process::exit(1);
+        }
+        TestBinaryOutcome::LaunchFailed(err) => {
             eprintln!("error: failed to exec `{binary}`: {err}");
             process::exit(1);
+        }
+    }
+}
+
+/// Wall-clock cap on a `koja test` binary so a deadlocked runtime
+/// surfaces as a failed test instead of hanging the dev loop.
+const TEST_BINARY_TIMEOUT: Duration = Duration::from_secs(60);
+
+enum TestBinaryOutcome {
+    Exited(i32),
+    LaunchFailed(io::Error),
+    TimedOut,
+}
+
+/// Spawn `binary` and poll `try_wait` until it exits or the
+/// deadline passes. On timeout, kill the child and report.
+fn run_test_binary_with_timeout(binary: &str, timeout: Duration) -> TestBinaryOutcome {
+    let mut child = match process::Command::new(binary).spawn() {
+        Ok(c) => c,
+        Err(e) => return TestBinaryOutcome::LaunchFailed(e),
+    };
+
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(status)) => return TestBinaryOutcome::Exited(status.code().unwrap_or(1)),
+            Ok(None) if Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return TestBinaryOutcome::TimedOut;
+            }
+            Ok(None) => thread::sleep(Duration::from_millis(50)),
+            Err(e) => return TestBinaryOutcome::LaunchFailed(e),
         }
     }
 }

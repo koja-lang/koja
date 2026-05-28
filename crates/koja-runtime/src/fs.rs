@@ -8,12 +8,15 @@ use std::path::Path;
 use std::ptr;
 
 use crate::ffi::{EAGAIN, get_errno, libc_close, libc_read, libc_write};
-use crate::reactor::{Interest, io_block};
+use crate::reactor::{Interest, io_block, release_fd};
 use crate::util::{alloc_koja_string, set_last_error};
 
 /// Closes a raw file descriptor. Returns 0 on success, -1 on error.
+/// Drops any reactor registration first so fd-number reuse can't
+/// hit stale poller entries.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_fd_close(fd: i32) -> i32 {
+    release_fd(fd);
     let ret = unsafe { libc_close(fd) };
     if ret < 0 {
         set_last_error(io::Error::last_os_error());
