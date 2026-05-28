@@ -82,11 +82,11 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
 
     let mut packages = into_packages(parsed);
 
-    // Pre-collect synthesis: append `impl Debug for T` blocks so
-    // they're present when collect / lift register items. Has to
-    // run before collect because the synthesizer introduces new
-    // top-level items, unlike the post-lift `synthesize_program`
-    // pass which only mutates function bodies.
+    // Pre-collect synthesis: append `impl Clone / Debug / Equality
+    // for T` blocks so they're present when collect / lift register
+    // items. Has to run before collect because the synthesizer
+    // introduces new top-level items, unlike the post-lift
+    // `synthesize_program` pass which only mutates function bodies.
     //
     // The "existing impls" set is collected per-package across all
     // files first so a hand-written `impl Debug for List<T>` in
@@ -94,6 +94,7 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     // `list.koja` (and vice versa) — without the cross-file scan
     // we'd get duplicate impls.
     for pkg in &mut packages {
+        synthesize::derive_clone::derive_clone_package(pkg);
         synthesize::derive_debug::derive_debug_package(pkg);
         synthesize::derive_equality::derive_equality_package(pkg);
     }

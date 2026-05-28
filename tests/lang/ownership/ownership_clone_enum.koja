@@ -1,0 +1,22 @@
+enum Tag
+  Unset
+  Name(String)
+  Stamped{at: Int, by: String}
+end
+
+fn main
+  a = Tag.Name("hello")
+  a_twin = a.clone()
+  a.format().print()
+  a_twin.format().print()
+
+  b = Tag.Stamped{at: 42, by: "alice"}
+  b_twin = b.clone()
+  b.format().print()
+  b_twin.format().print()
+
+  c = Tag.Unset
+  c_twin = c.clone()
+  c.format().print()
+  c_twin.format().print()
+end

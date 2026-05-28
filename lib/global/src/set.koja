@@ -51,3 +51,16 @@ impl ListLiteral<T> for Set<T>
   @intrinsic
   fn from_list(move list: List<T>) -> Self
 end
+
+impl Clone for Set<T>
+  @doc """
+  Returns a fresh, independently-owned `Set<T>` whose elements are
+  each cloned (`T.clone()`). Mutating the clone (or the original)
+  after the call leaves the other side untouched. Implemented as
+  `@intrinsic` because the hash-table walk needs the monomorphized
+  `T` clone fn at codegen time — no surface iteration primitive
+  exists for `Set<T>` yet.
+  """
+  @intrinsic
+  fn clone(self) -> Self
+end

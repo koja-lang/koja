@@ -13,6 +13,7 @@ use std::rc::Rc;
 use koja_ir::{IRFunction, SetMethod};
 
 use crate::error::RuntimeError;
+use crate::intrinsics::helpers;
 use crate::value::{SetEntries, Value};
 
 pub(super) fn dispatch(
@@ -21,6 +22,7 @@ pub(super) fn dispatch(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
+        SetMethod::Clone => clone(args),
         SetMethod::EmptyQ => empty_q(args),
         SetMethod::FromList => from_list(args),
         SetMethod::HasQ => has_q(args),
@@ -33,6 +35,18 @@ pub(super) fn dispatch(
 
 fn new() -> Result<Value, RuntimeError> {
     Ok(Value::Set(Rc::new(RefCell::new(Vec::new()))))
+}
+
+/// Deep-clones the set: fresh `Rc<RefCell<...>>` plus a fresh entry
+/// vec built by recursively cloning each element through
+/// [`super::helpers::deep_clone_value`]. Mirrors `Map.clone` —
+/// shallow `Rc::clone` would alias the storage and break clone
+/// semantics on mutation.
+fn clone(args: &[Value]) -> Result<Value, RuntimeError> {
+    let set = expect_set(args, 0, "Set.clone")?;
+    let items = set.borrow();
+    let cloned: Vec<Value> = items.iter().map(helpers::deep_clone_value).collect();
+    Ok(Value::Set(Rc::new(RefCell::new(cloned))))
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {

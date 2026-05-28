@@ -3,12 +3,6 @@ struct Point
   y: Int
 end
 
-extend Point
-  fn clone(self) -> Point
-    Point{x: self.x, y: self.y}
-  end
-end
-
 fn consume(move p: Point) -> Int
   p.x
 end

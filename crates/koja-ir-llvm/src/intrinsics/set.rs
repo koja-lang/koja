@@ -30,6 +30,7 @@ pub(super) fn emit_set<'ctx>(
     };
 
     match method {
+        SetMethod::Clone => hashtable::emit_table_clone(ctx, function, llvm_function, &layout),
         SetMethod::EmptyQ => hashtable::emit_empty_q(ctx, function, llvm_function),
         SetMethod::FromList => hashtable::emit_set_from_list(ctx, function, llvm_function, &layout),
         SetMethod::HasQ => hashtable::emit_has_q(ctx, function, llvm_function, &layout),

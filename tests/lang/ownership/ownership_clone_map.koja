@@ -1,0 +1,9 @@
+fn main
+  pages: Map<String, String> = ["home": "ok", "about": "ok"]
+  twin = pages.clone()
+  pages = pages.put("home", "404")
+  pages.get("home").unwrap().print()
+  twin.get("home").unwrap().print()
+  pages.length().print()
+  twin.length().print()
+end

@@ -134,6 +134,7 @@ pub enum ListMethod {
 /// from there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapMethod {
+    Clone,
     EmptyQ,
     FromMap,
     Get,
@@ -149,6 +150,7 @@ pub enum MapMethod {
 /// [`crate::IRFunction`] signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetMethod {
+    Clone,
     EmptyQ,
     FromList,
     HasQ,
@@ -647,6 +649,7 @@ impl ListMethod {
 impl MapMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
+            "clone" => Self::Clone,
             "empty?" => Self::EmptyQ,
             "from_map" => Self::FromMap,
             "get" => Self::Get,
@@ -661,6 +664,7 @@ impl MapMethod {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::Clone => "clone",
             Self::EmptyQ => "empty?",
             Self::FromMap => "from_map",
             Self::Get => "get",
@@ -718,6 +722,7 @@ impl ReplyToMethod {
 impl SetMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
+            "clone" => Self::Clone,
             "empty?" => Self::EmptyQ,
             "from_list" => Self::FromList,
             "has?" => Self::HasQ,
@@ -731,6 +736,7 @@ impl SetMethod {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::Clone => "clone",
             Self::EmptyQ => "empty?",
             Self::FromList => "from_list",
             Self::HasQ => "has?",
@@ -903,6 +909,7 @@ mod tests {
     #[test]
     fn map_methods_cover_the_full_surface() {
         for (method, variant) in [
+            ("clone", MapMethod::Clone),
             ("empty?", MapMethod::EmptyQ),
             ("from_map", MapMethod::FromMap),
             ("get", MapMethod::Get),
@@ -923,6 +930,7 @@ mod tests {
     #[test]
     fn set_methods_cover_the_full_surface() {
         for (method, variant) in [
+            ("clone", SetMethod::Clone),
             ("empty?", SetMethod::EmptyQ),
             ("from_list", SetMethod::FromList),
             ("has?", SetMethod::HasQ),

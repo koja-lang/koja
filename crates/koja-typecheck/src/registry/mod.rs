@@ -774,9 +774,10 @@ impl GlobalRegistry {
 /// Protocols that every type implicitly satisfies — the synthesizer
 /// or hand-written stdlib impls guarantee an impl for every concrete
 /// monomorphization, so a bare type-parameter `T.format()` /
-/// `T.eq(other)` resolves as if `T: Debug` / `T: Equality` were
-/// declared. `Hash` joins this list once it's auto-derived too.
-pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Debug", "Equality"];
+/// `T.eq(other)` / `T.clone()` resolves as if `T: Debug` /
+/// `T: Equality` / `T: Clone` were declared. `Hash` joins this list
+/// once it's auto-derived too.
+pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Clone", "Debug", "Equality"];
 
 /// Seed a primitive struct stub under `Global.<name>` with an empty
 /// `StructDefinition` (no fields, no conformances). The empty

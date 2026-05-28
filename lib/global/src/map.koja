@@ -67,3 +67,16 @@ impl MapLiteral<K, V> for Map<K, V>
   @intrinsic
   fn from_map(move map: Map<K, V>) -> Self
 end
+
+impl Clone for Map<K, V>
+  @doc """
+  Returns a fresh, independently-owned `Map<K, V>` whose entries are
+  each cloned (`K.clone()` / `V.clone()`). Mutating the clone (or
+  the original) after the call leaves the other side untouched.
+  Implemented as `@intrinsic` because the hash-table walk needs the
+  monomorphized `K` / `V` clone fns at codegen time — no surface
+  iteration primitive exists for `Map<K, V>` yet.
+  """
+  @intrinsic
+  fn clone(self) -> Self
+end

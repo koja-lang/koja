@@ -25,6 +25,7 @@ pub(super) fn dispatch(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
+        MapMethod::Clone => clone(args),
         MapMethod::EmptyQ => empty_q(args),
         MapMethod::FromMap => from_map(args),
         MapMethod::Get => get(function, args),
@@ -38,6 +39,22 @@ pub(super) fn dispatch(
 
 fn new() -> Result<Value, RuntimeError> {
     Ok(Value::Map(Rc::new(RefCell::new(Vec::new()))))
+}
+
+/// Deep-clones the map: fresh `Rc<RefCell<...>>` plus a fresh entry
+/// vec built by recursively cloning each key/value through
+/// [`super::helpers::deep_clone_value`]. The recursion mirrors the
+/// LLVM backend's per-element K/V clone — mutating the clone (or the
+/// original) after the call must not be observable on the other side
+/// even for `Map<String, List<X>>`-style nested-heap K/V shapes.
+fn clone(args: &[Value]) -> Result<Value, RuntimeError> {
+    let map = expect_map(args, 0, "Map.clone")?;
+    let entries = map.borrow();
+    let cloned: Vec<(Value, Value)> = entries
+        .iter()
+        .map(|(k, v)| (helpers::deep_clone_value(k), helpers::deep_clone_value(v)))
+        .collect();
+    Ok(Value::Map(Rc::new(RefCell::new(cloned))))
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {
