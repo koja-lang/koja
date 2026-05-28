@@ -185,6 +185,17 @@ pub(crate) struct Process {
     init_state: *mut u8,
     /// FIFO queue of heap-allocated message buffers delivered via `send`.
     mailbox: VecDeque<*mut u8>,
+    /// Claim flag: `true` from the moment a worker switches into this
+    /// process until that same worker has persisted the post-yield `sp`.
+    ///
+    /// A yielding process publishes a resumable state (`Blocked` /
+    /// `WaitingIo`) under the lock *before* the context switch saves its
+    /// new `sp`, so there is a window where the process looks schedulable
+    /// but `sp` still points at the previous yield's (now-clobbered)
+    /// frame. Gating pickup on `!on_cpu` keeps any other worker from
+    /// resuming that stale frame until the owning worker writes the
+    /// correct `sp` and clears the flag.
+    on_cpu: bool,
     /// Saved stack pointer. Written by `koja_context_switch` when the
     /// process yields, read when a worker resumes it.
     sp: *mut u8,
@@ -414,12 +425,12 @@ fn worker_loop() {
             }
         }
 
-        let found = guard
-            .processes
-            .iter()
-            .position(|p| p.state == ProcessState::Created || p.state == ProcessState::Runnable);
+        let found = guard.processes.iter().position(|p| {
+            !p.on_cpu && (p.state == ProcessState::Created || p.state == ProcessState::Runnable)
+        });
 
         if let Some(i) = found {
+            guard.processes[i].on_cpu = true;
             guard.processes[i].state = ProcessState::Running;
             let pid = guard.processes[i].id;
             let proc_sp = guard.processes[i].sp;
@@ -435,6 +446,7 @@ fn worker_loop() {
             let idx = (pid - 1) as usize;
             if idx < guard.processes.len() {
                 guard.processes[idx].sp = saved_sp;
+                guard.processes[idx].on_cpu = false;
             }
 
             if !guard.processes.is_empty() && guard.processes[0].state == ProcessState::Dead {
@@ -803,6 +815,7 @@ pub unsafe extern "C" fn koja_rt_spawn(
             id,
             init_state: heap_state,
             mailbox: VecDeque::new(),
+            on_cpu: false,
             sp,
             state: ProcessState::Created,
         });

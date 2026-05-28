@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Passing a heap-owning local (e.g. a `String` built with `<>`, or a `List`) to a function or method that takes ownership (`move`) no longer crashes or returns corrupt data under `--backend=llvm`.
+- Fixed a scheduler race that could intermittently crash message-heavy programs (e.g. request/reply between processes) with a segfault. A process that yielded while waiting for a message could be resumed by another worker thread from a stale stack pointer before its post-yield state was saved.
 - Fixed a TOCTOU race in the I/O reactor that could leave a process blocked on a readiness event delivered between fd registration and the blocking state transition.
 - Closing a file descriptor now drops it from the reactor's watched and registered maps, preventing spurious wakeups when the kernel later recycles the fd.
 
