@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use koja_ast::ast::{
     AssignTarget, BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm,
-    Pattern, Statement, StringPart,
+    PassMode, Pattern, Statement, StringPart,
 };
 use koja_ast::identifier::{AnonymousKind, FnParam, LocalId, Resolution, ResolvedType};
 use koja_typecheck::{FunctionSignature, GlobalRegistry};
@@ -33,7 +33,7 @@ use crate::local::IRLocalId;
 use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
-use super::body::{finalize_open_flow, lower_body};
+use super::body::{finalize_open_flow, lower_body, move_out_local_value};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
 use super::ownership::{is_heap_type, ownership_for_param};
@@ -708,7 +708,7 @@ fn build_fn_as_closure_wrapper(
     let entry = ctx.fresh_block("entry");
 
     let params = mint_wrapper_params(sig, &mut ctx, registry, output, entry);
-    let arg_values = read_wrapper_args(&params, &mut ctx, entry);
+    let arg_values = read_wrapper_args(&params, sig, &mut ctx, entry);
 
     let return_ty =
         resolved_type_to_ir_type(&sig.return_type, registry, &mut output.instantiations);
@@ -787,14 +787,19 @@ fn mint_wrapper_params(
 /// Read each promoted slot back into a fresh `ValueId` for the
 /// inner [`IRInstruction::Call`]. Mirrors [`super::calls::emit_call`]'s
 /// arg-lowering shape (`LocalRead` per arg) so callee semantics
-/// match a hand-written `fn (x) -> target(x) end` shim.
+/// match a hand-written `fn (x) -> target(x) end` shim. For target
+/// params declared `move`, substitutes a [`IRInstruction::MoveOutLocal`]
+/// against the wrapper's own slot so the fn-exit drop pass skips it;
+/// without that the wrapper would free the payload the target also
+/// owns.
 fn read_wrapper_args(
     params: &[IRFunctionParam],
+    sig: &FunctionSignature,
     ctx: &mut FnLowerCtx,
     entry: IRBlockId,
 ) -> Vec<ValueId> {
     let mut values = Vec::with_capacity(params.len());
-    for param in params {
+    for (idx, param) in params.iter().enumerate() {
         let dest = ctx.fresh_value(param.ty.clone());
         ctx.cfg.append(
             entry,
@@ -804,6 +809,12 @@ fn read_wrapper_args(
                 ty: param.ty.clone(),
             },
         );
+        ctx.record_value_source(dest, param.local_id);
+        let mode = sig.params.get(idx).map(|p| p.mode);
+        let dest = match mode {
+            Some(PassMode::Move) => move_out_local_value(ctx, entry, dest),
+            _ => dest,
+        };
         values.push(dest);
     }
     values

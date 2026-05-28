@@ -1,0 +1,20 @@
+@doc """
+Regression: an `Owned` local (here: result of `<>`) passed to a
+`move` parameter must be marked moved at the call site. Otherwise
+the caller's fn-exit `DropLocal` would free the payload the callee
+already took ownership of, surfacing as a double-free / silent
+SIGSEGV under the LLVM backend.
+"""
+
+fn consume(move s: String) -> Int
+  s.length()
+end
+
+fn build -> Int
+  text = "hello" <> " world"
+  consume(text)
+end
+
+fn main
+  build().print()
+end

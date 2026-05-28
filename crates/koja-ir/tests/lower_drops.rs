@@ -343,6 +343,151 @@ fn match_arms_writing_owned_merge_to_owned_when_every_arm_agrees() {
 }
 
 #[test]
+fn struct_field_init_from_owned_local_substitutes_moveoutlocal() {
+    // The demo_api SIGSEGV: a `<>`-built local moved into a struct
+    // field and returned reads back freed memory. Without
+    // `move_out_local_value` at the struct-field sink the slot
+    // stayed Live & Owned, fn-exit `DropLocal` freed the payload,
+    // and the returned struct's field pointed at the freed bytes.
+    // Pin that the substitution fires exactly once and no fn-exit
+    // drop sneaks in.
+    let source = "
+        struct Box
+          body: String
+        end
+
+        fn build -> Box
+          text = \"hi\" <> \"!\"
+          Box{body: text}
+        end
+
+        fn main
+          build()
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let build = function(&program, "build");
+
+    let move_outs: usize = build
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|inst| matches!(inst, IRInstruction::MoveOutLocal { .. }))
+        .count();
+    assert_eq!(
+        move_outs, 1,
+        "expected exactly one MoveOutLocal substitution at the struct-field \
+         init sink; got {move_outs}",
+    );
+
+    let drops: usize = build
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|inst| matches!(inst, IRInstruction::DropLocal { .. }))
+        .count();
+    assert_eq!(
+        drops, 0,
+        "moved-out slot must not also receive a fn-exit DropLocal; got {drops}",
+    );
+}
+
+#[test]
+fn move_arg_from_owned_local_substitutes_moveoutlocal() {
+    // Companion to the struct-field fix: an Owned local passed to a
+    // `move` parameter must be marked moved at the call site, or the
+    // caller's fn-exit DropLocal will free a payload the callee has
+    // already taken ownership of. Pin one MoveOutLocal at the call
+    // sink and zero DropLocals on the consumed slot.
+    let source = "
+        fn consume(move s: String) -> Int
+          s.length()
+        end
+
+        fn build -> Int
+          text = \"hi\" <> \"!\"
+          consume(text)
+        end
+
+        fn main
+          build()
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let build = function(&program, "build");
+
+    let move_outs: usize = build
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|inst| matches!(inst, IRInstruction::MoveOutLocal { .. }))
+        .count();
+    assert_eq!(
+        move_outs, 1,
+        "expected one MoveOutLocal substitution at the move-arg sink; got {move_outs}",
+    );
+
+    let drops: usize = build
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|inst| matches!(inst, IRInstruction::DropLocal { .. }))
+        .count();
+    assert_eq!(
+        drops, 0,
+        "moved-out slot must not also receive a fn-exit DropLocal; got {drops}",
+    );
+}
+
+#[test]
+fn borrow_arg_from_owned_local_keeps_droplocal_and_no_moveoutlocal() {
+    // Inverse pin: a borrow-mode param must NOT trigger MoveOutLocal
+    // on the caller's Owned slot. The caller still owns the payload
+    // through the call and the fn-exit `DropLocal` is what frees it.
+    let source = "
+        fn examine(s: String) -> Int
+          s.length()
+        end
+
+        fn build -> Int
+          text = \"hi\" <> \"!\"
+          examine(text)
+        end
+
+        fn main
+          build()
+        end
+    ";
+
+    let program = lower(&dedent(source));
+    let build = function(&program, "build");
+
+    let move_outs: usize = build
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|inst| matches!(inst, IRInstruction::MoveOutLocal { .. }))
+        .count();
+    assert_eq!(
+        move_outs, 0,
+        "borrow-mode args must not emit MoveOutLocal on the caller's slot; got {move_outs}",
+    );
+
+    let drops: usize = build
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|inst| matches!(inst, IRInstruction::DropLocal { .. }))
+        .count();
+    assert_eq!(
+        drops, 1,
+        "Owned local borrowed across a call must still receive its fn-exit DropLocal; got {drops}",
+    );
+}
+
+#[test]
 fn no_owned_slots_means_no_droplocal_or_moveoutlocal() {
     // Smoke regression: existing programs without `move`
     // params or heap-typed assignments should produce zero

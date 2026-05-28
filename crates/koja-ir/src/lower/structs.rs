@@ -26,6 +26,7 @@ use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
 use crate::types::{IRType, ValueId};
 
+use super::body::move_out_local_value;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::package::resolved_type_to_ir_type;
@@ -145,6 +146,7 @@ pub(super) fn canonicalize_struct_inits(
     let mut values_by_name: BTreeMap<String, ValueId> = BTreeMap::new();
     for field in fields {
         let (value, next) = lower_expr(&field.value, ctx, current, registry, output)?;
+        let value = move_out_local_value(ctx, next, value);
         values_by_name.insert(field.name.clone(), value);
         current = next;
     }

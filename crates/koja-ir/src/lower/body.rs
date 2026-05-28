@@ -141,7 +141,7 @@ fn lower_statement(
             let return_value = match value.as_ref() {
                 Some(expr) => {
                     let (id, next) = lower_expr(expr, ctx, block, registry, output)?;
-                    let return_id = move_out_for_return(ctx, next, id);
+                    let return_id = move_out_local_value(ctx, next, id);
                     emit_function_exit_drops(ctx, next);
                     ctx.cfg.set_terminator(
                         next,
@@ -701,10 +701,20 @@ fn compound_to_ir(op: CompoundOp) -> IRBinOp {
 /// skips it. The original `LocalRead` instruction stays in the
 /// block as dead code (its dest is unused after substitution); the
 /// LLVM optimizer drops it. Eval treats `MoveOutLocal` as a frame
-/// removal, so a moved-out slot's subsequent reads panic — but the
-/// foundation slice doesn't emit any such reads (return is the
-/// only consumer site).
-fn move_out_for_return(ctx: &mut FnLowerCtx, block: IRBlockId, value: ValueId) -> ValueId {
+/// removal, so a moved-out slot's subsequent reads panic — but
+/// typecheck's use-after-move pass already rejects those.
+///
+/// Called at every ownership-sink site: the function return tail,
+/// struct/enum field initializers (via [`super::structs::canonicalize_struct_inits`]),
+/// and anywhere else a local's heap payload transfers to a new
+/// owner. Without this stamp the slot stays Live & Owned, and
+/// `emit_function_exit_drops` frees the payload out from under the
+/// new owner.
+pub(super) fn move_out_local_value(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    value: ValueId,
+) -> ValueId {
     let Some(local) = ctx.value_source(value) else {
         return value;
     };
@@ -756,7 +766,7 @@ fn expect_local_id(lvalue: &LValue) -> LocalId {
 /// nothing to do.
 ///
 /// Owned trailing values flow through the same
-/// [`move_out_for_return`] substitution as explicit `return`s — a
+/// [`move_out_local_value`] substitution as explicit `return`s — a
 /// function whose body's last expression is a bare ident reference
 /// to a Live & Owned slot transfers that slot to the caller. The
 /// fall-through case otherwise mirrors the explicit-`return`-with-
@@ -765,7 +775,7 @@ fn expect_local_id(lvalue: &LValue) -> LocalId {
 /// emits drops and a unit return.
 pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult) {
     if let FlowResult::Open { value, block } = flow {
-        let return_value = value.map(|id| move_out_for_return(ctx, block, id));
+        let return_value = value.map(|id| move_out_local_value(ctx, block, id));
         emit_function_exit_drops(ctx, block);
         ctx.cfg.set_terminator(
             block,

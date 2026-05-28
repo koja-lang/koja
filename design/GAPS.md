@@ -25,12 +25,8 @@ type isn't propagated into the call. Workaround: use struct literals
 directly (`Pair{first: self, second: Option.None}`) where the field-type
 hint pins the variant, or bind with a type annotation first.
 
----
-
-## `ref T` parsed but deferred
-
-The type checker parses `ref T` but defers it. Redundant with
-borrow-by-default semantics. Revisit if a concrete use case emerges.
+Re-confirmed 2026-05-27 on both backends; diagnostic now reads
+``typecheck cannot infer type parameter `T` of `Global.Option` from unit variant `None` ``.
 
 ---
 
@@ -51,174 +47,6 @@ automatically since iteration is bounds-checked). With lazy iteration,
 `loop { match iter.next() ... }` and `None` breaks the loop.
 
 Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
-
----
-
-## `Debug.format` for tuple variants drops payloads beyond the first
-
-The auto-derived `Debug` implementation only renders the payload of
-single-arg tuple variants. Multi-arg tuple variants render only the variant
-name and recursive payloads through deeply-nested constructions print only
-the head:
-
-```koja
-enum Shape
-  Circle(Int)
-  Rect(Int, Int)
-end
-
-print(Shape.Circle(5))    # "Circle(5)"        (correct)
-print(Shape.Rect(3, 4))   # "Rect"             (payload dropped)
-```
-
-```koja
-enum Expr
-  Num(Int)
-  Add(Expr, Expr)
-end
-
-print(Expr.Add(Expr.Num(1), Expr.Num(2)))   # "Add"
-print(Expr.Num(1))                          # "Num(1)"
-```
-
-The single-arg path in `koja-codegen/src/debug.rs` works; the multi-arg
-case appears to short-circuit before formatting the tuple body. Fix should
-also exercise nested cases (variant inside variant) since printing is the
-default debug surface.
-
-Surfaced during agent compiler-fuzz testing (April 2026).
-
----
-
-## Nested type-aliased unions don't expand inner aliases
-
-A `type` alias whose RHS is a union of unions leaves the inner alias
-unexpanded in the type checker, causing both arm-membership errors and a
-spurious `unknown` member in the union:
-
-```koja
-type AB = A | B
-type ABC = AB | C
-
-abc: ABC = ...
-match abc
-  x: A -> ...    # error: type `A` is not a member of union `C | unknown`
-  x: B -> ...
-  x: C -> ...
-end
-# also: error: non-exhaustive match on union type: missing `unknown`
-```
-
-Widening (`abc: ABC = ab` where `ab: AB`) is accepted; the bug is in how
-`ABC`'s definition is resolved. The inner `AB` alias doesn't get expanded
-into its members, leaving the union as effectively `<unresolved> | C` and
-later normalized to `C | unknown`.
-
-**Workaround:** flatten unions manually -- write `type ABC = A | B | C`
-instead of composing aliases.
-
-Surfaced during agent compiler-fuzz testing (April 2026).
-
----
-
-## Bare closure expression as a statement fails to parse
-
-A `fn (...)` closure used as an expression-statement (no surrounding
-assignment, return, or call) is misparsed as a nested function declaration
-and produces a cascade of errors complaining about a missing identifier
-between `fn` and `(`:
-
-```koja
-fn main
-  fn (x: Int) -> Int x + 1 end   # error: expected identifier, found LParen
-  print("ok")
-end
-```
-
-The issue is purely syntactic -- assigning the closure first
-(`f = fn (x: Int) -> Int x + 1 end`) parses fine. In practice this matters
-inside method bodies that try to return a closure as the final expression,
-because the parser hits the same `fn (` start-of-statement ambiguity:
-
-```koja
-extend Foo
-  fn make(self) -> fn (Int) -> Int
-    fn (x: Int) -> Int x + 1 end   # same parse error
-  end
-end
-```
-
-**Workaround:** bind the closure to a local first and return the local
-(`f = fn ... end; f`).
-
-**Fix sketch:** when `parse_statement` sees `fn` followed by `(`, treat it
-as an expression-statement (closure) rather than a function declaration.
-
-Surfaced during agent compiler-fuzz testing (April 2026).
-
----
-
-## Closures inside impl methods cannot capture `self`
-
-A closure created inside an `impl` method that references `self`
-(directly or through field access) is rejected with a misleading
-"self used outside of impl method" error pointing at the struct
-declaration, not the offending closure:
-
-```koja
-extend Counter
-  fn make_adder(self) -> fn (Int) -> Int
-    f = fn (x: Int) -> Int
-      x + self.value     # error: self used outside of impl method
-    end
-    f
-  end
-end
-```
-
-Capturing through a local works (`v = self.value` then capture `v`), so
-the closure capture machinery is fine -- the limitation is that `self`
-specifically isn't visible from inside a nested closure scope. The error
-span is also wrong (it points at the struct decl rather than the `self`
-reference inside the closure).
-
-**Workaround:** copy the relevant fields into locals before constructing
-the closure.
-
-Surfaced during agent compiler-fuzz testing (April 2026).
-
----
-
-## Specialized impl loses concrete type when the type parameter recurses through itself
-
-For an `extend` block specialized to a self-nested instantiation
-(`extend Box<Box<Int>>`), inner field access is type-checked using the
-struct's _generic_ parameter rather than the inner concrete substitution:
-
-```koja
-struct Box<T>
-  value: T
-end
-
-extend Box<Box<Int>>
-  fn get_inner(self) -> Int
-    self.value.value     # error: field access on non-struct type `T`
-  end
-end
-```
-
-`self.value` is correctly typed as `Box<Int>`, but the next field access
-sees that inner `Box`'s declared field type as the original `T` and
-refuses the field access. Specializations to a single concrete level
-(`extend Box<Int>` where `self.value` is `Int`, or `extend Box<Inner>` for
-some non-generic struct `Inner`) work correctly -- the bug is specifically
-the case where the specialization substitutes the same generic shape.
-
-**Workaround:** decompose the access through a local
-(`inner = self.value; inner.value`), or lift the helper to a free
-function that takes the inner type explicitly.
-
-Surfaced during agent compiler-fuzz testing (April 2026).
 
 ---
 
@@ -269,80 +97,53 @@ analysis isn't lost.
 
 ---
 
-## Keyword as identifier silently drops the function
+## Stdlib signatures lie about ownership for `List.append` / `Map.put`
 
-A function whose parameter (or local) name shadows a reserved keyword
-(`cond`, `if`, `match`, `loop`, `do`, `end`, ...) doesn't error — the
-declaration is silently dropped and the rest of the file resolves
-against an empty body. No diagnostic, no parse error, just a missing
-function.
+`List.append(move self, item: T)` and `Map.put(move self, key: K, value: V)`
+declare their elements as `borrow`, but the intrinsic implementations take
+ownership of the stored value (the list/map's internal storage just records
+the heap pointer). The caller's slot stays Live & Owned past the call, so
+the fn-exit `DropLocal` frees a payload the container still references —
+surfaces as `Utf8Error` panics or silent garbage reads under the LLVM
+backend when a `<>`-built local is appended/put inside a helper and the
+helper returns the container. The `koja-ir-eval` backend masks the bug
+because frame teardown doesn't actually free heap payloads.
 
-```koja
-fn run(cond: Bool) -> Int    # `cond` is a keyword
-  greeting = "hello"
-  consume(greeting)
-  greeting.length()
-end
-```
-
-The above type-checks clean (zero diagnostics), but `run` never enters
-the registry — downstream callers see `unknown function run`.
-
-**Workaround:** rename the offending identifier (`flag`, `condition`,
-etc).
-
-**Fix sketch:** when `parse_param` sees a token that isn't `Ident`,
-emit a "reserved keyword `{name}` cannot be used as a parameter name"
-diagnostic instead of bailing the whole function.
-
-Surfaced during use-after-move test writing (May 2026).
-
----
-
-## `<>` concat into a returned struct field corrupts the field
-
-A `String` produced by `<>` concat, bound to a local, moved into a
-struct field, then returned from a helper function reads back as freed
-memory at the call site (or segfaults outright). Only reproduces under
-codegen — the interpreter handles it fine.
+Minimal repro (`/tmp/koja-gaps-triage/followup_b_list_literal.kojs`):
 
 ```koja
-alias HTTP.Response
-alias HTTP.Status
-alias HTTP.Headers
-alias JSON.Encoder
-alias JSON.Value
-
-fn build -> Response
-  body = Value.object([Value.entry("hello", Value.string("world"))])
-  text = Encoder.encode_pretty(body) <> "\n"
-  Response{
-    body: text,
-    headers: Headers.new(),
-    status: Status.ok(),
-    version: "HTTP/1.1",
-  }
+fn build -> List<String>
+  text = "hello" <> " world"
+  [text]
 end
+build().get(0).print()  # LLVM: Utf8Error panic; eval: Some("hello world")
 ```
 
-At the call site, `r.body` reads as `"HTTP/1.1 "` (the prior struct
-field's contents leaking through) and `r.serialize()` produces a
-truncated wire message. Slightly different shapes SIGSEGV instead.
+Two valid fixes:
 
-Three changes each individually fix it: drop the `<>` (bind the bare
-`Encoder.encode_pretty(body)`), call `.clone()` when assigning the
-field, or inline the struct construction at the call site. The same
-code in `fn main` (no helper return) also works.
+1. **Mark the params `move`** (`fn append(move self, move item: T)`). Honest
+   semantically, but breaks stdlib callers like `List.filter` /
+   `List.map` that today do `result.append(item)` against a borrowed
+   loop binding — those would need to clone explicitly. Best long-term
+   answer.
 
-**Workaround:** don't move a `<>`-built local directly into a struct
-field that crosses a function return; clone it, drop the concat, or
-build inline.
+2. **Have the intrinsic copy heap payloads on insert.** Keeps the
+   borrow signature honest at runtime cost. Probably wrong for a
+   "moves by default" language.
 
-Surfaced while wiring up `examples/demo_api` (May 2026).
+The IR-side machinery to support option 1 is already in place
+([`koja-ir/src/lower/calls.rs::consume_at_mode`](../crates/koja-ir/src/lower/calls.rs))
+— flipping the stdlib signatures will route the move through the same
+`MoveOutLocal` path that the struct-field-init and call-arg fixes
+already use. Not done here because it's a non-trivial stdlib refactor.
 
----
-
-Audited 2026-05-03
+Audited 2026-05-03 · Bug section re-triaged 2026-05-27 (seven fixed
+entries removed: `Debug.format` tuple payloads, nested type-aliased
+unions, bare closure expression statements, closures capturing `self`,
+specialized self-nested impls, keyword-as-identifier silent drop, and
+`<>` concat into a returned struct field corrupting under LLVM; one
+new entry added: dishonest borrow signatures on `List.append` /
+`Map.put`).
 
 # Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift
 
@@ -462,17 +263,6 @@ shorthand-in-struct-pattern work.
 
 ---
 
-## E. ROADMAP.md drift
-
-### E1. `Global.Mmap` — "DONE" but absent
-
-- ROADMAP.md line 169 lists `Mmap` as shipped.
-- `rg Mmap koja/lib` finds nothing. No Mmap type, no `mmap` intrinsic.
-
-**Action:** remove the `Mmap` line or move it to "Remaining".
-
----
-
 ## F. Internal AST/AST-user consistency findings (minor)
 
 ### F1. `Annotation.value` has 2 variants but grammar allows 3
@@ -489,7 +279,6 @@ shorthand-in-struct-pattern work.
 
 1. **Category C** (grammar.ebnf sync) — 5 minutes, grammar-only.
 2. **Category D** (LANGUAGE.md drift) — rewrite Concurrency section, fix TOC, fix `receive` / `reply` / `send_after` / generics note.
-3. **Category E** (ROADMAP.md sync) — tiny, remove Mmap claim.
-4. **Category B / F** (AssignTarget tightening, short closure destructure, other minor cleanups) — pick off as bite-sized PRs.
+3. **Category B / F** (AssignTarget tightening, short closure destructure, other minor cleanups) — pick off as bite-sized PRs.
 
 Each step is independent and can land in its own commit/PR.
