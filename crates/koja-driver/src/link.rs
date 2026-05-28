@@ -36,7 +36,7 @@ const EMBEDDED_SSL: &[u8] = include_bytes!(env!("KOJA_SSL_LIB_PATH"));
 /// floor used when compiling the embedded runtime
 /// (`-mmacosx-version-min=11.0` in `koja-runtime/build.rs`) and the
 /// workspace-wide `MACOSX_DEPLOYMENT_TARGET` in
-/// `expo/.cargo/config.toml` that drives `boring-sys`'s
+/// `koja/.cargo/config.toml` that drives `boring-sys`'s
 /// `libcrypto.a` / `libssl.a` builds. Using `sw_vers` here is
 /// tempting but produces "object file was built for newer macOS
 /// version than being linked" warnings whenever the installed Xcode

@@ -22,7 +22,7 @@ brew install llvm@18
 2. Clone the repository.
 
 ```sh
-git clone https://github.com/hpopp/koja-lang && cd expo-lang/expo
+git clone https://github.com/hpopp/koja-lang && cd koja-lang/koja
 ```
 
 3. Build the compiler.

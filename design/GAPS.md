@@ -467,7 +467,7 @@ shorthand-in-struct-pattern work.
 ### E1. `Global.Mmap` — "DONE" but absent
 
 - ROADMAP.md line 169 lists `Mmap` as shipped.
-- `rg Mmap expo/lib` finds nothing. No Mmap type, no `mmap` intrinsic.
+- `rg Mmap koja/lib` finds nothing. No Mmap type, no `mmap` intrinsic.
 
 **Action:** remove the `Mmap` line or move it to "Remaining".
 

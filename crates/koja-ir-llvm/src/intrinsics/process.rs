@@ -540,7 +540,7 @@ fn emit_reply_send<'ctx>(
 const ENVELOPE_PAYLOAD_OFFSET: u64 = 8;
 
 /// `enum Option<T>` variant tags (declaration order in
-/// `expo/lib/global/src/kernel.koja`).
+/// `koja/lib/global/src/kernel.koja`).
 const OPTION_SOME_TAG: u64 = 0;
 const OPTION_NONE_TAG: u64 = 1;
 
@@ -550,7 +550,7 @@ const RESULT_OK_TAG: u8 = 0;
 const RESULT_ERR_TAG: u8 = 1;
 
 /// `enum CallError` variant tags (declaration order in
-/// `expo/lib/global/src/process.koja`).
+/// `koja/lib/global/src/process.koja`).
 const CALL_ERROR_TIMEOUT_TAG: u8 = 0;
 const CALL_ERROR_PROCESS_DOWN_TAG: u8 = 1;
 

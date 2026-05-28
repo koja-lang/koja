@@ -236,7 +236,7 @@ Two modes the compiler needs to support, distinguished by an env var:
 
 | Mode         | Stdlib source                                  | When             |
 | ------------ | ---------------------------------------------- | ---------------- |
-| Compiler-dev | `KOJA_STDLIB_PATH` → `expo/lib/`               | Inside this repo |
+| Compiler-dev | `KOJA_STDLIB_PATH` → `koja/lib/`               | Inside this repo |
 | User         | Install location (`~/.koja/<version>/stdlib/`) | Everywhere else  |
 
 Compiler-dev mode skips materialization entirely — you're editing stdlib

@@ -658,9 +658,9 @@ process / spawn wrappers).
 The following are grep/assertion-checkable in CI:
 
 - `koja-ir-llvm` does not import `koja-typecheck`. Grep:
-  `rg "use koja_typecheck" expo/crates/koja-ir-llvm/`
+  `rg "use koja_typecheck" koja/crates/koja-ir-llvm/`
 - `koja-ir-llvm` does not call any `monomorphize_*` planner. Grep:
-  `rg "monomorphize_" expo/crates/koja-ir-llvm/`
+  `rg "monomorphize_" koja/crates/koja-ir-llvm/`
 - No `lazy_mono_count` field or its increment sites exist.
 - `IRInstruction::Stub` does not exist.
 - No `Ok(None)` paths in `koja-ir/src/lower/` that fall through to

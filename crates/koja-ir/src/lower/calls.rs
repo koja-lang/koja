@@ -647,7 +647,7 @@ fn emit_opaque_placeholder(ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
 
 /// Emit `Global.IO.puts(<message>)` and return the block the call
 /// landed in. The callee symbol matches the one stamped by lift for
-/// the `IO.puts` function in [`expo/lib/global/src/io.koja`], so the
+/// the `IO.puts` function in [`koja/lib/global/src/io.koja`], so the
 /// regular function registration in `lower_function_inner` resolves
 /// it at link time.
 fn emit_io_puts(message: ValueId, ctx: &mut FnLowerCtx, block: IRBlockId) -> IRBlockId {

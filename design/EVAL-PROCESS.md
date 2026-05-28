@@ -354,7 +354,7 @@ Greppable / assertable invariants:
   diff-based golden test.
 - `koja-ir-eval` does not import `koja-ir-llvm` (parity must not
   flow through the LLVM backend). Grep:
-  `rg "use koja_ir_llvm" expo/crates/koja-ir-eval/`.
+  `rg "use koja_ir_llvm" koja/crates/koja-ir-eval/`.
 - Eval scheduler thread names match `koja-pid-{N}` (debugger
   visibility; sanity check during shell sessions).
 - `Interpreter::run_program` accepts both `ProjectEntry::Function`
@@ -366,14 +366,14 @@ Greppable / assertable invariants:
 
 ## Cross-references
 
-- `expo/design/COMPILER-NORTHSTAR.md` — pipeline shape; eval is
+- `koja/design/COMPILER-NORTHSTAR.md` — pipeline shape; eval is
   a backend on the same sealed `IRProgram` as LLVM.
-- `expo/design/FNMAIN.md` — process model, lifecycle semantics,
+- `koja/design/FNMAIN.md` — process model, lifecycle semantics,
   `StopReason` / `ExitStatus` / supervisor design that this doc
   defers to.
-- `expo/crates/koja-runtime/src/scheduler.rs` — the LLVM-side
+- `koja/crates/koja-runtime/src/scheduler.rs` — the LLVM-side
   reference implementation. When in doubt about observable
   semantics, the runtime is the spec.
-- `expo/crates/koja-ir-eval/src/interpreter.rs` — the
+- `koja/crates/koja-ir-eval/src/interpreter.rs` — the
   `Spawn` / `Receive` arms that today return `Unsupported`.
   These are the surgical sites for phases 2-3.

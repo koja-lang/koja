@@ -239,7 +239,7 @@ fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<Doc
 /// already stamps onto its [`koja_parser::SourceFile`]s. Skips
 /// any package the caller has already provided (project source
 /// or path dep) — without the skip, running `koja doc` from
-/// inside a stdlib package (e.g. `expo/lib/net`) would ingest
+/// inside a stdlib package (e.g. `koja/lib/net`) would ingest
 /// that package's files twice and double every sidebar entry.
 fn push_stdlib_inputs(out: &mut Vec<DocInput>) {
     let already_present: std::collections::HashSet<String> =

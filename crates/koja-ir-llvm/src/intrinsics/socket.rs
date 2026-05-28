@@ -1,5 +1,5 @@
 //! `@intrinsic` methods on `Socket` from
-//! [`expo/lib/net/src/net.koja`]:
+//! [`koja/lib/net/src/net.koja`]:
 //!
 //! * `Socket.recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>`
 //!   — datagram receive; suspends until the fd is readable.
@@ -41,7 +41,7 @@ use crate::runtime::{
 use crate::types::list_value_type;
 
 /// `enum Result<T, E>` variant tag for `Ok(T)`. Lifted from
-/// `expo/lib/global/src/kernel.koja`'s declaration order.
+/// `koja/lib/global/src/kernel.koja`'s declaration order.
 const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
 /// `enum Result<T, E>` variant tag for `Err(E)`.
 const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);

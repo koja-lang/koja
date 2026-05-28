@@ -12,7 +12,7 @@
 #   4. Prints per-ExprKind counts plus the sealing-progress metric
 #      (distinct ExprKinds still hitting Stub / 28).
 #
-# Sister script to expo/stub/stub-categorization.md, which is the
+# Sister script to koja/stub/stub-categorization.md, which is the
 # tracked deliverable; the .log + .txt files are gitignored.
 
 set -euo pipefail

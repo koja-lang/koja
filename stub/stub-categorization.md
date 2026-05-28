@@ -74,7 +74,7 @@ inventory entries): `BinaryLiteral`, `Cond`, `Group`, `If`,
 landed:
 
 - **Phase 0 -- artifact cleanup.** `stub-{driver,stdlib}.log` +
-  `stub-inventory.txt` moved into `expo/stub/` and gitignored;
+  `stub-inventory.txt` moved into `koja/stub/` and gitignored;
   `regenerate.sh` makes the inventory one-command repeatable;
   this doc became the tracked deliverable for slice planning.
 - **Phase 1 -- function attribution.**

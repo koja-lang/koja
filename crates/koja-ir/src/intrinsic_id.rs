@@ -51,7 +51,7 @@ pub enum IRIntrinsicId {
     /// displaces it.
     Print,
     /// `@intrinsic` methods on `Ref<M, R>` from
-    /// [`expo/lib/global/src/process.koja`]. The `M` / `R` type
+    /// [`koja/lib/global/src/process.koja`]. The `M` / `R` type
     /// parameters don't appear here — they ride the
     /// [`crate::IRFunction`] signature, the same way `List<T>`'s
     /// element type does.
@@ -63,7 +63,7 @@ pub enum IRIntrinsicId {
     ReplyTo(ReplyToMethod),
     Set(SetMethod),
     /// `@intrinsic` methods on `Socket` from
-    /// [`expo/lib/net/src/net.koja`]. Both methods bridge into the
+    /// [`koja/lib/net/src/net.koja`]. Both methods bridge into the
     /// runtime's `koja_socket_*` C ABI (`recv_from` → mailbox-driven
     /// recv with sender address, `resolve` → blocking
     /// `getaddrinfo`). Wrapped in an enum so adding sibling methods
@@ -159,7 +159,7 @@ pub enum SetMethod {
 }
 
 /// `@intrinsic`-flagged methods on `Ref<M, R>` from
-/// [`expo/lib/global/src/process.koja`]. `Cast` / `Call` / `Signal` /
+/// [`koja/lib/global/src/process.koja`]. `Cast` / `Call` / `Signal` /
 /// `Kill` / `AliveQ` / `SendAfter` cover the public mailbox surface;
 /// `SelfRef` is the only zero-argument constructor (the others are
 /// receiver-bound).
@@ -184,7 +184,7 @@ pub enum ReplyToMethod {
 }
 
 /// `@intrinsic`-flagged methods on `Socket` from
-/// [`expo/lib/net/src/net.koja`]. `RecvFrom` receives one
+/// [`koja/lib/net/src/net.koja`]. `RecvFrom` receives one
 /// datagram + sender address (suspending the process until the fd
 /// is readable); `Resolve` is a synchronous `getaddrinfo` shim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

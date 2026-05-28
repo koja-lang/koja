@@ -24,7 +24,7 @@ use crate::error::LlvmError;
 use crate::runtime::{declare_float_parse_extern, declare_int_parse_extern};
 
 /// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
-/// in `expo/lib/global/src/kernel.koja`.
+/// in `koja/lib/global/src/kernel.koja`.
 const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
 /// `enum Result<T, E>` variant tag for `Err(E)`.
 const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);

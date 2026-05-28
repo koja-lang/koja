@@ -11,7 +11,7 @@ schema_version = 1
 # pinned commit.
 [grammars.koja]
 repository = "file:///Users/hpopp/Work/koja-lang/tree-sitter-koja"
-commit = "54e3666037e41df5e27167123dee80cea95ec02a"
+commit = "e385390a17c1160f4f055e603bcdb707530257d0"
 
 [language_servers.koja-lsp]
 name = "Koja LSP"

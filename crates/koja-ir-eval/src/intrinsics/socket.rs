@@ -1,5 +1,5 @@
 //! `@intrinsic` methods on `Socket` from
-//! [`expo/lib/net/src/net.koja`]:
+//! [`koja/lib/net/src/net.koja`]:
 //!
 //! * `Socket.recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>`
 //! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`

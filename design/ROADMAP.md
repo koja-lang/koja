@@ -23,7 +23,7 @@ Shared substrate:
 
 - `koja-ast` -- tokens, spans, AST node definitions, `Resolution`/`Identifier` shapes, `seal_ast`
 - `koja-runtime` -- multi-threaded process scheduler and C-ABI intrinsics (static library linked into compiled binaries)
-- `koja-stdlib` -- build script auto-discovers `.koja` sources under `expo/lib/` and embeds them via `include_str!`
+- `koja-stdlib` -- build script auto-discovers `.koja` sources under `koja/lib/` and embeds them via `include_str!`
 
 Tooling:
 
@@ -231,7 +231,7 @@ Four sub-milestones, the first of which is a design spike. **Constraint added** 
 
 - Revisit `archive/20260323-CONCURRENCY.md`.
 - Surface specific open questions: deadlock-free monitor delivery, batched vs streaming `ExitSignal`, registry interactions, transient vs permanent restart semantics, root-crash propagation.
-- Write a fresh design doc under `expo/design/` capturing decisions before B2 code lands.
+- Write a fresh design doc under `koja/design/` capturing decisions before B2 code lands.
 
 #### B1: Scheduler hardening
 

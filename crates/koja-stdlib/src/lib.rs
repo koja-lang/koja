@@ -1,6 +1,6 @@
 //! Embedded standard library sources for the Koja language.
 //!
-//! Sources live in `expo/lib/` as proper Koja projects. The build
+//! Sources live in `koja/lib/` as proper Koja projects. The build
 //! script discovers all `.koja` files and generates the constants
 //! plus the curated [`AUTOIMPORT`] and [`QUALIFIED`] tables.
 

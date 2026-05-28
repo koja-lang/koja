@@ -25,7 +25,7 @@ Each piece is described below with exact file paths and code.
 The compiler already embeds `libcrypto.a` from BoringSSL (built by
 `boring-sys`). `libssl.a` lives in the same build directory.
 
-### `expo/crates/koja-driver/build.rs`
+### `koja/crates/koja-driver/build.rs`
 
 Add a second search for `libssl.a`, using the same `find_file` helper
 and the same `build_dir` that locates `libcrypto.a`:
@@ -44,7 +44,7 @@ println!(
 println!("cargo:rerun-if-changed={}", ssl_lib_path.display());
 ```
 
-### `expo/crates/koja-driver/src/pipeline.rs`
+### `koja/crates/koja-driver/src/pipeline.rs`
 
 Embed and write the library at link time, mirroring `EMBEDDED_CRYPTO`:
 
@@ -72,7 +72,7 @@ socket isn't ready. The TLS code needs to suspend the Koja process
 until the fd is ready, then retry -- exactly what the runtime's
 internal `io_block` function does.
 
-### `expo/crates/koja-runtime/src/fs.rs`
+### `koja/crates/koja-runtime/src/fs.rs`
 
 Add one function (4 lines) at the end of the file:
 
@@ -92,7 +92,7 @@ This is a thin C ABI wrapper around the existing `io_block`. Since
 
 ## 3. Stdlib: `Fd.block`
 
-### `expo/lib/global/src/fd.koja`
+### `koja/lib/global/src/fd.koja`
 
 Add to the `impl Fd` block (after `unwatch`):
 
@@ -262,7 +262,7 @@ No retry loop needed for shutdown -- best-effort.
 
 ## 5. `TCPSocket` integration
 
-### `expo/lib/net/src/tcp.koja`
+### `koja/lib/net/src/tcp.koja`
 
 #### Add fields
 
@@ -336,7 +336,7 @@ end
 
 ## 6. HTTP client HTTPS support
 
-### `expo/lib/http/src/client.koja`
+### `koja/lib/http/src/client.koja`
 
 In `Http.request`, after parsing the URL: if the scheme is `https://`,
 use `TCPSocket.connect_tls` instead of `TCPSocket.connect`. The URL
@@ -406,7 +406,7 @@ returns. Same pattern as the crypto package.
 
 ## Testing
 
-Tests go in `expo/lib/net/test/` and `expo/lib/http/test/`. Possible
+Tests go in `koja/lib/net/test/` and `koja/lib/http/test/`. Possible
 test cases:
 
 - **HTTPS GET**: `Http.get("https://httpbin.org/get")` returns 200
@@ -429,10 +429,10 @@ After implementation, run:
 
 | File                                      | Change                                                            |
 | ----------------------------------------- | ----------------------------------------------------------------- |
-| `expo/crates/koja-driver/build.rs`        | Find `libssl.a`, set env var                                      |
-| `expo/crates/koja-driver/src/pipeline.rs` | Embed + write `libssl.a`                                          |
-| `expo/crates/koja-runtime/src/fs.rs`      | Add `koja_io_block` (4 lines)                                     |
-| `expo/lib/global/src/fd.koja`                | Add `Fd.block` + extern decl                                      |
-| `expo/lib/net/src/tls.koja`               | **New file**: TLSConfig, FFI bindings, TLS operations             |
-| `expo/lib/net/src/tcp.koja`               | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
-| `expo/lib/http/src/client.koja`           | Use `connect_tls` for https:// URLs                               |
+| `koja/crates/koja-driver/build.rs`        | Find `libssl.a`, set env var                                      |
+| `koja/crates/koja-driver/src/pipeline.rs` | Embed + write `libssl.a`                                          |
+| `koja/crates/koja-runtime/src/fs.rs`      | Add `koja_io_block` (4 lines)                                     |
+| `koja/lib/global/src/fd.koja`                | Add `Fd.block` + extern decl                                      |
+| `koja/lib/net/src/tls.koja`               | **New file**: TLSConfig, FFI bindings, TLS operations             |
+| `koja/lib/net/src/tcp.koja`               | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
+| `koja/lib/http/src/client.koja`           | Use `connect_tls` for https:// URLs                               |
