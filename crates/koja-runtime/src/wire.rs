@@ -25,7 +25,7 @@
 //!
 //! Tags partition the mailbox into dispatch classes, not payload
 //! shapes — a reply is `Business` traffic flowing callee->caller, not
-//! a category of its own (see `koja/design/MESSAGE-LIFECYCLE.md`).
+//! a category of its own.
 
 use crate::memory;
 
@@ -66,7 +66,7 @@ pub(crate) const IO_READY_ERROR: u8 = 2;
 ///
 /// The wire tag itself lives in the buffer at offset 0 (read by
 /// codegen); a typed `tag` field is added when the receive path starts
-/// returning it (deferred; see `koja/design/MESSAGE-LIFECYCLE.md`).
+/// returning it (deferred).
 ///
 /// Freeing is RAII via [`Drop`], which runs `drop_glue` over the
 /// payload (when present) and then deallocates the buffer — the

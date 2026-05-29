@@ -1,5 +1,13 @@
 # Message & Envelope Lifecycle
 
+> **Archived 2026-05-29.** Phases 1–5 (wire SSOT, `Envelope` type,
+> discard path, timer cancellation, slot-out receive ownership
+> transfer) are implemented. The only remainder, phase 6
+> (`Envelope.drop_glue` for nested payload heap on discard), is split
+> out and now tracked by `design/OWNERSHIP-DROP.md` as a downstream
+> consumer of the recursive drop-glue subsystem. Nothing else here is
+> outstanding.
+
 Design for a single owned-envelope contract in the Koja runtime so
 that every message buffer has exactly one owner, one allocator, one
 free path, and one place that defines its wire format. Closes the

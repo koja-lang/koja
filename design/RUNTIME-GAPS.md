@@ -9,8 +9,9 @@ get tackled.
 ## The throughline
 
 Almost every runtime bug we've chased — the message-envelope leaks
-(`MESSAGE-LIFECYCLE.md` phases 1–5), the deferred discard-path
-nested-heap leak (phase 6), the `on_cpu` scheduler race, the
+(`archive/20260529-MESSAGE-LIFECYCLE.md` phases 1–5), the deferred
+discard-path nested-heap leak (`OWNERSHIP-DROP.md`), the `on_cpu`
+scheduler race, the
 nondeterministic SIGBUS in tight `call` loops — traces to one root:
 
 > **The runtime manages raw memory and process state by hand, with
@@ -39,8 +40,9 @@ the absence as intentional:
 
 The delivered-receive path's reason is legitimate (ownership moves to
 compiled code). But the consequence is that **every forgotten path
-leaks** — which is exactly the family of bugs `MESSAGE-LIFECYCLE.md`
-phases 1–5 fixed one path at a time:
+leaks** — which is exactly the family of bugs
+`archive/20260529-MESSAGE-LIFECYCLE.md` phases 1–5 fixed one path at a
+time:
 
 - `Timer.msg_buf` is freed by hand in two places (`cancel_timers_for`
   and the worker-loop fire site); any new early-return between them
@@ -66,12 +68,11 @@ no second free site). The remaining hand-free is the deliberate
 ownership transfer on delivered receive (`free_transport` consumes the
 `Envelope`; nested heap moves to the receiver). Note the one leak still
 open is _nested_ heap inside discarded payloads — that's the recursive
-drop-glue subsystem (`MESSAGE-LIFECYCLE.md` phase 6), not a missing
-`Drop`.
+drop-glue subsystem (`OWNERSHIP-DROP.md`), not a missing `Drop`.
 
 ### 2. Two allocators for the same logical types
 
-**Severity: high. Bug class: undefined behavior; blocks phase 6.**
+**Severity: high. Bug class: undefined behavior; blocks recursive drop glue.**
 
 Heap payloads are allocated through **both** `std::alloc` and libc
 `malloc`, sometimes for the same logical `String`/`Binary`:
@@ -85,7 +86,7 @@ Heap payloads are allocated through **both** `std::alloc` and libc
 Freeing a `std::alloc` block with `free()` (or vice-versa) is undefined
 behavior. It works today only because codegen's `payload - 8` free
 recipe happens to match the allocator used. It also actively **blocks
-`MESSAGE-LIFECYCLE.md` phase 6**: recursive drop glue would need to free
+recursive drop glue (`OWNERSHIP-DROP.md`)**: drop glue would need to free
 a message's nested `String`s, which may be `malloc`'d while the envelope
 is `std::alloc`'d.
 
@@ -392,9 +393,11 @@ The four highest-leverage fixes have all landed:
 
 ## What's left for soft launch
 
-- **Recursive drop glue** (`MESSAGE-LIFECYCLE.md` phase 6) — the
-  largest remaining correctness gap, now unblocked by #2. Nested heap
-  inside discarded structs/enums leaks language-wide. Its own effort.
+- **Recursive drop glue** (`OWNERSHIP-DROP.md`) — the largest remaining
+  correctness gap, now unblocked by #2. Nested heap inside discarded
+  structs/enums leaks language-wide. Its own effort (the design doc
+  records the literal-provenance + call-return-mode blockers a naive
+  widening hits).
 - **#5 (reactor strands a worker)** and **#9 (messages don't wake
   `WaitingIo`)** — liveness / shutdown semantics.
 - Deferred: **#7** (typed `EventKey`; de-risked by generational PIDs),
