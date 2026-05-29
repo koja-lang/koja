@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
 use crate::memory;
+use crate::tsan::{self, Fiber};
 use crate::wire::{
     Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
     TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE,
@@ -104,7 +105,7 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
         }
         guard.processes[idx].mailbox.push_front(envelope);
         if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].state = ProcessState::Runnable;
+            guard.processes[idx].transition(ProcessState::Runnable);
         }
     }
 
@@ -135,7 +136,7 @@ const RET_ADDR_OFFSET: usize = 48;
 // Process & scheduler state
 // ---------------------------------------------------------------------------
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProcessState {
     /// Newly spawned, not yet entered by any worker.
     Created,
@@ -151,6 +152,26 @@ pub(crate) enum ProcessState {
     WaitingIo,
     /// Function returned; process will not be scheduled again.
     Dead,
+}
+
+/// Whether `from -> to` is a legal process lifecycle edge.
+///
+/// Built from the audited transition sites: a worker claims a fresh or
+/// woken process (`Created`/`Runnable -> Running`); a running process
+/// blocks on a message or I/O (`Running -> Blocked`/`WaitingIo`); a
+/// wake re-arms a parked process (`Blocked`/`WaitingIo -> Runnable`);
+/// and any live process can die via return (`Running -> Dead`) or a
+/// kill from another worker (`* -> Dead`). No legal edge is a self-edge,
+/// because every call site gates its precondition first.
+fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
+    use ProcessState::*;
+    matches!(
+        (from, to),
+        (Created | Runnable, Running)
+            | (Running, Blocked | WaitingIo | Dead)
+            | (Blocked | WaitingIo, Runnable)
+            | (Created | Runnable | Blocked | WaitingIo, Dead)
+    )
 }
 
 /// An owned byte buffer from the allocator funnel ([`memory::alloc`]),
@@ -258,6 +279,9 @@ pub(crate) struct Process {
     stack: ProcessStack,
     /// Current lifecycle state, driven by the scheduler and runtime intrinsics.
     pub(crate) state: ProcessState,
+    /// TSan fiber modelling this process's stack, so the sanitizer can follow
+    /// `koja_context_switch`. Null (and inert) outside a sanitized build.
+    tsan_fiber: Fiber,
 }
 
 /// Process contains raw pointers that are heap-allocated and not
@@ -272,11 +296,30 @@ impl Process {
     /// (already-empty owners drop as no-ops), so a kill racing the
     /// worker loop reclaims at most once.
     fn take_resources(&mut self) -> Reclaim {
+        // The process is dead and not currently executing, so its fiber is no
+        // longer the running context: tearing it down here is sound. Null it
+        // so a second (idempotent) call doesn't double-free.
+        tsan::destroy(mem::replace(&mut self.tsan_fiber, Fiber::null()));
         Reclaim {
             init_state: mem::take(&mut self.init_state),
             mailbox: mem::take(&mut self.mailbox),
             stack: mem::replace(&mut self.stack, ProcessStack::null()),
         }
+    }
+
+    /// Single chokepoint for lifecycle state changes. Panics in debug
+    /// builds on an illegal edge; compiles to a plain field write in
+    /// release. Callers still gate their precondition (e.g. only wake a
+    /// `Blocked` process), so no legal edge is a self-edge.
+    pub(crate) fn transition(&mut self, to: ProcessState) {
+        debug_assert!(
+            is_legal_transition(self.state, to),
+            "illegal process state transition for pid {}: {:?} -> {:?}",
+            self.id,
+            self.state,
+            to,
+        );
+        self.state = to;
     }
 }
 
@@ -426,11 +469,12 @@ unsafe extern "C" fn process_trampoline() {
     {
         let mut guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
-        guard.processes[idx].state = ProcessState::Dead;
+        guard.processes[idx].transition(ProcessState::Dead);
     }
 
     WORK_AVAILABLE.notify_all();
 
+    tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {
@@ -515,6 +559,7 @@ fn worker_count() -> usize {
 fn worker_loop() {
     let sched_sp_ptr = SCHED_SP.with(|c| c.get());
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
+    tsan::capture_scheduler_fiber();
 
     loop {
         if SHUTDOWN.load(Ordering::Relaxed) {
@@ -528,7 +573,7 @@ fn worker_loop() {
         let now = Instant::now();
         for proc in guard.processes.iter_mut() {
             if proc.state == ProcessState::Blocked && proc.deadline.is_some_and(|dl| now >= dl) {
-                proc.state = ProcessState::Runnable;
+                proc.transition(ProcessState::Runnable);
             }
         }
 
@@ -555,7 +600,7 @@ fn worker_loop() {
                 if guard.deliverable(idx) {
                     guard.processes[idx].mailbox.push_back(envelope);
                     if guard.processes[idx].state == ProcessState::Blocked {
-                        guard.processes[idx].state = ProcessState::Runnable;
+                        guard.processes[idx].transition(ProcessState::Runnable);
                     }
                 } else {
                     // Target vanished or died between scheduling and firing;
@@ -573,12 +618,14 @@ fn worker_loop() {
 
         if let Some(i) = found {
             guard.processes[i].on_cpu = true;
-            guard.processes[i].state = ProcessState::Running;
+            guard.processes[i].transition(ProcessState::Running);
             let pid = guard.processes[i].id;
             let proc_sp = guard.processes[i].sp;
+            let proc_fiber = guard.processes[i].tsan_fiber;
             drop(guard);
 
             CURRENT_PID.with(|c| c.set(pid));
+            tsan::switch_to_process(proc_fiber);
             unsafe {
                 koja_context_switch(sched_sp_ptr, proc_sp);
             }
@@ -750,9 +797,10 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        guard.processes[idx].state = ProcessState::Blocked;
+        guard.processes[idx].transition(ProcessState::Blocked);
     }
 
+    tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {
@@ -781,11 +829,12 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        guard.processes[idx].state = ProcessState::Blocked;
+        guard.processes[idx].transition(ProcessState::Blocked);
         guard.processes[idx].deadline =
             Some(Instant::now() + Duration::from_millis(timeout_ms as u64));
     }
 
+    tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {
@@ -838,7 +887,7 @@ pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
         }
         guard.processes[idx].mailbox.push_back(envelope);
         if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].state = ProcessState::Runnable;
+            guard.processes[idx].transition(ProcessState::Runnable);
         }
     }
 
@@ -881,7 +930,7 @@ pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
         }
         guard.processes[idx].mailbox.push_back(envelope);
         if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].state = ProcessState::Runnable;
+            guard.processes[idx].transition(ProcessState::Runnable);
         }
     }
 
@@ -960,7 +1009,7 @@ pub extern "C" fn koja_rt_kill(pid: i64) {
         if guard.processes[idx].state == ProcessState::Dead {
             return;
         }
-        guard.processes[idx].state = ProcessState::Dead;
+        guard.processes[idx].transition(ProcessState::Dead);
         guard.cancel_timers_for(pid);
         // Reclaiming a stack a worker is still running on would be a
         // use-after-free; in that case let the owning worker reclaim on
@@ -1022,6 +1071,7 @@ pub unsafe extern "C" fn koja_rt_spawn(
             sp,
             stack,
             state: ProcessState::Created,
+            tsan_fiber: tsan::create_process_fiber(),
         });
         id
     };

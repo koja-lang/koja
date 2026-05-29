@@ -187,6 +187,38 @@ The nondeterministic SIGBUS in tight `call` loops most likely lives here.
 3. Longer term: `loom` for exhaustive interleaving tests of the
    switch/handoff.
 
+**Status (steps 1-2 done).**
+
+- *Transition guards (step 1).* Every `ProcessState` write now goes
+  through `Process::transition`, which `debug_assert!`s the edge against
+  `is_legal_transition` (`scheduler.rs`). All 12 audited sites in
+  `scheduler.rs` / `reactor.rs` were routed through it; the existing
+  per-site preconditions mean no legal edge is a self-edge. The full lang
+  suite and stdlib tests run with the guards active (debug runtime) and
+  stay silent.
+- *ThreadSanitizer (step 2).* A multi-worker stress harness lives at
+  `crates/koja-runtime/tests/scheduler_stress.rs`: a controller process
+  ping-pongs one-byte messages with N children for R rounds, driving the
+  context switch and mailbox handoff across real worker threads. Run it
+  under TSan with `just tsan` (nightly + `-Zbuild-std`; see
+  `INSTALLING.md`).
+
+  TSan cannot follow `koja_context_switch` on its own — the hand-written
+  assembly stack swap faults its shadow stack (`DEADLYSIGNAL`) the first
+  time a process yields mid-function. This is resolved by modelling each
+  process and each worker's scheduler context as a TSan **fiber** and
+  announcing every switch via the `__tsan_*_fiber` API (`tsan.rs`). The
+  annotations are gated on the `koja_tsan` cfg (set only by `just tsan`),
+  so normal and release builds are byte-for-byte unaffected. With them in
+  place a 16-child / 2000-round soak (~32k cross-worker handoffs) reports
+  **no data races**.
+
+- *Remaining (step 3).* The TSan harness only exercises the
+  spawn/send/receive path; it does not yet cover `kill`, timers, or I/O
+  readiness, and TSan still cannot see the asm stack swap itself (only the
+  Rust state around it). `loom` remains the path to exhaustive
+  interleaving coverage of the switch/handoff.
+
 ### 5. A known liveness bug parked in a doc comment
 
 **Severity: medium. Bug class: worker stranded forever.**

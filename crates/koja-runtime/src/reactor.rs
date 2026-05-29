@@ -165,7 +165,7 @@ pub fn reactor_loop() {
                     if idx < sched_guard.processes.len()
                         && sched_guard.processes[idx].state == ProcessState::WaitingIo
                     {
-                        sched_guard.processes[idx].state = ProcessState::Runnable;
+                        sched_guard.processes[idx].transition(ProcessState::Runnable);
                     }
                 }
             }
@@ -247,12 +247,13 @@ pub fn io_block(fd: i32, interest: Interest) {
     {
         let mut guard = SCHED.lock().unwrap();
         if idx < guard.processes.len() {
-            guard.processes[idx].state = ProcessState::WaitingIo;
+            guard.processes[idx].transition(ProcessState::WaitingIo);
         }
     }
 
     register(fd, interest, pid);
 
+    crate::tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {

@@ -17,5 +17,6 @@ mod scheduler;
 mod socket;
 mod string;
 mod system;
+mod tsan;
 mod util;
 mod wire;
