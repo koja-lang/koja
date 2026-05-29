@@ -55,7 +55,7 @@ fn make_closure_with_capture_mallocs_and_stores_into_env() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
     assert_contains(&ir_text, "main__closure0.env");
     // The env block is allocated by libc malloc.
-    assert_contains(&ir_text, "call ptr @malloc");
+    assert_contains(&ir_text, "call ptr @koja_alloc");
     // The capture-bearing fat pointer ends up at a load with the
     // closure-shaped struct type `{ ptr, ptr }`.
     assert_contains(&ir_text, "load { ptr, ptr }");

@@ -55,7 +55,7 @@ fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
     assert_contains(&ir_text, "@llvm.memcpy.p0.p0.i64");
     // The runtime concat-bits extern must NOT be declared for a
     // pure-Binary program — Binary stays inline.
@@ -86,7 +86,7 @@ fn binary_literal_emits_malloc_and_byte_packing() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
     assert_contains(&ir_text, "@llvm.memset.p0.i64");
     // Pure byte-aligned segments must NOT pull in the runtime
     // pack-bits helper — that path is reserved for sub-byte

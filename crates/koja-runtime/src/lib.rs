@@ -10,6 +10,7 @@ mod ffi;
 mod format;
 mod fs;
 mod intrinsics;
+mod memory;
 mod panic;
 mod reactor;
 mod scheduler;

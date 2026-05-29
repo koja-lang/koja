@@ -20,12 +20,12 @@ pub(crate) const FORMAT_F64_SYMBOL: &str = "koja_format_f64";
 pub(crate) const FORMAT_I64_SYMBOL: &str = "koja_format_i64";
 pub(crate) const FORMAT_U64_SYMBOL: &str = "koja_format_u64";
 pub(crate) const FLOAT_PARSE_SYMBOL: &str = "koja_float_parse";
-pub(crate) const FREE_SYMBOL: &str = "free";
+pub(crate) const FREE_SYMBOL: &str = "koja_free";
 pub(crate) const INT_PARSE_SYMBOL: &str = "koja_int_parse";
 pub(crate) const LAST_ERROR_SYMBOL: &str = "koja_last_error";
-pub(crate) const MALLOC_SYMBOL: &str = "malloc";
+pub(crate) const MALLOC_SYMBOL: &str = "koja_alloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
-pub(crate) const REALLOC_SYMBOL: &str = "realloc";
+pub(crate) const REALLOC_SYMBOL: &str = "koja_realloc";
 pub(crate) const UTF8_VALIDATE_SYMBOL: &str = "koja_utf8_validate";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__koja_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__koja_panic";
@@ -90,11 +90,13 @@ pub(crate) fn declare_runtime_format<'ctx>(
         .add_function(symbol, signature, Some(Linkage::External))
 }
 
-/// Declare (or look up) the libc `free` extern. The drop emitter
-/// calls this once per heap-typed slot at function exit. Signature
-/// is `void(i8*)`; the heap-block pointers are computed by
-/// adjusting the SSA payload pointer (`payload - 8`) before the
-/// call so `free` sees the allocator's block base.
+/// Declare (or look up) the `koja_free` extern — the runtime
+/// allocator funnel's free (a sizeless libc-`free` passthrough; see
+/// `koja-runtime/src/mem.rs`). The drop emitter calls this once per
+/// heap-typed slot at function exit. Signature is `void(i8*)`; the
+/// heap-block pointers are computed by adjusting the SSA payload
+/// pointer (`payload - 8`) before the call so the funnel sees the
+/// allocator's block base.
 pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(FREE_SYMBOL) {
         return existing;
@@ -157,10 +159,12 @@ pub(crate) fn declare_last_error_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functi
         .add_function(LAST_ERROR_SYMBOL, signature, Some(Linkage::External))
 }
 
-/// Declare (or look up) the libc `malloc` extern. The concat /
+/// Declare (or look up) the `koja_alloc` extern — the runtime
+/// allocator funnel's alloc (a libc-`malloc` passthrough that aborts
+/// on OOM; see `koja-runtime/src/mem.rs`). The concat /
 /// binary-construct emitters call this for the heap block base.
-/// Signature: `i8* malloc(i64)` (the runtime targets 64-bit hosts; the
-/// argument type matches `size_t` on those targets).
+/// Signature: `i8* koja_alloc(i64)` (the runtime targets 64-bit hosts;
+/// the argument type matches `size_t` on those targets).
 pub(crate) fn declare_malloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(MALLOC_SYMBOL) {
         return existing;
@@ -241,9 +245,11 @@ pub(crate) fn declare_socket_resolve_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fu
         .add_function(SOCKET_RESOLVE_SYMBOL, signature, Some(Linkage::External))
 }
 
-/// Declare (or look up) the libc `realloc` extern. The list
-/// `append` / `concat` emitters call this when the buffer needs to
-/// grow. Signature: `i8* realloc(i8* ptr, i64 new_size)`.
+/// Declare (or look up) the `koja_realloc` extern — the runtime
+/// allocator funnel's realloc (a libc-`realloc` passthrough that
+/// aborts on OOM; see `koja-runtime/src/mem.rs`). The list `append` /
+/// `concat` emitters call this when the buffer needs to grow.
+/// Signature: `i8* koja_realloc(i8* ptr, i64 new_size)`.
 pub(crate) fn declare_realloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(REALLOC_SYMBOL) {
         return existing;

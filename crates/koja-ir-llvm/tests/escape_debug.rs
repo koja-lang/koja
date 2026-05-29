@@ -38,9 +38,9 @@ fn escape_debug_emits_no_free_call_inside_match_arm_bodies() {
     // We drive the `String.escape_debug` function from the auto-
     // imported `Global.string` source, since lowering it is what
     // walks through the buggy code path; the test asserts the
-    // emitted body carries no `call void @free` at all (the
+    // emitted body carries no `call void @koja_free` at all (the
     // function-exit drop substitutes a `MoveOutLocal` for the
-    // returned slot value, so no `free` lands).
+    // returned slot value, so no free lands).
     let program = lower(&dedent(
         "
         fn main -> String
@@ -51,8 +51,8 @@ fn escape_debug_emits_no_free_call_inside_match_arm_bodies() {
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
     let body = extract_function_body(&ir_text, "Global.String.escape_debug");
     assert!(
-        !body.contains("call void @free"),
-        "expected no `call void @free` inside `Global.String.escape_debug` body \
+        !body.contains("call void @koja_free"),
+        "expected no `call void @koja_free` inside `Global.String.escape_debug` body \
          (the cross-arm slot-state leak was synthesizing free calls inside \
          match arm bodies); got body:\n{body}",
     );
@@ -79,7 +79,7 @@ fn debug_format_for_string_compiles_without_free_in_concat_chain() {
     // `format` always returns a freshly-concat'd heap string and
     // `move`s it out through the return — no drops in the body.
     assert!(
-        !body.contains("call void @free"),
-        "expected no `call void @free` inside `Global.String.format` body; got:\n{body}",
+        !body.contains("call void @koja_free"),
+        "expected no `call void @koja_free` inside `Global.String.format` body; got:\n{body}",
     );
 }

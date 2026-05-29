@@ -106,6 +106,62 @@ slot is never removed** — nothing ever pops `processes`. Consequences:
 Removes the unbounded growth, the O(N) scans, the scattered indexing,
 and the keyspace collision in #7 — all at once.
 
+#### PID design: generational index (Erlang-style), not a monotonic counter
+
+The current scheme is monotonic `i64` with `idx = pid - 1` as a direct
+index. It is, perhaps surprisingly, **stale-safe today**: because a PID
+is never reused, a stale `Ref` always maps back to its original (now
+`Dead`) slot and correctly reports `ProcessDown`. The only problem is
+that the table never shrinks (this entry's growth + O(N) scans).
+
+The catch: **slot reuse and generations are the same decision.** The
+moment the table reuses a slot to bound memory, a monotonic/plain index
+reintroduces an ABA hazard — a new process inheriting a dead one's slot,
+so an old `Ref` misdelivers to the wrong process. Erlang's pids avoid
+exactly this. Despite *looking* random in the shell (`<0.123.0>`), an
+Erlang pid is a structured opaque handle `{node, index, serial,
+creation}`; the `serial`/`creation` are the generation counters that
+make reuse safe. The substantive properties we want are **opacity** (a
+PID is a handle, not array arithmetic) and **reuse-safety**, not
+randomness.
+
+Concrete design — pack a generation into the existing 64-bit PID:
+
+- low 32 bits = **slot index** into the `ProcessTable`
+- high 32 bits = **generation**, bumped each time the slot is recycled
+
+`send` / `is_alive` / etc. decode `idx = pid & 0xFFFF_FFFF`,
+`gen = pid >> 32`, and check `table[idx].generation == gen` before
+touching the process; a mismatch is a stale handle → `ProcessDown`.
+Properties:
+
+- **O(1) lookup preserved** — still an array index, just validated.
+- **Reuse-safe** — stale `Ref`s can never alias a recycled slot.
+- **Opaque** — `pid - 1` arithmetic stops being meaningful; all access
+  goes through `table.get(pid)`, which removes the index-panic surface
+  in #6.
+- **ABI-transparent** — a PID stays an `i64`. A `Ref<M, R>` is just a
+  struct whose field 0 is that `i64` (`build_insert_value(.., 0)` in
+  [intrinsics/process.rs](koja/crates/koja-ir-llvm/src/intrinsics/process.rs)),
+  and every `koja_rt_*` call already passes `pid: i64`. So this is a
+  **pure runtime refactor — no codegen or `Ref` layout change.**
+
+This is essentially what modern ERTS does, minus distribution.
+
+**Optional "random-looking" PIDs** (only if desired):
+
+- *Cosmetic:* XOR / lightweight-encrypt the packed `(index | generation)`
+  with a per-runtime-instance random key on the way out and reverse it on
+  the way in. PIDs look random; decode stays O(1); ABI stays `i64`.
+- *Unguessable:* generate a 63-bit random PID with a
+  `HashMap<Pid, slot>`. Adds genuine unforgeability (relevant only if
+  PIDs ever cross a trust boundary, e.g. distributed Koja over a wire),
+  at the cost of trading the array index for a hash lookup plus
+  (astronomically rare) collision handling.
+
+The generation counter is the core mechanism; "random PIDs" are an
+optional layer on top, not a substitute for it.
+
 ### 4. Safety-critical ordering lives in prose, not types (the race surface)
 
 **Severity: high. Bug class: nondeterministic crashes / hangs.**

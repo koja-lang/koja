@@ -122,8 +122,8 @@ fn string_concat_emits_inline_malloc_and_memcpy() {
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    assert_contains(&ir_text, "declare ptr @malloc(i64)");
-    assert_contains(&ir_text, "call ptr @malloc(i64");
+    assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
+    assert_contains(&ir_text, "call ptr @koja_alloc(i64");
     // Two memcpys (lhs payload, rhs payload) + the trailing-NUL
     // store. inkwell renders memcpy as the `llvm.memcpy.p0.p0.i64`
     // intrinsic.

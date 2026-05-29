@@ -27,7 +27,7 @@
 //! shapes — a reply is `Business` traffic flowing callee->caller, not
 //! a category of its own (see `koja/design/MESSAGE-LIFECYCLE.md`).
 
-use std::alloc;
+use crate::memory;
 
 /// Forward business traffic and replies. Payload is the message: a
 /// `Pair<M, Option<ReplyTo<R>>>` going to the target, or a bare `R`
@@ -68,22 +68,24 @@ pub(crate) const IO_READY_ERROR: u8 = 2;
 /// codegen); a typed `tag` field is added when the receive path starts
 /// returning it (deferred; see `koja/design/MESSAGE-LIFECYCLE.md`).
 ///
-/// Freeing is always explicit — there is no `Drop` impl — and splits
-/// by path: the delivered-receive path copies the payload into the
-/// receiver's slot and frees only the transport buffer via
-/// [`Envelope::free_transport`] (nested heap moves to the receiver),
-/// while the discard path (process death, send-to-dead) uses
-/// [`Envelope::free`], which also runs `drop_glue` over the payload.
+/// Freeing is RAII via [`Drop`], which runs `drop_glue` over the
+/// payload (when present) and then deallocates the buffer — the
+/// discard semantics for any undelivered envelope (process death,
+/// send-to-dead). The delivered-receive path is the one exception: it
+/// copies the payload into the receiver's slot and then opts out of the
+/// glue via [`Envelope::free_transport`], so only the transport buffer
+/// is freed (the nested heap has moved to the receiver).
 pub(crate) struct Envelope {
-    /// Transport buffer `[tag header | payload]`, owned by the global
-    /// allocator (`alloc::alloc`, 8-byte aligned).
+    /// Transport buffer `[tag header | payload]`, owned by the
+    /// allocator funnel (`memory::alloc`, 8-byte aligned) and freed with
+    /// `memory::free` on drop.
     pub(crate) buffer: *mut u8,
     /// Drop glue for nested Koja heap in the payload, run before the
     /// buffer is freed on the discard path. Null until the deferred
     /// codegen phase that emits it.
     pub(crate) drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
-    /// Total buffer length in bytes, so the allocation `Layout` is
-    /// recoverable here rather than only at the send site.
+    /// Total buffer length in bytes, so the delivered-receive copy can
+    /// size the payload without consulting the send site.
     pub(crate) length: usize,
 }
 
@@ -102,24 +104,26 @@ impl Envelope {
         }
     }
 
-    /// Discard-path free: runs payload drop glue (when present) over the
-    /// undelivered payload, then frees the transport buffer. Consumes the
-    /// envelope.
-    pub(crate) fn free(self) {
+    /// Delivered-path defuse: the receiver has already copied the
+    /// payload (and any nested heap it references) into its own frame,
+    /// so the transport buffer must be freed *without* running
+    /// `drop_glue`. Clearing the glue and letting the envelope drop
+    /// deallocates the buffer only. Consumes the envelope.
+    pub(crate) fn free_transport(mut self) {
+        self.drop_glue = None;
+    }
+}
+
+/// Discard-path free: runs payload drop glue (when present) over the
+/// undelivered payload, then frees the transport buffer. This is the
+/// default for any envelope that is dropped without being delivered —
+/// undelivered mail on process death, sends to a dead target, etc. The
+/// delivered path opts out via [`Envelope::free_transport`].
+impl Drop for Envelope {
+    fn drop(&mut self) {
         if let Some(drop_glue) = self.drop_glue {
             unsafe { drop_glue(self.buffer.add(TAG_HEADER_SIZE)) };
         }
-        self.free_transport();
-    }
-
-    /// Delivered-path free: frees the transport buffer only, never
-    /// running `drop_glue`. The payload's nested heap has already been
-    /// copied into the receiver's frame, which now owns it. Consumes the
-    /// envelope.
-    pub(crate) fn free_transport(self) {
-        unsafe {
-            let layout = alloc::Layout::from_size_align(self.length, 8).unwrap();
-            alloc::dealloc(self.buffer, layout);
-        }
+        unsafe { memory::free(self.buffer) };
     }
 }

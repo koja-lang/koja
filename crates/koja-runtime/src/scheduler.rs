@@ -8,6 +8,7 @@
 use std::alloc;
 use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
+use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Condvar, Mutex};
@@ -15,6 +16,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
+use crate::memory;
 use crate::wire::{
     Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
     TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE,
@@ -42,7 +44,7 @@ extern "C" fn handle_sighup(_sig: libc::c_int) {
 
 fn install_signals() {
     unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
+        let mut sa: libc::sigaction = mem::zeroed();
         sa.sa_flags = 0;
         libc::sigemptyset(&mut sa.sa_mask);
 
@@ -57,7 +59,7 @@ fn install_signals() {
 
         // Unblock these signals in case the parent process (e.g. cargo test
         // linking LLVM) inherited a mask that blocks them.
-        let mut unblock: libc::sigset_t = std::mem::zeroed();
+        let mut unblock: libc::sigset_t = mem::zeroed();
         libc::sigemptyset(&mut unblock);
         libc::sigaddset(&mut unblock, libc::SIGTERM);
         libc::sigaddset(&mut unblock, libc::SIGINT);
@@ -85,8 +87,7 @@ fn poll_signals() {
 /// pushes it to the front of the target process's mailbox.
 fn send_lifecycle_to(pid: i64, variant: i64) {
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(LIFECYCLE_BUF_SIZE, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(LIFECYCLE_BUF_SIZE);
         ptr::write_bytes(buf, 0, LIFECYCLE_BUF_SIZE);
         *buf = TAG_LIFECYCLE;
         *buf.add(TAG_HEADER_SIZE) = variant as u8;
@@ -98,7 +99,7 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
         let mut guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
         if !guard.deliverable(idx) {
-            envelope.free();
+            drop(envelope);
             return;
         }
         guard.processes[idx].mailbox.push_front(envelope);
@@ -152,15 +153,72 @@ pub(crate) enum ProcessState {
     Dead,
 }
 
+/// An owned byte buffer from the allocator funnel ([`memory::alloc`]),
+/// freed on drop. Wraps the scheduler's hand-managed heap runs — a
+/// process's initial state and a pending timer's staged message bytes —
+/// so they reclaim by RAII rather than a matching manual free on every
+/// path.
+///
+/// The empty value (`Default`) is null and drops as a no-op, so it also
+/// serves as the placeholder left behind when ownership is moved out
+/// via [`mem::take`].
+struct OwnedBuf {
+    ptr: *mut u8,
+}
+
+impl OwnedBuf {
+    /// Wraps an allocation from [`memory::alloc`], or null for empty.
+    fn new(ptr: *mut u8) -> Self {
+        Self { ptr }
+    }
+}
+
+impl Default for OwnedBuf {
+    fn default() -> Self {
+        Self {
+            ptr: ptr::null_mut(),
+        }
+    }
+}
+
+impl Drop for OwnedBuf {
+    fn drop(&mut self) {
+        unsafe { memory::free(self.ptr) };
+    }
+}
+
 /// An `mmap`-backed process stack: a `PROT_NONE` guard page at the
 /// lowest address (the growth end, since stacks grow down) followed by
-/// the usable region. Held on each [`Process`] so the mapping can be
-/// released when the process dies.
+/// the usable region. Held on each [`Process`] so the mapping is
+/// `munmap`ped on drop when the process's resources are reclaimed.
 struct ProcessStack {
     /// Base of the whole mapping (start of the guard page).
     base: *mut u8,
     /// Total mapped bytes: guard page + usable stack.
     size: usize,
+}
+
+impl ProcessStack {
+    /// The empty placeholder left behind when a stack's ownership is
+    /// moved out (see [`Process::take_resources`]). A null base drops as
+    /// a no-op.
+    const fn null() -> Self {
+        Self {
+            base: ptr::null_mut(),
+            size: 0,
+        }
+    }
+}
+
+impl Drop for ProcessStack {
+    fn drop(&mut self) {
+        if self.base.is_null() {
+            return;
+        }
+        unsafe {
+            libc::munmap(self.base as *mut libc::c_void, self.size);
+        }
+    }
 }
 
 /// A single lightweight Koja process.
@@ -177,11 +235,9 @@ pub(crate) struct Process {
     func: ProcessFn,
     /// Unique process identifier. PIDs start at 1; index is `id - 1`.
     id: i64,
-    /// Heap-allocated initial state passed to `func` on first entry.
-    init_state: *mut u8,
-    /// Byte length of the `init_state` allocation, needed to deallocate
-    /// it on death. `0` when `init_state` is null.
-    init_state_len: usize,
+    /// Heap-allocated initial state passed to `func` on first entry,
+    /// owned by the process and freed when its resources are reclaimed.
+    init_state: OwnedBuf,
     /// FIFO queue of message envelopes delivered via `send`.
     mailbox: VecDeque<Envelope>,
     /// Claim flag: `true` from the moment a worker switches into this
@@ -209,67 +265,50 @@ pub(crate) struct Process {
 unsafe impl Send for Process {}
 
 impl Process {
-    /// Removes a dead process's reclaimable resources from its slot,
-    /// nulling/zeroing/emptying them so the actual frees can happen
-    /// after the `SCHED` lock is dropped. Idempotent: a second call
-    /// returns an empty [`Reclaim`] whose [`Reclaim::free`] is a no-op,
-    /// so a kill racing the worker loop reclaims at most once.
+    /// Moves a dead process's reclaimable resources out of its slot,
+    /// leaving empty/null placeholders so the actual frees happen when
+    /// the returned [`Reclaim`] is dropped — after the `SCHED` lock is
+    /// released. Idempotent: a second call returns an empty `Reclaim`
+    /// (already-empty owners drop as no-ops), so a kill racing the
+    /// worker loop reclaims at most once.
     fn take_resources(&mut self) -> Reclaim {
-        let reclaim = Reclaim {
-            init_state: self.init_state,
-            init_state_len: self.init_state_len,
-            mailbox: std::mem::take(&mut self.mailbox),
-            stack: ProcessStack {
-                base: self.stack.base,
-                size: self.stack.size,
-            },
-        };
-        self.init_state = ptr::null_mut();
-        self.init_state_len = 0;
-        self.stack = ProcessStack {
-            base: ptr::null_mut(),
-            size: 0,
-        };
-        reclaim
+        Reclaim {
+            init_state: mem::take(&mut self.init_state),
+            mailbox: mem::take(&mut self.mailbox),
+            stack: mem::replace(&mut self.stack, ProcessStack::null()),
+        }
     }
 }
 
-/// Resources taken from a dead process, freed once the `SCHED` lock is
-/// no longer held. Produced by [`Process::take_resources`].
+/// Resources moved out of a dead process, freed when this value is
+/// dropped — which the reclaim sites do only after the `SCHED` lock is
+/// released. Produced by [`Process::take_resources`]. Each field is an
+/// RAII owner, so dropping a `Reclaim` drains the mailbox (running each
+/// envelope's drop glue), unmaps the stack, and frees `init_state`; an
+/// already-reclaimed `Reclaim` holds empty owners and drops as a no-op.
+///
+/// The fields are never read by name — they exist purely so their own
+/// `Drop` runs at this controlled point — hence `allow(dead_code)`.
+#[allow(dead_code)]
 struct Reclaim {
-    init_state: *mut u8,
-    init_state_len: usize,
+    init_state: OwnedBuf,
     mailbox: VecDeque<Envelope>,
     stack: ProcessStack,
 }
 
-/// Reclaim owns raw pointers detached from a [`Process`]; freeing them
-/// off the scheduler thread is sound.
+/// Reclaim owns heap detached from a [`Process`]; freeing it off the
+/// scheduler thread is sound.
 unsafe impl Send for Reclaim {}
-
-impl Reclaim {
-    /// Frees every undelivered mailbox envelope, unmaps the stack, and
-    /// deallocates `init_state`. All parts are empty/null-safe, so this
-    /// is sound on an already-reclaimed `Reclaim`.
-    fn free(mut self) {
-        for envelope in self.mailbox.drain(..) {
-            envelope.free();
-        }
-        free_process_stack(self.stack);
-        if !self.init_state.is_null() && self.init_state_len > 0 {
-            unsafe {
-                let layout = alloc::Layout::from_size_align(self.init_state_len, 8).unwrap();
-                alloc::dealloc(self.init_state, layout);
-            }
-        }
-    }
-}
 
 /// A pending delayed message, delivered when `fire_at` has elapsed.
 struct Timer {
     fire_at: Instant,
     target_pid: i64,
-    msg_buf: *mut u8,
+    /// Staged payload bytes, owned by the timer and freed when it drops
+    /// (on fire or cancel).
+    msg_buf: OwnedBuf,
+    /// Length of the staged payload, retained to size the fire-time
+    /// envelope.
     msg_len: usize,
 }
 
@@ -306,20 +345,12 @@ impl Scheduler {
         idx < self.processes.len() && self.processes[idx].state != ProcessState::Dead
     }
 
-    /// Cancels every pending timer aimed at `pid`, freeing its staged
-    /// message buffer. Called when a process dies so a delayed `send`
-    /// neither fires onto a dead mailbox nor leaks its staging buffer.
+    /// Cancels every pending timer aimed at `pid`. Called when a process
+    /// dies so a delayed `send` neither fires onto a dead mailbox nor
+    /// leaks its staging buffer — each removed `Timer` drops, freeing its
+    /// `OwnedBuf`.
     fn cancel_timers_for(&mut self, pid: i64) {
-        self.timers.retain(|timer| {
-            if timer.target_pid != pid {
-                return true;
-            }
-            unsafe {
-                let layout = alloc::Layout::from_size_align(timer.msg_len, 8).unwrap();
-                alloc::dealloc(timer.msg_buf, layout);
-            }
-            false
-        });
+        self.timers.retain(|timer| timer.target_pid != pid);
     }
 }
 
@@ -381,7 +412,10 @@ unsafe extern "C" fn process_trampoline() {
     let (func, init_state) = {
         let guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
-        (guard.processes[idx].func, guard.processes[idx].init_state)
+        (
+            guard.processes[idx].func,
+            guard.processes[idx].init_state.ptr,
+        )
     };
 
     unsafe {
@@ -407,8 +441,9 @@ unsafe extern "C" fn process_trampoline() {
 /// Maps a fresh [`STACK_SIZE`] process stack with a `PROT_NONE` guard
 /// page at the growth (low-address) end and initialises it so the first
 /// context switch lands in [`process_trampoline`]. Returns the mapping
-/// handle (for later [`free_process_stack`]) plus the initial stack
-/// pointer. Aborts on mapping failure, matching the old allocator.
+/// handle (a [`ProcessStack`] that `munmap`s itself on drop) plus the
+/// initial stack pointer. Aborts on mapping failure, matching the old
+/// allocator.
 fn allocate_process_stack() -> (ProcessStack, *mut u8) {
     let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
     let size = page + STACK_SIZE;
@@ -440,18 +475,6 @@ fn allocate_process_stack() -> (ProcessStack, *mut u8) {
     let stack_top = unsafe { base.add(size) };
     let sp = unsafe { init_process_stack(stack_top, process_trampoline) };
     (ProcessStack { base, size }, sp)
-}
-
-/// Releases a stack mapping previously returned by
-/// [`allocate_process_stack`]. A null base (a process whose stack was
-/// already reclaimed) is a no-op.
-fn free_process_stack(stack: ProcessStack) {
-    if stack.base.is_null() {
-        return;
-    }
-    unsafe {
-        libc::munmap(stack.base as *mut libc::c_void, stack.size);
-    }
 }
 
 /// Determines how many worker threads to run.
@@ -512,20 +535,18 @@ fn worker_loop() {
         let mut i = 0;
         while i < guard.timers.len() {
             if now >= guard.timers[i].fire_at {
+                // `timer` is owned here; its `OwnedBuf` frees the staged
+                // bytes when it drops at the end of this iteration, after
+                // they've been copied into the fire-time envelope.
                 let timer = guard.timers.swap_remove(i);
                 let total = TAG_HEADER_SIZE + timer.msg_len;
                 let buf = unsafe {
-                    let layout = alloc::Layout::from_size_align(total, 8).unwrap();
-                    let buf = alloc::alloc(layout);
+                    let buf = memory::alloc(total);
                     ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
                     ptr::copy_nonoverlapping(
-                        timer.msg_buf,
+                        timer.msg_buf.ptr,
                         buf.add(TAG_HEADER_SIZE),
                         timer.msg_len,
-                    );
-                    alloc::dealloc(
-                        timer.msg_buf,
-                        alloc::Layout::from_size_align(timer.msg_len, 8).unwrap(),
                     );
                     buf
                 };
@@ -539,7 +560,7 @@ fn worker_loop() {
                 } else {
                     // Target vanished or died between scheduling and firing;
                     // don't push onto a dead mailbox or leak the buffer.
-                    envelope.free();
+                    drop(envelope);
                 }
             } else {
                 i += 1;
@@ -590,7 +611,7 @@ fn worker_loop() {
                 WORK_AVAILABLE.notify_all();
             }
             if let Some(reclaim) = reclaim {
-                reclaim.free();
+                drop(reclaim);
             }
             if shutdown {
                 break;
@@ -801,8 +822,7 @@ pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
     let len = msg_len as usize;
     let total = TAG_HEADER_SIZE + len;
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(total, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(total);
         ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
         ptr::copy_nonoverlapping(msg_ptr, buf.add(TAG_HEADER_SIZE), len);
         buf
@@ -813,7 +833,7 @@ pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
         let mut guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
         if !guard.deliverable(idx) {
-            envelope.free();
+            drop(envelope);
             return;
         }
         guard.processes[idx].mailbox.push_back(envelope);
@@ -843,8 +863,7 @@ pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
 /// mailbox via `push_back`.
 pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(IO_READY_BUF_SIZE, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(IO_READY_BUF_SIZE);
         ptr::write_bytes(buf, 0, IO_READY_BUF_SIZE);
         *buf = TAG_IO_READY;
         *buf.add(IO_READY_VARIANT_OFFSET) = variant;
@@ -857,7 +876,7 @@ pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
         let mut guard = SCHED.lock().unwrap();
         let idx = (pid - 1) as usize;
         if !guard.deliverable(idx) {
-            envelope.free();
+            drop(envelope);
             return;
         }
         guard.processes[idx].mailbox.push_back(envelope);
@@ -884,8 +903,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
 ) {
     let len = msg_len as usize;
     let msg_copy = unsafe {
-        let layout = alloc::Layout::from_size_align(len, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(len);
         ptr::copy_nonoverlapping(msg_ptr, buf, len);
         buf
     };
@@ -897,7 +915,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
         guard.timers.push(Timer {
             fire_at,
             target_pid: pid,
-            msg_buf: msg_copy,
+            msg_buf: OwnedBuf::new(msg_copy),
             msg_len: len,
         });
     }
@@ -955,7 +973,7 @@ pub extern "C" fn koja_rt_kill(pid: i64) {
         }
     };
     if let Some(reclaim) = reclaim {
-        reclaim.free();
+        drop(reclaim);
     }
 }
 
@@ -980,8 +998,7 @@ pub unsafe extern "C" fn koja_rt_spawn(
     };
     let heap_state = if heap_state_len > 0 {
         unsafe {
-            let layout = alloc::Layout::from_size_align(heap_state_len, 8).unwrap();
-            let buf = alloc::alloc(layout);
+            let buf = memory::alloc(heap_state_len);
             ptr::copy_nonoverlapping(state_ptr, buf, heap_state_len);
             buf
         }
@@ -999,8 +1016,7 @@ pub unsafe extern "C" fn koja_rt_spawn(
             deadline: None,
             func: fn_ptr,
             id,
-            init_state: heap_state,
-            init_state_len: heap_state_len,
+            init_state: OwnedBuf::new(heap_state),
             mailbox: VecDeque::new(),
             on_cpu: false,
             sp,

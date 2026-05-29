@@ -90,5 +90,5 @@ fn heap_leaf_overwrite_emits_free_call_for_drop_value() {
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    assert_contains(&ir_text, "call void @free");
+    assert_contains(&ir_text, "call void @koja_free");
 }
