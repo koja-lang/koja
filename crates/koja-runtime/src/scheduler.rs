@@ -17,7 +17,8 @@ use std::time::{Duration, Instant};
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
 use crate::memory;
-use crate::tsan::{self, Fiber};
+use crate::process_table::ProcessTable;
+use crate::tsan;
 use crate::wire::{
     Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
     TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE,
@@ -69,18 +70,27 @@ fn install_signals() {
     }
 }
 
-/// Checks atomic signal flags and injects lifecycle messages into PID 1's
-/// mailbox. Called from the worker loop. Lifecycle variant indices match
-/// the `Lifecycle` enum declaration order: Shutdown=0, Interrupt=1, Reload=2.
+/// Checks atomic signal flags and injects lifecycle messages into the main
+/// process's mailbox. Called from the worker loop. Lifecycle variant indices
+/// match the `Lifecycle` enum declaration order: Shutdown=0, Interrupt=1,
+/// Reload=2. Only takes the lock when a signal actually fired.
 fn poll_signals() {
-    if GOT_SIGTERM.swap(false, Ordering::Relaxed) {
-        send_lifecycle_to(1, 0);
+    let term = GOT_SIGTERM.swap(false, Ordering::Relaxed);
+    let int = GOT_SIGINT.swap(false, Ordering::Relaxed);
+    let hup = GOT_SIGHUP.swap(false, Ordering::Relaxed);
+    if !(term || int || hup) {
+        return;
     }
-    if GOT_SIGINT.swap(false, Ordering::Relaxed) {
-        send_lifecycle_to(1, 1);
+
+    let main_pid = SCHED.lock().unwrap().main_pid();
+    if term {
+        send_lifecycle_to(main_pid, 0);
     }
-    if GOT_SIGHUP.swap(false, Ordering::Relaxed) {
-        send_lifecycle_to(1, 2);
+    if int {
+        send_lifecycle_to(main_pid, 1);
+    }
+    if hup {
+        send_lifecycle_to(main_pid, 2);
     }
 }
 
@@ -98,14 +108,9 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
     let envelope = Envelope::new(buf, LIFECYCLE_BUF_SIZE);
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        if !guard.deliverable(idx) {
+        if let Some(envelope) = guard.deliver_front(pid, envelope) {
             drop(envelope);
             return;
-        }
-        guard.processes[idx].mailbox.push_front(envelope);
-        if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].transition(ProcessState::Runnable);
         }
     }
 
@@ -114,7 +119,7 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
 
 const STACK_SIZE: usize = 512 * 1024;
 
-type ProcessFn = extern "C" fn(*const u8);
+pub(crate) type ProcessFn = extern "C" fn(*const u8);
 
 // ---------------------------------------------------------------------------
 // Platform-specific initial-frame layout constants
@@ -154,26 +159,6 @@ pub(crate) enum ProcessState {
     Dead,
 }
 
-/// Whether `from -> to` is a legal process lifecycle edge.
-///
-/// Built from the audited transition sites: a worker claims a fresh or
-/// woken process (`Created`/`Runnable -> Running`); a running process
-/// blocks on a message or I/O (`Running -> Blocked`/`WaitingIo`); a
-/// wake re-arms a parked process (`Blocked`/`WaitingIo -> Runnable`);
-/// and any live process can die via return (`Running -> Dead`) or a
-/// kill from another worker (`* -> Dead`). No legal edge is a self-edge,
-/// because every call site gates its precondition first.
-fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
-    use ProcessState::*;
-    matches!(
-        (from, to),
-        (Created | Runnable, Running)
-            | (Running, Blocked | WaitingIo | Dead)
-            | (Blocked | WaitingIo, Runnable)
-            | (Created | Runnable | Blocked | WaitingIo, Dead)
-    )
-}
-
 /// An owned byte buffer from the allocator funnel ([`memory::alloc`]),
 /// freed on drop. Wraps the scheduler's hand-managed heap runs — a
 /// process's initial state and a pending timer's staged message bytes —
@@ -183,13 +168,13 @@ fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
 /// The empty value (`Default`) is null and drops as a no-op, so it also
 /// serves as the placeholder left behind when ownership is moved out
 /// via [`mem::take`].
-struct OwnedBuf {
+pub(crate) struct OwnedBuf {
     ptr: *mut u8,
 }
 
 impl OwnedBuf {
     /// Wraps an allocation from [`memory::alloc`], or null for empty.
-    fn new(ptr: *mut u8) -> Self {
+    pub(crate) fn new(ptr: *mut u8) -> Self {
         Self { ptr }
     }
 }
@@ -212,7 +197,7 @@ impl Drop for OwnedBuf {
 /// lowest address (the growth end, since stacks grow down) followed by
 /// the usable region. Held on each [`Process`] so the mapping is
 /// `munmap`ped on drop when the process's resources are reclaimed.
-struct ProcessStack {
+pub(crate) struct ProcessStack {
     /// Base of the whole mapping (start of the guard page).
     base: *mut u8,
     /// Total mapped bytes: guard page + usable stack.
@@ -223,7 +208,7 @@ impl ProcessStack {
     /// The empty placeholder left behind when a stack's ownership is
     /// moved out (see [`Process::take_resources`]). A null base drops as
     /// a no-op.
-    const fn null() -> Self {
+    pub(crate) const fn null() -> Self {
         Self {
             base: ptr::null_mut(),
             size: 0,
@@ -245,22 +230,21 @@ impl Drop for ProcessStack {
 /// A single lightweight Koja process.
 ///
 /// Each process has its own stack, a FIFO mailbox of raw message buffers,
-/// and a state machine driven by the scheduler. PIDs start at 1 and map
-/// to `Vec` indices as `pid - 1`.
+/// and a state machine driven by the scheduler. Processes live in a
+/// generational slotmap ([`ProcessTable`]); a PID packs the slot index and
+/// generation rather than being a bare `Vec` offset.
 pub(crate) struct Process {
     /// Optional receive timeout. Set by `koja_rt_receive_timeout`, cleared
     /// on resume. The worker loop promotes `Blocked → Runnable` when the
     /// deadline passes.
-    deadline: Option<Instant>,
+    pub(crate) deadline: Option<Instant>,
     /// The compiled Koja function to call when first entering this process.
     func: ProcessFn,
-    /// Unique process identifier. PIDs start at 1; index is `id - 1`.
-    id: i64,
     /// Heap-allocated initial state passed to `func` on first entry,
     /// owned by the process and freed when its resources are reclaimed.
     init_state: OwnedBuf,
     /// FIFO queue of message envelopes delivered via `send`.
-    mailbox: VecDeque<Envelope>,
+    pub(crate) mailbox: VecDeque<Envelope>,
     /// Claim flag: `true` from the moment a worker switches into this
     /// process until that same worker has persisted the post-yield `sp`.
     ///
@@ -271,17 +255,14 @@ pub(crate) struct Process {
     /// frame. Gating pickup on `!on_cpu` keeps any other worker from
     /// resuming that stale frame until the owning worker writes the
     /// correct `sp` and clears the flag.
-    on_cpu: bool,
+    pub(crate) on_cpu: bool,
     /// Saved stack pointer. Written by `koja_context_switch` when the
     /// process yields, read when a worker resumes it.
-    sp: *mut u8,
+    pub(crate) sp: *mut u8,
     /// The process's `mmap`-backed stack, unmapped when the process dies.
     stack: ProcessStack,
     /// Current lifecycle state, driven by the scheduler and runtime intrinsics.
     pub(crate) state: ProcessState,
-    /// TSan fiber modelling this process's stack, so the sanitizer can follow
-    /// `koja_context_switch`. Null (and inert) outside a sanitized build.
-    tsan_fiber: Fiber,
 }
 
 /// Process contains raw pointers that are heap-allocated and not
@@ -289,37 +270,44 @@ pub(crate) struct Process {
 unsafe impl Send for Process {}
 
 impl Process {
+    /// Builds a freshly spawned process in the `Created` state. Called by
+    /// [`ProcessTable::spawn`], which owns the slot/PID assignment.
+    pub(crate) fn new(
+        func: ProcessFn,
+        init_state: OwnedBuf,
+        stack: ProcessStack,
+        sp: *mut u8,
+    ) -> Self {
+        Process {
+            deadline: None,
+            func,
+            init_state,
+            mailbox: VecDeque::new(),
+            on_cpu: false,
+            sp,
+            stack,
+            state: ProcessState::Created,
+        }
+    }
+
+    /// The entry function and its heap-allocated initial state, read by
+    /// [`process_trampoline`] on first entry.
+    pub(crate) fn entry(&self) -> (ProcessFn, *const u8) {
+        (self.func, self.init_state.ptr)
+    }
+
     /// Moves a dead process's reclaimable resources out of its slot,
     /// leaving empty/null placeholders so the actual frees happen when
     /// the returned [`Reclaim`] is dropped — after the `SCHED` lock is
     /// released. Idempotent: a second call returns an empty `Reclaim`
     /// (already-empty owners drop as no-ops), so a kill racing the
     /// worker loop reclaims at most once.
-    fn take_resources(&mut self) -> Reclaim {
-        // The process is dead and not currently executing, so its fiber is no
-        // longer the running context: tearing it down here is sound. Null it
-        // so a second (idempotent) call doesn't double-free.
-        tsan::destroy(mem::replace(&mut self.tsan_fiber, Fiber::null()));
+    pub(crate) fn take_resources(&mut self) -> Reclaim {
         Reclaim {
             init_state: mem::take(&mut self.init_state),
             mailbox: mem::take(&mut self.mailbox),
             stack: mem::replace(&mut self.stack, ProcessStack::null()),
         }
-    }
-
-    /// Single chokepoint for lifecycle state changes. Panics in debug
-    /// builds on an illegal edge; compiles to a plain field write in
-    /// release. Callers still gate their precondition (e.g. only wake a
-    /// `Blocked` process), so no legal edge is a self-edge.
-    pub(crate) fn transition(&mut self, to: ProcessState) {
-        debug_assert!(
-            is_legal_transition(self.state, to),
-            "illegal process state transition for pid {}: {:?} -> {:?}",
-            self.id,
-            self.state,
-            to,
-        );
-        self.state = to;
     }
 }
 
@@ -333,7 +321,7 @@ impl Process {
 /// The fields are never read by name — they exist purely so their own
 /// `Drop` runs at this controlled point — hence `allow(dead_code)`.
 #[allow(dead_code)]
-struct Reclaim {
+pub(crate) struct Reclaim {
     init_state: OwnedBuf,
     mailbox: VecDeque<Envelope>,
     stack: ProcessStack,
@@ -343,63 +331,9 @@ struct Reclaim {
 /// scheduler thread is sound.
 unsafe impl Send for Reclaim {}
 
-/// A pending delayed message, delivered when `fire_at` has elapsed.
-struct Timer {
-    fire_at: Instant,
-    target_pid: i64,
-    /// Staged payload bytes, owned by the timer and freed when it drops
-    /// (on fire or cancel).
-    msg_buf: OwnedBuf,
-    /// Length of the staged payload, retained to size the fire-time
-    /// envelope.
-    msg_len: usize,
-}
-
-unsafe impl Send for Timer {}
-
-/// Shared scheduler state protected by [`SCHED`].
-///
-/// All process metadata lives here. Workers lock the Mutex briefly to
-/// find/claim a runnable process or update state, then release before
-/// performing any context switch.
-pub(crate) struct Scheduler {
-    /// Monotonically increasing PID counter. Next spawned process gets this ID.
-    next_id: i64,
-    /// All known processes, indexed by `pid - 1`.
-    pub(crate) processes: Vec<Process>,
-    /// Pending timers created by `send_after`. Drained by the worker loop.
-    timers: Vec<Timer>,
-}
-
-impl Scheduler {
-    const fn new() -> Self {
-        Scheduler {
-            next_id: 1,
-            processes: Vec::new(),
-            timers: Vec::new(),
-        }
-    }
-
-    /// Whether `idx` names a process that can still receive mail: in
-    /// range and not yet `Dead`. Sends to a missing or dead target are
-    /// dropped (and their envelopes freed) rather than queued onto a
-    /// mailbox that will never be drained again.
-    fn deliverable(&self, idx: usize) -> bool {
-        idx < self.processes.len() && self.processes[idx].state != ProcessState::Dead
-    }
-
-    /// Cancels every pending timer aimed at `pid`. Called when a process
-    /// dies so a delayed `send` neither fires onto a dead mailbox nor
-    /// leaks its staging buffer — each removed `Timer` drops, freeing its
-    /// `OwnedBuf`.
-    fn cancel_timers_for(&mut self, pid: i64) {
-        self.timers.retain(|timer| timer.target_pid != pid);
-    }
-}
-
 /// Global scheduler state. Workers hold this lock briefly to find or
 /// update processes; the lock is always released before context-switching.
-pub(crate) static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+pub(crate) static SCHED: Mutex<ProcessTable> = Mutex::new(ProcessTable::new());
 
 /// Condvar paired with [`SCHED`]. Workers park here when idle.
 /// Woken by `koja_rt_send`, `koja_rt_spawn`, the reactor, and on shutdown.
@@ -452,13 +386,8 @@ unsafe fn init_process_stack(stack_top: *mut u8, entry: unsafe extern "C" fn()) 
 unsafe extern "C" fn process_trampoline() {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    let (func, init_state) = {
-        let guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        (
-            guard.processes[idx].func,
-            guard.processes[idx].init_state.ptr,
-        )
+    let Some((func, init_state)) = SCHED.lock().unwrap().get(pid).map(Process::entry) else {
+        return;
     };
 
     unsafe {
@@ -468,8 +397,7 @@ unsafe extern "C" fn process_trampoline() {
 
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        guard.processes[idx].transition(ProcessState::Dead);
+        guard.transition(pid, ProcessState::Dead);
     }
 
     WORK_AVAILABLE.notify_all();
@@ -571,57 +499,10 @@ fn worker_loop() {
         let mut guard = SCHED.lock().unwrap();
 
         let now = Instant::now();
-        for proc in guard.processes.iter_mut() {
-            if proc.state == ProcessState::Blocked && proc.deadline.is_some_and(|dl| now >= dl) {
-                proc.transition(ProcessState::Runnable);
-            }
-        }
+        guard.promote_due_deadlines(now);
+        fire_due_timers(&mut guard, now);
 
-        let mut i = 0;
-        while i < guard.timers.len() {
-            if now >= guard.timers[i].fire_at {
-                // `timer` is owned here; its `OwnedBuf` frees the staged
-                // bytes when it drops at the end of this iteration, after
-                // they've been copied into the fire-time envelope.
-                let timer = guard.timers.swap_remove(i);
-                let total = TAG_HEADER_SIZE + timer.msg_len;
-                let buf = unsafe {
-                    let buf = memory::alloc(total);
-                    ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
-                    ptr::copy_nonoverlapping(
-                        timer.msg_buf.ptr,
-                        buf.add(TAG_HEADER_SIZE),
-                        timer.msg_len,
-                    );
-                    buf
-                };
-                let envelope = Envelope::new(buf, total);
-                let idx = (timer.target_pid - 1) as usize;
-                if guard.deliverable(idx) {
-                    guard.processes[idx].mailbox.push_back(envelope);
-                    if guard.processes[idx].state == ProcessState::Blocked {
-                        guard.processes[idx].transition(ProcessState::Runnable);
-                    }
-                } else {
-                    // Target vanished or died between scheduling and firing;
-                    // don't push onto a dead mailbox or leak the buffer.
-                    drop(envelope);
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        let found = guard.processes.iter().position(|p| {
-            !p.on_cpu && (p.state == ProcessState::Created || p.state == ProcessState::Runnable)
-        });
-
-        if let Some(i) = found {
-            guard.processes[i].on_cpu = true;
-            guard.processes[i].transition(ProcessState::Running);
-            let pid = guard.processes[i].id;
-            let proc_sp = guard.processes[i].sp;
-            let proc_fiber = guard.processes[i].tsan_fiber;
+        if let Some((pid, proc_sp, proc_fiber)) = guard.claim_next() {
             drop(guard);
 
             CURRENT_PID.with(|c| c.set(pid));
@@ -632,23 +513,12 @@ fn worker_loop() {
 
             let saved_sp = unsafe { *yield_sp_ptr };
             let mut guard = SCHED.lock().unwrap();
-            let idx = (pid - 1) as usize;
-            // A process that just ran its final switch-out is now `Dead`.
-            // Detach its stack + init_state here (under the lock) so the
-            // unmap/dealloc can run after the lock is dropped. Safe: the
-            // process already switched off its own stack to get here.
-            let mut reclaim = None;
-            if idx < guard.processes.len() {
-                guard.processes[idx].sp = saved_sp;
-                guard.processes[idx].on_cpu = false;
-                if guard.processes[idx].state == ProcessState::Dead {
-                    reclaim = Some(guard.processes[idx].take_resources());
-                    guard.cancel_timers_for(pid);
-                }
-            }
+            // Persist the saved `sp`, release the `on_cpu` claim, and reclaim
+            // the slot if the process died. Detaching resources here (under
+            // the lock) lets the unmap/dealloc run after the lock is dropped.
+            let reclaim = guard.after_switch(pid, saved_sp);
 
-            let shutdown =
-                !guard.processes.is_empty() && guard.processes[0].state == ProcessState::Dead;
+            let shutdown = guard.should_shutdown();
             if shutdown {
                 SHUTDOWN.store(true, Ordering::Relaxed);
             }
@@ -657,60 +527,47 @@ fn worker_loop() {
             if shutdown {
                 WORK_AVAILABLE.notify_all();
             }
-            if let Some(reclaim) = reclaim {
-                drop(reclaim);
-            }
+            drop(reclaim);
             if shutdown {
                 break;
             }
             continue;
         }
 
-        if !guard.processes.is_empty() && guard.processes[0].state == ProcessState::Dead {
+        if guard.should_shutdown() {
             SHUTDOWN.store(true, Ordering::Relaxed);
             drop(guard);
             WORK_AVAILABLE.notify_all();
             break;
         }
 
-        let any_alive = guard
-            .processes
-            .iter()
-            .any(|p| p.state != ProcessState::Dead);
-        if !any_alive {
-            SHUTDOWN.store(true, Ordering::Relaxed);
-            drop(guard);
-            WORK_AVAILABLE.notify_all();
-            break;
-        }
-
-        let any_active = guard
-            .processes
-            .iter()
-            .any(|p| p.state == ProcessState::Running || p.state == ProcessState::WaitingIo);
-
-        let nearest_deadline = guard
-            .processes
-            .iter()
-            .filter(|p| p.state == ProcessState::Blocked)
-            .filter_map(|p| p.deadline)
-            .min();
-        let nearest_timer = guard.timers.iter().map(|t| t.fire_at).min();
-        let nearest = match (nearest_deadline, nearest_timer) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-
-        let timeout = if any_active {
-            nearest
-                .map(|dl| dl.saturating_duration_since(now))
-                .unwrap_or(Duration::from_millis(10))
-        } else {
-            nearest
-                .map(|dl| dl.saturating_duration_since(now))
-                .unwrap_or(Duration::from_millis(100))
-        };
+        let any_active = guard.any_active();
+        let nearest = guard.nearest_wakeup();
+        let idle_park = Duration::from_millis(if any_active { 10 } else { 100 });
+        let timeout = nearest
+            .map(|dl| dl.saturating_duration_since(now))
+            .unwrap_or(idle_park);
         let _ = WORK_AVAILABLE.wait_timeout(guard, timeout);
+    }
+}
+
+/// Delivers every timer due at `now`. Each fired timer's staged payload is
+/// copied into a fresh envelope and handed to the target; an undeliverable
+/// timer (target gone or dead) drops its envelope. Dropping each drained
+/// [`TimerEntry`] frees its staging buffer.
+fn fire_due_timers(table: &mut ProcessTable, now: Instant) {
+    for entry in table.take_due_timers(now) {
+        let total = TAG_HEADER_SIZE + entry.msg_len;
+        let buf = unsafe {
+            let buf = memory::alloc(total);
+            ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
+            ptr::copy_nonoverlapping(entry.msg.ptr, buf.add(TAG_HEADER_SIZE), entry.msg_len);
+            buf
+        };
+        let envelope = Envelope::new(buf, total);
+        if let Some(envelope) = table.deliver_back(entry.target_pid, envelope) {
+            drop(envelope);
+        }
     }
 }
 
@@ -789,15 +646,15 @@ fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
-    let idx = (pid - 1) as usize;
 
     {
         let mut guard = SCHED.lock().unwrap();
-        if let Some(envelope) = guard.processes[idx].mailbox.pop_front() {
+        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_front());
+        if let Some(envelope) = popped {
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        guard.processes[idx].transition(ProcessState::Blocked);
+        guard.transition(pid, ProcessState::Blocked);
     }
 
     tsan::switch_to_scheduler();
@@ -809,7 +666,7 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
 
     let envelope = {
         let mut guard = SCHED.lock().unwrap();
-        guard.processes[idx].mailbox.pop_front()
+        guard.get_mut(pid).and_then(|p| p.mailbox.pop_front())
     };
     envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
@@ -821,17 +678,20 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
-    let idx = (pid - 1) as usize;
 
     {
         let mut guard = SCHED.lock().unwrap();
-        if let Some(envelope) = guard.processes[idx].mailbox.pop_front() {
+        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_front());
+        if let Some(envelope) = popped {
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        guard.processes[idx].transition(ProcessState::Blocked);
-        guard.processes[idx].deadline =
-            Some(Instant::now() + Duration::from_millis(timeout_ms as u64));
+        guard.transition(pid, ProcessState::Blocked);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        if let Some(p) = guard.get_mut(pid) {
+            p.deadline = Some(deadline);
+        }
+        guard.push_deadline(pid, deadline);
     }
 
     tsan::switch_to_scheduler();
@@ -843,8 +703,10 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
 
     let envelope = {
         let mut guard = SCHED.lock().unwrap();
-        guard.processes[idx].deadline = None;
-        guard.processes[idx].mailbox.pop_front()
+        guard.get_mut(pid).and_then(|p| {
+            p.deadline = None;
+            p.mailbox.pop_front()
+        })
     };
     envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
@@ -880,14 +742,9 @@ pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
     let envelope = Envelope::new(buf, total);
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        if !guard.deliverable(idx) {
+        if let Some(envelope) = guard.deliver_back(pid, envelope) {
             drop(envelope);
             return;
-        }
-        guard.processes[idx].mailbox.push_back(envelope);
-        if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].transition(ProcessState::Runnable);
         }
     }
 
@@ -923,14 +780,9 @@ pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
     let envelope = Envelope::new(buf, IO_READY_BUF_SIZE);
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        if !guard.deliverable(idx) {
+        if let Some(envelope) = guard.deliver_back(pid, envelope) {
             drop(envelope);
             return;
-        }
-        guard.processes[idx].mailbox.push_back(envelope);
-        if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].transition(ProcessState::Runnable);
         }
     }
 
@@ -961,12 +813,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
 
     {
         let mut guard = SCHED.lock().unwrap();
-        guard.timers.push(Timer {
-            fire_at,
-            target_pid: pid,
-            msg_buf: OwnedBuf::new(msg_copy),
-            msg_len: len,
-        });
+        guard.push_timer(fire_at, pid, OwnedBuf::new(msg_copy), len);
     }
 
     WORK_AVAILABLE.notify_one();
@@ -977,14 +824,9 @@ pub unsafe extern "C" fn koja_rt_send_after(
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
     let guard = SCHED.lock().unwrap();
-    let idx = (pid - 1) as usize;
-    if idx >= guard.processes.len() {
-        return 0;
-    }
-    if guard.processes[idx].state == ProcessState::Dead {
-        0
-    } else {
-        1
+    match guard.get(pid) {
+        Some(process) if process.state != ProcessState::Dead => 1,
+        _ => 0,
     }
 }
 
@@ -1002,23 +844,19 @@ pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
 pub extern "C" fn koja_rt_kill(pid: i64) {
     let reclaim = {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        if idx >= guard.processes.len() {
-            return;
+        match guard.get(pid) {
+            Some(process) if process.state != ProcessState::Dead => {}
+            _ => return,
         }
-        if guard.processes[idx].state == ProcessState::Dead {
-            return;
-        }
-        guard.processes[idx].transition(ProcessState::Dead);
-        guard.cancel_timers_for(pid);
+        guard.transition(pid, ProcessState::Dead);
         // Reclaiming a stack a worker is still running on would be a
         // use-after-free; in that case let the owning worker reclaim on
         // switch-out (it sees `Dead` after persisting `sp`). The mailbox
         // rides along so its envelopes are freed exactly once.
-        if guard.processes[idx].on_cpu {
+        if guard.get(pid).is_some_and(|process| process.on_cpu) {
             None
         } else {
-            Some(guard.processes[idx].take_resources())
+            guard.free(pid)
         }
     };
     if let Some(reclaim) = reclaim {
@@ -1059,21 +897,7 @@ pub unsafe extern "C" fn koja_rt_spawn(
 
     let id = {
         let mut guard = SCHED.lock().unwrap();
-        let id = guard.next_id;
-        guard.next_id += 1;
-        guard.processes.push(Process {
-            deadline: None,
-            func: fn_ptr,
-            id,
-            init_state: OwnedBuf::new(heap_state),
-            mailbox: VecDeque::new(),
-            on_cpu: false,
-            sp,
-            stack,
-            state: ProcessState::Created,
-            tsan_fiber: tsan::create_process_fiber(),
-        });
-        id
+        guard.spawn(fn_ptr, OwnedBuf::new(heap_state), stack, sp)
     };
 
     WORK_AVAILABLE.notify_one();

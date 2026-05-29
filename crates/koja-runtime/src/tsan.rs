@@ -13,10 +13,16 @@
 //!
 //! Usage from the scheduler:
 //! - [`capture_scheduler_fiber`] once at the top of each worker loop;
-//! - [`create_process_fiber`] when spawning a process, stored on it;
+//! - [`create_process_fiber`] once per process-table slot, reused across slot
+//!   reuse (see [`crate::process_table`]);
 //! - [`switch_to_process`] right before context-switching into a process;
-//! - [`switch_to_scheduler`] right before a process yields back;
-//! - [`destroy`] when a dead process's resources are reclaimed.
+//! - [`switch_to_scheduler`] right before a process yields back.
+//!
+//! Fibers are bound to slots, not individual processes, and are never
+//! destroyed: TSan's fiber machinery caps total fibers ever created, so a
+//! spawn-and-die workload that recycled a fiber per process would exhaust the
+//! pool. Reusing a slot's fiber across its successive (strictly sequential)
+//! occupants keeps the live fiber count at the peak concurrency instead.
 
 use std::cell::Cell;
 use std::ffi::c_void;
@@ -49,14 +55,9 @@ pub(crate) fn capture_scheduler_fiber() {
     SCHED_FIBER.with(|c| c.set(imp::current_fiber()));
 }
 
-/// Creates a fresh fiber modelling a newly spawned process's stack.
+/// Creates a fresh fiber modelling a process-table slot's stack.
 pub(crate) fn create_process_fiber() -> Fiber {
     imp::create_fiber()
-}
-
-/// Tears down a dead process's fiber. A no-op on a null handle.
-pub(crate) fn destroy(fiber: Fiber) {
-    imp::destroy(fiber);
 }
 
 /// Announces a switch into `fiber`, immediately before a worker
@@ -78,7 +79,6 @@ mod imp {
 
     unsafe extern "C" {
         fn __tsan_create_fiber(flags: u32) -> *mut c_void;
-        fn __tsan_destroy_fiber(fiber: *mut c_void);
         fn __tsan_get_current_fiber() -> *mut c_void;
         fn __tsan_switch_to_fiber(fiber: *mut c_void, flags: u32);
     }
@@ -89,12 +89,6 @@ mod imp {
 
     pub(super) fn current_fiber() -> Fiber {
         Fiber(unsafe { __tsan_get_current_fiber() })
-    }
-
-    pub(super) fn destroy(fiber: Fiber) {
-        if !fiber.0.is_null() {
-            unsafe { __tsan_destroy_fiber(fiber.0) };
-        }
     }
 
     pub(super) fn switch_to(fiber: Fiber) {
@@ -115,9 +109,6 @@ mod imp {
     pub(super) fn current_fiber() -> Fiber {
         Fiber::null()
     }
-
-    #[inline(always)]
-    pub(super) fn destroy(_fiber: Fiber) {}
 
     #[inline(always)]
     pub(super) fn switch_to(_fiber: Fiber) {}

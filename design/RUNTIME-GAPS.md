@@ -106,6 +106,38 @@ slot is never removed** — nothing ever pops `processes`. Consequences:
 Removes the unbounded growth, the O(N) scans, the scattered indexing,
 and the keyspace collision in #7 — all at once.
 
+**Status: done.** [`process_table.rs`](koja/crates/koja-runtime/src/process_table.rs)
+implements `ProcessTable`: a generational slotmap (PID packs
+`(generation << 32) | index`, generation starting at 1), a single
+bounds- and generation-checked `get`/`get_mut`, a `ready` `VecDeque`,
+and timer + deadline `BinaryHeap` min-heaps. All ~14 PID sites in
+`scheduler.rs`/`reactor.rs` route through `get`/`get_mut`/`transition`
+(the `pid - 1` indexing and the #6 index-panic surface are gone), the
+`transition` chokepoint moved here so it maintains the ready queue and
+O(1) `alive`/`active` counts, and `worker_loop` now pops `next_runnable`
++ due timers/deadlines instead of the ~6 linear scans. Slots are freed
+and recycled on death (bounded growth), with the generation bump making
+a stale `Ref` to a recycled slot report `ProcessDown` (preserved, now
+reuse-safe). Timer cancellation is lazy (validated on fire). Verified by
+`process_table.rs` unit tests, the spawn-and-die churn phase in
+[scheduler_stress.rs](koja/crates/koja-runtime/tests/scheduler_stress.rs),
+the full lang + stdlib suites, and `just tsan`.
+
+- **#7 de-risked.** Live packed PIDs are `>= 2^32`, far above the
+  reactor's `WATCH_KEY_OFFSET = 1_000_000`, so the keyspace collision is
+  practically unreachable in the interim. The typed-`EventKey` fix (#7)
+  is left as a separate follow-up.
+- **TSan + churn caveat.** Concurrent, rapid TSan fiber *reuse* across
+  worker threads trips TSan's own cooperative-fiber bookkeeping (a
+  non-deterministic SEGV inside `__tsan_func_entry`, not a race in our
+  code — same asm-context-switch fragility as #4). `just tsan` therefore
+  runs the heavy ping-pong concurrency soak with churn disabled
+  (`KOJA_STRESS_WAVES=0`); the wide spawn-and-die reuse churn is exercised
+  for correctness under the normal debug build instead. To keep TSan's
+  fiber count bounded, fibers are now bound to slots (created once per
+  slot, reused across occupants) rather than created/destroyed per
+  process — see [tsan.rs](koja/crates/koja-runtime/src/tsan.rs).
+
 #### PID design: generational index (Erlang-style), not a monotonic counter
 
 The current scheme is monotonic `i64` with `idx = pid - 1` as a direct

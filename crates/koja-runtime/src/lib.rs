@@ -12,6 +12,7 @@ mod fs;
 mod intrinsics;
 mod memory;
 mod panic;
+mod process_table;
 mod reactor;
 mod scheduler;
 mod socket;
