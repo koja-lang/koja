@@ -22,9 +22,9 @@ use polling::{Event, Events, PollMode, Poller};
 
 use crate::ffi::{EAGAIN, get_errno, koja_context_switch};
 use crate::scheduler::{
-    CURRENT_PID, IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE, ProcessState, SCHED, SCHED_SP,
-    SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
+    CURRENT_PID, ProcessState, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
 };
+use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
 /// Whether the reactor should wake for readable or writable readiness.
 #[derive(Clone, Copy)]
@@ -161,11 +161,11 @@ pub fn reactor_loop() {
                     io_events.push((owner_pid, variant, fd as i64));
                 } else {
                     let pid = ev.key as i64;
-                    let idx = (pid - 1) as usize;
-                    if idx < sched_guard.processes.len()
-                        && sched_guard.processes[idx].state == ProcessState::WaitingIo
+                    if sched_guard
+                        .get(pid)
+                        .is_some_and(|process| process.state == ProcessState::WaitingIo)
                     {
-                        sched_guard.processes[idx].state = ProcessState::Runnable;
+                        sched_guard.transition(pid, ProcessState::Runnable);
                     }
                 }
             }
@@ -242,17 +242,15 @@ pub(crate) fn release_fd(fd: i32) {
 /// parks forever. Reverse order means at worst a spurious resume.
 pub fn io_block(fd: i32, interest: Interest) {
     let pid = CURRENT_PID.with(|c| c.get());
-    let idx = (pid - 1) as usize;
 
     {
         let mut guard = SCHED.lock().unwrap();
-        if idx < guard.processes.len() {
-            guard.processes[idx].state = ProcessState::WaitingIo;
-        }
+        guard.transition(pid, ProcessState::WaitingIo);
     }
 
     register(fd, interest, pid);
 
+    crate::tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {

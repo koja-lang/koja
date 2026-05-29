@@ -8,34 +8,21 @@
 use std::alloc;
 use std::cell::{Cell, UnsafeCell};
 use std::collections::VecDeque;
+use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
-
-// ---------------------------------------------------------------------------
-// Mailbox tag and IOReady layout constants
-// ---------------------------------------------------------------------------
-
-#[allow(dead_code)]
-pub(crate) const TAG_BUSINESS: u8 = 0;
-pub(crate) const TAG_LIFECYCLE: u8 = 1;
-pub(crate) const TAG_IO_READY: u8 = 2;
-
-pub(crate) const TAG_HEADER_SIZE: usize = 8;
-
-pub(crate) const LIFECYCLE_BUF_SIZE: usize = 16;
-
-pub(crate) const IO_READY_BUF_SIZE: usize = 24;
-pub(crate) const IO_READY_VARIANT_OFFSET: usize = 8;
-pub(crate) const IO_READY_FD_OFFSET: usize = 16;
-
-pub(crate) const IO_READY_READ: u8 = 0;
-pub(crate) const IO_READY_WRITE: u8 = 1;
-pub(crate) const IO_READY_ERROR: u8 = 2;
+use crate::memory;
+use crate::process_table::ProcessTable;
+use crate::tsan;
+use crate::wire::{
+    Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
+    TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE,
+};
 
 // ---------------------------------------------------------------------------
 // Signal handling state
@@ -59,7 +46,7 @@ extern "C" fn handle_sighup(_sig: libc::c_int) {
 
 fn install_signals() {
     unsafe {
-        let mut sa: libc::sigaction = std::mem::zeroed();
+        let mut sa: libc::sigaction = mem::zeroed();
         sa.sa_flags = 0;
         libc::sigemptyset(&mut sa.sa_mask);
 
@@ -74,7 +61,7 @@ fn install_signals() {
 
         // Unblock these signals in case the parent process (e.g. cargo test
         // linking LLVM) inherited a mask that blocks them.
-        let mut unblock: libc::sigset_t = std::mem::zeroed();
+        let mut unblock: libc::sigset_t = mem::zeroed();
         libc::sigemptyset(&mut unblock);
         libc::sigaddset(&mut unblock, libc::SIGTERM);
         libc::sigaddset(&mut unblock, libc::SIGINT);
@@ -83,18 +70,27 @@ fn install_signals() {
     }
 }
 
-/// Checks atomic signal flags and injects lifecycle messages into PID 1's
-/// mailbox. Called from the worker loop. Lifecycle variant indices match
-/// the `Lifecycle` enum declaration order: Shutdown=0, Interrupt=1, Reload=2.
+/// Checks atomic signal flags and injects lifecycle messages into the main
+/// process's mailbox. Called from the worker loop. Lifecycle variant indices
+/// match the `Lifecycle` enum declaration order: Shutdown=0, Interrupt=1,
+/// Reload=2. Only takes the lock when a signal actually fired.
 fn poll_signals() {
-    if GOT_SIGTERM.swap(false, Ordering::Relaxed) {
-        send_lifecycle_to(1, 0);
+    let term = GOT_SIGTERM.swap(false, Ordering::Relaxed);
+    let int = GOT_SIGINT.swap(false, Ordering::Relaxed);
+    let hup = GOT_SIGHUP.swap(false, Ordering::Relaxed);
+    if !(term || int || hup) {
+        return;
     }
-    if GOT_SIGINT.swap(false, Ordering::Relaxed) {
-        send_lifecycle_to(1, 1);
+
+    let main_pid = SCHED.lock().unwrap().main_pid();
+    if term {
+        send_lifecycle_to(main_pid, 0);
     }
-    if GOT_SIGHUP.swap(false, Ordering::Relaxed) {
-        send_lifecycle_to(1, 2);
+    if int {
+        send_lifecycle_to(main_pid, 1);
+    }
+    if hup {
+        send_lifecycle_to(main_pid, 2);
     }
 }
 
@@ -102,23 +98,19 @@ fn poll_signals() {
 /// pushes it to the front of the target process's mailbox.
 fn send_lifecycle_to(pid: i64, variant: i64) {
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(LIFECYCLE_BUF_SIZE, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(LIFECYCLE_BUF_SIZE);
         ptr::write_bytes(buf, 0, LIFECYCLE_BUF_SIZE);
         *buf = TAG_LIFECYCLE;
         *buf.add(TAG_HEADER_SIZE) = variant as u8;
         buf
     };
 
+    let envelope = Envelope::new(buf, LIFECYCLE_BUF_SIZE);
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        if idx >= guard.processes.len() {
+        if let Some(envelope) = guard.deliver_front(pid, envelope) {
+            drop(envelope);
             return;
-        }
-        guard.processes[idx].mailbox.push_front(buf);
-        if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].state = ProcessState::Runnable;
         }
     }
 
@@ -127,7 +119,7 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
 
 const STACK_SIZE: usize = 512 * 1024;
 
-type ProcessFn = extern "C" fn(*const u8);
+pub(crate) type ProcessFn = extern "C" fn(*const u8);
 
 // ---------------------------------------------------------------------------
 // Platform-specific initial-frame layout constants
@@ -149,7 +141,7 @@ const RET_ADDR_OFFSET: usize = 48;
 // Process & scheduler state
 // ---------------------------------------------------------------------------
 
-#[derive(PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum ProcessState {
     /// Newly spawned, not yet entered by any worker.
     Created,
@@ -167,24 +159,92 @@ pub(crate) enum ProcessState {
     Dead,
 }
 
+/// An owned byte buffer from the allocator funnel ([`memory::alloc`]),
+/// freed on drop. Wraps the scheduler's hand-managed heap runs — a
+/// process's initial state and a pending timer's staged message bytes —
+/// so they reclaim by RAII rather than a matching manual free on every
+/// path.
+///
+/// The empty value (`Default`) is null and drops as a no-op, so it also
+/// serves as the placeholder left behind when ownership is moved out
+/// via [`mem::take`].
+pub(crate) struct OwnedBuf {
+    ptr: *mut u8,
+}
+
+impl OwnedBuf {
+    /// Wraps an allocation from [`memory::alloc`], or null for empty.
+    pub(crate) fn new(ptr: *mut u8) -> Self {
+        Self { ptr }
+    }
+}
+
+impl Default for OwnedBuf {
+    fn default() -> Self {
+        Self {
+            ptr: ptr::null_mut(),
+        }
+    }
+}
+
+impl Drop for OwnedBuf {
+    fn drop(&mut self) {
+        unsafe { memory::free(self.ptr) };
+    }
+}
+
+/// An `mmap`-backed process stack: a `PROT_NONE` guard page at the
+/// lowest address (the growth end, since stacks grow down) followed by
+/// the usable region. Held on each [`Process`] so the mapping is
+/// `munmap`ped on drop when the process's resources are reclaimed.
+pub(crate) struct ProcessStack {
+    /// Base of the whole mapping (start of the guard page).
+    base: *mut u8,
+    /// Total mapped bytes: guard page + usable stack.
+    size: usize,
+}
+
+impl ProcessStack {
+    /// The empty placeholder left behind when a stack's ownership is
+    /// moved out (see [`Process::take_resources`]). A null base drops as
+    /// a no-op.
+    pub(crate) const fn null() -> Self {
+        Self {
+            base: ptr::null_mut(),
+            size: 0,
+        }
+    }
+}
+
+impl Drop for ProcessStack {
+    fn drop(&mut self) {
+        if self.base.is_null() {
+            return;
+        }
+        unsafe {
+            libc::munmap(self.base as *mut libc::c_void, self.size);
+        }
+    }
+}
+
 /// A single lightweight Koja process.
 ///
 /// Each process has its own stack, a FIFO mailbox of raw message buffers,
-/// and a state machine driven by the scheduler. PIDs start at 1 and map
-/// to `Vec` indices as `pid - 1`.
+/// and a state machine driven by the scheduler. Processes live in a
+/// generational slotmap ([`ProcessTable`]); a PID packs the slot index and
+/// generation rather than being a bare `Vec` offset.
 pub(crate) struct Process {
     /// Optional receive timeout. Set by `koja_rt_receive_timeout`, cleared
     /// on resume. The worker loop promotes `Blocked → Runnable` when the
     /// deadline passes.
-    deadline: Option<Instant>,
+    pub(crate) deadline: Option<Instant>,
     /// The compiled Koja function to call when first entering this process.
     func: ProcessFn,
-    /// Unique process identifier. PIDs start at 1; index is `id - 1`.
-    id: i64,
-    /// Heap-allocated initial state passed to `func` on first entry.
-    init_state: *mut u8,
-    /// FIFO queue of heap-allocated message buffers delivered via `send`.
-    mailbox: VecDeque<*mut u8>,
+    /// Heap-allocated initial state passed to `func` on first entry,
+    /// owned by the process and freed when its resources are reclaimed.
+    init_state: OwnedBuf,
+    /// FIFO queue of message envelopes delivered via `send`.
+    pub(crate) mailbox: VecDeque<Envelope>,
     /// Claim flag: `true` from the moment a worker switches into this
     /// process until that same worker has persisted the post-yield `sp`.
     ///
@@ -195,10 +255,12 @@ pub(crate) struct Process {
     /// frame. Gating pickup on `!on_cpu` keeps any other worker from
     /// resuming that stale frame until the owning worker writes the
     /// correct `sp` and clears the flag.
-    on_cpu: bool,
+    pub(crate) on_cpu: bool,
     /// Saved stack pointer. Written by `koja_context_switch` when the
     /// process yields, read when a worker resumes it.
-    sp: *mut u8,
+    pub(crate) sp: *mut u8,
+    /// The process's `mmap`-backed stack, unmapped when the process dies.
+    stack: ProcessStack,
     /// Current lifecycle state, driven by the scheduler and runtime intrinsics.
     pub(crate) state: ProcessState,
 }
@@ -207,43 +269,71 @@ pub(crate) struct Process {
 /// thread-affine, so cross-thread transfer is safe.
 unsafe impl Send for Process {}
 
-/// A pending delayed message, delivered when `fire_at` has elapsed.
-struct Timer {
-    fire_at: Instant,
-    target_pid: i64,
-    msg_buf: *mut u8,
-    msg_len: usize,
-}
+impl Process {
+    /// Builds a freshly spawned process in the `Created` state. Called by
+    /// [`ProcessTable::spawn`], which owns the slot/PID assignment.
+    pub(crate) fn new(
+        func: ProcessFn,
+        init_state: OwnedBuf,
+        stack: ProcessStack,
+        sp: *mut u8,
+    ) -> Self {
+        Process {
+            deadline: None,
+            func,
+            init_state,
+            mailbox: VecDeque::new(),
+            on_cpu: false,
+            sp,
+            stack,
+            state: ProcessState::Created,
+        }
+    }
 
-unsafe impl Send for Timer {}
+    /// The entry function and its heap-allocated initial state, read by
+    /// [`process_trampoline`] on first entry.
+    pub(crate) fn entry(&self) -> (ProcessFn, *const u8) {
+        (self.func, self.init_state.ptr)
+    }
 
-/// Shared scheduler state protected by [`SCHED`].
-///
-/// All process metadata lives here. Workers lock the Mutex briefly to
-/// find/claim a runnable process or update state, then release before
-/// performing any context switch.
-pub(crate) struct Scheduler {
-    /// Monotonically increasing PID counter. Next spawned process gets this ID.
-    next_id: i64,
-    /// All known processes, indexed by `pid - 1`.
-    pub(crate) processes: Vec<Process>,
-    /// Pending timers created by `send_after`. Drained by the worker loop.
-    timers: Vec<Timer>,
-}
-
-impl Scheduler {
-    const fn new() -> Self {
-        Scheduler {
-            next_id: 1,
-            processes: Vec::new(),
-            timers: Vec::new(),
+    /// Moves a dead process's reclaimable resources out of its slot,
+    /// leaving empty/null placeholders so the actual frees happen when
+    /// the returned [`Reclaim`] is dropped — after the `SCHED` lock is
+    /// released. Idempotent: a second call returns an empty `Reclaim`
+    /// (already-empty owners drop as no-ops), so a kill racing the
+    /// worker loop reclaims at most once.
+    pub(crate) fn take_resources(&mut self) -> Reclaim {
+        Reclaim {
+            init_state: mem::take(&mut self.init_state),
+            mailbox: mem::take(&mut self.mailbox),
+            stack: mem::replace(&mut self.stack, ProcessStack::null()),
         }
     }
 }
 
+/// Resources moved out of a dead process, freed when this value is
+/// dropped — which the reclaim sites do only after the `SCHED` lock is
+/// released. Produced by [`Process::take_resources`]. Each field is an
+/// RAII owner, so dropping a `Reclaim` drains the mailbox (running each
+/// envelope's drop glue), unmaps the stack, and frees `init_state`; an
+/// already-reclaimed `Reclaim` holds empty owners and drops as a no-op.
+///
+/// The fields are never read by name — they exist purely so their own
+/// `Drop` runs at this controlled point — hence `allow(dead_code)`.
+#[allow(dead_code)]
+pub(crate) struct Reclaim {
+    init_state: OwnedBuf,
+    mailbox: VecDeque<Envelope>,
+    stack: ProcessStack,
+}
+
+/// Reclaim owns heap detached from a [`Process`]; freeing it off the
+/// scheduler thread is sound.
+unsafe impl Send for Reclaim {}
+
 /// Global scheduler state. Workers hold this lock briefly to find or
 /// update processes; the lock is always released before context-switching.
-pub(crate) static SCHED: Mutex<Scheduler> = Mutex::new(Scheduler::new());
+pub(crate) static SCHED: Mutex<ProcessTable> = Mutex::new(ProcessTable::new());
 
 /// Condvar paired with [`SCHED`]. Workers park here when idle.
 /// Woken by `koja_rt_send`, `koja_rt_spawn`, the reactor, and on shutdown.
@@ -296,10 +386,8 @@ unsafe fn init_process_stack(stack_top: *mut u8, entry: unsafe extern "C" fn()) 
 unsafe extern "C" fn process_trampoline() {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    let (func, init_state) = {
-        let guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        (guard.processes[idx].func, guard.processes[idx].init_state)
+    let Some((func, init_state)) = SCHED.lock().unwrap().get(pid).map(Process::entry) else {
+        return;
     };
 
     unsafe {
@@ -309,12 +397,12 @@ unsafe extern "C" fn process_trampoline() {
 
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        guard.processes[idx].state = ProcessState::Dead;
+        guard.transition(pid, ProcessState::Dead);
     }
 
     WORK_AVAILABLE.notify_all();
 
+    tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {
@@ -322,20 +410,43 @@ unsafe extern "C" fn process_trampoline() {
     }
 }
 
-/// Heap-allocates a [`STACK_SIZE`] byte stack (16-byte aligned) and
-/// initialises it so the first context switch lands in
-/// [`process_trampoline`].
-fn allocate_process_stack() -> *mut u8 {
-    unsafe {
-        let layout = alloc::Layout::from_size_align(STACK_SIZE, 16).unwrap();
-        let base = alloc::alloc(layout);
-        if base.is_null() {
-            alloc::handle_alloc_error(layout);
-        }
-        let stack_top = base.add(STACK_SIZE);
-        let stack_top = ((stack_top as usize) & !15) as *mut u8;
-        init_process_stack(stack_top, process_trampoline)
+/// Maps a fresh [`STACK_SIZE`] process stack with a `PROT_NONE` guard
+/// page at the growth (low-address) end and initialises it so the first
+/// context switch lands in [`process_trampoline`]. Returns the mapping
+/// handle (a [`ProcessStack`] that `munmap`s itself on drop) plus the
+/// initial stack pointer. Aborts on mapping failure, matching the old
+/// allocator.
+fn allocate_process_stack() -> (ProcessStack, *mut u8) {
+    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) } as usize;
+    let size = page + STACK_SIZE;
+    let oom = || alloc::handle_alloc_error(alloc::Layout::from_size_align(size, page).unwrap());
+
+    let base = unsafe {
+        libc::mmap(
+            ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANON,
+            -1,
+            0,
+        )
+    };
+    if base == libc::MAP_FAILED {
+        oom();
     }
+
+    // Guard the lowest page: a downward-growing stack that overruns its
+    // usable region faults here instead of corrupting adjacent memory.
+    if unsafe { libc::mprotect(base, page, libc::PROT_NONE) } != 0 {
+        unsafe { libc::munmap(base, size) };
+        oom();
+    }
+
+    let base = base as *mut u8;
+    // `mmap` returns page-aligned memory, so `base + size` is 16-aligned.
+    let stack_top = unsafe { base.add(size) };
+    let sp = unsafe { init_process_stack(stack_top, process_trampoline) };
+    (ProcessStack { base, size }, sp)
 }
 
 /// Determines how many worker threads to run.
@@ -376,6 +487,7 @@ fn worker_count() -> usize {
 fn worker_loop() {
     let sched_sp_ptr = SCHED_SP.with(|c| c.get());
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
+    tsan::capture_scheduler_fiber();
 
     loop {
         if SHUTDOWN.load(Ordering::Relaxed) {
@@ -387,129 +499,93 @@ fn worker_loop() {
         let mut guard = SCHED.lock().unwrap();
 
         let now = Instant::now();
-        for proc in guard.processes.iter_mut() {
-            if proc.state == ProcessState::Blocked && proc.deadline.is_some_and(|dl| now >= dl) {
-                proc.state = ProcessState::Runnable;
-            }
-        }
+        guard.promote_due_deadlines(now);
+        fire_due_timers(&mut guard, now);
 
-        let mut i = 0;
-        while i < guard.timers.len() {
-            if now >= guard.timers[i].fire_at {
-                let timer = guard.timers.swap_remove(i);
-                let total = TAG_HEADER_SIZE + timer.msg_len;
-                let buf = unsafe {
-                    let layout = alloc::Layout::from_size_align(total, 8).unwrap();
-                    let buf = alloc::alloc(layout);
-                    ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
-                    ptr::copy_nonoverlapping(
-                        timer.msg_buf,
-                        buf.add(TAG_HEADER_SIZE),
-                        timer.msg_len,
-                    );
-                    alloc::dealloc(
-                        timer.msg_buf,
-                        alloc::Layout::from_size_align(timer.msg_len, 8).unwrap(),
-                    );
-                    buf
-                };
-                let idx = (timer.target_pid - 1) as usize;
-                if idx < guard.processes.len() {
-                    guard.processes[idx].mailbox.push_back(buf);
-                    if guard.processes[idx].state == ProcessState::Blocked {
-                        guard.processes[idx].state = ProcessState::Runnable;
-                    }
-                }
-            } else {
-                i += 1;
-            }
-        }
-
-        let found = guard.processes.iter().position(|p| {
-            !p.on_cpu && (p.state == ProcessState::Created || p.state == ProcessState::Runnable)
-        });
-
-        if let Some(i) = found {
-            guard.processes[i].on_cpu = true;
-            guard.processes[i].state = ProcessState::Running;
-            let pid = guard.processes[i].id;
-            let proc_sp = guard.processes[i].sp;
+        if let Some((pid, proc_sp, proc_fiber)) = guard.claim_next() {
             drop(guard);
 
             CURRENT_PID.with(|c| c.set(pid));
+            tsan::switch_to_process(proc_fiber);
             unsafe {
                 koja_context_switch(sched_sp_ptr, proc_sp);
             }
 
             let saved_sp = unsafe { *yield_sp_ptr };
             let mut guard = SCHED.lock().unwrap();
-            let idx = (pid - 1) as usize;
-            if idx < guard.processes.len() {
-                guard.processes[idx].sp = saved_sp;
-                guard.processes[idx].on_cpu = false;
-            }
+            // Persist the saved `sp`, release the `on_cpu` claim, and reclaim
+            // the slot if the process died. Detaching resources here (under
+            // the lock) lets the unmap/dealloc run after the lock is dropped.
+            let reclaim = guard.after_switch(pid, saved_sp);
 
-            if !guard.processes.is_empty() && guard.processes[0].state == ProcessState::Dead {
+            let shutdown = guard.should_shutdown();
+            if shutdown {
                 SHUTDOWN.store(true, Ordering::Relaxed);
-                drop(guard);
-                WORK_AVAILABLE.notify_all();
-                break;
             }
             drop(guard);
+
+            if shutdown {
+                WORK_AVAILABLE.notify_all();
+            }
+            drop(reclaim);
+            if shutdown {
+                break;
+            }
             continue;
         }
 
-        if !guard.processes.is_empty() && guard.processes[0].state == ProcessState::Dead {
+        if guard.should_shutdown() {
             SHUTDOWN.store(true, Ordering::Relaxed);
             drop(guard);
             WORK_AVAILABLE.notify_all();
             break;
         }
 
-        let any_alive = guard
-            .processes
-            .iter()
-            .any(|p| p.state != ProcessState::Dead);
-        if !any_alive {
-            SHUTDOWN.store(true, Ordering::Relaxed);
-            drop(guard);
-            WORK_AVAILABLE.notify_all();
-            break;
-        }
-
-        let any_active = guard
-            .processes
-            .iter()
-            .any(|p| p.state == ProcessState::Running || p.state == ProcessState::WaitingIo);
-
-        let nearest_deadline = guard
-            .processes
-            .iter()
-            .filter(|p| p.state == ProcessState::Blocked)
-            .filter_map(|p| p.deadline)
-            .min();
-        let nearest_timer = guard.timers.iter().map(|t| t.fire_at).min();
-        let nearest = match (nearest_deadline, nearest_timer) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        };
-
-        let timeout = if any_active {
-            nearest
-                .map(|dl| dl.saturating_duration_since(now))
-                .unwrap_or(Duration::from_millis(10))
-        } else {
-            nearest
-                .map(|dl| dl.saturating_duration_since(now))
-                .unwrap_or(Duration::from_millis(100))
-        };
+        let any_active = guard.any_active();
+        let nearest = guard.nearest_wakeup();
+        let idle_park = Duration::from_millis(if any_active { 10 } else { 100 });
+        let timeout = nearest
+            .map(|dl| dl.saturating_duration_since(now))
+            .unwrap_or(idle_park);
         let _ = WORK_AVAILABLE.wait_timeout(guard, timeout);
+    }
+}
+
+/// Delivers every timer due at `now`. Each fired timer's staged payload is
+/// copied into a fresh envelope and handed to the target; an undeliverable
+/// timer (target gone or dead) drops its envelope. Dropping each drained
+/// [`TimerEntry`] frees its staging buffer.
+fn fire_due_timers(table: &mut ProcessTable, now: Instant) {
+    for entry in table.take_due_timers(now) {
+        let total = TAG_HEADER_SIZE + entry.msg_len;
+        let buf = unsafe {
+            let buf = memory::alloc(total);
+            ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
+            ptr::copy_nonoverlapping(entry.msg.ptr, buf.add(TAG_HEADER_SIZE), entry.msg_len);
+            buf
+        };
+        let envelope = Envelope::new(buf, total);
+        if let Some(envelope) = table.deliver_back(entry.target_pid, envelope) {
+            drop(envelope);
+        }
     }
 }
 
 // ---------------------------------------------------------------------------
 // Runtime intrinsics (C ABI)
 // ---------------------------------------------------------------------------
+
+static RUNTIME_INIT: Once = Once::new();
+
+/// One-time process-global runtime initialization. Installs the panic hook
+/// that converts any Rust panic — on any thread, before unwinding — into a
+/// clean diagnostic abort, so a panic can never unwind across the C-ABI or
+/// poison the scheduler lock. Called at the head of every runtime entry
+/// point (`koja_rt_spawn` is the first one a program reaches), so the hook
+/// is live before any worker thread is spawned or any `SCHED` lock is taken.
+fn ensure_runtime_init() {
+    RUNTIME_INIT.call_once(crate::panic::install_panic_hook);
+}
 
 /// Called by the compiled Koja program after `main` returns.
 ///
@@ -519,6 +595,8 @@ fn worker_loop() {
 /// until the main process (PID 1) dies and [`SHUTDOWN`] is set.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_main_done() {
+    ensure_runtime_init();
+
     // Force line-buffered stdout so output is visible immediately even
     // when stdout is a pipe (e.g. when spawned by a test harness).
     unsafe {
@@ -557,68 +635,94 @@ pub extern "C" fn koja_rt_main_done() {
     }
 }
 
-/// Blocking receive. Returns the first message in the current
-/// process's mailbox, or context-switches back to the scheduler
-/// (marking the process `Blocked`) until a message arrives.
+/// Hands a delivered envelope to the receiving frame: copies its
+/// payload into `out`, frees the transport buffer, and returns the
+/// wire tag. The copy is clamped to `min(payload, out_cap)` so an
+/// oversized payload region can't overflow the receiver's slot and an
+/// oversized slot can't over-read the buffer. The nested Koja heap the
+/// payload may reference now belongs to the receiver, so this frees
+/// only the transport buffer (never `drop_glue`).
+fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
+    let tag = unsafe { *envelope.buffer } as i64;
+    let copy_len = (envelope.length - TAG_HEADER_SIZE).min(out_cap.max(0) as usize);
+    unsafe {
+        ptr::copy_nonoverlapping(envelope.buffer.add(TAG_HEADER_SIZE), out, copy_len);
+    }
+    envelope.free_transport();
+    tag
+}
+
+/// Blocking receive. Copies the next message's payload into `out` (at
+/// most `out_cap` bytes), frees the transport buffer, and returns its
+/// wire tag; context-switches back to the scheduler (marking the
+/// process `Blocked`) until a message arrives. Returns `-1` only if
+/// woken with an empty mailbox.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_rt_receive() -> *const u8 {
+pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
-    let idx = (pid - 1) as usize;
 
     {
         let mut guard = SCHED.lock().unwrap();
-        if let Some(msg) = guard.processes[idx].mailbox.pop_front() {
-            return msg as *const u8;
+        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_front());
+        if let Some(envelope) = popped {
+            drop(guard);
+            return deliver_envelope(envelope, out, out_cap);
         }
-        guard.processes[idx].state = ProcessState::Blocked;
+        guard.transition(pid, ProcessState::Blocked);
     }
 
+    tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {
         koja_context_switch(yield_sp_ptr, sched_sp);
     }
 
-    let mut guard = SCHED.lock().unwrap();
-    guard.processes[idx]
-        .mailbox
-        .pop_front()
-        .map(|p| p as *const u8)
-        .unwrap_or(ptr::null())
+    let envelope = {
+        let mut guard = SCHED.lock().unwrap();
+        guard.get_mut(pid).and_then(|p| p.mailbox.pop_front())
+    };
+    envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
 
 /// Receive with a timeout. Like [`koja_rt_receive`] but sets a
 /// deadline `timeout_ms` milliseconds in the future. If no message
 /// arrives before the deadline, the worker loop promotes the process
-/// back to `Runnable` and this returns null.
+/// back to `Runnable` and this returns `-1`.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
+pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
-    let idx = (pid - 1) as usize;
 
     {
         let mut guard = SCHED.lock().unwrap();
-        if let Some(msg) = guard.processes[idx].mailbox.pop_front() {
-            return msg as *const u8;
+        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_front());
+        if let Some(envelope) = popped {
+            drop(guard);
+            return deliver_envelope(envelope, out, out_cap);
         }
-        guard.processes[idx].state = ProcessState::Blocked;
-        guard.processes[idx].deadline =
-            Some(Instant::now() + Duration::from_millis(timeout_ms as u64));
+        guard.transition(pid, ProcessState::Blocked);
+        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        if let Some(p) = guard.get_mut(pid) {
+            p.deadline = Some(deadline);
+        }
+        guard.push_deadline(pid, deadline);
     }
 
+    tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {
         koja_context_switch(yield_sp_ptr, sched_sp);
     }
 
-    let mut guard = SCHED.lock().unwrap();
-    guard.processes[idx].deadline = None;
-    guard.processes[idx]
-        .mailbox
-        .pop_front()
-        .map(|p| p as *const u8)
-        .unwrap_or(ptr::null())
+    let envelope = {
+        let mut guard = SCHED.lock().unwrap();
+        guard.get_mut(pid).and_then(|p| {
+            p.deadline = None;
+            p.mailbox.pop_front()
+        })
+    };
+    envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
 
 /// Returns the PID of the currently executing process on this worker
@@ -643,22 +747,18 @@ pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
     let len = msg_len as usize;
     let total = TAG_HEADER_SIZE + len;
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(total, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(total);
         ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
         ptr::copy_nonoverlapping(msg_ptr, buf.add(TAG_HEADER_SIZE), len);
         buf
     };
 
+    let envelope = Envelope::new(buf, total);
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        if idx >= guard.processes.len() {
+        if let Some(envelope) = guard.deliver_back(pid, envelope) {
+            drop(envelope);
             return;
-        }
-        guard.processes[idx].mailbox.push_back(buf);
-        if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].state = ProcessState::Runnable;
         }
     }
 
@@ -683,8 +783,7 @@ pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
 /// mailbox via `push_back`.
 pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
     let buf = unsafe {
-        let layout = alloc::Layout::from_size_align(IO_READY_BUF_SIZE, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(IO_READY_BUF_SIZE);
         ptr::write_bytes(buf, 0, IO_READY_BUF_SIZE);
         *buf = TAG_IO_READY;
         *buf.add(IO_READY_VARIANT_OFFSET) = variant;
@@ -692,15 +791,12 @@ pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
         buf
     };
 
+    let envelope = Envelope::new(buf, IO_READY_BUF_SIZE);
     {
         let mut guard = SCHED.lock().unwrap();
-        let idx = (pid - 1) as usize;
-        if idx >= guard.processes.len() {
+        if let Some(envelope) = guard.deliver_back(pid, envelope) {
+            drop(envelope);
             return;
-        }
-        guard.processes[idx].mailbox.push_back(buf);
-        if guard.processes[idx].state == ProcessState::Blocked {
-            guard.processes[idx].state = ProcessState::Runnable;
         }
     }
 
@@ -722,8 +818,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
 ) {
     let len = msg_len as usize;
     let msg_copy = unsafe {
-        let layout = alloc::Layout::from_size_align(len, 8).unwrap();
-        let buf = alloc::alloc(layout);
+        let buf = memory::alloc(len);
         ptr::copy_nonoverlapping(msg_ptr, buf, len);
         buf
     };
@@ -732,12 +827,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
 
     {
         let mut guard = SCHED.lock().unwrap();
-        guard.timers.push(Timer {
-            fire_at,
-            target_pid: pid,
-            msg_buf: msg_copy,
-            msg_len: len,
-        });
+        guard.push_timer(fire_at, pid, OwnedBuf::new(msg_copy), len);
     }
 
     WORK_AVAILABLE.notify_one();
@@ -748,33 +838,44 @@ pub unsafe extern "C" fn koja_rt_send_after(
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
     let guard = SCHED.lock().unwrap();
-    let idx = (pid - 1) as usize;
-    if idx >= guard.processes.len() {
-        return 0;
-    }
-    if guard.processes[idx].state == ProcessState::Dead {
-        0
-    } else {
-        1
+    match guard.get(pid) {
+        Some(process) if process.state != ProcessState::Dead => 1,
+        _ => 0,
     }
 }
 
-/// Immediately marks a process as `Dead`. Its mailbox is drained and
-/// its stack is deallocated. No signal is sent -- the process gets no
-/// chance to run cleanup. This is the "last resort" termination primitive.
+/// Immediately marks a process as `Dead`, reclaiming its stack and
+/// initial state. No signal is sent -- the process gets no chance to run
+/// cleanup. This is the "last resort" termination primitive.
+///
+/// If the target is currently executing on another worker (`on_cpu`),
+/// all of its resources -- stack, initial state, and any undelivered
+/// mailbox envelopes -- are reclaimed by that worker when it switches
+/// out; otherwise they are freed here. Nested heap inside a discarded
+/// payload is not yet freed (it waits on the deferred drop-glue work;
+/// see the message/envelope-lifecycle design).
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_kill(pid: i64) {
-    let mut guard = SCHED.lock().unwrap();
-    let idx = (pid - 1) as usize;
-    if idx >= guard.processes.len() {
-        return;
+    let reclaim = {
+        let mut guard = SCHED.lock().unwrap();
+        match guard.get(pid) {
+            Some(process) if process.state != ProcessState::Dead => {}
+            _ => return,
+        }
+        guard.transition(pid, ProcessState::Dead);
+        // Reclaiming a stack a worker is still running on would be a
+        // use-after-free; in that case let the owning worker reclaim on
+        // switch-out (it sees `Dead` after persisting `sp`). The mailbox
+        // rides along so its envelopes are freed exactly once.
+        if guard.get(pid).is_some_and(|process| process.on_cpu) {
+            None
+        } else {
+            guard.free(pid)
+        }
+    };
+    if let Some(reclaim) = reclaim {
+        drop(reclaim);
     }
-    let proc = &mut guard.processes[idx];
-    if proc.state == ProcessState::Dead {
-        return;
-    }
-    proc.state = ProcessState::Dead;
-    proc.mailbox.clear();
 }
 
 /// Spawns a new lightweight process that will call `fn_ptr(state)`.
@@ -791,35 +892,28 @@ pub unsafe extern "C" fn koja_rt_spawn(
     state_ptr: *const u8,
     state_len: i64,
 ) -> i64 {
-    let heap_state = if state_len > 0 && !state_ptr.is_null() {
-        let len = state_len as usize;
+    ensure_runtime_init();
+
+    let heap_state_len = if state_len > 0 && !state_ptr.is_null() {
+        state_len as usize
+    } else {
+        0
+    };
+    let heap_state = if heap_state_len > 0 {
         unsafe {
-            let layout = alloc::Layout::from_size_align(len, 8).unwrap();
-            let buf = alloc::alloc(layout);
-            ptr::copy_nonoverlapping(state_ptr, buf, len);
+            let buf = memory::alloc(heap_state_len);
+            ptr::copy_nonoverlapping(state_ptr, buf, heap_state_len);
             buf
         }
     } else {
         ptr::null_mut()
     };
 
-    let sp = allocate_process_stack();
+    let (stack, sp) = allocate_process_stack();
 
     let id = {
         let mut guard = SCHED.lock().unwrap();
-        let id = guard.next_id;
-        guard.next_id += 1;
-        guard.processes.push(Process {
-            deadline: None,
-            func: fn_ptr,
-            id,
-            init_state: heap_state,
-            mailbox: VecDeque::new(),
-            on_cpu: false,
-            sp,
-            state: ProcessState::Created,
-        });
-        id
+        guard.spawn(fn_ptr, OwnedBuf::new(heap_state), stack, sp)
     };
 
     WORK_AVAILABLE.notify_one();

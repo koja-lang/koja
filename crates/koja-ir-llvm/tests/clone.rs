@@ -3,7 +3,7 @@
 //!
 //! - each of the three `@intrinsic` impls lands as a `define ptr
 //!   @"Global.<Type>.clone"(ptr ...)` whose body allocates fresh
-//!   storage via `@malloc`, copies the header + payload via the
+//!   storage via `@koja_alloc`, copies the header + payload via the
 //!   `@memcpy` extern, and returns the new payload pointer;
 //! - `String.clone` writes a trailing NUL (a separate `store i8 0`
 //!   past the payload), `Binary.clone` and `Bits.clone` do not;
@@ -36,14 +36,14 @@ fn string_clone_emits_malloc_memcpy_and_trailing_nul() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
     assert_contains(&ir_text, "declare ptr @memcpy(ptr, ptr, i64)");
     assert_contains(&ir_text, "define ptr @Global.String.clone(ptr");
 
     let body = extract_function_body(&ir_text, "Global.String.clone");
     assert!(
-        body.contains("call ptr @malloc("),
-        "String.clone body must call malloc; got:\n{body}",
+        body.contains("call ptr @koja_alloc("),
+        "String.clone body must call koja_alloc; got:\n{body}",
     );
     assert!(
         body.contains("call ptr @memcpy("),
@@ -74,8 +74,8 @@ fn binary_clone_emits_malloc_memcpy_and_no_nul() {
 
     let body = extract_function_body(&ir_text, "Global.Binary.clone");
     assert!(
-        body.contains("call ptr @malloc("),
-        "Binary.clone body must call malloc; got:\n{body}",
+        body.contains("call ptr @koja_alloc("),
+        "Binary.clone body must call koja_alloc; got:\n{body}",
     );
     assert!(
         body.contains("call ptr @memcpy("),
@@ -106,8 +106,8 @@ fn bits_clone_emits_ceil_byte_count_and_no_nul() {
 
     let body = extract_function_body(&ir_text, "Global.Bits.clone");
     assert!(
-        body.contains("call ptr @malloc("),
-        "Bits.clone body must call malloc; got:\n{body}",
+        body.contains("call ptr @koja_alloc("),
+        "Bits.clone body must call koja_alloc; got:\n{body}",
     );
     assert!(
         body.contains("call ptr @memcpy("),

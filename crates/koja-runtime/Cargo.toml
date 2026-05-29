@@ -8,6 +8,11 @@ version.workspace = true
 [lib]
 crate-type = ["rlib", "staticlib"]
 
+[lints.rust]
+# `koja_tsan` gates the ThreadSanitizer fiber annotations in the scheduler;
+# it is set only by the `just tsan` recipe (see justfile).
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(koja_tsan)'] }
+
 [dependencies]
 backtrace = "0.3"
 libc = "0.2"

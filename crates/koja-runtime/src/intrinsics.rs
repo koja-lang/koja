@@ -16,6 +16,8 @@
 
 use std::io::{self, Write};
 
+use crate::memory;
+
 /// Borrows the bytes of a heap-emitted Koja string/`Binary` body.
 /// Reads the `i64` bit-length from the 8-byte header at `payload - 8`
 /// and returns a slice over the corresponding byte count.
@@ -56,10 +58,7 @@ pub unsafe extern "C" fn __koja_concat_bits(lhs: *const u8, rhs: *const u8) -> *
     let total_bytes = total_bits.div_ceil(8) as usize;
     let block_size = 8 + total_bytes;
 
-    let block = unsafe { libc::malloc(block_size) } as *mut u8;
-    if block.is_null() {
-        std::process::abort();
-    }
+    let block = memory::alloc(block_size);
     unsafe {
         *(block.cast::<i64>()) = total_bits as i64;
     }

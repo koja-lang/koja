@@ -12,9 +12,10 @@ use std::ptr;
 use crate::ffi::{
     AF_INET, Addrinfo, EAGAIN, EINPROGRESS, SO_ERROR, SO_REUSEADDR, SOL_SOCKET, SockaddrIn,
     get_errno, libc_accept, libc_bind, libc_connect, libc_freeaddrinfo, libc_getaddrinfo,
-    libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket, malloc,
+    libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket,
     set_nonblocking,
 };
+use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
 use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_binary, set_last_error};
 
@@ -176,7 +177,7 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
 
     let data_len = n as usize;
     let str_alloc = STRING_HEADER_SIZE + data_len + 1;
-    let str_base = unsafe { malloc(str_alloc) };
+    let str_base = memory::alloc(str_alloc);
     unsafe {
         *(str_base as *mut i64) = (data_len as i64) * BITS_PER_BYTE as i64;
         let str_payload = str_base.add(STRING_HEADER_SIZE);
@@ -188,7 +189,7 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
         let sender_port = u16::from_be(sender_addr.sin_port) as i64;
 
         let result_size = 3 * mem::size_of::<*mut u8>();
-        let result = malloc(result_size);
+        let result = memory::alloc(result_size);
         *(result as *mut *mut u8) = str_payload;
         *((result as *mut *mut u8).add(1)) = ip_bin;
         *((result as *mut i64).add(2)) = sender_port;
@@ -239,7 +240,7 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
     }
 
     let buf_size = 8 + addrs.len() * mem::size_of::<*mut u8>();
-    let buf = unsafe { malloc(buf_size) };
+    let buf = memory::alloc(buf_size);
     unsafe {
         *(buf as *mut i64) = addrs.len() as i64;
         let ptrs = buf.add(8) as *mut *mut u8;

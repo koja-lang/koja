@@ -89,7 +89,6 @@ unsafe extern "C" {
 
     pub fn fflush(stream: *mut u8) -> i32;
     pub fn setvbuf(stream: *mut u8, buf: *mut u8, mode: i32, size: usize) -> i32;
-    pub fn malloc(size: usize) -> *mut u8;
 
     #[link_name = "accept"]
     pub fn libc_accept(fd: i32, addr: *mut u8, addrlen: *mut u32) -> i32;

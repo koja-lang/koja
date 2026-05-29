@@ -140,7 +140,7 @@ fn binary_match_greedy_tail_emits_malloc_and_memcpy() {
     assert_contains(&ir_text, "tail_alloc_size");
     assert_contains(&ir_text, "tail_payload");
     assert_contains(&ir_text, "tail_cpy");
-    assert_contains(&ir_text, "declare ptr @malloc(i64)");
+    assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
 }
 
 #[test]

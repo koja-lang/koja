@@ -44,8 +44,20 @@ const COLORS_ON: Colors = Colors {
 const COLORS_OFF: Colors = Colors { red: "", reset: "" };
 
 // ---------------------------------------------------------------------------
-// Panic entry point
+// Panic entry points
 // ---------------------------------------------------------------------------
+
+/// Distinguishes a user-level Koja panic (`panic()`, `unwrap` on `None`)
+/// from an internal runtime panic surfaced via the global hook. The origin
+/// selects both the leading tag and the backtrace frame-filter policy: user
+/// panics hide runtime/stdlib frames to show only user code, while runtime
+/// panics keep `koja_rt_*` / `koja_runtime::` frames since those are exactly
+/// the ones worth seeing.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PanicOrigin {
+    User,
+    Runtime,
+}
 
 /// Entry point called from compiled Koja code on panic. Prints the panic
 /// message and a filtered backtrace to stderr, then aborts the process.
@@ -54,7 +66,7 @@ const COLORS_OFF: Colors = Colors { red: "", reset: "" };
 ///
 /// `msg` must be a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) {
+pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) -> ! {
     let message = if msg.is_null() {
         "unknown panic".to_string()
     } else {
@@ -63,12 +75,54 @@ pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) {
             .into_owned()
     };
 
+    abort_with_diagnostic(PanicOrigin::User, &message);
+}
+
+/// Installs a process-global panic hook that routes every Rust panic — on
+/// any thread, from any site (`unwrap`, `expect`, `assert!`, allocation
+/// failure, a poisoned `SCHED` lock) — through the same diagnostic-and-abort
+/// path as user panics. The hook runs before unwinding with the stack
+/// intact, so the backtrace is faithful and no unwind ever crosses the
+/// C-ABI or poisons a lock (the first panic aborts immediately, so the
+/// worker-cascade failure mode cannot happen).
+pub(crate) fn install_panic_hook() {
+    std::panic::set_hook(Box::new(|info| {
+        let payload = info.payload();
+        let message = payload
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_string())
+            .or_else(|| payload.downcast_ref::<String>().cloned())
+            .unwrap_or_else(|| "unknown panic".to_string());
+
+        let message = match info.location() {
+            Some(loc) => format!(
+                "{message} (at {}:{}:{})",
+                loc.file(),
+                loc.line(),
+                loc.column()
+            ),
+            None => message,
+        };
+
+        abort_with_diagnostic(PanicOrigin::Runtime, &message);
+    }));
+}
+
+/// Prints `message` and a filtered backtrace to stderr in the Elixir-style
+/// koja format, then aborts the process. Captures the backtrace at the call
+/// site, so callers must invoke it with the panicking stack still live.
+pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
     let c = if use_color() { &COLORS_ON } else { &COLORS_OFF };
 
     let app = app_name();
 
+    let tag = match origin {
+        PanicOrigin::Runtime => "runtime panic",
+        PanicOrigin::User => "panic",
+    };
+
     eprint!("{}", c.red);
-    eprintln!("** (panic) {message}");
+    eprintln!("** ({tag}) {message}");
 
     let cwd = std::env::current_dir().ok();
 
@@ -86,7 +140,7 @@ pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) {
                 .map(|n| n.to_string())
                 .unwrap_or_else(|| "<unknown>".to_string());
 
-            if should_skip_frame(&name) {
+            if should_skip_frame(&name, origin) {
                 return;
             }
 
@@ -115,7 +169,7 @@ pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) {
         eprintln!("    <no frames available — was the binary compiled with debug info?>");
     }
 
-    if let Some(hint) = hint_for_panic(&message) {
+    if let Some(hint) = hint_for_panic(message) {
         eprintln!();
         eprintln!("    hint: {hint}");
     }
@@ -130,8 +184,21 @@ pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) {
 // Frame filtering
 // ---------------------------------------------------------------------------
 
-fn should_skip_frame(name: &str) -> bool {
+fn should_skip_frame(name: &str, origin: PanicOrigin) -> bool {
     if name == "__koja_user_main" || name == "main" {
+        return false;
+    }
+
+    // The panic machinery itself is never interesting in a backtrace.
+    if name.starts_with("koja_runtime::panic::") {
+        return true;
+    }
+
+    // Internal runtime panics keep the runtime frames — they are the stack
+    // worth seeing. User panics hide them to surface only user Koja code.
+    if origin == PanicOrigin::Runtime
+        && (name.starts_with("koja_rt_") || name.starts_with("koja_runtime::"))
+    {
         return false;
     }
 
@@ -140,6 +207,7 @@ fn should_skip_frame(name: &str) -> bool {
         || name.starts_with("koja_runtime::")
         || name.starts_with("std::")
         || name.starts_with("core::")
+        || name.contains("core::ops::function::")
         || name.starts_with("backtrace::")
         || name.starts_with("__")
         || name.starts_with("_start")
@@ -257,4 +325,43 @@ fn hint_for_panic(msg: &str) -> Option<&'static str> {
         return Some("use .unwrap_or(default) or pattern match to handle the error");
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn runtime_panics_keep_runtime_frames_user_panics_hide_them() {
+        // Runtime frames are the stack worth seeing for an internal panic,
+        // but noise for a user panic.
+        for frame in ["koja_rt_send", "koja_runtime::scheduler::worker_loop"] {
+            assert!(should_skip_frame(frame, PanicOrigin::User), "{frame}");
+            assert!(!should_skip_frame(frame, PanicOrigin::Runtime), "{frame}");
+        }
+    }
+
+    #[test]
+    fn std_and_panic_plumbing_is_dropped_regardless_of_origin() {
+        for origin in [PanicOrigin::User, PanicOrigin::Runtime] {
+            for frame in [
+                "std::rt::lang_start",
+                "core::panicking::panic",
+                "backtrace::backtrace::trace",
+                "koja_panic_backtrace",
+                "koja_runtime::panic::abort_with_diagnostic",
+                "__rust_try",
+            ] {
+                assert!(should_skip_frame(frame, origin), "{frame}");
+            }
+        }
+    }
+
+    #[test]
+    fn user_code_frames_are_always_kept() {
+        for origin in [PanicOrigin::User, PanicOrigin::Runtime] {
+            assert!(!should_skip_frame("__koja_user_main", origin));
+            assert!(!should_skip_frame("greet", origin));
+        }
+    }
 }
