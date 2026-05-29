@@ -1,5 +1,6 @@
 //! String and binary manipulation runtime functions.
 
+use std::borrow::Cow;
 use std::ffi::{CStr, c_char};
 use std::ptr;
 use std::slice;
@@ -7,14 +8,17 @@ use std::str;
 
 use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_koja_string};
 
-/// Decodes a NUL-terminated C string pointer into `&str`. Panics on
-/// invalid UTF-8; every Koja `String` is valid UTF-8 by construction.
+/// Decodes a NUL-terminated C string pointer into a string. Every Koja
+/// `String` is valid UTF-8 by construction, so the borrowed path is taken
+/// for all well-formed input; the lossy fallback exists only so malformed
+/// bytes degrade to replacement characters instead of panicking across the
+/// C-ABI.
 ///
 /// # Safety
 /// `ptr` must point to a valid NUL-terminated string.
-unsafe fn cstr_str<'a>(ptr: *const u8) -> &'a str {
+unsafe fn cstr_str<'a>(ptr: *const u8) -> Cow<'a, str> {
     let cstr = unsafe { CStr::from_ptr(ptr as *const c_char) };
-    str::from_utf8(cstr.to_bytes()).unwrap()
+    String::from_utf8_lossy(cstr.to_bytes())
 }
 
 /// Attempts to parse a NUL-terminated string as a 64-bit float.

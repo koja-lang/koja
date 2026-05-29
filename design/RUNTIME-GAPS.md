@@ -57,6 +57,18 @@ becomes a thing you opt into and can grep for, rather than the default
 failure mode. This single inversion would have made phases 3–5 largely
 unnecessary.
 
+**Status: done.** `OwnedBuf` and `ProcessStack` (`scheduler.rs`),
+`Reclaim` (its fields are RAII owners), and `Envelope`
+(`Drop` + `free_transport(self)` defuse in `wire.rs`) all reclaim by
+drop now. `Timer.msg_buf`'s hand-free is gone — the timer payload is an
+`OwnedBuf` on the table's heap entry, freed on drop (lazy cancellation,
+no second free site). The remaining hand-free is the deliberate
+ownership transfer on delivered receive (`free_transport` consumes the
+`Envelope`; nested heap moves to the receiver). Note the one leak still
+open is _nested_ heap inside discarded payloads — that's the recursive
+drop-glue subsystem (`MESSAGE-LIFECYCLE.md` phase 6), not a missing
+`Drop`.
+
 ### 2. Two allocators for the same logical types
 
 **Severity: high. Bug class: undefined behavior; blocks phase 6.**
@@ -80,6 +92,16 @@ is `std::alloc`'d.
 **Fix.** Pick one allocator (the global one) for all Koja heap. Funnel
 String/Binary/Bits allocation through a single `alloc`/`free` pair so
 drop glue can be written once and can't cross allocators.
+
+**Status: done.** [`memory.rs`](koja/crates/koja-runtime/src/memory.rs)
+is the single funnel: codegen calls `koja_alloc`/`koja_realloc`/
+`koja_free`, runtime Rust calls the `pub(crate)` `alloc`/`realloc`/
+`free` helpers, and both bottom out in one libc `malloc`/`free` pair. A
+documented passthrough invariant keeps it interop-safe for
+`CPtr`/`CString` and user `extern fn malloc/free`. Frees are sizeless
+(matching codegen's `free(payload - 8)`), so drop glue can free a
+message's nested heap without ever crossing allocators — unblocking
+phase 6.
 
 ### 3. `processes: Vec<Process>` never shrinks; `pid - 1` indexing is scattered
 
@@ -115,19 +137,20 @@ and timer + deadline `BinaryHeap` min-heaps. All ~14 PID sites in
 (the `pid - 1` indexing and the #6 index-panic surface are gone), the
 `transition` chokepoint moved here so it maintains the ready queue and
 O(1) `alive`/`active` counts, and `worker_loop` now pops `next_runnable`
-+ due timers/deadlines instead of the ~6 linear scans. Slots are freed
-and recycled on death (bounded growth), with the generation bump making
-a stale `Ref` to a recycled slot report `ProcessDown` (preserved, now
-reuse-safe). Timer cancellation is lazy (validated on fire). Verified by
-`process_table.rs` unit tests, the spawn-and-die churn phase in
-[scheduler_stress.rs](koja/crates/koja-runtime/tests/scheduler_stress.rs),
-the full lang + stdlib suites, and `just tsan`.
 
-- **#7 de-risked.** Live packed PIDs are `>= 2^32`, far above the
+- due timers/deadlines instead of the ~6 linear scans. Slots are freed
+  and recycled on death (bounded growth), with the generation bump making
+  a stale `Ref` to a recycled slot report `ProcessDown` (preserved, now
+  reuse-safe). Timer cancellation is lazy (validated on fire). Verified by
+  `process_table.rs` unit tests, the spawn-and-die churn phase in
+  [scheduler_stress.rs](koja/crates/koja-runtime/tests/scheduler_stress.rs),
+  the full lang + stdlib suites, and `just tsan`.
+
+* **#7 de-risked.** Live packed PIDs are `>= 2^32`, far above the
   reactor's `WATCH_KEY_OFFSET = 1_000_000`, so the keyspace collision is
   practically unreachable in the interim. The typed-`EventKey` fix (#7)
   is left as a separate follow-up.
-- **TSan + churn caveat.** Concurrent, rapid TSan fiber *reuse* across
+* **TSan + churn caveat.** Concurrent, rapid TSan fiber _reuse_ across
   worker threads trips TSan's own cooperative-fiber bookkeeping (a
   non-deterministic SEGV inside `__tsan_func_entry`, not a race in our
   code — same asm-context-switch fragility as #4). `just tsan` therefore
@@ -150,7 +173,7 @@ The catch: **slot reuse and generations are the same decision.** The
 moment the table reuses a slot to bound memory, a monotonic/plain index
 reintroduces an ABA hazard — a new process inheriting a dead one's slot,
 so an old `Ref` misdelivers to the wrong process. Erlang's pids avoid
-exactly this. Despite *looking* random in the shell (`<0.123.0>`), an
+exactly this. Despite _looking_ random in the shell (`<0.123.0>`), an
 Erlang pid is a structured opaque handle `{node, index, serial,
 creation}`; the `serial`/`creation` are the generation counters that
 make reuse safe. The substantive properties we want are **opacity** (a
@@ -182,10 +205,10 @@ This is essentially what modern ERTS does, minus distribution.
 
 **Optional "random-looking" PIDs** (only if desired):
 
-- *Cosmetic:* XOR / lightweight-encrypt the packed `(index | generation)`
+- _Cosmetic:_ XOR / lightweight-encrypt the packed `(index | generation)`
   with a per-runtime-instance random key on the way out and reverse it on
   the way in. PIDs look random; decode stays O(1); ABI stays `i64`.
-- *Unguessable:* generate a 63-bit random PID with a
+- _Unguessable:_ generate a 63-bit random PID with a
   `HashMap<Pid, slot>`. Adds genuine unforgeability (relevant only if
   PIDs ever cross a trust boundary, e.g. distributed Koja over a wire),
   at the cost of trading the array index for a hash lookup plus
@@ -203,7 +226,7 @@ Two correctness invariants are correct-by-comment only:
 - The `on_cpu` flag + "publish `Blocked` before the context switch saves
   `sp`" dance (`Process` doc in `scheduler.rs`). A pickup that ignores
   `on_cpu` resumes a stale frame.
-- `io_block` **must** set `WaitingIo` *before* `register` — otherwise the
+- `io_block` **must** set `WaitingIo` _before_ `register` — otherwise the
   reactor's `state == WaitingIo` wake guard drops the event and the
   process parks forever (`reactor.rs`).
 
@@ -211,6 +234,7 @@ These can't be checked by the compiler and aren't exercised by any type.
 The nondeterministic SIGBUS in tight `call` loops most likely lives here.
 
 **Fix (cheapest first).**
+
 1. Funnel every state change through a single
    `transition(pid, from, to)` method with `debug_assert!` on illegal
    edges.
@@ -221,14 +245,14 @@ The nondeterministic SIGBUS in tight `call` loops most likely lives here.
 
 **Status (steps 1-2 done).**
 
-- *Transition guards (step 1).* Every `ProcessState` write now goes
+- _Transition guards (step 1)._ Every `ProcessState` write now goes
   through `Process::transition`, which `debug_assert!`s the edge against
   `is_legal_transition` (`scheduler.rs`). All 12 audited sites in
   `scheduler.rs` / `reactor.rs` were routed through it; the existing
   per-site preconditions mean no legal edge is a self-edge. The full lang
   suite and stdlib tests run with the guards active (debug runtime) and
   stay silent.
-- *ThreadSanitizer (step 2).* A multi-worker stress harness lives at
+- _ThreadSanitizer (step 2)._ A multi-worker stress harness lives at
   `crates/koja-runtime/tests/scheduler_stress.rs`: a controller process
   ping-pongs one-byte messages with N children for R rounds, driving the
   context switch and mailbox handoff across real worker threads. Run it
@@ -245,7 +269,7 @@ The nondeterministic SIGBUS in tight `call` loops most likely lives here.
   place a 16-child / 2000-round soak (~32k cross-worker handoffs) reports
   **no data races**.
 
-- *Remaining (step 3).* The TSan harness only exercises the
+- _Remaining (step 3)._ The TSan harness only exercises the
   spawn/send/receive path; it does not yet cover `kill`, timers, or I/O
   readiness, and TSan still cannot see the asm stack swap itself (only the
   Rust state around it). `loom` remains the path to exhaustive
@@ -286,6 +310,30 @@ diagnostic + `process::abort`) instead of unwinding, or return error
 sentinels. Consider `catch_unwind` shims at the ABI edge for defense in
 depth.
 
+**Status: done.** A process-global panic hook
+([`panic::install_panic_hook`](koja/crates/koja-runtime/src/panic.rs))
+now routes every Rust panic — on any thread, from any site — through the
+same diagnostic-and-abort path as user panics. It runs _before_
+unwinding with the stack intact, so the backtrace is faithful and no
+unwind ever reaches a C-ABI frame or poisons `SCHED`: the first panic
+aborts immediately, which also kills the old worker-cascade failure
+mode (one worker panicking, poisoning the lock, and the rest dying on
+`SCHED.lock().unwrap()`). The hook is installed exactly once via a
+`std::sync::Once` (`ensure_runtime_init`) at the head of `koja_rt_spawn`
+and `koja_rt_main_done` — `koja_rt_spawn` is the first runtime call a
+program makes, so the hook is live before any worker thread or lock
+exists. The shared `abort_with_diagnostic(origin, msg)` takes a
+`PanicOrigin` so runtime panics keep `koja_rt_*` / `koja_runtime::`
+frames (the stack worth seeing) while user panics still surface only
+user code. Targeted source fixes: `fill_random` retries `EINTR` instead
+of asserting on the first hiccup, and `cstr_str` decodes with
+`from_utf8_lossy` (no panic on malformed bytes). Remaining
+`expect`/`debug_assert`/`Layout` sites stay as invariants — they now
+abort cleanly with a diagnostic via the hook. Per-entry `catch_unwind`
+shims were intentionally skipped: the global hook covers every site at
+zero per-call cost, so the shims would add boilerplate without
+additional safety.
+
 ### 7. Two keyspaces multiplexed into one integer, with a reachable collision
 
 **Severity: medium. Bug class: misrouted I/O events.**
@@ -325,29 +373,33 @@ have the resumed process re-check its mailbox before re-blocking on I/O.
 
 ---
 
-## If we only do three things
+## The big four (done)
 
-1. **RAII the resources** (`Drop` + explicit `into_raw` for the one
-   transfer). Kills the leak-on-every-path family outright — the family
-   `MESSAGE-LIFECYCLE.md` phases 1–5 fixed by hand. (Entry #1.)
-2. **One allocator for all Koja heap.** Removes the cross-allocator UB
-   hazard and unblocks phase 6's drop glue. (Entry #2.)
-3. **A `ProcessTable` abstraction** (generational PIDs + ready queue +
-   timer heap + bounds-checked accessor). Removes unbounded growth, the
-   O(N) scans, scattered `pid - 1` indexing, and the keyspace collision
-   in one move. (Entries #3, #7.)
+The four highest-leverage fixes have all landed:
 
-Orthogonally and cheaply: **turn on ThreadSanitizer in CI.** Highest
-leverage for the race class specifically — it converts "SIGBUS in the
-field at random N" into "CI failure with a data-race report." (Entry
-#4.)
+1. **RAII the resources** — `Drop` everywhere + `free_transport` defuse
+   for the delivered-receive transfer. (Entry #1.) ✅
+2. **One allocator for all Koja heap** — the `memory.rs` funnel; removes
+   the cross-allocator UB hazard and unblocks phase 6. (Entry #2.) ✅
+3. **A `ProcessTable` abstraction** — generational PIDs + ready queue +
+   timer/deadline heaps + bounds-checked accessor. Removes unbounded
+   growth, the O(N) scans, scattered `pid - 1` indexing, and de-risks the
+   keyspace collision. (Entries #3, #7.) ✅
+4. **ThreadSanitizer + transition guards** — every state change funnels
+   through `ProcessTable::transition` with a `debug_assert!` edge check,
+   and `just tsan` runs a fiber-annotated race soak. (Entry #4; `loom`
+   remains as step 3.) ✅
 
-## Suggested sequencing
+## What's left for soft launch
 
-- #1 (RAII) is the most self-contained and a clean first follow-up.
-- #2 (single allocator) is a prerequisite for `MESSAGE-LIFECYCLE.md`
-  phase 6 (recursive drop glue); do it before that effort.
-- #3 (`ProcessTable`) is the largest blast radius — plan-mode it; it
-  subsumes #7 and removes the index-panic surface in #6.
-- #4 (TSan/transition guards) can land independently at any time and
-  should, to characterize the existing race.
+- **Recursive drop glue** (`MESSAGE-LIFECYCLE.md` phase 6) — the
+  largest remaining correctness gap, now unblocked by #2. Nested heap
+  inside discarded structs/enums leaks language-wide. Its own effort.
+- **#5 (reactor strands a worker)** and **#9 (messages don't wake
+  `WaitingIo`)** — liveness / shutdown semantics.
+- Deferred: **#7** (typed `EventKey`; de-risked by generational PIDs),
+  **#8** (remaining `malloc` null checks), **#4 step 3** (`loom`).
+
+**#6 (panics across the C-ABI)** is now done — see its section: a global
+panic hook converts every panic into a clean diagnostic abort before any
+unwind reaches a C frame.

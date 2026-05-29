@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Condvar, Mutex};
+use std::sync::{Condvar, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -575,6 +575,18 @@ fn fire_due_timers(table: &mut ProcessTable, now: Instant) {
 // Runtime intrinsics (C ABI)
 // ---------------------------------------------------------------------------
 
+static RUNTIME_INIT: Once = Once::new();
+
+/// One-time process-global runtime initialization. Installs the panic hook
+/// that converts any Rust panic — on any thread, before unwinding — into a
+/// clean diagnostic abort, so a panic can never unwind across the C-ABI or
+/// poison the scheduler lock. Called at the head of every runtime entry
+/// point (`koja_rt_spawn` is the first one a program reaches), so the hook
+/// is live before any worker thread is spawned or any `SCHED` lock is taken.
+fn ensure_runtime_init() {
+    RUNTIME_INIT.call_once(crate::panic::install_panic_hook);
+}
+
 /// Called by the compiled Koja program after `main` returns.
 ///
 /// Initializes the I/O reactor, spawns `worker_count() - 1` worker OS
@@ -583,6 +595,8 @@ fn fire_due_timers(table: &mut ProcessTable, now: Instant) {
 /// until the main process (PID 1) dies and [`SHUTDOWN`] is set.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_main_done() {
+    ensure_runtime_init();
+
     // Force line-buffered stdout so output is visible immediately even
     // when stdout is a pipe (e.g. when spawned by a test harness).
     unsafe {
@@ -878,6 +892,8 @@ pub unsafe extern "C" fn koja_rt_spawn(
     state_ptr: *const u8,
     state_len: i64,
 ) -> i64 {
+    ensure_runtime_init();
+
     let heap_state_len = if state_len > 0 && !state_ptr.is_null() {
         state_len as usize
     } else {

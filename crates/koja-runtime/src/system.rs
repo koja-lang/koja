@@ -5,6 +5,7 @@ use std::ffi::{CStr, CString, c_char};
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use crate::ffi::get_errno;
 #[cfg(target_os = "macos")]
 use crate::ffi::libc_getentropy;
 use crate::ffi::libc_gethostname;
@@ -88,7 +89,9 @@ pub extern "C" fn koja_kernel_exit(code: i64) {
     std::process::exit(code as i32);
 }
 
-/// Fills `buf` with `len` bytes of OS entropy.
+/// Fills `buf` with `len` bytes of OS entropy. Retries transient `EINTR`
+/// interruptions; a genuine failure panics (the global runtime hook turns
+/// that into a clean diagnostic abort rather than a leaked error).
 fn fill_random(buf: *mut u8, len: usize) {
     let mut offset = 0;
     while offset < len {
@@ -98,15 +101,22 @@ fn fill_random(buf: *mut u8, len: usize) {
         #[cfg(target_os = "macos")]
         {
             let chunk = remaining.min(256);
-            let ret = unsafe { libc_getentropy(dest, chunk) };
-            assert!(ret == 0, "getentropy failed");
+            if unsafe { libc_getentropy(dest, chunk) } != 0 {
+                let errno = get_errno();
+                assert!(errno == libc::EINTR, "getentropy failed (errno {errno})");
+                continue;
+            }
             offset += chunk;
         }
 
         #[cfg(target_os = "linux")]
         {
             let n = unsafe { libc_getrandom(dest, remaining, 0) };
-            assert!(n > 0, "getrandom failed");
+            if n < 0 {
+                let errno = get_errno();
+                assert!(errno == libc::EINTR, "getrandom failed (errno {errno})");
+                continue;
+            }
             offset += n as usize;
         }
     }
