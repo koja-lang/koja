@@ -61,23 +61,23 @@ The current state, with exact references:
    - IR: `ReceiveTag::wire_byte` (`function.rs`) maps
      `Business → 0`, `Lifecycle → 1`.
    - Codegen: `ENVELOPE_PAYLOAD_OFFSET = 8` (`emit/process.rs`).
-   The constants comment-reference each other but there is no shared
-   definition; a change to the header size must be made in three files
-   that don't share a type.
+     The constants comment-reference each other but there is no shared
+     definition; a change to the header size must be made in three files
+     that don't share a type.
 
 3. **One tag, two payload shapes — by direction.** A reply is not a
-   separate wire category; it is a *business message going the other
-   way*. Under the `Process<C, M, R>` protocol, `cast` / `call` /
+   separate wire category; it is a _business message going the other
+   way_. Under the `Process<C, M, R>` protocol, `cast` / `call` /
    `send_after` send the forward shape `Pair<M, Option<ReplyTo<R>>>`
    to the target (`koja_rt_send`, tag `Business`), and `ReplyTo.send`
    sends the bare reverse shape `R` back to the caller's pid
-   (`koja_rt_send`, *also* tag `Business`; `emit_reply_to` in
+   (`koja_rt_send`, _also_ tag `Business`; `emit_reply_to` in
    `intrinsics/process.rs`). Both shapes ride the `Business` tag
-   because both *are* business traffic — the tag intentionally does
-   not distinguish them. Disambiguation is by receive *context*: the
+   because both _are_ business traffic — the tag intentionally does
+   not distinguish them. Disambiguation is by receive _context_: the
    `run`-loop `receive` expects the forward pair; a process blocked in
    `Ref.call` expects the bare `R` (its inline `koja_rt_receive_timeout`
-   reads `R` straight off `+8`). The consequence for *discard* is that
+   reads `R` straight off `+8`). The consequence for _discard_ is that
    a dead process's mailbox can hold a mix of forward pairs (addressed
    to it) and pending replies of assorted `R` types (from calls it
    made), and neither size nor shape is recoverable from the tag — so a
@@ -174,15 +174,15 @@ for `koja_rt_send` and friends:
 
 A reply is a business message flowing callee→caller, so it keeps the
 `Business` tag — splitting it out would misrepresent the protocol and
-gain nothing. The thing a discard routine actually needs is *size* and
-*nested-heap layout*, and the tag never carried those even for forward
+gain nothing. The thing a discard routine actually needs is _size_ and
+_nested-heap layout_, and the tag never carried those even for forward
 messages (two different `M`s already share `Business`). The fix is to
 make every envelope self-describing via `len` + `drop_glue`, both
 stamped at the `send` site from the statically-known sent type. This
 covers forward pairs and reverse replies uniformly, with no new tag and
 no change to receive dispatch.
 
-The tag stays purely a *dispatch* discriminator for the `run`-loop
+The tag stays purely a _dispatch_ discriminator for the `run`-loop
 `receive`: `Business` → the `pair:` arm, `Lifecycle` → the lifecycle
 arm, `IORead` → the (reserved) I/O arm. Replies never reach
 `dispatch_arms` at all — they are consumed inline by the blocked
@@ -205,9 +205,9 @@ koja_rt_receive(out: *mut u8) -> i64   // returns the wire tag, or -1 (no messag
 
 Nested Koja heap referenced from the payload (e.g. a `String` pointer)
 transfers by value into the receiver's local and follows ordinary Koja
-ownership from there — no drop glue needed on the *delivered* path,
+ownership from there — no drop glue needed on the _delivered_ path,
 because the value is now live in the frame. `drop_glue` is only for the
-*discard* path, where the value never reaches user code.
+_discard_ path, where the value never reaches user code.
 
 There are **two** delivered-receive sites, and both must adopt the
 owned shape:
@@ -249,13 +249,19 @@ is "pending the envelope redesign") becomes accurate.
 
 ### Drop glue source
 
-`drop_glue` is a per-message-type function emitted by codegen — the
-same drop-glue codegen already needs for owned struct fields. Each
-`send` site stamps the message type's drop-glue pointer into the
+`drop_glue` is a per-message-type function emitted by codegen. Each
+`send` site would stamp the message type's drop-glue pointer into the
 envelope (null when the message is copy-only / owns no heap, which the
 type checker already knows). The runtime never introspects the
 payload; it only calls the function the compiler supplied. This is the
 piece that makes discard sound without the runtime knowing Koja types.
+
+Note (deferred): this codegen does **not** exist yet. The current drop
+pipeline frees only leaf heap locals (`String`/`Binary`/`Bits`) at
+function exit; it has no per-type destructor that recurses through a
+composite's heap-owning fields. Emitting `drop_glue` therefore means
+building that recursive drop-glue subsystem first — a general language
+need, split into its own effort (see phase 6).
 
 ### Allocator unification
 
@@ -275,7 +281,7 @@ Two defensible end states:
    values own `malloc` memory). Con: two allocators remain, but the
    ownership is no longer ambiguous.
 
-This doc recommends **option 2**: it resolves the *ambiguity* (the
+This doc recommends **option 2**: it resolves the _ambiguity_ (the
 actual bug) without reworking the Koja heap, and `Envelope` makes the
 boundary a type, not a convention.
 
@@ -310,19 +316,34 @@ Each phase compiles, passes the suite, and reverts cleanly.
    Leak check: kill/spawn loop with non-empty mailboxes stays bounded.
 4. **Timer cancellation.** Dead-target guard on fire + cancel-on-death.
    Tested with a delayed-send-to-killed-process fixture.
-5. **Receive ownership transfer.** Change the `koja_rt_receive` /
-   `koja_rt_receive_timeout` ABI to deserialize-into-slot + free; update
-   both delivered-receive sites — `emit_receive` (`run`-loop dispatch)
-   and `emit_call` (inline reply `R`). This is the delivered-envelope
-   leak fix and the riskiest phase (ABI + codegen). Pinned by the
-   `lang_process_*` golden suite and a request/reply RSS leak check.
-6. **Drop glue.** Emit per-message-type drop-glue; stamp pointers at
-   `send` sites; run them on the discard path. Closes the nested-heap
-   leak for discarded messages.
+5. **Receive ownership transfer.** _(done)_ The `koja_rt_receive` /
+   `koja_rt_receive_timeout` ABI is now slot-out: `i64 receive(out,
+out_cap[, timeout])` copies the payload (header stripped) into the
+   receiver's slot clamped to `out_cap`, frees the transport buffer via
+   `Envelope::free_transport`, and returns the wire tag (`-1` on
+   no-message/timeout). Both delivered-receive sites adopt it —
+   `emit_receive` (`run`-loop dispatch, branching on the returned tag)
+   and `emit_call` (inline reply `R`, `tag == -1` is the timeout). This
+   removed the delivered-envelope leak and the raw pointer from the ABI;
+   `ENVELOPE_PAYLOAD_OFFSET` is gone from codegen (the header offset is
+   now purely a runtime concern). Pinned by the `lang_process_*` golden
+   suite and a request/reply RSS leak check.
+6. **Drop glue.** _(split into its own effort.)_ Closing the
+   nested-heap leak for **discarded** messages needs a per-message-type
+   drop-glue function. The premise that "the same drop-glue codegen
+   already needs for owned struct fields" exists is **false**: today
+   only leaf `String`/`Binary`/`Bits` are freed (via `DropLocal`), and
+   nested heap inside structs/enums leaks language-wide. So this phase
+   is really "build a recursive composite drop-glue subsystem" (a new
+   per-monomorphized-type destructor that recurses struct/enum fields),
+   which the language needs generally, not just for messages — tracked
+   separately. Until then, `Envelope.drop_glue` stays `null`: discarded
+   message payloads still leak their nested heap, but the transport
+   buffer (phases 1-5) is reclaimed.
 
-Phases 1-4 are pure runtime and land independently. 5 is the codegen
-crux (both receive sites). 6 closes the long tail of nested heap in
-discarded messages.
+Phases 1-4 are pure runtime and landed independently. 5 was the codegen
+crux (both receive sites) and is done. 6 is deferred to a dedicated
+recursive-drop effort.
 
 ## Mechanical checks
 

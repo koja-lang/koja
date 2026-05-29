@@ -696,18 +696,38 @@ pub extern "C" fn koja_rt_main_done() {
     }
 }
 
-/// Blocking receive. Returns the first message in the current
-/// process's mailbox, or context-switches back to the scheduler
-/// (marking the process `Blocked`) until a message arrives.
+/// Hands a delivered envelope to the receiving frame: copies its
+/// payload into `out`, frees the transport buffer, and returns the
+/// wire tag. The copy is clamped to `min(payload, out_cap)` so an
+/// oversized payload region can't overflow the receiver's slot and an
+/// oversized slot can't over-read the buffer. The nested Koja heap the
+/// payload may reference now belongs to the receiver, so this frees
+/// only the transport buffer (never `drop_glue`).
+fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
+    let tag = unsafe { *envelope.buffer } as i64;
+    let copy_len = (envelope.length - TAG_HEADER_SIZE).min(out_cap.max(0) as usize);
+    unsafe {
+        ptr::copy_nonoverlapping(envelope.buffer.add(TAG_HEADER_SIZE), out, copy_len);
+    }
+    envelope.free_transport();
+    tag
+}
+
+/// Blocking receive. Copies the next message's payload into `out` (at
+/// most `out_cap` bytes), frees the transport buffer, and returns its
+/// wire tag; context-switches back to the scheduler (marking the
+/// process `Blocked`) until a message arrives. Returns `-1` only if
+/// woken with an empty mailbox.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_rt_receive() -> *const u8 {
+pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
     let idx = (pid - 1) as usize;
 
     {
         let mut guard = SCHED.lock().unwrap();
         if let Some(envelope) = guard.processes[idx].mailbox.pop_front() {
-            return envelope.buffer as *const u8;
+            drop(guard);
+            return deliver_envelope(envelope, out, out_cap);
         }
         guard.processes[idx].state = ProcessState::Blocked;
     }
@@ -718,27 +738,27 @@ pub extern "C" fn koja_rt_receive() -> *const u8 {
         koja_context_switch(yield_sp_ptr, sched_sp);
     }
 
-    let mut guard = SCHED.lock().unwrap();
-    guard.processes[idx]
-        .mailbox
-        .pop_front()
-        .map(|envelope| envelope.buffer as *const u8)
-        .unwrap_or(ptr::null())
+    let envelope = {
+        let mut guard = SCHED.lock().unwrap();
+        guard.processes[idx].mailbox.pop_front()
+    };
+    envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
 
 /// Receive with a timeout. Like [`koja_rt_receive`] but sets a
 /// deadline `timeout_ms` milliseconds in the future. If no message
 /// arrives before the deadline, the worker loop promotes the process
-/// back to `Runnable` and this returns null.
+/// back to `Runnable` and this returns `-1`.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
+pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
     let idx = (pid - 1) as usize;
 
     {
         let mut guard = SCHED.lock().unwrap();
         if let Some(envelope) = guard.processes[idx].mailbox.pop_front() {
-            return envelope.buffer as *const u8;
+            drop(guard);
+            return deliver_envelope(envelope, out, out_cap);
         }
         guard.processes[idx].state = ProcessState::Blocked;
         guard.processes[idx].deadline =
@@ -751,13 +771,12 @@ pub extern "C" fn koja_rt_receive_timeout(timeout_ms: i64) -> *const u8 {
         koja_context_switch(yield_sp_ptr, sched_sp);
     }
 
-    let mut guard = SCHED.lock().unwrap();
-    guard.processes[idx].deadline = None;
-    guard.processes[idx]
-        .mailbox
-        .pop_front()
-        .map(|envelope| envelope.buffer as *const u8)
-        .unwrap_or(ptr::null())
+    let envelope = {
+        let mut guard = SCHED.lock().unwrap();
+        guard.processes[idx].deadline = None;
+        guard.processes[idx].mailbox.pop_front()
+    };
+    envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
 
 /// Returns the PID of the currently executing process on this worker

@@ -34,9 +34,9 @@
 //!   `koja_rt_receive_timeout` reader pulls `R` straight off the
 //!   envelope's `+8` payload offset.
 
+use inkwell::IntPredicate;
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{ArrayValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
-use inkwell::{AddressSpace, IntPredicate};
 use koja_ir::mangling::global_primitive_symbol;
 use koja_ir::{
     IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, RefMethod, ReplyToMethod,
@@ -266,17 +266,26 @@ fn emit_call<'ctx>(
         )
         .map_err(|e| inkwell_err("build_call koja_rt_send (call)", e))?;
 
+    let reply_slot = ctx.build_entry_alloca(reply_llvm, "reply_payload");
+    let reply_cap = ctx
+        .context
+        .i64_type()
+        .const_int(ctx.layouts.target_data.get_abi_size(&reply_llvm), false);
     let receive_fn = declare_rt_receive_timeout_extern(ctx);
-    let reply_envelope = ctx
+    let reply_tag = ctx
         .builder
-        .build_call(receive_fn, &[timeout.into()], "reply_envelope")
+        .build_call(
+            receive_fn,
+            &[reply_slot.into(), reply_cap.into(), timeout.into()],
+            "reply_tag",
+        )
         .map_err(|e| inkwell_err("build_call koja_rt_receive_timeout (call)", e))?
         .try_as_basic_value()
         .basic()
         .ok_or_else(|| {
             LlvmError::Codegen("koja_rt_receive_timeout did not produce a value".to_string())
         })?
-        .into_pointer_value();
+        .into_int_value();
 
     let timeout_check_bb = ctx
         .context
@@ -292,15 +301,14 @@ fn emit_call<'ctx>(
         .append_basic_block(llvm_function, "call_build_down");
     let merge_bb = ctx.context.append_basic_block(llvm_function, "call_merge");
 
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let null_ptr = ptr_ty.const_null();
-    let is_null = ctx
+    let none_tag = ctx.context.i64_type().const_int(-1i64 as u64, true);
+    let is_none = ctx
         .builder
-        .build_int_compare(IntPredicate::EQ, reply_envelope, null_ptr, "reply_is_null")
-        .map_err(|e| inkwell_err("build_int_compare reply_is_null", e))?;
+        .build_int_compare(IntPredicate::EQ, reply_tag, none_tag, "reply_is_none")
+        .map_err(|e| inkwell_err("build_int_compare reply_is_none", e))?;
     ctx.builder
-        .build_conditional_branch(is_null, timeout_check_bb, got_reply_bb)
-        .map_err(|e| inkwell_err("build_conditional_branch reply_is_null", e))?;
+        .build_conditional_branch(is_none, timeout_check_bb, got_reply_bb)
+        .map_err(|e| inkwell_err("build_conditional_branch reply_is_none", e))?;
 
     ctx.builder.position_at_end(timeout_check_bb);
     let alive_fn = declare_rt_is_process_alive_extern(ctx);
@@ -353,21 +361,9 @@ fn emit_call<'ctx>(
         .expect("EmitContext::emit_call lost the build_down insertion block before the merge phi");
 
     ctx.builder.position_at_end(got_reply_bb);
-    let i8_ty = ctx.context.i8_type();
-    let payload_offset = i8_ty.const_int(ENVELOPE_PAYLOAD_OFFSET, false);
-    let payload_ptr = unsafe {
-        ctx.builder
-            .build_gep(
-                i8_ty,
-                reply_envelope,
-                &[payload_offset],
-                "reply_payload_ptr",
-            )
-            .map_err(|e| inkwell_err("build_gep reply_payload_ptr", e))?
-    };
     let reply_value = ctx
         .builder
-        .build_load(reply_llvm, payload_ptr, "reply_value")
+        .build_load(reply_llvm, reply_slot, "reply_value")
         .map_err(|e| inkwell_err("build_load reply_value", e))?;
     let ok_result = build_enum_value(
         ctx,
@@ -530,14 +526,6 @@ fn emit_reply_send<'ctx>(
 }
 
 // ----- envelope construction ----------------------------------------------
-
-/// Byte offset of the payload inside an envelope buffer the
-/// runtime hands back from `koja_rt_receive_timeout`. Mirrors the
-/// constant of the same name in [`crate::emit::process`] and
-/// `TAG_HEADER_SIZE` in `koja-runtime/src/scheduler.rs` — the
-/// runtime allocates 8 bytes for the tag (with padding) before the
-/// payload.
-const ENVELOPE_PAYLOAD_OFFSET: u64 = 8;
 
 /// `enum Option<T>` variant tags (declaration order in
 /// `koja/lib/global/src/kernel.koja`).

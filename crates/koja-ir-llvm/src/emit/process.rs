@@ -32,7 +32,6 @@
 //!   then a no-op (handled by the already-terminated guard in
 //!   [`super::emit_block`]).
 
-use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicTypeEnum, StructType};
@@ -524,24 +523,14 @@ pub(super) fn emit_spawn<'ctx>(
 
 // ----- IRInstruction::Receive ----------------------------------------------
 
-/// Byte offset of the payload inside an envelope buffer. The runtime
-/// reserves `8` bytes for the tag (with padding) before the payload.
-///
-/// This conforms to the envelope wire ABI, whose authoritative
-/// definition is `TAG_HEADER_SIZE` in `koja-runtime/src/wire.rs`. It
-/// mirrors that value by spec — the same way the `koja_rt_*` extern
-/// declarations mirror the runtime's function signatures — rather than
-/// importing a shared type. Per-arm tag bytes ride through
-/// [`ReceiveTag::wire_byte`], which conforms to the same ABI.
-const ENVELOPE_PAYLOAD_OFFSET: u64 = 8;
-
-/// Emit a single `IRInstruction::Receive`. Calls `koja_rt_receive`
-/// (or `koja_rt_receive_timeout` when `after` is present), reads
-/// the envelope tag, deserializes the matching arm's payload into
-/// its declared local slot, and branches into the arm body block.
-/// The host block ends with the dispatch — its IR `Unreachable`
-/// terminator is a no-op once the `super::emit_block` already-
-/// terminated guard kicks in.
+/// Emit a single `IRInstruction::Receive`. Allocates a payload scratch
+/// slot sized to the widest arm payload, calls `koja_rt_receive` (or
+/// `koja_rt_receive_timeout` when `after` is present) to copy the next
+/// message's payload into it (the runtime strips the tag header and
+/// frees the transport buffer), then branches into the arm whose tag
+/// matches the returned wire tag. The host block ends with the dispatch
+/// — its IR `Unreachable` terminator is a no-op once the
+/// `super::emit_block` already-terminated guard kicks in.
 ///
 /// `dest` and `result_type` come from the IR for symmetry with
 /// other instruction emitters; the host block never reads `dest`
@@ -564,94 +553,102 @@ pub(super) fn emit_receive<'ctx>(
         LlvmError::Codegen("LLVM emit: Receive's host block has no parent function".to_string())
     })?;
 
-    let envelope_ptr = build_receive_call(ctx, after, values)?;
-    let after_branch = match after {
-        Some(after) => Some(timeout_null_branch(
-            ctx,
-            host_function,
-            envelope_ptr,
-            after,
-        )?),
-        None => None,
-    };
-
-    if let Some((continue_bb, _)) = after_branch {
+    let (payload_slot, payload_cap) = build_payload_slot(ctx, arms)?;
+    let tag_value = build_receive_call(ctx, after, values, payload_slot, payload_cap)?;
+    if let Some(after) = after {
+        let continue_bb = timeout_tag_branch(ctx, host_function, tag_value, after)?;
         ctx.builder.position_at_end(continue_bb);
     }
-    let tag_value = read_envelope_tag(ctx, envelope_ptr)?;
-    dispatch_arms(ctx, host_function, envelope_ptr, tag_value, arms)
+    dispatch_arms(ctx, host_function, payload_slot, tag_value, arms)
 }
 
-/// Lower `koja_rt_receive` (no timeout) or
-/// `koja_rt_receive_timeout(timeout)` to the actual call and
-/// return the `i8*` envelope pointer. The timeout path lowers the
-/// timeout SSA value through the existing value map.
+/// Allocate the scratch slot the runtime copies the delivered payload
+/// into. Sized to the widest arm payload and 8-aligned (an `i64` array,
+/// since every Koja value type is at most 8-aligned), so one slot
+/// serves whichever arm matches. Returns the slot pointer and its byte
+/// capacity; the runtime clamps the copy to that capacity.
+fn build_payload_slot<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    arms: &[ReceiveArm],
+) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), LlvmError> {
+    let mut max_size = 0u64;
+    for arm in arms {
+        let llvm_type = ir_basic_type(ctx, &arm.payload_type)?;
+        max_size = max_size.max(ctx.layouts.target_data.get_abi_size(&llvm_type));
+    }
+    let words = max_size.max(1).div_ceil(8);
+    let slot_ty = ctx.context.i64_type().array_type(words as u32);
+    let slot = ctx.build_entry_alloca(slot_ty, "receive_payload");
+    let cap = ctx.context.i64_type().const_int(max_size, false);
+    Ok((slot, cap))
+}
+
+/// Lower `koja_rt_receive(slot, cap)` (no timeout) or
+/// `koja_rt_receive_timeout(slot, cap, timeout)` to the actual call and
+/// return the `i64` wire tag (`-1` when no message). The timeout path
+/// lowers the timeout SSA value through the existing value map.
 fn build_receive_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     after: Option<&ReceiveAfter>,
     values: &ValueMap<'ctx>,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let envelope_call = if let Some(after) = after {
+    payload_slot: PointerValue<'ctx>,
+    payload_cap: IntValue<'ctx>,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    let tag_call = if let Some(after) = after {
         let timeout = lookup(values, after.timeout)?.into_int_value();
         let receive_fn = declare_rt_receive_timeout_extern(ctx);
         ctx.builder
-            .build_call(receive_fn, &[timeout.into()], "receive_envelope")
+            .build_call(
+                receive_fn,
+                &[payload_slot.into(), payload_cap.into(), timeout.into()],
+                "receive_tag",
+            )
             .map_err(|e| inkwell_err("build_call koja_rt_receive_timeout", e))?
     } else {
         let receive_fn = declare_rt_receive_extern(ctx);
         ctx.builder
-            .build_call(receive_fn, &[], "receive_envelope")
+            .build_call(
+                receive_fn,
+                &[payload_slot.into(), payload_cap.into()],
+                "receive_tag",
+            )
             .map_err(|e| inkwell_err("build_call koja_rt_receive", e))?
     };
-    Ok(envelope_call
+    Ok(tag_call
         .try_as_basic_value()
         .basic()
         .ok_or_else(|| LlvmError::Codegen("koja_rt_receive did not return a value".to_string()))?
-        .into_pointer_value())
+        .into_int_value())
 }
 
-/// On the timeout path, branch to the `after` body when
-/// `koja_rt_receive_timeout` returns null (no message arrived
-/// within the deadline). Returns the basic block the dispatch
-/// should continue from when the envelope is non-null. Wires the
-/// `after` arm to its lowered body block via the active block map.
-fn timeout_null_branch<'ctx>(
+/// On the timeout path, branch to the `after` body when the receive
+/// returned `-1` (no message arrived within the deadline). Returns the
+/// block dispatch continues from once a message was delivered. Wires
+/// the `after` arm to its lowered body block via the active block map.
+fn timeout_tag_branch<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: FunctionValue<'ctx>,
-    envelope_ptr: PointerValue<'ctx>,
+    tag_value: IntValue<'ctx>,
     after: &ReceiveAfter,
-) -> Result<(BasicBlock<'ctx>, ()), LlvmError> {
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let null_ptr = ptr_ty.const_null();
-    let is_null = ctx
+) -> Result<BasicBlock<'ctx>, LlvmError> {
+    let none_tag = ctx.context.i64_type().const_int(-1i64 as u64, true);
+    let is_none = ctx
         .builder
-        .build_int_compare(IntPredicate::EQ, envelope_ptr, null_ptr, "envelope_is_null")
-        .map_err(|e| inkwell_err("build_int_compare envelope_is_null", e))?;
+        .build_int_compare(IntPredicate::EQ, tag_value, none_tag, "receive_is_none")
+        .map_err(|e| inkwell_err("build_int_compare receive_is_none", e))?;
     let after_bb = ctx.block_for(after.body);
     let continue_bb = ctx.context.append_basic_block(function, "receive_dispatch");
     ctx.builder
-        .build_conditional_branch(is_null, after_bb, continue_bb)
-        .map_err(|e| inkwell_err("build_conditional_branch envelope_is_null", e))?;
-    Ok((continue_bb, ()))
-}
-
-/// Read the i8 tag byte at offset 0 of the envelope buffer.
-fn read_envelope_tag<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    envelope_ptr: PointerValue<'ctx>,
-) -> Result<IntValue<'ctx>, LlvmError> {
-    let i8_ty = ctx.context.i8_type();
-    ctx.builder
-        .build_load(i8_ty, envelope_ptr, "envelope_tag")
-        .map(|v| v.into_int_value())
-        .map_err(|e| inkwell_err("build_load envelope_tag", e))
+        .build_conditional_branch(is_none, after_bb, continue_bb)
+        .map_err(|e| inkwell_err("build_conditional_branch receive_is_none", e))?;
+    Ok(continue_bb)
 }
 
 /// Build the per-arm dispatch chain as a sequence of conditional
-/// branches keyed on the envelope tag. Each matching arm gets a
-/// dedicated "deserialize then branch to body" block so we can
-/// share the GEP / payload-load logic without re-emitting it at
-/// every comparison site.
+/// branches keyed on the returned wire tag. Each matching arm gets a
+/// dedicated "deserialize then branch to body" block so we can share
+/// the payload-load logic without re-emitting it at every comparison
+/// site.
 ///
 /// Tags that no arm declares fall through to an `unreachable` —
 /// the typecheck seal admits only declared shapes, so a runtime
@@ -660,11 +657,11 @@ fn read_envelope_tag<'ctx>(
 fn dispatch_arms<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: FunctionValue<'ctx>,
-    envelope_ptr: PointerValue<'ctx>,
+    payload_slot: PointerValue<'ctx>,
     tag_value: IntValue<'ctx>,
     arms: &[ReceiveArm],
 ) -> Result<(), LlvmError> {
-    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
     for (index, arm) in arms.iter().enumerate() {
         let wire_byte = arm.tag.wire_byte();
         let is_match = ctx
@@ -672,7 +669,7 @@ fn dispatch_arms<'ctx>(
             .build_int_compare(
                 IntPredicate::EQ,
                 tag_value,
-                i8_ty.const_int(wire_byte as u64, false),
+                i64_ty.const_int(wire_byte as u64, false),
                 &format!("is_arm_{index}"),
             )
             .map_err(|e| inkwell_err("build_int_compare arm tag", e))?;
@@ -687,7 +684,7 @@ fn dispatch_arms<'ctx>(
             .map_err(|e| inkwell_err("build_conditional_branch arm dispatch", e))?;
 
         ctx.builder.position_at_end(arm_prelude_bb);
-        deserialize_payload_into_local(ctx, envelope_ptr, arm)?;
+        deserialize_payload_into_local(ctx, payload_slot, arm)?;
         let body_bb = ctx.block_for(arm.body);
         ctx.builder
             .build_unconditional_branch(body_bb)
@@ -701,31 +698,16 @@ fn dispatch_arms<'ctx>(
         .map_err(|e| inkwell_err("build_unreachable receive fallthrough", e))
 }
 
-/// Load the typed payload out of `envelope_ptr` (offset 8) and
-/// store it into the arm's payload local slot. The shape depends
-/// on the [`ReceiveTag`]:
-///
-/// - `Lifecycle`: the runtime serializes the variant index as a
-///   single byte at offset 8. We load it as the arm's enum-outer
-///   (stamped by the layout pre-emit) using its full LLVM size,
-///   so the trailing padding bytes the runtime allocator zeroed
-///   stay quiet alongside the live tag byte.
-/// - `Business`: the runtime serializes the unboxed business
-///   message struct at offset 8 (today, a `Pair<M, Option<ReplyTo<R>>>`
-///   produced by `Ref.cast` / `Ref.call`). We load the arm's
-///   payload type directly.
+/// Load the typed payload the runtime copied into `payload_slot` (at
+/// offset 0 — the runtime already stripped the tag header) and store it
+/// into the arm's payload local slot. `Business` arms load the unboxed
+/// message struct (today a `Pair<M, Option<ReplyTo<R>>>`); `Lifecycle`
+/// arms load the enum-outer whose variant byte the runtime wrote.
 fn deserialize_payload_into_local<'ctx>(
     ctx: &EmitContext<'ctx>,
-    envelope_ptr: PointerValue<'ctx>,
+    payload_slot: PointerValue<'ctx>,
     arm: &ReceiveArm,
 ) -> Result<(), LlvmError> {
-    let i8_ty = ctx.context.i8_type();
-    let payload_offset = i8_ty.const_int(ENVELOPE_PAYLOAD_OFFSET, false);
-    let payload_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, envelope_ptr, &[payload_offset], "payload_ptr")
-            .map_err(|e| inkwell_err("build_gep payload_ptr", e))?
-    };
     let payload_llvm_type = ir_basic_type(ctx, &arm.payload_type)?;
     let label = match arm.tag {
         ReceiveTag::Business => "business_payload",
@@ -733,7 +715,7 @@ fn deserialize_payload_into_local<'ctx>(
     };
     let payload = ctx
         .builder
-        .build_load(payload_llvm_type, payload_ptr, label)
+        .build_load(payload_llvm_type, payload_slot, label)
         .map_err(|e| inkwell_err("build_load receive payload", e))?;
     let slot = ctx.local_slot(arm.payload_local);
     ctx.builder

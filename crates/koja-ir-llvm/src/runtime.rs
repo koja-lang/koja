@@ -385,22 +385,24 @@ pub(crate) fn declare_rt_spawn_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Function
 }
 
 /// Declare (or look up) `koja_rt_receive`. Signature:
-/// `i8* koja_rt_receive()`. Returns a tagged envelope buffer
-/// (tag at offset 0; payload starts at offset 8). Blocks until a
-/// message arrives.
+/// `i64 koja_rt_receive(i8* out, i64 out_cap)`. Copies the next
+/// message's payload (header stripped) into the `out` slot, clamped to
+/// `out_cap` bytes, frees the transport buffer, and returns the wire
+/// tag; blocks until a message arrives. Returns `-1` on an empty wake.
 pub(crate) fn declare_rt_receive_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(RT_RECEIVE_SYMBOL) {
         return existing;
     }
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let signature = ptr_ty.fn_type(&[], false);
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
     ctx.module
         .add_function(RT_RECEIVE_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) `koja_rt_receive_timeout`. Signature:
-/// `i8* koja_rt_receive_timeout(i64 timeout_ms)`. Like
-/// [`declare_rt_receive_extern`] but returns null on timeout.
+/// `i64 koja_rt_receive_timeout(i8* out, i64 out_cap, i64 timeout_ms)`.
+/// Like [`declare_rt_receive_extern`] but returns `-1` on timeout.
 pub(crate) fn declare_rt_receive_timeout_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -409,7 +411,7 @@ pub(crate) fn declare_rt_receive_timeout_extern<'ctx>(
     }
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
-    let signature = ptr_ty.fn_type(&[i64_ty.into()], false);
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
     ctx.module.add_function(
         RT_RECEIVE_TIMEOUT_SYMBOL,
         signature,

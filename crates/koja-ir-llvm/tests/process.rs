@@ -10,9 +10,10 @@
 //!   typed config, calls `<state>.start`, branches on the
 //!   `Result.tag`, chains into `<state>.run` on Ok.
 //! - **Receive**: calls `koja_rt_receive` (or
-//!   `koja_rt_receive_timeout` with the `after` clause), reads the
-//!   envelope tag, dispatches to per-arm "deserialize then branch"
-//!   blocks ending in `unreachable` for unmatched tags.
+//!   `koja_rt_receive_timeout` with the `after` clause) into a payload
+//!   slot, then dispatches on the returned wire tag to per-arm
+//!   "deserialize then branch" blocks ending in `unreachable` for
+//!   unmatched tags.
 //! - **Ref intrinsics**: `self_ref`, `cast`, `signal`, `kill`,
 //!   `alive?`, `send_after`, plus `ReplyTo.send` — each routes
 //!   through the matching `koja_rt_*` extern declared in
@@ -264,9 +265,9 @@ fn receive_lifecycle_calls_koja_rt_receive_and_dispatches_on_tag() {
         ";
     let ir_text = emit(source);
 
-    assert_contains(&ir_text, "declare ptr @koja_rt_receive()");
-    assert_contains(&ir_text, "call ptr @koja_rt_receive()");
-    assert_contains(&ir_text, "envelope_tag");
+    assert_contains(&ir_text, "declare i64 @koja_rt_receive(ptr, i64)");
+    assert_contains(&ir_text, "call i64 @koja_rt_receive(ptr");
+    assert_contains(&ir_text, "receive_tag");
     assert_contains(&ir_text, "is_arm_0");
     // Each arm body block lives in the function's CFG and the
     // dispatch jumps in via the per-arm prelude block. The host
@@ -277,7 +278,7 @@ fn receive_lifecycle_calls_koja_rt_receive_and_dispatches_on_tag() {
 }
 
 #[test]
-fn receive_with_after_calls_receive_timeout_and_branches_on_null() {
+fn receive_with_after_calls_receive_timeout_and_branches_on_none() {
     let source = "
         fn drain -> StopReason
           receive
@@ -294,9 +295,13 @@ fn receive_with_after_calls_receive_timeout_and_branches_on_null() {
         ";
     let ir_text = emit(source);
 
-    assert_contains(&ir_text, "declare ptr @koja_rt_receive_timeout(i64)");
-    assert_contains(&ir_text, "call ptr @koja_rt_receive_timeout(i64 100)");
-    assert_contains(&ir_text, "envelope_is_null");
+    assert_contains(
+        &ir_text,
+        "declare i64 @koja_rt_receive_timeout(ptr, i64, i64)",
+    );
+    assert_contains(&ir_text, "call i64 @koja_rt_receive_timeout(ptr");
+    assert_contains(&ir_text, "i64 100)");
+    assert_contains(&ir_text, "receive_is_none");
 }
 
 #[test]
@@ -516,12 +521,16 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
     // caller's own mailbox. Three-way dispatch on the result
     // (timeout / process-down / Ok) feeds a single phi that
     // returns `Result<R, CallError>`.
-    assert_contains(&ir_text, "declare ptr @koja_rt_receive_timeout(i64)");
+    assert_contains(
+        &ir_text,
+        "declare i64 @koja_rt_receive_timeout(ptr, i64, i64)",
+    );
     // The literal `100` is consumed at the `.call` call site;
     // inside the intrinsic body the timeout flows through `%2`
-    // (the third parameter).
-    assert_contains(&ir_text, "call ptr @koja_rt_receive_timeout(i64 %2)");
-    assert_contains(&ir_text, "reply_is_null");
+    // (the third intrinsic parameter) into the receive's third arg.
+    assert_contains(&ir_text, "call i64 @koja_rt_receive_timeout(ptr");
+    assert_contains(&ir_text, "i64 %2)");
+    assert_contains(&ir_text, "reply_is_none");
     assert_contains(&ir_text, "call_timeout_check:");
     assert_contains(&ir_text, "call_got_reply:");
     assert_contains(&ir_text, "call_build_timeout:");

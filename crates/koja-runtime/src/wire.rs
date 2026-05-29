@@ -68,10 +68,12 @@ pub(crate) const IO_READY_ERROR: u8 = 2;
 /// codegen); a typed `tag` field is added when the receive path starts
 /// returning it (deferred; see `koja/design/MESSAGE-LIFECYCLE.md`).
 ///
-/// Freeing is always explicit via [`Envelope::free`] — there is no
-/// `Drop` impl, because the delivered-receive path hands the raw
-/// `buffer` pointer back to compiled code and must not free it. Only
-/// the discard path (process death) frees through this type.
+/// Freeing is always explicit — there is no `Drop` impl — and splits
+/// by path: the delivered-receive path copies the payload into the
+/// receiver's slot and frees only the transport buffer via
+/// [`Envelope::free_transport`] (nested heap moves to the receiver),
+/// while the discard path (process death, send-to-dead) uses
+/// [`Envelope::free`], which also runs `drop_glue` over the payload.
 pub(crate) struct Envelope {
     /// Transport buffer `[tag header | payload]`, owned by the global
     /// allocator (`alloc::alloc`, 8-byte aligned).
@@ -100,13 +102,21 @@ impl Envelope {
         }
     }
 
-    /// Frees the transport buffer, running payload drop glue first when
-    /// present. Consumes the envelope. Used only on the discard path —
-    /// the delivered path returns `buffer` to compiled code instead.
+    /// Discard-path free: runs payload drop glue (when present) over the
+    /// undelivered payload, then frees the transport buffer. Consumes the
+    /// envelope.
     pub(crate) fn free(self) {
         if let Some(drop_glue) = self.drop_glue {
             unsafe { drop_glue(self.buffer.add(TAG_HEADER_SIZE)) };
         }
+        self.free_transport();
+    }
+
+    /// Delivered-path free: frees the transport buffer only, never
+    /// running `drop_glue`. The payload's nested heap has already been
+    /// copied into the receiver's frame, which now owns it. Consumes the
+    /// envelope.
+    pub(crate) fn free_transport(self) {
         unsafe {
             let layout = alloc::Layout::from_size_align(self.length, 8).unwrap();
             alloc::dealloc(self.buffer, layout);
