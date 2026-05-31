@@ -3,6 +3,7 @@
 
 use crate::function::IRSymbol;
 use crate::local::IRLocalId;
+use crate::return_mode::FnReturnMode;
 
 /// Identifier of an SSA value within a single function. Values are
 /// numbered in definition order starting from 0; the same `ValueId`
@@ -421,8 +422,11 @@ pub enum IRType {
     /// First-class callable: a `{fn_ptr, env_ptr}` fat pointer.
     /// `params` excludes the implicit `env_ptr` slot, which
     /// [`crate::IRInstruction::CallClosure`] threads at call time.
+    /// `return_mode` is identity-erased metadata (it does not affect
+    /// type equality) carried for future indirect-call drop decisions.
     Function {
         params: Vec<IRType>,
+        return_mode: FnReturnMode,
         ret: Box<IRType>,
     },
     /// Heap-boxed `T`, stamped by [`crate::cycle::break_type_cycles`]

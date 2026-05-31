@@ -2,7 +2,7 @@
 //! functions (top-level, inline struct methods, impl-block methods)
 //! via the [`super::SelfContext`] knob.
 
-use koja_ast::ast::{Diagnostic, Function, Param, TypeExpr, is_extern_c, is_intrinsic};
+use koja_ast::ast::{Diagnostic, Function, Param, ReturnMode, TypeExpr, is_extern_c, is_intrinsic};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
@@ -80,6 +80,7 @@ pub(super) fn lift_function_with_identifier(
     let signature = FunctionSignature {
         dispatch,
         params,
+        return_mode: ReturnMode::default(),
         return_type,
         impl_args,
     };

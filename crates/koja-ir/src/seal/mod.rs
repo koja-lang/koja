@@ -142,7 +142,7 @@ pub(super) fn require_supported_type(ty: &IRType, location: &dyn Fn() -> String)
         IRType::Set(inner) => {
             require_supported_type(inner, &|| format!("{} (Set element)", location()))
         }
-        IRType::Function { params, ret } => {
+        IRType::Function { params, ret, .. } => {
             for (idx, param) in params.iter().enumerate() {
                 require_supported_type(param, &|| {
                     format!("{} (Function param[{idx}])", location())

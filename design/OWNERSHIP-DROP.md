@@ -223,13 +223,50 @@ value, or a borrow of one of its inputs?
   (`to_binary` should clone, matching `CPtr.to_binary`'s documented
   "copies `len` bytes" contract in `LANGUAGE.md`).
 
-Concretely: add a return-mode bit to the IR function signature
-(owned vs borrows-arg-N), populated by typecheck, and have
-`ownership_for_expr` stamp `Call`/`MethodCall` results from it instead
-of guessing. Audit every intrinsic that returns a pointer-shaped value
-for accidental aliasing; either make it copy or mark it borrowing.
-This is the load-bearing change — it is what lets ownership widen past
-the five-shape whitelist at all.
+Concretely, return mode is a per-function `ReturnMode { Owned, Borrowed }`
+**computed in typecheck** (after `resolve`, before `seal_ast`: a
+memoized DFS over the resolved call graph where a function is `Owned`
+iff every returned value is owned, intrinsics keyed off a hand-authored
+catalog, cycles biased to `Borrowed`) and stamped onto the AST-layer
+`FunctionSignature`. Computing it there — not in an IR pass — makes it
+invariant across monomorphization, surfaces it to the LSP, and has it
+in hand at lowering. The intrinsic catalog is the audit of every
+pointer-shaped intrinsic: the genuine aliases (`String.to_binary`,
+`Binary.ptr`/`to_bits`, `Bits.to_binary`, `CPtr.offset`, `List.get`/
+`pop`, `Map.get`) are `Borrowed`; fresh/clone/slice results are `Owned`.
+
+This is the load-bearing input that lets ownership widen past the
+five-shape whitelist. It decomposes into two orthogonal axes:
+
+- **Axis A — "is this value owned?"** The return mode feeds it.
+  Consumed (in the deferred Phase 2) by `ownership_for_expr` stamping
+  `Ownership::Owned` on call results, which in turn drives the
+  `Drop*` instructions lowering already emits.
+- **Axis B — "how do I recursively free a `T`?"** The composite drop
+  glue itself, orthogonal to return mode. See §Drop glue.
+
+#### What landed now vs. what consumes it later
+
+Return mode is **computed and carried** but **not yet consumed**:
+
+- Direct calls read it from the callee's `FunctionSignature` at
+  lowering.
+- Indirect calls (`CallClosure`, concrete callee unknown) can't reach a
+  signature, so the mode also rides on the closure value's type:
+  `IRType::Function` carries a distinct IR-layer `ReturnMode` (mirroring
+  the `koja_ast::PassMode` → IR `Ownership` split). It is identity-erased
+  metadata — `fn(T) -> U` is one structural type regardless of a given
+  callee's mode, so it does not affect type equality / hashing. Lowering
+  populates it wherever a function value wraps a known callee (the
+  fn-as-value adapter from its signature); closures, type annotations,
+  and bounded/protocol callees stay the conservative `Borrowed`.
+
+Consuming it now would be unsafe: stamping `Owned` on call results
+before the Phase 2 move-out sinks exist would double-free
+(`x = f()` owned, then `g(move x)`). So this phase keeps the
+conservative `Borrowed` default everywhere it's read, leaving behavior
+unchanged (leak-not-double-free) until the machinery below lands
+together.
 
 ### Liveness: generalize the existing move tracking
 
@@ -249,17 +286,27 @@ shelved attempt and are correct in isolation; they are safe to land
 once provenance + return-mode unblock the `Owned` widening they
 support.)
 
-### Drop glue, once unblocked
+### Drop glue, once unblocked (Axis B)
 
 With the heap invariant (clone-on-acquisition) and return-mode in
-place, recursive composite drop
-glue (`FunctionKind::DropGlue { ty }`, registered pre-seal, bodies
-synthesized in `koja-ir-llvm/src/intrinsics/drop_glue.rs`) is sound:
-a struct drops each owning field, an enum tag-dispatches to its
-variant payload, and `List`/`Map`/`Set` walk their elements then free
-their always-heap backing buffers. The glue infrastructure from the
-shelved attempt is reusable as-is; it was only ever unsafe because the
-values flowing into it had unknown provenance and ownership.
+place, recursive composite drop glue is sound. The destination shape is
+an **`elaborate` IR sub-pass**, not a backend fallback: it
+whole-program-discovers which composite types are actually dropped
+(mirroring the closure/process discovery passes), synthesizes one
+per-type drop function (`FunctionKind::DropGlue { ty }`) into the
+`IRProgram`, and rewrites every composite `DropLocal`/`DropValue` into a
+`Call @drop_T`. The synthesized body recurses structurally: a struct
+drops each owning field, an enum tag-dispatches to its variant payload,
+and `List`/`Map`/`Set` walk their elements then free their always-heap
+backing buffers. Leaf heap (`String`/`Binary`/`Bits`) keeps its direct
+`DropLocal`.
+
+Materializing the glue as real `IRFunction`s — discovered and lowered
+before seal, like every other function — keeps the backend a pure
+translator and removes its current panic-on-composite fallback,
+satisfying the northstar's "no lazy backfill in codegen" rule. It is
+orthogonal to return mode (Axis A): Axis A decides *whether* a value is
+dropped, Axis B decides *how* to free a `T` once that decision is made.
 
 ### Field-overwrite (Blocker 3)
 
@@ -272,10 +319,12 @@ land after it.
 
 ## Phasing
 
-1. **Return mode + intrinsic audit.** Add the IR return-mode bit,
-   populate from typecheck, fix/mark aliasing intrinsics. Unblocks
-   Blocker 2. No widening yet — `ownership_for_expr` keeps the
-   whitelist but now *can* trust call results.
+1. **Return mode + intrinsic audit (landed).** Compute `ReturnMode` in
+   typecheck onto `FunctionSignature`; port the intrinsic audit into a
+   typecheck catalog; carry the IR-layer mode on `IRType::Function` for
+   indirect calls. Computed and carried, not consumed — `ownership_for_expr`
+   keeps the whitelist but now *can* trust call results (direct via the
+   signature, indirect via the closure value's type). Unblocks Blocker 2.
 2. **Widen ownership + move-out sinks + OR-merge + clone-on-acquisition.**
    Stamp call results, constructors, and collection literals `Owned`
    using the facts from (1); add the rebind / field-RHS / arm-tail

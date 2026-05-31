@@ -70,6 +70,7 @@ pub use local::IRLocalId;
 pub use ownership::Ownership;
 pub use package::IRPackage;
 pub use program::{IRProgram, ProjectEntry, lower_program};
+pub use return_mode::{FnReturnMode, ReturnMode};
 pub use script::{IRScript, lower_script};
 pub use struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
 pub use tail_calls::function_has_tail_call;

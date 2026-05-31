@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{Expr, PassMode};
+use koja_ast::ast::{Expr, PassMode, ReturnMode};
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 /// How a function call dispatches on its callee.
@@ -77,6 +77,11 @@ pub struct ResolvedStructField {
 pub struct FunctionSignature {
     pub dispatch: Dispatch,
     pub params: Vec<ResolvedParam>,
+    /// Whether the call site owns this function's result (and may drop
+    /// it) or merely borrows a view into an input / a static. Defaults
+    /// to the leak-safe [`ReturnMode::Borrowed`] at lift time; the
+    /// `infer_return_modes` pass stamps the real value after `resolve`.
+    pub return_mode: ReturnMode,
     pub return_type: ResolvedType,
     pub impl_args: Vec<ResolvedType>,
 }

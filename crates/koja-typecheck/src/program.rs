@@ -11,7 +11,7 @@ use koja_ast::ast::{Diagnostic, File, Severity};
 use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
-use crate::pipeline::{aliases, collect, lift_signatures, resolve, seal, synthesize};
+use crate::pipeline::{aliases, collect, lift_signatures, resolve, return_mode, seal, synthesize};
 use crate::registry::GlobalRegistry;
 
 /// A package fragment of a [`CheckedProgram`].
@@ -135,6 +135,8 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
             partial: rebuild_parsed(&packages),
         });
     }
+
+    return_mode::infer_return_modes(&packages, &mut registry);
 
     let checked = CheckedProgram {
         diagnostics,

@@ -102,7 +102,7 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.mangled().to_string(),
         IRType::Float32 => "Float32".to_string(),
         IRType::Float64 => "Float64".to_string(),
-        IRType::Function { params, ret } => {
+        IRType::Function { params, ret, .. } => {
             let rendered_params: Vec<String> = params.iter().map(mangle_type).collect();
             format!("Fn_${};{}$", rendered_params.join(","), mangle_type(ret))
         }

@@ -5,7 +5,6 @@
 use std::borrow::Borrow;
 use std::fmt;
 
-use koja_ast::ast::ReturnMode;
 use koja_ast::identifier::Identifier;
 
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
@@ -180,14 +179,6 @@ pub struct IRFunction {
     pub blocks: Vec<IRBasicBlock>,
     pub kind: FunctionKind,
     pub params: Vec<IRFunctionParam>,
-    /// Whether the call site owns this function's result (and may
-    /// drop it) or merely borrows a view into an input / a static.
-    /// Filled by [`crate::return_mode::infer_return_modes`] after
-    /// lowering + monomorphization; construction sites default to the
-    /// leak-safe [`ReturnMode::Borrowed`] until the pass overwrites
-    /// it. Nothing consumes it yet — drop insertion lands in a later
-    /// phase (see `design/OWNERSHIP-DROP.md`).
-    pub return_mode: ReturnMode,
     pub return_type: IRType,
     pub symbol: IRSymbol,
 }

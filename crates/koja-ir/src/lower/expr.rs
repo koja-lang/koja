@@ -18,6 +18,7 @@ use crate::constant::IRConstantValue;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
+use crate::return_mode::FnReturnMode;
 use crate::types::{ConcatKind, ConstValue, IRType, ValueId};
 
 use super::arms::lower_result_ty;
@@ -586,7 +587,12 @@ fn lower_fn_as_value(
     }
     let target_symbol = IRSymbol::from_identifier(&entry.identifier);
     let wrapper_symbol = synthesize_fn_as_closure_wrapper(&target_symbol, sig, registry, output);
-    let ty = resolved_type_to_ir_type(expr_resolution, registry, &mut output.instantiations);
+    let mut ty = resolved_type_to_ir_type(expr_resolution, registry, &mut output.instantiations);
+    // This closure value wraps a known function, so its result
+    // ownership is the wrapped fn's — stamp it for indirect-call drops.
+    if let IRType::Function { return_mode, .. } = &mut ty {
+        *return_mode = FnReturnMode(sig.return_mode.into());
+    }
     let dest = ctx.fresh_value(ty.clone());
     ctx.cfg.append(
         block,

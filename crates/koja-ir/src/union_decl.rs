@@ -437,7 +437,7 @@ fn walk_type(ty: &IRType, out: &mut BTreeMap<IRSymbol, IRType>) {
             walk_type(key, out);
             walk_type(value, out);
         }
-        IRType::Function { params, ret } => {
+        IRType::Function { params, ret, .. } => {
             for param in params {
                 walk_type(param, out);
             }

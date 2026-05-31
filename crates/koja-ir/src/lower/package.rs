@@ -9,8 +9,8 @@
 //! [`Identifier`] differs.
 
 use koja_ast::ast::{
-    Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Param, ReturnMode, TypeExpr,
-    is_extern_c, is_intrinsic,
+    Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c,
+    is_intrinsic,
 };
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
@@ -26,6 +26,7 @@ use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
 use crate::mangling::{mangled_type_name, union_mangle};
 use crate::package::IRPackage;
+use crate::return_mode::FnReturnMode;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
 
@@ -330,7 +331,6 @@ pub(crate) fn lower_function_inner(
             blocks: Vec::new(),
             kind: FunctionKind::Intrinsic(intrinsic_id),
             params,
-            return_mode: ReturnMode::Borrowed,
             return_type,
             symbol,
         });
@@ -343,7 +343,6 @@ pub(crate) fn lower_function_inner(
             blocks: Vec::new(),
             kind: FunctionKind::Extern(attrs),
             params,
-            return_mode: ReturnMode::Borrowed,
             return_type,
             symbol,
         });
@@ -371,7 +370,6 @@ pub(crate) fn lower_function_inner(
         blocks,
         kind: FunctionKind::Regular,
         params,
-        return_mode: ReturnMode::Borrowed,
         return_type,
         symbol,
     })
@@ -523,6 +521,7 @@ pub(crate) fn resolved_type_to_ir_type(
                 .iter()
                 .map(|p| resolved_type_to_ir_type(&p.ty, registry, instantiations))
                 .collect(),
+            return_mode: FnReturnMode::default(),
             ret: Box::new(resolved_type_to_ir_type(ret, registry, instantiations)),
         },
         ResolvedType::Named {

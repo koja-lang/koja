@@ -29,7 +29,6 @@ use crate::function::{FunctionKind, IRFunction, IRSymbol};
 use crate::generics::{self, Instantiation};
 use crate::lower::{LowerOutput, resolved_type_to_ir_type, synthesize_process_entry_wrapper};
 use crate::package::IRPackage;
-use crate::return_mode::infer_return_modes;
 use crate::struct_decl::IRStructDecl;
 use crate::tail_calls::rewrite_tail_calls;
 use crate::types::IRType;
@@ -227,7 +226,6 @@ pub fn lower_program(
     discover_unions(&mut program.packages);
     break_type_cycles(&mut program.packages);
     rewrite_tail_calls(&mut program.packages);
-    infer_return_modes(&mut program.packages);
 
     if program.function(program.entry_point.mangled()).is_none() {
         return Err(LowerError::EntryPointNotFound {

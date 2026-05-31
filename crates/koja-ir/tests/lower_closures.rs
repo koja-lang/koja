@@ -21,7 +21,9 @@
 //!   [`IRInstruction::MakeClosure`] with no captures.
 
 use koja_ast::util::dedent;
-use koja_ir::{FunctionKind, IRFunction, IRInstruction, IRProgram, IRType};
+use koja_ir::{
+    FnReturnMode, FunctionKind, IRFunction, IRInstruction, IRProgram, IRType, ReturnMode,
+};
 
 mod common;
 
@@ -81,6 +83,7 @@ fn move_out_locals_in(function: &IRFunction) -> Vec<&IRInstruction> {
 fn int_fn_type(arity: usize) -> IRType {
     IRType::Function {
         params: vec![IRType::Int64; arity],
+        return_mode: FnReturnMode::default(),
         ret: Box::new(IRType::Int64),
     }
 }
@@ -353,6 +356,37 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
     assert_eq!(body_symbol.mangled(), "TestApp.add__as_closure");
     assert!(captures.is_empty());
     assert_eq!(*ty, int_fn_type(2));
+}
+
+#[test]
+fn fn_as_value_carries_callee_return_mode_on_closure_type() {
+    // `fresh` returns a cloned (owned) String; the fn-as-value adapter
+    // stamps that mode onto the closure value's `IRType::Function`.
+    let source = "
+        fn fresh(s: String) -> String
+          s.clone()
+        end
+
+        fn apply(f: fn (String) -> String, s: String) -> String
+          f(s)
+        end
+
+        fn main -> Int
+          apply(fresh, \"hi\")
+          0
+        end
+        ";
+
+    let program = lower(&dedent(source));
+    let makes = make_closure_in(function(&program, "main"));
+    assert_eq!(makes.len(), 1, "one fn-as-value adapter site");
+    let IRInstruction::MakeClosure { ty, .. } = makes[0] else {
+        unreachable!()
+    };
+    let IRType::Function { return_mode, .. } = ty else {
+        panic!("closure value must carry IRType::Function, got {ty:?}");
+    };
+    assert_eq!(return_mode.0, ReturnMode::Owned);
 }
 
 #[test]

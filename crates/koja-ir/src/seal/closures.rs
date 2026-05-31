@@ -166,6 +166,7 @@ fn require_value_type_matches_body(
     let IRType::Function {
         params: ty_params,
         ret: ty_ret,
+        ..
     } = value_ty
     else {
         seal_panic(&format!(
@@ -220,7 +221,6 @@ fn kind_label(kind: &FunctionKind) -> &'static str {
 mod tests {
     use std::collections::BTreeMap;
 
-    use koja_ast::ast::ReturnMode;
     use koja_ast::identifier::{Identifier, LocalId};
 
     use crate::function::{
@@ -230,6 +230,7 @@ mod tests {
     use crate::local::IRLocalId;
     use crate::ownership::Ownership;
     use crate::package::IRPackage;
+    use crate::return_mode::FnReturnMode;
     use crate::types::{IRType, ValueId};
 
     use super::{seal_closure_decls, seal_closure_ops};
@@ -272,7 +273,6 @@ mod tests {
                 local_id: param_local,
                 ty: IRType::Int64,
             }],
-            return_mode: ReturnMode::Borrowed,
             return_type: IRType::Int64,
             symbol: sym,
         }
@@ -291,7 +291,6 @@ mod tests {
             blocks: vec![entry],
             kind: FunctionKind::Regular,
             params: Vec::new(),
-            return_mode: ReturnMode::Borrowed,
             return_type: IRType::Unit,
             symbol: sym,
         }
@@ -372,6 +371,7 @@ mod tests {
             dest: ValueId(8),
             ty: IRType::Function {
                 params: vec![IRType::Int64],
+                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Int64),
             },
         };
@@ -391,6 +391,7 @@ mod tests {
             dest: ValueId(0),
             ty: IRType::Function {
                 params: Vec::new(),
+                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Unit),
             },
         };
@@ -411,6 +412,7 @@ mod tests {
             dest: ValueId(0),
             ty: IRType::Function {
                 params: Vec::new(),
+                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Unit),
             },
         };
@@ -431,6 +433,7 @@ mod tests {
             dest: ValueId(0),
             ty: IRType::Function {
                 params: vec![IRType::Int64],
+                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Int64),
             },
         };
@@ -451,6 +454,7 @@ mod tests {
             dest: ValueId(1),
             ty: IRType::Function {
                 params: vec![IRType::Bool],
+                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Int64),
             },
         };
@@ -471,6 +475,7 @@ mod tests {
             dest: ValueId(1),
             ty: IRType::Function {
                 params: vec![IRType::Int64],
+                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Bool),
             },
         };

@@ -64,6 +64,9 @@ pub(super) fn substitute_signature(
                 ty: substitute_resolved_type(&param.ty, args, owner),
             })
             .collect(),
+        // Return mode is a property of the body, invariant across the
+        // type-arg substitution mono performs.
+        return_mode: signature.return_mode,
         return_type: substitute_resolved_type(&signature.return_type, args, owner),
         impl_args: signature
             .impl_args
