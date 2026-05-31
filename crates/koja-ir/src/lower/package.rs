@@ -9,8 +9,8 @@
 //! [`Identifier`] differs.
 
 use koja_ast::ast::{
-    Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Param, TypeExpr, is_extern_c,
-    is_intrinsic,
+    Diagnostic, ExtendBlock, Function, ImplBlock, ImplMember, Item, Param, ReturnMode, TypeExpr,
+    is_extern_c, is_intrinsic,
 };
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
@@ -330,6 +330,7 @@ pub(crate) fn lower_function_inner(
             blocks: Vec::new(),
             kind: FunctionKind::Intrinsic(intrinsic_id),
             params,
+            return_mode: ReturnMode::Borrowed,
             return_type,
             symbol,
         });
@@ -342,6 +343,7 @@ pub(crate) fn lower_function_inner(
             blocks: Vec::new(),
             kind: FunctionKind::Extern(attrs),
             params,
+            return_mode: ReturnMode::Borrowed,
             return_type,
             symbol,
         });
@@ -369,6 +371,7 @@ pub(crate) fn lower_function_inner(
         blocks,
         kind: FunctionKind::Regular,
         params,
+        return_mode: ReturnMode::Borrowed,
         return_type,
         symbol,
     })

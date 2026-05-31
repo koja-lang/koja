@@ -220,6 +220,7 @@ fn kind_label(kind: &FunctionKind) -> &'static str {
 mod tests {
     use std::collections::BTreeMap;
 
+    use koja_ast::ast::ReturnMode;
     use koja_ast::identifier::{Identifier, LocalId};
 
     use crate::function::{
@@ -271,6 +272,7 @@ mod tests {
                 local_id: param_local,
                 ty: IRType::Int64,
             }],
+            return_mode: ReturnMode::Borrowed,
             return_type: IRType::Int64,
             symbol: sym,
         }
@@ -289,6 +291,7 @@ mod tests {
             blocks: vec![entry],
             kind: FunctionKind::Regular,
             params: Vec::new(),
+            return_mode: ReturnMode::Borrowed,
             return_type: IRType::Unit,
             symbol: sym,
         }

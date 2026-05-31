@@ -30,7 +30,7 @@
 //! The host block's terminator is [`crate::IRTerminator::Unreachable`]
 //! because dispatch always leaves the receive instruction.
 
-use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, MatchArm, Pattern, Statement};
+use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, MatchArm, Pattern, ReturnMode, Statement};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 use koja_typecheck::{GlobalRegistry, RegistryEntry};
@@ -498,6 +498,7 @@ fn build_wrapper_body(
             local_id: config_local,
             ty: config_type,
         }],
+        return_mode: ReturnMode::Borrowed,
         return_type: IRType::Unit,
         symbol: wrapper_symbol,
     }

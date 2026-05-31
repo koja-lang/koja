@@ -45,6 +45,7 @@ mod merge;
 mod ownership;
 mod package;
 mod program;
+mod return_mode;
 mod script;
 mod seal;
 mod struct_decl;

@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use koja_ast::ast::{
     AssignTarget, BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm,
-    PassMode, Pattern, Statement, StringPart,
+    PassMode, Pattern, ReturnMode, Statement, StringPart,
 };
 use koja_ast::identifier::{AnonymousKind, FnParam, LocalId, Resolution, ResolvedType};
 use koja_typecheck::{FunctionSignature, GlobalRegistry};
@@ -508,6 +508,7 @@ fn synthesize_body(
         blocks: ctx.into_blocks(),
         kind: FunctionKind::Closure { env_layout },
         params,
+        return_mode: ReturnMode::Borrowed,
         return_type,
         symbol: symbol.clone(),
     })
@@ -735,6 +736,7 @@ fn build_fn_as_closure_wrapper(
             env_layout: Vec::new(),
         },
         params,
+        return_mode: ReturnMode::Borrowed,
         return_type: return_ty,
         symbol: wrapper_symbol,
     }

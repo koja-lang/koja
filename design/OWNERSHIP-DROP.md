@@ -77,7 +77,11 @@ b = Box{raw: "literal"}   # drop glue → free(rodata) → SIGABRT
 The value's *provenance* (heap vs static) is invisible at the point of
 drop. The leaf-local whitelist sidesteps this by only ever dropping
 values whose provenance is statically known to be a fresh malloc; a
-composite field has no such guarantee.
+composite field has no such guarantee. And literals are not the only
+offender: `const` refs lower through `LoadConst` to the same rodata
+global, and borrowed params are not heap-owned either — both reach
+owned composite positions the same way. The fix therefore cannot be
+literal-specific; see §Provenance.
 
 ### Blocker 2 — "owned" call results can alias a borrow
 
@@ -115,12 +119,14 @@ view of its arguments**, so it cannot stamp call results at all.
 
 Both blockers are the same missing abstraction: the IR ownership
 lattice is a syntactic guess (`ownership_for_expr`) that carries
-neither **provenance** (is this payload heap or static?) nor the
-typechecker's **move/borrow + return-mode** facts (does this call
-hand back ownership, or a borrow of its inputs?). Drop insertion needs
-both. Until it has them, the only safe `Owned` sources are the five
-hand-verified "always a fresh malloc, never aliases anything" shapes
-already on the whitelist.
+neither a **heap invariant** (is everything reachable from this owned
+value actually freeable?) nor the typechecker's **move/borrow +
+return-mode** facts (does this call hand back ownership, or a borrow of
+its inputs?). Drop insertion needs the first established (by cloning
+statics/borrows at ownership acquisition, §Provenance) and the second
+known (§Ownership). Until it has them, the only safe `Owned` sources
+are the five hand-verified "always a fresh malloc, never aliases
+anything" shapes already on the whitelist.
 
 A third, related gap motivates the same machinery:
 
@@ -142,9 +148,12 @@ move-tracking facts as Blocker 2.
 Drop insertion is sound and complete when, for every move-typed SSA
 value, the compiler knows three facts at the drop site:
 
-1. **Provenance** — does this value's payload live on the heap
-   (`koja_alloc`) or in a static global? Only heap payloads may be
-   freed. (Resolves Blocker 1.)
+1. **Provenance** — every payload reachable from an `Owned`, droppable
+   value must be heap; only heap payloads may be freed. Rather than
+   track heap-vs-static at runtime, the compiler *maintains* this as an
+   invariant: an `Owned` binding is never initialized from an `Unowned`
+   source (literal, `const`, borrow) without a clone. (Resolves
+   Blocker 1.)
 2. **Ownership** — does this binding own the value, or borrow it?
    Only owners drop. For a *call result*, this is the callee's
    declared return mode: owned (fresh / moved-out) vs borrowed (a view
@@ -159,26 +168,42 @@ The current lattice approximates (3) and ignores (1) and (2).
 
 ## Design
 
-### Provenance: make heap-or-static a runtime-visible fact
+### Provenance: keep statics static, clone on ownership acquisition
 
-Two viable shapes; recommend the first.
+Literals stay zero-cost rodata globals, and so do `const`s (which
+lower through `LoadConst` to the same `emit_const_payload` path). The
+two alternatives that make heap-vs-static a runtime-visible fact —
+heapifying every literal through `koja_alloc`, or tagging the
+`bit_length` header with a sentinel `koja_free` checks — both pay a
+permanent, program-wide cost (an allocation per literal occurrence, or
+a header bit plus a branch on every free and allocator) to solve a
+problem that only exists at one boundary. Both are rejected.
 
-- **(A) Heapify literals.** Materialize String / Binary / Bits
-  literals through `koja_alloc` instead of a constant global
-  (replace the rodata path in `emit_const_payload`). Every payload is
-  then uniformly freeable, drop glue needs no provenance bit, and the
-  C-ABI passthrough invariant in `memory.rs` is preserved. Cost: a
-  per-literal allocation at first use (amortizable by caching a heap
-  copy per literal global behind a one-time init), and literals stop
-  being shareable rodata.
-- **(B) Tagged free.** Keep literals static but reserve a sentinel in
-  the `i64 bit_length` header (e.g. a high bit, or a `-1` refcount
-  word) that `koja_free` checks and no-ops. Cheaper at materialization,
-  but spends a header bit and adds a branch to every free, and every
-  hand-written runtime allocator must honor the sentinel.
+That boundary is *ownership acquisition*: a static or borrowed payload
+can only reach `free` by being stored into an `Owned`, droppable
+position — a struct/enum field, a collection element, or a `move`
+parameter. Leaf bindings never trigger it (`s = "hi"` is `Unowned`,
+never dropped, stays rodata). So the invariant drop glue needs —
+**every payload reachable from an owned, droppable value is heap** — is
+established structurally, at lowering, by one rule:
 
-Either makes Blocker 1 disappear: drop glue can free any leaf payload
-it reaches.
+> When an `Owned` binding is initialized from an `Unowned` source
+> (literal, `const`, or borrowed value), insert a heap clone of the
+> source.
+
+This subsumes literals, consts, and borrows with a single mechanism,
+costs nothing for transient literals, and needs no runtime provenance
+bit or allocator cooperation. It reuses the deep-copy infrastructure
+in `koja-ir-llvm/src/intrinsics/heap_clone.rs`; composite clones
+recurse the same shape drop glue does, inverted.
+
+Heapifying literals would *not* let us skip this rule. `const` stays
+static by design, and borrowed params are never heap-owned here, so
+both still flow `Unowned` into owned positions — "const stays static"
+plus "drop glue frees fields" together *force* clone-on-acquisition
+regardless. Eager literal heapification would therefore be pure cost
+with no drop-glue payoff, and a strict regression on today's
+zero-cost transient literals (`print("hi")`, literal match arms).
 
 ### Ownership: consume the typechecker's return mode
 
@@ -226,7 +251,8 @@ support.)
 
 ### Drop glue, once unblocked
 
-With provenance and return-mode in place, recursive composite drop
+With the heap invariant (clone-on-acquisition) and return-mode in
+place, recursive composite drop
 glue (`FunctionKind::DropGlue { ty }`, registered pre-seal, bodies
 synthesized in `koja-ir-llvm/src/intrinsics/drop_glue.rs`) is sound:
 a struct drops each owning field, an enum tag-dispatches to its
@@ -246,22 +272,24 @@ land after it.
 
 ## Phasing
 
-1. **Provenance.** Heapify literals (or tagged-free). Self-contained;
-   unblocks Blocker 1; no behavior change until drops widen.
-2. **Return mode + intrinsic audit.** Add the IR return-mode bit,
+1. **Return mode + intrinsic audit.** Add the IR return-mode bit,
    populate from typecheck, fix/mark aliasing intrinsics. Unblocks
-   Blocker 2. Still no widening yet — `ownership_for_expr` keeps the
+   Blocker 2. No widening yet — `ownership_for_expr` keeps the
    whitelist but now *can* trust call results.
-3. **Widen ownership + move-out sinks + OR-merge.** Stamp call
-   results, constructors, and collection literals `Owned` using the
-   facts from (1)+(2); add the rebind / field-RHS / arm-tail sinks.
-4. **Recursive drop glue.** Land the composite glue against the now-safe
+2. **Widen ownership + move-out sinks + OR-merge + clone-on-acquisition.**
+   Stamp call results, constructors, and collection literals `Owned`
+   using the facts from (1); add the rebind / field-RHS / arm-tail
+   move-out sinks; add the clone-on-acquisition guard so any `Unowned`
+   source feeding an `Owned` binding (aggregate field, collection
+   element, `move` param) is cloned to heap. This is where Blocker 1's
+   resolution lands — statics stay static, ownership boundaries clone.
+3. **Recursive drop glue.** Land the composite glue against the now-safe
    value flow. RSS leak fixtures for struct / enum / `List` / `Map` /
    `Set` + nested; eval parity; `just doit` + `just tsan`.
-5. **Field-overwrite drop.** Conditional old-value drop on field
+4. **Field-overwrite drop.** Conditional old-value drop on field
    reassignment, gated by move-consumption.
 
-Each phase is independently green; only (3) onward changes observed
+Each phase is independently green; only (2) onward changes observed
 free behavior.
 
 ## Mechanical checks
@@ -281,7 +309,7 @@ free behavior.
 
 - **Message discard.** `design/archive/20260529-MESSAGE-LIFECYCLE.md`
   phase 6 (`Envelope.drop_glue`) is a direct consumer: once recursive
-  drop glue exists (phase 4 here), the `send` site can stamp the
+  drop glue exists (phase 3 here), the `send` site can stamp the
   message type's glue pointer into the envelope so a discarded
   mailbox reclaims nested payload heap, not just the transport buffer.
   Until then `Envelope.drop_glue` stays `null` (transport reclaimed,
@@ -292,6 +320,11 @@ free behavior.
 - Per-path conditional drop flags (drop-on-some-branches). The OR-merge
   bias leaks rather than tracks these; revisit only if the leaks prove
   material.
+- Runtime heap-vs-static provenance — a `bit_length` tag bit, or
+  heapifying every literal through `koja_alloc`. The
+  clone-on-acquisition invariant keeps statics out of drop paths
+  structurally, so no runtime tag, allocator cooperation, or
+  per-literal allocation is needed.
 - Reference counting or any shared-ownership story. Koja stays
   single-owner.
 - Cyclic-data reclamation beyond what `Indirect` boxing + move

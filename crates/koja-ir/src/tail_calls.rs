@@ -119,6 +119,7 @@ mod tests {
     use crate::local::IRLocalId;
     use crate::ownership::Ownership;
     use crate::types::{IRType, ValueId};
+    use koja_ast::ast::ReturnMode;
     use koja_ast::identifier::LocalId;
     use std::collections::BTreeMap;
 
@@ -173,6 +174,7 @@ mod tests {
                 local_id: param_local,
                 ty: IRType::Int64,
             }],
+            return_mode: ReturnMode::Borrowed,
             return_type: IRType::Int64,
             symbol,
         }

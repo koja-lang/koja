@@ -19,6 +19,7 @@
 
 use std::fmt;
 
+use koja_ast::ast::ReturnMode;
 use koja_ast::identifier::Identifier;
 
 /// One `@intrinsic`-annotated function's dispatch slot. Constructed
@@ -366,6 +367,88 @@ impl IRIntrinsicId {
             return IntType::from_source(receiver).map(|ty| Self::Bitwise { ty, op });
         }
         None
+    }
+
+    /// Whether this intrinsic hands back freshly-owned heap or a view
+    /// that aliases its receiver/argument (or a static). The
+    /// return-mode pass keys call-result ownership off this catalog so
+    /// drop insertion never frees an alias.
+    ///
+    /// `Borrowed` is reserved for the genuine aliases: zero-cost
+    /// reinterprets (`Binary.ptr`, `Binary.to_bits`, `Bits.to_binary`,
+    /// `CPtr.offset`) and collection element views (`List.get` /
+    /// `List.pop` / `Map.get`). Everything else — fresh allocations,
+    /// clones, slices, concat-backed builders, the `recv`/`resolve`
+    /// socket calls, and all scalar / unit / `Bool` results — is
+    /// `Owned`. `CPtr.to_string` / `List.from_list` / `Map.from_map`
+    /// take ownership of their input and re-hand it, so they own the
+    /// result too. See the audit in `design/OWNERSHIP-DROP.md`.
+    pub fn return_mode(&self) -> ReturnMode {
+        use ReturnMode::{Borrowed, Owned};
+        match self {
+            Self::Binary(method) => match method {
+                BinaryMethod::Ptr | BinaryMethod::ToBits => Borrowed,
+                BinaryMethod::ByteSize | BinaryMethod::Clone | BinaryMethod::ToString => Owned,
+            },
+            Self::Bits(method) => match method {
+                BitsMethod::ToBinary => Borrowed,
+                BitsMethod::Clone => Owned,
+            },
+            Self::CPtr(method) => match method {
+                CPtrMethod::Offset => Borrowed,
+                CPtrMethod::Alloc
+                | CPtrMethod::Free
+                | CPtrMethod::Null
+                | CPtrMethod::NullQ
+                | CPtrMethod::Read
+                | CPtrMethod::ToBinary
+                | CPtrMethod::ToString
+                | CPtrMethod::Write => Owned,
+            },
+            Self::List(method) => match method {
+                ListMethod::Get | ListMethod::Pop => Borrowed,
+                ListMethod::Append
+                | ListMethod::Concat
+                | ListMethod::EmptyQ
+                | ListMethod::FromList
+                | ListMethod::Length
+                | ListMethod::New
+                | ListMethod::ReplaceAt
+                | ListMethod::Slice => Owned,
+            },
+            Self::Map(method) => match method {
+                MapMethod::Get => Borrowed,
+                MapMethod::Clone
+                | MapMethod::EmptyQ
+                | MapMethod::FromMap
+                | MapMethod::HasQ
+                | MapMethod::Length
+                | MapMethod::New
+                | MapMethod::Put
+                | MapMethod::Remove => Owned,
+            },
+            Self::String(method) => match method {
+                StringMethod::ToBinary => Borrowed,
+                StringMethod::ByteLength
+                | StringMethod::Clone
+                | StringMethod::Get
+                | StringMethod::Length
+                | StringMethod::Slice
+                | StringMethod::ToCstring => Owned,
+            },
+            Self::Bitwise { .. }
+            | Self::CString(_)
+            | Self::Debug(_)
+            | Self::Equality(_)
+            | Self::Hash(_)
+            | Self::Kernel(_)
+            | Self::Parse(_)
+            | Self::Print
+            | Self::Ref(_)
+            | Self::ReplyTo(_)
+            | Self::Set(_)
+            | Self::Socket(_) => Owned,
+        }
     }
 }
 
@@ -1150,6 +1233,59 @@ mod tests {
         assert!(
             IRIntrinsicId::from_identifier(&id(&["Outer", "Inner", "method"])).is_none(),
             "three-segment paths aren't part of today's intrinsic surface",
+        );
+    }
+
+    #[test]
+    fn return_mode_marks_aliases_borrowed_and_fresh_owned() {
+        use ReturnMode::{Borrowed, Owned};
+        // Zero-cost reinterprets and element views alias their input.
+        assert_eq!(
+            IRIntrinsicId::String(StringMethod::ToBinary).return_mode(),
+            Borrowed,
+        );
+        assert_eq!(
+            IRIntrinsicId::Binary(BinaryMethod::Ptr).return_mode(),
+            Borrowed,
+        );
+        assert_eq!(
+            IRIntrinsicId::Binary(BinaryMethod::ToBits).return_mode(),
+            Borrowed,
+        );
+        assert_eq!(
+            IRIntrinsicId::Bits(BitsMethod::ToBinary).return_mode(),
+            Borrowed
+        );
+        assert_eq!(
+            IRIntrinsicId::CPtr(CPtrMethod::Offset).return_mode(),
+            Borrowed
+        );
+        assert_eq!(IRIntrinsicId::List(ListMethod::Get).return_mode(), Borrowed);
+        assert_eq!(IRIntrinsicId::List(ListMethod::Pop).return_mode(), Borrowed);
+        assert_eq!(IRIntrinsicId::Map(MapMethod::Get).return_mode(), Borrowed);
+
+        // Fresh allocs, clones, slices, and move-through conversions own.
+        assert_eq!(
+            IRIntrinsicId::String(StringMethod::Slice).return_mode(),
+            Owned
+        );
+        assert_eq!(
+            IRIntrinsicId::String(StringMethod::Clone).return_mode(),
+            Owned
+        );
+        assert_eq!(IRIntrinsicId::List(ListMethod::Slice).return_mode(), Owned);
+        assert_eq!(
+            IRIntrinsicId::List(ListMethod::FromList).return_mode(),
+            Owned
+        );
+        assert_eq!(IRIntrinsicId::Map(MapMethod::FromMap).return_mode(), Owned);
+        assert_eq!(
+            IRIntrinsicId::CPtr(CPtrMethod::ToString).return_mode(),
+            Owned
+        );
+        assert_eq!(
+            IRIntrinsicId::Binary(BinaryMethod::ToString).return_mode(),
+            Owned,
         );
     }
 
