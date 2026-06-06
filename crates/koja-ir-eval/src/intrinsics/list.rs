@@ -1,10 +1,9 @@
-//! `List<T>` family — heap-backed dynamic array. Eval mirrors the
-//! LLVM ABI's by-value semantics from the outside (every method
-//! takes / returns a `Value::List`) but stores elements in a shared
-//! `Rc<RefCell<Vec<Value>>>` so move-self mutators (`append`,
-//! `concat`, `pop`, `replace_at`) can mutate in place. The
-//! interpreter never aliases a `Value::List` after a move-self
-//! intrinsic returns, so sharing is invisible at the Koja level.
+//! `List<T>` family — heap-backed dynamic array. Eval stores elements
+//! in `Rc<RefCell<Vec<Value>>>`, but under value semantics every
+//! mutator (`append`, `concat`, `pop`, `replace_at`) is
+//! copy-on-write: it clones the receiver's backing vec into a fresh
+//! `Rc` before mutating, so a shared binding (`b = a`) is never
+//! observably mutated through another alias.
 //!
 //! `get` and `pop` materialize `Option<T>` / `Pair<Option<T>, List<T>>`
 //! values directly. The receiver symbol for the option / pair shape
@@ -64,16 +63,17 @@ fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {
 fn append(args: &[Value]) -> Result<Value, RuntimeError> {
     let list = expect_list(args, 0, "List.append")?;
     let item = expect_arg(args, 1, "List.append")?.clone();
-    list.borrow_mut().push(item);
-    Ok(Value::List(list))
+    let mut items = list.borrow().clone();
+    items.push(item);
+    Ok(Value::List(Rc::new(RefCell::new(items))))
 }
 
 fn concat(args: &[Value]) -> Result<Value, RuntimeError> {
     let lhs = expect_list(args, 0, "List.concat")?;
     let rhs = expect_list(args, 1, "List.concat")?;
-    let mut tail: Vec<Value> = rhs.borrow().clone();
-    lhs.borrow_mut().append(&mut tail);
-    Ok(Value::List(lhs))
+    let mut combined = lhs.borrow().clone();
+    combined.extend(rhs.borrow().iter().cloned());
+    Ok(Value::List(Rc::new(RefCell::new(combined))))
 }
 
 fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
@@ -97,9 +97,10 @@ fn pop<R: CallResolver>(
     let list = expect_list(args, 0, "List.pop")?;
     let pair_symbol = struct_return_symbol(function, "List.pop")?;
     let option_symbol = pair_first_option_symbol(&pair_symbol, resolver)?;
-    let popped = list.borrow_mut().pop();
+    let mut items = list.borrow().clone();
+    let popped = items.pop();
     let option = helpers::option_value(option_symbol, popped);
-    let remainder = Value::List(list);
+    let remainder = Value::List(Rc::new(RefCell::new(items)));
     Ok(Value::Struct {
         symbol: pair_symbol,
         fields: vec![option, remainder],
@@ -110,13 +111,13 @@ fn replace_at(args: &[Value]) -> Result<Value, RuntimeError> {
     let list = expect_list(args, 0, "List.replace_at")?;
     let index = expect_int(args, 1, "List.replace_at")?;
     let value = expect_arg(args, 2, "List.replace_at")?.clone();
-    if index >= 0 {
-        let mut borrow = list.borrow_mut();
-        if let Some(slot) = borrow.get_mut(index as usize) {
-            *slot = value;
-        }
+    let mut items = list.borrow().clone();
+    if index >= 0
+        && let Some(slot) = items.get_mut(index as usize)
+    {
+        *slot = value;
     }
-    Ok(Value::List(list))
+    Ok(Value::List(Rc::new(RefCell::new(items))))
 }
 
 fn slice(args: &[Value]) -> Result<Value, RuntimeError> {

@@ -21,7 +21,7 @@
 //! [`Param.local_id`]: koja_ast::ast::Param
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, PassMode, Statement};
+use koja_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Statement};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
@@ -155,7 +155,7 @@ pub(crate) fn resolve_file(
     }
     if let Some(body) = file.body.as_mut() {
         let mut scope = LocalScope::new();
-        let mut resolver = env.make_resolver(None, None, None, &[], &mut scope);
+        let mut resolver = env.make_resolver(None, None, &[], &mut scope);
         for stmt in body.iter_mut() {
             resolve_statement(stmt, &mut resolver, diagnostics);
         }
@@ -190,7 +190,6 @@ fn resolve_function(
     if let Some(signature) = &signature {
         seed_scope_with_params(function, signature, &mut scope);
     }
-    let self_pass_mode = signature.as_ref().and_then(self_param_mode);
     let type_param_owners = type_param_owners(identifier, function, enclosing_type, env.registry);
 
     let Some(body) = function.body.as_mut() else {
@@ -200,7 +199,6 @@ fn resolve_function(
         let mut resolver = env.make_resolver(
             enclosing_type,
             enclosing_type_id,
-            self_pass_mode,
             &type_param_owners,
             &mut scope,
         );
@@ -256,19 +254,6 @@ fn lifted_signature<'a>(
         GlobalKind::Function(Some(signature)) => Some(signature),
         _ => None,
     }
-}
-
-/// `PassMode` of the lifted signature's `self` receiver, when one
-/// exists. `lift_signatures::functions` always assigns the `"self"`
-/// name to a `Param::Self_`, so a name-keyed lookup avoids depending
-/// on slot-0 ordering invariants and stays robust against any future
-/// reshuffling of the param vec.
-fn self_param_mode(signature: &FunctionSignature) -> Option<PassMode> {
-    signature
-        .params
-        .iter()
-        .find(|param| param.name == "self")
-        .map(|param| param.mode)
 }
 
 /// Pre-populate `scope` with the function's params (each a fresh

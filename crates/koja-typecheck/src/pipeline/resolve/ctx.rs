@@ -1,13 +1,11 @@
 //! Resolver state threaded through every name-resolution recursion.
 
-use koja_ast::ast::{AliasDecl, PassMode};
+use koja_ast::ast::AliasDecl;
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::GlobalRegistry;
-
-use super::moves::MoveLedger;
 
 /// File-level resolver inputs: the cross-function pieces every
 /// per-function [`Resolver`] reuses verbatim. Bundling them at the
@@ -37,7 +35,6 @@ impl<'a> ResolverEnv<'a> {
         &'b mut self,
         enclosing_type: Option<&'b str>,
         enclosing_type_id: Option<GlobalRegistryId>,
-        self_pass_mode: Option<PassMode>,
         type_param_owners: &'b [GlobalRegistryId],
         scope: &'b mut LocalScope,
     ) -> Resolver<'b> {
@@ -48,11 +45,9 @@ impl<'a> ResolverEnv<'a> {
             file_aliases: self.file_aliases,
             loop_break_seen: Vec::new(),
             loop_depth: 0,
-            moves: MoveLedger::new(),
             package: self.package,
             registry: self.registry,
             scope,
-            self_pass_mode,
             type_param_owners,
         }
     }
@@ -127,24 +122,9 @@ pub(super) struct Resolver<'a> {
     /// this to `0` and restore on exit so a `break` inside a
     /// closure body must reference a loop _inside_ the closure.
     pub loop_depth: u32,
-    /// Per-function move-state ledger. Updated at every move-trigger
-    /// site (assignment RHS for non-`Copy` types, `move` parameter
-    /// arg, `move self` receiver) and consulted at every local read
-    /// to diagnose use-after-move. Lives on the resolver so branch
-    /// joins can `snapshot` / `restore` / `merge_branches` it
-    /// without separate plumbing.
-    pub moves: MoveLedger,
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
     pub scope: &'a mut LocalScope,
-    /// `PassMode` of the enclosing method's `self` receiver, when one
-    /// exists. `Some(PassMode::Move)` admits `self.field = …` mutation;
-    /// `Some(PassMode::Borrow | PassMode::Copy)` rejects it. `None`
-    /// outside any method (top-level fns, file body) — there's no
-    /// `self` in scope at all, so the field-assignment self-mutation
-    /// rule trivially doesn't apply (the head-local lookup already
-    /// fails, and the assignment diagnoses as "undeclared").
-    pub self_pass_mode: Option<PassMode>,
     /// Owner chain that any in-body type annotation resolves against
     /// — innermost first (function's own id when it declares
     /// type-params, then receiver). Mirrors

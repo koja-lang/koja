@@ -15,9 +15,10 @@ use crate::error::LlvmError;
 use crate::types::ir_basic_type;
 
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash, codegen_err,
-    entry_pointer, expect_enum_symbol, extract_int, extract_pointer, extract_table_fields,
-    nth_hashtable, nth_param, resolve_key_hash_ops, ret_basic, ret_struct,
+    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
+    clone_table_buffers, codegen_err, entry_pointer, expect_enum_symbol, extract_int,
+    extract_pointer, extract_table_fields, nth_hashtable, nth_param, resolve_key_hash_ops,
+    ret_basic, ret_struct,
 };
 use super::{
     HashtableLayout, OPTION_NONE_TAG, OPTION_SOME_TAG, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE,
@@ -206,14 +207,17 @@ pub(crate) fn emit_remove<'ctx>(
     let i64_ty = ctx.context.i64_type();
     // emit_remove keeps the manual 4-step extract because it needs
     // `self_val` for the not-found return — `extract_table_fields`
-    // discards the original struct.
+    // discards the original struct. Copy-on-write: the found path
+    // tombstones a fresh clone of the buffers, so the receiver's
+    // table is never mutated in place through a shared binding.
     let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
-    let table = TableSnapshot {
+    let original = TableSnapshot {
         entries_ptr: extract_pointer(ctx, function, self_val, 0, "entries")?,
         states_ptr: extract_pointer(ctx, function, self_val, 1, "states")?,
         length: extract_int(ctx, function, self_val, 2, "len")?,
         capacity: extract_int(ctx, function, self_val, 3, "cap")?,
     };
+    let table = clone_table_buffers(ctx, function, &original, layout.entry_size)?;
     let key_val = nth_param(function, llvm_function, 1, "key")?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(

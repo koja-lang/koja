@@ -23,7 +23,7 @@
 mod bounded;
 mod methods;
 
-use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal, PassMode};
+use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
 use koja_ast::coercion::{Coercion, LiteralCoercion};
 use koja_ast::identifier::{
     AnonymousKind, FnParam, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
@@ -47,7 +47,6 @@ use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coe
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
-use super::moves::move_source_local;
 use super::types::display_resolution;
 
 /// Co-traveling call-site context shared by [`resolve_call`] /
@@ -178,7 +177,6 @@ pub(super) fn resolve_call(
         resolve_closure_args(args, &partially_substituted_params, resolver, diagnostics);
         let (substituted_params, substituted_return) =
             infer_call_type_args(callee, &sig, args, site, resolver.registry, diagnostics);
-        mark_move_args(args, &substituted_params, resolver);
         validate_arg_signature(
             args,
             &substituted_params,
@@ -369,11 +367,6 @@ pub(super) fn resolve_method_call(
             resolver,
             diagnostics,
         );
-        if let MethodReceiver::Instance { .. } = method_receiver
-            && let Some(self_param) = sig.params.first()
-        {
-            mark_move_receiver(receiver, self_param.mode, resolver);
-        }
         validate_arg_signature(
             args,
             method_receiver.explicit_params(&sig.params),
@@ -488,12 +481,6 @@ pub(super) fn resolve_method_call(
         return MethodCallOutcome::Method(ResolvedType::unresolved());
     }
     let substituted_explicit = method_receiver.explicit_params(&substituted_params);
-    mark_move_args(args, substituted_explicit, resolver);
-    if let MethodReceiver::Instance { .. } = method_receiver
-        && let Some(self_param) = substituted_params.first()
-    {
-        mark_move_receiver(receiver, self_param.mode, resolver);
-    }
     validate_arg_signature(
         args,
         substituted_explicit,
@@ -768,10 +755,7 @@ fn callee_is_visible(
 /// so seal walks a populated tree. The expected type at each position
 /// flows into the corresponding arg via [`resolve_expr_with_expected`]
 /// so closure args can pull their param/return shape from the
-/// callee's signature when the user omits annotations. After each
-/// arg resolves, [`mark_move_arg`] stamps the source local as moved
-/// when the corresponding param is `move` and the arg is a
-/// bare-ident read of a non-`Copy` local.
+/// callee's signature when the user omits annotations.
 fn resolve_args(
     args: &mut [Arg],
     expected: Option<&[ResolvedParam]>,
@@ -783,43 +767,6 @@ fn resolve_args(
         let param = expected.and_then(|params| params.get(index));
         let expected_ty = param.map(|p| &p.ty);
         resolve_expr_with_expected(&mut arg.value, expected_ty, resolver, diagnostics);
-        if let Some(param) = param {
-            mark_move_arg(&arg.value, param.mode, resolver);
-        }
-    }
-}
-
-/// Stamp the source local of a `move`-position argument as `Moved`.
-/// No-op for `Borrow`/`Copy` params, fresh-rvalue args, and `Copy`
-/// locals.
-fn mark_move_arg(arg: &Expr, mode: PassMode, resolver: &mut Resolver<'_>) {
-    if mode != PassMode::Move {
-        return;
-    }
-    if let Some(source) = move_source_local(arg, resolver) {
-        resolver.moves.mark_moved(source, arg.span);
-    }
-}
-
-/// Sweep every (param, arg) pair and stamp moves where the param
-/// is `move`. Used after generic-call inference resolves the
-/// substituted param list — the per-arg path inside `resolve_args`
-/// already covers the non-generic path.
-fn mark_move_args(args: &[Arg], params: &[ResolvedParam], resolver: &mut Resolver<'_>) {
-    for (param, arg) in params.iter().zip(args.iter()) {
-        mark_move_arg(&arg.value, param.mode, resolver);
-    }
-}
-
-/// Stamp the source local of a `move self` method receiver as
-/// `Moved`. Mirrors [`mark_move_arg`] for the receiver position
-/// (`receiver.method()` with `move self`).
-fn mark_move_receiver(receiver: &Expr, mode: PassMode, resolver: &mut Resolver<'_>) {
-    if mode != PassMode::Move {
-        return;
-    }
-    if let Some(source) = move_source_local(receiver, resolver) {
-        resolver.moves.mark_moved(source, receiver.span);
     }
 }
 

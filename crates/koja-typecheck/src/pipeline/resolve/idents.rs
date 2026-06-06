@@ -7,7 +7,6 @@ use koja_ast::span::Span;
 use crate::registry::GlobalKind;
 
 use super::ctx::Resolver;
-use super::moves::MoveState;
 
 /// Resolve a bare identifier expression. Locals win first; package-
 /// level constants resolve through a global lookup so an
@@ -29,7 +28,6 @@ pub(super) fn resolve_ident(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     if let Some((local_id, ty)) = resolver.scope.lookup(name) {
-        diagnose_if_moved(name, local_id, span, resolver, diagnostics);
         *resolution = Resolution::Local(local_id);
         return ty.clone();
     }
@@ -96,7 +94,6 @@ pub(super) fn resolve_self(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     if let Some((local_id, ty)) = resolver.scope.lookup("self") {
-        diagnose_if_moved("self", local_id, span, resolver, diagnostics);
         *local_id_slot = Some(local_id);
         return ty.clone();
     }
@@ -105,27 +102,4 @@ pub(super) fn resolve_self(
         span,
     ));
     ResolvedType::unresolved()
-}
-
-/// Emit a use-after-move diagnostic when `local` has been moved
-/// before the read at `span`. Available locals pass through.
-/// Shared by every read site that goes through scope lookup so the
-/// wording stays uniform.
-pub(super) fn diagnose_if_moved(
-    name: &str,
-    local: LocalId,
-    span: Span,
-    resolver: &Resolver<'_>,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    let Some(state) = resolver.moves.state(local) else {
-        return;
-    };
-    let message = match state {
-        MoveState::Moved { .. } => format!("use of moved value `{name}`"),
-        MoveState::MaybeMoved { .. } => {
-            format!("value `{name}` may have been moved by an earlier branch")
-        }
-    };
-    diagnostics.push(Diagnostic::error(message, span));
 }

@@ -1,0 +1,20 @@
+fn dup_in_scope
+  a = "abcdef".upcase()
+  b = a
+  b.print()
+  a.print()
+end
+
+fn carry -> String
+  x = "hello world".upcase()
+  y = x
+  y
+end
+
+fn main
+  dup_in_scope()
+  s = carry()
+  t = s
+  s.print()
+  t.print()
+end

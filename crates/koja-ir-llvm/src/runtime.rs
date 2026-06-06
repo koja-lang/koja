@@ -25,7 +25,6 @@ pub(crate) const INT_PARSE_SYMBOL: &str = "koja_int_parse";
 pub(crate) const LAST_ERROR_SYMBOL: &str = "koja_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "koja_alloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
-pub(crate) const REALLOC_SYMBOL: &str = "koja_realloc";
 pub(crate) const UTF8_VALIDATE_SYMBOL: &str = "koja_utf8_validate";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__koja_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__koja_panic";
@@ -243,22 +242,6 @@ pub(crate) fn declare_socket_resolve_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fu
     let signature = ptr_ty.fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(SOCKET_RESOLVE_SYMBOL, signature, Some(Linkage::External))
-}
-
-/// Declare (or look up) the `koja_realloc` extern — the runtime
-/// allocator funnel's realloc (a libc-`realloc` passthrough that
-/// aborts on OOM; see `koja-runtime/src/mem.rs`). The list `append` /
-/// `concat` emitters call this when the buffer needs to grow.
-/// Signature: `i8* koja_realloc(i8* ptr, i64 new_size)`.
-pub(crate) fn declare_realloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(existing) = ctx.module.get_function(REALLOC_SYMBOL) {
-        return existing;
-    }
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let i64_ty = ctx.context.i64_type();
-    let signature = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
-    ctx.module
-        .add_function(REALLOC_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `__koja_concat_bits` runtime

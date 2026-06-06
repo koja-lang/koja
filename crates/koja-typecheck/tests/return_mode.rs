@@ -1,9 +1,11 @@
 //! Coverage for the `infer_return_modes` pass (`src/pipeline/return_mode`).
 //!
 //! Asserts the [`ReturnMode`] stamped onto each function's
-//! [`FunctionSignature`]: fresh heap / `move`-through / owned-returning
-//! callees are `Owned`; aliasing views (field access, borrowed
-//! intrinsics), plain literals, and recursive cycles are `Borrowed`.
+//! [`FunctionSignature`]: fresh heap and owned-returning callees are
+//! `Owned`; aliasing views (parameter passthrough, field access,
+//! borrowed intrinsics), plain literals, and recursive cycles are
+//! `Borrowed`. The `move` keyword is inert under value semantics, so
+//! a parameter passthrough is `Borrowed` regardless of `move`.
 
 use koja_ast::ast::ReturnMode;
 use koja_ast::identifier::Identifier;
@@ -51,7 +53,10 @@ fn plain_literal_is_borrowed() {
 }
 
 #[test]
-fn move_param_through_is_owned() {
+fn move_param_through_is_borrowed() {
+    // The `move` keyword is inert under value semantics: a parameter
+    // returned straight through aliases storage the caller still owns,
+    // so the return mode is `Borrowed` regardless of `move`.
     let checked = typecheck(&dedent(
         "
         fn identity(move s: String) -> String
@@ -59,7 +64,7 @@ fn move_param_through_is_owned() {
         end
         ",
     ));
-    assert_eq!(return_mode(&checked, &["identity"]), ReturnMode::Owned);
+    assert_eq!(return_mode(&checked, &["identity"]), ReturnMode::Borrowed);
 }
 
 #[test]

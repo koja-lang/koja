@@ -1,6 +1,5 @@
 //! Surface-level coverage for multi-segment field assignment
-//! (`p.x = v`, `a.b.c = v`, `p.x += 1`) and the `move self`
-//! mutation rule.
+//! (`p.x = v`, `a.b.c = v`, `p.x += 1`) and `self`-field mutation.
 //!
 //! Pinned shapes:
 //!
@@ -10,8 +9,9 @@
 //!   offending lvalue and field type.
 //! - Unknown field on a struct receiver diagnoses against the
 //!   receiver name.
-//! - `self.x = v` typechecks under `move self` and is rejected under
-//!   borrowed `self` (mirrors v1's `koja-typecheck::stmt` rule).
+//! - `self.x = v` typechecks unconditionally: under value semantics
+//!   `self` is an independent local value, so there is no
+//!   borrowed/owned distinction to gate the mutation on.
 //! - Compound assignment on a field (`p.x += 1`) requires the leaf
 //!   field's type to be arithmetic.
 
@@ -133,8 +133,10 @@ fn self_field_write_typechecks_under_move_self() {
 }
 
 #[test]
-fn self_field_write_under_borrowed_self_diagnoses() {
-    let failure = typecheck_fail(&dedent(
+fn self_field_write_without_move_self_typechecks() {
+    // The `move` keyword is inert under value semantics, so `self`
+    // field mutation typechecks even without `move self`.
+    typecheck(&dedent(
         "
         struct Counter
           n: Int
@@ -151,13 +153,6 @@ fn self_field_write_under_borrowed_self_diagnoses() {
         end
         ",
     ));
-    let messages = diagnostic_messages(&failure);
-    assert!(
-        messages
-            .iter()
-            .any(|m| m.contains("self") && m.contains("borrowed")),
-        "expected `self` mutation rejection mentioning the borrow, got {messages:?}",
-    );
 }
 
 #[test]

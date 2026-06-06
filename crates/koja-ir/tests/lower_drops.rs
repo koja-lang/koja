@@ -1,17 +1,17 @@
-//! End-to-end smoke coverage for the foundation `move`/drop
-//! pipeline. Each test drives `parse → check → lower` against a
-//! source that exercises one of the three drop-pipeline scenarios
-//! and pins the resulting IR shape:
+//! End-to-end smoke coverage for the drop pipeline. Each test
+//! drives `parse → check → lower` against a source that exercises one
+//! of the drop-pipeline scenarios and pins the resulting IR shape:
 //!
-//! - **Reassignment-of-Owned**: a `move s: String` slot reassigned
-//!   to a literal triggers a `DropLocal` before the new write; the
-//!   slot becomes Unowned and produces no fn-exit drop.
+//! - **Reassignment-of-Owned**: an Owned slot reassigned to a literal
+//!   triggers a `DropLocal` before the new write; the slot becomes
+//!   Unowned and produces no fn-exit drop.
 //! - **Return-of-Owned**: returning an Owned slot substitutes
 //!   `MoveOutLocal` for the standard `LocalRead`, marks the slot
 //!   Moved, and skips it at fn-exit drops.
-//! - **Move-param flowing through to fn-exit drop**: a `move s: String`
-//!   slot the body never consumes is dropped at fn exit (one
-//!   `DropLocal` before the terminator).
+//!
+//! Owned slots are produced by heap-allocating expressions (string
+//! concat). The `move` keyword is inert under value semantics, so
+//! parameters are never Owned and never drive these scenarios.
 //!
 //! These tests sit one level above `lower_ownership.rs` (which
 //! pins per-write stamping) — they validate the full lowerer
@@ -20,7 +20,7 @@
 //! placement.
 
 use koja_ast::util::dedent;
-use koja_ir::{IRBasicBlock, IRFunction, IRInstruction, IRLocalId, IRTerminator};
+use koja_ir::{IRBasicBlock, IRFunction, IRInstruction, IRTerminator, Ownership};
 
 mod common;
 
@@ -33,20 +33,29 @@ fn last_block(function: &IRFunction) -> &IRBasicBlock {
         .expect("function should have at least one block")
 }
 
-fn move_param_slot(function: &IRFunction, name: &str) -> IRLocalId {
-    let param = function.params.first().unwrap_or_else(|| {
-        panic!(
-            "function `{}` has no params; cannot resolve `{name}`",
-            function.symbol
-        )
-    });
-    param.local_id
+/// The local targeted by the function's first Owned `LocalWrite` —
+/// the heap-allocating slot the drop scenarios pin on.
+fn first_owned_slot(function: &IRFunction) -> koja_ir::IRLocalId {
+    function
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .find_map(|i| match i {
+            IRInstruction::LocalWrite {
+                local,
+                ownership: Ownership::Owned,
+                ..
+            } => Some(*local),
+            _ => None,
+        })
+        .expect("function should have at least one Owned LocalWrite")
 }
 
 #[test]
 fn reassign_owned_slot_emits_droplocal_before_new_write() {
     let source = "
-        fn taker(move s: String) -> String
+        fn taker(prefix: String) -> String
+          s = prefix <> \"!\"
           s = \"literal\"
           s
         end
@@ -58,7 +67,7 @@ fn reassign_owned_slot_emits_droplocal_before_new_write() {
 
     let program = lower(&dedent(source));
     let taker = function(&program, "taker");
-    let s_slot = move_param_slot(taker, "s");
+    let s_slot = first_owned_slot(taker);
 
     let body = &taker
         .blocks
@@ -97,16 +106,16 @@ fn reassign_owned_slot_emits_droplocal_before_new_write() {
         .collect();
     assert!(
         writes_for_s.len() >= 2,
-        "expected at least two writes to `{s_slot}` (param promotion + reassignment); got {}",
+        "expected at least two writes to `{s_slot}` (initial concat + reassignment); got {}",
         writes_for_s.len(),
     );
 
     let drop_index = drops_for_s[0].0;
-    let promotion_write = writes_for_s[0].0;
+    let initial_write = writes_for_s[0].0;
     let reassign_write = writes_for_s[1].0;
     assert!(
-        promotion_write < drop_index,
-        "DropLocal must come after the promotion write: promotion@{promotion_write}, drop@{drop_index}",
+        initial_write < drop_index,
+        "DropLocal must come after the initial Owned write: initial@{initial_write}, drop@{drop_index}",
     );
     assert!(
         drop_index < reassign_write,
@@ -117,7 +126,8 @@ fn reassign_owned_slot_emits_droplocal_before_new_write() {
 #[test]
 fn return_of_owned_slot_substitutes_moveoutlocal_and_skips_fn_exit_drop() {
     let source = "
-        fn shout(move s: String) -> String
+        fn shout(prefix: String) -> String
+          s = prefix <> \"!\"
           s
         end
 
@@ -128,7 +138,7 @@ fn return_of_owned_slot_substitutes_moveoutlocal_and_skips_fn_exit_drop() {
 
     let program = lower(&dedent(source));
     let shout = function(&program, "shout");
-    let s_slot = move_param_slot(shout, "s");
+    let s_slot = first_owned_slot(shout);
 
     let last = last_block(shout);
 
@@ -168,52 +178,6 @@ fn return_of_owned_slot_substitutes_moveoutlocal_and_skips_fn_exit_drop() {
     assert_eq!(
         *rv, moved_dest,
         "Return value must point at the MoveOutLocal's dest, not the original LocalRead",
-    );
-}
-
-#[test]
-fn unconsumed_move_param_drops_at_fn_exit() {
-    let source = "
-        fn taker(move s: String) -> Int
-          1
-        end
-
-        fn main
-          taker(\"hi\")
-        end
-    ";
-
-    let program = lower(&dedent(source));
-    let taker = function(&program, "taker");
-    let s_slot = move_param_slot(taker, "s");
-
-    let last = last_block(taker);
-
-    let drops: Vec<_> = last
-        .instructions
-        .iter()
-        .enumerate()
-        .filter(|(_, i)| matches!(i, IRInstruction::DropLocal { local, .. } if *local == s_slot))
-        .collect();
-    assert_eq!(
-        drops.len(),
-        1,
-        "expected exactly one fn-exit DropLocal for the unconsumed move param `{s_slot}`; got {}",
-        drops.len(),
-    );
-    let (drop_pos, _) = drops[0];
-
-    assert_eq!(
-        drop_pos,
-        last.instructions.len() - 1,
-        "DropLocal must be the last instruction before the terminator: drop@{drop_pos}, instructions.len()={}",
-        last.instructions.len(),
-    );
-
-    assert!(
-        matches!(last.terminator, IRTerminator::Return { value: Some(_) }),
-        "terminator should be Return-with-Int-value; got {:?}",
-        last.terminator,
     );
 }
 
@@ -394,58 +358,11 @@ fn struct_field_init_from_owned_local_substitutes_moveoutlocal() {
 }
 
 #[test]
-fn move_arg_from_owned_local_substitutes_moveoutlocal() {
-    // Companion to the struct-field fix: an Owned local passed to a
-    // `move` parameter must be marked moved at the call site, or the
-    // caller's fn-exit DropLocal will free a payload the callee has
-    // already taken ownership of. Pin one MoveOutLocal at the call
-    // sink and zero DropLocals on the consumed slot.
-    let source = "
-        fn consume(move s: String) -> Int
-          s.length()
-        end
-
-        fn build -> Int
-          text = \"hi\" <> \"!\"
-          consume(text)
-        end
-
-        fn main
-          build()
-        end
-    ";
-
-    let program = lower(&dedent(source));
-    let build = function(&program, "build");
-
-    let move_outs: usize = build
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .filter(|inst| matches!(inst, IRInstruction::MoveOutLocal { .. }))
-        .count();
-    assert_eq!(
-        move_outs, 1,
-        "expected one MoveOutLocal substitution at the move-arg sink; got {move_outs}",
-    );
-
-    let drops: usize = build
-        .blocks
-        .iter()
-        .flat_map(|block| &block.instructions)
-        .filter(|inst| matches!(inst, IRInstruction::DropLocal { .. }))
-        .count();
-    assert_eq!(
-        drops, 0,
-        "moved-out slot must not also receive a fn-exit DropLocal; got {drops}",
-    );
-}
-
-#[test]
-fn borrow_arg_from_owned_local_keeps_droplocal_and_no_moveoutlocal() {
-    // Inverse pin: a borrow-mode param must NOT trigger MoveOutLocal
-    // on the caller's Owned slot. The caller still owns the payload
-    // through the call and the fn-exit `DropLocal` is what frees it.
+fn arg_from_owned_local_keeps_droplocal_and_no_moveoutlocal() {
+    // An Owned local passed as an argument must NOT trigger
+    // MoveOutLocal on the caller's slot — under value semantics every
+    // argument is passed by borrow, so the caller still owns the
+    // payload through the call and the fn-exit `DropLocal` frees it.
     let source = "
         fn examine(s: String) -> Int
           s.length()

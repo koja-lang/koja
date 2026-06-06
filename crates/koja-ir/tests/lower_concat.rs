@@ -125,12 +125,13 @@ fn concat_result_assigned_to_local_stamps_owned() {
         })
         .collect();
 
-    // Three Owned LocalWrites: one each for `a` and `b` (move-param
-    // promotion), plus one for `s` (the concat result).
+    // One Owned LocalWrite: `s` (the concat result). The `move`
+    // keyword is inert under value semantics, so params `a` and `b`
+    // promote as Unowned (the caller retains and frees them).
     assert_eq!(
         owned_writes.len(),
-        3,
-        "expected 3 Owned LocalWrites (a, b, s); got {} in {:?}",
+        1,
+        "expected 1 Owned LocalWrite (s); got {} in {:?}",
         owned_writes.len(),
         build,
     );

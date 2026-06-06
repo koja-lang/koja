@@ -1,12 +1,9 @@
-//! Use-after-move enforcement coverage. The typecheck pass owns a
-//! per-function `MoveLedger` (per `Resolver::moves`) and flags every
-//! read of a local whose move state is `Moved` or `MaybeMoved`. The
-//! tests below pin the surface diagnostics for the four trigger
-//! sites — assignment RHS, `move`-param call argument, `move self`
-//! method receiver, and `move`-param free-fn argument — plus the
-//! pessimistic branch-join behavior (`if` / `match`) and the fresh-
-//! write reset that lets `x = ...; consume(x); x = ...` keep
-//! resolving.
+//! Value-semantics assignment coverage (plus a few binary-literal
+//! range checks that share this file). Under value semantics there is
+//! no move tracking at all: assignment, argument passing, and `self`
+//! receivers are copies, so a binding stays usable after it's read,
+//! assigned, or passed. The tests below pin that reads-after-use stay
+//! clean.
 
 use koja_ast::util::dedent;
 
@@ -33,70 +30,23 @@ fn assert_diagnostic(source: &str, needle: &str) {
 }
 
 #[test]
-fn assigning_one_local_to_another_moves_the_rhs() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            struct Point
-              x: Int
-              y: Int
-            end
+fn reading_a_local_after_assigning_it_is_clean() {
+    // Value semantics: `p2 = p1` copies, so `p1` stays usable.
+    assert_clean(&dedent(
+        r#"
+        struct Point
+          x: Int
+          y: Int
+        end
 
-            fn main
-              p1 = Point{x: 1, y: 2}
-              p2 = p1
-              p1.x
-            end
-            "#,
-        ),
-        "use of moved value `p1`",
-    );
-}
-
-#[test]
-fn move_param_arg_moves_the_caller_local() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            fn consume(move s: String) -> Int
-              s.length()
-            end
-
-            fn main
-              greeting = "hello"
-              consume(greeting)
-              greeting.length()
-            end
-            "#,
-        ),
-        "use of moved value `greeting`",
-    );
-}
-
-#[test]
-fn move_self_method_receiver_moves_the_caller_local() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            struct Counter
-              n: Int
-            end
-
-            extend Counter
-              fn into_value(move self) -> Int
-                self.n
-              end
-            end
-
-            fn main
-              c = Counter{n: 1}
-              c.into_value()
-              c.n
-            end
-            "#,
-        ),
-        "use of moved value `c`",
-    );
+        fn main
+          p1 = Point{x: 1, y: 2}
+          p2 = p1
+          p2.y
+          p1.x
+        end
+        "#,
+    ));
 }
 
 #[test]
@@ -134,98 +84,6 @@ fn reassignment_clears_move_state() {
         end
         "#,
     ));
-}
-
-#[test]
-fn move_in_if_then_arm_only_yields_maybe_moved() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            fn consume(move s: String) -> Int
-              s.length()
-            end
-
-            fn run(flag: Bool) -> Int
-              greeting = "hello"
-              if flag
-                consume(greeting)
-              end
-              greeting.length()
-            end
-            "#,
-        ),
-        "may have been moved",
-    );
-}
-
-#[test]
-fn move_in_both_if_arms_yields_strict_moved() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            fn consume(move s: String) -> Int
-              s.length()
-            end
-
-            fn run(flag: Bool) -> Int
-              greeting = "hello"
-              if flag
-                consume(greeting)
-              else
-                consume(greeting)
-              end
-              greeting.length()
-            end
-            "#,
-        ),
-        "use of moved value `greeting`",
-    );
-}
-
-#[test]
-fn move_in_only_match_arm_yields_strict_moved() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            fn consume(move s: String) -> Int
-              s.length()
-            end
-
-            fn run(label: Int) -> Int
-              greeting = "hello"
-              match label
-                0 -> consume(greeting)
-                _ -> consume(greeting)
-              end
-              greeting.length()
-            end
-            "#,
-        ),
-        "use of moved value `greeting`",
-    );
-}
-
-#[test]
-fn move_in_one_match_arm_yields_maybe_moved() {
-    assert_diagnostic(
-        &dedent(
-            r#"
-            fn consume(move s: String) -> Int
-              s.length()
-            end
-
-            fn run(label: Int) -> Int
-              greeting = "hello"
-              match label
-                0 -> consume(greeting)
-                _ -> 0
-              end
-              greeting.length()
-            end
-            "#,
-        ),
-        "may have been moved",
-    );
 }
 
 #[test]

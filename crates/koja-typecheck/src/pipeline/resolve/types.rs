@@ -93,28 +93,6 @@ pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -
     NUMERIC.iter().any(|name| is_primitive(ty, registry, name))
 }
 
-/// Is `ty` a `Copy` type per `LANGUAGE.md`? Numeric primitives,
-/// `Bool`, `Unit`, `Never`, raw `CPtr` pointers, and function-
-/// pointer values are Copy — assignment / consumption duplicates
-/// the value rather than moving it. Everything else (user structs,
-/// enums, `String`/`List`/`Map`/`Set`/`Binary`/`Bits`, generic type
-/// params, unions) is non-`Copy`. Bare type params default to
-/// non-`Copy` so generic functions that pass a `T` to a `move`
-/// param conservatively count as moves.
-pub(super) fn is_copy_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    const COPY_PRIMITIVES: &[&str] = &[
-        "Bool", "CPtr", "Float", "Float32", "Int", "Int16", "Int32", "Int64", "Int8", "Never",
-        "UInt16", "UInt32", "UInt64", "UInt8", "Unit",
-    ];
-    let peeled = peel_alias(ty, registry);
-    if let ResolvedType::Anonymous(AnonymousKind::Function { .. }) = peeled {
-        return true;
-    }
-    COPY_PRIMITIVES
-        .iter()
-        .any(|name| is_primitive(&peeled, registry, name))
-}
-
 /// Build a canonical `ResolvedType::Union` from `members`. Steps:
 /// peel each member through aliases, flatten any `Union(_)` member
 /// into the outer vec, sort by `display_resolution`, dedup by the

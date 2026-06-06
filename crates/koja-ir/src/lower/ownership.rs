@@ -46,20 +46,13 @@ pub(super) fn ownership_for_expr(expr: &Expr, value_type: &IRType) -> Ownership 
     }
 }
 
-/// Classify a parameter slot's ownership at promotion time. `move`
-/// params (`move c: T`, `move self`) own their value when `T` is a
-/// heap type; default-borrow and copy-mode (closure-capture-resolved)
-/// slots never own. Stack-typed parameters always resolve to
-/// [`Ownership::Unowned`] regardless of `mode` — `move c: Int32` is
-/// a no-op semantically.
-pub(super) fn ownership_for_param(mode: PassMode, ty: &IRType) -> Ownership {
-    if !is_heap_type(ty) {
-        return Ownership::Unowned;
-    }
-    match mode {
-        PassMode::Move => Ownership::Owned,
-        PassMode::Borrow | PassMode::Copy => Ownership::Unowned,
-    }
+/// Classify a parameter slot's ownership at promotion time. Under
+/// value semantics the `move` keyword is inert, so every parameter —
+/// regardless of `mode` — borrows: the caller retains ownership and
+/// frees its own slot. Parameters are therefore never dropped by the
+/// callee.
+pub(super) fn ownership_for_param(_mode: PassMode, _ty: &IRType) -> Ownership {
+    Ownership::Unowned
 }
 
 /// Heap-allocated IR types: the bit-length-header family (`String`,

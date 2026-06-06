@@ -23,6 +23,7 @@ use koja_ir::{IRFunction, IRSymbol, IRType};
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::{declare_malloc_extern, declare_memset_extern};
 use crate::types::{hashtable_value_type, ir_basic_type};
 
@@ -202,6 +203,73 @@ pub(super) fn call_malloc<'ctx>(
             ))
         })
         .map(|v| v.into_pointer_value())
+}
+
+/// Shallow-clone a table's buffers into fresh allocations. Under
+/// value semantics every hashtable mutator is copy-on-write: it
+/// clones the entries + states buffers before writing, so a binding
+/// shared by assignment is never mutated in place through another
+/// alias. Element payloads are byte-copied (not deep-cloned) — the
+/// COW invariant means any nested mutation copies in turn. The source
+/// buffers are left to leak; reclamation lands with the drop-glue
+/// pass.
+pub(super) fn clone_table_buffers<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    src: &TableSnapshot<'ctx>,
+    entry_size: u64,
+) -> Result<TableSnapshot<'ctx>, LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let entries_bytes = ctx
+        .builder
+        .build_int_mul(
+            src.capacity,
+            i64_ty.const_int(entry_size, false),
+            "entries_bytes",
+        )
+        .map_err(|e| codegen_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+    let malloc = declare_malloc_extern(ctx);
+    let dst_entries = call_malloc(ctx, function, malloc, entries_bytes, "cow_entries")?;
+    let dst_states = call_malloc(ctx, function, malloc, src.capacity, "cow_states")?;
+    let memcpy = declare_memcpy_extern(ctx);
+    ctx.builder
+        .build_call(
+            memcpy,
+            &[
+                dst_entries.into(),
+                src.entries_ptr.into(),
+                entries_bytes.into(),
+            ],
+            "",
+        )
+        .map_err(|e| {
+            codegen_err(
+                format_args!("build_call memcpy for `{}`", function.symbol),
+                e,
+            )
+        })?;
+    ctx.builder
+        .build_call(
+            memcpy,
+            &[
+                dst_states.into(),
+                src.states_ptr.into(),
+                src.capacity.into(),
+            ],
+            "",
+        )
+        .map_err(|e| {
+            codegen_err(
+                format_args!("build_call memcpy for `{}`", function.symbol),
+                e,
+            )
+        })?;
+    Ok(TableSnapshot {
+        entries_ptr: dst_entries,
+        states_ptr: dst_states,
+        length: src.length,
+        capacity: src.capacity,
+    })
 }
 
 pub(super) fn call_hash<'ctx>(

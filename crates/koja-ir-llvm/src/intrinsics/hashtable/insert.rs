@@ -14,8 +14,9 @@ use crate::error::LlvmError;
 
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash, codegen_err,
-    entry_pointer, extract_table_fields, nth_param, resolve_key_hash_ops, ret_struct,
+    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
+    clone_table_buffers, codegen_err, entry_pointer, extract_table_fields, nth_param,
+    resolve_key_hash_ops, ret_struct,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
@@ -27,7 +28,8 @@ pub(crate) fn emit_map_put<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let table = extract_table_fields(ctx, function, llvm_function)?;
+    let original = extract_table_fields(ctx, function, llvm_function)?;
+    let table = clone_table_buffers(ctx, function, &original, layout.entry_size)?;
     let key_val = nth_param(function, llvm_function, 1, "key")?;
     let value_val = nth_param(function, llvm_function, 2, "value")?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
@@ -119,7 +121,8 @@ pub(crate) fn emit_set_insert<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let table = extract_table_fields(ctx, function, llvm_function)?;
+    let original = extract_table_fields(ctx, function, llvm_function)?;
+    let table = clone_table_buffers(ctx, function, &original, layout.entry_size)?;
     let item_val = nth_param(function, llvm_function, 1, "item")?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 

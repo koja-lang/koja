@@ -10,7 +10,6 @@ use koja_ast::identifier::{
 };
 use koja_typecheck::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry};
 
-use super::body::move_out_local_value;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
 use super::package::resolved_type_to_ir_type;
@@ -504,8 +503,9 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
 /// already mangled if the callee is a generic instantiation;
 /// `return_ty` is already substituted. `param_modes` parallels the
 /// final argument list (receiver first when `prepend` is `Some`,
-/// then positional args) so [`emit_call`] can fire
-/// [`move_out_local_value`] only for `move` sinks.
+/// then positional args). Under value semantics every argument is
+/// passed by borrow, so the modes no longer drive lowering; the
+/// field is retained until the affine machinery is fully retired.
 struct CallSite<'a> {
     callee_symbol: IRSymbol,
     return_ty: IRType,
@@ -516,11 +516,9 @@ struct CallSite<'a> {
 
 /// Shared tail of [`lower_call`] / [`lower_method_call`]: lower
 /// each arg in sequence, then emit the [`IRInstruction::Call`] in
-/// the final block. For `move` parameters (including `move self`),
-/// substitutes a [`IRInstruction::MoveOutLocal`] when the arg
-/// originated from an Owned local — without this the slot stays
-/// Live & Owned past the call and fn-exit drops a payload the
-/// callee already took ownership of.
+/// the final block. Every argument is passed by borrow (the `move`
+/// keyword is inert under value semantics), so the caller retains
+/// ownership of its slots and frees them at scope exit.
 fn emit_call(
     site: CallSite<'_>,
     ctx: &mut FnLowerCtx,
@@ -563,23 +561,17 @@ fn emit_call(
     Ok((dest, current))
 }
 
-/// Mode-aware bridge to [`move_out_local_value`]: only `move`
-/// parameters consume the caller's slot. `Borrow` keeps the slot
-/// Live & Owned so subsequent reads remain valid; `Copy` (closure
-/// captures, resolved upstream) duplicates the value at the callee
-/// without affecting the caller. An absent mode (extern callees or
-/// signature drift) defaults to `Borrow` — the conservative choice
-/// that preserves the original "leave the slot alone" behavior.
+/// Under value semantics the `move` keyword is inert: every argument
+/// is passed by borrow, leaving the caller's slot Live & Owned so the
+/// caller frees it at scope exit. No argument consumes the caller's
+/// slot, so the parameter `mode` no longer affects lowering.
 fn consume_at_mode(
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
+    _ctx: &mut FnLowerCtx,
+    _block: IRBlockId,
     value: ValueId,
-    mode: Option<PassMode>,
+    _mode: Option<PassMode>,
 ) -> ValueId {
-    match mode {
-        Some(PassMode::Move) => move_out_local_value(ctx, block, value),
-        _ => value,
-    }
+    value
 }
 
 /// Collect the `move`/`borrow`/`copy` mode of every signature

@@ -460,10 +460,13 @@ impl<'a> Inference<'a> {
     }
 
     fn param_mode(&self, ctx: &BodyCtx<'a>, local: LocalId) -> Option<ReturnMode> {
-        ctx.param_modes.get(&local).map(|mode| match mode {
-            PassMode::Move => ReturnMode::Owned,
-            PassMode::Borrow | PassMode::Copy => ReturnMode::Borrowed,
-        })
+        // Under value semantics the `move` keyword is inert: every
+        // parameter borrows, so a value that flows straight through
+        // from a parameter aliases storage the caller still owns and
+        // must be returned `Borrowed` (never re-freed at the call site).
+        ctx.param_modes
+            .get(&local)
+            .map(|_mode| ReturnMode::Borrowed)
     }
 
     /// Resolve a bare `Call` callee to its function id, or `None` for

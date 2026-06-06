@@ -1,22 +1,20 @@
-//! Coverage for the foundation `move`/drop pipeline at the
-//! lowering layer:
+//! Coverage for the ownership-stamping layer of lowering:
 //!
 //! - Every existing program shape stamps `Ownership::Unowned` on its
 //!   `LocalWrite` instructions (the pipeline pre-filters non-heap types at
 //!   the classifier — no expression today produces a heap-typed
 //!   value, so every site is Unowned).
-//! - `move c: String` parameter promotion stamps `Ownership::Owned`
-//!   on the slot and `move c: Int` (a stack type) stamps `Unowned`.
-//!   This pins the heap-type-aware classifier and matches the pipeline's
-//!   pre-filter approach (non-heap types never carry the Owned
-//!   stamp; v1 filters at drop-emission instead).
+//! - Parameter promotion always stamps `Ownership::Unowned`: the
+//!   `move` keyword is inert under value semantics, so a heap-typed
+//!   parameter borrows (the caller retains and frees it) just like a
+//!   stack-typed one.
 //!
 //! These tests sit at the IR-shape boundary — they don't exercise
 //! the LLVM backend or eval. The smoke tests in
 //! `tests/lower_drops.rs` cover end-to-end drop-pipeline shape.
 
 use koja_ast::util::dedent;
-use koja_ir::{IRFunction, IRInstruction, IRType, Ownership};
+use koja_ir::{IRFunction, IRInstruction, Ownership};
 
 mod common;
 
@@ -106,13 +104,12 @@ fn move_param_with_stack_type_stamps_unowned() {
 }
 
 #[test]
-fn move_param_with_string_type_stamps_owned_on_promotion() {
-    // `move s: String` is the only path today that produces an
-    // [`Ownership::Owned`] `LocalWrite`. Assignment / read paths
-    // for String today produce [`Ownership::Unowned`] (literals
-    // are global pointers); concat / interpolation aren't lowered
-    // yet. The promotion `LocalWrite` for `s` carries the only
-    // Owned stamp in the function.
+fn move_param_with_heap_type_stamps_unowned() {
+    // The `move` keyword is inert under value semantics, so even a
+    // heap-typed parameter promotes Unowned — the caller retains
+    // ownership and frees its own slot. This guards against
+    // resurrecting move-param ownership (which would re-introduce the
+    // affine drop/borrow distinction).
     let source = "
         fn taker(move s: String) -> String
           s
@@ -125,174 +122,7 @@ fn move_param_with_string_type_stamps_owned_on_promotion() {
 
     let program = lower(&dedent(source));
     let taker = function(&program, "taker");
-
-    let writes = local_writes(taker);
-    let owned_writes: Vec<_> = writes
-        .iter()
-        .filter(|i| {
-            matches!(
-                i,
-                IRInstruction::LocalWrite {
-                    ownership: Ownership::Owned,
-                    ..
-                }
-            )
-        })
-        .collect();
-
-    assert_eq!(
-        owned_writes.len(),
-        1,
-        "exactly one Owned LocalWrite expected (the `s` promotion); got {} in {writes:?}",
-        owned_writes.len(),
-    );
-    let IRInstruction::LocalWrite { local, .. } = owned_writes[0] else {
-        unreachable!()
-    };
-
-    let entry = taker.blocks.first().expect("entry block missing");
-    let decl = entry
-        .instructions
-        .iter()
-        .find_map(|i| match i {
-            IRInstruction::LocalDecl {
-                local: decl_local,
-                ty,
-            } if decl_local == local => Some(ty),
-            _ => None,
-        })
-        .expect("LocalDecl for `s`'s slot must precede its Owned LocalWrite");
-
-    assert_eq!(
-        decl,
-        &IRType::String,
-        "`move s: String` slot's declared type must be IRType::String, got {decl:?}",
-    );
-}
-
-#[test]
-fn move_param_with_binary_type_stamps_owned_on_promotion() {
-    // `Binary` joined the heap-type family in the strings/binary/bits
-    // slice. `move b: Binary` must stamp Owned on the promotion
-    // `LocalWrite`, mirroring `move s: String`. This pins the
-    // `is_heap_type` extension to Binary.
-    let source = "
-        fn taker(move b: Binary) -> Binary
-          b
-        end
-
-        fn main
-          1
-        end
-    ";
-
-    let program = lower(&dedent(source));
-    let taker = function(&program, "taker");
-
-    let writes = local_writes(taker);
-    let owned_writes: Vec<_> = writes
-        .iter()
-        .filter(|i| {
-            matches!(
-                i,
-                IRInstruction::LocalWrite {
-                    ownership: Ownership::Owned,
-                    ..
-                }
-            )
-        })
-        .collect();
-
-    assert_eq!(
-        owned_writes.len(),
-        1,
-        "exactly one Owned LocalWrite expected (the `b` promotion); got {} in {writes:?}",
-        owned_writes.len(),
-    );
-    let IRInstruction::LocalWrite { local, .. } = owned_writes[0] else {
-        unreachable!()
-    };
-
-    let entry = taker.blocks.first().expect("entry block missing");
-    let decl = entry
-        .instructions
-        .iter()
-        .find_map(|i| match i {
-            IRInstruction::LocalDecl {
-                local: decl_local,
-                ty,
-            } if decl_local == local => Some(ty),
-            _ => None,
-        })
-        .expect("LocalDecl for `b`'s slot must precede its Owned LocalWrite");
-
-    assert_eq!(
-        decl,
-        &IRType::Binary,
-        "`move b: Binary` slot's declared type must be IRType::Binary, got {decl:?}",
-    );
-}
-
-#[test]
-fn move_param_with_bits_type_stamps_owned_on_promotion() {
-    // Sibling of [`move_param_with_binary_type_stamps_owned_on_promotion`]:
-    // `Bits` is the second new heap type added in this slice and must
-    // stamp Owned on `move` promotion just like `String` and `Binary`.
-    let source = "
-        fn taker(move b: Bits) -> Bits
-          b
-        end
-
-        fn main
-          1
-        end
-    ";
-
-    let program = lower(&dedent(source));
-    let taker = function(&program, "taker");
-
-    let writes = local_writes(taker);
-    let owned_writes: Vec<_> = writes
-        .iter()
-        .filter(|i| {
-            matches!(
-                i,
-                IRInstruction::LocalWrite {
-                    ownership: Ownership::Owned,
-                    ..
-                }
-            )
-        })
-        .collect();
-
-    assert_eq!(
-        owned_writes.len(),
-        1,
-        "exactly one Owned LocalWrite expected (the `b` promotion); got {} in {writes:?}",
-        owned_writes.len(),
-    );
-    let IRInstruction::LocalWrite { local, .. } = owned_writes[0] else {
-        unreachable!()
-    };
-
-    let entry = taker.blocks.first().expect("entry block missing");
-    let decl = entry
-        .instructions
-        .iter()
-        .find_map(|i| match i {
-            IRInstruction::LocalDecl {
-                local: decl_local,
-                ty,
-            } if decl_local == local => Some(ty),
-            _ => None,
-        })
-        .expect("LocalDecl for `b`'s slot must precede its Owned LocalWrite");
-
-    assert_eq!(
-        decl,
-        &IRType::Bits,
-        "`move b: Bits` slot's declared type must be IRType::Bits, got {decl:?}",
-    );
+    assert_all_unowned(taker, "move String param");
 }
 
 #[test]
