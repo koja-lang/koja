@@ -29,7 +29,7 @@ fn first_concat(function: &IRFunction) -> &IRInstruction {
 #[test]
 fn string_concat_lowers_to_concat_string() {
     let source = "
-        fn greet(move a: String, move b: String) -> String
+        fn greet(a: String, b: String) -> String
           a <> b
         end
 
@@ -50,7 +50,7 @@ fn string_concat_lowers_to_concat_string() {
 #[test]
 fn binary_concat_lowers_to_concat_binary() {
     let source = "
-        fn join(move a: Binary, move b: Binary) -> Binary
+        fn join(a: Binary, b: Binary) -> Binary
           a <> b
         end
 
@@ -71,7 +71,7 @@ fn binary_concat_lowers_to_concat_binary() {
 #[test]
 fn bits_concat_lowers_to_concat_bits() {
     let source = "
-        fn join(move a: Bits, move b: Bits) -> Bits
+        fn join(a: Bits, b: Bits) -> Bits
           a <> b
         end
 

@@ -13,13 +13,11 @@ struct Worker
 end
 
 impl Process<WorkerConfig, Tick | Sig, String> for Worker
-  fn start(move config: WorkerConfig) -> Result<Self, StopReason>
+  fn start(config: WorkerConfig) -> Result<Self, StopReason>
     Result.Ok(Worker{})
   end
 
-  fn handle(move self, msg: Tick | Sig, from: Option<ReplyTo<String>>)
-    -> Step<Self>
-
+  fn handle(self, msg: Tick | Sig, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       t: Tick ->
         match t
@@ -51,13 +49,12 @@ enum BossMsg
 end
 
 impl Process<BossConfig, BossMsg, String> for Boss
-  fn start(move config: BossConfig) -> Result<Self, StopReason>
+  fn start(config: BossConfig) -> Result<Self, StopReason>
     w = spawn Worker.start(WorkerConfig{})
     Result.Ok(Boss{worker: w})
   end
 
-  fn handle(move self, msg: BossMsg, from: Option<ReplyTo<String>>)
-    -> Step<Self>
+  fn handle(self, msg: BossMsg, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       BossMsg.Run ->
         self.worker.call(Tick.Beat(1), 5000)

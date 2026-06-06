@@ -112,13 +112,13 @@ fn field_write_on_unknown_field_diagnoses_against_struct_name() {
 }
 
 #[test]
-fn self_field_write_typechecks_under_move_self() {
+fn self_field_write_with_return_typechecks() {
     typecheck(&dedent(
         "
         struct Counter
           n: Int
 
-          fn bump(move self) -> Counter
+          fn bump(self) -> Counter
             self.n = self.n + 1
             self
           end
@@ -133,9 +133,9 @@ fn self_field_write_typechecks_under_move_self() {
 }
 
 #[test]
-fn self_field_write_without_move_self_typechecks() {
-    // The `move` keyword is inert under value semantics, so `self`
-    // field mutation typechecks even without `move self`.
+fn self_field_write_typechecks() {
+    // Under value semantics `self` field mutation typechecks on a
+    // plain `self` receiver.
     typecheck(&dedent(
         "
         struct Counter

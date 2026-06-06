@@ -178,7 +178,7 @@ priv fn build_request(
   sb.build()
 end
 
-priv fn write_headers(move sb: StringBuilder, headers: Headers, i: Int)
+priv fn write_headers(sb: StringBuilder, headers: Headers, i: Int)
   -> StringBuilder
 
   if i >= headers.entries.length()
@@ -190,16 +190,14 @@ priv fn write_headers(move sb: StringBuilder, headers: Headers, i: Int)
   write_headers(sb, headers, i + 1)
 end
 
-priv fn read_response(move socket: TCPSocket) -> Result<Response, Error>
+priv fn read_response(socket: TCPSocket) -> Result<Response, Error>
   match read_all(socket, StringBuilder.new())
     Result.Err(e) -> Result.Err(e)
     Result.Ok(data) -> Parser.parse_response(data)
   end
 end
 
-priv fn read_all(move socket: TCPSocket, move sb: StringBuilder)
-  -> Result<String, Error>
-
+priv fn read_all(socket: TCPSocket, sb: StringBuilder) -> Result<String, Error>
   match socket.read(8192)
     Result.Err(e) ->
       Result.Err(Error.ConnectionFailed("read failed: " <> e))

@@ -43,7 +43,6 @@ pub enum TokenKind {
     In,
     Loop,
     Match,
-    Move,
     Not,
     Priv,
     Protocol,

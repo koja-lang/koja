@@ -85,10 +85,9 @@ fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Set(Rc::new(RefCell::new(items))))
 }
 
-/// `from_list(move list: List<T>) -> Set<T>` — the `ListLiteral`
+/// `from_list(list: List<T>) -> Set<T>` — the `ListLiteral`
 /// path goes here when the resolver synthesizes
-/// `Set.from_list([a, b, c])`. Walks the list once, deduping; the
-/// list is consumed (move-self semantics).
+/// `Set.from_list([a, b, c])`. Walks the list once, deduping.
 fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {
     let list = match expect_arg(args, 0, "Set.from_list")? {
         Value::List(items) => items.clone(),

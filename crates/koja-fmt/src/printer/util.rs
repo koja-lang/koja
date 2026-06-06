@@ -179,22 +179,10 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
         TypeExpr::Self_ { .. } => text("Self"),
         TypeExpr::Function {
             params,
-            param_modes,
             return_type,
             ..
         } => {
-            let params_doc: Vec<Doc> = params
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    let is_move = param_modes.get(i).is_some_and(|m| *m == PassMode::Move);
-                    if is_move {
-                        concat(vec![text("move "), type_expr_to_doc(p)])
-                    } else {
-                        type_expr_to_doc(p)
-                    }
-                })
-                .collect();
+            let params_doc: Vec<Doc> = params.iter().map(type_expr_to_doc).collect();
             concat(vec![
                 text("fn ("),
                 intersperse(params_doc, text(", ")),
@@ -420,15 +408,9 @@ pub(super) fn literal_to_doc(lit: &Literal) -> Doc {
 pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
     match cp {
         ClosureParam::Name {
-            mode,
-            name,
-            type_expr,
-            ..
+            name, type_expr, ..
         } => {
             let mut parts = Vec::new();
-            if *mode == PassMode::Move {
-                parts.push(text("move "));
-            }
             parts.push(text(name.clone()));
             if let Some(te) = type_expr {
                 parts.push(text(": "));
@@ -692,24 +674,14 @@ pub(super) fn sig_will_break(f: &Function) -> bool {
 /// Estimates the rendered text length of a function parameter.
 pub(super) fn param_text_len(p: &Param) -> usize {
     match p {
-        Param::Self_ { mode, .. } => {
-            if *mode == PassMode::Move {
-                9
-            } else {
-                4
-            }
-        }
+        Param::Self_ { .. } => 4,
         Param::Regular {
-            mode,
             name,
             type_expr,
             default,
             ..
         } => {
             let mut n = 0;
-            if *mode == PassMode::Move {
-                n += 5;
-            }
             n += name.len();
             n += 2;
             n += type_expr_text_len(type_expr);

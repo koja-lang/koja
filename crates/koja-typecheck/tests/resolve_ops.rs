@@ -176,9 +176,8 @@ fn binary_concat_requires_binary_operands() {
     // must convert through an explicit stdlib helper. Pin the
     // diagnostic shape so accidental cross-type acceptance gets
     // caught.
-    let failure = typecheck_fail(
-        "fn copy(move b: Binary) -> Binary\n  \"hi\" <> b\nend\n\nfn main\n  1\nend\n",
-    );
+    let failure =
+        typecheck_fail("fn copy(b: Binary) -> Binary\n  \"hi\" <> b\nend\n\nfn main\n  1\nend\n");
     assert!(
         failure
             .diagnostics

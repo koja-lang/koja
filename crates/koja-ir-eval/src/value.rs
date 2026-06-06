@@ -18,9 +18,8 @@ use koja_ir::{IRSymbol, IRVariantTag};
 /// `Map<K, V>` storage: `(key, value)` pairs in insertion order.
 /// Eval doesn't need a real hash table — linear probes over a Vec
 /// give the right semantics in tests' tiny working sets, and `Map`
-/// values are `Rc<RefCell<...>>` for the same in-place-mutation
-/// reasons as [`Value::List`] (every collection-mutating intrinsic
-/// is `move self`).
+/// values are `Rc<RefCell<...>>` for the same copy-on-write
+/// reasons as [`Value::List`].
 pub type MapEntries = Rc<RefCell<Vec<(Value, Value)>>>;
 
 /// `Set<T>` storage: unique elements in insertion order. Same
@@ -66,13 +65,12 @@ pub enum Value {
     Float32(f32),
     Float64(f64),
     Int(i64),
-    /// Heap-backed dynamic array. Shared `Rc<RefCell>` so move-self
-    /// intrinsics (`append`, `pop`, `concat`) can mutate the
-    /// underlying buffer in place — the interpreter copies the `Rc`,
-    /// not the `Vec`. Aliased reads observe the post-mutation state,
-    /// matching the LLVM by-value ABI's conservative copy-on-write
-    /// behavior in practice (every intrinsic that mutates
-    /// consumes its receiver via `move self`).
+    /// Heap-backed dynamic array. Shared `Rc<RefCell>` so the
+    /// collection intrinsics (`append`, `pop`, `concat`) can mutate
+    /// the underlying buffer via copy-on-write — the interpreter
+    /// copies the `Rc`, not the `Vec`, and clones the buffer before a
+    /// mutation when the value is shared, matching the value-semantics
+    /// model where no mutation is observable through another binding.
     List(Rc<RefCell<Vec<Value>>>),
     /// Heap-backed associative map keyed by [`Value`]. Eval uses
     /// linear probes for `Eq` (matches Koja's `Equality` protocol's

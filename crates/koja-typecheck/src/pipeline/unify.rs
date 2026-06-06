@@ -14,7 +14,7 @@
 //! pass an explicit owner.
 
 use koja_ast::identifier::{
-    AnonymousKind, FnParam, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
+    AnonymousKind, GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex,
 };
 
 use crate::pipeline::resolve::types::{is_primitive, types_equivalent};
@@ -334,7 +334,7 @@ pub(crate) fn unify_into(
                 return Ok(());
             }
             for (template_param, actual_param) in template_params.iter().zip(actual_params) {
-                unify_into(&template_param.ty, &actual_param.ty, subst, registry)?;
+                unify_into(template_param, actual_param, subst, registry)?;
             }
             unify_into(template_ret, actual_ret, subst, registry)
         }
@@ -351,13 +351,7 @@ pub fn substitute(template: &ResolvedType, subst: &Substitution) -> ResolvedType
     match template {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             ResolvedType::Anonymous(AnonymousKind::Function {
-                params: params
-                    .iter()
-                    .map(|p| FnParam {
-                        mode: p.mode,
-                        ty: substitute(&p.ty, subst),
-                    })
-                    .collect(),
+                params: params.iter().map(|p| substitute(p, subst)).collect(),
                 ret: Box::new(substitute(ret, subst)),
             })
         }

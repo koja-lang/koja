@@ -26,7 +26,7 @@ mod methods;
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
 use koja_ast::coercion::{Coercion, LiteralCoercion};
 use koja_ast::identifier::{
-    AnonymousKind, FnParam, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
+    AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
 use koja_ast::labels::expr_kind_label;
 use koja_ast::span::Span;
@@ -590,7 +590,6 @@ fn infer_call_type_args(
         .params
         .iter()
         .map(|p| ResolvedParam {
-            mode: p.mode,
             name: p.name.clone(),
             ty: substitute(&p.ty, &subst),
         })
@@ -831,7 +830,6 @@ fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<Reso
     params
         .iter()
         .map(|p| ResolvedParam {
-            mode: p.mode,
             name: p.name.clone(),
             ty: substitute(&p.ty, subst),
         })
@@ -962,14 +960,13 @@ fn resolve_local_call(
 /// Names are synthesized as `arg<index>` so arity / type
 /// diagnostics still surface a label without depending on a
 /// signature decl that doesn't exist.
-fn synthesize_local_call_params(fn_params: &[FnParam]) -> Vec<ResolvedParam> {
+fn synthesize_local_call_params(fn_params: &[ResolvedType]) -> Vec<ResolvedParam> {
     fn_params
         .iter()
         .enumerate()
-        .map(|(index, p)| ResolvedParam {
-            mode: p.mode,
+        .map(|(index, ty)| ResolvedParam {
             name: format!("arg{index}"),
-            ty: p.ty.clone(),
+            ty: ty.clone(),
         })
         .collect()
 }

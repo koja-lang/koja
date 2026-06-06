@@ -4,7 +4,7 @@ Shared AST definitions used by every other crate. No logic -- just data types.
 
 ## Key files
 
-- `ast.rs` -- Core AST nodes: `File`, `Item`, `Expr`, `Statement`, `Pattern`, `PassMode`, comments
+- `ast.rs` -- Core AST nodes: `File`, `Item`, `Expr`, `Statement`, `Pattern`, comments
 - `token.rs` -- `Token` and `TokenKind` for the lexer
 - `identifier.rs` -- `Identifier`, `Resolution`, `ResolvedType`, `LocalId` -- the registry-pointing names and resolutions stamped by typecheck
 - `coercion.rs` -- per-expression `LiteralCoercion` and `Coercion` slots populated by typecheck and consumed by IR lowering
@@ -14,6 +14,5 @@ Shared AST definitions used by every other crate. No logic -- just data types.
 
 ## Key types
 
-- `PassMode` -- `Copy`, `Move`, `Borrow` (parameter ownership semantics)
 - `Visibility` -- `Public`, `Private`
 - `ResolvedType` -- registry-pointing type annotation on every `Expr`; populated by typecheck-resolve and asserted by seal

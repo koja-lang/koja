@@ -21,8 +21,8 @@
 
 use koja_ast::ast::{
     Annotation, Arg, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
-    FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item, MatchArm, Param,
-    PassMode, Pattern, Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item, MatchArm, Param, Pattern,
+    Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -182,7 +182,6 @@ fn clone_function(body_expr: Expr, span: Span) -> Function {
         name: CLONE_METHOD.to_string(),
         type_params: Vec::new(),
         params: vec![Param::Self_ {
-            mode: PassMode::Borrow,
             local_id: None,
             span,
         }],

@@ -6,11 +6,7 @@ end
 
 fn build -> Response
   text = "hello" <> " world"
-  Response{
-    body: text,
-    status: 200,
-    version: "HTTP/1.1",
-  }
+  Response{body: text, status: 200, version: "HTTP/1.1"}
 end
 
 fn main

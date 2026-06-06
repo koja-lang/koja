@@ -13,7 +13,7 @@
 //! once the canonical PascalCase forms (`Bool`, `Int32`) landed in
 //! stdlib and project sources alike.
 
-use koja_ast::ast::{PassMode, TypeExpr};
+use koja_ast::ast::TypeExpr;
 use koja_ast::span::Span;
 use koja_ast::token::TokenKind;
 
@@ -68,28 +68,16 @@ impl Parser {
         self.advance(); // fn
         self.expect(&TokenKind::LParen);
 
-        let entries = self.comma_separated(&TokenKind::RParen, Self::parse_function_type_param);
+        let params = self.comma_separated(&TokenKind::RParen, Self::parse_type_expr);
         self.expect(&TokenKind::RParen);
         self.expect(&TokenKind::Arrow);
         let return_type = self.parse_type_expr();
 
-        let (param_modes, params): (Vec<_>, Vec<_>) = entries.into_iter().unzip();
-
         TypeExpr::Function {
             params,
-            param_modes,
             return_type: Box::new(return_type),
             span: self.span_from(start),
         }
-    }
-
-    fn parse_function_type_param(&mut self) -> (PassMode, TypeExpr) {
-        let mode = if self.eat(&TokenKind::Move).is_some() {
-            PassMode::Move
-        } else {
-            PassMode::Borrow
-        };
-        (mode, self.parse_type_expr())
     }
 
     fn parse_paren_type(&mut self) -> TypeExpr {

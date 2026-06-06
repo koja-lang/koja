@@ -165,19 +165,19 @@ protocol Process<C, M, R>
   child process context after spawn, before the receive loop begins.
   Return `Result.Err` to abort startup.
   """
-  fn start(move config: C) -> Result<Self, StopReason>
+  fn start(config: C) -> Result<Self, StopReason>
 
   @doc """
   Handles a business message. Return `Step.Continue(self)` to keep running
   with updated state, or `Step.Done(reason)` to stop the process.
   """
-  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
 
   @doc """
   Handles an OS lifecycle event (SIGTERM, SIGINT, SIGHUP). Default stops
   on Shutdown/Interrupt and continues on Reload.
   """
-  fn handle_signal(move self, event: Lifecycle) -> Step<Self>
+  fn handle_signal(self, event: Lifecycle) -> Step<Self>
     match event
       Lifecycle.Shutdown -> Step.Done(StopReason.Shutdown)
       Lifecycle.Interrupt -> Step.Done(StopReason.Shutdown)
@@ -190,7 +190,7 @@ protocol Process<C, M, R>
   lifecycle events to `handle_signal`. Can be overridden for custom
   loop behavior.
   """
-  fn run(move self) -> StopReason
+  fn run(self) -> StopReason
     receive
       pair: Pair<M, Option<ReplyTo<R>>> ->
         match self.handle(pair.first, pair.second)
@@ -220,17 +220,17 @@ extend Task<R>
     spawn Task.start(Task{work: fun})
   end
 
-  fn await(move reference: Ref<(), R>) -> Result<R, CallError>
+  fn await(reference: Ref<(), R>) -> Result<R, CallError>
     reference.call((), 5000)
   end
 end
 
 impl Process<Task<R>, (), R> for Task<R>
-  fn start(move config: Task<R>) -> Result<Self, StopReason>
+  fn start(config: Task<R>) -> Result<Self, StopReason>
     Result.Ok(config)
   end
 
-  fn run(move self) -> StopReason
+  fn run(self) -> StopReason
     result = self.work()
 
     receive
@@ -247,7 +247,7 @@ impl Process<Task<R>, (), R> for Task<R>
     end
   end
 
-  fn handle(move self, msg: (), from: Option<ReplyTo<R>>) -> Step<Self>
+  fn handle(self, msg: (), from: Option<ReplyTo<R>>) -> Step<Self>
     Step.Continue(self)
   end
 end

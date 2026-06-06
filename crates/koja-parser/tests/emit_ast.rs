@@ -62,8 +62,8 @@ fn function_add() {
   items
     Function add (Public) @1:1-3:4
       params
-        Regular a: Named Int (Borrow) @1:8-1:14
-        Regular b: Named Int (Borrow) @1:16-1:22
+        Regular a: Named Int @1:8-1:14
+        Regular b: Named Int @1:16-1:22
       return: Named Int
       body
         Binary Add @2:3-2:8
@@ -114,7 +114,7 @@ end
         "      type: Named Int",
         "Function describe (Public)",
         "      params",
-        "        Regular p: Named Point (Borrow)",
+        "        Regular p: Named Point",
         "      return: Named Int",
         "      body",
         "        Assignment",

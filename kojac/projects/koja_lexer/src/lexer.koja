@@ -31,7 +31,7 @@ extend Lexer
   Tokenises `source` and returns a `LexResult` containing tokens,
   comments, and any diagnostics.
   """
-  fn lex(move source: String) -> LexResult
+  fn lex(source: String) -> LexResult
     # -------------------------------------------------------------------
     # Public API (alpha-sorted)
     # -------------------------------------------------------------------
@@ -48,7 +48,7 @@ extend Lexer
   @doc """
   Creates a new Lexer positioned at the start of `source`.
   """
-  fn new(move source: String) -> Lexer
+  fn new(source: String) -> Lexer
     cursor = Cursor.new(source)
     Lexer{comments: [], cursor: cursor, errors: [], tokens: []}
   end
@@ -57,7 +57,7 @@ extend Lexer
   Runs the lexer to completion, returning the final state with all
   tokens, comments, and errors accumulated.
   """
-  fn run(move self) -> Self
+  fn run(self) -> Self
     if self.cursor.at_end?()
       position = self.cursor.position()
       token = Token{
@@ -75,7 +75,7 @@ extend Lexer
     end
   end
 
-  priv fn advance_cursor(move self) -> Self
+  priv fn advance_cursor(self) -> Self
     # -------------------------------------------------------------------
     # Private helpers (alpha-sorted)
     # -------------------------------------------------------------------
@@ -84,7 +84,7 @@ extend Lexer
     self
   end
 
-  priv fn append_token(move self, token: Token) -> Self
+  priv fn append_token(self, token: Token) -> Self
     self.tokens = self.tokens.append(token)
     self
   end
@@ -98,7 +98,7 @@ extend Lexer
     end
   end
 
-  priv fn close_string(move self, multiline: Bool) -> Self
+  priv fn close_string(self, multiline: Bool) -> Self
     end_start = self.cursor.position()
 
     if multiline
@@ -148,19 +148,19 @@ extend Lexer
     end
   end
 
-  priv fn double(move self, kind: TokenKind) -> Self
+  priv fn double(self, kind: TokenKind) -> Self
     start = self.cursor.position()
     self.cursor = self.cursor.advance().advance()
     token = Token{kind: kind, span: Span.new(start, self.cursor.position())}
     self.append_token(token)
   end
 
-  priv fn emit(move self, kind: TokenKind, start: Position) -> Self
+  priv fn emit(self, kind: TokenKind, start: Position) -> Self
     token = Token{kind: kind, span: Span.new(start, self.cursor.position())}
     self.append_token(token)
   end
 
-  priv fn emit_fragment(move self, text: String, frag_start: Position) -> Self
+  priv fn emit_fragment(self, text: String, frag_start: Position) -> Self
     text == "" ? self : self.emit(TokenKind.StringFragment(text), frag_start)
   end
 
@@ -217,14 +217,14 @@ extend Lexer
     self.tokens.last().map(x -> x.kind)
   end
 
-  priv fn lex_colon(move self) -> Self
+  priv fn lex_colon(self) -> Self
     match self.cursor.peek_next()
       Some(":") -> self.double(TokenKind.ColonColon)
       _ -> self.single(TokenKind.Colon)
     end
   end
 
-  priv fn lex_comment(move self) -> Self
+  priv fn lex_comment(self) -> Self
     start = self.cursor.position()
 
     # Skip the leading '#'
@@ -254,7 +254,7 @@ extend Lexer
     self
   end
 
-  priv fn lex_decimal(move self) -> Self
+  priv fn lex_decimal(self) -> Self
     start = self.cursor.position()
     start_offset = self.cursor.offset
 
@@ -280,14 +280,14 @@ extend Lexer
     self.emit(TokenKind.IntLit(name), start)
   end
 
-  priv fn lex_eq(move self) -> Self
+  priv fn lex_eq(self) -> Self
     match self.cursor.peek_next()
       Some("=") -> self.double(TokenKind.EqEq)
       _ -> self.single(TokenKind.Eq)
     end
   end
 
-  priv fn lex_gt(move self) -> Self
+  priv fn lex_gt(self) -> Self
     match self.cursor.peek_next()
       Some(">") -> self.double(TokenKind.GtGt)
       Some("=") -> self.double(TokenKind.GtEq)
@@ -295,7 +295,7 @@ extend Lexer
     end
   end
 
-  priv fn lex_ident(move self) -> Self
+  priv fn lex_ident(self) -> Self
     start = self.cursor.position()
     start_offset = self.cursor.offset
 
@@ -316,7 +316,7 @@ extend Lexer
     self.emit(kind, start)
   end
 
-  priv fn lex_interp_body(move self) -> Self
+  priv fn lex_interp_body(self) -> Self
     if self.cursor.at_end?()
       return self
     end
@@ -335,7 +335,7 @@ extend Lexer
     end
   end
 
-  priv fn lex_interpolation(move self) -> Self
+  priv fn lex_interpolation(self) -> Self
     interp_start = self.cursor.position()
     self.cursor = self.cursor.advance().advance()
     self = self.emit(TokenKind.InterpolStart, interp_start)
@@ -345,7 +345,7 @@ extend Lexer
     self.emit(TokenKind.InterpolEnd, interp_end)
   end
 
-  priv fn lex_lt(move self) -> Self
+  priv fn lex_lt(self) -> Self
     match self.cursor.peek_next()
       Some("<") -> self.double(TokenKind.LtLt)
       Some(">") -> self.double(TokenKind.LtGt)
@@ -354,7 +354,7 @@ extend Lexer
     end
   end
 
-  priv fn lex_minus(move self) -> Self
+  priv fn lex_minus(self) -> Self
     match self.cursor.peek_next()
       Some(">") -> self.double(TokenKind.Arrow)
       Some("=") -> self.double(TokenKind.MinusEq)
@@ -362,14 +362,14 @@ extend Lexer
     end
   end
 
-  priv fn lex_multiline_string(move self) -> Self
+  priv fn lex_multiline_string(self) -> Self
     start = self.cursor.position()
     self.cursor = self.cursor.advance().advance().advance()
     self = self.emit(TokenKind.MultilineStringStart, start)
     self.lex_string_body(true)
   end
 
-  priv fn lex_newline(move self) -> Self
+  priv fn lex_newline(self) -> Self
     start = self.cursor.position()
     self.cursor = self.cursor.advance()
 
@@ -389,7 +389,7 @@ extend Lexer
     self.emit(TokenKind.Newline, start)
   end
 
-  priv fn lex_not(move self) -> Self
+  priv fn lex_not(self) -> Self
     match self.cursor.peek_next()
       Some("=") ->
         self.double(TokenKind.NotEq)
@@ -408,7 +408,7 @@ extend Lexer
     end
   end
 
-  priv fn lex_number(move self) -> Self
+  priv fn lex_number(self) -> Self
     if self.cursor.peek() == Option.Some("0")
       match self.cursor.peek_next().or("NONE")
         "x" | "X" ->
@@ -447,7 +447,7 @@ extend Lexer
     self.lex_decimal()
   end
 
-  priv fn lex_plus(move self) -> Self
+  priv fn lex_plus(self) -> Self
     match self.cursor.peek_next()
       Some("=") -> self.double(TokenKind.PlusEq)
       _ -> self.single(TokenKind.Plus)
@@ -455,7 +455,7 @@ extend Lexer
   end
 
   priv fn lex_prefixed_int(
-    move self,
+    self,
     pred: fn (String) -> Bool,
     message: String,
     hint: String,
@@ -486,7 +486,7 @@ extend Lexer
     self.emit(TokenKind.IntLit(name), start)
   end
 
-  priv fn lex_single(move self) -> Self
+  priv fn lex_single(self) -> Self
     match self.cursor.peek().or("NONE")
       "NONE" ->
         self
@@ -590,28 +590,28 @@ extend Lexer
     end
   end
 
-  priv fn lex_slash(move self) -> Self
+  priv fn lex_slash(self) -> Self
     match self.cursor.peek_next()
       Some("=") -> self.double(TokenKind.SlashEq)
       _ -> self.single(TokenKind.Slash)
     end
   end
 
-  priv fn lex_star(move self) -> Self
+  priv fn lex_star(self) -> Self
     match self.cursor.peek_next()
       Some("=") -> self.double(TokenKind.StarEq)
       _ -> self.single(TokenKind.Star)
     end
   end
 
-  priv fn lex_string(move self) -> Self
+  priv fn lex_string(self) -> Self
     start = self.cursor.position()
     self.cursor = self.cursor.advance()
     self = self.emit(TokenKind.StringStart, start)
     self.lex_string_body(false)
   end
 
-  priv fn lex_string_body(move self, multiline: Bool) -> Self
+  priv fn lex_string_body(self, multiline: Bool) -> Self
     frag_start = self.cursor.position()
     text = ""
 
@@ -725,16 +725,15 @@ extend Lexer
     end
   end
 
-  priv fn single(move self, kind: TokenKind) -> Self
+  priv fn single(self, kind: TokenKind) -> Self
     start = self.cursor.position()
     self.cursor = self.cursor.advance()
     token = Token{kind: kind, span: Span.new(start, self.cursor.position())}
     self.append_token(token)
   end
 
-  priv fn unterminated_string(move self, multiline: Bool, frag_start: Position)
+  priv fn unterminated_string(self, multiline: Bool, frag_start: Position)
     -> Self
-
     label = multiline ? "unterminated multiline string" : "unterminated string"
     hint = multiline ? "add a closing '\"\"\"'" : "add a closing '\"'"
     self.errors = self.errors.append(

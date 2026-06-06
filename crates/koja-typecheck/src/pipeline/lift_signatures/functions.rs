@@ -131,7 +131,7 @@ fn is_concrete_type(ty: &ResolvedType) -> bool {
             type_args,
         } => type_args.iter().all(is_concrete_type),
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            params.iter().all(|p| is_concrete_type(&p.ty)) && is_concrete_type(ret)
+            params.iter().all(is_concrete_type) && is_concrete_type(ret)
         }
         _ => false,
     }
@@ -357,7 +357,7 @@ fn lift_param(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedParam {
     match param {
-        Param::Self_ { mode, span, .. } => {
+        Param::Self_ { span, .. } => {
             let SelfContext::Receiver {
                 receiver: receiver_identifier,
                 self_override,
@@ -371,7 +371,6 @@ fn lift_param(
                     *span,
                 ));
                 return ResolvedParam {
-                    mode: *mode,
                     name: "self".to_string(),
                     ty: ResolvedType::unresolved(),
                 };
@@ -390,13 +389,11 @@ fn lift_param(
                 }
             };
             ResolvedParam {
-                mode: *mode,
                 name: "self".to_string(),
                 ty,
             }
         }
         Param::Regular {
-            mode,
             name,
             type_expr,
             default,
@@ -419,7 +416,6 @@ fn lift_param(
                 diagnostics,
             );
             ResolvedParam {
-                mode: *mode,
                 name: name.clone(),
                 ty,
             }

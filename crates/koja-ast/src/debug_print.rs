@@ -18,8 +18,8 @@ use crate::ast::{
     AliasDecl, AnnotationValue, Arg, AssignTarget, BinOp, BinarySegment, ClosureParam, CompoundOp,
     CondArm, Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr,
     ExprKind, ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item,
-    LValue, Literal, MatchArm, Param, PassMode, Pattern, ProtocolDecl, ProtocolMethod, Statement,
-    StringPart, StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
+    LValue, Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
+    StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
 };
 use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
 use crate::span::Span;
@@ -697,23 +697,17 @@ impl<'a> Printer<'a> {
 
     fn param(&mut self, param: &Param) {
         match param {
-            Param::Self_ { mode, span, .. } => {
-                self.header(&format!("Self ({})", format_pass_mode(*mode)), *span);
+            Param::Self_ { span, .. } => {
+                self.header("Self", *span);
             }
             Param::Regular {
-                mode,
                 name,
                 type_expr,
                 default,
                 span,
                 ..
             } => {
-                let header = format!(
-                    "Regular {}: {} ({})",
-                    name,
-                    type_expr_inline(type_expr),
-                    format_pass_mode(*mode),
-                );
+                let header = format!("Regular {}: {}", name, type_expr_inline(type_expr));
                 if default.is_some() {
                     self.nested(&header, *span, |p| {
                         if let Some(def) = default {
@@ -730,7 +724,6 @@ impl<'a> Printer<'a> {
     fn closure_param(&mut self, param: &ClosureParam) {
         match param {
             ClosureParam::Name {
-                mode,
                 name,
                 span,
                 type_expr,
@@ -740,7 +733,6 @@ impl<'a> Printer<'a> {
                 if let Some(ty) = type_expr {
                     let _ = write!(header, ": {}", type_expr_inline(ty));
                 }
-                let _ = write!(header, " ({})", format_pass_mode(*mode));
                 self.header(&header, *span);
             }
             ClosureParam::Destructured { names, span } => {
@@ -957,8 +949,7 @@ fn expr_header(expr: &Expr) -> String {
 fn format_resolved_type(ty: &ResolvedType) -> String {
     match ty {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
-            let rendered_params: Vec<String> =
-                params.iter().map(|p| format_resolved_type(&p.ty)).collect();
+            let rendered_params: Vec<String> = params.iter().map(format_resolved_type).collect();
             format!(
                 "fn ({}) -> {}",
                 rendered_params.join(", "),
@@ -1067,14 +1058,6 @@ fn format_unary_op(op: UnaryOp) -> &'static str {
     }
 }
 
-fn format_pass_mode(mode: PassMode) -> &'static str {
-    match mode {
-        PassMode::Borrow => "Borrow",
-        PassMode::Copy => "Copy",
-        PassMode::Move => "Move",
-    }
-}
-
 fn format_visibility(v: Visibility) -> &'static str {
     match v {
         Visibility::Private => "Private",
@@ -1141,12 +1124,11 @@ fn type_expr_inline(t: &TypeExpr) -> String {
         TypeExpr::Self_ { .. } => String::from("Self"),
         TypeExpr::Function {
             params,
-            param_modes,
             return_type,
             ..
         } => format!(
             "fn({}) -> {}",
-            format_fn_params(params, param_modes),
+            format_fn_params(params),
             type_expr_brief(return_type),
         ),
         TypeExpr::Union { types, .. } => format!(
@@ -1178,12 +1160,11 @@ fn type_expr_brief(t: &TypeExpr) -> String {
         TypeExpr::Self_ { .. } => String::from("Self"),
         TypeExpr::Function {
             params,
-            param_modes,
             return_type,
             ..
         } => format!(
             "fn({}) -> {}",
-            format_fn_params(params, param_modes),
+            format_fn_params(params),
             type_expr_brief(return_type),
         ),
         TypeExpr::Union { types, .. } => types
@@ -1194,18 +1175,10 @@ fn type_expr_brief(t: &TypeExpr) -> String {
     }
 }
 
-fn format_fn_params(params: &[TypeExpr], modes: &[PassMode]) -> String {
+fn format_fn_params(params: &[TypeExpr]) -> String {
     params
         .iter()
-        .enumerate()
-        .map(|(i, p)| {
-            let mode_prefix = match modes.get(i) {
-                Some(PassMode::Move) => "move ",
-                Some(PassMode::Copy) => "copy ",
-                _ => "",
-            };
-            format!("{mode_prefix}{}", type_expr_brief(p))
-        })
+        .map(type_expr_brief)
         .collect::<Vec<_>>()
         .join(", ")
 }

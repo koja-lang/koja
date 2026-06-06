@@ -504,7 +504,7 @@ pub(crate) fn resolved_type_to_ir_type(
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => IRType::Function {
             params: params
                 .iter()
-                .map(|p| resolved_type_to_ir_type(&p.ty, registry, instantiations))
+                .map(|p| resolved_type_to_ir_type(p, registry, instantiations))
                 .collect(),
             ret: Box::new(resolved_type_to_ir_type(ret, registry, instantiations)),
         },

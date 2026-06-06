@@ -41,14 +41,14 @@ extend Map<K, V>
   Inserts or updates the given key-value pair and returns the updated map.
   """
   @intrinsic
-  fn put(move self, key: K, value: V) -> Map<K, V>
+  fn put(self, key: K, value: V) -> Map<K, V>
 
   @doc """
   Removes the entry for the given key and returns the updated map.
   If the key is not present, the map is returned unchanged.
   """
   @intrinsic
-  fn remove(move self, key: K) -> Map<K, V>
+  fn remove(self, key: K) -> Map<K, V>
 end
 
 @doc """
@@ -57,7 +57,7 @@ A protocol for types that can be constructed from a map literal
 to `from_map`.
 """
 protocol MapLiteral<K, V>
-  fn from_map(move map: Map<K, V>) -> Self
+  fn from_map(map: Map<K, V>) -> Self
 end
 
 impl MapLiteral<K, V> for Map<K, V>
@@ -65,7 +65,7 @@ impl MapLiteral<K, V> for Map<K, V>
   Returns the map unchanged. `Map<K, V>` is the default type for map literals.
   """
   @intrinsic
-  fn from_map(move map: Map<K, V>) -> Self
+  fn from_map(map: Map<K, V>) -> Self
 end
 
 impl Clone for Map<K, V>

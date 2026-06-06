@@ -21,7 +21,7 @@ struct Set<T>
   If the item is already present, the set is returned unchanged.
   """
   @intrinsic
-  fn insert(move self, item: T) -> Set<T>
+  fn insert(self, item: T) -> Set<T>
 
   @doc """
   Returns the number of elements in the set.
@@ -40,7 +40,7 @@ struct Set<T>
   If the item is not present, the set is returned unchanged.
   """
   @intrinsic
-  fn remove(move self, item: T) -> Set<T>
+  fn remove(self, item: T) -> Set<T>
 end
 
 impl ListLiteral<T> for Set<T>
@@ -49,7 +49,7 @@ impl ListLiteral<T> for Set<T>
   naturally deduplicating.
   """
   @intrinsic
-  fn from_list(move list: List<T>) -> Self
+  fn from_list(list: List<T>) -> Self
 end
 
 impl Clone for Set<T>

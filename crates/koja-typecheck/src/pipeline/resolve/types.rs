@@ -220,7 +220,7 @@ pub(crate) fn types_equivalent(
                 && a_params
                     .iter()
                     .zip(b_params)
-                    .all(|(x, y)| x.mode == y.mode && types_equivalent(&x.ty, &y.ty, registry))
+                    .all(|(x, y)| types_equivalent(x, y, registry))
                 && types_equivalent(a_ret, b_ret, registry)
         }
         (ResolvedType::Union(a_members), ResolvedType::Union(b_members)) => {
@@ -262,7 +262,7 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             let rendered_params = params
                 .iter()
-                .map(|p| display_resolution(&p.ty, registry))
+                .map(|p| display_resolution(p, registry))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(

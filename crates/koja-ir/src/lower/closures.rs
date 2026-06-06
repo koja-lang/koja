@@ -14,8 +14,8 @@
 //!
 //! [`MakeClosure`] is then emitted in the outer block, reading each
 //! capture through the outer ctx's normal local-or-capture path.
-//! Heap captures move into the env (the outer slot is marked Moved
-//! so fn-exit drops skip it).
+//! Captures copy into the env (value semantics — the outer binding
+//! stays live).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -23,7 +23,7 @@ use koja_ast::ast::{
     AssignTarget, BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm,
     Pattern, Statement, StringPart,
 };
-use koja_ast::identifier::{AnonymousKind, FnParam, LocalId, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, LocalId, Resolution, ResolvedType};
 use koja_typecheck::{FunctionSignature, GlobalRegistry};
 
 use crate::function::{
@@ -133,7 +133,7 @@ struct CaptureInfo {
     ir_type: IRType,
 }
 
-fn expect_function_params(resolution: &ResolvedType) -> &[FnParam] {
+fn expect_function_params(resolution: &ResolvedType) -> &[ResolvedType] {
     match resolution {
         ResolvedType::Anonymous(AnonymousKind::Function { params, .. }) => params,
         other => panic!(
@@ -461,12 +461,12 @@ fn resolve_capture_types(
 /// AST + lifted-signature view of one closure expression. Bundles
 /// the four facets [`synthesize_body`] needs to materialize a body:
 /// surface params (`ClosureParam` carries `local_id` stamps), the
-/// statement / short-expr form, the resolver-stamped fn-type
-/// `params` (with `mode`), and the fn-type return.
+/// statement / short-expr form, the resolver-stamped fn-type param
+/// types, and the fn-type return.
 struct ClosureSig<'a> {
     body: BodyShape<'a>,
     closure_params: &'a [ClosureParam],
-    fn_params: &'a [FnParam],
+    fn_params: &'a [ResolvedType],
     fn_ret: &'a ResolvedType,
 }
 
@@ -513,11 +513,11 @@ fn synthesize_body(
 
 /// Mint and promote the closure body's user-visible parameters,
 /// mirroring [`crate::lower::package::lower_params`] but driven by
-/// a [`ClosureParam`] / [`FnParam`] pair instead of an AST
+/// a [`ClosureParam`] / param-type pair instead of an AST
 /// `Function`.
 fn lower_closure_params(
     closure_params: &[ClosureParam],
-    fn_params: &[FnParam],
+    fn_params: &[ResolvedType],
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
     ctx: &mut FnLowerCtx,
@@ -527,7 +527,7 @@ fn lower_closure_params(
         closure_params.iter().zip(fn_params.iter()).enumerate()
     {
         let local_id = closure_param_local_id(closure_param, index);
-        let ty = resolved_type_to_ir_type(&fn_param.ty, registry, &mut output.instantiations);
+        let ty = resolved_type_to_ir_type(fn_param, registry, &mut output.instantiations);
         let id = ctx.fresh_value(ty.clone());
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();

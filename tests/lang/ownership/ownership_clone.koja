@@ -3,7 +3,7 @@ struct Point
   y: Int
 end
 
-fn consume(move p: Point) -> Int
+fn consume(p: Point) -> Int
   p.x
 end
 

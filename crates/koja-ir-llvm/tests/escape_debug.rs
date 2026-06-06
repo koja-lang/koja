@@ -2,9 +2,8 @@
 //! specifically `escape_debug`, which v1-PARITY pinned as the
 //! "match-on-String + concat-assign" SIGABRT source. The bug was a
 //! spurious `DropLocal` inside the second match arm at lowering
-//! time; after the slot-state snapshot/restore fix the arm bodies
-//! carry no `free` calls and the function emits exactly the
-//! function-exit drop that `move`s out through the return.
+//! time; under the value-semantics leak baseline the arm bodies
+//! carry no `free` calls and the function emits no drops at all.
 //!
 //! These tests pin the LLVM IR shape — the actual end-to-end
 //! "compile + execute the binary, observe correct output" coverage
@@ -76,8 +75,8 @@ fn debug_format_for_string_compiles_without_free_in_concat_chain() {
     ));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
     let body = extract_function_body(&ir_text, "Global.String.format");
-    // `format` always returns a freshly-concat'd heap string and
-    // `move`s it out through the return — no drops in the body.
+    // `format` always returns a freshly-concat'd heap string; under
+    // the leak baseline no drops are emitted in the body.
     assert!(
         !body.contains("call void @koja_free"),
         "expected no `call void @koja_free` inside `Global.String.format` body; got:\n{body}",

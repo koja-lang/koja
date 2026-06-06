@@ -7,8 +7,8 @@
 //! capture of outer locals; nested closures; and "value-of-fn-type"
 //! storage in a local binding.
 
-use koja_ast::ast::{ClosureParam, Expr, ExprKind, Function, Item, PassMode, Statement};
-use koja_ast::identifier::{AnonymousKind, FnParam, Identifier, Resolution, ResolvedType};
+use koja_ast::ast::{ClosureParam, Expr, ExprKind, Function, Item, Statement};
+use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
@@ -57,7 +57,7 @@ fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
     ResolvedType::leaf(Resolution::Global(id))
 }
 
-fn fn_type(params: Vec<FnParam>, ret: ResolvedType) -> ResolvedType {
+fn fn_type(params: Vec<ResolvedType>, ret: ResolvedType) -> ResolvedType {
     ResolvedType::Anonymous(AnonymousKind::Function {
         params,
         ret: Box::new(ret),
@@ -81,13 +81,7 @@ fn block_closure_with_annotated_params_resolves_to_function_type() {
     let Statement::Assignment { value, .. } = &body[0] else {
         panic!("expected assignment, got {:?}", body[0]);
     };
-    let expected = fn_type(
-        vec![FnParam {
-            mode: PassMode::Borrow,
-            ty: int.clone(),
-        }],
-        int,
-    );
+    let expected = fn_type(vec![int.clone()], int);
     assert_eq!(value.resolution, expected);
 
     let ExprKind::Closure { params, .. } = &value.kind else {
@@ -120,13 +114,7 @@ fn short_closure_with_unannotated_param_uses_context() {
         panic!("expected Call, got {:?}", trailing.kind);
     };
     let closure = &args[0].value;
-    let expected = fn_type(
-        vec![FnParam {
-            mode: PassMode::Borrow,
-            ty: int.clone(),
-        }],
-        int,
-    );
+    let expected = fn_type(vec![int.clone()], int);
     assert_eq!(closure.resolution, expected);
 }
 
@@ -225,13 +213,7 @@ fn closure_value_stored_in_local_resolves_to_function_type() {
     let Statement::Assignment { value, .. } = &body[0] else {
         panic!("expected assignment, got {:?}", body[0]);
     };
-    let expected = fn_type(
-        vec![FnParam {
-            mode: PassMode::Borrow,
-            ty: int.clone(),
-        }],
-        int,
-    );
+    let expected = fn_type(vec![int.clone()], int);
     assert_eq!(value.resolution, expected);
 }
 
@@ -308,12 +290,6 @@ fn closure_capture_of_heap_local_resolves_through_string() {
         panic!("expected Call, got {:?}", trailing.kind);
     };
     let closure = &args[0].value;
-    let expected = fn_type(
-        vec![FnParam {
-            mode: PassMode::Borrow,
-            ty: int,
-        }],
-        string,
-    );
+    let expected = fn_type(vec![int], string);
     assert_eq!(closure.resolution, expected);
 }

@@ -328,7 +328,6 @@ pub(super) fn infer_method_call_type_args(
         .params
         .iter()
         .map(|p| ResolvedParam {
-            mode: p.mode,
             name: p.name.clone(),
             ty: substitute(&p.ty, &subst),
         })

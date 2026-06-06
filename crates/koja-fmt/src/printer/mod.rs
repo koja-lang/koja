@@ -327,27 +327,17 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats a function parameter (`self`, `move self`, or `name: Type`).
+    /// Formats a function parameter (`self` or `name: Type`).
     fn param_to_doc(&mut self, p: &Param) -> Doc {
         match p {
-            Param::Self_ { mode, .. } => {
-                if *mode == PassMode::Move {
-                    text("move self")
-                } else {
-                    text("self")
-                }
-            }
+            Param::Self_ { .. } => text("self"),
             Param::Regular {
-                mode,
                 name,
                 type_expr,
                 default,
                 ..
             } => {
                 let mut parts = Vec::new();
-                if *mode == PassMode::Move {
-                    parts.push(text("move "));
-                }
                 parts.push(text(name.clone()));
                 parts.push(text(": "));
                 parts.push(type_expr_to_doc(type_expr));

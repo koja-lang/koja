@@ -1,7 +1,5 @@
 use std::fmt;
 
-use crate::ast::PassMode;
-
 /// AST-wide identifier for any globally-named entity (struct, enum, function,
 /// method, variant, etc.). Carries the package name and the lexical
 /// containment path within that package (e.g. `["User", "validate"]` for a
@@ -257,7 +255,7 @@ impl ResolvedType {
     pub fn is_resolved(&self) -> bool {
         match self {
             Self::Anonymous(AnonymousKind::Function { params, ret }) => {
-                params.iter().all(|p| p.ty.is_resolved()) && ret.is_resolved()
+                params.iter().all(|p| p.is_resolved()) && ret.is_resolved()
             }
             Self::Named {
                 resolution,
@@ -276,19 +274,10 @@ impl ResolvedType {
 /// `Tuple { elements }`.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub enum AnonymousKind {
-    /// `fn (T, U) -> R` — structural function type with per-parameter
-    /// pass mode. Equates positionally on params (mode + type) and
-    /// covariantly on return.
+    /// `fn (T, U) -> R` — structural function type. Equates positionally
+    /// on param types and covariantly on return.
     Function {
-        params: Vec<FnParam>,
+        params: Vec<ResolvedType>,
         ret: Box<ResolvedType>,
     },
-}
-
-/// A single parameter of an [`AnonymousKind::Function`]: a type plus
-/// the surface pass mode (`move` / `Borrow` / `Copy`).
-#[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub struct FnParam {
-    pub mode: PassMode,
-    pub ty: ResolvedType,
 }

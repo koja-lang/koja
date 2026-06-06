@@ -1,27 +1,27 @@
 struct Point
-  x: Int32
-  y: Int32
+  x: Int
+  y: Int
 end
 
 extend Point
-  fn distance_squared(self) -> Int32
+  fn distance_squared(self) -> Int
     self.x * self.x + self.y * self.y
   end
 end
 
 enum Shape
-  Circle(Int32)
-  Rect(Int32, Int32)
+  Circle(Int)
+  Rect(Int, Int)
 end
 
-fn area(s: Shape) -> Int32
+fn area(s: Shape) -> Int
   match s
     Shape.Circle(r) -> r * r * 3
     Shape.Rect(w, h) -> w * h
   end
 end
 
-fn apply(x: Int32, f: fn (Int32) -> Int32) -> Int32
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
   f(x)
 end
 
@@ -34,17 +34,17 @@ fn main
     "Hello, #{name}!".print()
   end
 
-  scores: Map<String, Int32> = ["Alice": 95, "Bob": 87]
+  scores: Map<String, Int> = ["Alice": 95, "Bob": 87]
   "has Alice? #{scores.has?("Alice")}".print()
 
   score = Option.Some(42)
-  "doubled: #{score.map(fn (n: Int32) -> Int32 n * 2 end).or(0)}".print()
+  "doubled: #{score.map(fn (n: Int) -> Int n * 2 end).or(0)}".print()
 
   threshold = 80
 
   passing =
-    fn (s: Int32) -> Bool s >= threshold end
+    fn (s: Int) -> Bool s >= threshold end
 
   "87 passing? #{passing(87)}".print()
-  "applied: #{apply(5, fn (n: Int32) -> Int32 n * n end)}".print()
+  "applied: #{apply(5, fn (n: Int) -> Int n * n end)}".print()
 end

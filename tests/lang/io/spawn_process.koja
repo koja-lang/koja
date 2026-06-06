@@ -13,13 +13,11 @@ struct Worker
 end
 
 impl Process<WorkerConfig, WorkerMsg, String> for Worker
-  fn start(move config: WorkerConfig) -> Result<Self, StopReason>
+  fn start(config: WorkerConfig) -> Result<Self, StopReason>
     Result.Ok(Worker{label: config.label})
   end
 
-  fn handle(move self, msg: WorkerMsg, from: Option<ReplyTo<String>>)
-    -> Step<Self>
-
+  fn handle(self, msg: WorkerMsg, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       WorkerMsg.Greet(name) ->
         "#{self.label}: Hello, #{name}!".print()

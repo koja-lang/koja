@@ -161,7 +161,6 @@ impl Lexer {
             "in" => TokenKind::In,
             "loop" => TokenKind::Loop,
             "match" => TokenKind::Match,
-            "move" => TokenKind::Move,
             "not" => TokenKind::Not,
             "priv" => TokenKind::Priv,
             "protocol" => TokenKind::Protocol,

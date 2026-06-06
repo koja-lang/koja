@@ -76,7 +76,7 @@ struct Socket
   @doc """
   Binds the socket to the given address and port.
   """
-  fn bind(move self, addr: SocketAddress) -> Result<Socket, String>
+  fn bind(self, addr: SocketAddress) -> Result<Socket, String>
     result = koja_socket_bind(
       self.fd.descriptor,
       addr.ip.bytes.ptr(),
@@ -88,14 +88,14 @@ struct Socket
   @doc """
   Closes the socket.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     self.fd.close()
   end
 
   @doc """
   Connects the socket to the given address and port.
   """
-  fn connect(move self, addr: SocketAddress) -> Result<Socket, String>
+  fn connect(self, addr: SocketAddress) -> Result<Socket, String>
     result = koja_socket_connect(
       self.fd.descriptor,
       addr.ip.bytes.ptr(),
@@ -123,7 +123,7 @@ struct Socket
   @doc """
   Starts listening for incoming connections with the given backlog.
   """
-  fn listen(move self, backlog: Int) -> Result<Socket, String>
+  fn listen(self, backlog: Int) -> Result<Socket, String>
     result = koja_socket_listen(self.fd.descriptor, backlog)
     result == -1 ? Result.Err(koja_last_error().to_string()) : Result.Ok(self)
   end
@@ -159,7 +159,7 @@ struct Socket
   @doc """
   Sets the SO_REUSEADDR option on the socket.
   """
-  fn set_reuse_addr(move self) -> Result<Socket, String>
+  fn set_reuse_addr(self) -> Result<Socket, String>
     result = koja_socket_setsockopt_reuse(self.fd.descriptor)
     result == -1 ? Result.Err(koja_last_error().to_string()) : Result.Ok(self)
   end

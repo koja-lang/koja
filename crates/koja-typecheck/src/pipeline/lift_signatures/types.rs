@@ -3,7 +3,7 @@
 
 use koja_ast::ast::{AliasDecl, Diagnostic, TypeExpr};
 use koja_ast::identifier::{
-    AnonymousKind, FnParam, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
+    AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
 use koja_ast::span::Span;
 
@@ -96,17 +96,12 @@ pub(crate) fn resolve_type_expr(
     match type_expr {
         TypeExpr::Function {
             params,
-            param_modes,
             return_type,
             ..
         } => {
             let resolved_params = params
                 .iter()
-                .zip(param_modes.iter().copied())
-                .map(|(param_ty, mode)| FnParam {
-                    mode,
-                    ty: resolve_type_expr(param_ty, type_params, scope, diagnostics),
-                })
+                .map(|param_ty| resolve_type_expr(param_ty, type_params, scope, diagnostics))
                 .collect();
             let ret = resolve_type_expr(return_type, type_params, scope, diagnostics);
             ResolvedType::Anonymous(AnonymousKind::Function {
@@ -421,7 +416,7 @@ pub(super) fn render_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> S
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             let rendered_params = params
                 .iter()
-                .map(|p| render_resolved(&p.ty, registry))
+                .map(|p| render_resolved(p, registry))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(

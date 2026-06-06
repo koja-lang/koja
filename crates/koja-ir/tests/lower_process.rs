@@ -74,9 +74,9 @@ const PROCESS_STUB: &str = "
     end
 
     protocol Process<C, M, R>
-      fn start(move config: C) -> Result<Self, StopReason>
-      fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
-      fn run(move self) -> StopReason
+      fn start(config: C) -> Result<Self, StopReason>
+      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+      fn run(self) -> StopReason
     end
     ";
 
@@ -134,15 +134,15 @@ fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
         end
 
         impl Process<Int, Int, Int> for Counter
-          fn start(move config: Int) -> Result<Counter, StopReason>
+          fn start(config: Int) -> Result<Counter, StopReason>
             Result.Ok(Counter{count: config})
           end
 
-          fn handle(move self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
+          fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
             Step.Done(StopReason.Normal)
           end
 
-          fn run(move self) -> StopReason
+          fn run(self) -> StopReason
             StopReason.Normal
           end
         end
@@ -235,15 +235,15 @@ fn spawn_dedupes_wrapper_across_call_sites() {
         end
 
         impl Process<Int, Int, Int> for Counter
-          fn start(move config: Int) -> Result<Counter, StopReason>
+          fn start(config: Int) -> Result<Counter, StopReason>
             Result.Ok(Counter{count: config})
           end
 
-          fn handle(move self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
+          fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
             Step.Done(StopReason.Normal)
           end
 
-          fn run(move self) -> StopReason
+          fn run(self) -> StopReason
             StopReason.Normal
           end
         end
@@ -488,15 +488,15 @@ fn process_entry_lowers_to_process_entry_wrapper() {
         end
 
         impl Process<App, AppMsg, String> for App
-          fn start(move config: App) -> Result<Self, StopReason>
+          fn start(config: App) -> Result<Self, StopReason>
             Result.Ok(config)
           end
 
-          fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+          fn handle(self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
             Step.Continue(self)
           end
 
-          fn run(move self) -> StopReason
+          fn run(self) -> StopReason
             StopReason.Normal
           end
         end

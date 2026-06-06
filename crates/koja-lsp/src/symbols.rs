@@ -10,9 +10,7 @@
 use tower_lsp_server::jsonrpc::Result;
 use tower_lsp_server::ls_types::*;
 
-use koja_ast::ast::{
-    File, Function, ImplMember, Item, Param, PassMode, TypeExpr, TypeParam, Visibility,
-};
+use koja_ast::ast::{File, Function, ImplMember, Item, Param, TypeExpr, TypeParam, Visibility};
 
 use crate::backend::Backend;
 use crate::convert::{path_to_uri, span_to_range};
@@ -28,22 +26,10 @@ fn type_expr_label(te: &TypeExpr) -> String {
         TypeExpr::Unit { .. } => "()".to_string(),
         TypeExpr::Function {
             params,
-            param_modes,
             return_type,
             ..
         } => {
-            let ps: Vec<String> = params
-                .iter()
-                .zip(param_modes.iter())
-                .map(|(p, mode)| {
-                    let label = type_expr_label(p);
-                    if *mode == PassMode::Move {
-                        format!("move {label}")
-                    } else {
-                        label
-                    }
-                })
-                .collect();
+            let ps: Vec<String> = params.iter().map(type_expr_label).collect();
             format!("fn ({}) -> {}", ps.join(", "), type_expr_label(return_type))
         }
         TypeExpr::Self_ { .. } => "Self".to_string(),

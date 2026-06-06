@@ -1,7 +1,7 @@
 //! Bare identifier and `self` resolution.
 
 use koja_ast::ast::Diagnostic;
-use koja_ast::identifier::{AnonymousKind, FnParam, Identifier, LocalId, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use crate::registry::GlobalKind;
@@ -51,14 +51,7 @@ pub(super) fn resolve_ident(
                 }
                 *resolution = Resolution::Global(id);
                 return ResolvedType::Anonymous(AnonymousKind::Function {
-                    params: sig
-                        .params
-                        .iter()
-                        .map(|p| FnParam {
-                            mode: p.mode,
-                            ty: p.ty.clone(),
-                        })
-                        .collect(),
+                    params: sig.params.iter().map(|p| p.ty.clone()).collect(),
                     ret: Box::new(sig.return_type.clone()),
                 });
             }

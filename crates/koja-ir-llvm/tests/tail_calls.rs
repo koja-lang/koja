@@ -17,7 +17,7 @@ fn self_recursive_tail_call_emits_tco_loop_header_and_back_edge() {
         struct Counter
           n: Int
 
-          fn count_down(move self) -> Self
+          fn count_down(self) -> Self
             if self.n <= 0
               return self
             end

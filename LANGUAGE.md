@@ -8,7 +8,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 
 - [Lexical Structure](#lexical-structure) -- Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
 - [Variables and Constants](#variables-and-constants) -- Assignment, Type Annotations, Compound Assignment, Constants
-- [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters and Ownership
+- [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters
 - [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
 - [Types](#types) -- Primitives, Unit, Strings, Structs, Enums, Union Types, Generics
 - [Pattern Matching](#pattern-matching) -- `match`, OR Patterns, `cond`
@@ -46,7 +46,7 @@ x = 42  # inline comment
 
 ```
 alias, break, cond, const, else, end, enum, false, fn, for,
-if, impl, in, loop, match, move, not, priv, protocol,
+if, impl, in, loop, match, not, priv, protocol,
 receive, return, self, spawn, struct, true, type, unless, when
 ```
 
@@ -223,7 +223,7 @@ fn describe(c: Config) -> String
 end
 ```
 
-The `move` keyword is still accepted in signatures for source compatibility but is inert: it has no effect on semantics, since every parameter is already a value. New code should omit it.
+There is no parameter-passing modifier: every parameter is a value. (Earlier releases had a `move` keyword; it has been removed, since value semantics make it meaningless.)
 
 ---
 
@@ -428,8 +428,6 @@ c = Counter{value: 0}
 c = c.increment()   # rebind to the returned value
 ```
 
-`move self` is still accepted but inert; prefer plain `self`.
-
 `Self` is a shorthand for the enclosing type in return positions. Use it instead of repeating the type name.
 
 #### Extend Blocks
@@ -438,7 +436,7 @@ c = c.increment()   # rebind to the returned value
 
 ```koja
 extend Point
-  fn translate(move self, dx: Int32, dy: Int32) -> Self
+  fn translate(self, dx: Int32, dy: Int32) -> Self
     self.x += dx
     self.y += dy
     self
@@ -767,8 +765,6 @@ Closure parameters are passed by value, like function parameters:
 measure = fn (data: String) -> Int data.length() end
 ```
 
-`move` is accepted on closure parameters for compatibility but is inert.
-
 ### Short Closures
 
 Short closures use `param -> expr` syntax with parameter types inferred from the calling context:
@@ -807,14 +803,6 @@ end
 apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 ```
 
-#### `move` in Function Types
-
-Function types are written `fn (T) -> U`. `move` may appear on a parameter (`fn (move T) -> U`) for compatibility but is inert -- parameters are always passed by value:
-
-```koja
-fn map<U>(self, f: fn (T) -> U) -> Option<U>
-```
-
 ---
 
 ## Value Semantics
@@ -826,8 +814,8 @@ Koja uses value semantics: every binding, parameter, return, and field is an ind
 1. Assignment copies. The source remains usable.
 2. Function and closure parameters are passed by value; the caller's binding survives the call.
 3. There is no aliasing: mutating one binding never affects another.
-4. There is no use-after-move -- a value is usable for as long as it is in scope.
-5. The `move` keyword is accepted in signatures for source compatibility but is semantically inert; new code should omit it.
+4. A value is usable for as long as it is in scope; there is no consuming move.
+5. There is no parameter-passing modifier and no `move` keyword -- value semantics make ownership transfer meaningless.
 
 > Memory note: this experimental release frees only stack-resident values; heap-backed values (strings, collections, composites) currently leak. Reclamation is deterministic, scope-bound cleanup that is being reintroduced -- it is not a garbage collector. See the README for production-readiness status.
 
@@ -1005,9 +993,9 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 ```koja
 protocol Process<C, M, R>
   fn new(config: C) -> Self
-  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
-  fn handle_signal(move self, event: Lifecycle) -> Self | StopReason
-  fn run(move self) -> StopReason
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
+  fn handle_signal(self, event: Lifecycle) -> Self | StopReason
+  fn run(self) -> StopReason
 end
 ```
 
@@ -1018,7 +1006,7 @@ end
 `run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when a `StopReason` is returned:
 
 ```koja
-fn run(move self) -> StopReason
+fn run(self) -> StopReason
   receive
     pair: Pair<M, Option<ReplyTo<R>>> ->
       match self.handle(pair.first, pair.second)
@@ -1046,7 +1034,7 @@ impl Process<Counter, CounterMsg, Int> for Counter
     config
   end
 
-  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
+  fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
     match msg
       CounterMsg.Increment -> self.count += 1
       CounterMsg.Decrement -> self.count -= 1
@@ -1299,7 +1287,7 @@ list.empty?().print()   # false
 Functions:
 
 - `new() -> List<T>` -- creates an empty list.
-- `append(move self, item: T) -> List<T>` -- appends an element.
+- `append(self, item: T) -> List<T>` -- appends an element.
 - `last(self) -> Option<T>` -- returns the last element, or `None` if empty.
 - `length(self) -> Int` -- returns the number of elements.
 - `get(self, index: Int) -> Option<T>` -- returns the element at `index`, or `None` if out of bounds.
@@ -1336,10 +1324,10 @@ m.length().print()           # 2
 Functions:
 
 - `new() -> Map<K, V>` -- creates an empty map.
-- `put(move self, key: K, value: V) -> Map<K, V>` -- inserts or updates a key-value pair.
+- `put(self, key: K, value: V) -> Map<K, V>` -- inserts or updates a key-value pair.
 - `get(self, key: K) -> Option<V>` -- returns `Option.Some(value)` if the key exists, `Option.None` otherwise.
 - `has?(self, key: K) -> Bool` -- returns `true` if the key exists.
-- `remove(move self, key: K) -> Map<K, V>` -- removes the entry for the key. Returns the map unchanged if the key is absent.
+- `remove(self, key: K) -> Map<K, V>` -- removes the entry for the key. Returns the map unchanged if the key is absent.
 - `length(self) -> Int` -- returns the number of entries.
 - `empty?(self) -> Bool` -- returns `true` if the map has no entries.
 
@@ -1364,9 +1352,9 @@ s.has?(1).print()     # true
 Functions:
 
 - `new() -> Set<T>` -- creates an empty set.
-- `insert(move self, item: T) -> Set<T>` -- adds an element. Returns unchanged if already present.
+- `insert(self, item: T) -> Set<T>` -- adds an element. Returns unchanged if already present.
 - `has?(self, item: T) -> Bool` -- returns `true` if the element exists.
-- `remove(move self, item: T) -> Set<T>` -- removes the element. Returns unchanged if absent.
+- `remove(self, item: T) -> Set<T>` -- removes the element. Returns unchanged if absent.
 - `length(self) -> Int` -- returns the number of elements.
 - `empty?(self) -> Bool` -- returns `true` if the set has no elements.
 
@@ -1496,7 +1484,7 @@ Functions:
 
 - `read(self, count: Int) -> Result<String, String>` -- reads up to `count` bytes.
 - `write(self, data: String) -> Result<Int, String>` -- writes data, returns bytes written.
-- `close(move self) -> Result<String, String>` -- closes the descriptor.
+- `close(self) -> Result<String, String>` -- closes the descriptor.
 
 #### `File`
 
@@ -1516,7 +1504,7 @@ Functions:
 - `File.exists?(path: String) -> Bool` -- returns true if the file exists.
 - `File.delete(path: String) -> Result<String, String>` -- deletes a file.
 - `File.rename(source: String, destination: String) -> Result<String, String>` -- renames (moves) a file.
-- `close(move self) -> Result<String, String>` -- closes the file handle.
+- `close(self) -> Result<String, String>` -- closes the file handle.
 
 ```koja
 content = File.read("config.txt").unwrap()
@@ -1618,7 +1606,7 @@ flags.bor(0b0001).print()   # 11 (0b1011)
 protocol Debug
   fn format(self) -> String
   fn print(self)                # default: IO.puts(self.format())
-  fn inspect(move self) -> Self # default: self.print(); self
+  fn inspect(self) -> Self # default: self.print(); self
 end
 ```
 
@@ -1650,7 +1638,7 @@ List and map literals are backed by protocols, allowing custom types to opt into
 
 ```koja
 protocol ListLiteral<T>
-  fn from_list(move list: List<T>) -> Self
+  fn from_list(list: List<T>) -> Self
 end
 ```
 
@@ -1660,7 +1648,7 @@ end
 
 ```koja
 protocol MapLiteral<K, V>
-  fn from_map(move map: Map<K, V>) -> Self
+  fn from_map(map: Map<K, V>) -> Self
 end
 ```
 
@@ -1715,7 +1703,7 @@ A raw C pointer type. `Copy` semantics (just a machine word). No ownership track
 struct CPtr<T>
   fn null() -> CPtr<T>
   fn alloc(count: Int) -> CPtr<T>
-  fn free(move self)
+  fn free(self)
   fn offset(self, n: Int) -> CPtr<T>
   fn read(self) -> T
   fn write(self, value: T)

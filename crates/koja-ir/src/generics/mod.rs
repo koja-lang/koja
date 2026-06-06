@@ -40,9 +40,7 @@ mod substitute;
 use std::collections::{BTreeMap, BTreeSet};
 
 use koja_ast::ast::{Function, ImplMember, Item};
-use koja_ast::identifier::{
-    AnonymousKind, FnParam, GlobalRegistryId, Identifier, Resolution, ResolvedType,
-};
+use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_typecheck::{CheckedPackage, GlobalRegistry};
 
 use crate::lower::LowerOutput;
@@ -286,10 +284,7 @@ pub(crate) fn substitute_resolved_type(
             ResolvedType::Anonymous(AnonymousKind::Function {
                 params: params
                     .iter()
-                    .map(|p| FnParam {
-                        mode: p.mode,
-                        ty: substitute_resolved_type(&p.ty, args, owner),
-                    })
+                    .map(|p| substitute_resolved_type(p, args, owner))
                     .collect(),
                 ret: Box::new(substitute_resolved_type(ret, args, owner)),
             })

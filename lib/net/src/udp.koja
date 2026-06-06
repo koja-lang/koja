@@ -51,7 +51,7 @@ struct UDPSocket
   @doc """
   Closes the UDP socket.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     self.socket.close()
   end
 end

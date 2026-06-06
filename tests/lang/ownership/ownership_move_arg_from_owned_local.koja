@@ -5,8 +5,7 @@ the caller's fn-exit `DropLocal` would free the payload the callee
 already took ownership of, surfacing as a double-free / silent
 SIGSEGV under the LLVM backend.
 """
-
-fn consume(move s: String) -> Int
+fn consume(s: String) -> Int
   s.length()
 end
 

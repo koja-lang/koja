@@ -1,9 +1,9 @@
 //! Value-semantics assignment coverage (plus a few binary-literal
 //! range checks that share this file). Under value semantics there is
-//! no move tracking at all: assignment, argument passing, and `self`
-//! receivers are copies, so a binding stays usable after it's read,
-//! assigned, or passed. The tests below pin that reads-after-use stay
-//! clean.
+//! no ownership tracking at all: assignment, argument passing, and
+//! `self` receivers are copies, so a binding stays usable after it's
+//! read, assigned, or passed. The tests below pin that reads-after-use
+//! stay clean.
 
 use koja_ast::util::dedent;
 
@@ -50,12 +50,12 @@ fn reading_a_local_after_assigning_it_is_clean() {
 }
 
 #[test]
-fn copy_local_read_after_move_param_call_is_clean() {
-    // `Int` is `Copy` — passing it to a `move`-param doesn't
-    // strand the original local.
+fn local_read_after_passing_to_call_is_clean() {
+    // Value semantics: passing `x` to a call copies, so the
+    // original local stays usable afterward.
     assert_clean(&dedent(
         r#"
-        fn consume(move n: Int) -> Int
+        fn consume(n: Int) -> Int
           n + 1
         end
 
@@ -69,10 +69,10 @@ fn copy_local_read_after_move_param_call_is_clean() {
 }
 
 #[test]
-fn reassignment_clears_move_state() {
+fn read_after_passing_and_reassigning_is_clean() {
     assert_clean(&dedent(
         r#"
-        fn consume(move s: String) -> Int
+        fn consume(s: String) -> Int
           s.length()
         end
 

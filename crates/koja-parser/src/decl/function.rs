@@ -7,7 +7,7 @@
 //! signatures and, inside struct/enum/impl bodies, when the *next*
 //! token starts another function declaration.
 
-use koja_ast::ast::{Annotation, Function, Item, Param, PassMode, Visibility};
+use koja_ast::ast::{Annotation, Function, Item, Param, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -85,25 +85,13 @@ impl Parser {
     fn parse_param(&mut self) -> Param {
         let start = self.current_span();
 
-        let has_move = self.eat(&TokenKind::Move).is_some();
-
         if self.eat(&TokenKind::Self_).is_some() {
             return Param::Self_ {
-                mode: if has_move {
-                    PassMode::Move
-                } else {
-                    PassMode::Borrow
-                },
                 local_id: None,
                 span: self.span_from(start),
             };
         }
 
-        let mode = if has_move || self.eat(&TokenKind::Move).is_some() {
-            PassMode::Move
-        } else {
-            PassMode::Borrow
-        };
         let name = self.expect_ident();
         self.expect(&TokenKind::Colon);
         let type_expr = self.parse_type_expr();
@@ -114,7 +102,6 @@ impl Parser {
         };
 
         Param::Regular {
-            mode,
             name,
             type_expr,
             default,

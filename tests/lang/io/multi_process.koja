@@ -8,12 +8,11 @@ struct Ponger
 end
 
 impl Process<Ponger, PingMsg, String> for Ponger
-  fn start(move config: Ponger) -> Result<Self, StopReason>
+  fn start(config: Ponger) -> Result<Self, StopReason>
     Result.Ok(config)
   end
 
-  fn handle(move self, msg: PingMsg, from: Option<ReplyTo<String>>)
-    -> Step<Self>
+  fn handle(self, msg: PingMsg, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       PingMsg.Ping(name) ->
         match from
@@ -44,12 +43,11 @@ struct Coordinator
 end
 
 impl Process<Coordinator, CoordMsg, String> for Coordinator
-  fn start(move config: Coordinator) -> Result<Self, StopReason>
+  fn start(config: Coordinator) -> Result<Self, StopReason>
     Result.Ok(config)
   end
 
-  fn handle(move self, msg: CoordMsg, from: Option<ReplyTo<String>>)
-    -> Step<Self>
+  fn handle(self, msg: CoordMsg, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       CoordMsg.RunTest ->
         p = spawn Ponger.start(Ponger{label: "ponger"})

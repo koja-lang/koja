@@ -148,7 +148,7 @@ struct Parser
     Parser.parse_headers_loop(self.input, self.pos, headers)
   end
 
-  priv fn parse_headers_loop(input: String, pos: Int, move headers: Headers)
+  priv fn parse_headers_loop(input: String, pos: Int, headers: Headers)
     -> Result<Pair<Headers, Int>, Error>
 
     p = Parser{input: input.clone(), pos: pos}
@@ -212,7 +212,7 @@ struct Parser
     Parser.parse_chunks(self.input, self.pos, sb)
   end
 
-  priv fn parse_chunks(input: String, pos: Int, move sb: StringBuilder)
+  priv fn parse_chunks(input: String, pos: Int, sb: StringBuilder)
     -> Result<String, Error>
 
     p = Parser{input: input.clone(), pos: pos}

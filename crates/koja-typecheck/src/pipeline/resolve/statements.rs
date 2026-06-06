@@ -24,9 +24,8 @@
 //!     the existing local's type; the existing [`LocalId`] stays put.
 //!
 //! - **Field write** (`segments.len() >= 2`): the head segment must
-//!   resolve to a declared local and (when it is `self`) the
-//!   enclosing fn must have `move self`. Each subsequent segment
-//!   projects through a struct definition's field roster, applying
+//!   resolve to a declared local (`self` included). Each subsequent
+//!   segment projects through a struct definition's field roster, applying
 //!   the receiver's type-args at every step (so `self.entries` on
 //!   `Headers { entries: List<Header> }` types as `List<Header>`
 //!   rather than the raw declared type-param). The rhs validates
@@ -288,9 +287,9 @@ pub(super) fn resolve_compound_assignment(
 }
 
 /// Resolve a multi-segment `local.field1.field2 = value` assignment.
-/// The head segment must name a declared local (and must be `move
-/// self` when it is `self`); each subsequent segment projects through
-/// a struct field roster while substituting the receiver's type-args
+/// The head segment must name a declared local (`self` included);
+/// each subsequent segment projects through a struct field roster
+/// while substituting the receiver's type-args
 /// at every step. On success, the rhs validates against the leaf
 /// field type and the head local's `LocalId` is stamped on
 /// `lvalue.local_id` so IR lower can find the slot.

@@ -4,7 +4,7 @@
 //! same registry-driven mangling / instantiation-recording shape and
 //! benefit from a single emitter ([`emit_call`]).
 
-use koja_ast::ast::{Arg, Expr, ExprKind, PassMode};
+use koja_ast::ast::{Arg, Expr, ExprKind};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
@@ -109,7 +109,6 @@ pub(super) fn lower_call(
         return_ty,
         args,
         prepend: None,
-        param_modes: param_modes_from_signature(signature),
     };
     emit_call(site, ctx, block, registry, output)
 }
@@ -158,7 +157,7 @@ fn lower_local_closure_call(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) = callee_ty else {
+    let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = callee_ty else {
         panic!(
             "IR lower: local closure call callee resolved to non-function type \
              ({callee_ty:?}) — typecheck seal violation",
@@ -194,9 +193,8 @@ fn lower_local_closure_call(
 
     let mut lowered_args = Vec::with_capacity(args.len());
     let mut current = block;
-    for (idx, arg) in args.iter().enumerate() {
+    for arg in args {
         let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
-        let value = consume_at_mode(ctx, next, value, params.get(idx).map(|p| p.mode));
         lowered_args.push(value);
         current = next;
     }
@@ -226,8 +224,7 @@ fn lower_closure_expr_call(
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
-    let ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) = &callee.resolution
-    else {
+    let ResolvedType::Anonymous(AnonymousKind::Function { ret, .. }) = &callee.resolution else {
         panic!(
             "IR lower: closure-expr call callee resolved to non-function type ({:?}) — \
              typecheck seal violation",
@@ -238,9 +235,8 @@ fn lower_closure_expr_call(
 
     let (callee_value, mut current) = lower_expr(callee, ctx, block, registry, output)?;
     let mut lowered_args = Vec::with_capacity(args.len());
-    for (idx, arg) in args.iter().enumerate() {
+    for arg in args {
         let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
-        let value = consume_at_mode(ctx, next, value, params.get(idx).map(|p| p.mode));
         lowered_args.push(value);
         current = next;
     }
@@ -372,7 +368,6 @@ pub(super) fn lower_method_call(
         return_ty,
         args,
         prepend,
-        param_modes: param_modes_from_signature(signature),
     };
     emit_call(site, ctx, current_block, registry, output)
 }
@@ -501,24 +496,19 @@ fn receiver_struct_id(receiver: &Expr, dispatch: Dispatch) -> GlobalRegistryId {
 /// instance dispatch (filling `params[0]` / `self`), `None` for
 /// bare calls and static method dispatch. `callee_symbol` is
 /// already mangled if the callee is a generic instantiation;
-/// `return_ty` is already substituted. `param_modes` parallels the
-/// final argument list (receiver first when `prepend` is `Some`,
-/// then positional args). Under value semantics every argument is
-/// passed by borrow, so the modes no longer drive lowering; the
-/// field is retained until the affine machinery is fully retired.
+/// `return_ty` is already substituted.
 struct CallSite<'a> {
     callee_symbol: IRSymbol,
     return_ty: IRType,
     args: &'a [Arg],
     prepend: Option<ValueId>,
-    param_modes: Vec<PassMode>,
 }
 
 /// Shared tail of [`lower_call`] / [`lower_method_call`]: lower
 /// each arg in sequence, then emit the [`IRInstruction::Call`] in
-/// the final block. Every argument is passed by borrow (the `move`
-/// keyword is inert under value semantics), so the caller retains
-/// ownership of its slots and frees them at scope exit.
+/// the final block. Under value semantics every argument is passed
+/// by value; the caller retains its slots and frees them at scope
+/// exit.
 fn emit_call(
     site: CallSite<'_>,
     ctx: &mut FnLowerCtx,
@@ -531,22 +521,16 @@ fn emit_call(
         return_ty,
         args,
         prepend,
-        param_modes,
     } = site;
     let mut lowered_args = Vec::with_capacity(args.len() + usize::from(prepend.is_some()));
-    let mut mode_idx = 0;
     if let Some(receiver) = prepend {
-        let value = consume_at_mode(ctx, block, receiver, param_modes.get(mode_idx).copied());
-        lowered_args.push(value);
-        mode_idx += 1;
+        lowered_args.push(receiver);
     }
     let mut current = block;
     for arg in args {
         let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
-        let value = consume_at_mode(ctx, next, value, param_modes.get(mode_idx).copied());
         lowered_args.push(value);
         current = next;
-        mode_idx += 1;
     }
 
     let dest = ctx.fresh_value(return_ty);
@@ -559,27 +543,6 @@ fn emit_call(
         },
     );
     Ok((dest, current))
-}
-
-/// Under value semantics the `move` keyword is inert: every argument
-/// is passed by borrow, leaving the caller's slot Live & Owned so the
-/// caller frees it at scope exit. No argument consumes the caller's
-/// slot, so the parameter `mode` no longer affects lowering.
-fn consume_at_mode(
-    _ctx: &mut FnLowerCtx,
-    _block: IRBlockId,
-    value: ValueId,
-    _mode: Option<PassMode>,
-) -> ValueId {
-    value
-}
-
-/// Collect the `move`/`borrow`/`copy` mode of every signature
-/// parameter in declaration order. Both static and instance calls
-/// use the same flat list; for instance dispatch index 0 is
-/// `self`'s mode (matching the `prepend` slot in [`CallSite`]).
-fn param_modes_from_signature(signature: &FunctionSignature) -> Vec<PassMode> {
-    signature.params.iter().map(|p| p.mode).collect()
 }
 
 /// `Debug` protocol methods that get the opaque-receiver shortcut.

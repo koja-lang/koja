@@ -1,7 +1,10 @@
 enum Tag
   Unset
   Name(String)
-  Stamped{at: Int, by: String}
+  Stamped {
+    at: Int,
+    by: String,
+  }
 end
 
 fn main

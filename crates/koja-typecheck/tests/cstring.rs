@@ -1,6 +1,6 @@
 //! Surface-level coverage for the auto-imported `Global.cstring`
 //! source. Pins the `CString` struct's two fields (`ptr: CPtr<UInt8>`,
-//! `len: Int`), the `move self` `free` body, and the
+//! `len: Int`), the `free` body, and the
 //! `@intrinsic to_string` declaration — all reachable from user
 //! code that round-trips through `CPtr<UInt8>.to_cstring`.
 

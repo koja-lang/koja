@@ -16,7 +16,7 @@ struct Fd
   @doc """
   Closes the file descriptor.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     koja_fd_close(self.descriptor) == 0
       ? Result.Ok("")
       : Result.Err("close failed")
@@ -98,7 +98,7 @@ struct File
   @doc """
   Closes the file handle.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     self.fd.close()
   end
 

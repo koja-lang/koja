@@ -11,7 +11,7 @@ struct StringBuilder
     StringBuilder{parts: parts}
   end
 
-  fn add(move self, s: String) -> StringBuilder
+  fn add(self, s: String) -> StringBuilder
     StringBuilder{parts: self.parts.append(s)}
   end
 

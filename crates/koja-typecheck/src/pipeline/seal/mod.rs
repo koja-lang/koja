@@ -214,7 +214,7 @@ pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
         }
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             for param in params {
-                seal_no_type_param(&param.ty, span);
+                seal_no_type_param(param, span);
             }
             seal_no_type_param(ret, span);
         }

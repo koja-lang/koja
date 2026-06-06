@@ -86,7 +86,7 @@ fn extend_with_dotted_target() {
     let src = dedent(
         "
         extend Net.TCPSocket
-          fn read_line(move self) -> String
+          fn read_line(self) -> String
             \"line\"
           end
         end

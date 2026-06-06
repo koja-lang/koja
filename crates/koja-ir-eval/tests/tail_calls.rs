@@ -19,7 +19,7 @@ fn self_recursive_tail_call_runs_in_constant_stack() {
         struct Counter
           n: Int
 
-          fn count_down(move self) -> Self
+          fn count_down(self) -> Self
             if self.n <= 0
               return self
             end
@@ -48,7 +48,7 @@ fn self_recursive_unit_tail_call_runs_in_constant_stack() {
         struct Counter
           n: Int
 
-          fn count_down(move self) -> Int
+          fn count_down(self) -> Int
             if self.n <= 0
               return self.n
             end

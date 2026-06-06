@@ -5,6 +5,7 @@ end
 
 fn render(line: String) -> String
   result = ""
+
   for c in line
     match c
       "\t" -> result = result <> "\\t"
@@ -13,6 +14,7 @@ fn render(line: String) -> String
       _ -> result = result <> c
     end
   end
+
   result
 end
 
