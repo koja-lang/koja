@@ -110,7 +110,7 @@ allocator from an ambient context (Odin-style), so dropping into an
 arena does not require viral allocator parameters on every signature.
 This is what makes the arena-heavy style pleasant rather than a tax.
 
-**Role.** Arenas are the *targeted* fast path for profiled,
+**Role.** Arenas are the _targeted_ fast path for profiled,
 allocation-heavy or transient hot work (query execution, parsing,
 planning, per-iteration temporaries, transient graphs) — **not** the
 everyday default. If ordinary code needs arenas to be fast, that
@@ -120,12 +120,12 @@ state (that is `Shared<T>` or FFI).
 
 **Tiered model**, safe by default, control on demand:
 
-| Tier | Mechanism | Use |
-|---|---|---|
-| Default | immutable + rc/COW | the 90% of code |
-| `arena { }` | bump, rc-free, locally mutable, copy-out on escape | profiled hot/transient work |
-| `Shared<T>` | atomic ARC + synchronization | cross-process mutable state |
-| `CPtr`/FFI | manual | truly external / extreme core |
+| Tier        | Mechanism                                          | Use                           |
+| ----------- | -------------------------------------------------- | ----------------------------- |
+| Default     | immutable + rc/COW                                 | the 90% of code               |
+| `arena { }` | bump, rc-free, locally mutable, copy-out on escape | profiled hot/transient work   |
+| `Shared<T>` | atomic ARC + synchronization                       | cross-process mutable state   |
+| `CPtr`/FFI  | manual                                             | truly external / extreme core |
 
 ## Surface language changes
 
@@ -183,8 +183,8 @@ place to approach systems speed). Claims worth standing behind:
   claim it.
 - **Near-systems performance inside arena hot paths.**
 
-Caveat: these are *achievable targets contingent on a mature
-optimizer* (rc elision, in-place fast path, uniqueness analysis).
+Caveat: these are _achievable targets contingent on a mature
+optimizer_ (rc elision, in-place fast path, uniqueness analysis).
 Naive rc/COW out of the box is noticeably slower than Go. Treat
 external perf claims as aspirational until benchmarked.
 

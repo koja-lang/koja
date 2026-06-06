@@ -836,23 +836,9 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, value);
             Ok(())
         }
-        IRInstruction::LocalWrite {
-            local,
-            ownership: _,
-            value,
-        } => {
+        IRInstruction::LocalWrite { local, value } => {
             let resolved = lookup(&frame.values, *value)?;
             frame.locals.insert(*local, resolved);
-            Ok(())
-        }
-        IRInstruction::MoveOutLocal { dest, local, .. } => {
-            let value = frame.locals.remove(local).unwrap_or_else(|| {
-                panic!(
-                    "interpreter: `MoveOutLocal` on `{local}` before its `LocalWrite` (or \
-                     after a prior move) — seal / lower invariant violation",
-                )
-            });
-            frame.values.insert(*dest, value);
             Ok(())
         }
         IRInstruction::StructInit { dest, fields, ty } => {

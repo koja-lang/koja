@@ -28,7 +28,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use koja_ast::ast::{Literal, ReturnMode};
+use koja_ast::ast::Literal;
 use koja_ast::identifier::{
     GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -618,26 +618,6 @@ impl GlobalRegistry {
                     other.label(),
                 );
             }
-        }
-    }
-
-    /// Overwrite a function entry's return mode after `resolve`, once
-    /// the `infer_return_modes` pass has classified the body. Unlike
-    /// [`Self::set_signature`], this is an in-place update of an
-    /// already-stamped signature; panics unless the entry is
-    /// `Function(Some(_))`.
-    pub fn set_function_return_mode(&mut self, id: GlobalRegistryId, return_mode: ReturnMode) {
-        let entry = self
-            .entries
-            .get_mut(&id)
-            .unwrap_or_else(|| panic!("set_function_return_mode on missing registry id {id}"));
-        match &mut entry.kind {
-            GlobalKind::Function(Some(signature)) => signature.return_mode = return_mode,
-            other => panic!(
-                "set_function_return_mode on `{}` ({}) — expected a signed function entry",
-                entry.identifier,
-                other.label(),
-            ),
         }
     }
 

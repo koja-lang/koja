@@ -11,16 +11,10 @@
 //!
 //! Out of scope here: backend-emitted body shape (eval coverage in
 //! `koja-ir-eval/tests/clone.rs`, LLVM coverage in
-//! `koja-ir-llvm/tests/clone.rs`). Owned-vs-Unowned stamping
-//! on the destination slot is not pinned — today
-//! `lower::ownership::ownership_for_expr` only flags constructor-shaped
-//! AST nodes (`Concat`, `BinaryLiteral`, closure literals, `Receive`,
-//! interpolated strings) as `Owned`; method-call returns are still
-//! `Unowned` regardless of fresh-allocating semantics. PR2 (the
-//! universal Clone slice) ships the registry-aware classifier that
-//! lets `s.clone()` stamp `Owned` end-to-end. Until then, the heap
-//! buffer the clone produces is leaked at scope exit — an existing
-//! gap shared by every fresh-allocating helper (`String.upcase`,
+//! `koja-ir-llvm/tests/clone.rs`). Under the value-semantics leak
+//! baseline, drop insertion is deferred to the future drop-glue pass,
+//! so the heap buffer the clone produces is leaked at scope exit —
+//! shared by every fresh-allocating helper (`String.upcase`,
 //! `String.replace`, …), not a regression.
 
 use koja_ast::util::dedent;

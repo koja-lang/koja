@@ -22,14 +22,12 @@ use crate::function::{
     BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
-use crate::ownership::Ownership;
 use crate::types::{IRBinOp, IRType, ValueId};
 
 use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
 use super::expr::lower_expr;
 use super::ops::bin_op_result_type;
-use super::ownership::ownership_for_expr;
 use super::package::resolved_type_to_ir_type;
 use super::structs::resolved_struct_symbol;
 
@@ -141,15 +139,10 @@ fn lower_statement(
             let return_value = match value.as_ref() {
                 Some(expr) => {
                     let (id, next) = lower_expr(expr, ctx, block, registry, output)?;
-                    let return_id = move_out_local_value(ctx, next, id);
                     emit_function_exit_drops(ctx, next);
-                    ctx.cfg.set_terminator(
-                        next,
-                        IRTerminator::Return {
-                            value: Some(return_id),
-                        },
-                    );
-                    Some(return_id)
+                    ctx.cfg
+                        .set_terminator(next, IRTerminator::Return { value: Some(id) });
+                    Some(id)
                 }
                 None => {
                     emit_function_exit_drops(ctx, block);
@@ -234,7 +227,6 @@ fn lower_assignment(
 
     let (value_id, current) = lower_expr(value, ctx, block, registry, output)?;
     let value_ty = ctx.type_of(value_id);
-    let ownership = ownership_for_expr(value, &value_ty);
 
     if !ctx.local_is_declared(ir_local) {
         let entry = ctx.entry_block();
@@ -246,28 +238,14 @@ fn lower_assignment(
             },
         );
         ctx.mark_local_declared(ir_local, value_ty.clone());
-    } else if let Some(state) = ctx.slot_state(ir_local)
-        && !state.moved
-        && matches!(state.ownership, Ownership::Owned)
-    {
-        let slot_ty = state.ty.clone();
-        ctx.cfg.append(
-            current,
-            IRInstruction::DropLocal {
-                local: ir_local,
-                ty: slot_ty,
-            },
-        );
     }
     ctx.cfg.append(
         current,
         IRInstruction::LocalWrite {
             local: ir_local,
-            ownership,
             value: value_id,
         },
     );
-    ctx.mark_local_written(ir_local, ownership);
     Ok(FlowResult::Open {
         value: None,
         block: current,
@@ -386,19 +364,13 @@ fn lower_field_assignment(
         new_value = dest;
     }
 
-    let head_ownership = ctx
-        .slot_state(ir_local)
-        .map(|state| state.ownership)
-        .unwrap_or(Ownership::Unowned);
     ctx.cfg.append(
         current,
         IRInstruction::LocalWrite {
             local: ir_local,
-            ownership: head_ownership,
             value: new_value,
         },
     );
-    ctx.mark_local_written(ir_local, head_ownership);
 
     Ok(FlowResult::Open {
         value: None,
@@ -539,11 +511,9 @@ fn lower_compound_assignment(
             current,
             IRInstruction::LocalWrite {
                 local: ir_local,
-                ownership: Ownership::Unowned,
                 value: result,
             },
         );
-        ctx.mark_local_written(ir_local, Ownership::Unowned);
         return Ok(FlowResult::Open {
             value: None,
             block: current,
@@ -640,19 +610,13 @@ fn lower_compound_assignment(
         new_value = dest;
     }
 
-    let head_ownership = ctx
-        .slot_state(ir_local)
-        .map(|state| state.ownership)
-        .unwrap_or(Ownership::Unowned);
     ctx.cfg.append(
         current,
         IRInstruction::LocalWrite {
             local: ir_local,
-            ownership: head_ownership,
             value: new_value,
         },
     );
-    ctx.mark_local_written(ir_local, head_ownership);
 
     Ok(FlowResult::Open {
         value: None,
@@ -693,45 +657,6 @@ fn compound_to_ir(op: CompoundOp) -> IRBinOp {
     }
 }
 
-/// If `value` originates from a [`crate::IRInstruction::LocalRead`]
-/// of a Live & Owned slot, append a [`crate::IRInstruction::MoveOutLocal`]
-/// to `block` that produces a fresh dest of the slot's type and
-/// return that dest; otherwise return `value` unchanged. Marks the
-/// slot Moved on the substitution path so [`emit_function_exit_drops`]
-/// skips it. The original `LocalRead` instruction stays in the
-/// block as dead code (its dest is unused after substitution); the
-/// LLVM optimizer drops it. Eval treats `MoveOutLocal` as a frame
-/// removal, so a moved-out slot's subsequent reads panic — but
-/// typecheck's use-after-move pass already rejects those.
-///
-/// Called at every ownership-sink site: the function return tail,
-/// struct/enum field initializers (via [`super::structs::canonicalize_struct_inits`]),
-/// and anywhere else a local's heap payload transfers to a new
-/// owner. Without this stamp the slot stays Live & Owned, and
-/// `emit_function_exit_drops` frees the payload out from under the
-/// new owner.
-pub(super) fn move_out_local_value(
-    ctx: &mut FnLowerCtx,
-    block: IRBlockId,
-    value: ValueId,
-) -> ValueId {
-    let Some(local) = ctx.value_source(value) else {
-        return value;
-    };
-    let Some(state) = ctx.slot_state(local) else {
-        return value;
-    };
-    if state.moved || !matches!(state.ownership, Ownership::Owned) {
-        return value;
-    }
-    let ty = state.ty.clone();
-    let dest = ctx.fresh_value(ty.clone());
-    ctx.cfg
-        .append(block, IRInstruction::MoveOutLocal { dest, local, ty });
-    ctx.mark_local_moved(local);
-    dest
-}
-
 /// Pull the [`LValue`] off a sealed [`AssignTarget`]. Typecheck
 /// rejects pattern destructuring, so by the time lowering runs the
 /// target is always [`AssignTarget::LValue`] — anything else is an
@@ -763,25 +688,12 @@ fn expect_local_id(lvalue: &LValue) -> LocalId {
 
 /// Wire a still-open trailing flow up to its function's `Return`.
 /// Closed flows already set their own terminator (an inner `return`);
-/// nothing to do.
-///
-/// Owned trailing values flow through the same
-/// [`move_out_local_value`] substitution as explicit `return`s — a
-/// function whose body's last expression is a bare ident reference
-/// to a Live & Owned slot transfers that slot to the caller. The
-/// fall-through case otherwise mirrors the explicit-`return`-with-
-/// value branch in [`lower_statement`]: emit move-out, emit fn-exit
-/// drops, stamp `Return`. The fall-through case with no value
-/// emits drops and a unit return.
+/// nothing to do. Emits the function-exit drops, then stamps the
+/// `Return` carrying the trailing value (if any).
 pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult) {
     if let FlowResult::Open { value, block } = flow {
-        let return_value = value.map(|id| move_out_local_value(ctx, block, id));
         emit_function_exit_drops(ctx, block);
-        ctx.cfg.set_terminator(
-            block,
-            IRTerminator::Return {
-                value: return_value,
-            },
-        );
+        ctx.cfg
+            .set_terminator(block, IRTerminator::Return { value });
     }
 }

@@ -163,7 +163,6 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::LocalRead { .. }
             | IRInstruction::LocalWrite { .. }
             | IRInstruction::MakeClosure { .. }
-            | IRInstruction::MoveOutLocal { .. }
             | IRInstruction::Receive { .. }
             | IRInstruction::Spawn { .. }
             | IRInstruction::UnaryOp { .. }

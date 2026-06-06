@@ -228,9 +228,7 @@ mod tests {
         IRSymbol, IRTerminator,
     };
     use crate::local::IRLocalId;
-    use crate::ownership::Ownership;
     use crate::package::IRPackage;
-    use crate::return_mode::FnReturnMode;
     use crate::types::{IRType, ValueId};
 
     use super::{seal_closure_decls, seal_closure_ops};
@@ -257,7 +255,6 @@ mod tests {
                 },
                 IRInstruction::LocalWrite {
                     local: param_local,
-                    ownership: Ownership::Unowned,
                     value: param_id,
                 },
             ],
@@ -371,7 +368,6 @@ mod tests {
             dest: ValueId(8),
             ty: IRType::Function {
                 params: vec![IRType::Int64],
-                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Int64),
             },
         };
@@ -391,7 +387,6 @@ mod tests {
             dest: ValueId(0),
             ty: IRType::Function {
                 params: Vec::new(),
-                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Unit),
             },
         };
@@ -412,7 +407,6 @@ mod tests {
             dest: ValueId(0),
             ty: IRType::Function {
                 params: Vec::new(),
-                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Unit),
             },
         };
@@ -433,7 +427,6 @@ mod tests {
             dest: ValueId(0),
             ty: IRType::Function {
                 params: vec![IRType::Int64],
-                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Int64),
             },
         };
@@ -454,7 +447,6 @@ mod tests {
             dest: ValueId(1),
             ty: IRType::Function {
                 params: vec![IRType::Bool],
-                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Int64),
             },
         };
@@ -475,7 +467,6 @@ mod tests {
             dest: ValueId(1),
             ty: IRType::Function {
                 params: vec![IRType::Int64],
-                return_mode: FnReturnMode::default(),
                 ret: Box::new(IRType::Bool),
             },
         };

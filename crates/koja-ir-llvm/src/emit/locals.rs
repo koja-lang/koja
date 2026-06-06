@@ -62,8 +62,7 @@ pub(super) fn emit_local_write<'ctx>(
 /// at the payload), so a single GEP-by-`-8` + `free` shape covers
 /// all three. `Function`-typed slots delegate to the closure
 /// drop helper. Non-heap types panic loudly: the lowerer is
-/// responsible for never emitting `DropLocal` for stack types
-/// (it keys on [`IRType`] in `is_heap_type`).
+/// responsible for never emitting `DropLocal` for stack types.
 pub(super) fn emit_drop_local<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,

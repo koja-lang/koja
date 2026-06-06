@@ -8,7 +8,7 @@
 //! - `fn` / `priv fn` visibility model
 //! - Pattern matching with exhaustive `match` / `when` guards
 //! - String interpolation via `#{expr}`
-//! - Ownership-based memory without lifetimes or GC
+//! - Value-semantics memory (deep-copy on acquisition) without GC
 //!
 //! See the project-root design documents for full details:
 //! - `ROADMAP.md` — phases, feature status, and guiding principles

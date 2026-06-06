@@ -41,13 +41,11 @@ use crate::function::{
 };
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
-use crate::ownership::Ownership;
 use crate::types::{ConstValue, IRType, ValueId};
 
 use super::arms::{lower_arm_into, lower_result_ty};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
-use super::ownership::is_heap_type;
 use super::package::resolved_type_to_ir_type;
 
 /// Lower `spawn Type.start(config)`. Typecheck has already validated
@@ -263,20 +261,6 @@ fn lower_receive_arm(
             },
         );
         ctx.mark_local_declared(ir_local, payload_type.clone());
-        // Stack-typed payloads (`Lifecycle`, `Pair<M, ...>` over
-        // copy types, ...) don't need a function-exit drop; the
-        // ownership lattice gates `DropLocal` emission on the
-        // `Owned` bit. Heap-typed payloads (today: only `String`
-        // can land in a receive payload via the auto-imports;
-        // `Binary` / `Bits` / `Function` are not currently
-        // shippable through a mailbox envelope) own their copy of
-        // the deserialized buffer so they need the drop.
-        let ownership = if is_heap_type(&payload_type) {
-            Ownership::Owned
-        } else {
-            Ownership::Unowned
-        };
-        ctx.mark_local_written(ir_local, ownership);
     }
 
     if let Some(guard) = &arm.guard {
@@ -468,12 +452,10 @@ fn build_wrapper_body(
         entry,
         IRInstruction::LocalWrite {
             local: config_local,
-            ownership: Ownership::Owned,
             value: config_id,
         },
     );
     ctx.mark_local_declared(config_local, config_type.clone());
-    ctx.mark_local_written(config_local, Ownership::Owned);
 
     let unit_dest = ctx.fresh_value(IRType::Unit);
     ctx.cfg.append(

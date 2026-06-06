@@ -21,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use koja_ast::ast::{
     AssignTarget, BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm,
-    PassMode, Pattern, Statement, StringPart,
+    Pattern, Statement, StringPart,
 };
 use koja_ast::identifier::{AnonymousKind, FnParam, LocalId, Resolution, ResolvedType};
 use koja_typecheck::{FunctionSignature, GlobalRegistry};
@@ -30,13 +30,11 @@ use crate::function::{
     FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
-use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
-use super::body::{finalize_open_flow, lower_body, move_out_local_value};
+use super::body::{finalize_open_flow, lower_body};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
-use super::ownership::{is_heap_type, ownership_for_param};
 use super::package::resolved_type_to_ir_type;
 
 /// Lower a `fn (x: T) -> U ... end` closure expression.
@@ -530,7 +528,6 @@ fn lower_closure_params(
     {
         let local_id = closure_param_local_id(closure_param, index);
         let ty = resolved_type_to_ir_type(&fn_param.ty, registry, &mut output.instantiations);
-        let ownership = ownership_for_param(fn_param.mode, &ty);
         let id = ctx.fresh_value(ty.clone());
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
@@ -545,12 +542,10 @@ fn lower_closure_params(
             entry,
             IRInstruction::LocalWrite {
                 local: ir_local,
-                ownership,
                 value: id,
             },
         );
         ctx.mark_local_declared(ir_local, ty.clone());
-        ctx.mark_local_written(ir_local, ownership);
         params.push(IRFunctionParam {
             id,
             local_id: ir_local,
@@ -612,11 +607,10 @@ fn emit_make_closure(
     Ok((dest, block))
 }
 
-/// Read a single capture's current value in the outer ctx. Heap
-/// captures backed by a Live & Owned outer slot move into the env
-/// (the slot is marked Moved so fn-exit drops skip it); other
-/// shapes copy via `LocalRead` or `LoadCapture` if the outer ctx is
-/// itself a closure body.
+/// Read a single capture's current value in the outer ctx. Under
+/// value semantics every capture copies into the env: a `LoadCapture`
+/// when the outer ctx is itself a closure body, otherwise a
+/// `LocalRead` of the outer slot. The outer binding stays live.
 fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
     if let Some(capture_index) = ctx.closures().capture_index(capture.local_id) {
         let dest = ctx.fresh_value(capture.ir_type.clone());
@@ -631,23 +625,6 @@ fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx, block: IRBlockId) -
         return dest;
     }
     let ir_local = IRLocalId::from_local_id(capture.local_id);
-    if is_heap_type(&capture.ir_type)
-        && let Some(state) = ctx.slot_state(ir_local)
-        && !state.moved
-        && matches!(state.ownership, Ownership::Owned)
-    {
-        let dest = ctx.fresh_value(capture.ir_type.clone());
-        ctx.cfg.append(
-            block,
-            IRInstruction::MoveOutLocal {
-                dest,
-                local: ir_local,
-                ty: capture.ir_type.clone(),
-            },
-        );
-        ctx.mark_local_moved(ir_local);
-        return dest;
-    }
     let dest = ctx.fresh_value(capture.ir_type.clone());
     ctx.cfg.append(
         block,
@@ -708,7 +685,7 @@ fn build_fn_as_closure_wrapper(
     let entry = ctx.fresh_block("entry");
 
     let params = mint_wrapper_params(sig, &mut ctx, registry, output, entry);
-    let arg_values = read_wrapper_args(&params, sig, &mut ctx, entry);
+    let arg_values = read_wrapper_args(&params, &mut ctx, entry);
 
     let return_ty =
         resolved_type_to_ir_type(&sig.return_type, registry, &mut output.instantiations);
@@ -742,8 +719,7 @@ fn build_fn_as_closure_wrapper(
 
 /// Mint a fresh slot per wrapped fn parameter. Each slot mirrors a
 /// regular fn-param promotion: `LocalDecl` + `LocalWrite` in the
-/// entry block, ownership stamped from the named fn's
-/// [`koja_ast::ast::PassMode`].
+/// entry block.
 fn mint_wrapper_params(
     sig: &FunctionSignature,
     ctx: &mut FnLowerCtx,
@@ -757,7 +733,6 @@ fn mint_wrapper_params(
         let id = ctx.fresh_value(ty.clone());
         let local_id = LocalId::new(index as u32);
         let ir_local = IRLocalId::from_local_id(local_id);
-        let ownership = ownership_for_param(param.mode, &ty);
         ctx.cfg.append(
             entry,
             IRInstruction::LocalDecl {
@@ -769,12 +744,10 @@ fn mint_wrapper_params(
             entry,
             IRInstruction::LocalWrite {
                 local: ir_local,
-                ownership,
                 value: id,
             },
         );
         ctx.mark_local_declared(ir_local, ty.clone());
-        ctx.mark_local_written(ir_local, ownership);
         params.push(IRFunctionParam {
             id,
             local_id: ir_local,
@@ -787,19 +760,14 @@ fn mint_wrapper_params(
 /// Read each promoted slot back into a fresh `ValueId` for the
 /// inner [`IRInstruction::Call`]. Mirrors [`super::calls::emit_call`]'s
 /// arg-lowering shape (`LocalRead` per arg) so callee semantics
-/// match a hand-written `fn (x) -> target(x) end` shim. For target
-/// params declared `move`, substitutes a [`IRInstruction::MoveOutLocal`]
-/// against the wrapper's own slot so the fn-exit drop pass skips it;
-/// without that the wrapper would free the payload the target also
-/// owns.
+/// match a hand-written `fn (x) -> target(x) end` shim.
 fn read_wrapper_args(
     params: &[IRFunctionParam],
-    sig: &FunctionSignature,
     ctx: &mut FnLowerCtx,
     entry: IRBlockId,
 ) -> Vec<ValueId> {
     let mut values = Vec::with_capacity(params.len());
-    for (idx, param) in params.iter().enumerate() {
+    for param in params {
         let dest = ctx.fresh_value(param.ty.clone());
         ctx.cfg.append(
             entry,
@@ -809,12 +777,6 @@ fn read_wrapper_args(
                 ty: param.ty.clone(),
             },
         );
-        ctx.record_value_source(dest, param.local_id);
-        let mode = sig.params.get(idx).map(|p| p.mode);
-        let dest = match mode {
-            Some(PassMode::Move) => move_out_local_value(ctx, entry, dest),
-            _ => dest,
-        };
         values.push(dest);
     }
     values

@@ -35,30 +35,12 @@ use crate::span::Span;
 pub enum PassMode {
     /// Value is duplicated; the original stays live.
     Copy,
-    /// Ownership transfers; the original is consumed.
+    /// The `move` keyword. Inert under value semantics — parsed and
+    /// preserved on the AST but behaves identically to `Borrow`; the
+    /// original stays live.
     Move,
     /// Read-only reference; the original stays live and accessible.
     Borrow,
-}
-
-/// How a callable hands its result back: fresh heap the caller owns,
-/// or a view that aliases one of the callee's inputs / a static. Drop
-/// insertion must never free a `Borrowed` result — its storage is
-/// owned elsewhere (the receiver, an argument, or rodata). Computed
-/// for every function by the return-mode pass; see
-/// `koja-ir/src/return_mode.rs`.
-#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum ReturnMode {
-    /// A freshly-allocated value, or ownership moved through from a
-    /// `move` parameter. Safe for the call site to own and drop.
-    Owned,
-    /// Aliases a borrowed parameter, a field/element projection, a
-    /// closure capture, or a static literal. The call site must keep
-    /// the result `Unowned` and never drop it. The conservative
-    /// default — an unresolved or cyclic callee resolves here so the
-    /// pass biases to leak-not-double-free.
-    #[default]
-    Borrowed,
 }
 
 /// Visibility marker on functions: `Public` (default) or `Private` (from the

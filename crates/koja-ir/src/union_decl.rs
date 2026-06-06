@@ -327,8 +327,7 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
         | IRInstruction::LoadConst { ty, .. }
         | IRInstruction::LocalDecl { ty, .. }
         | IRInstruction::LocalRead { ty, .. }
-        | IRInstruction::MakeClosure { ty, .. }
-        | IRInstruction::MoveOutLocal { ty, .. } => walk_type(ty, out),
+        | IRInstruction::MakeClosure { ty, .. } => walk_type(ty, out),
         IRInstruction::Receive {
             arms, result_type, ..
         } => {

@@ -3,7 +3,6 @@
 
 use crate::function::IRSymbol;
 use crate::local::IRLocalId;
-use crate::return_mode::FnReturnMode;
 
 /// Identifier of an SSA value within a single function. Values are
 /// numbered in definition order starting from 0; the same `ValueId`
@@ -361,11 +360,9 @@ impl ConcatKind {
 ///   non-multiple of 8; payload occupies `ceil(bit_length / 8)`
 ///   bytes and trailing bits in the last byte are zero-padded.
 ///
-/// All three are move types per `LANGUAGE.md` — owned heap storage
-/// freed at scope exit by [`crate::IRInstruction::DropLocal`]. The
-/// `is_heap_type` classifier in
-/// [`koja_ir::lower::ownership`] (module) treats them
-/// uniformly. `CString` is a struct, not a member of this family.
+/// All three are heap-allocated; the future drop-glue pass frees
+/// them at scope exit via [`crate::IRInstruction::DropLocal`].
+/// `CString` is a struct, not a member of this family.
 ///
 /// `Struct(symbol)` names a user-declared (non-generic) struct by
 /// the same mangled [`IRSymbol`] used as the key on
@@ -422,11 +419,8 @@ pub enum IRType {
     /// First-class callable: a `{fn_ptr, env_ptr}` fat pointer.
     /// `params` excludes the implicit `env_ptr` slot, which
     /// [`crate::IRInstruction::CallClosure`] threads at call time.
-    /// `return_mode` is identity-erased metadata (it does not affect
-    /// type equality) carried for future indirect-call drop decisions.
     Function {
         params: Vec<IRType>,
-        return_mode: FnReturnMode,
         ret: Box<IRType>,
     },
     /// Heap-boxed `T`, stamped by [`crate::cycle::break_type_cycles`]

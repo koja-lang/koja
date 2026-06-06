@@ -72,11 +72,11 @@ fn closure_invoked_twice_reuses_environment() {
 
 #[test]
 fn heap_typed_capture_routes_through_env_and_runs_inside_body() {
-    // Concat materializes `s` as Owned, so the lower pass routes the
-    // outer slot through MoveOutLocal into the closure's env. The
-    // body reads `s` via LoadCapture and passes it to `length`,
-    // exercising the env-allocation + capture-lookup contract end
-    // to end without needing a real intrinsic.
+    // The closure captures heap-typed `s`, copied into the env via a
+    // LocalRead of the outer slot (value semantics). The body reads
+    // `s` via LoadCapture and passes it to `length`, exercising the
+    // env-allocation + capture-lookup contract end to end without
+    // needing a real intrinsic.
     let source = "
         fn length(_s: String) -> Int
           3

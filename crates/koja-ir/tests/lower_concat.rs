@@ -11,7 +11,7 @@
 //! (which pins the runtime byte-for-byte result).
 
 use koja_ast::util::dedent;
-use koja_ir::{ConcatKind, IRFunction, IRInstruction, IRType, Ownership};
+use koja_ir::{ConcatKind, IRFunction, IRInstruction, IRType};
 
 mod common;
 
@@ -87,52 +87,4 @@ fn bits_concat_lowers_to_concat_bits() {
     };
     assert_eq!(*kind, ConcatKind::Bits);
     assert_eq!(join.return_type, IRType::Bits);
-}
-
-#[test]
-fn concat_result_assigned_to_local_stamps_owned() {
-    // `s = "a" <> "b"` should stamp `Ownership::Owned` on the
-    // assignment's `LocalWrite` because the RHS is a concat (a
-    // heap-allocating producer). This pins the
-    // [`koja_ir::lower::ownership::ownership_for_expr`]
-    // classifier's `BinOp::Concat` arm — without the Owned stamp,
-    // drop emission wouldn't free the freshly-allocated payload.
-    let source = "
-        fn build(move a: String, move b: String) -> String
-          s = a <> b
-          s
-        end
-
-        fn main
-          1
-        end
-    ";
-
-    let program = lower(&dedent(source));
-    let build = function(&program, "build");
-
-    let owned_writes: Vec<_> = build
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
-        .filter_map(|i| match i {
-            IRInstruction::LocalWrite {
-                local,
-                ownership: Ownership::Owned,
-                value,
-            } => Some((local, value)),
-            _ => None,
-        })
-        .collect();
-
-    // One Owned LocalWrite: `s` (the concat result). The `move`
-    // keyword is inert under value semantics, so params `a` and `b`
-    // promote as Unowned (the caller retains and frees them).
-    assert_eq!(
-        owned_writes.len(),
-        1,
-        "expected 1 Owned LocalWrite (s); got {} in {:?}",
-        owned_writes.len(),
-        build,
-    );
 }

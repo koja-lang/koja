@@ -38,12 +38,6 @@
 //! - [`ops`] — operator / literal translation: [`lower_literal`],
 //!   [`lower_bin_op`], [`lower_unary_op`], plus the small
 //!   `IRType`-shaped result-type helpers.
-//! - [`ownership`] — classifies an assignment-RHS expression
-//!   ([`ownership::ownership_for_expr`]) or parameter-promotion slot
-//!   ([`ownership::ownership_for_param`]) as
-//!   [`crate::Ownership::Owned`] vs [`crate::Ownership::Unowned`]
-//!   so [`crate::IRInstruction::LocalWrite`] sites can stamp the
-//!   right value at IR-build time.
 //! - [`structs`] — struct decl, struct-literal construction, and
 //!   field-access lowering: [`lower_struct_decl`],
 //!   [`lower_struct_construction`], [`lower_field_access`].
@@ -65,7 +59,6 @@ mod loops;
 mod map_literal;
 mod match_expr;
 mod ops;
-mod ownership;
 pub(crate) mod package;
 mod patterns;
 mod process;

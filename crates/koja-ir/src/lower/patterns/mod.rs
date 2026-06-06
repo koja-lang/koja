@@ -53,7 +53,6 @@ use crate::enum_decl::IRVariantTag;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::substitute_resolved_type;
 use crate::local::IRLocalId;
-use crate::ownership::Ownership;
 use crate::types::{IRType, ValueId};
 
 use literals::emit_literal_eq;
@@ -358,11 +357,9 @@ fn lower_binding_check(
         block,
         IRInstruction::LocalWrite {
             local: ir_local,
-            ownership: Ownership::Unowned,
             value: inputs.subject,
         },
     );
-    ctx.mark_local_written(ir_local, Ownership::Unowned);
 }
 
 /// Pin a binding's `LocalId` invariant: every pattern binding must

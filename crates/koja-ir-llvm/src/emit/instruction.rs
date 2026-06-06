@@ -181,11 +181,7 @@ pub(crate) fn emit_instruction<'ctx>(
             values.insert(*dest, value);
             Ok(())
         }
-        IRInstruction::LocalWrite {
-            local,
-            ownership: _,
-            value,
-        } => {
+        IRInstruction::LocalWrite { local, value } => {
             let resolved = lookup(values, *value)?;
             locals::emit_local_write(ctx, *local, resolved)
         }
@@ -197,11 +193,6 @@ pub(crate) fn emit_instruction<'ctx>(
         } => {
             let result = closures::emit_make_closure(ctx, body, captures, values)?;
             values.insert(*dest, result);
-            Ok(())
-        }
-        IRInstruction::MoveOutLocal { dest, local, ty } => {
-            let value = locals::emit_local_read(ctx, *local, ty)?;
-            values.insert(*dest, value);
             Ok(())
         }
         IRInstruction::StructInit { dest, fields, ty } => {

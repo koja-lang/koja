@@ -287,7 +287,6 @@ fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction)
                 IRInstruction::LocalWrite {
                     local: write,
                     value,
-                    ..
                 },
             ) => {
                 debug_assert_eq!(*decl, param.local_id);

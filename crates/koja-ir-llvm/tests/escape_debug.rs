@@ -39,8 +39,8 @@ fn escape_debug_emits_no_free_call_inside_match_arm_bodies() {
     // imported `Global.string` source, since lowering it is what
     // walks through the buggy code path; the test asserts the
     // emitted body carries no `call void @koja_free` at all (the
-    // function-exit drop substitutes a `MoveOutLocal` for the
-    // returned slot value, so no free lands).
+    // drop insertion is deferred under the value-semantics leak
+    // baseline, so no free lands).
     let program = lower(&dedent(
         "
         fn main -> String

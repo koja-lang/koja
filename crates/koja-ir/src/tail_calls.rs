@@ -13,7 +13,7 @@
 //! Detection shape (per block):
 //!
 //! ```text
-//! ... evaluate args (LocalReads, MoveOutLocals, struct inits, ...)
+//! ... evaluate args (LocalReads, struct inits, ...)
 //! %c = Call { callee: F.symbol, args: [a0, a1, ...] }
 //! DropLocal X     // any number of trailing exit drops
 //! DropValue Y
@@ -117,7 +117,6 @@ mod tests {
     use super::*;
     use crate::function::{IRBasicBlock, IRBlockId, IRFunctionParam};
     use crate::local::IRLocalId;
-    use crate::ownership::Ownership;
     use crate::types::{IRType, ValueId};
     use koja_ast::identifier::LocalId;
     use std::collections::BTreeMap;
@@ -149,7 +148,6 @@ mod tests {
                     },
                     IRInstruction::LocalWrite {
                         local: param_local,
-                        ownership: Ownership::Unowned,
                         value: param_id,
                     },
                     IRInstruction::LocalRead {

@@ -216,7 +216,6 @@ fn seal_locals(function: &IRFunction, owner: &str) {
                 IRInstruction::DropLocal { local, .. }
                 | IRInstruction::LocalRead { local, .. }
                 | IRInstruction::LocalWrite { local, .. }
-                | IRInstruction::MoveOutLocal { local, .. }
                     if !declared.contains(local) =>
                 {
                     seal_panic(&format!(

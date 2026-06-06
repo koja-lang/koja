@@ -1,9 +1,9 @@
 //! Coverage that `lift_signatures` propagates the surface-syntax
 //! [`PassMode`] verbatim onto [`ResolvedParam::mode`] for both
 //! regular params (`name: T` → `Borrow`, `move name: T` → `Move`)
-//! and the `self` receiver. Downstream IR consumers
-//! (`ownership_for_param`, the parameter-promotion `LocalWrite`
-//! stamp) key drop decisions on this field.
+//! and the `self` receiver. `move` is inert under value semantics,
+//! but the mode is still preserved on the signature for diagnostics
+//! and tooling.
 
 use koja_ast::ast::PassMode;
 use koja_ast::identifier::Identifier;

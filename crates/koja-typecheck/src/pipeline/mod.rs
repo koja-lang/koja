@@ -11,8 +11,6 @@
 //!   (today: `for` desugar).
 //! - [`resolve::resolve_file`] — populate `Resolution` /
 //!   `Expr.resolution` on every node.
-//! - [`return_mode::infer_return_modes`] — classify each function's
-//!   result ownership and stamp it onto its `FunctionSignature`.
 //! - [`seal::seal_ast`] — assert sealed-AST invariants.
 //!
 //! Pipeline contract: diagnostics short-circuit `check_program`
@@ -23,7 +21,6 @@ pub(crate) mod collect;
 pub(crate) mod lift_signatures;
 pub(crate) mod local_scope;
 pub(crate) mod resolve;
-pub(crate) mod return_mode;
 pub(crate) mod seal;
 pub(crate) mod synthesize;
 pub(crate) mod unify;
