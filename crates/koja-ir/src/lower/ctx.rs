@@ -120,6 +120,17 @@ pub(crate) struct FnLowerCtx {
     /// the top to find the [`IRBlockId`] its `Branch` should
     /// target. Mirrors v1's `FnLowerState::loop_exit` stack.
     loop_exit: Vec<IRBlockId>,
+    /// SSA values that own a fresh heap allocation (and so may be
+    /// moved into an owner or dropped as a temp). The drop-glue
+    /// lowering ([`super::ownership`]) marks the result of every
+    /// instruction that is *certain* to produce a fresh allocation
+    /// (`Call` / `CallClosure` / `Concat` / `BinaryConstruct` /
+    /// `Clone`); everything absent is treated as **borrowed** (a
+    /// literal, `const`, slot/field read, or parameter), which is
+    /// cloned on acquisition and never freed as a temp. Defaulting
+    /// to borrowed keeps a misclassification leak-only, never a
+    /// double-free.
+    owned_values: BTreeSet<ValueId>,
 }
 
 /// Per-function closure bookkeeping. Two roles: outer fns mint
@@ -176,7 +187,36 @@ impl FnLowerCtx {
             locals: BTreeMap::new(),
             closures: ClosureState::default(),
             loop_exit: Vec::new(),
+            owned_values: BTreeSet::new(),
         }
+    }
+
+    /// Mark `value` as owning a fresh heap allocation — eligible to be
+    /// moved into an owner or freed as a discarded temp. Called by the
+    /// drop-glue lowering at every certain-fresh producer.
+    pub(crate) fn mark_owned(&mut self, value: ValueId) {
+        self.owned_values.insert(value);
+    }
+
+    /// Does `value` own a fresh heap allocation? Absent values are
+    /// borrowed (literal / `const` / read / param) — cloned on
+    /// acquisition, never freed as a temp.
+    pub(crate) fn is_owned(&self, value: ValueId) -> bool {
+        self.owned_values.contains(&value)
+    }
+
+    /// The heap-leaf local slots declared in this function, in
+    /// reverse declaration order (LIFO drop). Used by the drop-glue
+    /// lowering to free every owning slot at a control-flow exit.
+    pub(crate) fn heap_leaf_slots(&self) -> Vec<(IRLocalId, IRType)> {
+        let mut slots: Vec<(IRLocalId, IRType)> = self
+            .locals
+            .iter()
+            .filter(|(_, ty)| super::ownership::is_heap_leaf(ty))
+            .map(|(local, ty)| (*local, ty.clone()))
+            .collect();
+        slots.reverse();
+        slots
     }
 
     /// Push an enclosing loop's exit block. Paired with

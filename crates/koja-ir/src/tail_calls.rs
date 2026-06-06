@@ -31,7 +31,16 @@ use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::package::IRPackage;
-use crate::types::ValueId;
+use crate::types::{IRType, ValueId};
+
+/// Leaf heap types whose `Clone` is an rc increment (`String` /
+/// `Binary` / `Bits`). Tail-call back-edges must acquire these before
+/// the trailing exit drops release the slots they rebind. Mirrors
+/// `lower::ownership::is_heap_leaf` (kept local — that one is private
+/// to the lower module).
+fn is_heap_leaf(ty: &IRType) -> bool {
+    matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
+}
 
 /// Rewrite every self-recursive tail-position call across `packages`
 /// into [`IRTerminator::TailCall`]. Idempotent — re-running on an
@@ -60,11 +69,34 @@ pub fn function_has_tail_call(function: &IRFunction) -> bool {
 
 fn rewrite_function(function: &mut IRFunction) {
     let symbol = function.symbol.clone();
+    let param_types: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
+    let mut next_value = next_value_id(function);
     for block in &mut function.blocks {
         if let Some(plan) = match_tail_call(block, &symbol) {
-            apply_plan(block, plan, &symbol);
+            apply_plan(block, plan, &symbol, &param_types, &mut next_value);
         }
     }
+}
+
+/// The first unused [`ValueId`] for `function` — one past the maximum
+/// id defined by any parameter, block parameter, or instruction. The
+/// rewrite mints back-edge arg-clone destinations from here.
+fn next_value_id(function: &IRFunction) -> u32 {
+    let mut max = 0;
+    for param in &function.params {
+        max = max.max(param.id.0);
+    }
+    for block in &function.blocks {
+        for block_param in &block.params {
+            max = max.max(block_param.dest.0);
+        }
+        for instruction in &block.instructions {
+            if let Some(dest) = instruction.dest() {
+                max = max.max(dest.0);
+            }
+        }
+    }
+    max + 1
 }
 
 /// Detection-time payload: which instruction index holds the
@@ -104,11 +136,42 @@ fn match_tail_call(block: &IRBasicBlock, enclosing: &IRSymbol) -> Option<Rewrite
     None
 }
 
-fn apply_plan(block: &mut IRBasicBlock, plan: RewritePlan, enclosing: &IRSymbol) {
+fn apply_plan(
+    block: &mut IRBasicBlock,
+    plan: RewritePlan,
+    enclosing: &IRSymbol,
+    param_types: &[IRType],
+    next_value: &mut u32,
+) {
     block.instructions.remove(plan.call_index);
+
+    // Acquire each heap-leaf arg into a fresh owned value *where the
+    // `Call` sat* — i.e. before the trailing exit drops. The back-edge
+    // then stores the clone, so rebinding a param slot never reads
+    // through a pointer the drop just rc-released. Without this, a
+    // self-tail-call passing a heap-leaf slot (`f(s, ...)`) would drop
+    // `s`'s block to rc 0 and then store the freed pointer back.
+    let mut args = plan.args;
+    let mut clones = Vec::new();
+    for (arg, ty) in args.iter_mut().zip(param_types) {
+        if is_heap_leaf(ty) {
+            let dest = ValueId(*next_value);
+            *next_value += 1;
+            clones.push(IRInstruction::Clone {
+                dest,
+                source: *arg,
+                ty: ty.clone(),
+            });
+            *arg = dest;
+        }
+    }
+    for (offset, clone) in clones.into_iter().enumerate() {
+        block.instructions.insert(plan.call_index + offset, clone);
+    }
+
     block.terminator = IRTerminator::TailCall {
         callee: enclosing.clone(),
-        args: plan.args,
+        args,
     };
 }
 

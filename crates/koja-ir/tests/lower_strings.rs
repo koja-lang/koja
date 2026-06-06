@@ -2,6 +2,11 @@
 //! [Literal] }` → `IRInstruction::Const { ConstValue::String }` with
 //! return type `IRType::String`. Interpolation surfaces as a
 //! feature-gap diagnostic.
+//!
+//! Returning the literal is an ownership boundary, so the rc baseline
+//! *acquires* it: a [`IRInstruction::Clone`] (`rc++`, a no-op on the
+//! immortal rodata literal) follows the `Const`, and the `Return`
+//! targets the clone.
 
 use koja_ast::util::dedent;
 use koja_ir::{ConstValue, IRInstruction, IRTerminator, IRType};
@@ -23,7 +28,6 @@ fn string_literal_lowers_to_const_string() {
     assert_eq!(main.return_type, IRType::String);
 
     let block = main.blocks.first().expect("main has at least one block");
-    assert_eq!(block.instructions.len(), 1);
 
     let IRInstruction::Const { dest, value } = &block.instructions[0] else {
         panic!(
@@ -36,9 +40,25 @@ fn string_literal_lowers_to_const_string() {
     };
     assert_eq!(text, "hello");
 
+    let IRInstruction::Clone {
+        dest: cloned,
+        source,
+        ..
+    } = &block.instructions[1]
+    else {
+        panic!(
+            "expected the literal to be acquired by a Clone, got {:?}",
+            block.instructions[1]
+        );
+    };
+    assert_eq!(source, dest, "the Clone should acquire the Const literal");
+
     assert_eq!(
         block.terminator,
-        IRTerminator::Return { value: Some(*dest) },
+        IRTerminator::Return {
+            value: Some(*cloned)
+        },
+        "Return should target the acquired (cloned) value",
     );
 }
 

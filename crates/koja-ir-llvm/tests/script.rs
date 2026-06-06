@@ -94,17 +94,22 @@ fn int_compare_emits_user_main_ret_void() {
 }
 
 #[test]
-fn string_literal_emits_v1_header_layout() {
+fn string_literal_emits_rc_header_layout() {
     let script = lower_as_script("\"hello\"\n");
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
-    // Private constant matches koja-codegen's create_string_global:
-    // `{ i64 bit_length, [N+1 x i8] c"<bytes>\00" }`. For "hello":
-    // bit_length = 40, payload = 6 bytes (5 utf8 + trailing NUL).
+    // Private constant matches the rc header layout:
+    // `{ i64 rc, i64 bit_length, [N+1 x i8] c"<bytes>\00" }`. The rc word
+    // is the immortal sentinel (`i64::MIN = -9223372036854775808`) so the
+    // runtime never frees the rodata literal. For "hello": bit_length =
+    // 40, payload = 6 bytes (5 utf8 + trailing NUL).
     assert_contains(&ir_text, "@alpha_str.0 = private constant");
-    assert_contains(&ir_text, "{ i64 40, [6 x i8] c\"hello\\00\" }");
+    assert_contains(
+        &ir_text,
+        "{ i64 -9223372036854775808, i64 40, [6 x i8] c\"hello\\00\" }",
+    );
 }
 
 #[test]
@@ -113,8 +118,8 @@ fn string_concat_emits_inline_malloc_and_memcpy() {
     //   1. read both `i64 bit_length`s from the `payload-8` headers
     //      (negative GEP + load),
     //   2. derive byte counts via `>> 3`,
-    //   3. `malloc(8 + total_bytes [+1])` for the new heap block,
-    //   4. store the combined bit_length at offset 0,
+    //   3. `malloc(HEADER_BYTES + total_bytes [+1])` for the new block,
+    //   4. init the rc header (`rc = 1`, combined bit_length),
     //   5. `memcpy` lhs payload, `memcpy` rhs payload, and (String
     //      only) write a trailing `\0`.
     let script = lower_as_script("\"foo\" <> \"bar\"\n");
@@ -138,12 +143,12 @@ fn empty_string_literal_uses_zero_bit_length() {
 
     assert_main_shape(&ir_text);
     // Empty UTF-8 payload: bit_length = 0, payload array length = 1
-    // (just the trailing NUL). LLVM renders the all-zero initializer
-    // as `zeroinitializer`, and the type appears in the global's
-    // declaration line instead.
+    // (just the trailing NUL). The rc word is the immortal sentinel
+    // (`i64::MIN`); the payload array renders as `zeroinitializer`.
     assert_contains(
         &ir_text,
-        "@alpha_str.0 = private constant { i64, [1 x i8] } zeroinitializer",
+        "@alpha_str.0 = private constant { i64, i64, [1 x i8] } \
+         { i64 -9223372036854775808, i64 0, [1 x i8] zeroinitializer }",
     );
 }
 

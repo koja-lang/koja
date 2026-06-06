@@ -316,9 +316,9 @@ fn walk_block_param(param: &BlockParam, out: &mut BTreeMap<IRSymbol, IRType>) {
 fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IRType>) {
     match instruction {
         IRInstruction::CallClosure { result_ty, .. } => walk_type(result_ty, out),
-        IRInstruction::DropLocal { ty, .. } | IRInstruction::DropValue { ty, .. } => {
-            walk_type(ty, out)
-        }
+        IRInstruction::Clone { ty, .. }
+        | IRInstruction::DropLocal { ty, .. }
+        | IRInstruction::DropValue { ty, .. } => walk_type(ty, out),
         IRInstruction::EnumPayloadFieldGet { field_type, .. } => walk_type(field_type, out),
         IRInstruction::FieldGet { field_type, .. } | IRInstruction::FieldSet { field_type, .. } => {
             walk_type(field_type, out)

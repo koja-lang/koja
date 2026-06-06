@@ -12,11 +12,14 @@
 //! and pin a 1-1 test in `tests/intrinsics.rs`. The exhaustive match
 //! makes the wiring step compiler-checked.
 
-use inkwell::values::FunctionValue;
-use koja_ir::{IRFunction, IRIntrinsicId, KernelMethod};
+use inkwell::values::{BasicValueEnum, FunctionValue};
+use koja_ir::{IRFunction, IRIntrinsicId, IRType, KernelMethod};
 
 use crate::ctx::EmitContext;
+use crate::emit::heap_layout::{block_base, is_heap_leaf};
+use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::runtime::declare_rc_inc_extern;
 
 mod binary;
 mod bitwise;
@@ -26,7 +29,7 @@ mod debug;
 mod equality;
 mod hash;
 mod hashtable;
-mod heap_clone;
+pub(crate) mod heap_clone;
 mod kernel;
 mod list;
 mod map;
@@ -72,4 +75,34 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         IRIntrinsicId::Socket(method) => socket::emit_socket(ctx, function, llvm_function, method),
         IRIntrinsicId::String(method) => string::emit_string(ctx, function, llvm_function, method),
     }
+}
+
+/// Acquire a collection element under value semantics: when `elem_ty`
+/// is an rc-managed heap leaf (`String` / `Binary` / `Bits`), bump its
+/// refcount so the container takes — or a freshly handed-out binding
+/// receives — an independent reference. A no-op for inline scalar and
+/// (for now) composite elements. Hand-written collection intrinsics
+/// call this at every store-in (`append`, `replace_at`) and hand-out
+/// (`get`, `pop`) site, standing in for the clone glue that callee
+/// parameter promotion supplies to ordinary functions. `value` is the
+/// element's SSA value — a payload pointer for heap leaves.
+pub(super) fn acquire_element<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    elem_ty: &IRType,
+    value: BasicValueEnum<'ctx>,
+    label: &str,
+) -> Result<(), LlvmError> {
+    if !is_heap_leaf(elem_ty) {
+        return Ok(());
+    }
+    let base = block_base(
+        ctx,
+        value.into_pointer_value(),
+        &format!("{label}.block_base"),
+    )?;
+    let rc_inc = declare_rc_inc_extern(ctx);
+    ctx.builder
+        .build_call(rc_inc, &[base.into()], &format!("{label}.rc_inc"))
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("element rc_inc for `{label}`"), e))
 }

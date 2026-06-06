@@ -1,13 +1,17 @@
-//! Drop-pipeline regression for the value-semantics leak baseline.
+//! Drop-pipeline regression for the value-semantics reference-counting
+//! baseline.
 //!
-//! Drop insertion is deferred to the future drop-glue pass. Until it
-//! lands, lowering emits **zero** `DropLocal`s: a binding shared by
-//! assignment (`b = a`) aliases the same heap payload, so freeing
-//! per-slot at scope exit would double-free. These tests pin that no
-//! shape — heap reassignment, return of a heap local, `match` / `cond`
-//! arms, struct-field init, call args, scalar programs — emits a
-//! `DropLocal`, guarding against accidentally re-enabling drops before
-//! deep-copy-on-acquisition makes them safe.
+//! Drop glue is enabled: a heap-leaf local (`String` / `Binary` /
+//! `Bits`) is reference-counted, so lowering emits a `DropLocal`
+//! (`rc--`, freeing at zero) at scope exit. Acquisition sites
+//! (`Clone` = `rc++`) keep the count balanced — a binding shared by
+//! assignment, returned out of the function, captured in a struct
+//! field, or passed as an argument each acquires its own reference, so
+//! the per-slot drop is safe rather than a double-free. These tests
+//! pin that heap locals carry a `DropLocal` while purely scalar
+//! functions carry none, guarding against accidentally dropping the
+//! glue (regressing to the old leak baseline) or emitting drops for
+//! non-heap slots.
 
 use koja_ast::util::dedent;
 use koja_ir::{IRFunction, IRInstruction};
@@ -16,13 +20,28 @@ mod common;
 
 use common::{function, lower_program_source as lower};
 
-/// Assert `function` carries no `DropLocal` in any block.
+/// Assert `function` emits at least one `DropLocal` (rc drop glue is
+/// active for its heap-leaf locals).
+fn assert_has_drop(function: &IRFunction, name: &str) {
+    let has_drop = function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|inst| matches!(inst, IRInstruction::DropLocal { .. }));
+    assert!(
+        has_drop,
+        "function `{name}` should emit a DropLocal for its heap-leaf local under the rc baseline",
+    );
+}
+
+/// Assert `function` carries no `DropLocal` in any block — the shape a
+/// purely scalar function must keep (no heap slots to reclaim).
 fn assert_no_drops(function: &IRFunction, name: &str) {
     for block in &function.blocks {
         for inst in &block.instructions {
             assert!(
                 !matches!(inst, IRInstruction::DropLocal { .. }),
-                "function `{name}` should emit no DropLocal under the leak baseline; \
+                "function `{name}` should emit no DropLocal (no heap locals); \
                  got {inst:?} in block `{}`",
                 block.label,
             );
@@ -31,7 +50,7 @@ fn assert_no_drops(function: &IRFunction, name: &str) {
 }
 
 #[test]
-fn reassigned_heap_local_emits_no_droplocal() {
+fn reassigned_heap_local_emits_droplocal() {
     let source = "
         fn taker(prefix: String) -> String
           s = prefix <> \"!\"
@@ -45,11 +64,11 @@ fn reassigned_heap_local_emits_no_droplocal() {
     ";
 
     let program = lower(&dedent(source));
-    assert_no_drops(function(&program, "taker"), "taker");
+    assert_has_drop(function(&program, "taker"), "taker");
 }
 
 #[test]
-fn returned_heap_local_emits_no_droplocal() {
+fn returned_heap_local_emits_droplocal() {
     let source = "
         fn shout(prefix: String) -> String
           s = prefix <> \"!\"
@@ -62,11 +81,11 @@ fn returned_heap_local_emits_no_droplocal() {
     ";
 
     let program = lower(&dedent(source));
-    assert_no_drops(function(&program, "shout"), "shout");
+    assert_has_drop(function(&program, "shout"), "shout");
 }
 
 #[test]
-fn match_arms_writing_heap_emit_no_droplocal() {
+fn match_arms_writing_heap_emit_droplocal() {
     let source = "
         fn render(c: String) -> String
           result = \"\"
@@ -84,11 +103,11 @@ fn match_arms_writing_heap_emit_no_droplocal() {
     ";
 
     let program = lower(&dedent(source));
-    assert_no_drops(function(&program, "render"), "render");
+    assert_has_drop(function(&program, "render"), "render");
 }
 
 #[test]
-fn cond_arms_writing_heap_emit_no_droplocal() {
+fn cond_arms_writing_heap_emit_droplocal() {
     let source = "
         fn classify(n: Int) -> String
           result = \"\"
@@ -106,11 +125,11 @@ fn cond_arms_writing_heap_emit_no_droplocal() {
     ";
 
     let program = lower(&dedent(source));
-    assert_no_drops(function(&program, "classify"), "classify");
+    assert_has_drop(function(&program, "classify"), "classify");
 }
 
 #[test]
-fn struct_field_init_from_heap_local_emits_no_droplocal() {
+fn struct_field_init_from_heap_local_emits_droplocal() {
     let source = "
         struct Box
           body: String
@@ -127,11 +146,11 @@ fn struct_field_init_from_heap_local_emits_no_droplocal() {
     ";
 
     let program = lower(&dedent(source));
-    assert_no_drops(function(&program, "build"), "build");
+    assert_has_drop(function(&program, "build"), "build");
 }
 
 #[test]
-fn heap_local_passed_as_arg_emits_no_droplocal() {
+fn heap_local_passed_as_arg_emits_droplocal() {
     let source = "
         fn examine(s: String) -> Int
           s.length()
@@ -148,7 +167,7 @@ fn heap_local_passed_as_arg_emits_no_droplocal() {
     ";
 
     let program = lower(&dedent(source));
-    assert_no_drops(function(&program, "build"), "build");
+    assert_has_drop(function(&program, "build"), "build");
 }
 
 #[test]

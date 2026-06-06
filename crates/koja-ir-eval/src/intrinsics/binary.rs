@@ -29,7 +29,16 @@ use crate::error::RuntimeError;
 use crate::intrinsics::helpers;
 use crate::value::Value;
 
-const STRING_HEADER_SIZE: usize = 8;
+/// Block base offset for the rc-prefixed Koja string/binary ABI
+/// (`[i64 rc][i64 bit_length][payload…]`). API contract: MUST equal
+/// [`koja_runtime::util::BLOCK_HEADER_SIZE`].
+const BLOCK_HEADER_SIZE: usize = 16;
+/// Offset of the `i64 bit_length` word from the block base. API
+/// contract: MUST equal [`koja_runtime::util::LENGTH_OFFSET`].
+const LENGTH_OFFSET: usize = 8;
+/// Sentinel `i64 rc` for statically-allocated (immortal) blocks; a
+/// freshly-`malloc`'d block is mortal, so it starts at `1`.
+const RC_INITIAL: i64 = 1;
 const BITS_PER_BYTE: i64 = 8;
 
 unsafe extern "C" {
@@ -175,26 +184,28 @@ fn bits_to_binary(function: &IRFunction, args: &[Value]) -> Result<Value, Runtim
     Ok(helpers::result_value(result_symbol, parsed))
 }
 
-/// Copy `data` into a freshly-`malloc`'d `[i64 bit_length][payload…]`
-/// buffer and return a pointer to the payload (matches
-/// [`koja_runtime::util::alloc_binary`]'s ABI). Empty inputs round-
-/// trip as a null pointer because the runtime helpers do the same:
-/// a zero-byte payload has no meaningful address. Callers that need
-/// to free pass the *payload* pointer back through `CPtr.free` or
-/// the runtime's `koja_free`, which both step back over the header.
+/// Copy `data` into a freshly-`malloc`'d
+/// `[i64 rc][i64 bit_length][payload…]` buffer and return a pointer to
+/// the payload (matches [`koja_runtime::util::alloc_binary`]'s ABI:
+/// `rc = 1`, mortal). Empty inputs round-trip as a null pointer
+/// because the runtime helpers do the same: a zero-byte payload has no
+/// meaningful address. Callers that need to free pass the *payload*
+/// pointer back through `CPtr.to_string` or the runtime's `koja_free`,
+/// which both step back over the full header to the block base.
 fn alloc_koja_string_payload(data: &[u8]) -> *mut u8 {
     if data.is_empty() {
         return ptr::null_mut();
     }
-    let total = STRING_HEADER_SIZE + data.len();
+    let total = BLOCK_HEADER_SIZE + data.len();
     let base = unsafe { malloc(total) };
     if base.is_null() {
         return ptr::null_mut();
     }
     let bit_len = (data.len() as i64) * BITS_PER_BYTE;
     unsafe {
-        *(base as *mut i64) = bit_len;
-        let payload = base.add(STRING_HEADER_SIZE);
+        *(base as *mut i64) = RC_INITIAL;
+        *(base.add(LENGTH_OFFSET) as *mut i64) = bit_len;
+        let payload = base.add(BLOCK_HEADER_SIZE);
         ptr::copy_nonoverlapping(data.as_ptr(), payload, data.len());
         payload
     }

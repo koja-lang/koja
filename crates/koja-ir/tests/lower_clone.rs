@@ -11,11 +11,10 @@
 //!
 //! Out of scope here: backend-emitted body shape (eval coverage in
 //! `koja-ir-eval/tests/clone.rs`, LLVM coverage in
-//! `koja-ir-llvm/tests/clone.rs`). Under the value-semantics leak
-//! baseline, drop insertion is deferred to the future drop-glue pass,
-//! so the heap buffer the clone produces is leaked at scope exit —
-//! shared by every fresh-allocating helper (`String.upcase`,
-//! `String.replace`, …), not a regression.
+//! `koja-ir-llvm/tests/clone.rs`). Under the value-semantics
+//! reference-counting baseline, `Clone` is an `rc++` and the matching
+//! `DropLocal` an `rc--`, so the heap buffer the clone produces is
+//! reclaimed at scope exit (drop coverage in `lower_drops.rs`).
 
 use koja_ast::util::dedent;
 use koja_ir::{

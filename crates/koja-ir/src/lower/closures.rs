@@ -35,6 +35,7 @@ use crate::types::{IRType, ValueId};
 use super::body::{finalize_open_flow, lower_body};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
+use super::ownership::promote_param;
 use super::package::resolved_type_to_ir_type;
 
 /// Lower a `fn (x: T) -> U ... end` closure expression.
@@ -528,29 +529,9 @@ fn lower_closure_params(
     {
         let local_id = closure_param_local_id(closure_param, index);
         let ty = resolved_type_to_ir_type(fn_param, registry, &mut output.instantiations);
-        let id = ctx.fresh_value(ty.clone());
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalDecl {
-                local: ir_local,
-                ty: ty.clone(),
-            },
-        );
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalWrite {
-                local: ir_local,
-                value: id,
-            },
-        );
-        ctx.mark_local_declared(ir_local, ty.clone());
-        params.push(IRFunctionParam {
-            id,
-            local_id: ir_local,
-            ty,
-        });
+        params.push(promote_param(ctx, entry, ir_local, ty));
     }
     params
 }
@@ -730,29 +711,9 @@ fn mint_wrapper_params(
     let mut params = Vec::with_capacity(sig.params.len());
     for (index, param) in sig.params.iter().enumerate() {
         let ty = resolved_type_to_ir_type(&param.ty, registry, &mut output.instantiations);
-        let id = ctx.fresh_value(ty.clone());
         let local_id = LocalId::new(index as u32);
         let ir_local = IRLocalId::from_local_id(local_id);
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalDecl {
-                local: ir_local,
-                ty: ty.clone(),
-            },
-        );
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalWrite {
-                local: ir_local,
-                value: id,
-            },
-        );
-        ctx.mark_local_declared(ir_local, ty.clone());
-        params.push(IRFunctionParam {
-            id,
-            local_id: ir_local,
-            ty,
-        });
+        params.push(promote_param(ctx, entry, ir_local, ty));
     }
     params
 }

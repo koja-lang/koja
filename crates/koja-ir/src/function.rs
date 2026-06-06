@@ -326,6 +326,31 @@ pub enum IRInstruction {
         dest: ValueId,
         result_ty: IRType,
     },
+    /// `dest = clone(source)` — a deep, independent copy of `source`
+    /// (statically typed `ty`). The drop-glue lowering emits this at
+    /// every *ownership acquisition* of a heap value (binding,
+    /// parameter promotion, field/element store, return) so each
+    /// owner holds a unique payload it can free at scope exit without
+    /// aliasing another owner's storage. The source stays live and
+    /// unmodified.
+    ///
+    /// Backend lowering by `ty`:
+    /// - Leaf heap (`String` / `Binary` / `Bits`): allocate a fresh
+    ///   `[i64 bit_length][payload]` block and `memcpy` the source in
+    ///   (reuses the `heap_clone` backbone). Eval relies on its host
+    ///   GC and treats the looked-up value as already independent.
+    /// - Stack/`Copy` leaf types (`Int`, `Float`, `Bool`, …): a plain
+    ///   register copy — `dest` aliases the same immutable SSA value.
+    /// - Composite heap (`List` / `Map` / `Set` / heap-owning structs
+    ///   and enums, closures): rewritten by the `elaborate` sub-pass
+    ///   into a `Call` to a synthesized per-type `clone_T`, so the
+    ///   backend never recurses inline. A composite `Clone` that
+    ///   survives to a backend is a lowering bug.
+    Clone {
+        dest: ValueId,
+        source: ValueId,
+        ty: IRType,
+    },
     /// `dest = lhs <> rhs` for the heap-payload family (`String`,
     /// `Binary`, `Bits`). Separate from [`Self::BinaryOp`] because
     /// the LLVM emission shape differs:
@@ -617,6 +642,7 @@ impl IRInstruction {
             | IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
             | IRInstruction::CallClosure { dest, .. }
+            | IRInstruction::Clone { dest, .. }
             | IRInstruction::Concat { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }

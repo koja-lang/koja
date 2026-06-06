@@ -20,7 +20,7 @@ use koja_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegist
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
 use crate::extern_attrs::IRExternAttrs;
-use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
+use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSymbol};
 use crate::generics::Instantiation;
 use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
@@ -33,6 +33,7 @@ use super::body::{finalize_open_flow, lower_body};
 use super::constants::lower_constant_pool_entry;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_decl;
+use super::ownership::promote_param;
 use super::structs::lower_struct_decl;
 
 use std::collections::BTreeMap;
@@ -397,29 +398,9 @@ fn lower_params(
         });
         let resolved = &signature.params[index].ty;
         let ty = resolved_type_to_ir_type(resolved, registry, &mut output.instantiations);
-        let id = ctx.fresh_value(ty.clone());
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalDecl {
-                local: ir_local,
-                ty: ty.clone(),
-            },
-        );
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalWrite {
-                local: ir_local,
-                value: id,
-            },
-        );
-        ctx.mark_local_declared(ir_local, ty.clone());
-        params.push(IRFunctionParam {
-            id,
-            local_id: ir_local,
-            ty,
-        });
+        params.push(promote_param(ctx, entry, ir_local, ty));
     }
     Some(params)
 }

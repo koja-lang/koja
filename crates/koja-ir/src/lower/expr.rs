@@ -38,6 +38,7 @@ use super::ops::{
     bin_op_result_type, const_value_type, int_const_at_width, lower_bin_op, lower_literal,
     lower_unary_op, parse_int_literal, unary_op_result_type,
 };
+use super::ownership::drop_discarded_temp;
 use super::package::resolved_type_to_ir_type;
 use super::process::{lower_receive, lower_spawn};
 use super::structs::{lower_field_access, lower_struct_construction};
@@ -137,6 +138,7 @@ fn lower_expr_inner(
                         rhs,
                     },
                 );
+                ctx.mark_owned(dest);
                 return Ok((dest, block));
             }
             let ir_op = lower_bin_op(*op, expr.span, &mut output.diagnostics)?;
@@ -693,6 +695,13 @@ fn lower_string(
                 rhs: next_value,
             },
         );
+        ctx.mark_owned(dest);
+        // `Concat` copies both operands, so the running accumulator and
+        // any owned operand (e.g. a `Debug.format` result for `{x}`)
+        // are dead after this step — free them so interpolation
+        // intermediates don't leak.
+        drop_discarded_temp(ctx, block, acc);
+        drop_discarded_temp(ctx, block, next_value);
         acc = dest;
     }
     Ok((acc, block))

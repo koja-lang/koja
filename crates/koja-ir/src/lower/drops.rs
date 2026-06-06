@@ -2,18 +2,21 @@
 //! function's control flow — explicit `return` and the synthesized
 //! fall-through tail [`super::body::finalize_open_flow`].
 //!
-//! Drop insertion is deferred to the drop-glue pass. Under the current
-//! value-semantics baseline every heap value leaks: a binding shared by
-//! assignment (`b = a`) aliases the same payload, so freeing per-slot
-//! at scope exit would double-free. The walk and the
-//! [`crate::IRInstruction::DropLocal`] instruction remain as the
-//! insertion point for that pass; today it emits nothing.
+//! Under the deep-copy-on-acquisition value-semantics baseline every
+//! heap-leaf local owns an independent allocation (bindings, params,
+//! and returns clone borrowed sources via [`super::ownership`]), so
+//! each owning slot is freed unconditionally at scope exit with no
+//! aliasing hazard. Composite heap is handled by the elaborate pass.
 
 use crate::function::IRBlockId;
 
 use super::ctx::FnLowerCtx;
+use super::ownership::emit_slot_drops;
 
-/// Emit the function-exit drops for `block`. No-op under the leak
-/// baseline (see module docs); kept as the seam the drop-glue pass
-/// fills in.
-pub(super) fn emit_function_exit_drops(_ctx: &mut FnLowerCtx, _block: IRBlockId) {}
+/// Emit the function-exit drops for `block`: free every heap-leaf
+/// local slot owned by the function. Caller must have already
+/// materialized any returned value (so the return clone is taken
+/// before its source slot is dropped).
+pub(super) fn emit_function_exit_drops(ctx: &mut FnLowerCtx, block: IRBlockId) {
+    emit_slot_drops(ctx, block);
+}

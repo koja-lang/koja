@@ -17,6 +17,7 @@ use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::intrinsics::acquire_element;
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::declare_malloc_extern;
 use crate::types::{ir_basic_type, list_value_type};
@@ -168,6 +169,12 @@ fn emit_append<'ctx>(
 
     let self_val = nth_list(function, llvm_function, 0, "self")?;
     let item_val = nth_param(function, llvm_function, 1, "item")?;
+    acquire_element(
+        ctx,
+        element(ListMethod::Append, function)?,
+        item_val,
+        "append.item",
+    )?;
 
     let buf_ptr = build_extract_pointer(ctx, function, self_val, 0, "buf_ptr")?;
     let len = build_extract_int(ctx, function, self_val, 1, "len")?;
@@ -247,6 +254,7 @@ fn emit_get<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?;
+    acquire_element(ctx, element(ListMethod::Get, function)?, value, "get.elem")?;
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[value])?;
     ctx.builder
         .build_return(Some(&some))
@@ -330,6 +338,12 @@ fn emit_pop<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?;
+    acquire_element(
+        ctx,
+        element(ListMethod::Pop, function)?,
+        elem_val,
+        "pop.elem",
+    )?;
     let some = build_enum_value(ctx, &option_symbol, OPTION_SOME_TAG, &[elem_val])?;
     let new_buf = copy_buffer(ctx, function, buf_ptr, new_len, new_len, elem_size)?;
     let shortened = build_list_struct(ctx, function, new_buf, new_len, new_len)?;
@@ -356,6 +370,12 @@ fn emit_replace_at<'ctx>(
     let self_val = nth_list(function, llvm_function, 0, "self")?;
     let index = nth_int(function, llvm_function, 1, "index")?;
     let value = nth_param(function, llvm_function, 2, "value")?;
+    acquire_element(
+        ctx,
+        element(ListMethod::ReplaceAt, function)?,
+        value,
+        "replace.value",
+    )?;
 
     let buf_ptr = build_extract_pointer(ctx, function, self_val, 0, "buf_ptr")?;
     let len = build_extract_int(ctx, function, self_val, 1, "len")?;

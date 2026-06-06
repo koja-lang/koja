@@ -18,14 +18,11 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
+use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::declare_malloc_extern;
-
-/// `[i64 bit_length][payload bytes]` — the SSA pointer points at
-/// the first payload byte; the bit-length sits 8 bytes before.
-pub(crate) const HEADER_BYTES: u64 = 8;
 
 /// Emit a `Clone` body that allocates a fresh `[i64 bit_length]
 /// [payload bytes]` block, `memcpy`s the header word + payload from
@@ -47,7 +44,13 @@ pub(super) fn emit_payload_clone<'ctx>(
     ceil_byte_count: bool,
 ) -> Result<(), LlvmError> {
     let payload = pointer_param(function, llvm_function)?;
-    let dst_payload = copy_heap_payload(ctx, function, payload, with_nul, ceil_byte_count)?;
+    let dst_payload = copy_heap_payload(
+        ctx,
+        function.symbol.mangled(),
+        payload,
+        with_nul,
+        ceil_byte_count,
+    )?;
     ctx.builder
         .build_return(Some(&dst_payload))
         .map(|_| ())
@@ -70,9 +73,9 @@ pub(super) fn emit_payload_clone<'ctx>(
 /// callers wire it into a wider control-flow shape when they want
 /// `Result.Ok(new_payload)` (`Binary.to_string`) vs a plain return
 /// (`String.clone`).
-pub(super) fn copy_heap_payload<'ctx>(
+pub(crate) fn copy_heap_payload<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    label: &str,
     src_payload: PointerValue<'ctx>,
     with_nul: bool,
     ceil_byte_count: bool,
@@ -80,101 +83,50 @@ pub(super) fn copy_heap_payload<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     let three = i64_ty.const_int(3, false);
-    let header = i64_ty.const_int(HEADER_BYTES, false);
 
-    let neg_hdr = i64_ty.const_int((-(HEADER_BYTES as i64)) as u64, true);
-    let src_base = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, src_payload, &[neg_hdr], "src_base")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("clone src_base GEP for `{}`", function.symbol),
-                    e,
-                )
-            })?
-    };
-    let bit_length = ctx
-        .builder
-        .build_load(i64_ty, src_base, "bit_length")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("clone header load for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .into_int_value();
-    let byte_count = byte_count_from_bits(ctx, function, bit_length, ceil_byte_count, three)?;
-    let body_size = ctx
-        .builder
-        .build_int_add(byte_count, header, "body_size")
-        .map_err(|e| inkwell_err(format_args!("clone body_size for `{}`", function.symbol), e))?;
-    let alloc_size = if with_nul {
-        ctx.builder
-            .build_int_add(body_size, i64_ty.const_int(1, false), "alloc_size")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("clone alloc_size for `{}`", function.symbol),
-                    e,
-                )
-            })?
-    } else {
-        body_size
-    };
+    // The source's `bit_length` (at `payload - LENGTH_OFFSET`); the
+    // fresh block gets its own `rc = 1`, never the source's count.
+    let bit_length = load_bit_length(ctx, src_payload, "clone_src")?;
+    let byte_count = byte_count_from_bits(ctx, label, bit_length, ceil_byte_count, three)?;
+    let alloc_size = block_alloc_size(ctx, byte_count, with_nul, "alloc_size")?;
 
     let malloc = declare_malloc_extern(ctx);
     let dst_base = ctx
         .builder
         .build_call(malloc, &[alloc_size.into()], "clone_buf")
-        .map_err(|e| inkwell_err(format_args!("clone malloc for `{}`", function.symbol), e))?
+        .map_err(|e| inkwell_err(format_args!("clone malloc for `{label}`"), e))?
         .try_as_basic_value()
         .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "malloc returned no value for `{}`",
-                function.symbol,
-            ))
-        })?
+        .ok_or_else(|| LlvmError::Codegen(format!("malloc returned no value for `{label}`")))?
         .into_pointer_value();
+    let dst_payload = init_heap_block(ctx, dst_base, bit_length, "clone_dst")?;
+
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
         .build_call(
             memcpy,
-            &[dst_base.into(), src_base.into(), body_size.into()],
+            &[dst_payload.into(), src_payload.into(), byte_count.into()],
             "",
         )
-        .map_err(|e| inkwell_err(format_args!("clone memcpy for `{}`", function.symbol), e))?;
+        .map_err(|e| inkwell_err(format_args!("clone memcpy for `{label}`"), e))?;
 
     if with_nul {
         let nul = unsafe {
             ctx.builder
-                .build_in_bounds_gep(i8_ty, dst_base, &[body_size], "nul")
-                .map_err(|e| {
-                    inkwell_err(format_args!("clone NUL GEP for `{}`", function.symbol), e)
-                })?
+                .build_in_bounds_gep(i8_ty, dst_payload, &[byte_count], "nul")
+                .map_err(|e| inkwell_err(format_args!("clone NUL GEP for `{label}`"), e))?
         };
         ctx.builder
             .build_store(nul, i8_ty.const_zero())
-            .map_err(|e| {
-                inkwell_err(format_args!("clone NUL store for `{}`", function.symbol), e)
-            })?;
+            .map_err(|e| inkwell_err(format_args!("clone NUL store for `{label}`"), e))?;
     }
 
-    let dst_payload = unsafe {
-        ctx.builder
-            .build_in_bounds_gep(i8_ty, dst_base, &[header], "dst_payload")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("clone dst_payload GEP for `{}`", function.symbol),
-                    e,
-                )
-            })?
-    };
     Ok(dst_payload)
 }
 
 fn byte_count_from_bits<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    label: &str,
     bit_length: IntValue<'ctx>,
     ceil: bool,
     three: IntValue<'ctx>,
@@ -184,24 +136,14 @@ fn byte_count_from_bits<'ctx>(
         let bits_plus7 = ctx
             .builder
             .build_int_add(bit_length, i64_ty.const_int(7, false), "bits_plus7")
-            .map_err(|e| inkwell_err(format_args!("clone bits+7 for `{}`", function.symbol), e))?;
+            .map_err(|e| inkwell_err(format_args!("clone bits+7 for `{label}`"), e))?;
         ctx.builder
             .build_right_shift(bits_plus7, three, false, "byte_count")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("clone byte_count for `{}`", function.symbol),
-                    e,
-                )
-            })
+            .map_err(|e| inkwell_err(format_args!("clone byte_count for `{label}`"), e))
     } else {
         ctx.builder
             .build_right_shift(bit_length, three, false, "byte_count")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("clone byte_count for `{}`", function.symbol),
-                    e,
-                )
-            })
+            .map_err(|e| inkwell_err(format_args!("clone byte_count for `{label}`"), e))
     }
 }
 

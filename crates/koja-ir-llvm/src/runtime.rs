@@ -25,6 +25,8 @@ pub(crate) const INT_PARSE_SYMBOL: &str = "koja_int_parse";
 pub(crate) const LAST_ERROR_SYMBOL: &str = "koja_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "koja_alloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
+pub(crate) const RC_DEC_SYMBOL: &str = "koja_rc_dec";
+pub(crate) const RC_INC_SYMBOL: &str = "koja_rc_inc";
 pub(crate) const UTF8_VALIDATE_SYMBOL: &str = "koja_utf8_validate";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__koja_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__koja_panic";
@@ -104,6 +106,38 @@ pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValu
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(FREE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_rc_inc` extern — the runtime's
+/// refcount increment for an rc-managed leaf heap block. Signature:
+/// `void koja_rc_inc(i8* base)`, where `base` is the block base (the
+/// `i64 rc` word, `payload - HEADER_BYTES`). Immortal (rodata) blocks
+/// carry a negative sentinel rc and are skipped by the runtime. The
+/// `Clone` emitter calls this once per acquired heap-leaf value.
+pub(crate) fn declare_rc_inc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RC_INC_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(RC_INC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_rc_dec` extern — the runtime's
+/// refcount decrement for an rc-managed leaf heap block, freeing the
+/// block when the count hits zero. Signature: `void koja_rc_dec(i8*
+/// base)` (block base, as for [`declare_rc_inc_extern`]). The drop
+/// emitter calls this once per heap-leaf slot at scope exit / per
+/// discarded heap-leaf value.
+pub(crate) fn declare_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RC_DEC_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(RC_DEC_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `koja_int_parse` runtime helper.

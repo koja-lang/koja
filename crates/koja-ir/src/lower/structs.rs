@@ -28,6 +28,7 @@ use crate::types::{IRType, ValueId};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
+use super::ownership::materialize_owned;
 use super::package::resolved_type_to_ir_type;
 
 /// Lower an `Item::Struct` against the typecheck registry. Returns
@@ -145,7 +146,13 @@ pub(super) fn canonicalize_struct_inits(
     let mut values_by_name: BTreeMap<String, ValueId> = BTreeMap::new();
     for field in fields {
         let (value, next) = lower_expr(&field.value, ctx, current, registry, output)?;
-        values_by_name.insert(field.name.clone(), value);
+        // Value semantics: a field-store acquires an independent value,
+        // so a borrowed heap-leaf source is cloned (rc-bumped) into the
+        // field. The field then owns a reference that outlives the
+        // source local's scope-exit drop.
+        let field_ty = ctx.type_of(value);
+        let owned = materialize_owned(ctx, current, value, &field_ty);
+        values_by_name.insert(field.name.clone(), owned);
         current = next;
     }
 
@@ -198,11 +205,15 @@ pub(super) fn lower_field_access(
             base,
             dest,
             field_index,
-            field_type,
+            field_type: field_type.clone(),
             struct_symbol,
         },
     );
-    Ok((dest, current))
+    // Value semantics: reading a heap-leaf field hands the caller an
+    // independent value (rc-bumped), balancing the drop the caller's
+    // binding/temp will emit — without disturbing the receiver's field.
+    let owned = materialize_owned(ctx, current, dest, &field_type);
+    Ok((owned, current))
 }
 
 fn struct_entry_from_resolution<'a>(

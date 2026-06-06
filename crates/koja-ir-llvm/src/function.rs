@@ -22,6 +22,7 @@ use koja_ir::{
 };
 
 use crate::ctx::{ClosureFrame, EmitContext, TcoFrame};
+use crate::emit::heap_layout::is_heap_leaf;
 use crate::emit::process::{emit_process_entry_wrapper_body, emit_spawn_wrapper_body};
 use crate::emit::{self, BlockMap, ValueMap, inkwell_err};
 use crate::error::LlvmError;
@@ -242,7 +243,7 @@ fn emit_entry_with_tco_split<'ctx>(
     phi_map: &emit::PhiMap<'ctx>,
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let promotion_len = 2 * function.params.len();
+    let promotion_len = promotion_prefix_len(function);
     if block.instructions.len() < promotion_len {
         panic!(
             "LLVM emit: TCO entry block on `{}` is shorter ({}) than the expected \
@@ -272,32 +273,64 @@ fn emit_entry_with_tco_split<'ctx>(
     emit::emit_terminator_default(ctx, block.id, &block.terminator, values, block_map, phi_map)
 }
 
-/// Sanity-check that the leading `2 * params.len()` instructions
-/// of the entry block are the canonical `LocalDecl` + `LocalWrite`
-/// pairs lower emits during parameter promotion. The check is
-/// `debug_assert!`-style: a violation here indicates a lower
-/// invariant break that would otherwise corrupt the back-edge
-/// slot writes.
+/// Number of leading entry-block instructions lower emits to promote
+/// the parameters into their local slots. Each param is a `LocalDecl`
+/// and `LocalWrite` pair (2); a heap-leaf param additionally clones
+/// the borrowed argument into its owning slot between the two (3), so
+/// the frame holds storage it can drop at scope exit.
+fn promotion_prefix_len(function: &IRFunction) -> usize {
+    function
+        .params
+        .iter()
+        .map(|param| if is_heap_leaf(&param.ty) { 3 } else { 2 })
+        .sum()
+}
+
+/// Sanity-check that the entry block's leading instructions are the
+/// canonical per-parameter promotion sequences lower emits:
+/// `LocalDecl` → (`Clone` for heap-leaf) → `LocalWrite`. A violation
+/// indicates a lower invariant break that would otherwise corrupt the
+/// back-edge slot writes; we panic with a clear message.
 fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction) {
-    debug_assert_eq!(prefix.len(), 2 * function.params.len());
-    for (index, param) in function.params.iter().enumerate() {
-        match (&prefix[index * 2], &prefix[index * 2 + 1]) {
-            (
-                IRInstruction::LocalDecl { local: decl, .. },
-                IRInstruction::LocalWrite {
-                    local: write,
-                    value,
-                },
-            ) => {
-                debug_assert_eq!(*decl, param.local_id);
-                debug_assert_eq!(*write, param.local_id);
-                debug_assert_eq!(*value, param.id);
-            }
-            other => panic!(
-                "LLVM emit: unexpected promotion shape on `{}` at param #{index}: {other:?}",
+    debug_assert_eq!(prefix.len(), promotion_prefix_len(function));
+    let mut cursor = prefix.iter().enumerate();
+    for param in &function.params {
+        let (index, decl) = cursor.next().expect("promotion prefix shorter than params");
+        let IRInstruction::LocalDecl { local, .. } = decl else {
+            panic!(
+                "LLVM emit: expected `LocalDecl` at promotion #{index} on `{}`, got {decl:?}",
                 function.symbol,
-            ),
-        }
+            );
+        };
+        debug_assert_eq!(*local, param.local_id);
+
+        // Heap-leaf params clone the borrowed argument into the slot;
+        // the slot then owns `clone.dest` rather than the raw param.
+        let stored = if is_heap_leaf(&param.ty) {
+            let (index, clone) = cursor
+                .next()
+                .expect("promotion prefix missing heap-leaf clone");
+            let IRInstruction::Clone { dest, source, .. } = clone else {
+                panic!(
+                    "LLVM emit: expected `Clone` at promotion #{index} on `{}`, got {clone:?}",
+                    function.symbol,
+                );
+            };
+            debug_assert_eq!(*source, param.id);
+            *dest
+        } else {
+            param.id
+        };
+
+        let (index, write) = cursor.next().expect("promotion prefix missing LocalWrite");
+        let IRInstruction::LocalWrite { local, value } = write else {
+            panic!(
+                "LLVM emit: expected `LocalWrite` at promotion #{index} on `{}`, got {write:?}",
+                function.symbol,
+            );
+        };
+        debug_assert_eq!(*local, param.local_id);
+        debug_assert_eq!(*value, stored);
     }
 }
 

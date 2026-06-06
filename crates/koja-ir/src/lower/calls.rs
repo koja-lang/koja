@@ -209,6 +209,7 @@ fn lower_local_closure_call(
             result_ty: return_ty,
         },
     );
+    ctx.mark_owned(dest);
     Ok((dest, current))
 }
 
@@ -251,6 +252,7 @@ fn lower_closure_expr_call(
             result_ty: return_ty,
         },
     );
+    ctx.mark_owned(dest);
     Ok((dest, current))
 }
 
@@ -542,6 +544,7 @@ fn emit_call(
             args: lowered_args,
         },
     );
+    ctx.mark_owned(dest);
     Ok((dest, current))
 }
 

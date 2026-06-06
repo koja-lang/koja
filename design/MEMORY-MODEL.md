@@ -222,8 +222,20 @@ value, or none).
 
 **Open questions** to resolve before implementation:
 
-1. Refcount header layout for heap values (and interaction with the
-   existing `payload - 8` length-prefix convention).
+1. ~~Refcount header layout for heap values (and interaction with the
+   existing `payload - 8` length-prefix convention).~~ **Resolved.**
+   Heap-leaf blocks (`String` / `Binary` / `Bits`) are
+   `[i64 rc][i64 bit_length][payload…][NUL?]`, a 16-byte header. The
+   SSA pointer still addresses the first payload byte, so the existing
+   `bit_length` lives at `payload - 8` unchanged; the new `i64 rc` word
+   sits at `payload - 16` (the block base, the pointer handed to
+   `free` / `koja_rc_inc` / `koja_rc_dec`). `Clone` is `rc++`, `Drop`
+   is `rc--` (free at zero); statically-allocated rodata literals carry
+   a negative sentinel rc (`i64::MIN`) so inc/dec are no-ops and they
+   never reach `free`. The layout constants are mirrored, by contract,
+   in `koja-runtime` (`util::{BLOCK_HEADER_SIZE, LENGTH_OFFSET}`),
+   `koja-ir-llvm` (`emit::heap_layout`), and `koja-ir-eval`'s raw-ABI
+   readers rather than shared through a common crate.
 2. COW retrofit on the current runtime: `List` flat buffer,
    `String`/`Binary`/`Bits`, the `Map`/`Set` hashtables.
 3. Message-boundary policy: deep copy vs atomic-rc handoff per type

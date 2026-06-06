@@ -665,6 +665,15 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, result);
             Ok(())
         }
+        // The host `Value` is deep-cloned on every `lookup`, so a
+        // `Clone` is just a re-bind: the result is already an
+        // independent copy with no shared backing. The LLVM backend
+        // does the real allocation; here the GC handles reclamation.
+        IRInstruction::Clone { dest, source, .. } => {
+            let value = lookup(&frame.values, *source)?;
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
         IRInstruction::Concat {
             dest,
             kind,

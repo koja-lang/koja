@@ -1,20 +1,20 @@
 //! `CString.to_string(self) -> String` — copy the `len` bytes of the
-//! `CString { ptr, len }` struct payload into a fresh `[i64
-//! bit_length][len bytes]` Koja string block. Caller retains
-//! ownership of `self`; the produced `String` is a fresh owned heap
-//! allocation, freed by the surrounding drop pipeline at end of
-//! scope.
+//! `CString { ptr, len }` struct payload into a fresh
+//! `[i64 rc][i64 bit_length][len bytes][NUL]` Koja string block
+//! (`rc = 1`, trailing NUL for libc compat — `String.length`/equality
+//! rely on the terminator). Caller retains ownership of `self`; the
+//! produced `String` is a fresh owned heap allocation, freed by the
+//! surrounding drop pipeline at end of scope.
 
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
+use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::declare_malloc_extern;
-
-const STRING_HEADER_BYTES: u64 = 8;
 
 pub(super) fn emit_to_string<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -25,8 +25,6 @@ pub(super) fn emit_to_string<'ctx>(
     ctx.builder.position_at_end(entry);
 
     let i64_ty = ctx.context.i64_type();
-    let i8_ty = ctx.context.i8_type();
-    let header_size = i64_ty.const_int(STRING_HEADER_BYTES, false);
 
     let cs_val = llvm_function.get_nth_param(0).ok_or_else(|| {
         LlvmError::Codegen(format!(
@@ -66,10 +64,7 @@ pub(super) fn emit_to_string<'ctx>(
         }
     };
 
-    let total = ctx
-        .builder
-        .build_int_add(header_size, byte_len, "total")
-        .map_err(|e| inkwell_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
+    let total = block_alloc_size(ctx, byte_len, true, "total")?;
     let malloc = declare_malloc_extern(ctx);
     let base_ptr: PointerValue<'ctx> = ctx
         .builder
@@ -94,15 +89,7 @@ pub(super) fn emit_to_string<'ctx>(
         .builder
         .build_int_mul(byte_len, i64_ty.const_int(8, false), "bit_len")
         .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_store(base_ptr, bit_len)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
-
-    let payload_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, base_ptr, &[header_size], "payload_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
+    let payload_ptr = init_heap_block(ctx, base_ptr, bit_len, "cstring_str")?;
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
         .build_call(
@@ -116,6 +103,14 @@ pub(super) fn emit_to_string<'ctx>(
                 e,
             )
         })?;
+    let nul_ptr = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(ctx.context.i8_type(), payload_ptr, &[byte_len], "nul_ptr")
+            .map_err(|e| inkwell_err(format_args!("build_gep nul for `{}`", function.symbol), e))?
+    };
+    ctx.builder
+        .build_store(nul_ptr, ctx.context.i8_type().const_zero())
+        .map_err(|e| inkwell_err(format_args!("build_store nul for `{}`", function.symbol), e))?;
     ctx.builder
         .build_return(Some(&payload_ptr))
         .map(|_| ())

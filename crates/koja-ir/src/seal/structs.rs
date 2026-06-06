@@ -150,6 +150,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::BinaryOp { .. }
             | IRInstruction::Call { .. }
             | IRInstruction::CallClosure { .. }
+            | IRInstruction::Clone { .. }
             | IRInstruction::Concat { .. }
             | IRInstruction::Const { .. }
             | IRInstruction::DropLocal { .. }

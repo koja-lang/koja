@@ -28,6 +28,7 @@ use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
 use super::expr::lower_expr;
 use super::ops::bin_op_result_type;
+use super::ownership::{drop_discarded_temp, is_heap_leaf, materialize_owned};
 use super::package::resolved_type_to_ir_type;
 use super::structs::resolved_struct_symbol;
 
@@ -90,6 +91,14 @@ pub(super) fn lower_body(
 ) -> Result<FlowResult, ()> {
     let mut last_value: Option<ValueId> = None;
     for stmt in body {
+        // The previous statement's trailing value is now superseded —
+        // if it owned a fresh heap-leaf allocation it's discarded, so
+        // free it here (it is still live in the current `block`, which
+        // its producer dominates). The final statement's value is not
+        // dropped: it flows out as the body result.
+        if let Some(discarded) = last_value.take() {
+            drop_discarded_temp(ctx, block, discarded);
+        }
         match lower_statement(stmt, ctx, block, registry, output)? {
             FlowResult::Open { value, block: next } => {
                 last_value = value;
@@ -139,10 +148,15 @@ fn lower_statement(
             let return_value = match value.as_ref() {
                 Some(expr) => {
                     let (id, next) = lower_expr(expr, ctx, block, registry, output)?;
+                    // Acquire the result as an owned value *before* the
+                    // exit drops free its source slots, so the return
+                    // clone is taken while the source is live.
+                    let return_ty = ctx.type_of(id);
+                    let owned = materialize_owned(ctx, next, id, &return_ty);
                     emit_function_exit_drops(ctx, next);
                     ctx.cfg
-                        .set_terminator(next, IRTerminator::Return { value: Some(id) });
-                    Some(id)
+                        .set_terminator(next, IRTerminator::Return { value: Some(owned) });
+                    Some(owned)
                 }
                 None => {
                     emit_function_exit_drops(ctx, block);
@@ -228,7 +242,15 @@ fn lower_assignment(
     let (value_id, current) = lower_expr(value, ctx, block, registry, output)?;
     let value_ty = ctx.type_of(value_id);
 
-    if !ctx.local_is_declared(ir_local) {
+    // Acquire the rhs as an owned value: borrowed sources (literals,
+    // reads, params) are deep-cloned so the slot holds an independent
+    // heap-leaf allocation it can free at scope exit. The clone is
+    // taken before the overwrite-drop, so a self-assign (`x = x`)
+    // copies the old payload before freeing it.
+    let owned_value = materialize_owned(ctx, current, value_id, &value_ty);
+
+    let first_declaration = !ctx.local_is_declared(ir_local);
+    if first_declaration {
         let entry = ctx.entry_block();
         ctx.cfg.append(
             entry,
@@ -238,12 +260,32 @@ fn lower_assignment(
             },
         );
         ctx.mark_local_declared(ir_local, value_ty.clone());
+    } else if is_heap_leaf(&value_ty) {
+        // Reassignment of a heap-leaf slot: free the prior owned
+        // payload before overwriting so the old allocation doesn't
+        // leak.
+        let stale = ctx.fresh_value(value_ty.clone());
+        ctx.cfg.append(
+            current,
+            IRInstruction::LocalRead {
+                dest: stale,
+                local: ir_local,
+                ty: value_ty.clone(),
+            },
+        );
+        ctx.cfg.append(
+            current,
+            IRInstruction::DropValue {
+                value: stale,
+                ty: value_ty.clone(),
+            },
+        );
     }
     ctx.cfg.append(
         current,
         IRInstruction::LocalWrite {
             local: ir_local,
-            value: value_id,
+            value: owned_value,
         },
     );
     Ok(FlowResult::Open {
@@ -692,8 +734,14 @@ fn expect_local_id(lvalue: &LValue) -> LocalId {
 /// `Return` carrying the trailing value (if any).
 pub(super) fn finalize_open_flow(ctx: &mut FnLowerCtx, flow: FlowResult) {
     if let FlowResult::Open { value, block } = flow {
+        // Acquire the trailing value as owned *before* the exit drops,
+        // so the return clone is taken while its source slots are live.
+        let owned = value.map(|id| {
+            let ty = ctx.type_of(id);
+            materialize_owned(ctx, block, id, &ty)
+        });
         emit_function_exit_drops(ctx, block);
         ctx.cfg
-            .set_terminator(block, IRTerminator::Return { value });
+            .set_terminator(block, IRTerminator::Return { value: owned });
     }
 }

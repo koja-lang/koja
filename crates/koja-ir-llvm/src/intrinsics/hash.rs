@@ -10,12 +10,10 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::{HashImpl, IRFunction, IRSymbol};
 
 use crate::ctx::EmitContext;
+use crate::emit::heap_layout::load_bit_length;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 
-/// `[i64 bit_length][payload bytes]` — the SSA pointer points at
-/// the first payload byte; the bit-length sits 8 bytes before.
-const STRING_HEADER_BYTES: u64 = 8;
 const FNV_OFFSET_BASIS: u64 = 0xcbf29ce484222325;
 const FNV_PRIME: u64 = 0x100000001b3;
 
@@ -57,17 +55,7 @@ fn emit_string_hash<'ctx>(
         }
     };
 
-    let neg_hdr = i64_ty.const_int(-(STRING_HEADER_BYTES as i64) as u64, true);
-    let hdr_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, str_ptr, &[neg_hdr], "hdr_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
-    let bit_length = ctx
-        .builder
-        .build_load(i64_ty, hdr_ptr, "bit_length")
-        .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?
-        .into_int_value();
+    let bit_length = load_bit_length(ctx, str_ptr, "bit_length")?;
     let byte_count = ctx
         .builder
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
