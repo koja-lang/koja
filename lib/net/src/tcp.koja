@@ -64,10 +64,20 @@ struct TCPSocket
   end
 
   @doc """
-  Writes data to the connection. Returns the number of bytes
-  written or an error if the write fails.
+  Reads up to `count` raw bytes from the connection. Suitable for
+  binary protocols where the data is not UTF-8 text. Returns the bytes
+  or an error if the read fails.
   """
-  fn write(self, data: String) -> Result<Int, String>
+  fn read_binary(self, count: Int) -> Result<Binary, String>
+    self.socket.fd.read_binary(count)
+  end
+
+  @doc """
+  Writes data to the connection. Accepts either a `String` (encoded as
+  UTF-8) or a `Binary` for raw wire protocols. Returns the number of
+  bytes written or an error if the write fails.
+  """
+  fn write(self, data: Binary | String) -> Result<Int, String>
     self.socket.fd.write(data)
   end
 

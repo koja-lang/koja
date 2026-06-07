@@ -120,9 +120,10 @@ fn binary_match_unsigned_binding_skips_sign_extend() {
 
 #[test]
 fn binary_match_greedy_tail_emits_malloc_and_memcpy() {
-    // Greedy `: Binary` allocates a fresh `[i64 bit_length][payload]`
-    // block and `memcpy`s the remaining bytes into it. Pins the
-    // tail-alloc-size add and the memcpy call.
+    // Greedy `: Binary` allocates a fresh `[i64 rc][i64 bit_length][payload]`
+    // block via the shared `init_heap_block` helper and `memcpy`s the
+    // remaining bytes into it. Pins the tail-alloc-size add, the
+    // bit-length header GEP (`tail_len`), and the memcpy call.
     let source = "
         fn main
           stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
@@ -138,7 +139,7 @@ fn binary_match_greedy_tail_emits_malloc_and_memcpy() {
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "tail_alloc_size");
-    assert_contains(&ir_text, "tail_payload");
+    assert_contains(&ir_text, "tail_len");
     assert_contains(&ir_text, "tail_cpy");
     assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
 }

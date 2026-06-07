@@ -22,7 +22,7 @@ use koja_ir::{IRInstruction, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::{PACKAGE, function, lower_program_source as lower};
 
 #[test]
 fn union_widening_arg_lowers_to_union_wrap() {
@@ -59,14 +59,18 @@ end
         "expected exactly one UnionWrap for the bare-Post → union arg site, got {wrap_count}",
     );
 
+    // Scope to the test package: the autoimported stdlib carries its
+    // own unions (e.g. `Fd.write`'s `Binary | String`), so summing
+    // across every package would also count those.
     let union_decl_count = program
         .packages
         .iter()
+        .filter(|p| p.package == PACKAGE)
         .map(|p| p.unions.len())
         .sum::<usize>();
     assert_eq!(
         union_decl_count, 1,
-        "expected exactly one IRUnionDecl for `Post | Comment`, got {union_decl_count}",
+        "expected exactly one IRUnionDecl for `Post | Comment` in `{PACKAGE}`, got {union_decl_count}",
     );
 }
 
@@ -173,15 +177,19 @@ fn main -> Int
 end
 ";
     let program = lower(source);
+    // Scope to the test package so stdlib unions in autoimported
+    // packages (e.g. `Fd.write`'s `Binary | String`) don't inflate
+    // the count we're pinning the dedupe against.
     let union_decl_count = program
         .packages
         .iter()
+        .filter(|p| p.package == PACKAGE)
         .map(|p| p.unions.len())
         .sum::<usize>();
     assert_eq!(
         union_decl_count, 1,
         "expected canonicalization to collapse `Post | Comment` and `Comment | Post` \
-         to a single IRUnionDecl, got {union_decl_count}",
+         to a single IRUnionDecl in `{PACKAGE}`, got {union_decl_count}",
     );
 
     // `IRType::Union { members }` carries the canonical (sorted)

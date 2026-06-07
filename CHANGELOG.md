@@ -10,9 +10,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `koja test` now enforces a 60-second per-binary timeout, so a hung test process fails fast instead of stalling the suite.
+- `Fd.read_binary(count)` and `TCPSocket.read_binary(count)` -- read up to `count` bytes as a `Binary` for binary wire protocols.
 
 ### Changed
 
+- `Fd.write` and `TCPSocket.write` now accept `data: Binary | String` (a `String` is encoded as UTF-8), unifying text and binary writes under one method.
 - **Breaking**: Koja moved from affine ownership to **value semantics**. Every binding, parameter, return, and field is now an independent value: assignment and argument passing copy, and a value stays usable for as long as it is in scope. Copies are made cheap by reference-counted copy-on-write — heap-backed values (`String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, enums, closures) are shared while live and reclaimed deterministically at scope exit, with no garbage collector. The `move` keyword and borrow-by-default parameter passing are gone, along with use-after-move errors and the `fn(move T) -> U` function-type syntax. Remove `move` from your signatures; code that previously had to satisfy move/borrow rules now just works.
 
 ### Removed

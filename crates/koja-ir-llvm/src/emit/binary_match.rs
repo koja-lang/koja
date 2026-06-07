@@ -46,6 +46,7 @@ use crate::intrinsics::cptr::{declare_memcmp_extern, declare_memcpy_extern};
 use crate::runtime::declare_malloc_extern;
 
 use super::constants::emit_string_literal_payload;
+use super::heap_layout::{block_alloc_size, init_heap_block};
 use super::{ValueMap, inkwell_err, lookup};
 
 /// Lower an `IRInstruction::BinaryMatch`. Returns the `i1` success
@@ -375,14 +376,7 @@ fn emit_greedy_tail<'ctx>(
         .build_int_sub(bit_length, prefix_bits_const, "tail_bits")
         .map_err(|e| inkwell_err(format_args!("BinaryMatch tail-bits sub"), e))?;
 
-    let alloc_size = ctx
-        .builder
-        .build_int_add(
-            i64_ty.const_int(8, false),
-            remaining_bytes,
-            "tail_alloc_size",
-        )
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch tail-alloc size"), e))?;
+    let alloc_size = block_alloc_size(ctx, remaining_bytes, false, "tail_alloc_size")?;
     let malloc = declare_malloc_extern(ctx);
     let base = ctx
         .builder
@@ -392,14 +386,7 @@ fn emit_greedy_tail<'ctx>(
         .basic()
         .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
         .into_pointer_value();
-    ctx.builder
-        .build_store(base, remaining_bits)
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch tail header store"), e))?;
-    let tail_payload = unsafe {
-        ctx.builder
-            .build_in_bounds_gep(i8_ty, base, &[i64_ty.const_int(8, false)], "tail_payload")
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch tail-payload GEP"), e))?
-    };
+    let tail_payload = init_heap_block(ctx, base, remaining_bits, "tail")?;
     let src = unsafe {
         ctx.builder
             .build_in_bounds_gep(i8_ty, payload, &[prefix_bytes_const], "tail_src")
