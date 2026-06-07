@@ -1,5 +1,11 @@
 # Ownership & Drop Insertion
 
+> **Superseded by `MEMORY-MODEL.md`** (value semantics + reference
+> counting). The affine single-owner / `move` / drop-insertion model
+> described below was abandoned in favor of value semantics made cheap
+> by RC copy-on-write. Retained as a historical snapshot of the
+> reasoning; nothing here reflects the current implementation.
+
 Design for a sound, complete drop-insertion model in the Koja
 compiler: every move-typed value gets freed exactly once, no value is
 freed while still aliased, and no static/literal payload is ever

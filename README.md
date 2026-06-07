@@ -2,7 +2,7 @@
 
 > A language for humans and AI.
 
-Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model.
+Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with value semantics and an Erlang-style concurrency model.
 
 For the full language specification, see [LANGUAGE.md](LANGUAGE.md).
 
@@ -102,26 +102,26 @@ fn main
 end
 ```
 
-### Ownership and Move Semantics
+### Values
+
+Variables, parameters, and return values are independent values:
+assigning or passing one hands off a logically separate copy. Copies are
+cheap -- heap-backed values like `String`, `Binary`, and collections are
+shared under the hood and only duplicated when mutated.
 
 ```koja
 struct Config
   name: String
 end
 
-fn consume(move c: Config) -> String
-  c.name
-end
-
-fn borrow(c: Config) -> String
+fn describe(c: Config) -> String
   c.name
 end
 
 fn main
   c = Config{name: "test"}
-  borrow(c)         # borrows -- c is still live
-  c.name.print()
-  consume(c)         # moves -- c is consumed
+  describe(c).print()   # c is passed by value
+  c.name.print()        # and still usable here
 end
 ```
 

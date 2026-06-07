@@ -239,16 +239,18 @@ authors who want to expose raw bindings can use `fn` deliberately.
 
 ## Open: Ownership boundary
 
-Koja has ownership + move semantics. C has neither. The FFI boundary is
-where these models collide.
+Koja has value semantics with automatic reference-counted memory. C has
+manual memory and raw pointers. The FFI boundary is where these models
+meet.
 
 ### Passing Koja values to C
 
 Primitives (`Int32`, `UInt32`, `Float`, `Bool`) are straightforward --
 they're passed by value, same as C. No ownership questions.
 
-For pointers (`CPtr<T>`): the pointer value is copied (it's `Copy`). The
-Koja side retains no ownership of what's behind the pointer.
+For pointers (`CPtr<T>`): the pointer is a plain machine word, copied by
+value like any scalar. The Koja side retains no ownership of what's
+behind the pointer.
 
 For strings: `to_cstring()` creates a copy via `malloc`. The original
 Koja `String` is unaffected. The `CString` is a new allocation that
@@ -271,9 +273,10 @@ authors do.
 
 ### Open questions
 
-- What does `Ptr.read()` return for move types? A copy? Should it be
-  restricted to `Copy` types?
-- Should there be a `Ptr.read_copy()` vs `Ptr.read_move()` distinction?
+- What does `CPtr.read()` return for heap-backed types (e.g. a struct
+  containing a `String`)? Reconstructing a reference-counted Koja value
+  from raw C bytes is fraught -- likely restrict `read()` to scalar /
+  `@compat "C"` types.
 - How does `@compat "C"` struct passing work? By value (copy the struct
   onto the C stack) or by pointer?
 
@@ -349,8 +352,8 @@ Options:
 
 ## `CPtr<T>` design (implemented)
 
-Raw pointer type. `Copy` (just a machine word). No ownership tracking.
-The Koja compiler will not auto-free memory behind a `CPtr<T>`.
+Raw pointer type: a plain machine word, copied by value. No ownership
+tracking. The Koja compiler will not auto-free memory behind a `CPtr<T>`.
 
 Named `CPtr` (not `Ptr`) to signal that this is a C interop type --
 it uses `malloc`/`free`, not the Koja runtime allocator. Normal Koja
@@ -361,7 +364,7 @@ code never touches `CPtr` -- only FFI wrapper authors do.
 ```koja
 CPtr.null()          # -> CPtr<T>    null pointer
 CPtr.alloc(count)    # -> CPtr<T>    malloc(count * sizeof(T))
-ptr.free()           # free(ptr)     move self, no return
+ptr.free()           # free(ptr)     no return
 ptr.offset(n)        # -> CPtr<T>    pointer arithmetic
 ptr.read()           # -> T          read value at pointer
 ptr.write(value)     #               write value at pointer
@@ -376,8 +379,9 @@ and maps to LLVM's opaque pointer type.
 
 - Should `CPtr<T>` be restricted to primitives and `@compat "C"`
   structs, or remain generic over all types?
-- Should `read()` be restricted to `Copy` types? What about reading a
-  struct that contains a `String` (heap-allocated)?
+- Should `read()` be restricted to scalar / `@compat "C"` types? Reading
+  a struct that contains a `String` (heap-backed) would need to rebuild a
+  reference-counted Koja value from raw bytes.
 - Null checking: `null?()` returns `Bool`. Should there also be a
   `to_option()` -> `Option<CPtr<T>>` for idiomatic handling?
 
@@ -409,8 +413,8 @@ end
 - Compiler-chosen layout is the default (and may reorder fields)
 - `@compat "C"` structs can be passed to/from C by value or by pointer
 - `Debug.format()` auto-derive still works
-- Move semantics still work
-- `Copy` types remain `Copy`
+- Value semantics still apply: the struct stays an independent value;
+  only its in-memory layout changes
 
 ### Open questions
 
@@ -423,14 +427,14 @@ end
 
 ---
 
-## Open: Linking
+## Linking
 
-### `@link` annotation
+### `@link` annotation -- **DONE**
 
 `@link "libname"` on a struct or function produces `-l libname` at link
 time. Multiple `@link` annotations link multiple libraries.
 
-#### Symbol naming: `@link "lib:symbol"`
+#### Symbol naming: `@link "lib:symbol"` -- **DONE**
 
 When the C symbol name differs from the Koja function name, append
 `:symbol` to the link string. The part before the colon is the library

@@ -1,6 +1,6 @@
 # Koja Language Reference
 
-Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
+Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with value semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
 
 ---
 
@@ -130,7 +130,7 @@ p2 = p1
 p1.x    # still valid -- p2 is an independent copy
 ```
 
-Copies are observably independent for every type. Mutating one binding never affects another, so there is no aliasing and no use-after-move: a value remains usable for as long as it is in scope.
+Copies are observably independent for every type: mutating one binding never affects another, and a value remains usable for as long as it is in scope.
 
 ### Constants
 
@@ -807,21 +807,20 @@ apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 
 ## Value Semantics
 
-Koja uses value semantics: every binding, parameter, return, and field is an independent value. There is no garbage collector, no `Box`, `Rc`, or `Arc` in user code, no lifetime annotations, and no borrow checker.
+Koja uses value semantics: every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime.
 
 ### Rules
 
 1. Assignment copies. The source remains usable.
 2. Function and closure parameters are passed by value; the caller's binding survives the call.
 3. There is no aliasing: mutating one binding never affects another.
-4. A value is usable for as long as it is in scope; there is no consuming move.
-5. There is no parameter-passing modifier and no `move` keyword -- value semantics make ownership transfer meaningless.
+4. A value is usable for as long as it is in scope.
 
-> Memory note: this experimental release frees only stack-resident values; heap-backed values (strings, collections, composites) currently leak. Reclamation is deterministic, scope-bound cleanup that is being reintroduced -- it is not a garbage collector. See the README for production-readiness status.
+> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting — blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector: there are no pauses and no background collector. See the README for production-readiness status.
 
 ### Copy Cost
 
-All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents:
+All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap: the block is reference-counted and shared, with a copy made lazily only if a shared value is mutated (copy-on-write). The result is always an independent value:
 
 ```koja
 a = 42
@@ -1417,7 +1416,7 @@ s.slice(Range{start: 0, stop: 4}).print()     # "hello"
 
 ### Binary and Bits
 
-`Binary` represents an arbitrary byte sequence. `Bits` represents an arbitrary bit sequence. Both are move types.
+`Binary` represents an arbitrary byte sequence. `Bits` represents an arbitrary bit sequence. Both are heap-backed value types (copied by reference-counted share like `String`).
 
 #### Literals
 
@@ -1608,7 +1607,7 @@ protocol Debug
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver is borrowed and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver stays live and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
 
 `Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
@@ -1829,7 +1828,7 @@ Bump-allocated regions with bulk-free semantics. Designed but not implemented --
 ```koja
 result = arena
   # all allocations in here are bulk-freed at block exit
-  # only explicitly cloned values escape
+  # only values explicitly copied out of the block escape
 end
 ```
 

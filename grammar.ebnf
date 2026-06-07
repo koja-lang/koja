@@ -132,8 +132,8 @@ function_decl = { annotation } , [ "priv" ] , "fn" , IDENT , [ type_params ] ,
 
 param_list = param , { "," , param } ;
 
-param = [ "move" ] , IDENT , ":" , type_expr , [ "=" , expr ]
-      | [ "move" ] , "self" ;
+param = IDENT , ":" , type_expr , [ "=" , expr ]
+      | "self" ;
 
 
 (* ========================================================================== *)
@@ -149,7 +149,7 @@ primary_type_expr = "fn" , "(" , [ fn_type_param , { "," , fn_type_param } ] , "
                   | "Self"                                                  (* self type *)
                   | "(" , ")" ;                                             (* unit *)
 
-fn_type_param = [ "move" ] , type_expr ;
+fn_type_param = type_expr ;
 
 named_type = TYPE_IDENT , { "." , TYPE_IDENT } ;
 
@@ -503,8 +503,8 @@ BIN_DIGIT = "0" | "1" ;
 (* Reserved keywords                                                          *)
 (* ========================================================================== *)
 
-(* after, alias, break, cond, const, else, end, enum, extend, false,    *)
-(* fn, for, if, impl, in, loop, match, move, not, priv, protocol,        *)
+(* after, alias, break, cond, const, else, end, enum, extend, false,     *)
+(* fn, for, if, impl, in, loop, match, not, priv, protocol,              *)
 (* receive, return, self, spawn, struct, true, type, unless, when, while *)
 (*                                                                       *)
 (* Note: `and`, `or`, and `as` are contextual identifiers, not reserved  *)
