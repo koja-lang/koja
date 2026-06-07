@@ -9,11 +9,11 @@ struct Calc
 end
 
 impl Process<CalcConfig, CalcMsg, Int> for Calc
-  fn start(move config: CalcConfig) -> Result<Self, StopReason>
+  fn start(config: CalcConfig) -> Result<Self, StopReason>
     Result.Ok(Calc{})
   end
 
-  fn handle(move self, msg: CalcMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+  fn handle(self, msg: CalcMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
     match msg
       CalcMsg.Add(a, b) ->
         sum = a + b

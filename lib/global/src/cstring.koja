@@ -10,7 +10,7 @@ struct CString
   @doc """
   Frees the underlying C memory.
   """
-  fn free(move self)
+  fn free(self)
     self.ptr.free()
   end
 

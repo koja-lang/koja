@@ -34,6 +34,7 @@ use crate::types::{IRType, ValueId};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
+use super::ownership::materialize_owned;
 use super::package::resolved_type_to_ir_type;
 use super::structs::canonicalize_struct_inits;
 
@@ -231,7 +232,13 @@ fn lower_tuple_variant(
     let mut values = Vec::with_capacity(exprs.len());
     for expr in exprs {
         let (value, next) = lower_expr(expr, ctx, current, registry, output)?;
-        values.push(value);
+        // Value semantics: an enum payload-store acquires an independent
+        // value, so a borrowed heap-leaf source is cloned (rc-bumped) in.
+        // The variant then owns a reference outliving the source local's
+        // scope-exit drop.
+        let payload_ty = ctx.type_of(value);
+        let owned = materialize_owned(ctx, current, value, &payload_ty);
+        values.push(owned);
         current = next;
     }
     let dest = ctx.fresh_value(IRType::Enum(symbol.clone()));

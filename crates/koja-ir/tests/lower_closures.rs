@@ -9,9 +9,9 @@
 //!   [`FunctionKind::Closure`] and emit
 //!   [`IRInstruction::MakeClosure`] in the outer block.
 //! - **Captures** populate `env_layout`, surface as
-//!   [`IRInstruction::LoadCapture`] inside the body, and route
-//!   through [`IRInstruction::MoveOutLocal`] when the outer slot is
-//!   heap-typed and Owned.
+//!   [`IRInstruction::LoadCapture`] inside the body, and copy into
+//!   the env via a [`IRInstruction::LocalRead`] of the outer slot
+//!   (value semantics — the outer binding stays live).
 //! - **Closure-typed local calls** lower to
 //!   [`IRInstruction::CallClosure`] dispatching through a
 //!   [`IRInstruction::LocalRead`] of the slot.
@@ -66,15 +66,6 @@ fn call_closures_in(function: &IRFunction) -> Vec<&IRInstruction> {
         .iter()
         .flat_map(|b| &b.instructions)
         .filter(|i| matches!(i, IRInstruction::CallClosure { .. }))
-        .collect()
-}
-
-fn move_out_locals_in(function: &IRFunction) -> Vec<&IRInstruction> {
-    function
-        .blocks
-        .iter()
-        .flat_map(|b| &b.instructions)
-        .filter(|i| matches!(i, IRInstruction::MoveOutLocal { .. }))
         .collect()
 }
 
@@ -170,7 +161,7 @@ fn block_closure_with_capture_loads_through_env_layout() {
 }
 
 #[test]
-fn heap_typed_capture_moves_out_of_owner_slot() {
+fn unused_outer_local_is_not_captured() {
     let source = "
         fn main -> Int
           s = \"hi\"
@@ -181,11 +172,10 @@ fn heap_typed_capture_moves_out_of_owner_slot() {
         end
         ";
 
-    // `s` is unused inside the closure body, so it should NOT
-    // appear in env_layout. We assert the negative shape: no
-    // MoveOutLocal, no captures, and env_layout is empty. This
-    // pins the capture-analysis dedup/visibility rules so a future
-    // walker bug doesn't accidentally lift unused outer locals.
+    // `s` is unused inside the closure body, so it should NOT appear
+    // in env_layout or carry a capture value. Pins the
+    // capture-analysis dedup/visibility rules so a future walker bug
+    // doesn't accidentally lift unused outer locals.
     let program = lower(&dedent(source));
     let body = require_synthesized(&program, "TestApp.main__closure0");
     let FunctionKind::Closure { env_layout } = &body.kind else {
@@ -201,19 +191,13 @@ fn heap_typed_capture_moves_out_of_owner_slot() {
         unreachable!()
     };
     assert!(captures.is_empty());
-    assert!(
-        move_out_locals_in(main).is_empty(),
-        "no heap capture => no MoveOutLocal lifted into the env",
-    );
 }
 
 #[test]
-fn heap_capture_emits_move_out_local_into_env() {
-    // Use `<>` to materialize `s` as a fresh, owned heap String so
-    // its slot stamps `Ownership::Owned` (raw literals stamp
-    // `Unowned` — they're static-data pointers). The closure
-    // captures `s`, which routes the outer slot through
-    // `MoveOutLocal` per the ownership-aware `read_capture` path.
+fn heap_capture_copies_into_env_via_local_read() {
+    // The closure captures heap-typed `s`. Under value semantics the
+    // capture copies into the env via a `LocalRead` of the outer slot
+    // (the binding stays live) — there is no move-out.
     let source = "
         fn main -> Int
           s = \"hi\" <> \"there\"
@@ -240,16 +224,22 @@ fn heap_capture_emits_move_out_local_into_env() {
         "g captures `s: String` into env_layout[0]",
     );
 
-    let moves = move_out_locals_in(main);
-    assert_eq!(
-        moves.len(),
-        1,
-        "outer `s` slot moves into the closure's env exactly once",
-    );
-    let IRInstruction::MoveOutLocal { ty, .. } = moves[0] else {
+    // The captured value forwarded to MakeClosure is read from the
+    // outer slot, not moved out of it.
+    let makes = make_closure_in(main);
+    let IRInstruction::MakeClosure { captures, .. } = makes[0] else {
         unreachable!()
     };
-    assert_eq!(*ty, IRType::String);
+    assert_eq!(captures.len(), 1, "g forwards one captured value");
+    let reads_string = main
+        .blocks
+        .iter()
+        .flat_map(|b| &b.instructions)
+        .any(|i| matches!(i, IRInstruction::LocalRead { ty, .. } if *ty == IRType::String));
+    assert!(
+        reads_string,
+        "the heap capture copies into the env via a String LocalRead",
+    );
 }
 
 #[test]

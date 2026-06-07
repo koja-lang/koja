@@ -28,8 +28,8 @@
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 //! [`Unresolved`]: koja_ast::identifier::ResolvedType::Unresolved
 
-use koja_ast::ast::{ClosureParam, Diagnostic, Expr, PassMode, Statement, TypeExpr};
-use koja_ast::identifier::{AnonymousKind, FnParam, ResolvedType};
+use koja_ast::ast::{ClosureParam, Diagnostic, Expr, Statement, TypeExpr};
+use koja_ast::identifier::{AnonymousKind, ResolvedType};
 use koja_ast::span::Span;
 
 use super::ctx::Resolver;
@@ -40,7 +40,7 @@ use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 /// Resolve a block closure (`fn (x: Int) -> Int ... end` or
 /// `fn x -> body end`). Stamps `local_id` on each named param,
 /// resolves the body under a snapshot, and returns the
-/// [`AnonymousKind::Function`] type with per-param mode preserved.
+/// [`AnonymousKind::Function`] type.
 pub(super) fn resolve_closure(
     params: &mut [ClosureParam],
     return_type: &Option<TypeExpr>,
@@ -118,16 +118,16 @@ pub(super) fn resolve_short_closure(
     })
 }
 
-/// Compute each closure param's declared [`FnParam`] (mode + type).
-/// Annotation wins over context; both missing diagnoses and
-/// substitutes [`ResolvedType::Unresolved`].
+/// Compute each closure param's declared type. Annotation wins over
+/// context; both missing diagnoses and substitutes
+/// [`ResolvedType::Unresolved`].
 fn bind_closure_params(
     params: &[ClosureParam],
-    expected_params: Option<&[FnParam]>,
+    expected_params: Option<&[ResolvedType]>,
     span: Span,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> Vec<FnParam> {
+) -> Vec<ResolvedType> {
     if let Some(expected) = expected_params
         && expected.len() != params.len()
     {
@@ -153,35 +153,27 @@ fn bind_closure_params(
 
 fn resolve_closure_param(
     param: &ClosureParam,
-    expected: Option<&FnParam>,
+    expected: Option<&ResolvedType>,
     resolver: &Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
-) -> FnParam {
+) -> ResolvedType {
     match param {
         ClosureParam::Name {
-            mode,
             type_expr: Some(type_expr),
             ..
-        } => FnParam {
-            mode: *mode,
-            ty: resolve_type_expr(
-                type_expr,
-                TypeParamScope::default(),
-                resolver.resolution_scope(),
-                diagnostics,
-            ),
-        },
+        } => resolve_type_expr(
+            type_expr,
+            TypeParamScope::default(),
+            resolver.resolution_scope(),
+            diagnostics,
+        ),
         ClosureParam::Name {
-            mode,
             name,
             span,
             type_expr: None,
             ..
         } => match expected {
-            Some(expected_param) => FnParam {
-                mode: *mode,
-                ty: expected_param.ty.clone(),
-            },
+            Some(expected_ty) => expected_ty.clone(),
             None => {
                 diagnostics.push(Diagnostic::error(
                     format!(
@@ -190,27 +182,16 @@ fn resolve_closure_param(
                     ),
                     *span,
                 ));
-                FnParam {
-                    mode: *mode,
-                    ty: ResolvedType::unresolved(),
-                }
+                ResolvedType::unresolved()
             }
         },
-        ClosureParam::Wildcard { .. } => FnParam {
-            mode: PassMode::Borrow,
-            ty: expected
-                .map(|p| p.ty.clone())
-                .unwrap_or_else(ResolvedType::unresolved),
-        },
+        ClosureParam::Wildcard { .. } => expected.cloned().unwrap_or_else(ResolvedType::unresolved),
         ClosureParam::Destructured { span, .. } => {
             diagnostics.push(Diagnostic::error(
                 "typecheck does not yet support destructured closure parameters".to_string(),
                 *span,
             ));
-            FnParam {
-                mode: PassMode::Borrow,
-                ty: ResolvedType::unresolved(),
-            }
+            ResolvedType::unresolved()
         }
     }
 }
@@ -220,17 +201,17 @@ fn resolve_closure_param(
 /// ids.
 fn declare_closure_params(
     params: &mut [ClosureParam],
-    resolved: &[FnParam],
+    resolved: &[ResolvedType],
     resolver: &mut Resolver<'_>,
 ) {
-    for (param, fn_param) in params.iter_mut().zip(resolved.iter()) {
+    for (param, param_ty) in params.iter_mut().zip(resolved.iter()) {
         match param {
             ClosureParam::Name { local_id, name, .. } => {
-                let id = resolver.scope.declare(name, fn_param.ty.clone());
+                let id = resolver.scope.declare(name, param_ty.clone());
                 *local_id = Some(id);
             }
             ClosureParam::Wildcard { local_id, .. } => {
-                let id = resolver.scope.declare_anonymous(fn_param.ty.clone());
+                let id = resolver.scope.declare_anonymous(param_ty.clone());
                 *local_id = Some(id);
             }
             ClosureParam::Destructured { .. } => {
@@ -284,7 +265,7 @@ fn trailing_expr_type(body: &[Statement]) -> Option<ResolvedType> {
     })
 }
 
-fn expected_function_params(expected: Option<&ResolvedType>) -> Option<&[FnParam]> {
+fn expected_function_params(expected: Option<&ResolvedType>) -> Option<&[ResolvedType]> {
     match expected {
         Some(ResolvedType::Anonymous(AnonymousKind::Function { params, .. })) => Some(params),
         _ => None,

@@ -92,10 +92,6 @@ fn main() {
     let autoimport_modules: &[&str] = &[
         // kernel first — defines Option/Result/Pair referenced downstream
         "Global.kernel",
-        // clone after kernel so Clone impls can reach for Result /
-        // Option in their bodies; ahead of every other file so a
-        // stdlib `.clone()` call always finds the protocol.
-        "Global.clone",
         "Global.cptr",
         "Global.cstring",
         "Global.bitwise",

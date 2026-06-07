@@ -13,7 +13,7 @@ struct FdTest
     end
   end
 
-  @test "close consumes the fd (move semantics)"
+  @test "close consumes the fd"
   fn test_close_via_file -> Result<Bool, String>
     match File.open("/dev/null", FileMode.Read)
       Result.Ok(file) ->

@@ -2,7 +2,7 @@ struct Packet
   data: String
 end
 
-fn consume(p: Packet, handler: fn (move Packet) -> String) -> String
+fn consume(p: Packet, handler: fn (Packet) -> String) -> String
   handler(p)
 end
 
@@ -10,6 +10,6 @@ fn main
   p = Packet{data: "hello"}
 
   result =
-    consume(p, fn (move pkt: Packet) -> String pkt.data end)
+    consume(p, fn (pkt: Packet) -> String pkt.data end)
   result.print()
 end

@@ -1,6 +1,6 @@
 # Koja Language Reference
 
-Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with Rust-grade ownership semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
+Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with value semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
 
 ---
 
@@ -8,12 +8,12 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 
 - [Lexical Structure](#lexical-structure) -- Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
 - [Variables and Constants](#variables-and-constants) -- Assignment, Type Annotations, Compound Assignment, Constants
-- [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters and Ownership
+- [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters
 - [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
 - [Types](#types) -- Primitives, Unit, Strings, Structs, Enums, Union Types, Generics
 - [Pattern Matching](#pattern-matching) -- `match`, OR Patterns, `cond`
 - [Closures and Function Types](#closures-and-function-types) -- Block Closures, Short Closures, Capture Semantics, Function Types
-- [Ownership and Borrowing](#ownership-and-borrowing) -- Rules, `clone()`, Drop Insertion, Copy Types
+- [Value Semantics](#value-semantics) -- Rules, Copy Cost, Field Access
 - [Protocols](#protocols) -- Behavioral Contracts, Static Dispatch
 - [Modules](#modules) -- Transparent Files, Visibility, Aliases
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
@@ -46,7 +46,7 @@ x = 42  # inline comment
 
 ```
 alias, break, cond, const, else, end, enum, false, fn, for,
-if, impl, in, loop, match, move, not, priv, protocol,
+if, impl, in, loop, match, not, priv, protocol,
 receive, return, self, spawn, struct, true, type, unless, when
 ```
 
@@ -120,21 +120,17 @@ x *= 3
 x /= 4
 ```
 
-### Ownership on Assignment
+### Assignment and Value Semantics
 
-Assignment moves ownership for non-copy types. The original variable is no longer usable:
+Every binding holds an independent value. Assignment copies; the original stays usable:
 
 ```koja
 p1 = Point{x: 1, y: 2}
 p2 = p1
-# p1 is moved -- using it here is a compile error
+p1.x    # still valid -- p2 is an independent copy
 ```
 
-Reassignment brings a variable back to live:
-
-```koja
-p1 = Point{x: 3, y: 4}  # p1 is live again
-```
+Copies are observably independent for every type: mutating one binding never affects another, and a value remains usable for as long as it is in scope.
 
 ### Constants
 
@@ -217,21 +213,17 @@ fn find(items: List<Int32>, target: Int32) -> Bool
 end
 ```
 
-### Parameters and Ownership
+### Parameters
 
-Parameters borrow by default (read-only). Use `move` to take ownership:
+Parameters are passed by value -- the callee receives its own independent copy and the caller's binding stays usable afterward:
 
 ```koja
-fn borrow(c: Config) -> String
-  c.name                 # read-only access
-end
-
-fn consume(move c: Config) -> String
-  c.name                 # owns c, caller loses access
+fn describe(c: Config) -> String
+  c.name                 # operates on a private copy
 end
 ```
 
-`move` only appears in the function signature, never at the call site. The compiler infers moves from the callee's signature.
+There is no parameter-passing modifier: every parameter is a value. (Earlier releases had a `move` keyword; it has been removed, since value semantics make it meaningless.)
 
 ---
 
@@ -322,7 +314,7 @@ Nested ternaries are disallowed.
 | `Bits`    | Arbitrary bit sequence                    |
 | `()`      | Unit type (empty value)                   |
 
-All numeric primitives and `Bool` are **copy types** -- assignment duplicates the value. `String`, `Binary`, `Bits`, structs, and enums are **move types** -- assignment transfers ownership.
+All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit; `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
 
 ### Unit Expression
 
@@ -421,16 +413,19 @@ p.distance_squared().print()
 Point.origin().x.print()
 ```
 
-`self` borrows by default (read-only). Use `move self` for mutating functions that return the modified value:
+Methods receive `self` by value. A "mutating" method does not change the receiver in place -- it computes a new value and returns it, and the caller rebinds:
 
 ```koja
 struct Counter
   value: Int
 
-  fn increment(move self) -> Self
+  fn increment(self) -> Self
     Counter{value: self.value + 1}
   end
 end
+
+c = Counter{value: 0}
+c = c.increment()   # rebind to the returned value
 ```
 
 `Self` is a shorthand for the enclosing type in return positions. Use it instead of repeating the type name.
@@ -441,7 +436,7 @@ end
 
 ```koja
 extend Point
-  fn translate(move self, dx: Int32, dy: Int32) -> Self
+  fn translate(self, dx: Int32, dy: Int32) -> Self
     self.x += dx
     self.y += dy
     self
@@ -719,7 +714,7 @@ Variable bindings inside OR patterns are disallowed.
 
 `match` is value-producing when all arms produce values.
 
-`match` borrows the matched value — it does not consume it. The original variable remains live inside all arms and after the `match` expression.
+`match` reads the matched value without consuming it. The original variable remains live inside all arms and after the `match` expression.
 
 ### `cond`
 
@@ -764,10 +759,10 @@ add = fn (a: Int32, b: Int32) -> Int32
 end
 ```
 
-Closure parameters support `move` to take ownership, matching the function parameter convention:
+Closure parameters are passed by value, like function parameters:
 
 ```koja
-consume = fn (move data: String) -> Int data.length() end
+measure = fn (data: String) -> Int data.length() end
 ```
 
 ### Short Closures
@@ -784,19 +779,17 @@ Works at inline call sites including generic methods. For multi-parameter or mul
 
 ### Capture Semantics
 
-Closures capture variables from their enclosing scope:
-
-- Copy types (primitives, `Bool`) are duplicated.
-- Move types (structs, enums, `String`) are moved -- the original variable is consumed.
+Closures capture variables from their enclosing scope by value -- each captured variable is copied into the closure's environment, and the original stays usable:
 
 ```koja
 multiplier = 3
 triple = fn (x: Int32) -> Int32
-  x * multiplier    # multiplier is copied (Int32 is a copy type)
+  x * multiplier    # multiplier is copied into the closure
 end
+multiplier.print()  # still live
 ```
 
-Captured closures use heap-allocated environment structs that are automatically freed when the closure goes out of scope.
+Captured closures use heap-allocated environment structs.
 
 ### Function Types
 
@@ -810,47 +803,24 @@ end
 apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 ```
 
-#### `move` in Function Types
-
-`fn (T) -> U` borrows `T`. `fn (move T) -> U` takes ownership of `T`:
-
-```koja
-fn map<U>(move self, f: fn (move T) -> U) -> Option<U>
-```
-
 ---
 
-## Ownership and Borrowing
+## Value Semantics
 
-Koja uses single-owner move semantics with borrow-by-default function parameters. There is no garbage collector, no `Box`, `Rc`, or `Arc` in user code, and no lifetime annotations.
+Koja uses value semantics: every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime.
 
 ### Rules
 
-1. Every heap-allocated value has exactly one owner.
-2. Assignment **moves** ownership for non-copy types. The source becomes unusable.
-3. Function parameters **borrow by default** (read-only). Use `move` to take ownership.
-4. Borrows are always read-only. There is no `&mut T`.
-5. `move` only appears in function/closure signatures, never at call sites.
-6. When the owner goes out of scope, the value is dropped (memory freed).
+1. Assignment copies. The source remains usable.
+2. Function and closure parameters are passed by value; the caller's binding survives the call.
+3. There is no aliasing: mutating one binding never affects another.
+4. A value is usable for as long as it is in scope.
 
-### `clone()`
+> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting — blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector: there are no pauses and no background collector. See the README for production-readiness status.
 
-`clone()` is available on all types. It produces a new owned copy without moving the original:
+### Copy Cost
 
-```koja
-p = Point{x: 10, y: 20}
-q = p.clone()
-consume(q)    # q is moved
-p.x.print()    # p is still live
-```
-
-### Drop Insertion
-
-The compiler inserts deterministic cleanup at scope boundaries. `List<T>` backing buffers and captured closure environments are freed automatically.
-
-### Copy Types
-
-All numeric primitives, `Bool`, `()`, and function pointers are copy types. Assignment duplicates the value:
+All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap: the block is reference-counted and shared, with a copy made lazily only if a shared value is mutated (copy-on-write). The result is always an independent value:
 
 ```koja
 a = 42
@@ -859,7 +829,7 @@ b = a     # a is still live
 
 ### Field Access
 
-Field access is always a borrow -- it never moves the struct or the field. You can read fields freely without consuming the owner:
+Field access reads a value out of the struct without disturbing the owner. You can read fields freely:
 
 ```koja
 struct Wrapper
@@ -868,18 +838,18 @@ struct Wrapper
 end
 
 w = Wrapper{name: "hello", count: 1}
-w.name.print()    # borrows name
-w.count.print()   # borrows count
-w.name.print()    # w is still live -- no move occurred
+w.name.print()    # w is still live
+w.count.print()
+w.name.print()
 ```
 
-This extends to chained access and method calls. Calling a borrow-`self` method through a field borrows the field through the struct:
+This extends to chained access and method calls:
 
 ```koja
-w.name.length()   # borrows name, calls length -- w is still live
+w.name.length()   # reads name, calls length -- w is still live
 ```
 
-To mutate a field, use reassignment. The right-hand side borrows the field, transforms it, and the result is written back:
+To mutate a field, use reassignment. The right-hand side transforms the current field value and the result is written back:
 
 ```koja
 w.name = w.name.upcase()
@@ -1002,7 +972,7 @@ Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
 ## Concurrency
 
-Koja uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are moved (ownership transfer, zero-copy) -- there is no shared mutable state.
+Koja uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are passed by value (each process receives its own copy) -- there is no shared mutable state.
 
 ### `Task<R>`
 
@@ -1022,9 +992,9 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 ```koja
 protocol Process<C, M, R>
   fn new(config: C) -> Self
-  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
-  fn handle_signal(move self, event: Lifecycle) -> Self | StopReason
-  fn run(move self) -> StopReason
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
+  fn handle_signal(self, event: Lifecycle) -> Self | StopReason
+  fn run(self) -> StopReason
 end
 ```
 
@@ -1035,7 +1005,7 @@ end
 `run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when a `StopReason` is returned:
 
 ```koja
-fn run(move self) -> StopReason
+fn run(self) -> StopReason
   receive
     pair: Pair<M, Option<ReplyTo<R>>> ->
       match self.handle(pair.first, pair.second)
@@ -1063,7 +1033,7 @@ impl Process<Counter, CounterMsg, Int> for Counter
     config
   end
 
-  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
+  fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
     match msg
       CounterMsg.Increment -> self.count += 1
       CounterMsg.Decrement -> self.count -= 1
@@ -1188,13 +1158,11 @@ The following types and functions are available in every module.
 
 ### Built-in Functions
 
-#### `clone()`
-
-Available on all types. Produces a new owned value:
-
-```koja
-copy = original.clone()
-```
+> **Note:** Koja uses value semantics — every binding, parameter,
+> return, and field is an independent value. Assigning or passing a
+> value already yields an independent copy (cheaply, via reference-
+> counted copy-on-write under the hood), so there is no `clone()`:
+> just assign or pass the value.
 
 ### `Kernel`
 
@@ -1311,12 +1279,12 @@ list.get(0).unwrap().print()  # 10
 list.empty?().print()   # false
 ```
 
-`append` uses `move self` semantics -- it returns the updated list. `get` returns `Option<T>` (`None` for out-of-bounds).
+`append` returns a new list with the element added (rebind with `list = list.append(x)`); the original is unchanged. `get` returns `Option<T>` (`None` for out-of-bounds).
 
 Functions:
 
 - `new() -> List<T>` -- creates an empty list.
-- `append(move self, item: T) -> List<T>` -- appends an element.
+- `append(self, item: T) -> List<T>` -- appends an element.
 - `last(self) -> Option<T>` -- returns the last element, or `None` if empty.
 - `length(self) -> Int` -- returns the number of elements.
 - `get(self, index: Int) -> Option<T>` -- returns the element at `index`, or `None` if out of bounds.
@@ -1353,10 +1321,10 @@ m.length().print()           # 2
 Functions:
 
 - `new() -> Map<K, V>` -- creates an empty map.
-- `put(move self, key: K, value: V) -> Map<K, V>` -- inserts or updates a key-value pair.
+- `put(self, key: K, value: V) -> Map<K, V>` -- inserts or updates a key-value pair.
 - `get(self, key: K) -> Option<V>` -- returns `Option.Some(value)` if the key exists, `Option.None` otherwise.
 - `has?(self, key: K) -> Bool` -- returns `true` if the key exists.
-- `remove(move self, key: K) -> Map<K, V>` -- removes the entry for the key. Returns the map unchanged if the key is absent.
+- `remove(self, key: K) -> Map<K, V>` -- removes the entry for the key. Returns the map unchanged if the key is absent.
 - `length(self) -> Int` -- returns the number of entries.
 - `empty?(self) -> Bool` -- returns `true` if the map has no entries.
 
@@ -1381,9 +1349,9 @@ s.has?(1).print()     # true
 Functions:
 
 - `new() -> Set<T>` -- creates an empty set.
-- `insert(move self, item: T) -> Set<T>` -- adds an element. Returns unchanged if already present.
+- `insert(self, item: T) -> Set<T>` -- adds an element. Returns unchanged if already present.
 - `has?(self, item: T) -> Bool` -- returns `true` if the element exists.
-- `remove(move self, item: T) -> Set<T>` -- removes the element. Returns unchanged if absent.
+- `remove(self, item: T) -> Set<T>` -- removes the element. Returns unchanged if absent.
 - `length(self) -> Int` -- returns the number of elements.
 - `empty?(self) -> Bool` -- returns `true` if the set has no elements.
 
@@ -1448,7 +1416,7 @@ s.slice(Range{start: 0, stop: 4}).print()     # "hello"
 
 ### Binary and Bits
 
-`Binary` represents an arbitrary byte sequence. `Bits` represents an arbitrary bit sequence. Both are move types.
+`Binary` represents an arbitrary byte sequence. `Bits` represents an arbitrary bit sequence. Both are heap-backed value types (copied by reference-counted share like `String`).
 
 #### Literals
 
@@ -1513,7 +1481,7 @@ Functions:
 
 - `read(self, count: Int) -> Result<String, String>` -- reads up to `count` bytes.
 - `write(self, data: String) -> Result<Int, String>` -- writes data, returns bytes written.
-- `close(move self) -> Result<String, String>` -- closes the descriptor.
+- `close(self) -> Result<String, String>` -- closes the descriptor.
 
 #### `File`
 
@@ -1533,7 +1501,7 @@ Functions:
 - `File.exists?(path: String) -> Bool` -- returns true if the file exists.
 - `File.delete(path: String) -> Result<String, String>` -- deletes a file.
 - `File.rename(source: String, destination: String) -> Result<String, String>` -- renames (moves) a file.
-- `close(move self) -> Result<String, String>` -- closes the file handle.
+- `close(self) -> Result<String, String>` -- closes the file handle.
 
 ```koja
 content = File.read("config.txt").unwrap()
@@ -1635,11 +1603,11 @@ flags.bor(0b0001).print()   # 11 (0b1011)
 protocol Debug
   fn format(self) -> String
   fn print(self)                # default: IO.puts(self.format())
-  fn inspect(move self) -> Self # default: self.print(); self
+  fn inspect(self) -> Self # default: self.print(); self
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver is borrowed and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver stays live and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
 
 `Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
@@ -1667,7 +1635,7 @@ List and map literals are backed by protocols, allowing custom types to opt into
 
 ```koja
 protocol ListLiteral<T>
-  fn from_list(move list: List<T>) -> Self
+  fn from_list(list: List<T>) -> Self
 end
 ```
 
@@ -1677,7 +1645,7 @@ end
 
 ```koja
 protocol MapLiteral<K, V>
-  fn from_map(move map: Map<K, V>) -> Self
+  fn from_map(map: Map<K, V>) -> Self
 end
 ```
 
@@ -1732,7 +1700,7 @@ A raw C pointer type. `Copy` semantics (just a machine word). No ownership track
 struct CPtr<T>
   fn null() -> CPtr<T>
   fn alloc(count: Int) -> CPtr<T>
-  fn free(move self)
+  fn free(self)
   fn offset(self, n: Int) -> CPtr<T>
   fn read(self) -> T
   fn write(self, value: T)
@@ -1860,7 +1828,7 @@ Bump-allocated regions with bulk-free semantics. Designed but not implemented --
 ```koja
 result = arena
   # all allocations in here are bulk-freed at block exit
-  # only explicitly cloned values escape
+  # only values explicitly copied out of the block escape
 end
 ```
 

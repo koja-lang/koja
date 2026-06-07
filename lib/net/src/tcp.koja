@@ -64,17 +64,27 @@ struct TCPSocket
   end
 
   @doc """
-  Writes data to the connection. Returns the number of bytes
-  written or an error if the write fails.
+  Reads up to `count` raw bytes from the connection. Suitable for
+  binary protocols where the data is not UTF-8 text. Returns the bytes
+  or an error if the read fails.
   """
-  fn write(self, data: String) -> Result<Int, String>
+  fn read_binary(self, count: Int) -> Result<Binary, String>
+    self.socket.fd.read_binary(count)
+  end
+
+  @doc """
+  Writes data to the connection. Accepts either a `String` (encoded as
+  UTF-8) or a `Binary` for raw wire protocols. Returns the number of
+  bytes written or an error if the write fails.
+  """
+  fn write(self, data: Binary | String) -> Result<Int, String>
     self.socket.fd.write(data)
   end
 
   @doc """
   Closes the TCP connection.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     self.socket.close()
   end
 end
@@ -163,7 +173,7 @@ struct TCPListener
   @doc """
   Closes the listener and stops accepting new connections.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     self.socket.close()
   end
 end
@@ -207,7 +217,7 @@ enum TCPServerMsg
 end
 
 impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
-  fn start(move config: TCPServerConfig) -> Result<Self, StopReason>
+  fn start(config: TCPServerConfig) -> Result<Self, StopReason>
     match TCPListener.bind(config.port)
       Result.Ok(listener) ->
         listener.fd().watch(0)
@@ -219,11 +229,8 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
     end
   end
 
-  fn handle(
-    move self,
-    msg: TCPServerMsg | IOReady,
-    from: Option<ReplyTo<String>>,
-  ) -> Step<Self>
+  fn handle(self, msg: TCPServerMsg | IOReady, from: Option<ReplyTo<String>>)
+    -> Step<Self>
 
     match msg
       io: IOReady ->
@@ -236,7 +243,7 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
     end
   end
 
-  fn handle_signal(move self, signal: Lifecycle) -> Step<Self>
+  fn handle_signal(self, signal: Lifecycle) -> Step<Self>
     match signal
       Lifecycle.Shutdown ->
         match self.listener.close()
@@ -259,7 +266,7 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
 end
 
 extend TCPServer
-  priv fn on_io_ready(move self, io: IOReady) -> Step<Self>
+  priv fn on_io_ready(self, io: IOReady) -> Step<Self>
     match io
       IOReady.Read(_) ->
         self.drain_accepts()
@@ -274,7 +281,7 @@ extend TCPServer
     end
   end
 
-  priv fn drain_accepts(move self) -> Step<Self>
+  priv fn drain_accepts(self) -> Step<Self>
     match self.listener.try_accept()
       Option.Some(client) ->
         self.owner.cast(TCPEvent.Connected(client))

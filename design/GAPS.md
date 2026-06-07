@@ -37,7 +37,7 @@ index-based while loops. This precludes lazy iteration, streaming, and any
 non-random-access collection (maps, linked lists, generators).
 
 Pre-v1.0, replace with an `Iterator<T>` protocol using
-`next(move self) -> Option<Pair<T, Self>>`. `get` now returns `Option<T>`.
+`next(self) -> Option<Pair<T, Self>>`. `get` now returns `Option<T>`.
 Codegen change is contained to `compile_for` in `loops.rs`; List/String
 impls wrap existing index-based access in iterator state.
 
@@ -97,53 +97,19 @@ analysis isn't lost.
 
 ---
 
-## Stdlib signatures lie about ownership for `List.append` / `Map.put`
+## Bug triage log
 
-`List.append(move self, item: T)` and `Map.put(move self, key: K, value: V)`
-declare their elements as `borrow`, but the intrinsic implementations take
-ownership of the stored value (the list/map's internal storage just records
-the heap pointer). The caller's slot stays Live & Owned past the call, so
-the fn-exit `DropLocal` frees a payload the container still references —
-surfaces as `Utf8Error` panics or silent garbage reads under the LLVM
-backend when a `<>`-built local is appended/put inside a helper and the
-helper returns the container. The `koja-ir-eval` backend masks the bug
-because frame teardown doesn't actually free heap payloads.
-
-Minimal repro (`/tmp/koja-gaps-triage/followup_b_list_literal.kojs`):
-
-```koja
-fn build -> List<String>
-  text = "hello" <> " world"
-  [text]
-end
-build().get(0).print()  # LLVM: Utf8Error panic; eval: Some("hello world")
-```
-
-Two valid fixes:
-
-1. **Mark the params `move`** (`fn append(move self, move item: T)`). Honest
-   semantically, but breaks stdlib callers like `List.filter` /
-   `List.map` that today do `result.append(item)` against a borrowed
-   loop binding — those would need to clone explicitly. Best long-term
-   answer.
-
-2. **Have the intrinsic copy heap payloads on insert.** Keeps the
-   borrow signature honest at runtime cost. Probably wrong for a
-   "moves by default" language.
-
-The IR-side machinery to support option 1 is already in place
-([`koja-ir/src/lower/calls.rs::consume_at_mode`](../crates/koja-ir/src/lower/calls.rs))
-— flipping the stdlib signatures will route the move through the same
-`MoveOutLocal` path that the struct-field-init and call-arg fixes
-already use. Not done here because it's a non-trivial stdlib refactor.
-
-Audited 2026-05-03 · Bug section re-triaged 2026-05-27 (seven fixed
-entries removed: `Debug.format` tuple payloads, nested type-aliased
-unions, bare closure expression statements, closures capturing `self`,
+Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries
+removed: `Debug.format` tuple payloads, nested type-aliased unions,
+bare closure expression statements, closures capturing `self`,
 specialized self-nested impls, keyword-as-identifier silent drop, and
-`<>` concat into a returned struct field corrupting under LLVM; one
-new entry added: dishonest borrow signatures on `List.append` /
-`Map.put`).
+`<>` concat into a returned struct field corrupting under LLVM) ·
+re-triaged 2026-06-07: the `List.append` / `Map.put` "borrow signature
+but takes ownership" double-free was removed — the value-semantics + RC
+migration dissolved it. `move` is gone, and a container now shares the
+caller's reference-counted payload rather than aliasing a slot the
+fn-exit drop frees, so there is no second free (the `text = "hello" <>
+" world"; [text]` repro runs correctly on both backends).
 
 # Audit: AST / grammar / LANGUAGE.md / ROADMAP.md / IR / codegen drift
 
@@ -191,13 +157,6 @@ in grammar, or implement it. Grammar line 246-247 is the liar today.
 **Action:** update grammar.ebnf to reflect parser truth
 (`cond_expr = "cond" , { cond_arm } , "else" , "->" , match_body , "end"`).
 
-### C2. Missing `move` modifier on `closure_param`
-
-- **Grammar:** lines 238-241 — no `move`.
-- **Parser:** accepts `move` for block closure params ([construct.rs:418-422](../crates/koja-parser/src/construct.rs)).
-
-**Action:** add `[ "move" ]` to `closure_param` in grammar.ebnf.
-
 ### C3. `constant_decl` accepts TypeIdent as name
 
 - **Grammar:** line 472 — `IDENT` only.
@@ -220,7 +179,7 @@ Probably fix the parser since the feature is cheap.
 ### D1. `Process` protocol surface (biggest documented lie)
 
 - **LANGUAGE.md:** shows `fn new(config: C) -> Self`, `handle -> Self | StopReason`, default `run` dispatching `Pair<M, Option<ReplyTo<R>>>` (lines ~991-1042).
-- **Reality:** stdlib has `fn start(move config: C) -> Result<Self, StopReason>`, `handle -> Step<Self>`, and `run` also dispatches `Lifecycle` ([process.koja:162-206](../lib/global/src/process.koja)). Typecheck requires `spawn Type.start(config)` form ([expr.rs:312-318](../crates/koja-typecheck/src/expr.rs)).
+- **Reality:** stdlib has `fn start(config: C) -> Result<Self, StopReason>`, `handle -> Step<Self>`, and `run` also dispatches `Lifecycle` ([process.koja:162-206](../lib/global/src/process.koja)). Typecheck requires `spawn Type.start(config)` form ([expr.rs:312-318](../crates/koja-typecheck/src/expr.rs)).
 
 **Action:** rewrite the Concurrency section to match reality — `start`
 not `new`, `Step<Self>` not union, mention `Lifecycle` and

@@ -1,4 +1,4 @@
-fn fib(n: Int32) -> Int32
+fn fib(n: Int) -> Int
   if n <= 1
     n
   else

@@ -14,33 +14,6 @@ use crate::span::Span;
 
 // Semantic enums
 
-/// How a value crosses a scope boundary: parameter passing, closure capture,
-/// or message send.
-///
-/// In the parser, `Move` is produced when the `move` keyword is present;
-/// `Borrow` is the default for all other parameters and receivers.
-/// `Copy` is resolved during type checking for closure captures of copy types.
-///
-/// ```koja
-/// fn update(move self, name: String) -> User  # self is Move, name is Borrow
-///   ...
-/// end
-///
-/// multiplier = 3
-/// triple = fn (x: Int32) -> Int32
-///   x * multiplier                             # multiplier captured as Copy
-/// end
-/// ```
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
-pub enum PassMode {
-    /// Value is duplicated; the original stays live.
-    Copy,
-    /// Ownership transfers; the original is consumed.
-    Move,
-    /// Read-only reference; the original stays live and accessible.
-    Borrow,
-}
-
 /// Visibility marker on functions: `Public` (default) or `Private` (from the
 /// `priv` keyword). The enforcement scope of `Private` depends on where the
 /// function is declared:
@@ -474,20 +447,15 @@ pub struct ProtocolMethod {
 #[allow(clippy::large_enum_variant)]
 pub enum Param {
     /// A regular named parameter with an optional default value.
-    /// `move name: Type` uses [`PassMode::Move`]; plain `name: Type` uses
-    /// [`PassMode::Borrow`].
     Regular {
-        mode: PassMode,
         name: String,
         type_expr: TypeExpr,
         default: Option<Expr>,
         local_id: Option<LocalId>,
         span: Span,
     },
-    /// The `self` receiver: `self` ([`PassMode::Borrow`]) or `move self`
-    /// ([`PassMode::Move`]).
+    /// The `self` receiver.
     Self_ {
-        mode: PassMode,
         local_id: Option<LocalId>,
         span: Span,
     },
@@ -547,11 +515,8 @@ pub enum TypeExpr {
     /// The unit type: `()`.
     Unit { span: Span },
     /// A function type: `fn (Int32, String) -> Bool`.
-    /// `param_modes` tracks the [`PassMode`] per parameter position
-    /// (e.g. `fn (move T) -> U` produces `[PassMode::Move]`).
     Function {
         params: Vec<TypeExpr>,
-        param_modes: Vec<PassMode>,
         return_type: Box<TypeExpr>,
         span: Span,
     },
@@ -664,12 +629,11 @@ pub enum BinOp {
 pub enum ClosureParam {
     /// A destructuring parameter: `(a, b)`.
     Destructured { names: Vec<String>, span: Span },
-    /// A named parameter with optional type: `x`, `x: Int`, `move x: Int`.
+    /// A named parameter with optional type: `x`, `x: Int`.
     /// `local_id` is `None` after parse; resolve stamps it so IR lower
     /// can reach the same id without re-walking.
     Name {
         local_id: Option<LocalId>,
-        mode: PassMode,
         name: String,
         span: Span,
         type_expr: Option<TypeExpr>,

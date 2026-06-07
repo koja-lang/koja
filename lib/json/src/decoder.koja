@@ -27,7 +27,7 @@ struct Decoder
     end
   end
 
-  fn skip_ws(move self) -> Decoder
+  fn skip_ws(self) -> Decoder
     if self.pos >= self.input.length()
       return self
     end
@@ -235,7 +235,7 @@ struct Decoder
     self.scan_string(pos + 1, pos, StringBuilder.new())
   end
 
-  fn scan_string(self, i: Int, start: Int, move sb: StringBuilder)
+  fn scan_string(self, i: Int, start: Int, sb: StringBuilder)
     -> Result<Pair<String, Int>, String>
 
     if i >= self.input.length()
@@ -278,12 +278,8 @@ struct Decoder
     self.parse_array_elements(items, i, pos)
   end
 
-  fn parse_array_elements(
-    self,
-    move items: List<Value>,
-    pos: Int,
-    arr_start: Int,
-  ) -> Result<Pair<Value, Int>, String>
+  fn parse_array_elements(self, items: List<Value>, pos: Int, arr_start: Int)
+    -> Result<Pair<Value, Int>, String>
 
     i = Decoder.skip_ws_at(self.input, pos)
 
@@ -336,7 +332,7 @@ struct Decoder
 
   fn parse_object_entries(
     self,
-    move entries: List<Pair<String, Value>>,
+    entries: List<Pair<String, Value>>,
     pos: Int,
     obj_start: Int,
   ) -> Result<Pair<Value, Int>, String>

@@ -32,6 +32,7 @@ mod cfg;
 mod constant;
 mod cycle;
 mod dominators;
+mod elaborate;
 mod enum_decl;
 mod error;
 mod extern_attrs;
@@ -42,7 +43,6 @@ mod local;
 mod lower;
 pub mod mangling;
 mod merge;
-mod ownership;
 mod package;
 mod program;
 mod script;
@@ -53,6 +53,7 @@ mod types;
 mod union_decl;
 
 pub use constant::IRConstantValue;
+pub use elaborate::needs_drop;
 pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};
 pub use error::LowerError;
 pub use extern_attrs::IRExternAttrs;
@@ -66,7 +67,6 @@ pub use intrinsic_id::{
     ReplyToMethod, SetMethod, SocketMethod, StringMethod,
 };
 pub use local::IRLocalId;
-pub use ownership::Ownership;
 pub use package::IRPackage;
 pub use program::{IRProgram, ProjectEntry, lower_program};
 pub use script::{IRScript, lower_script};

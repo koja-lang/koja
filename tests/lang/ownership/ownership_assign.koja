@@ -1,0 +1,22 @@
+# Value semantics: plain assignment yields an independent value, so
+# consuming the copy leaves the original readable (no explicit clone).
+struct Point
+  x: Int
+  y: Int
+end
+
+fn consume(p: Point) -> Int
+  p.x
+end
+
+fn main
+  p = Point{x: 10, y: 20}
+  q = p
+  consume(q).print()
+  p.x.print()
+
+  n = 42
+  m = n
+  m.print()
+  n.print()
+end

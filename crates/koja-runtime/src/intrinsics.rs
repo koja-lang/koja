@@ -17,21 +17,7 @@
 use std::io::{self, Write};
 
 use crate::memory;
-
-/// Borrows the bytes of a heap-emitted Koja string/`Binary` body.
-/// Reads the `i64` bit-length from the 8-byte header at `payload - 8`
-/// and returns a slice over the corresponding byte count.
-///
-/// # Safety
-///
-/// `payload` must point at the body of a heap-emitted string (the byte
-/// right after the `i64 bit_length` header). Calling with any other
-/// pointer is undefined behavior.
-unsafe fn string_payload_bytes<'a>(payload: *const u8) -> &'a [u8] {
-    let bit_length = unsafe { *payload.offset(-8).cast::<i64>() };
-    let byte_length = (bit_length / 8) as usize;
-    unsafe { std::slice::from_raw_parts(payload, byte_length) }
-}
+use crate::util::{BLOCK_HEADER_SIZE, read_bit_length, string_payload_bytes, write_block_header};
 
 /// Concatenate two `Bits` values produced by the LLVM backend.
 /// Reads `bit_length` from each operand's `payload - 8` header,
@@ -52,17 +38,14 @@ unsafe fn string_payload_bytes<'a>(payload: *const u8) -> &'a [u8] {
 /// with any other pointer is undefined behavior.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __koja_concat_bits(lhs: *const u8, rhs: *const u8) -> *const u8 {
-    let l_bits = unsafe { *(lhs.offset(-8).cast::<i64>()) } as u64;
-    let r_bits = unsafe { *(rhs.offset(-8).cast::<i64>()) } as u64;
+    let l_bits = unsafe { read_bit_length(lhs) } as u64;
+    let r_bits = unsafe { read_bit_length(rhs) } as u64;
     let total_bits = l_bits + r_bits;
     let total_bytes = total_bits.div_ceil(8) as usize;
-    let block_size = 8 + total_bytes;
+    let block_size = BLOCK_HEADER_SIZE + total_bytes;
 
     let block = memory::alloc(block_size);
-    unsafe {
-        *(block.cast::<i64>()) = total_bits as i64;
-    }
-    let payload = unsafe { block.add(8) };
+    let payload = unsafe { write_block_header(block, total_bits as i64) };
     if total_bytes > 0 {
         unsafe { std::ptr::write_bytes(payload, 0, total_bytes) };
     }

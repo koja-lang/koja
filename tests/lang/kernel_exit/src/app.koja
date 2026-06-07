@@ -6,18 +6,18 @@ enum AppMsg
 end
 
 impl Process<App, AppMsg, String> for App
-  fn start(move config: App) -> Result<Self, StopReason>
+  fn start(config: App) -> Result<Self, StopReason>
     IO.puts("before exit")
     Kernel.exit(42)
     IO.puts("after exit")
     Result.Ok(config)
   end
 
-  fn handle(move self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+  fn handle(self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
     Step.Continue(self)
   end
 
-  fn run(move self) -> StopReason
+  fn run(self) -> StopReason
     StopReason.Normal
   end
 end

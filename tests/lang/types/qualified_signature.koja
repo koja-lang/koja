@@ -6,9 +6,7 @@ fn header_value(headers: HTTP.Headers, name: String) -> String
 end
 
 fn build -> HTTP.Headers
-  HTTP.Headers.new()
-    .set("X-One", "1")
-    .set("X-Two", "2")
+  HTTP.Headers.new().set("X-One", "1").set("X-Two", "2")
 end
 
 fn main

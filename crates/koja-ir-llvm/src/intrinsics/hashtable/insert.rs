@@ -11,11 +11,13 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
+use crate::intrinsics::element::{acquire_value, release_in_slot};
 
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash, codegen_err,
-    entry_pointer, extract_table_fields, nth_param, resolve_key_hash_ops, ret_struct,
+    KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
+    clone_table_buffers, codegen_err, entry_pointer, extract_table_fields, nth_param,
+    resolve_key_hash_ops, ret_struct, value_slot,
 };
 use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
@@ -27,9 +29,16 @@ pub(crate) fn emit_map_put<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let table = extract_table_fields(ctx, function, llvm_function)?;
+    let original = extract_table_fields(ctx, function, llvm_function)?;
+    let table = clone_table_buffers(ctx, function, llvm_function, layout, &original)?;
     let key_val = nth_param(function, llvm_function, 1, "key")?;
     let value_val = nth_param(function, llvm_function, 2, "value")?;
+    let value_ty = layout.value_ty.ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "Map.put missing value type for `{}`",
+            function.symbol
+        ))
+    })?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
     let post = emit_resize_if_needed(ctx, function, llvm_function, layout, &table, &key_ops)?;
@@ -43,20 +52,15 @@ pub(crate) fn emit_map_put<'ctx>(
         &key_ops,
     )?;
 
-    // Update path: dup key found, overwrite value slot.
+    // Update path: dup key found, overwrite the value slot — release
+    // the old value the clone acquired, store the acquired incoming
+    // value. The matched key stays put (no key acquire / release).
     ctx.builder.position_at_end(probe.update_bb);
-    let val_ptr = unsafe {
-        ctx.builder
-            .build_gep(
-                i8_ty,
-                probe.e_ptr,
-                &[i64_ty.const_int(layout.key_size, false)],
-                "val_ptr",
-            )
-            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
+    let val_ptr = value_slot(ctx, function, probe.e_ptr, layout.key_size)?;
+    release_in_slot(ctx, function, value_ty, val_ptr)?;
+    let update_value = acquire_value(ctx, function, value_ty, value_val)?;
     ctx.builder
-        .build_store(val_ptr, value_val)
+        .build_store(val_ptr, update_value)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
     let updated = build_table_struct(
         ctx,
@@ -69,6 +73,9 @@ pub(crate) fn emit_map_put<'ctx>(
     ret_struct(ctx, function, updated)?;
 
     // Insert path: empty (or tombstone) slot, write key+value + state.
+    // Both payloads are acquired so the table owns independent
+    // references (the stale bytes a tombstone carries were never
+    // acquired, so the overwrite needs no release).
     ctx.builder.position_at_end(probe.insert_bb);
     let ins_ptr = entry_pointer(
         ctx,
@@ -77,21 +84,14 @@ pub(crate) fn emit_map_put<'ctx>(
         probe.pidx,
         layout.entry_size,
     )?;
+    let insert_key = acquire_value(ctx, function, layout.key_ty, key_val)?;
     ctx.builder
-        .build_store(ins_ptr, key_val)
+        .build_store(ins_ptr, insert_key)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
-    let ins_val_ptr = unsafe {
-        ctx.builder
-            .build_gep(
-                i8_ty,
-                ins_ptr,
-                &[i64_ty.const_int(layout.key_size, false)],
-                "ins_val_ptr",
-            )
-            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
+    let ins_val_ptr = value_slot(ctx, function, ins_ptr, layout.key_size)?;
+    let insert_value = acquire_value(ctx, function, value_ty, value_val)?;
     ctx.builder
-        .build_store(ins_val_ptr, value_val)
+        .build_store(ins_val_ptr, insert_value)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_OCCUPIED, false))
@@ -119,7 +119,8 @@ pub(crate) fn emit_set_insert<'ctx>(
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let table = extract_table_fields(ctx, function, llvm_function)?;
+    let original = extract_table_fields(ctx, function, llvm_function)?;
+    let table = clone_table_buffers(ctx, function, llvm_function, layout, &original)?;
     let item_val = nth_param(function, llvm_function, 1, "item")?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
@@ -146,7 +147,9 @@ pub(crate) fn emit_set_insert<'ctx>(
     )?;
     ret_struct(ctx, function, already)?;
 
-    // Insert path: empty (or tombstone) slot, write entry + state.
+    // Insert path: empty (or tombstone) slot, write entry + state. The
+    // item is acquired so the set owns an independent reference (a
+    // tombstone's stale bytes were never acquired, so no release).
     ctx.builder.position_at_end(probe.insert_bb);
     let ins_ptr = entry_pointer(
         ctx,
@@ -155,8 +158,9 @@ pub(crate) fn emit_set_insert<'ctx>(
         probe.pidx,
         layout.entry_size,
     )?;
+    let insert_item = acquire_value(ctx, function, layout.key_ty, item_val)?;
     ctx.builder
-        .build_store(ins_ptr, item_val)
+        .build_store(ins_ptr, insert_item)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_OCCUPIED, false))

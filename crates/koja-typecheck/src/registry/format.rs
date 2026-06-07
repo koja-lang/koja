@@ -196,7 +196,7 @@ fn format_resolved(ty: &ResolvedType, registry: &GlobalRegistry) -> String {
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             let rendered_params = params
                 .iter()
-                .map(|p| format_resolved(&p.ty, registry))
+                .map(|p| format_resolved(p, registry))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(

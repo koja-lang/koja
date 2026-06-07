@@ -21,7 +21,7 @@ struct Set<T>
   If the item is already present, the set is returned unchanged.
   """
   @intrinsic
-  fn insert(move self, item: T) -> Set<T>
+  fn insert(self, item: T) -> Set<T>
 
   @doc """
   Returns the number of elements in the set.
@@ -40,7 +40,7 @@ struct Set<T>
   If the item is not present, the set is returned unchanged.
   """
   @intrinsic
-  fn remove(move self, item: T) -> Set<T>
+  fn remove(self, item: T) -> Set<T>
 end
 
 impl ListLiteral<T> for Set<T>
@@ -49,18 +49,5 @@ impl ListLiteral<T> for Set<T>
   naturally deduplicating.
   """
   @intrinsic
-  fn from_list(move list: List<T>) -> Self
-end
-
-impl Clone for Set<T>
-  @doc """
-  Returns a fresh, independently-owned `Set<T>` whose elements are
-  each cloned (`T.clone()`). Mutating the clone (or the original)
-  after the call leaves the other side untouched. Implemented as
-  `@intrinsic` because the hash-table walk needs the monomorphized
-  `T` clone fn at codegen time — no surface iteration primitive
-  exists for `Set<T>` yet.
-  """
-  @intrinsic
-  fn clone(self) -> Self
+  fn from_list(list: List<T>) -> Self
 end

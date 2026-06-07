@@ -1,18 +1,16 @@
 //! Surface-shape AST rewrites that ride alongside the typecheck
 //! pipeline. Two phases:
 //!
-//! - [`derive_clone::derive_clone_package`] +
-//!   [`derive_debug::derive_debug_package`] +
+//! - [`derive_debug::derive_debug_package`] +
 //!   [`derive_equality::derive_equality_package`] run
 //!   **pre-collect** (called from [`crate::check_program`]) so the
-//!   new `impl Clone for T` / `impl Debug for T` / `impl Equality
-//!   for T` blocks land before name binding sees them.
+//!   new `impl Debug for T` / `impl Equality for T` blocks land
+//!   before name binding sees them.
 //! - [`synthesize_program`] runs **post-lift** and only mutates
 //!   function bodies — today: the `for` loop desugar in
 //!   [`for_desugar`]. Item-introducing rewrites can't live here
 //!   without re-running collect / lift on the new items.
 
-pub(crate) mod derive_clone;
 pub(crate) mod derive_debug;
 pub(crate) mod derive_equality;
 mod for_desugar;

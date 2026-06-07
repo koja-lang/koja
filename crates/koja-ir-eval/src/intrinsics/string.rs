@@ -24,18 +24,12 @@ pub(super) fn dispatch(
 ) -> Result<Value, RuntimeError> {
     match method {
         StringMethod::ByteLength => byte_length(args),
-        StringMethod::Clone => clone(args),
         StringMethod::Get => get(function, args),
         StringMethod::Length => length(args),
         StringMethod::Slice => slice(args),
         StringMethod::ToBinary => to_binary(args),
         StringMethod::ToCstring => to_cstring(function, args),
     }
-}
-
-fn clone(args: &[Value]) -> Result<Value, RuntimeError> {
-    let bytes = expect_string_bytes(args, 0, "String.clone")?;
-    Ok(Value::String(bytes.to_vec()))
 }
 
 fn byte_length(args: &[Value]) -> Result<Value, RuntimeError> {

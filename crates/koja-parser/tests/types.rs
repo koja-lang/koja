@@ -5,7 +5,7 @@
 //! when nested generics close two levels at once
 //! (`Map<String, List<Int>>`).
 
-use koja_ast::ast::{Item, PassMode, TypeExpr};
+use koja_ast::ast::{Item, TypeExpr};
 use koja_ast::util::dedent;
 
 mod common;
@@ -117,13 +117,8 @@ fn function_type_no_params() {
     );
     let ty = first_field_type(&src);
     match ty {
-        TypeExpr::Function {
-            params,
-            param_modes,
-            ..
-        } => {
+        TypeExpr::Function { params, .. } => {
             assert!(params.is_empty());
-            assert!(param_modes.is_empty());
         }
         other => panic!("expected Function, got {other:?}"),
     }
@@ -140,31 +135,8 @@ fn function_type_with_params() {
     );
     let ty = first_field_type(&src);
     match ty {
-        TypeExpr::Function {
-            params,
-            param_modes,
-            ..
-        } => {
+        TypeExpr::Function { params, .. } => {
             assert_eq!(params.len(), 2);
-            assert_eq!(param_modes.len(), 2);
-        }
-        other => panic!("expected Function, got {other:?}"),
-    }
-}
-
-#[test]
-fn function_type_with_move_param() {
-    let src = dedent(
-        "
-        struct S
-          callback: fn(move String) -> Int
-        end
-        ",
-    );
-    let ty = first_field_type(&src);
-    match ty {
-        TypeExpr::Function { param_modes, .. } => {
-            assert_eq!(param_modes, vec![PassMode::Move]);
         }
         other => panic!("expected Function, got {other:?}"),
     }

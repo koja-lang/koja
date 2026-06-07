@@ -23,6 +23,7 @@ use koja_typecheck::{CheckedProgram, GlobalRegistry};
 
 use crate::constant::IRConstantValue;
 use crate::cycle::break_type_cycles;
+use crate::elaborate;
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{FunctionKind, IRFunction, IRSymbol};
@@ -226,6 +227,7 @@ pub fn lower_program(
     discover_unions(&mut program.packages);
     break_type_cycles(&mut program.packages);
     rewrite_tail_calls(&mut program.packages);
+    elaborate::elaborate(&mut program.packages);
 
     if program.function(program.entry_point.mangled()).is_none() {
         return Err(LowerError::EntryPointNotFound {

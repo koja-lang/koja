@@ -14,29 +14,29 @@
 //!
 //! [`MakeClosure`] is then emitted in the outer block, reading each
 //! capture through the outer ctx's normal local-or-capture path.
-//! Heap captures move into the env (the outer slot is marked Moved
-//! so fn-exit drops skip it).
+//! Captures copy into the env (value semantics — the outer binding
+//! stays live).
 
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use koja_ast::ast::{
     AssignTarget, BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm,
-    PassMode, Pattern, Statement, StringPart,
+    Pattern, Statement, StringPart,
 };
-use koja_ast::identifier::{AnonymousKind, FnParam, LocalId, Resolution, ResolvedType};
+use koja_ast::identifier::{AnonymousKind, LocalId, Resolution, ResolvedType};
 use koja_typecheck::{FunctionSignature, GlobalRegistry};
 
 use crate::function::{
     FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
-use crate::ownership::Ownership;
+use crate::mangling::closure_drop_env_symbol;
 use crate::types::{IRType, ValueId};
 
-use super::body::{finalize_open_flow, lower_body, move_out_local_value};
+use super::body::{finalize_open_flow, lower_body};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
-use super::ownership::{is_heap_type, ownership_for_param};
+use super::ownership::{materialize_owned, promote_param};
 use super::package::resolved_type_to_ir_type;
 
 /// Lower a `fn (x: T) -> U ... end` closure expression.
@@ -69,6 +69,9 @@ pub(super) fn lower_block_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
+    if let Some(drop_env) = synthesize_drop_env(&symbol, &captures_with_types) {
+        output.synthesized_functions.push(drop_env);
+    }
 
     emit_make_closure(
         symbol,
@@ -111,6 +114,9 @@ pub(super) fn lower_short_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
+    if let Some(drop_env) = synthesize_drop_env(&symbol, &captures_with_types) {
+        output.synthesized_functions.push(drop_env);
+    }
 
     emit_make_closure(
         symbol,
@@ -121,6 +127,59 @@ pub(super) fn lower_short_closure(
         registry,
         output,
     )
+}
+
+/// Build the `<body>.$drop_env$` capture-release glue
+/// ([`FunctionKind::DropClosureGlue`]) for a closure that owns at
+/// least one heap-managed capture. Returns `None` otherwise — the env
+/// is then freed without per-capture teardown (the runtime sees a
+/// null glue pointer in the env header).
+///
+/// The body carries the same `env_layout` as the closure body and no
+/// user-visible params: for each heap-managed capture it
+/// [`IRInstruction::LoadCapture`]s the value and [`IRInstruction::DropValue`]s
+/// it. Composite drops are rewritten into `drop_T` calls by
+/// [`crate::elaborate`]; leaf drops stay inline `rc--` in the backend.
+fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Option<IRFunction> {
+    if !captures
+        .iter()
+        .any(|capture| capture.ir_type.is_heap_managed())
+    {
+        return None;
+    }
+    let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
+    let mut ctx = FnLowerCtx::new();
+    let entry = ctx.fresh_block("entry");
+    for (index, capture) in captures.iter().enumerate() {
+        if !capture.ir_type.is_heap_managed() {
+            continue;
+        }
+        let dest = ctx.fresh_value(capture.ir_type.clone());
+        ctx.cfg.append(
+            entry,
+            IRInstruction::LoadCapture {
+                capture_index: index as u32,
+                dest,
+                ty: capture.ir_type.clone(),
+            },
+        );
+        ctx.cfg.append(
+            entry,
+            IRInstruction::DropValue {
+                value: dest,
+                ty: capture.ir_type.clone(),
+            },
+        );
+    }
+    ctx.cfg
+        .set_terminator(entry, IRTerminator::Return { value: None });
+    Some(IRFunction {
+        blocks: ctx.into_blocks(),
+        kind: FunctionKind::DropClosureGlue { env_layout },
+        params: Vec::new(),
+        return_type: IRType::Unit,
+        symbol: closure_drop_env_symbol(body_symbol),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -135,7 +194,7 @@ struct CaptureInfo {
     ir_type: IRType,
 }
 
-fn expect_function_params(resolution: &ResolvedType) -> &[FnParam] {
+fn expect_function_params(resolution: &ResolvedType) -> &[ResolvedType] {
     match resolution {
         ResolvedType::Anonymous(AnonymousKind::Function { params, .. }) => params,
         other => panic!(
@@ -463,12 +522,12 @@ fn resolve_capture_types(
 /// AST + lifted-signature view of one closure expression. Bundles
 /// the four facets [`synthesize_body`] needs to materialize a body:
 /// surface params (`ClosureParam` carries `local_id` stamps), the
-/// statement / short-expr form, the resolver-stamped fn-type
-/// `params` (with `mode`), and the fn-type return.
+/// statement / short-expr form, the resolver-stamped fn-type param
+/// types, and the fn-type return.
 struct ClosureSig<'a> {
     body: BodyShape<'a>,
     closure_params: &'a [ClosureParam],
-    fn_params: &'a [FnParam],
+    fn_params: &'a [ResolvedType],
     fn_ret: &'a ResolvedType,
 }
 
@@ -515,11 +574,11 @@ fn synthesize_body(
 
 /// Mint and promote the closure body's user-visible parameters,
 /// mirroring [`crate::lower::package::lower_params`] but driven by
-/// a [`ClosureParam`] / [`FnParam`] pair instead of an AST
+/// a [`ClosureParam`] / param-type pair instead of an AST
 /// `Function`.
 fn lower_closure_params(
     closure_params: &[ClosureParam],
-    fn_params: &[FnParam],
+    fn_params: &[ResolvedType],
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
     ctx: &mut FnLowerCtx,
@@ -529,33 +588,10 @@ fn lower_closure_params(
         closure_params.iter().zip(fn_params.iter()).enumerate()
     {
         let local_id = closure_param_local_id(closure_param, index);
-        let ty = resolved_type_to_ir_type(&fn_param.ty, registry, &mut output.instantiations);
-        let ownership = ownership_for_param(fn_param.mode, &ty);
-        let id = ctx.fresh_value(ty.clone());
+        let ty = resolved_type_to_ir_type(fn_param, registry, &mut output.instantiations);
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalDecl {
-                local: ir_local,
-                ty: ty.clone(),
-            },
-        );
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalWrite {
-                local: ir_local,
-                ownership,
-                value: id,
-            },
-        );
-        ctx.mark_local_declared(ir_local, ty.clone());
-        ctx.mark_local_written(ir_local, ownership);
-        params.push(IRFunctionParam {
-            id,
-            local_id: ir_local,
-            ty,
-        });
+        params.push(promote_param(ctx, entry, ir_local, ty));
     }
     params
 }
@@ -596,7 +632,12 @@ fn emit_make_closure(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let mut capture_values = Vec::with_capacity(captures.len());
     for capture in captures {
-        capture_values.push(read_capture(capture, ctx, block));
+        // The env owns its captures under value semantics: acquire
+        // each heap-managed capture into a fresh owned value before
+        // it's stored, so the env can release it on teardown without
+        // disturbing the outer binding (which the read borrowed).
+        let borrowed = read_capture(capture, ctx, block);
+        capture_values.push(materialize_owned(ctx, block, borrowed, &capture.ir_type));
     }
     let ty = resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
     let dest = ctx.fresh_value(ty.clone());
@@ -612,11 +653,10 @@ fn emit_make_closure(
     Ok((dest, block))
 }
 
-/// Read a single capture's current value in the outer ctx. Heap
-/// captures backed by a Live & Owned outer slot move into the env
-/// (the slot is marked Moved so fn-exit drops skip it); other
-/// shapes copy via `LocalRead` or `LoadCapture` if the outer ctx is
-/// itself a closure body.
+/// Read a single capture's current value in the outer ctx. Under
+/// value semantics every capture copies into the env: a `LoadCapture`
+/// when the outer ctx is itself a closure body, otherwise a
+/// `LocalRead` of the outer slot. The outer binding stays live.
 fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx, block: IRBlockId) -> ValueId {
     if let Some(capture_index) = ctx.closures().capture_index(capture.local_id) {
         let dest = ctx.fresh_value(capture.ir_type.clone());
@@ -631,23 +671,6 @@ fn read_capture(capture: &CaptureInfo, ctx: &mut FnLowerCtx, block: IRBlockId) -
         return dest;
     }
     let ir_local = IRLocalId::from_local_id(capture.local_id);
-    if is_heap_type(&capture.ir_type)
-        && let Some(state) = ctx.slot_state(ir_local)
-        && !state.moved
-        && matches!(state.ownership, Ownership::Owned)
-    {
-        let dest = ctx.fresh_value(capture.ir_type.clone());
-        ctx.cfg.append(
-            block,
-            IRInstruction::MoveOutLocal {
-                dest,
-                local: ir_local,
-                ty: capture.ir_type.clone(),
-            },
-        );
-        ctx.mark_local_moved(ir_local);
-        return dest;
-    }
     let dest = ctx.fresh_value(capture.ir_type.clone());
     ctx.cfg.append(
         block,
@@ -708,7 +731,7 @@ fn build_fn_as_closure_wrapper(
     let entry = ctx.fresh_block("entry");
 
     let params = mint_wrapper_params(sig, &mut ctx, registry, output, entry);
-    let arg_values = read_wrapper_args(&params, sig, &mut ctx, entry);
+    let arg_values = read_wrapper_args(&params, &mut ctx, entry);
 
     let return_ty =
         resolved_type_to_ir_type(&sig.return_type, registry, &mut output.instantiations);
@@ -742,8 +765,7 @@ fn build_fn_as_closure_wrapper(
 
 /// Mint a fresh slot per wrapped fn parameter. Each slot mirrors a
 /// regular fn-param promotion: `LocalDecl` + `LocalWrite` in the
-/// entry block, ownership stamped from the named fn's
-/// [`koja_ast::ast::PassMode`].
+/// entry block.
 fn mint_wrapper_params(
     sig: &FunctionSignature,
     ctx: &mut FnLowerCtx,
@@ -754,32 +776,9 @@ fn mint_wrapper_params(
     let mut params = Vec::with_capacity(sig.params.len());
     for (index, param) in sig.params.iter().enumerate() {
         let ty = resolved_type_to_ir_type(&param.ty, registry, &mut output.instantiations);
-        let id = ctx.fresh_value(ty.clone());
         let local_id = LocalId::new(index as u32);
         let ir_local = IRLocalId::from_local_id(local_id);
-        let ownership = ownership_for_param(param.mode, &ty);
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalDecl {
-                local: ir_local,
-                ty: ty.clone(),
-            },
-        );
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalWrite {
-                local: ir_local,
-                ownership,
-                value: id,
-            },
-        );
-        ctx.mark_local_declared(ir_local, ty.clone());
-        ctx.mark_local_written(ir_local, ownership);
-        params.push(IRFunctionParam {
-            id,
-            local_id: ir_local,
-            ty,
-        });
+        params.push(promote_param(ctx, entry, ir_local, ty));
     }
     params
 }
@@ -787,19 +786,14 @@ fn mint_wrapper_params(
 /// Read each promoted slot back into a fresh `ValueId` for the
 /// inner [`IRInstruction::Call`]. Mirrors [`super::calls::emit_call`]'s
 /// arg-lowering shape (`LocalRead` per arg) so callee semantics
-/// match a hand-written `fn (x) -> target(x) end` shim. For target
-/// params declared `move`, substitutes a [`IRInstruction::MoveOutLocal`]
-/// against the wrapper's own slot so the fn-exit drop pass skips it;
-/// without that the wrapper would free the payload the target also
-/// owns.
+/// match a hand-written `fn (x) -> target(x) end` shim.
 fn read_wrapper_args(
     params: &[IRFunctionParam],
-    sig: &FunctionSignature,
     ctx: &mut FnLowerCtx,
     entry: IRBlockId,
 ) -> Vec<ValueId> {
     let mut values = Vec::with_capacity(params.len());
-    for (idx, param) in params.iter().enumerate() {
+    for param in params {
         let dest = ctx.fresh_value(param.ty.clone());
         ctx.cfg.append(
             entry,
@@ -809,12 +803,6 @@ fn read_wrapper_args(
                 ty: param.ty.clone(),
             },
         );
-        ctx.record_value_source(dest, param.local_id);
-        let mode = sig.params.get(idx).map(|p| p.mode);
-        let dest = match mode {
-            Some(PassMode::Move) => move_out_local_value(ctx, entry, dest),
-            _ => dest,
-        };
         values.push(dest);
     }
     values

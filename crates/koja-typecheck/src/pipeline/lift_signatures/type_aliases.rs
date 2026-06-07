@@ -149,7 +149,7 @@ fn type_references_alias(
         ResolvedType::Anonymous(koja_ast::identifier::AnonymousKind::Function { params, ret }) => {
             params
                 .iter()
-                .any(|p| type_references_alias(&p.ty, registry, seen))
+                .any(|p| type_references_alias(p, registry, seen))
                 || type_references_alias(ret, registry, seen)
         }
         ResolvedType::Union(members) => members

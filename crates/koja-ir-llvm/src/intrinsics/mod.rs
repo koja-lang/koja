@@ -23,10 +23,11 @@ mod bitwise;
 pub(super) mod cptr;
 mod cstring;
 mod debug;
+pub(crate) mod element;
 mod equality;
 mod hash;
 mod hashtable;
-mod heap_clone;
+pub(crate) mod heap_payload;
 mod kernel;
 mod list;
 mod map;
@@ -36,6 +37,11 @@ mod process;
 mod set;
 mod socket;
 mod string;
+
+/// The `0..capacity` occupied-bucket walk, re-exported so the collection
+/// glue emitter ([`crate::emit::collection_glue`]) iterates `Map` /
+/// `Set` buffers by the exact convention the hashtable intrinsics write.
+pub(crate) use hashtable::occupied_loop;
 
 /// Synthesize the body of an `@intrinsic` function. Forwards each
 /// variant to its hand-written emitter; each emitter receives the

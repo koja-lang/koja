@@ -7,7 +7,6 @@
 //! the `IRType::List(_)` inner type carried on the function's
 //! signature, then generates the same shape of IR regardless of `T`.
 
-use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::{BasicType, StructType};
@@ -19,7 +18,8 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::intrinsics::cptr::declare_memcpy_extern;
-use crate::runtime::{declare_malloc_extern, declare_realloc_extern};
+use crate::intrinsics::element::{acquire_buffer, acquire_value, element_slot, release_in_slot};
+use crate::runtime::declare_malloc_extern;
 use crate::types::{ir_basic_type, list_value_type};
 
 /// `Option<T>` variant tags as the stdlib decls them: `Some` first
@@ -166,87 +166,35 @@ fn emit_append<'ctx>(
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
-    let entry = ctx.builder.get_insert_block().unwrap();
-    let grow_bb = ctx.context.append_basic_block(llvm_function, "grow");
-    let store_bb = ctx.context.append_basic_block(llvm_function, "store");
 
     let self_val = nth_list(function, llvm_function, 0, "self")?;
     let item_val = nth_param(function, llvm_function, 1, "item")?;
+    let item_val = acquire_value(
+        ctx,
+        function,
+        element(ListMethod::Append, function)?,
+        item_val,
+    )?;
 
     let buf_ptr = build_extract_pointer(ctx, function, self_val, 0, "buf_ptr")?;
     let len = build_extract_int(ctx, function, self_val, 1, "len")?;
-    let cap = build_extract_int(ctx, function, self_val, 2, "cap")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Append)?;
 
-    let needs_grow = ctx
+    let new_len = ctx
         .builder
-        .build_int_compare(IntPredicate::EQ, len, cap, "needs_grow")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_conditional_branch(needs_grow, grow_bb, store_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_conditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
-
-    ctx.builder.position_at_end(grow_bb);
-    let new_cap = ctx
-        .builder
-        .build_int_mul(cap, i64_ty.const_int(2, false), "new_cap")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
-    let new_size = ctx
-        .builder
-        .build_int_mul(new_cap, elem_size, "new_size")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
-    let realloc = declare_realloc_extern(ctx);
-    let new_ptr = ctx
-        .builder
-        .build_call(realloc, &[buf_ptr.into(), new_size.into()], "new_buf")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call realloc for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "realloc returned no value for `{}`",
-                function.symbol,
-            ))
-        })?
-        .into_pointer_value();
-    ctx.builder
-        .build_unconditional_branch(store_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_unconditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
-
-    ctx.builder.position_at_end(store_bb);
-    let ptr_phi = ctx
-        .builder
-        .build_phi(ctx.context.ptr_type(AddressSpace::default()), "ptr_phi")
-        .map_err(|e| inkwell_err(format_args!("build_phi for `{}`", function.symbol), e))?;
-    ptr_phi.add_incoming(&[(&buf_ptr, entry), (&new_ptr, grow_bb)]);
-    let cap_phi = ctx
-        .builder
-        .build_phi(i64_ty, "cap_phi")
-        .map_err(|e| inkwell_err(format_args!("build_phi for `{}`", function.symbol), e))?;
-    cap_phi.add_incoming(&[(&cap, entry), (&new_cap, grow_bb)]);
-
-    let final_ptr = ptr_phi.as_basic_value().into_pointer_value();
-    let final_cap = cap_phi.as_basic_value().into_int_value();
+        .build_int_add(len, i64_ty.const_int(1, false), "new_len")
+        .map_err(|e| inkwell_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
+    let new_buf = copy_buffer(
+        ctx,
+        function,
+        llvm_function,
+        element(ListMethod::Append, function)?,
+        buf_ptr,
+        len,
+        new_len,
+        elem_size,
+        "append",
+    )?;
 
     let byte_offset = ctx
         .builder
@@ -254,18 +202,14 @@ fn emit_append<'ctx>(
         .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
     let elem_ptr = unsafe {
         ctx.builder
-            .build_gep(i8_ty, final_ptr, &[byte_offset], "elem_ptr")
+            .build_gep(i8_ty, new_buf, &[byte_offset], "elem_ptr")
             .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
     };
     ctx.builder
         .build_store(elem_ptr, item_val)
         .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
 
-    let new_len = ctx
-        .builder
-        .build_int_add(len, i64_ty.const_int(1, false), "new_len")
-        .map_err(|e| inkwell_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
-    let result = build_list_struct(ctx, function, final_ptr, new_len, final_cap)?;
+    let result = build_list_struct(ctx, function, new_buf, new_len, new_len)?;
     ret_struct(ctx, function, result)
 }
 
@@ -320,6 +264,7 @@ fn emit_get<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?;
+    let value = acquire_value(ctx, function, element(ListMethod::Get, function)?, value)?;
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[value])?;
     ctx.builder
         .build_return(Some(&some))
@@ -354,7 +299,6 @@ fn emit_pop<'ctx>(
     let self_val = nth_list(function, llvm_function, 0, "self")?;
     let buf_ptr = build_extract_pointer(ctx, function, self_val, 0, "buf_ptr")?;
     let len = build_extract_int(ctx, function, self_val, 1, "len")?;
-    let cap = build_extract_int(ctx, function, self_val, 2, "cap")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Pop)?;
     let elem_ty = ir_basic_type(ctx, element(ListMethod::Pop, function)?)?;
 
@@ -378,7 +322,25 @@ fn emit_pop<'ctx>(
 
     ctx.builder.position_at_end(empty_bb);
     let none = build_enum_value(ctx, &option_symbol, OPTION_NONE_TAG, &[])?;
-    let pair_empty = build_pair(ctx, function, pair_struct, none, self_val.into())?;
+    // Value semantics: the returned list must own an independent
+    // buffer. Handing back `self_val` directly aliases the caller's
+    // receiver slot, so both would free the same buffer at scope exit
+    // (double free). Clone into a fresh buffer instead — `len` is zero
+    // on this branch, so this allocates an empty buffer and copies
+    // nothing, mirroring the nonempty branch's `copy_buffer`.
+    let empty_buf = copy_buffer(
+        ctx,
+        function,
+        llvm_function,
+        element(ListMethod::Pop, function)?,
+        buf_ptr,
+        len,
+        len,
+        elem_size,
+        "pop_empty",
+    )?;
+    let empty_list = build_list_struct(ctx, function, empty_buf, len, len)?;
+    let pair_empty = build_pair(ctx, function, pair_struct, none, empty_list.into())?;
     ctx.builder
         .build_return(Some(&pair_empty))
         .map(|_| ())
@@ -393,6 +355,8 @@ fn emit_pop<'ctx>(
         .builder
         .build_int_mul(new_len, elem_size, "byte_off")
         .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+    // The popped element lives at `new_len` in the original buffer
+    // (it's excluded from the copy below).
     let elem_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, buf_ptr, &[byte_offset], "elem_ptr")
@@ -402,8 +366,20 @@ fn emit_pop<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?;
+    let elem_val = acquire_value(ctx, function, element(ListMethod::Pop, function)?, elem_val)?;
     let some = build_enum_value(ctx, &option_symbol, OPTION_SOME_TAG, &[elem_val])?;
-    let shortened = build_list_struct(ctx, function, buf_ptr, new_len, cap)?;
+    let new_buf = copy_buffer(
+        ctx,
+        function,
+        llvm_function,
+        element(ListMethod::Pop, function)?,
+        buf_ptr,
+        new_len,
+        new_len,
+        elem_size,
+        "pop",
+    )?;
+    let shortened = build_list_struct(ctx, function, new_buf, new_len, new_len)?;
     let pair_nonempty = build_pair(ctx, function, pair_struct, some, shortened.into())?;
     ctx.builder
         .build_return(Some(&pair_nonempty))
@@ -420,7 +396,6 @@ fn emit_replace_at<'ctx>(
     llvm_function: FunctionValue<'ctx>,
     entry: BasicBlock<'ctx>,
 ) -> Result<(), LlvmError> {
-    let i8_ty = ctx.context.i8_type();
     let in_bounds_bb = ctx.context.append_basic_block(llvm_function, "in_bounds");
     let done_bb = ctx.context.append_basic_block(llvm_function, "done");
 
@@ -451,27 +426,33 @@ fn emit_replace_at<'ctx>(
         })?;
 
     ctx.builder.position_at_end(in_bounds_bb);
-    let byte_offset = ctx
-        .builder
-        .build_int_mul(index, elem_size, "byte_off")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
-    let elem_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, buf_ptr, &[byte_offset], "elem_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
+    let elem_ty = element(ListMethod::ReplaceAt, function)?;
+    let new_buf = copy_buffer(
+        ctx,
+        function,
+        llvm_function,
+        elem_ty,
+        buf_ptr,
+        len,
+        len,
+        elem_size,
+        "replace",
+    )?;
+    let elem_ptr = element_slot(ctx, function, new_buf, index, elem_size)?;
+    // `copy_buffer` acquired every retained element, including the one
+    // at `index` we're about to overwrite — release that copy so the
+    // incoming value (acquired next) is the slot's sole owner.
+    release_in_slot(ctx, function, elem_ty, elem_ptr)?;
+    let value = acquire_value(ctx, function, elem_ty, value)?;
     ctx.builder
         .build_store(elem_ptr, value)
         .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_unconditional_branch(done_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_unconditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
+    let replaced = build_list_struct(ctx, function, new_buf, len, len)?;
+    ret_struct(ctx, function, replaced)?;
 
+    // Out of bounds: no element changes, so returning the receiver
+    // (which shares the backing buffer) is safe — every mutator is
+    // copy-on-write, so the shared buffer is never mutated in place.
     ctx.builder.position_at_end(done_bb);
     ret_struct(ctx, function, self_val)?;
 
@@ -602,6 +583,16 @@ fn emit_slice<'ctx>(
                 e,
             )
         })?;
+    acquire_buffer(
+        ctx,
+        function,
+        llvm_function,
+        element(ListMethod::Slice, function)?,
+        new_buf,
+        clamped_count,
+        elem_size,
+        "slice",
+    )?;
     let nonempty_result = build_list_struct(ctx, function, new_buf, clamped_count, clamped_count)?;
     ret_struct(ctx, function, nonempty_result)?;
 
@@ -643,17 +634,12 @@ fn emit_concat<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i8_ty = ctx.context.i8_type();
-    let i64_ty = ctx.context.i64_type();
-    let entry = ctx.builder.get_insert_block().unwrap();
-    let grow_bb = ctx.context.append_basic_block(llvm_function, "grow");
-    let copy_bb = ctx.context.append_basic_block(llvm_function, "copy");
 
     let self_val = nth_list(function, llvm_function, 0, "self")?;
     let other_val = nth_list(function, llvm_function, 1, "other")?;
 
     let self_ptr = build_extract_pointer(ctx, function, self_val, 0, "self_ptr")?;
     let self_len = build_extract_int(ctx, function, self_val, 1, "self_len")?;
-    let self_cap = build_extract_int(ctx, function, self_val, 2, "self_cap")?;
     let other_ptr = build_extract_pointer(ctx, function, other_val, 0, "other_ptr")?;
     let other_len = build_extract_int(ctx, function, other_val, 1, "other_len")?;
     let elem_size = element_byte_size(ctx, function, ListMethod::Concat)?;
@@ -662,80 +648,29 @@ fn emit_concat<'ctx>(
         .builder
         .build_int_add(self_len, other_len, "total_len")
         .map_err(|e| inkwell_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
-    let needs_grow = ctx
-        .builder
-        .build_int_compare(IntPredicate::UGT, total_len, self_cap, "needs_grow")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_conditional_branch(needs_grow, grow_bb, copy_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_conditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
 
-    ctx.builder.position_at_end(grow_bb);
-    let new_cap = total_len;
-    let new_size = ctx
-        .builder
-        .build_int_mul(new_cap, elem_size, "new_size")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
-    let realloc = declare_realloc_extern(ctx);
-    let new_ptr = ctx
-        .builder
-        .build_call(realloc, &[self_ptr.into(), new_size.into()], "new_buf")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call realloc for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "realloc returned no value for `{}`",
-                function.symbol,
-            ))
-        })?
-        .into_pointer_value();
-    ctx.builder
-        .build_unconditional_branch(copy_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_unconditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
-
-    ctx.builder.position_at_end(copy_bb);
-    let ptr_phi = ctx
-        .builder
-        .build_phi(ctx.context.ptr_type(AddressSpace::default()), "ptr_phi")
-        .map_err(|e| inkwell_err(format_args!("build_phi for `{}`", function.symbol), e))?;
-    ptr_phi.add_incoming(&[(&self_ptr, entry), (&new_ptr, grow_bb)]);
-    let cap_phi = ctx
-        .builder
-        .build_phi(i64_ty, "cap_phi")
-        .map_err(|e| inkwell_err(format_args!("build_phi for `{}`", function.symbol), e))?;
-    cap_phi.add_incoming(&[(&self_cap, entry), (&new_cap, grow_bb)]);
-
-    let final_ptr = ptr_phi.as_basic_value().into_pointer_value();
-    let final_cap = cap_phi.as_basic_value().into_int_value();
-
+    // Copy-on-write: a fresh `total_len` buffer seeded with `self`'s
+    // elements, then `other` appended after them. Neither input buffer
+    // is mutated.
+    let elem_ty = element(ListMethod::Concat, function)?;
+    let new_buf = copy_buffer(
+        ctx,
+        function,
+        llvm_function,
+        elem_ty,
+        self_ptr,
+        self_len,
+        total_len,
+        elem_size,
+        "concat",
+    )?;
     let dst_offset = ctx
         .builder
         .build_int_mul(self_len, elem_size, "dst_off")
         .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
     let dst_ptr = unsafe {
         ctx.builder
-            .build_gep(i8_ty, final_ptr, &[dst_offset], "dst_ptr")
+            .build_gep(i8_ty, new_buf, &[dst_offset], "dst_ptr")
             .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
     };
     let copy_bytes = ctx
@@ -755,12 +690,94 @@ fn emit_concat<'ctx>(
                 e,
             )
         })?;
+    // `copy_buffer` acquired `self`'s half; the `other` half was raw
+    // `memcpy`'d above, so acquire it too — the result owns independent
+    // references to every element.
+    acquire_buffer(
+        ctx,
+        function,
+        llvm_function,
+        elem_ty,
+        dst_ptr,
+        other_len,
+        elem_size,
+        "concat.other",
+    )?;
 
-    let result = build_list_struct(ctx, function, final_ptr, total_len, final_cap)?;
+    let result = build_list_struct(ctx, function, new_buf, total_len, total_len)?;
     ret_struct(ctx, function, result)
 }
 
 // --- helpers --------------------------------------------------------------
+
+/// Allocate a fresh `new_cap`-capacity buffer, copy the first
+/// `copy_count` elements out of `src`, then *acquire* each copy so the
+/// new buffer owns independent references. Under value semantics every
+/// list mutator is copy-on-write: it builds a new buffer instead of
+/// touching `src`, so a binding shared by assignment is never
+/// observably changed through another alias — and balancing the
+/// refcount here is what stops the shared payloads from double-freeing
+/// once both the source and the copy are reclaimed by drop glue.
+#[allow(clippy::too_many_arguments)]
+fn copy_buffer<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    element: &IRType,
+    src: PointerValue<'ctx>,
+    copy_count: IntValue<'ctx>,
+    new_cap: IntValue<'ctx>,
+    elem_size: IntValue<'ctx>,
+    label: &str,
+) -> Result<PointerValue<'ctx>, LlvmError> {
+    let alloc_bytes = ctx
+        .builder
+        .build_int_mul(new_cap, elem_size, "alloc_bytes")
+        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+    let malloc = declare_malloc_extern(ctx);
+    let new_buf = ctx
+        .builder
+        .build_call(malloc, &[alloc_bytes.into()], "new_buf")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_call malloc for `{}`", function.symbol),
+                e,
+            )
+        })?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!(
+                "malloc returned no value for `{}`",
+                function.symbol
+            ))
+        })?
+        .into_pointer_value();
+    let copy_bytes = ctx
+        .builder
+        .build_int_mul(copy_count, elem_size, "copy_bytes")
+        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+    let memcpy = declare_memcpy_extern(ctx);
+    ctx.builder
+        .build_call(memcpy, &[new_buf.into(), src.into(), copy_bytes.into()], "")
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("build_call memcpy for `{}`", function.symbol),
+                e,
+            )
+        })?;
+    acquire_buffer(
+        ctx,
+        function,
+        llvm_function,
+        element,
+        new_buf,
+        copy_count,
+        elem_size,
+        label,
+    )?;
+    Ok(new_buf)
+}
 
 fn nth_param<'ctx>(
     function: &IRFunction,

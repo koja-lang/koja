@@ -14,13 +14,11 @@ struct Parent
 end
 
 impl Process<ParentConfig, MsgA | MsgB, String> for Parent
-  fn start(move config: ParentConfig) -> Result<Self, StopReason>
+  fn start(config: ParentConfig) -> Result<Self, StopReason>
     Result.Ok(Parent{count: 0})
   end
 
-  fn handle(move self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>)
-    -> Step<Self>
-
+  fn handle(self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       a: MsgA ->
         match a

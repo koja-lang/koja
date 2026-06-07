@@ -13,6 +13,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 
 use super::enums;
+use super::heap_layout::{HEADER_BYTES, RC_IMMORTAL};
 
 /// Materialize the LLVM SSA value for `LoadConst`, using
 /// [`EmitContext::load_const_cache`] so repeat references reuse a
@@ -147,11 +148,13 @@ pub(crate) fn emit_string_literal_payload<'ctx>(
     emit_const_payload(ctx, bytes, (bytes.len() as u64) * 8, true, prefix)
 }
 
-/// Emit a heap-payload literal as a private constant global with
-/// the v1 header layout: `{ i64 bit_length, [N (+1) x i8] bytes }`.
-/// Returns a const-GEP to the payload (8 bytes past the header) so
-/// the runtime helpers can read `*(payload - 8)` for the bit length
-/// without any layout translation.
+/// Emit a heap-payload literal as a private constant global with the
+/// rc header layout: `{ i64 rc, i64 bit_length, [N (+1) x i8] bytes }`.
+/// The `rc` is the immortal sentinel ([`RC_IMMORTAL`]) so the runtime
+/// rc dec/inc treat the rodata block as never-freed. Returns a
+/// const-GEP to the payload (`HEADER_BYTES` past the base) so the
+/// runtime helpers read `*(payload - LENGTH_OFFSET)` for the bit
+/// length without any layout translation.
 ///
 /// `with_nul` adds a trailing `\0` byte to the payload array — used
 /// by `String` for libc compat. `Binary` and `Bits` pass `false`:
@@ -174,9 +177,10 @@ fn emit_const_payload<'ctx>(
     let payload_ty = i8_ty.array_type(array_len);
     let header_ty = ctx
         .context
-        .struct_type(&[i64_ty.into(), payload_ty.into()], false);
+        .struct_type(&[i64_ty.into(), i64_ty.into(), payload_ty.into()], false);
     let bytes_const = ctx.context.const_string(bytes, with_nul);
     let initializer = header_ty.const_named_struct(&[
+        i64_ty.const_int(RC_IMMORTAL as u64, false).into(),
         i64_ty.const_int(bit_length, false).into(),
         bytes_const.into(),
     ]);
@@ -188,6 +192,6 @@ fn emit_const_payload<'ctx>(
     unsafe {
         global
             .as_pointer_value()
-            .const_gep(i8_ty, &[i64_ty.const_int(8, false)])
+            .const_gep(i8_ty, &[i64_ty.const_int(HEADER_BYTES, false)])
     }
 }

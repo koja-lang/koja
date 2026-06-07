@@ -146,9 +146,11 @@ impl<'a> Printer<'a> {
             ]),
 
             ExprKind::Match { subject, arms } => {
-                let any_multiline = arms
-                    .iter()
-                    .any(|a| arm_is_multiline(&a.body) || pattern_is_multiline(&a.pattern));
+                let any_multiline = arms.iter().any(|a| {
+                    arm_is_multiline(&a.body)
+                        || pattern_is_multiline(&a.pattern)
+                        || arm_body_overflows(pattern_rendered_len(&a.pattern), &a.body)
+                });
                 let rendered: Vec<Doc> = arms
                     .iter()
                     .map(|arm| self.match_arm_to_doc(arm, any_multiline, expr.span.end.line))
@@ -158,11 +160,15 @@ impl<'a> Printer<'a> {
             }
 
             ExprKind::Cond { arms, else_body } => {
-                let else_multiline = else_body.as_ref().is_some_and(|b| arm_is_multiline(b));
+                let else_multiline = else_body
+                    .as_ref()
+                    .is_some_and(|b| arm_is_multiline(b) || arm_body_overflows(0, b));
                 let any_multiline = else_multiline
-                    || arms
-                        .iter()
-                        .any(|a| arm_is_multiline(&a.body) || expr_or_is_multiline(&a.condition));
+                    || arms.iter().any(|a| {
+                        arm_is_multiline(&a.body)
+                            || expr_or_is_multiline(&a.condition)
+                            || arm_body_overflows(expr_text_len(&a.condition), &a.body)
+                    });
                 let mut rendered: Vec<Doc> = arms
                     .iter()
                     .map(|arm| self.cond_arm_to_doc(arm, any_multiline, expr.span.end.line))
@@ -178,10 +184,11 @@ impl<'a> Printer<'a> {
                 after_timeout,
                 after_body,
             } => {
-                let any_multiline = arms
-                    .iter()
-                    .any(|a| arm_is_multiline(&a.body) || pattern_is_multiline(&a.pattern))
-                    || arm_is_multiline(after_body);
+                let any_multiline = arms.iter().any(|a| {
+                    arm_is_multiline(&a.body)
+                        || pattern_is_multiline(&a.pattern)
+                        || arm_body_overflows(pattern_rendered_len(&a.pattern), &a.body)
+                }) || arm_is_multiline(after_body);
                 let rendered: Vec<Doc> = arms
                     .iter()
                     .map(|arm| self.match_arm_to_doc(arm, any_multiline, expr.span.end.line))

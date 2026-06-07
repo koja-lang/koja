@@ -11,7 +11,7 @@ struct Headers
   same name. Use this for headers that allow multiple values
   like Set-Cookie.
   """
-  fn append(move self, name: String, value: String) -> Headers
+  fn append(self, name: String, value: String) -> Headers
     self.entries = self.entries.append(Header{name: name, value: value})
     self
   end
@@ -72,7 +72,7 @@ struct Headers
   Sets a header value, replacing any existing headers with
   the same name. If the header does not exist, it is appended.
   """
-  fn set(move self, name: String, value: String) -> Headers
+  fn set(self, name: String, value: String) -> Headers
     lower = name.downcase()
     new_entries: List<Header> = List.new()
     found = false
@@ -117,7 +117,7 @@ struct Headers
     entries: List<Header>,
     lower: String,
     i: Int,
-    move results: List<String>,
+    results: List<String>,
   ) -> List<String>
 
     if i >= entries.length()

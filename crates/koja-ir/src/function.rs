@@ -11,7 +11,6 @@ use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::extern_attrs::IRExternAttrs;
 use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
-use crate::ownership::Ownership;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{
     ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp, LoweredBinaryMatchLayout,
@@ -162,12 +161,70 @@ impl fmt::Display for IRBlockId {
 /// interior mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
-    Closure { env_layout: Vec<IRType> },
+    /// Synthesized per-type clone glue (`<T>.$clone$`). Registered by
+    /// the `elaborate` sub-pass for every heap-managed composite type
+    /// (`List` / `Map` / `Set` / heap-owning structs, enums, unions,
+    /// `Indirect` boxes). The operand type is `params[0].ty`; the
+    /// return type matches it. Lowering's composite `IRInstruction::Clone`
+    /// is rewritten into a `call` to this glue, so backends only ever
+    /// see leaf `Clone`s inline and a uniform `call` for composites.
+    ///
+    /// Its body is born one of two ways:
+    /// - **Aggregates** (`Struct` / `Enum` / `Union`): `elaborate::synth`
+    ///   builds a full CFG (project each field / payload, acquire it,
+    ///   rebuild). `blocks` is non-empty and the LLVM backend walks it
+    ///   like a [`Self::Regular`] body.
+    /// - **Collections / `Indirect`**: a runtime-shaped deep-copy the
+    ///   LLVM backend synthesizes from the operand type at emit time,
+    ///   so `blocks` lowers empty like [`Self::Intrinsic`].
+    ///
+    /// Eval reclaims via its host GC and never invokes the glue.
+    CloneGlue,
+    Closure {
+        env_layout: Vec<IRType>,
+    },
+    /// Synthesized per-closure-body capture-release glue
+    /// (`<body>.$drop_env$`). A closure env is type-erased behind the
+    /// structural [`IRType::Function`], so a `Drop` at a closure-typed
+    /// slot can't statically pick the right capture-release routine.
+    /// Each closure that owns at least one heap-managed capture gets
+    /// this sibling function; its address is stamped into the env
+    /// block's header by [`IRInstruction::MakeClosure`], and the
+    /// runtime calls it (with the env pointer) when the env's refcount
+    /// hits zero, before freeing the block.
+    ///
+    /// Shape is closure-like — an implicit `env_ptr` parameter at LLVM
+    /// position 0 and a body that reads each heap-managed capture via
+    /// [`IRInstruction::LoadCapture`] (indexed into `env_layout`) and
+    /// [`IRInstruction::DropValue`]s it, returning `Unit`. Unlike
+    /// [`Self::Closure`] it carries no user-visible params and is never
+    /// the target of a `MakeClosure`. Born as real IR during lowering
+    /// so [`crate::elaborate`] discovers any composite capture's
+    /// `drop_T` and rewrites the composite `DropValue`s into glue
+    /// calls, exactly as for a `Regular` body. Eval reclaims via its
+    /// host GC and never invokes it.
+    DropClosureGlue {
+        env_layout: Vec<IRType>,
+    },
+    /// Synthesized per-type drop glue (`<T>.$drop$`). The drop analog
+    /// of [`Self::CloneGlue`] — releases every heap-managed field /
+    /// payload / element of `params[0].ty`, then frees any collection
+    /// backing buffer. Returns `Unit`. Lowering's composite
+    /// `DropLocal` / `DropValue` is rewritten into a `call` to this
+    /// glue. Same two body shapes as [`Self::CloneGlue`]: an
+    /// `elaborate`-synthesized CFG for aggregates, an emit-time
+    /// backend body (empty `blocks`) for collections / `Indirect`.
+    /// Eval reclaims via its host GC and never invokes it.
+    DropGlue,
     Extern(IRExternAttrs),
     Intrinsic(IRIntrinsicId),
-    ProcessEntryWrapper { state: IRType },
+    ProcessEntryWrapper {
+        state: IRType,
+    },
     Regular,
-    SpawnWrapper { state: IRType },
+    SpawnWrapper {
+        state: IRType,
+    },
 }
 
 /// A lowered function. `blocks[0]` is the entry block; `params`
@@ -267,11 +324,8 @@ pub enum IRInstruction {
     /// re-summing widths; `segments` is in source order, each
     /// carrying its own `bit_offset` from the same lower-time pass.
     ///
-    /// Result is freshly-allocated owned heap storage with the
-    /// shared bit-length-header layout (`[i64 bit_length][payload]`),
-    /// so the lowering layer stamps [`Ownership::Owned`] on the
-    /// corresponding `LocalWrite` and the slot auto-drops at fn
-    /// exit.
+    /// Result is freshly-allocated heap storage with the shared
+    /// bit-length-header layout (`[i64 bit_length][payload]`).
     ///
     /// LLVM emission keys on the per-segment `width % 8` /
     /// `bit_offset % 8` to choose between inline byte-aligned
@@ -330,6 +384,36 @@ pub enum IRInstruction {
         dest: ValueId,
         result_ty: IRType,
     },
+    /// `dest = clone(source)` — a value-semantics acquisition that
+    /// yields an independent owner of `source` (statically typed `ty`).
+    /// The drop-glue lowering emits this at every *ownership
+    /// acquisition* of a heap value (binding, parameter promotion,
+    /// field/element store, return) so each owner can drop at scope
+    /// exit without aliasing another owner. Under reference counting
+    /// the independence is logical, not physical: immutable blocks are
+    /// shared and the bookkeeping is an `rc++`. The source stays live.
+    ///
+    /// Backend lowering by `ty`:
+    /// - Leaf heap (`String` / `Binary` / `Bits`): an `rc_inc` on the
+    ///   block base (`payload - HEADER_BYTES`); `dest` re-binds the
+    ///   same payload pointer. Eval relies on its host GC and treats
+    ///   the looked-up value as already independent.
+    /// - Stack/`Copy` leaf types (`Int`, `Float`, `Bool`, …): a plain
+    ///   register copy — `dest` aliases the same immutable SSA value.
+    /// - Closure (`Function`): an `rc_inc` on the captured env block,
+    ///   aliasing the same `{fn_ptr, env_ptr}` fat pointer.
+    /// - No-glue aggregates (`Struct` / `Enum` / `Union` whose fields
+    ///   are all `Copy`): a register copy, like the scalar leaves.
+    /// - Heap composites (`List` / `Map` / `Set` / `Indirect` and
+    ///   heap-owning structs and enums): rewritten by the `elaborate`
+    ///   sub-pass into a `Call` to a synthesized per-type `clone_T`, so
+    ///   the backend never recurses inline. One surviving to a backend
+    ///   is a lowering bug.
+    Clone {
+        dest: ValueId,
+        source: ValueId,
+        ty: IRType,
+    },
     /// `dest = lhs <> rhs` for the heap-payload family (`String`,
     /// `Binary`, `Bits`). Separate from [`Self::BinaryOp`] because
     /// the LLVM emission shape differs:
@@ -338,11 +422,9 @@ pub enum IRInstruction {
     /// - `Bits`: extern `__koja_concat_bits` runtime helper
     ///   (sub-byte alignment is far cleaner in Rust than LLVM IR).
     ///
-    /// Result is freshly-allocated owned heap storage with the same
-    /// `[i64 bit_length][payload]` layout as the operands. The
-    /// lowering layer stamps [`Ownership::Owned`] on the
-    /// corresponding `LocalWrite`, so the slot is auto-dropped at
-    /// fn exit. Both operands flow through unchanged — `<>` does
+    /// Result is freshly-allocated heap storage with the same
+    /// `[i64 bit_length][payload]` layout as the operands. Both
+    /// operands flow through unchanged — `<>` does
     /// **not** consume them at the IR level (consumption is a
     /// surface-language concept; at the IR layer the result is a
     /// fresh value and the operands' lifetimes are managed by their
@@ -424,18 +506,13 @@ pub enum IRInstruction {
         struct_symbol: IRSymbol,
         value: ValueId,
     },
-    /// Free the heap storage currently held by `local`'s slot, if
-    /// any. Emitted by the lowering layer at function exits (return,
-    /// fall-through) for slots whose most-recent [`Self::LocalWrite`]
-    /// stamped [`Ownership::Owned`] and whose [`IRType`] is heap-
-    /// allocated (today: [`IRType::String`]; future: `Binary`,
-    /// `Bits`, `List`, owned closure environments). Reads the slot's
-    /// current pointer, computes `payload - 8` to recover the
-    /// allocator block base, and calls extern `free`. No-op when the
-    /// slot's stamped ownership is [`Ownership::Unowned`] — the
-    /// lowering layer doesn't emit `DropLocal` in that case, so a
-    /// `DropLocal` reaching a backend always indicates a slot the
-    /// backend must free. Produces no value.
+    /// Free the heap storage currently held by `local`'s slot. Emitted
+    /// by the lowering layer at function exits (return, fall-through)
+    /// for slots whose [`IRType`] is heap-allocated. Reads the slot's
+    /// current pointer, computes `payload - 8` to recover the allocator
+    /// block base, and calls extern `free`. A `DropLocal` reaching a
+    /// backend always indicates a slot the backend must free. Produces
+    /// no value.
     DropLocal { local: IRLocalId, ty: IRType },
     /// Free the heap storage held by `value`. Value-keyed analog of
     /// [`Self::DropLocal`], used by [`Self::FieldSet`] lowering when
@@ -459,42 +536,15 @@ pub enum IRInstruction {
         local: IRLocalId,
         ty: IRType,
     },
-    /// Write `value` into the slot named by `local` with the given
-    /// `ownership`. Used for surface assignments and for parameter
-    /// promotion (one `LocalWrite` per param at function entry).
-    /// `ownership` records whether the value being stored is heap
-    /// storage the slot owns ([`Ownership::Owned`]) or a borrowed
-    /// pointer / primitive copy ([`Ownership::Unowned`]); the
-    /// lowering layer reads it back at scope-exit drop emission to
-    /// decide which slots need a `free`. LLVM lowers to `store`;
-    /// produces no value.
-    LocalWrite {
-        local: IRLocalId,
-        ownership: Ownership,
-        value: ValueId,
-    },
-    /// Move the current contents of `local` out of its slot into a
-    /// fresh `ValueId`. Used at sites that consume a local's
-    /// ownership — today only `return <local>` for an
-    /// [`Ownership::Owned`] slot (the returned value transfers to
-    /// the caller; the lowering layer suppresses the slot's
-    /// fn-exit `DropLocal`). Future sites: cross-local moves
-    /// (`t = s` for an Owned `s`), `move`-arg passing. LLVM lowers
-    /// identically to [`Self::LocalRead`] (the moved-vs-borrowed
-    /// distinction is purely IR-level — the slot's stack memory
-    /// remains valid until the function returns); eval removes the
-    /// frame entry so subsequent reads panic with use-after-move.
-    MoveOutLocal {
-        dest: ValueId,
-        local: IRLocalId,
-        ty: IRType,
-    },
+    /// Write `value` into the slot named by `local`. Used for surface
+    /// assignments and for parameter promotion (one `LocalWrite` per
+    /// param at function entry). LLVM lowers to `store`; produces no
+    /// value.
+    LocalWrite { local: IRLocalId, value: ValueId },
     /// `dest = (fn_ptr -> body, env_ptr)` where `env_ptr` points
     /// at a freshly allocated heap struct laid out per `body`'s
     /// [`FunctionKind::Closure::env_layout`]. `captures[i]` fills
-    /// field `i`. The closure value is `Ownership::Owned`;
-    /// `DropLocal { ty: Function { .. } }` recursively drops
-    /// captures before freeing the env.
+    /// field `i`.
     MakeClosure {
         body: IRSymbol,
         captures: Vec<ValueId>,
@@ -647,9 +697,7 @@ impl IRInstruction {
     /// The `ValueId` this instruction defines, if any. Storage-slot
     /// side-effect variants ([`IRInstruction::DropLocal`] /
     /// [`IRInstruction::LocalDecl`] / [`IRInstruction::LocalWrite`])
-    /// return `None`; everything else (including
-    /// [`IRInstruction::MoveOutLocal`], which moves the slot's
-    /// contents into a fresh value) defines a destination.
+    /// return `None`; everything else defines a destination.
     pub fn dest(&self) -> Option<ValueId> {
         match self {
             IRInstruction::BinaryConstruct { dest, .. }
@@ -657,6 +705,7 @@ impl IRInstruction {
             | IRInstruction::BinaryOp { dest, .. }
             | IRInstruction::Call { dest, .. }
             | IRInstruction::CallClosure { dest, .. }
+            | IRInstruction::Clone { dest, .. }
             | IRInstruction::Concat { dest, .. }
             | IRInstruction::Const { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }
@@ -668,7 +717,6 @@ impl IRInstruction {
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
             | IRInstruction::MakeClosure { dest, .. }
-            | IRInstruction::MoveOutLocal { dest, .. }
             | IRInstruction::Receive { dest, .. }
             | IRInstruction::Spawn { dest, .. }
             | IRInstruction::StructInit { dest, .. }

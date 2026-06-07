@@ -23,16 +23,12 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
+use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::intrinsics::heap_payload;
 use crate::runtime::{declare_free_extern, declare_malloc_extern};
 use crate::types::ir_basic_type;
-
-/// Bit-length header prepended to every Koja `Binary` / `String`
-/// payload — stored as `i64` immediately before the payload pointer.
-/// Matches v1's `STRING_HEADER_BYTES` so eval / native produce
-/// byte-identical heap layouts.
-const STRING_HEADER_BYTES: u64 = 8;
 
 pub(super) fn emit_cptr<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -221,18 +217,23 @@ fn emit_null_check<'ctx>(
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
-/// `to_string(self): self` — the runtime requires the pointer
-/// to already point at a valid length-prefixed Koja string payload
-/// (same layout as `String`); this method is therefore a zero-cost
-/// reinterpret.
+/// `to_string(self): String` — `self` must already point at a valid
+/// length-prefixed Koja string payload (same `[i64 bit_length]
+/// [payload]` layout as `String`). Returns a fresh, independent
+/// `String` copy rather than reinterpreting the pointer in place:
+/// the value-semantics invariant requires every call result to be
+/// owned heap, so the drop pipeline can free it without touching the
+/// caller-managed `CPtr` memory. `with_nul=true` for libc compat.
 fn emit_to_string<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
+    let copied =
+        heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), self_ptr, true, false)?;
     ctx.builder
-        .build_return(Some(&self_ptr))
+        .build_return(Some(&copied))
         .map(|_| ())
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
@@ -248,16 +249,11 @@ fn emit_to_binary<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let i8_ty = ctx.context.i8_type();
-    let header_size = i64_ty.const_int(STRING_HEADER_BYTES, false);
 
     let src_ptr = nth_pointer(function, llvm_function, 0, "self")?;
     let byte_len = nth_int(function, llvm_function, 1, "len")?;
 
-    let total = ctx
-        .builder
-        .build_int_add(header_size, byte_len, "total")
-        .map_err(|e| inkwell_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
+    let total = block_alloc_size(ctx, byte_len, false, "total")?;
     let malloc = declare_malloc_extern(ctx);
     let base_ptr = ctx
         .builder
@@ -278,20 +274,11 @@ fn emit_to_binary<'ctx>(
         })?
         .into_pointer_value();
 
-    // Header is `byte_len * 8` (bit length) at offset 0.
     let bit_len = ctx
         .builder
         .build_int_mul(byte_len, i64_ty.const_int(8, false), "bit_len")
         .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_store(base_ptr, bit_len)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
-
-    let payload_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, base_ptr, &[header_size], "payload_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
+    let payload_ptr = init_heap_block(ctx, base_ptr, bit_len, "cptr_str")?;
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
         .build_call(

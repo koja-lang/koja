@@ -21,8 +21,8 @@
 
 use koja_ast::ast::{
     Annotation, Arg, BinOp, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern,
-    File, Function, ImplBlock, ImplMember, Item, Literal, MatchArm, Param, PassMode, Pattern,
-    Statement, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    File, Function, ImplBlock, ImplMember, Item, Literal, MatchArm, Param, Pattern, Statement,
+    StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -179,12 +179,10 @@ fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
         type_params: Vec::new(),
         params: vec![
             Param::Self_ {
-                mode: PassMode::Borrow,
                 local_id: None,
                 span,
             },
             Param::Regular {
-                mode: PassMode::Borrow,
                 name: OTHER_PARAM.to_string(),
                 type_expr: other_type,
                 default: None,

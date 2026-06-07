@@ -29,7 +29,16 @@ use crate::error::RuntimeError;
 use crate::intrinsics::helpers;
 use crate::value::Value;
 
-const STRING_HEADER_SIZE: usize = 8;
+/// Block base offset for the rc-prefixed Koja string/binary ABI
+/// (`[i64 rc][i64 bit_length][payload…]`). API contract: MUST equal
+/// [`koja_runtime::util::BLOCK_HEADER_SIZE`].
+const BLOCK_HEADER_SIZE: usize = 16;
+/// Offset of the `i64 bit_length` word from the block base. API
+/// contract: MUST equal [`koja_runtime::util::LENGTH_OFFSET`].
+const LENGTH_OFFSET: usize = 8;
+/// Sentinel `i64 rc` for statically-allocated (immortal) blocks; a
+/// freshly-`malloc`'d block is mortal, so it starts at `1`.
+const RC_INITIAL: i64 = 1;
 const BITS_PER_BYTE: i64 = 8;
 
 unsafe extern "C" {
@@ -43,7 +52,6 @@ pub(super) fn binary(
 ) -> Result<Value, RuntimeError> {
     match method {
         BinaryMethod::ByteSize => byte_size(args),
-        BinaryMethod::Clone => clone(args),
         BinaryMethod::Ptr => ptr_(args),
         BinaryMethod::ToBits => to_bits(args),
         BinaryMethod::ToString => to_string(function, args),
@@ -56,7 +64,6 @@ pub(super) fn bits(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
-        BitsMethod::Clone => bits_clone(args),
         BitsMethod::ToBinary => bits_to_binary(function, args),
     }
 }
@@ -71,33 +78,6 @@ fn byte_size(args: &[Value]) -> Result<Value, RuntimeError> {
         });
     };
     Ok(Value::Int(bytes.len() as i64))
-}
-
-fn clone(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Binary(bytes)] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "Binary.clone expects a single Binary argument; got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
-    };
-    Ok(Value::Binary(bytes.clone()))
-}
-
-fn bits_clone(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Bits { bytes, bit_length }] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "Bits.clone expects a single Bits argument; got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
-    };
-    Ok(Value::Bits {
-        bytes: bytes.clone(),
-        bit_length: *bit_length,
-    })
 }
 
 fn ptr_(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -175,26 +155,28 @@ fn bits_to_binary(function: &IRFunction, args: &[Value]) -> Result<Value, Runtim
     Ok(helpers::result_value(result_symbol, parsed))
 }
 
-/// Copy `data` into a freshly-`malloc`'d `[i64 bit_length][payload…]`
-/// buffer and return a pointer to the payload (matches
-/// [`koja_runtime::util::alloc_binary`]'s ABI). Empty inputs round-
-/// trip as a null pointer because the runtime helpers do the same:
-/// a zero-byte payload has no meaningful address. Callers that need
-/// to free pass the *payload* pointer back through `CPtr.free` or
-/// the runtime's `koja_free`, which both step back over the header.
+/// Copy `data` into a freshly-`malloc`'d
+/// `[i64 rc][i64 bit_length][payload…]` buffer and return a pointer to
+/// the payload (matches [`koja_runtime::util::alloc_binary`]'s ABI:
+/// `rc = 1`, mortal). Empty inputs round-trip as a null pointer
+/// because the runtime helpers do the same: a zero-byte payload has no
+/// meaningful address. Callers that need to free pass the *payload*
+/// pointer back through `CPtr.to_string` or the runtime's `koja_free`,
+/// which both step back over the full header to the block base.
 fn alloc_koja_string_payload(data: &[u8]) -> *mut u8 {
     if data.is_empty() {
         return ptr::null_mut();
     }
-    let total = STRING_HEADER_SIZE + data.len();
+    let total = BLOCK_HEADER_SIZE + data.len();
     let base = unsafe { malloc(total) };
     if base.is_null() {
         return ptr::null_mut();
     }
     let bit_len = (data.len() as i64) * BITS_PER_BYTE;
     unsafe {
-        *(base as *mut i64) = bit_len;
-        let payload = base.add(STRING_HEADER_SIZE);
+        *(base as *mut i64) = RC_INITIAL;
+        *(base.add(LENGTH_OFFSET) as *mut i64) = bit_len;
+        let payload = base.add(BLOCK_HEADER_SIZE);
         ptr::copy_nonoverlapping(data.as_ptr(), payload, data.len());
         payload
     }

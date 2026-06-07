@@ -236,24 +236,6 @@ mod tests {
     }
 
     #[test]
-    fn closure_move_param_formatting() {
-        assert_fmt(
-            "
-            fn main
-              f =
-                fn (move x: Int) -> Int x * 2 end
-            end
-        ",
-            "
-            fn main
-              f =
-                fn (move x: Int) -> Int x * 2 end
-            end
-        ",
-        );
-    }
-
-    #[test]
     fn binary_literal_formatting() {
         assert_fmt(
             "
@@ -651,6 +633,85 @@ mod tests {
 
                 else ->
                   "other"
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn match_long_single_expr_body_breaks_all_arms() {
+        // One arm's single-expression body overflows the page width, so
+        // every sibling arm body is pushed onto its own line with blank
+        // lines between arms -- not just the long one.
+        assert_fmt(
+            r#"
+            fn pick(x: Option<Int>) -> String
+              match x
+                Option.Some(value) -> compute_the_chosen_label_for_the_final_display(value)
+                Option.None -> "none"
+              end
+            end
+        "#,
+            r#"
+            fn pick(x: Option<Int>) -> String
+              match x
+                Option.Some(value) ->
+                  compute_the_chosen_label_for_the_final_display(value)
+
+                Option.None ->
+                  "none"
+              end
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn match_short_bodies_stay_inline() {
+        // Regression guard: when no arm body overflows, the whole match
+        // stays inline with no blank lines between arms.
+        assert_fmt(
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 -> 10
+                _ -> 0
+              end
+            end
+        ",
+            "
+            fn f(x: Int) -> Int
+              match x
+                1 -> 10
+                _ -> 0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn match_ternary_body_breaks_arms_consistently() {
+        // The `scan_error` shape: a ternary body overflows, so the short
+        // sibling arm breaks consistently rather than staying inline.
+        assert_fmt(
+            r#"
+            fn scan_error(field: Int, rest: Binary) -> String
+              match take_cstring(rest)
+                Option.Some(pair) -> field == 77 ? pair.first : scan_error_more(pair.second)
+                Option.None -> "error"
+              end
+            end
+        "#,
+            r#"
+            fn scan_error(field: Int, rest: Binary) -> String
+              match take_cstring(rest)
+                Option.Some(pair) ->
+                  field == 77 ? pair.first : scan_error_more(pair.second)
+
+                Option.None ->
+                  "error"
               end
             end
         "#,

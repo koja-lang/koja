@@ -10,6 +10,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::runtime::{declare_concat_bits_extern, declare_malloc_extern};
 
+use super::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 use super::inkwell_err;
 
 /// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
@@ -58,14 +59,12 @@ fn emit_byte_aligned_concat<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
-    let neg8 = i64_ty.const_int((-8i64) as u64, true);
-    let eight = i64_ty.const_int(8, false);
     let three = i64_ty.const_int(3, false);
     let l_ptr = lhs.into_pointer_value();
     let r_ptr = rhs.into_pointer_value();
 
-    let (l_bits, l_bytes) = load_bit_length(ctx, l_ptr, "l", i8_ty, i64_ty, neg8, three)?;
-    let (r_bits, r_bytes) = load_bit_length(ctx, r_ptr, "r", i8_ty, i64_ty, neg8, three)?;
+    let (l_bits, l_bytes) = bits_and_bytes(ctx, l_ptr, "l", three)?;
+    let (r_bits, r_bytes) = bits_and_bytes(ctx, r_ptr, "r", three)?;
 
     let total_bits = ctx
         .builder
@@ -75,15 +74,7 @@ fn emit_byte_aligned_concat<'ctx>(
         .builder
         .build_int_add(l_bytes, r_bytes, "cat_total_bytes")
         .map_err(|e| inkwell_err(format_args!("concat total_bytes"), e))?;
-    let header_size = if with_nul {
-        i64_ty.const_int(9, false)
-    } else {
-        eight
-    };
-    let alloc_size = ctx
-        .builder
-        .build_int_add(total_bytes, header_size, "cat_alloc")
-        .map_err(|e| inkwell_err(format_args!("concat alloc"), e))?;
+    let alloc_size = block_alloc_size(ctx, total_bytes, with_nul, "cat_alloc")?;
 
     let malloc = declare_malloc_extern(ctx);
     let base = ctx
@@ -95,15 +86,7 @@ fn emit_byte_aligned_concat<'ctx>(
         .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
         .into_pointer_value();
 
-    ctx.builder
-        .build_store(base, total_bits)
-        .map_err(|e| inkwell_err(format_args!("concat store header"), e))?;
-
-    let payload = unsafe {
-        ctx.builder
-            .build_in_bounds_gep(i8_ty, base, &[eight], "cat_payload")
-            .map_err(|e| inkwell_err(format_args!("concat payload GEP"), e))?
-    };
+    let payload = init_heap_block(ctx, base, total_bits, "cat")?;
 
     ctx.builder
         .build_memcpy(payload, 1, l_ptr, 1, l_bytes)
@@ -132,29 +115,17 @@ fn emit_byte_aligned_concat<'ctx>(
     Ok(payload.into())
 }
 
-/// Load the `i64 bit_length` header at `payload - 8` plus its
-/// derived `bit_length >> 3` byte count. Shared between the lhs /
-/// rhs sides of [`emit_byte_aligned_concat`]; `prefix` is just for
-/// LLVM SSA-name readability.
-fn load_bit_length<'ctx>(
+/// Load a heap payload's `i64 bit_length` (the word at `payload -
+/// LENGTH_OFFSET`) plus its derived `bit_length >> 3` byte count.
+/// Shared between the lhs / rhs sides of [`emit_byte_aligned_concat`];
+/// `prefix` is just for LLVM SSA-name readability.
+fn bits_and_bytes<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
     prefix: &str,
-    i8_ty: inkwell::types::IntType<'ctx>,
-    i64_ty: inkwell::types::IntType<'ctx>,
-    neg8: IntValue<'ctx>,
     three: IntValue<'ctx>,
 ) -> Result<(IntValue<'ctx>, IntValue<'ctx>), LlvmError> {
-    let hdr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, payload, &[neg8], &format!("{prefix}_hdr"))
-            .map_err(|e| inkwell_err(format_args!("concat header GEP for `{prefix}`"), e))?
-    };
-    let bits = ctx
-        .builder
-        .build_load(i64_ty, hdr, &format!("{prefix}_bits"))
-        .map_err(|e| inkwell_err(format_args!("concat header load for `{prefix}`"), e))?
-        .into_int_value();
+    let bits = load_bit_length(ctx, payload, &format!("{prefix}_bits"))?;
     let bytes = ctx
         .builder
         .build_right_shift(bits, three, false, &format!("{prefix}_bytes"))

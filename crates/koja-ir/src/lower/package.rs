@@ -20,7 +20,7 @@ use koja_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegist
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
 use crate::extern_attrs::IRExternAttrs;
-use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRInstruction, IRSymbol};
+use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSymbol};
 use crate::generics::Instantiation;
 use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
@@ -33,7 +33,7 @@ use super::body::{finalize_open_flow, lower_body};
 use super::constants::lower_constant_pool_entry;
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_decl;
-use super::ownership::ownership_for_param;
+use super::ownership::promote_param;
 use super::structs::lower_struct_decl;
 
 use std::collections::BTreeMap;
@@ -380,15 +380,6 @@ pub(crate) fn lower_function_inner(
 /// `self` is treated as a regular param here: typecheck stamps
 /// `local_id` on every param shape, and `ExprKind::Self_` references
 /// read through the same `LocalRead` path body locals use.
-///
-/// The promotion `LocalWrite` carries the parameter's ownership
-/// stamp from [`super::ownership::ownership_for_param`]: `move`
-/// params (`move c: T`, `move self`) of heap-typed `T` enter their
-/// slot as [`Ownership::Owned`]; default-borrow params and
-/// stack-typed `move` params enter as [`Ownership::Unowned`]. This
-/// wires the slot directly into the drop pipeline so a `move`
-/// parameter that's never reassigned still gets a `DropLocal`
-/// at function exit.
 fn lower_params(
     function: &Function,
     identifier: &Identifier,
@@ -405,35 +396,11 @@ fn lower_params(
                  typecheck resolve must stamp one for every param before lower runs",
             )
         });
-        let mode = signature.params[index].mode;
         let resolved = &signature.params[index].ty;
         let ty = resolved_type_to_ir_type(resolved, registry, &mut output.instantiations);
-        let ownership = ownership_for_param(mode, &ty);
-        let id = ctx.fresh_value(ty.clone());
         let ir_local = IRLocalId::from_local_id(local_id);
         let entry = ctx.entry_block();
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalDecl {
-                local: ir_local,
-                ty: ty.clone(),
-            },
-        );
-        ctx.cfg.append(
-            entry,
-            IRInstruction::LocalWrite {
-                local: ir_local,
-                ownership,
-                value: id,
-            },
-        );
-        ctx.mark_local_declared(ir_local, ty.clone());
-        ctx.mark_local_written(ir_local, ownership);
-        params.push(IRFunctionParam {
-            id,
-            local_id: ir_local,
-            ty,
-        });
+        params.push(promote_param(ctx, entry, ir_local, ty));
     }
     Some(params)
 }
@@ -518,7 +485,7 @@ pub(crate) fn resolved_type_to_ir_type(
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => IRType::Function {
             params: params
                 .iter()
-                .map(|p| resolved_type_to_ir_type(&p.ty, registry, instantiations))
+                .map(|p| resolved_type_to_ir_type(p, registry, instantiations))
                 .collect(),
             ret: Box::new(resolved_type_to_ir_type(ret, registry, instantiations)),
         },

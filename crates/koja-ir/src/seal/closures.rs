@@ -30,8 +30,15 @@ use super::{require_supported_type, seal_panic};
 pub(super) fn seal_closure_decls(pkg: &IRPackage) {
     for function in pkg.functions.values() {
         match &function.kind {
-            FunctionKind::Closure { env_layout } => seal_closure_function(function, env_layout),
-            FunctionKind::Extern(_)
+            // Both closure-shaped kinds read captures via `LoadCapture`
+            // keyed into `env_layout`: the user-visible body and the
+            // synthesized `$drop_env$` capture-release glue.
+            FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
+                seal_closure_function(function, env_layout)
+            }
+            FunctionKind::CloneGlue
+            | FunctionKind::DropGlue
+            | FunctionKind::Extern(_)
             | FunctionKind::Intrinsic(_)
             | FunctionKind::ProcessEntryWrapper { .. }
             | FunctionKind::Regular
@@ -166,6 +173,7 @@ fn require_value_type_matches_body(
     let IRType::Function {
         params: ty_params,
         ret: ty_ret,
+        ..
     } = value_ty
     else {
         seal_panic(&format!(
@@ -207,7 +215,10 @@ fn require_value_type_matches_body(
 
 fn kind_label(kind: &FunctionKind) -> &'static str {
     match kind {
+        FunctionKind::CloneGlue => "CloneGlue",
         FunctionKind::Closure { .. } => "Closure",
+        FunctionKind::DropClosureGlue { .. } => "DropClosureGlue",
+        FunctionKind::DropGlue => "DropGlue",
         FunctionKind::Extern(_) => "Extern",
         FunctionKind::Intrinsic(_) => "Intrinsic",
         FunctionKind::ProcessEntryWrapper { .. } => "ProcessEntryWrapper",
@@ -227,7 +238,6 @@ mod tests {
         IRSymbol, IRTerminator,
     };
     use crate::local::IRLocalId;
-    use crate::ownership::Ownership;
     use crate::package::IRPackage;
     use crate::types::{IRType, ValueId};
 
@@ -255,7 +265,6 @@ mod tests {
                 },
                 IRInstruction::LocalWrite {
                     local: param_local,
-                    ownership: Ownership::Unowned,
                     value: param_id,
                 },
             ],

@@ -417,13 +417,29 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
         "entry block should declare a slot for self: {:?}",
         entry.instructions,
     );
+    // `self` is heap-managed (a struct), so promotion *acquires* it:
+    // a `Clone` of the incoming param feeds the slot write, giving the
+    // frame storage it can drop at exit without disturbing the caller.
+    let acquired = entry
+        .instructions
+        .iter()
+        .find_map(|i| match i {
+            IRInstruction::Clone { dest, source, .. } if *source == self_param.id => Some(*dest),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "entry block should acquire self before storing it: {:?}",
+                entry.instructions,
+            )
+        });
     assert!(
         entry.instructions.iter().any(|i| matches!(
             i,
             IRInstruction::LocalWrite { local, value, .. }
-                if *local == self_param.local_id && *value == self_param.id,
+                if *local == self_param.local_id && *value == acquired,
         )),
-        "entry block should mirror self's value into its slot: {:?}",
+        "entry block should store the acquired self into its slot: {:?}",
         entry.instructions,
     );
 }

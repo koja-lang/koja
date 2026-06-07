@@ -15,11 +15,12 @@
 //!   gives us a clean Rust home for it (mirroring how `Bits`
 //!   concat goes through `__koja_concat_bits`).
 //!
-//! The result heap block matches the v1 layout the entire
-//! string/binary/bits family shares: `[i64 bit_length][payload]`,
-//! with the SSA pointer pointing at the payload (`base + 8`). The
-//! caller stamps `IRType::Binary` (when `layout.byte_aligned`) or
-//! `IRType::Bits` on the destination value.
+//! The result heap block matches the rc layout the entire
+//! string/binary/bits family shares: `[i64 rc][i64 bit_length][payload]`,
+//! with the SSA pointer pointing at the payload (`base + HEADER_BYTES`)
+//! and `rc` initialized to 1 by [`init_heap_block`]. The caller stamps
+//! `IRType::Binary` (when `layout.byte_aligned`) or `IRType::Bits` on
+//! the destination value.
 
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
@@ -29,6 +30,7 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::runtime::{declare_malloc_extern, declare_pack_bits_extern};
 
+use super::heap_layout::{HEADER_BYTES, init_heap_block};
 use super::{ValueMap, inkwell_err, lookup};
 
 /// Lower an `IRInstruction::BinaryConstruct`. Allocates a fresh
@@ -46,7 +48,7 @@ pub(super) fn emit_binary_construct<'ctx>(
     let total_bytes = layout.total_bits.div_ceil(8);
 
     let malloc = declare_malloc_extern(ctx);
-    let alloc_size = i64_ty.const_int(8 + total_bytes, false);
+    let alloc_size = i64_ty.const_int(HEADER_BYTES + total_bytes, false);
     let base = ctx
         .builder
         .build_call(malloc, &[alloc_size.into()], "bin_alloc")
@@ -56,15 +58,7 @@ pub(super) fn emit_binary_construct<'ctx>(
         .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
         .into_pointer_value();
 
-    ctx.builder
-        .build_store(base, i64_ty.const_int(layout.total_bits, false))
-        .map_err(|e| inkwell_err(format_args!("BinaryConstruct header store"), e))?;
-
-    let payload = unsafe {
-        ctx.builder
-            .build_in_bounds_gep(i8_ty, base, &[i64_ty.const_int(8, false)], "bin_payload")
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct payload GEP"), e))?
-    };
+    let payload = init_heap_block(ctx, base, i64_ty.const_int(layout.total_bits, false), "bin")?;
 
     // Pre-zero the payload so trailing partial-byte bits and any
     // padding bits in sub-byte segments stay 0. The runtime

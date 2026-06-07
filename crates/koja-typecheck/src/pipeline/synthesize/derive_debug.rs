@@ -40,8 +40,8 @@
 
 use koja_ast::ast::{
     Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern, File,
-    Function, ImplBlock, ImplMember, Item, MatchArm, Param, PassMode, Pattern, Statement,
-    StringPart, StructDecl, StructField, TypeExpr, TypeParam, Visibility,
+    Function, ImplBlock, ImplMember, Item, MatchArm, Param, Pattern, Statement, StringPart,
+    StructDecl, StructField, TypeExpr, TypeParam, Visibility,
 };
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
@@ -214,7 +214,6 @@ fn format_function(body_expr: Expr, span: Span) -> Function {
         name: FORMAT_METHOD.to_string(),
         type_params: Vec::new(),
         params: vec![Param::Self_ {
-            mode: PassMode::Borrow,
             local_id: None,
             span,
         }],
@@ -248,7 +247,6 @@ fn print_function(span: Span) -> Function {
         name: PRINT_METHOD.to_string(),
         type_params: Vec::new(),
         params: vec![Param::Self_ {
-            mode: PassMode::Borrow,
             local_id: None,
             span,
         }],
@@ -258,7 +256,7 @@ fn print_function(span: Span) -> Function {
     }
 }
 
-/// Builds `fn inspect(move self) -> Self self.print(); self end`.
+/// Builds `fn inspect(self) -> Self self.print(); self end`.
 /// Mirrors the default body declared on `Debug.inspect` in
 /// `lib/global/src/debug.koja`.
 fn inspect_function(span: Span) -> Function {
@@ -269,7 +267,6 @@ fn inspect_function(span: Span) -> Function {
         name: INSPECT_METHOD.to_string(),
         type_params: Vec::new(),
         params: vec![Param::Self_ {
-            mode: PassMode::Move,
             local_id: None,
             span,
         }],

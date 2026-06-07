@@ -179,22 +179,10 @@ pub(super) fn type_expr_to_doc(ty: &TypeExpr) -> Doc {
         TypeExpr::Self_ { .. } => text("Self"),
         TypeExpr::Function {
             params,
-            param_modes,
             return_type,
             ..
         } => {
-            let params_doc: Vec<Doc> = params
-                .iter()
-                .enumerate()
-                .map(|(i, p)| {
-                    let is_move = param_modes.get(i).is_some_and(|m| *m == PassMode::Move);
-                    if is_move {
-                        concat(vec![text("move "), type_expr_to_doc(p)])
-                    } else {
-                        type_expr_to_doc(p)
-                    }
-                })
-                .collect();
+            let params_doc: Vec<Doc> = params.iter().map(type_expr_to_doc).collect();
             concat(vec![
                 text("fn ("),
                 intersperse(params_doc, text(", ")),
@@ -420,15 +408,9 @@ pub(super) fn literal_to_doc(lit: &Literal) -> Doc {
 pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
     match cp {
         ClosureParam::Name {
-            mode,
-            name,
-            type_expr,
-            ..
+            name, type_expr, ..
         } => {
             let mut parts = Vec::new();
-            if *mode == PassMode::Move {
-                parts.push(text("move "));
-            }
             parts.push(text(name.clone()));
             if let Some(te) = type_expr {
                 parts.push(text(": "));
@@ -511,6 +493,26 @@ pub(super) fn arm_is_multiline(body: &[Statement]) -> bool {
     false
 }
 
+/// Page width (80) minus a conservative minimum arm indentation. A
+/// single-expression arm body whose `head -> body` estimate exceeds
+/// this would width-wrap at render time, so we treat the whole arm as
+/// multi-line up front and break every sibling consistently.
+const ARM_INLINE_BUDGET: usize = 72;
+
+/// Returns `true` if a single-expression arm body, laid out inline
+/// after a `head -> ` of `head_len` columns, would overflow the page
+/// and width-wrap. Multi-statement and block-expression bodies are
+/// already caught by [`arm_is_multiline`], so they return `false` here.
+pub(super) fn arm_body_overflows(head_len: usize, body: &[Statement]) -> bool {
+    let [Statement::Expr(expr)] = body else {
+        return false;
+    };
+    if is_block_expr(expr) {
+        return false;
+    }
+    head_len + " -> ".len() + expr_text_len(expr) > ARM_INLINE_BUDGET
+}
+
 pub(super) fn pattern_is_multiline(pattern: &Pattern) -> bool {
     if let Pattern::Or { patterns, .. } = pattern {
         let estimated_width: usize = patterns.iter().map(pattern_text_len).sum::<usize>()
@@ -545,6 +547,17 @@ fn pattern_text_len(pattern: &Pattern) -> usize {
     }
 }
 
+/// Exact single-line rendered width of a pattern. Patterns are pure
+/// `Doc`s (no comment cursor), so we can render one to measure its flat
+/// width and use it as the arm-head length when predicting whether a
+/// single-expression body would overflow. This is exact for every
+/// pattern shape, avoiding the per-kind estimation drift that
+/// `pattern_text_len` (used only for the coarse or-pattern check)
+/// carries.
+pub(super) fn pattern_rendered_len(pattern: &Pattern) -> usize {
+    render(&pattern_to_doc(pattern), u32::MAX).chars().count()
+}
+
 /// Estimates whether a chained `or` or `and` expression would exceed the page width.
 pub(super) fn expr_or_is_multiline(expr: &Expr) -> bool {
     if let ExprKind::Binary {
@@ -576,7 +589,7 @@ fn collect_binop_exprs<'a>(expr: &'a Expr, target_op: &BinOp, out: &mut Vec<&'a 
     out.push(expr);
 }
 
-fn expr_text_len(expr: &Expr) -> usize {
+pub(super) fn expr_text_len(expr: &Expr) -> usize {
     match &expr.kind {
         ExprKind::Literal { value } => match value {
             Literal::Int(n) => n.to_string().len(),
@@ -592,18 +605,83 @@ fn expr_text_len(expr: &Expr) -> usize {
             Literal::Unit => 2,
         },
         ExprKind::Ident { name, .. } => name.len(),
+        ExprKind::Self_ { .. } => 4,
         ExprKind::Binary { op, left, right } => {
             expr_text_len(left) + expr_text_len(right) + binop_str(op).len() + 2
         }
         ExprKind::Unary { operand, .. } => expr_text_len(operand) + 4,
-        ExprKind::Call { callee, args, .. } => {
-            expr_text_len(callee)
-                + args.iter().map(|a| expr_text_len(&a.value)).sum::<usize>()
-                + args.len().saturating_sub(1) * 2
-                + 2
+        ExprKind::Call { callee, args, .. } => expr_text_len(callee) + call_args_text_len(args) + 2,
+        ExprKind::MethodCall {
+            receiver,
+            method,
+            args,
+            ..
+        } => expr_text_len(receiver) + 1 + method.len() + call_args_text_len(args) + 2,
+        ExprKind::FieldAccess { receiver, field } => expr_text_len(receiver) + 1 + field.len(),
+        ExprKind::Ternary {
+            condition,
+            then_expr,
+            else_expr,
+        } => expr_text_len(condition) + expr_text_len(then_expr) + expr_text_len(else_expr) + 6,
+        ExprKind::Group { expr } => expr_text_len(expr) + 2,
+        ExprKind::String { parts, .. } => {
+            2 + parts
+                .iter()
+                .map(|part| match part {
+                    StringPart::Literal { value, .. } => value.len(),
+                    StringPart::Interpolation { expr, .. } => expr_text_len(expr) + 3,
+                })
+                .sum::<usize>()
+        }
+        ExprKind::List { elements } => {
+            2 + elements.iter().map(expr_text_len).sum::<usize>()
+                + elements.len().saturating_sub(1) * 2
+        }
+        ExprKind::EnumConstruction {
+            type_path,
+            variant,
+            data,
+        } => {
+            let head = path_text_len(type_path) + 1 + variant.len();
+            match data {
+                EnumConstructionData::Unit => head,
+                EnumConstructionData::Tuple(elements) => {
+                    head + 2
+                        + elements.iter().map(expr_text_len).sum::<usize>()
+                        + elements.len().saturating_sub(1) * 2
+                }
+                EnumConstructionData::Struct(fields) => head + struct_fields_text_len(fields),
+            }
+        }
+        ExprKind::StructConstruction { type_path, fields } => {
+            path_text_len(type_path) + struct_fields_text_len(fields)
         }
         _ => 10,
     }
+}
+
+/// Estimates the rendered width of a call/method-call argument list,
+/// excluding the surrounding parentheses (`+ 2` is the caller's job).
+fn call_args_text_len(args: &[Arg]) -> usize {
+    args.iter()
+        .map(|a| a.name.as_ref().map_or(0, |n| n.len() + 2) + expr_text_len(&a.value))
+        .sum::<usize>()
+        + args.len().saturating_sub(1) * 2
+}
+
+/// Estimates the rendered width of a `{field: value, ...}` body,
+/// including the braces.
+fn struct_fields_text_len(fields: &[FieldInit]) -> usize {
+    2 + fields
+        .iter()
+        .map(|f| f.name.len() + 2 + expr_text_len(&f.value))
+        .sum::<usize>()
+        + fields.len().saturating_sub(1) * 2
+}
+
+/// Estimates the rendered width of a dotted path (`Pkg.Type`).
+fn path_text_len(path: &[String]) -> usize {
+    path.iter().map(|s| s.len()).sum::<usize>() + path.len().saturating_sub(1)
 }
 
 /// Assembles a `keyword ... arms ... end` block.
@@ -692,24 +770,14 @@ pub(super) fn sig_will_break(f: &Function) -> bool {
 /// Estimates the rendered text length of a function parameter.
 pub(super) fn param_text_len(p: &Param) -> usize {
     match p {
-        Param::Self_ { mode, .. } => {
-            if *mode == PassMode::Move {
-                9
-            } else {
-                4
-            }
-        }
+        Param::Self_ { .. } => 4,
         Param::Regular {
-            mode,
             name,
             type_expr,
             default,
             ..
         } => {
             let mut n = 0;
-            if *mode == PassMode::Move {
-                n += 5;
-            }
             n += name.len();
             n += 2;
             n += type_expr_text_len(type_expr);

@@ -39,6 +39,15 @@ pub(super) fn seal_package(pkg: &IRPackage) {
 fn seal_function(function: &IRFunction) {
     let owner = format!("function `{}`", function.symbol);
     match &function.kind {
+        FunctionKind::CloneGlue | FunctionKind::DropGlue => {
+            // Glue bodies come in two shapes, both valid: aggregate
+            // glue (struct / enum / union / `Indirect`) carries a full
+            // elaborate-synthesized CFG, validated by the standard
+            // SSA / block walk below; collection glue (`List` / `Map`
+            // / `Set`) lowers empty and is synthesized at emit time
+            // from the operand type, caught by the empty-blocks
+            // early-return after the parameter checks.
+        }
         FunctionKind::Intrinsic(_) => {
             if !function.blocks.is_empty() {
                 seal_panic(&format!(
@@ -67,6 +76,14 @@ fn seal_function(function: &IRFunction) {
                 seal_panic(&format!(
                     "{owner} is a synthesized closure but carries no basic blocks; closure \
                      bodies must lower to a non-empty CFG",
+                ));
+            }
+        }
+        FunctionKind::DropClosureGlue { .. } => {
+            if function.blocks.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is closure capture-release glue but carries no basic blocks; its \
+                     `LoadCapture` + `DropValue` body must lower to a non-empty CFG",
                 ));
             }
         }
@@ -216,7 +233,6 @@ fn seal_locals(function: &IRFunction, owner: &str) {
                 IRInstruction::DropLocal { local, .. }
                 | IRInstruction::LocalRead { local, .. }
                 | IRInstruction::LocalWrite { local, .. }
-                | IRInstruction::MoveOutLocal { local, .. }
                     if !declared.contains(local) =>
                 {
                     seal_panic(&format!(

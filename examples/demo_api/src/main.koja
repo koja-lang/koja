@@ -22,7 +22,7 @@ struct Server
 end
 
 impl Process<Server, (), String> for Server
-  fn start(move config: Server) -> Result<Self, StopReason>
+  fn start(config: Server) -> Result<Self, StopReason>
     port = Server.resolve_port()
 
     match TCPListener.bind(port)
@@ -40,11 +40,11 @@ impl Process<Server, (), String> for Server
     end
   end
 
-  fn handle(move self, msg: (), from: Option<ReplyTo<String>>) -> Step<Self>
+  fn handle(self, msg: (), from: Option<ReplyTo<String>>) -> Step<Self>
     Step.Continue(self)
   end
 
-  fn handle_signal(move self, signal: Lifecycle) -> Step<Self>
+  fn handle_signal(self, signal: Lifecycle) -> Step<Self>
     match signal
       Lifecycle.Interrupt ->
         IO.puts("")
@@ -60,13 +60,13 @@ impl Process<Server, (), String> for Server
     end
   end
 
-  fn run(move self) -> StopReason
+  fn run(self) -> StopReason
     self.tick()
   end
 end
 
 extend Server
-  priv fn tick(move self) -> StopReason
+  priv fn tick(self) -> StopReason
     Server.drain_accepts(self.listener)
 
     receive
@@ -87,7 +87,9 @@ extend Server
 
       Option.Some(raw) ->
         match raw.to_int()
-          Result.Ok(n) -> n
+          Result.Ok(n) ->
+            n
+
           Result.Err(_) ->
             IO.puts("PORT=#{raw} is not a valid integer, using #{DEFAULT_PORT}")
             DEFAULT_PORT
@@ -98,16 +100,13 @@ extend Server
   priv fn drain_accepts(listener: TCPListener)
     loop
       match listener.try_accept()
-        Option.Some(client) ->
-          Server.handle_connection(client)
-
-        Option.None ->
-          break
+        Option.Some(client) -> Server.handle_connection(client)
+        Option.None -> break
       end
     end
   end
 
-  priv fn handle_connection(move client: TCPSocket)
+  priv fn handle_connection(client: TCPSocket)
     raw =
       match client.read(8192)
         Result.Ok(s) -> s
@@ -118,7 +117,8 @@ extend Server
       response =
         match Parser.parse_request(raw)
           Result.Ok(req) -> Router.route(req)
-          Result.Err(_) -> Router.error(Status.bad_request(), "malformed request")
+          Result.Err(_) ->
+            Router.error(Status.bad_request(), "malformed request")
         end
 
       match client.write(response.serialize())

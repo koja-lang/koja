@@ -15,7 +15,7 @@ struct CPtr<T>
   Frees the memory at this pointer using C's free.
   """
   @intrinsic
-  fn free(move self)
+  fn free(self)
 
   @doc """
   Returns a pointer offset by `n` elements from this pointer.
@@ -42,17 +42,6 @@ struct CPtr<T>
   fn null?(self) -> Bool
 end
 
-impl Clone for CPtr<T>
-  @doc """
-  `CPtr<T>` is pointer-shaped Copy at the runtime ABI — `clone` just
-  returns the same address. Provided so universal `Clone` resolves
-  for `CPtr<T>` in generic contexts (e.g. `List<CPtr<UInt8>>.clone()`).
-  """
-  fn clone(self) -> Self
-    self
-  end
-end
-
 extend CPtr<UInt8>
   @doc """
   Creates a `Binary` by copying `len` bytes from this pointer.
@@ -68,7 +57,7 @@ extend CPtr<UInt8>
   the runtime). This is a zero-cost operation.
   """
   @intrinsic
-  fn to_string(move self) -> String
+  fn to_string(self) -> String
 
   @doc """
   Wraps this pointer in a `CString` by computing the length with `strlen`.

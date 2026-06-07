@@ -1,11 +1,11 @@
 //! `Set<T>` family — heap-backed unique-element container. Eval
-//! mirrors the LLVM ABI's by-value semantics from the outside
-//! (every method takes / returns a `Value::Set`) but stores
-//! elements in a shared `Rc<RefCell<Vec<Value>>>` so move-self
-//! mutators (`insert`, `remove`) can mutate in place. A linear
-//! probe over the element vec gives the right semantics — the LLVM
-//! backend's open-addressing hash table is purely a perf detail
-//! that's invisible at the Koja level.
+//! stores elements in `Rc<RefCell<Vec<Value>>>`, but under value
+//! semantics every mutator (`insert`, `remove`) is copy-on-write:
+//! it clones the receiver's element vec into a fresh `Rc` before
+//! mutating, so a shared binding is never observably mutated through
+//! another alias. A linear probe over the element vec gives the
+//! right semantics — the LLVM backend's open-addressing hash table
+//! is purely a perf detail that's invisible at the Koja level.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -13,7 +13,6 @@ use std::rc::Rc;
 use koja_ir::{IRFunction, SetMethod};
 
 use crate::error::RuntimeError;
-use crate::intrinsics::helpers;
 use crate::value::{SetEntries, Value};
 
 pub(super) fn dispatch(
@@ -22,7 +21,6 @@ pub(super) fn dispatch(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
-        SetMethod::Clone => clone(args),
         SetMethod::EmptyQ => empty_q(args),
         SetMethod::FromList => from_list(args),
         SetMethod::HasQ => has_q(args),
@@ -35,18 +33,6 @@ pub(super) fn dispatch(
 
 fn new() -> Result<Value, RuntimeError> {
     Ok(Value::Set(Rc::new(RefCell::new(Vec::new()))))
-}
-
-/// Deep-clones the set: fresh `Rc<RefCell<...>>` plus a fresh entry
-/// vec built by recursively cloning each element through
-/// [`super::helpers::deep_clone_value`]. Mirrors `Map.clone` —
-/// shallow `Rc::clone` would alias the storage and break clone
-/// semantics on mutation.
-fn clone(args: &[Value]) -> Result<Value, RuntimeError> {
-    let set = expect_set(args, 0, "Set.clone")?;
-    let items = set.borrow();
-    let cloned: Vec<Value> = items.iter().map(helpers::deep_clone_value).collect();
-    Ok(Value::Set(Rc::new(RefCell::new(cloned))))
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -68,31 +54,26 @@ fn has_q(args: &[Value]) -> Result<Value, RuntimeError> {
 fn insert(args: &[Value]) -> Result<Value, RuntimeError> {
     let set = expect_set(args, 0, "Set.insert")?;
     let item = expect_arg(args, 1, "Set.insert")?.clone();
-    {
-        let mut items = set.borrow_mut();
-        if !items.iter().any(|v| v == &item) {
-            items.push(item);
-        }
+    let mut items = set.borrow().clone();
+    if !items.iter().any(|v| v == &item) {
+        items.push(item);
     }
-    Ok(Value::Set(set))
+    Ok(Value::Set(Rc::new(RefCell::new(items))))
 }
 
 fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
     let set = expect_set(args, 0, "Set.remove")?;
     let item = expect_arg(args, 1, "Set.remove")?.clone();
-    {
-        let mut items = set.borrow_mut();
-        if let Some(idx) = items.iter().position(|v| v == &item) {
-            items.remove(idx);
-        }
+    let mut items = set.borrow().clone();
+    if let Some(idx) = items.iter().position(|v| v == &item) {
+        items.remove(idx);
     }
-    Ok(Value::Set(set))
+    Ok(Value::Set(Rc::new(RefCell::new(items))))
 }
 
-/// `from_list(move list: List<T>) -> Set<T>` — the `ListLiteral`
+/// `from_list(list: List<T>) -> Set<T>` — the `ListLiteral`
 /// path goes here when the resolver synthesizes
-/// `Set.from_list([a, b, c])`. Walks the list once, deduping; the
-/// list is consumed (move-self semantics).
+/// `Set.from_list([a, b, c])`. Walks the list once, deduping.
 fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {
     let list = match expect_arg(args, 0, "Set.from_list")? {
         Value::List(items) => items.clone(),

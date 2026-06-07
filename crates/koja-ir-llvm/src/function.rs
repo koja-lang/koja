@@ -17,7 +17,7 @@ use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 use koja_ir::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRType,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRType, ValueId,
     function_has_tail_call,
 };
 
@@ -57,12 +57,16 @@ pub(crate) fn declare_function<'ctx>(
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
     let signature = function_signature(ctx, function)?;
     let llvm_name = match &function.kind {
-        FunctionKind::Closure { .. } => function.symbol.mangled().to_string(),
+        FunctionKind::Closure { .. } | FunctionKind::DropClosureGlue { .. } => {
+            function.symbol.mangled().to_string()
+        }
         FunctionKind::Extern(attrs) => attrs
             .link_name
             .clone()
             .unwrap_or_else(|| function.symbol.last_segment().to_string()),
-        FunctionKind::Intrinsic(_)
+        FunctionKind::CloneGlue
+        | FunctionKind::DropGlue
+        | FunctionKind::Intrinsic(_)
         | FunctionKind::ProcessEntryWrapper { .. }
         | FunctionKind::Regular
         | FunctionKind::SpawnWrapper { .. } => function.symbol.mangled().to_string(),
@@ -81,7 +85,10 @@ fn function_signature<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
 ) -> Result<FunctionType<'ctx>, LlvmError> {
-    if matches!(function.kind, FunctionKind::Closure { .. }) {
+    if matches!(
+        function.kind,
+        FunctionKind::Closure { .. } | FunctionKind::DropClosureGlue { .. }
+    ) {
         let user_params: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
         return closure_body_signature(ctx, &user_params, &function.return_type);
     }
@@ -129,6 +136,22 @@ pub(crate) fn define_function<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let env_layout = match &function.kind {
+        FunctionKind::CloneGlue | FunctionKind::DropGlue => {
+            if function.blocks.is_empty() {
+                // Collection / `Indirect` glue: a runtime-shaped
+                // deep-copy / element-walk synthesized from the operand
+                // type at emit time, not from an IR CFG.
+                return emit::collection_glue::emit_collection_glue_body(
+                    ctx,
+                    function,
+                    llvm_function,
+                );
+            }
+            // Aggregate glue (struct / enum / union) carries a full
+            // `elaborate`-synthesized CFG; emit it exactly like a
+            // `Regular` body (no closure env).
+            None
+        }
         FunctionKind::Intrinsic(id) => {
             return intrinsics::emit_intrinsic_body(ctx, function, llvm_function, id);
         }
@@ -155,7 +178,9 @@ pub(crate) fn define_function<'ctx>(
             // trampoline returns from.
             return emit_process_entry_wrapper_body(ctx, function, llvm_function, state);
         }
-        FunctionKind::Closure { env_layout } => Some(env_layout.as_slice()),
+        FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
+            Some(env_layout.as_slice())
+        }
         FunctionKind::Regular => None,
     };
     // Slot table is per-function — flush any leftovers from the
@@ -242,7 +267,7 @@ fn emit_entry_with_tco_split<'ctx>(
     phi_map: &emit::PhiMap<'ctx>,
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let promotion_len = 2 * function.params.len();
+    let promotion_len = promotion_prefix_len(function, &block.instructions);
     if block.instructions.len() < promotion_len {
         panic!(
             "LLVM emit: TCO entry block on `{}` is shorter ({}) than the expected \
@@ -272,33 +297,87 @@ fn emit_entry_with_tco_split<'ctx>(
     emit::emit_terminator_default(ctx, block.id, &block.terminator, values, block_map, phi_map)
 }
 
-/// Sanity-check that the leading `2 * params.len()` instructions
-/// of the entry block are the canonical `LocalDecl` + `LocalWrite`
-/// pairs lower emits during parameter promotion. The check is
-/// `debug_assert!`-style: a violation here indicates a lower
-/// invariant break that would otherwise corrupt the back-edge
-/// slot writes.
-fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction) {
-    debug_assert_eq!(prefix.len(), 2 * function.params.len());
-    for (index, param) in function.params.iter().enumerate() {
-        match (&prefix[index * 2], &prefix[index * 2 + 1]) {
-            (
-                IRInstruction::LocalDecl { local: decl, .. },
-                IRInstruction::LocalWrite {
-                    local: write,
-                    value,
-                    ..
-                },
-            ) => {
-                debug_assert_eq!(*decl, param.local_id);
-                debug_assert_eq!(*write, param.local_id);
-                debug_assert_eq!(*value, param.id);
-            }
-            other => panic!(
-                "LLVM emit: unexpected promotion shape on `{}` at param #{index}: {other:?}",
-                function.symbol,
-            ),
+/// Number of leading entry-block instructions lower emits to promote
+/// the parameters into their local slots. Each param is a `LocalDecl`
+/// then `LocalWrite` pair (2); a heap-managed param additionally
+/// *acquires* the borrowed argument into its owning slot between the
+/// two (3) — an inline `Clone` for a heap leaf / no-glue aggregate, or
+/// the `Call` the [`koja_ir::elaborate`] pass rewrote a composite
+/// clone into. The optional acquire is detected structurally (by its
+/// operand referencing the incoming param) so the count tracks
+/// whatever lowering and elaborate produced without re-deriving the
+/// heap-managed predicate here.
+fn promotion_prefix_len(function: &IRFunction, instructions: &[IRInstruction]) -> usize {
+    let mut len = 0;
+    for param in &function.params {
+        len += 1; // LocalDecl
+        if is_param_acquire(instructions.get(len), param.id) {
+            len += 1; // Clone / rewritten clone-glue Call
         }
+        len += 1; // LocalWrite
+    }
+    len
+}
+
+/// Whether `instruction` is the acquire a heap-managed param promotion
+/// inserts between its `LocalDecl` and `LocalWrite`: an inline `Clone`
+/// of the incoming param, or the `Call` elaborate rewrote that clone
+/// into (the param is the call's sole argument).
+fn is_param_acquire(instruction: Option<&IRInstruction>, param: ValueId) -> bool {
+    match instruction {
+        Some(IRInstruction::Clone { source, .. }) => *source == param,
+        Some(IRInstruction::Call { args, .. }) => args.first() == Some(&param),
+        _ => false,
+    }
+}
+
+/// Sanity-check that the entry block's leading instructions are the
+/// canonical per-parameter promotion sequences lower emits:
+/// `LocalDecl` → (acquire `Clone` / `Call` for heap-managed) →
+/// `LocalWrite`. A violation indicates a lower invariant break that
+/// would otherwise corrupt the back-edge slot writes; we panic with a
+/// clear message.
+fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction) {
+    debug_assert_eq!(prefix.len(), promotion_prefix_len(function, prefix));
+    let mut cursor = prefix.iter().enumerate().peekable();
+    for param in &function.params {
+        let (index, decl) = cursor.next().expect("promotion prefix shorter than params");
+        let IRInstruction::LocalDecl { local, .. } = decl else {
+            panic!(
+                "LLVM emit: expected `LocalDecl` at promotion #{index} on `{}`, got {decl:?}",
+                function.symbol,
+            );
+        };
+        debug_assert_eq!(*local, param.local_id);
+
+        // A heap-managed param acquires the borrowed argument into its
+        // slot, so the slot owns the acquire's `dest` rather than the
+        // raw param. The acquire is an inline `Clone` (heap leaf /
+        // no-glue aggregate) or the `Call` elaborate rewrote a
+        // composite clone into.
+        let stored = match cursor.peek() {
+            Some((_, IRInstruction::Clone { dest, source, .. })) if *source == param.id => {
+                cursor.next();
+                *dest
+            }
+            Some((_, IRInstruction::Call { dest, args, .. }))
+                if args.first() == Some(&param.id) =>
+            {
+                cursor.next();
+                *dest
+            }
+            _ => param.id,
+        };
+
+        let (index, write) = cursor.next().expect("promotion prefix missing LocalWrite");
+        let IRInstruction::LocalWrite { local, value } = write else {
+            panic!(
+                "LLVM emit: expected `LocalWrite` at promotion #{index} on `{}`, got {write:?}",
+                function.symbol,
+            );
+        };
+        debug_assert_eq!(*local, param.local_id);
+        debug_assert_eq!(*value, stored);
     }
 }
 

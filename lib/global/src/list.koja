@@ -55,14 +55,14 @@ extend List<T>
   Appends an element to the end of the list and returns the updated list.
   """
   @intrinsic
-  fn append(move self, item: T) -> List<T>
+  fn append(self, item: T) -> List<T>
 
   @doc """
   Appends all elements of `other` to the end of this list and returns the
   combined list.
   """
   @intrinsic
-  fn concat(move self, other: List<T>) -> List<T>
+  fn concat(self, other: List<T>) -> List<T>
 
   @doc """
   Returns `true` if the list contains no elements.
@@ -137,7 +137,7 @@ extend List<T>
   if empty) and the remaining list.
   """
   @intrinsic
-  fn pop(move self) -> Pair<Option<T>, List<T>>
+  fn pop(self) -> Pair<Option<T>, List<T>>
 
   @doc """
   Reduces the list to a single value by applying `f` to the accumulator
@@ -158,7 +158,7 @@ extend List<T>
   Out-of-bounds indices are a no-op (returns the list unchanged).
   """
   @intrinsic
-  fn replace_at(move self, index: Int, value: T) -> List<T>
+  fn replace_at(self, index: Int, value: T) -> List<T>
 
   @doc """
   Returns a new list with the elements in reverse order.
@@ -194,7 +194,7 @@ The compiler builds a `List<T>` from the literal elements and passes it to
 custom collection types.
 """
 protocol ListLiteral<T>
-  fn from_list(move list: List<T>) -> Self
+  fn from_list(list: List<T>) -> Self
 end
 
 impl ListLiteral<T> for List<T>
@@ -202,24 +202,5 @@ impl ListLiteral<T> for List<T>
   Returns the list unchanged. `List<T>` is the default type for list literals.
   """
   @intrinsic
-  fn from_list(move list: List<T>) -> Self
-end
-
-impl Clone for List<T>
-  @doc """
-  Returns a fresh, independently-owned list whose elements are each
-  cloned via `T.clone()`. Mutating the clone (or the original) after
-  the call leaves the other side untouched. Hand-written in `.koja`
-  because `for item in self` already iterates the list — no need for
-  an `@intrinsic` walk like `Map` / `Set` require.
-  """
-  fn clone(self) -> Self
-    result: List<T> = List.new()
-
-    for item in self
-      result = result.append(item.clone())
-    end
-
-    result
-  end
+  fn from_list(list: List<T>) -> Self
 end

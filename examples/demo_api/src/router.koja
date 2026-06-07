@@ -16,12 +16,12 @@ struct Router
   """
   fn route(req: Request) -> Response
     match req.method
-      Method.Get ->
-        Router.route_get(req.path)
-
+      Method.Get -> Router.route_get(req.path)
       _ ->
-        Router.error(Status.method_not_allowed(),
-          "#{req.method.to_string()} not allowed on #{req.path}")
+        Router.error(
+          Status.method_not_allowed(),
+          "#{req.method.to_string()} not allowed on #{req.path}",
+        )
     end
   end
 
@@ -29,18 +29,24 @@ struct Router
   Builds a JSON error response with the given status and message.
   """
   fn error(status: Status, message: String) -> Response
-    body = Value.object([
-      Value.entry("error", Value.string(status.reason)),
-      Value.entry("message", Value.string(message)),
-      Value.entry("status", Value.int(status.code)),
-    ])
+    body = Value.object(
+      [
+        Value.entry("error", Value.string(status.reason)),
+         Value.entry("message", Value.string(message)),
+         Value.entry("status", Value.int(status.code))
+      ],
+    )
     Router.json_response(status, body)
   end
 
   priv fn route_get(path: String) -> Response
     match path
-      "/" -> Router.welcome()
-      "/users" -> Router.list_users()
+      "/" ->
+        Router.welcome()
+
+      "/users" ->
+        Router.list_users()
+
       _ ->
         match Router.parse_user_id(path)
           Option.Some(id) -> Router.get_user(id)
@@ -51,15 +57,21 @@ struct Router
   end
 
   priv fn welcome -> Response
-    body = Value.object([
-      Value.entry("name", Value.string("DemoAPI")),
-      Value.entry("version", Value.string("0.1.0")),
-      Value.entry("routes", Value.array([
-        Value.string("GET /"),
-        Value.string("GET /users"),
-        Value.string("GET /users/:id"),
-      ])),
-    ])
+    body = Value.object(
+      [
+        Value.entry("name", Value.string("DemoAPI")),
+         Value.entry("version", Value.string("0.1.0")),
+         Value.entry(
+          "routes",
+          Value.array(
+            [
+              Value.string("GET /"), Value.string("GET /users"),
+               Value.string("GET /users/:id")
+            ],
+          ),
+        )
+      ],
+    )
     Router.json_response(Status.ok(), body)
   end
 
@@ -70,11 +82,8 @@ struct Router
 
   priv fn get_user(id: Int) -> Response
     match UserService.find(id)
-      Option.Some(user) ->
-        Router.json_response(Status.ok(), user.to_value())
-
-      Option.None ->
-        Router.error(Status.not_found(), "no user with id #{id}")
+      Option.Some(user) -> Router.json_response(Status.ok(), user.to_value())
+      Option.None -> Router.error(Status.not_found(), "no user with id #{id}")
     end
   end
 
@@ -98,11 +107,6 @@ struct Router
     headers = Headers.new()
       .set("Content-Type", "application/json")
       .set("Content-Length", "#{text.byte_length()}")
-    Response{
-      body: text,
-      headers: headers,
-      status: status,
-      version: "HTTP/1.1",
-    }
+    Response{body: text, headers: headers, status: status, version: "HTTP/1.1"}
   end
 end

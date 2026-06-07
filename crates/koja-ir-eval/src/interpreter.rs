@@ -435,9 +435,26 @@ fn execute_function<R: CallResolver>(
                 }),
             };
         }
+        // Acquisition / release glue is a no-op under the interpreter:
+        // every host `Value` is independent (deep-cloned on `lookup`)
+        // and reclaimed by the host GC, so a clone is a rebind of the
+        // argument and a drop returns unit. Short-circuiting here means
+        // eval never executes a glue body — neither the aggregate CFG
+        // `elaborate` synthesizes nor the empty collection shell the
+        // LLVM backend fills.
+        FunctionKind::CloneGlue => return Ok(args.into_iter().next().unwrap_or(Value::Unit)),
+        FunctionKind::DropGlue => return Ok(Value::Unit),
         FunctionKind::Closure { .. } => panic!(
             "interpreter: direct `Call` to closure body `{}` — must dispatch via \
              `CallClosure` (seal invariant violation)",
+            function.symbol,
+        ),
+        // Capture-release glue exists only to back the LLVM env
+        // teardown ABI. The interpreter reclaims via its host GC and
+        // never calls (or even references) it.
+        FunctionKind::DropClosureGlue { .. } => panic!(
+            "interpreter: `$drop_env$` capture-release glue `{}` is LLVM-only — eval reclaims \
+             closures via the host GC and never invokes it",
             function.symbol,
         ),
         FunctionKind::SpawnWrapper { .. } => {
@@ -665,6 +682,15 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, result);
             Ok(())
         }
+        // The host `Value` is deep-cloned on every `lookup`, so a
+        // `Clone` is just a re-bind: the result is already an
+        // independent copy with no shared backing. The LLVM backend
+        // does the real allocation; here the GC handles reclamation.
+        IRInstruction::Clone { dest, source, .. } => {
+            let value = lookup(&frame.values, *source)?;
+            frame.values.insert(*dest, value);
+            Ok(())
+        }
         IRInstruction::Concat {
             dest,
             kind,
@@ -836,23 +862,9 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, value);
             Ok(())
         }
-        IRInstruction::LocalWrite {
-            local,
-            ownership: _,
-            value,
-        } => {
+        IRInstruction::LocalWrite { local, value } => {
             let resolved = lookup(&frame.values, *value)?;
             frame.locals.insert(*local, resolved);
-            Ok(())
-        }
-        IRInstruction::MoveOutLocal { dest, local, .. } => {
-            let value = frame.locals.remove(local).unwrap_or_else(|| {
-                panic!(
-                    "interpreter: `MoveOutLocal` on `{local}` before its `LocalWrite` (or \
-                     after a prior move) — seal / lower invariant violation",
-                )
-            });
-            frame.values.insert(*dest, value);
             Ok(())
         }
         IRInstruction::StructInit { dest, fields, ty } => {

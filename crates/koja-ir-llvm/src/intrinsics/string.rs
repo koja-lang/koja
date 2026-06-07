@@ -14,10 +14,11 @@ use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, StringMethod};
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
+use crate::emit::heap_layout::load_bit_length;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::intrinsics::cptr::declare_memcpy_extern;
-use crate::intrinsics::heap_clone;
+use crate::intrinsics::heap_payload;
 use crate::runtime::{
     declare_malloc_extern, declare_string_get_extern, declare_string_length_extern,
     declare_string_slice_extern,
@@ -29,10 +30,6 @@ use crate::types::ir_basic_type;
 const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
 const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
-/// `[i64 bit_length][payload bytes]` — the SSA pointer points at
-/// the first payload byte; the bit-length sits 8 bytes before.
-const STRING_HEADER_BYTES: u64 = 8;
-
 pub(super) fn emit_string<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -43,9 +40,6 @@ pub(super) fn emit_string<'ctx>(
     ctx.builder.position_at_end(entry);
     match method {
         StringMethod::ByteLength => emit_byte_length(ctx, function, llvm_function),
-        StringMethod::Clone => {
-            heap_clone::emit_payload_clone(ctx, function, llvm_function, true, false)
-        }
         StringMethod::Get => emit_get(ctx, function, llvm_function),
         StringMethod::Length => emit_length(ctx, function, llvm_function),
         StringMethod::Slice => emit_slice(ctx, function, llvm_function),
@@ -67,14 +61,21 @@ fn emit_byte_length<'ctx>(
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
+/// `String.to_binary(self) -> Binary` — a zero-cost reinterpret.
+/// `String` and `Binary` share the `[rc][bit_length][bytes]` block
+/// (the String's trailing libc NUL is just unused capacity a `Binary`
+/// never reads), so we rc-acquire the immutable block and hand back
+/// the same payload pointer as an owned `Binary`. The matching `Drop`
+/// rc-decrements either alias.
 fn emit_to_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let payload = self_payload(function, llvm_function)?;
+    let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
     ctx.builder
-        .build_return(Some(&payload))
+        .build_return(Some(&shared))
         .map(|_| ())
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
@@ -327,18 +328,7 @@ fn load_byte_count<'ctx>(
     payload: PointerValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let i8_ty = ctx.context.i8_type();
-    let neg_hdr = i64_ty.const_int(-(STRING_HEADER_BYTES as i64) as u64, true);
-    let hdr_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, payload, &[neg_hdr], "hdr_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
-    let bit_length = ctx
-        .builder
-        .build_load(i64_ty, hdr_ptr, "bit_length")
-        .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?
-        .into_int_value();
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     ctx.builder
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
         .map_err(|e| {

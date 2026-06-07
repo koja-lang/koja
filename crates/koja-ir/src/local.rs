@@ -14,6 +14,17 @@ impl IRLocalId {
     pub(crate) fn from_local_id(local_id: LocalId) -> Self {
         Self(local_id.as_u32())
     }
+
+    /// Placeholder slot id for synthesized glue
+    /// ([`crate::FunctionKind::CloneGlue`] / `DropGlue`). Glue bodies
+    /// read the operand straight off the parameter's SSA value
+    /// (`params[0].id`) — the aggregate bodies `elaborate` synthesizes
+    /// project fields off it, and the backend's collection bodies bind
+    /// it via `get_nth_param` — so the param's `local_id` slot is
+    /// never declared or read, and any id is sound here.
+    pub(crate) fn synthetic_placeholder() -> Self {
+        Self(0)
+    }
 }
 
 impl fmt::Display for IRLocalId {

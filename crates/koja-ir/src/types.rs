@@ -360,11 +360,9 @@ impl ConcatKind {
 ///   non-multiple of 8; payload occupies `ceil(bit_length / 8)`
 ///   bytes and trailing bits in the last byte are zero-padded.
 ///
-/// All three are move types per `LANGUAGE.md` — owned heap storage
-/// freed at scope exit by [`crate::IRInstruction::DropLocal`]. The
-/// `is_heap_type` classifier in
-/// [`koja_ir::lower::ownership`] (module) treats them
-/// uniformly. `CString` is a struct, not a member of this family.
+/// All three are heap-allocated; the future drop-glue pass frees
+/// them at scope exit via [`crate::IRInstruction::DropLocal`].
+/// `CString` is a struct, not a member of this family.
 ///
 /// `Struct(symbol)` names a user-declared (non-generic) struct by
 /// the same mangled [`IRSymbol`] used as the key on
@@ -469,6 +467,56 @@ impl IRType {
     /// uniform "any float" predicates.
     pub fn is_float(&self) -> bool {
         matches!(self, Self::Float32 | Self::Float64)
+    }
+
+    /// True for types value-semantics lowering acquires on binding and
+    /// releases at scope exit: the heap leaves (`Binary` / `Bits` /
+    /// `String`) plus every composite that *might* own heap storage
+    /// (collections, boxed-recursive `Indirect`, and any struct / enum
+    /// / union, conservatively).
+    ///
+    /// The predicate is intentionally structural — generic struct /
+    /// enum instantiations don't exist yet during per-package lowering,
+    /// so the precise "does this aggregate actually own heap" question
+    /// is deferred to the post-merge [`crate::elaborate`] pass (see
+    /// [`crate::elaborate::needs_drop`]). The conservatism is safe and
+    /// cheap: a composite that turns out to be all-`Copy` gets no glue
+    /// registered, so the backend renders its `Clone` as a register
+    /// copy and its `Drop` as a no-op.
+    ///
+    /// Closures (`Function`) are counted here too: a closure value
+    /// owns a heap env, cloned by an `rc++` on the env block and
+    /// released by an `rc--` that, at zero, runs the body's
+    /// capture-release glue (`FunctionKind::DropClosureGlue`) before
+    /// freeing. The acquire / release ops are picked structurally —
+    /// the backend renders a `Clone` / `Drop` of `Function` inline
+    /// against the env header, dispatching capture teardown through
+    /// the env-carried glue pointer rather than the value's type.
+    pub fn is_heap_managed(&self) -> bool {
+        match self {
+            Self::Binary | Self::Bits | Self::String => true,
+            Self::Enum(_)
+            | Self::Function { .. }
+            | Self::Indirect(_)
+            | Self::List(_)
+            | Self::Map { .. }
+            | Self::Set(_)
+            | Self::Struct(_)
+            | Self::Union { .. } => true,
+            Self::Bool
+            | Self::CPtr(_)
+            | Self::Float32
+            | Self::Float64
+            | Self::Int8
+            | Self::Int16
+            | Self::Int32
+            | Self::Int64
+            | Self::UInt8
+            | Self::UInt16
+            | Self::UInt32
+            | Self::UInt64
+            | Self::Unit => false,
+        }
     }
 
     /// True when this type is one of the integer-family variants

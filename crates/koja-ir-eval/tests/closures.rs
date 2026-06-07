@@ -72,11 +72,11 @@ fn closure_invoked_twice_reuses_environment() {
 
 #[test]
 fn heap_typed_capture_routes_through_env_and_runs_inside_body() {
-    // Concat materializes `s` as Owned, so the lower pass routes the
-    // outer slot through MoveOutLocal into the closure's env. The
-    // body reads `s` via LoadCapture and passes it to `length`,
-    // exercising the env-allocation + capture-lookup contract end
-    // to end without needing a real intrinsic.
+    // The closure captures heap-typed `s`, copied into the env via a
+    // LocalRead of the outer slot (value semantics). The body reads
+    // `s` via LoadCapture and passes it to `length`, exercising the
+    // env-allocation + capture-lookup contract end to end without
+    // needing a real intrinsic.
     let source = "
         fn length(_s: String) -> Int
           3
@@ -91,6 +91,31 @@ fn heap_typed_capture_routes_through_env_and_runs_inside_body() {
         end
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(13));
+}
+
+#[test]
+fn heap_capture_is_independent_and_survives_repeated_invocation() {
+    // The capture-acquire lowering clones the heap-typed `s` into the
+    // env, so the env owns its own copy: invoking the closure twice
+    // and using `s` again afterward must all see the same value
+    // (eval reclaims via its host GC, but the value-semantics shape
+    // must match the LLVM backend's rc path).
+    let source = "
+        fn length(_s: String) -> Int
+          5
+        end
+
+        fn main -> Int
+          s = \"hello\"
+          f = fn (n: Int) -> Int
+            length(s) + n
+          end
+          a = f(1)
+          b = f(2)
+          a + b + length(s)
+        end
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(18));
 }
 
 #[test]

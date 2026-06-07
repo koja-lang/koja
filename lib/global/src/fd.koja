@@ -16,7 +16,7 @@ struct Fd
   @doc """
   Closes the file descriptor.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     koja_fd_close(self.descriptor) == 0
       ? Result.Ok("")
       : Result.Err("close failed")
@@ -29,6 +29,19 @@ struct Fd
   fn read(self, count: Int) -> Result<String, String>
     ptr = koja_fd_read(self.descriptor, count)
     ptr.null?() ? Result.Err("read failed") : Result.Ok(ptr.to_string())
+  end
+
+  @doc """
+  Reads up to `count` bytes from the file descriptor as raw bytes.
+  Unlike `read`, this does not assume the data is UTF-8 text, making it
+  suitable for binary wire protocols. Returns the bytes read, or an
+  error message.
+  """
+  fn read_binary(self, count: Int) -> Result<Binary, String>
+    ptr = koja_fd_read(self.descriptor, count)
+    ptr.null?()
+      ? Result.Err("read failed")
+      : Result.Ok(ptr.to_string().to_binary())
   end
 
   @doc """
@@ -52,12 +65,18 @@ struct Fd
   end
 
   @doc """
-  Writes the given string data to the file descriptor.
-  Returns the number of bytes written, or an error message.
+  Writes data to the file descriptor. Accepts either a `String` (encoded
+  as UTF-8) or a `Binary` for raw wire protocols, so non-UTF-8 frames pass
+  through unaltered. Returns the number of bytes written, or an error.
   """
-  fn write(self, data: String) -> Result<Int, String>
-    bin = data.to_binary()
-    result = koja_fd_write(self.descriptor, bin.ptr(), bin.byte_size())
+  fn write(self, data: Binary | String) -> Result<Int, String>
+    bytes =
+      match data
+        b: Binary -> b
+        s: String -> s.to_binary()
+      end
+
+    result = koja_fd_write(self.descriptor, bytes.ptr(), bytes.byte_size())
     result >= 0 ? Result.Ok(result) : Result.Err("write failed")
   end
 
@@ -98,7 +117,7 @@ struct File
   @doc """
   Closes the file handle.
   """
-  fn close(move self) -> Result<String, String>
+  fn close(self) -> Result<String, String>
     self.fd.close()
   end
 

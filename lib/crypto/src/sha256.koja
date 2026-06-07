@@ -12,7 +12,7 @@ struct SHA256
   end
 
   @doc "Finalizes the hash and returns the 32-byte digest. Consumes the context."
-  fn finalize(move self) -> Binary
+  fn finalize(self) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(32)
     null: CPtr<UInt8> = CPtr.null()
     evp_digest_final_ex(self.ctx, out, null)
@@ -31,7 +31,7 @@ struct SHA256
   end
 
   @doc "Feeds data into the hash context."
-  fn update(move self, data: Binary) -> Self
+  fn update(self, data: Binary) -> Self
     evp_digest_update(self.ctx, data.ptr(), data.byte_size())
     self
   end

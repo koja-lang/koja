@@ -103,9 +103,9 @@ pub fn assert_main_shape(ir_text: &str) {
 /// holds for everything we emit today).
 ///
 /// Anchored on the `define ` prefix so substring searches don't
-/// snap to call sites — `@Global.String.clone(` appears as both a
-/// `define` line and a `call` line once auto-derived `Clone` impls
-/// invoke it from synthesized bodies.
+/// snap to call sites — a symbol like `@Global.Int.format(` appears
+/// as both a `define` line and a `call` line once auto-derived
+/// `Debug` impls invoke it from synthesized bodies.
 pub fn extract_function_body<'a>(ir_text: &'a str, name: &str) -> &'a str {
     let header = "define ";
     let needle = format!("@{name}(");

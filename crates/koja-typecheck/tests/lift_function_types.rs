@@ -1,16 +1,13 @@
 //! Typecheck coverage for `fn (T, U) -> R` annotations.
 //!
 //! Function types lift to [`ResolvedType::Anonymous`] with an
-//! [`AnonymousKind::Function`] payload. Per-parameter [`PassMode`]
-//! travels on each [`FnParam`]; the return type recurses through the
-//! same lifter. These tests pin the surface for higher-order
-//! signatures (`fn (T) -> U` parameters and returns) and cover the
-//! stdlib shape that powers `list.map` / `list.filter`.
+//! [`AnonymousKind::Function`] payload carrying each parameter's
+//! resolved type; the return type recurses through the same lifter.
+//! These tests pin the surface for higher-order signatures
+//! (`fn (T) -> U` parameters and returns) and cover the stdlib shape
+//! that powers `list.map` / `list.filter`.
 
-use koja_ast::ast::PassMode;
-use koja_ast::identifier::{
-    AnonymousKind, FnParam, Identifier, Resolution, ResolvedType, TypeParamIndex,
-};
+use koja_ast::identifier::{AnonymousKind, Identifier, Resolution, ResolvedType, TypeParamIndex};
 use koja_ast::util::dedent;
 use koja_typecheck::GlobalKind;
 
@@ -55,40 +52,12 @@ fn function_type_param_lifts_to_anonymous_function() {
     let signature = lookup_function_signature(&checked, PACKAGE, &["apply"]);
 
     let expected_callback = ResolvedType::Anonymous(AnonymousKind::Function {
-        params: vec![FnParam {
-            mode: PassMode::Borrow,
-            ty: int.clone(),
-        }],
+        params: vec![int.clone()],
         ret: Box::new(int.clone()),
     });
     assert_eq!(signature.params[0].ty, expected_callback);
     assert_eq!(signature.params[1].ty, int);
     assert_eq!(signature.return_type, int);
-}
-
-#[test]
-fn function_type_with_move_param_threads_pass_mode() {
-    let source = "
-        fn apply(f: fn (move String) -> String, s: String) -> String
-          s
-        end
-        ";
-
-    let checked = typecheck(&dedent(source));
-    let string = global_leaf(&checked, "String");
-    let signature = lookup_function_signature(&checked, PACKAGE, &["apply"]);
-
-    let ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) = &signature.params[0].ty
-    else {
-        panic!(
-            "expected `f` to lift to AnonymousKind::Function, got {:?}",
-            signature.params[0].ty
-        );
-    };
-    assert_eq!(params.len(), 1);
-    assert_eq!(params[0].mode, PassMode::Move);
-    assert_eq!(params[0].ty, string);
-    assert_eq!(**ret, string);
 }
 
 #[test]
@@ -106,17 +75,11 @@ fn function_type_returning_function_type_nests() {
     let signature = lookup_function_signature(&checked, PACKAGE, &["make_pipeline"]);
 
     let inner = ResolvedType::Anonymous(AnonymousKind::Function {
-        params: vec![FnParam {
-            mode: PassMode::Borrow,
-            ty: int.clone(),
-        }],
+        params: vec![int.clone()],
         ret: Box::new(int.clone()),
     });
     let outer = ResolvedType::Anonymous(AnonymousKind::Function {
-        params: vec![FnParam {
-            mode: PassMode::Borrow,
-            ty: int,
-        }],
+        params: vec![int],
         ret: Box::new(inner),
     });
     assert_eq!(signature.return_type, outer);
@@ -181,8 +144,7 @@ fn function_type_in_generic_context_carries_type_params() {
         panic!("expected `f: fn (T) -> U` to lift to AnonymousKind::Function");
     };
     assert_eq!(params.len(), 1);
-    assert_eq!(params[0].mode, PassMode::Borrow);
-    assert_eq!(params[0].ty, t);
+    assert_eq!(params[0], t);
     assert_eq!(**ret, u);
     assert_eq!(signature.return_type, u);
 }

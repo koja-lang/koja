@@ -111,9 +111,9 @@ const PROCESS_STUB: &str = "
     end
 
     protocol Process<C, M, R>
-      fn start(move config: C) -> Result<Self, StopReason>
-      fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
-      fn run(move self) -> StopReason
+      fn start(config: C) -> Result<Self, StopReason>
+      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+      fn run(self) -> StopReason
     end
     ";
 
@@ -178,15 +178,15 @@ const COUNTER_PROCESS: &str = "
     end
 
     impl Process<Int, Int, Int> for Counter
-      fn start(move config: Int) -> Result<Counter, StopReason>
+      fn start(config: Int) -> Result<Counter, StopReason>
         Result.Ok(Counter{count: config})
       end
 
-      fn handle(move self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
+      fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Counter>
         Step.Done(StopReason.Normal)
       end
 
-      fn run(move self) -> StopReason
+      fn run(self) -> StopReason
         receive
           event: Lifecycle ->
             StopReason.Shutdown
@@ -448,15 +448,15 @@ fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
         end
 
         impl Process<Int, (), Int> for UnitWorker
-          fn start(move config: Int) -> Result<UnitWorker, StopReason>
+          fn start(config: Int) -> Result<UnitWorker, StopReason>
             Result.Ok(UnitWorker{tag: config})
           end
 
-          fn handle(move self, msg: (), from: Option<ReplyTo<Int>>) -> Step<UnitWorker>
+          fn handle(self, msg: (), from: Option<ReplyTo<Int>>) -> Step<UnitWorker>
             Step.Done(StopReason.Normal)
           end
 
-          fn run(move self) -> StopReason
+          fn run(self) -> StopReason
             receive
               event: Lifecycle ->
                 StopReason.Shutdown
@@ -552,15 +552,15 @@ const APP_PROCESS_ENTRY: &str = "
     end
 
     impl Process<App, (), ()> for App
-      fn start(move config: App) -> Result<App, StopReason>
+      fn start(config: App) -> Result<App, StopReason>
         Result.Ok(config)
       end
 
-      fn handle(move self, msg: (), from: Option<ReplyTo<()>>) -> Step<App>
+      fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<App>
         Step.Done(StopReason.Normal)
       end
 
-      fn run(move self) -> StopReason
+      fn run(self) -> StopReason
         StopReason.Normal
       end
     end
@@ -601,15 +601,15 @@ fn process_entry_with_list_string_config_uses_argv_main_signature() {
         end
 
         impl Process<List<String>, (), ()> for ArgvApp
-          fn start(move config: List<String>) -> Result<ArgvApp, StopReason>
+          fn start(config: List<String>) -> Result<ArgvApp, StopReason>
             Result.Ok(ArgvApp{argv: config})
           end
 
-          fn handle(move self, msg: (), from: Option<ReplyTo<()>>) -> Step<ArgvApp>
+          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<ArgvApp>
             Step.Done(StopReason.Normal)
           end
 
-          fn run(move self) -> StopReason
+          fn run(self) -> StopReason
             StopReason.Normal
           end
         end

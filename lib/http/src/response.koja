@@ -55,7 +55,7 @@ struct Response
     sb.build()
   end
 
-  priv fn write_headers(move sb: StringBuilder, headers: Headers, i: Int)
+  priv fn write_headers(sb: StringBuilder, headers: Headers, i: Int)
     -> StringBuilder
 
     if i >= headers.entries.length()

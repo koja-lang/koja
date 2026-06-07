@@ -6,7 +6,7 @@ use std::ptr;
 use std::slice;
 use std::str;
 
-use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_koja_string};
+use crate::util::{BITS_PER_BYTE, alloc_koja_string, read_bit_length};
 
 /// Decodes a NUL-terminated C string pointer into a string. Every Koja
 /// `String` is valid UTF-8 by construction, so the borrowed path is taken
@@ -44,7 +44,7 @@ pub unsafe extern "C" fn koja_float_parse(ptr: *const u8, out: *mut f64) -> i64 
 /// length header at offset -8.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_format_binary(ptr: *const u8, is_bits: i64) -> *const u8 {
-    let bit_len = unsafe { *(ptr.sub(STRING_HEADER_SIZE) as *const i64) };
+    let bit_len = unsafe { read_bit_length(ptr) };
     if bit_len == 0 {
         return unsafe { alloc_koja_string(b"<<>>") };
     }

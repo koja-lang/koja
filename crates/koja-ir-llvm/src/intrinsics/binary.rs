@@ -27,9 +27,10 @@ use koja_ir::{BinaryMethod, BitsMethod, IRFunction, IRSymbol, IRType, IRVariantT
 use crate::ctx::EmitContext;
 use crate::emit::constants::emit_string_literal_payload;
 use crate::emit::enums::build_enum_value;
+use crate::emit::heap_layout::load_bit_length;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
-use crate::intrinsics::heap_clone::{self, HEADER_BYTES};
+use crate::intrinsics::heap_payload;
 use crate::runtime::declare_utf8_validate_extern;
 
 /// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
@@ -49,12 +50,8 @@ pub(super) fn emit_binary<'ctx>(
 
     match method {
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
-        BinaryMethod::Clone => {
-            heap_clone::emit_payload_clone(ctx, function, llvm_function, false, false)
-        }
-        BinaryMethod::Ptr | BinaryMethod::ToBits => {
-            emit_self_passthrough(ctx, function, llvm_function)
-        }
+        BinaryMethod::Ptr => emit_self_passthrough(ctx, function, llvm_function),
+        BinaryMethod::ToBits => emit_to_bits(ctx, function, llvm_function),
         BinaryMethod::ToString => emit_to_string(ctx, function, llvm_function),
     }
 }
@@ -69,11 +66,30 @@ pub(super) fn emit_bits<'ctx>(
     ctx.builder.position_at_end(entry);
 
     match method {
-        BitsMethod::Clone => {
-            heap_clone::emit_payload_clone(ctx, function, llvm_function, false, true)
-        }
         BitsMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
     }
+}
+
+/// `Binary.to_bits(self) -> Bits` — a zero-cost reinterpret: `Binary`
+/// and `Bits` share the identical `[rc][bit_length][bytes]` block, so
+/// we rc-acquire the immutable block and hand back the same payload
+/// pointer as an owned `Bits`. The matching `Drop` rc-decrements.
+fn emit_to_bits<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
+    ctx.builder
+        .build_return(Some(&shared))
+        .map(|_| ())
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("to_bits build_return for `{}`", function.symbol),
+                e,
+            )
+        })
 }
 
 /// `byte_size = bit_length / 8`. Reads the i64 header at
@@ -84,19 +100,8 @@ fn emit_byte_size<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let i8_ty = ctx.context.i8_type();
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
-    let neg = i64_ty.const_int((-(HEADER_BYTES as i64)) as u64, true);
-    let hdr_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, payload, &[neg], "hdr_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
-    };
-    let bit_length = ctx
-        .builder
-        .build_load(i64_ty, hdr_ptr, "bit_length")
-        .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?
-        .into_int_value();
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
         .builder
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
@@ -120,7 +125,7 @@ fn emit_self_passthrough<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
     ctx.builder
         .build_return(Some(&payload))
         .map(|_| ())
@@ -137,30 +142,9 @@ fn emit_to_string<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
-    let i8_ty = ctx.context.i8_type();
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
     let i64_ty = ctx.context.i64_type();
-    let neg_hdr = i64_ty.const_int((-(HEADER_BYTES as i64)) as u64, true);
-    let hdr_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, payload, &[neg_hdr], "hdr_ptr")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("to_string hdr GEP for `{}`", function.symbol),
-                    e,
-                )
-            })?
-    };
-    let bit_length = ctx
-        .builder
-        .build_load(i64_ty, hdr_ptr, "bit_length")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("to_string hdr load for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .into_int_value();
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
         .builder
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
@@ -217,7 +201,8 @@ fn emit_to_string<'ctx>(
         })?;
 
     ctx.builder.position_at_end(valid_bb);
-    let new_payload = heap_clone::copy_heap_payload(ctx, function, payload, true, false)?;
+    let new_payload =
+        heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), payload, true, false)?;
     return_result(
         ctx,
         function,
@@ -239,30 +224,9 @@ fn emit_to_binary<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
-    let i8_ty = ctx.context.i8_type();
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
     let i64_ty = ctx.context.i64_type();
-    let neg_hdr = i64_ty.const_int((-(HEADER_BYTES as i64)) as u64, true);
-    let hdr_ptr = unsafe {
-        ctx.builder
-            .build_gep(i8_ty, payload, &[neg_hdr], "hdr_ptr")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("to_binary hdr GEP for `{}`", function.symbol),
-                    e,
-                )
-            })?
-    };
-    let bit_length = ctx
-        .builder
-        .build_load(i64_ty, hdr_ptr, "bit_length")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("to_binary hdr load for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .into_int_value();
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let remainder = ctx
         .builder
         .build_and(bit_length, i64_ty.const_int(7, false), "remainder")
@@ -296,8 +260,13 @@ fn emit_to_binary<'ctx>(
             )
         })?;
 
+    // Zero-cost reinterpret: `Bits` and `Binary` share the identical
+    // `[rc][bit_length][bytes]` block (this branch only runs when
+    // `bit_length & 7 == 0`, so the payload is exactly byte-aligned),
+    // so rc-acquire the immutable block and hand back its pointer.
     ctx.builder.position_at_end(ok_bb);
-    return_result(ctx, function, result_symbol, RESULT_OK_TAG, payload.into())?;
+    let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
+    return_result(ctx, function, result_symbol, RESULT_OK_TAG, shared.into())?;
 
     emit_err_branch(
         ctx,

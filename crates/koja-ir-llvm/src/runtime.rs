@@ -13,6 +13,7 @@ use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
 
+pub(crate) const CLOSURE_RC_DEC_SYMBOL: &str = "koja_closure_rc_dec";
 pub(crate) const CONCAT_BITS_SYMBOL: &str = "__koja_concat_bits";
 pub(crate) const FORMAT_BOOL_SYMBOL: &str = "koja_format_bool";
 pub(crate) const FORMAT_F32_SYMBOL: &str = "koja_format_f32";
@@ -25,7 +26,8 @@ pub(crate) const INT_PARSE_SYMBOL: &str = "koja_int_parse";
 pub(crate) const LAST_ERROR_SYMBOL: &str = "koja_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "koja_alloc";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
-pub(crate) const REALLOC_SYMBOL: &str = "koja_realloc";
+pub(crate) const RC_DEC_SYMBOL: &str = "koja_rc_dec";
+pub(crate) const RC_INC_SYMBOL: &str = "koja_rc_inc";
 pub(crate) const UTF8_VALIDATE_SYMBOL: &str = "koja_utf8_validate";
 pub(crate) const PACK_BITS_SYMBOL: &str = "__koja_pack_bits";
 pub(crate) const PANIC_SYMBOL: &str = "__koja_panic";
@@ -105,6 +107,56 @@ pub(crate) fn declare_free_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValu
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(FREE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_rc_inc` extern — the runtime's
+/// refcount increment for an rc-managed leaf heap block. Signature:
+/// `void koja_rc_inc(i8* base)`, where `base` is the block base (the
+/// `i64 rc` word, `payload - HEADER_BYTES`). Immortal (rodata) blocks
+/// carry a negative sentinel rc and are skipped by the runtime. The
+/// `Clone` emitter calls this once per acquired heap-leaf value.
+pub(crate) fn declare_rc_inc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RC_INC_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(RC_INC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_rc_dec` extern — the runtime's
+/// refcount decrement for an rc-managed leaf heap block, freeing the
+/// block when the count hits zero. Signature: `void koja_rc_dec(i8*
+/// base)` (block base, as for [`declare_rc_inc_extern`]). The drop
+/// emitter calls this once per heap-leaf slot at scope exit / per
+/// discarded heap-leaf value.
+pub(crate) fn declare_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RC_DEC_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(RC_DEC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_closure_rc_dec` extern — the
+/// runtime's refcount decrement for a closure env block. Signature:
+/// `void koja_closure_rc_dec(i8* env)`, where `env` is the env block
+/// base (the `i64 rc` word). At zero it runs the env header's
+/// capture-release glue (if non-null) and frees the block; null /
+/// immortal envs are no-ops. The closure `Drop` emitter calls this
+/// once per closure-typed slot at scope exit / per discarded closure
+/// value.
+pub(crate) fn declare_closure_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(CLOSURE_RC_DEC_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(CLOSURE_RC_DEC_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `koja_int_parse` runtime helper.
@@ -243,22 +295,6 @@ pub(crate) fn declare_socket_resolve_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fu
     let signature = ptr_ty.fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(SOCKET_RESOLVE_SYMBOL, signature, Some(Linkage::External))
-}
-
-/// Declare (or look up) the `koja_realloc` extern — the runtime
-/// allocator funnel's realloc (a libc-`realloc` passthrough that
-/// aborts on OOM; see `koja-runtime/src/mem.rs`). The list `append` /
-/// `concat` emitters call this when the buffer needs to grow.
-/// Signature: `i8* koja_realloc(i8* ptr, i64 new_size)`.
-pub(crate) fn declare_realloc_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
-    if let Some(existing) = ctx.module.get_function(REALLOC_SYMBOL) {
-        return existing;
-    }
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let i64_ty = ctx.context.i64_type();
-    let signature = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into()], false);
-    ctx.module
-        .add_function(REALLOC_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `__koja_concat_bits` runtime

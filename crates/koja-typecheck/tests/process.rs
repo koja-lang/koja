@@ -76,8 +76,8 @@ extend Ref<M, R>
 end
 
 protocol Process<C, M, R>
-  fn start(move config: C) -> Result<Self, StopReason>
-  fn handle(move self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+  fn start(config: C) -> Result<Self, StopReason>
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
 end
 ";
 
@@ -172,11 +172,11 @@ fn spawn_start_resolves_to_ref_of_msg_and_reply() {
         end
 
         impl Process<Int, CounterMsg, Int> for Counter
-          fn start(move config: Int) -> Result<Counter, StopReason>
+          fn start(config: Int) -> Result<Counter, StopReason>
             Result.Ok(Counter{count: config})
           end
 
-          fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+          fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
             Step.Continue(self)
           end
         end
@@ -244,7 +244,7 @@ fn spawn_receiver_without_process_impl_diagnoses() {
         end
 
         extend Bag
-          fn start(move config: Int) -> Result<Bag, StopReason>
+          fn start(config: Int) -> Result<Bag, StopReason>
             Result.Ok(Bag{n: config})
           end
         end
@@ -459,11 +459,11 @@ fn ref_call_accepts_union_member_arg() {
         end
 
         impl Process<ParentConfig, MsgA | MsgB, String> for Parent
-          fn start(move config: ParentConfig) -> Result<Self, StopReason>
+          fn start(config: ParentConfig) -> Result<Self, StopReason>
             Result.Ok(Parent{count: 0})
           end
 
-          fn handle(move self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
+          fn handle(self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
             Step.Continue(self)
           end
         end
@@ -506,11 +506,11 @@ fn ref_call_rejects_non_member_arg() {
         end
 
         impl Process<ParentConfig, MsgA | MsgB, String> for Parent
-          fn start(move config: ParentConfig) -> Result<Self, StopReason>
+          fn start(config: ParentConfig) -> Result<Self, StopReason>
             Result.Ok(Parent{count: 0})
           end
 
-          fn handle(move self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
+          fn handle(self, msg: MsgA | MsgB, from: Option<ReplyTo<String>>) -> Step<Self>
             Step.Continue(self)
           end
         end

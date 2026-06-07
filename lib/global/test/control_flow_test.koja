@@ -16,7 +16,7 @@ struct CondStmtCounter
     CondStmtCounter{value: 0}
   end
 
-  fn apply(move self, n: Int) -> Self
+  fn apply(self, n: Int) -> Self
     cond
       n > 0 -> self.value = self.value + n
       n < 0 -> self.value = self.value + n

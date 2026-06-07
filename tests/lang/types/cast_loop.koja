@@ -10,12 +10,11 @@ struct Counter
 end
 
 impl Process<CounterConfig, CounterMsg, Int> for Counter
-  fn start(move config: CounterConfig) -> Result<Self, StopReason>
+  fn start(config: CounterConfig) -> Result<Self, StopReason>
     Result.Ok(Counter{count: 0})
   end
 
-  fn handle(move self, msg: CounterMsg, from: Option<ReplyTo<Int>>)
-    -> Step<Self>
+  fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
     match msg
       CounterMsg.Increment ->
         new_count = self.count + 1

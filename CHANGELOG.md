@@ -10,10 +10,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `koja test` now enforces a 60-second per-binary timeout, so a hung test process fails fast instead of stalling the suite.
+- `Fd.read_binary(count)` and `TCPSocket.read_binary(count)` -- read up to `count` bytes as a `Binary` for binary wire protocols.
+
+### Changed
+
+- `Fd.write` and `TCPSocket.write` now accept `data: Binary | String` (a `String` is encoded as UTF-8), unifying text and binary writes under one method.
+- **Breaking**: Koja moved from affine ownership to **value semantics**. Every binding, parameter, return, and field is now an independent value: assignment and argument passing copy, and a value stays usable for as long as it is in scope. Copies are made cheap by reference-counted copy-on-write — heap-backed values (`String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, enums, closures) are shared while live and reclaimed deterministically at scope exit, with no garbage collector. The `move` keyword and borrow-by-default parameter passing are gone, along with use-after-move errors and the `fn(move T) -> U` function-type syntax. Remove `move` from your signatures; code that previously had to satisfy move/borrow rules now just works.
+
+### Removed
+
+- **Breaking**: The `Clone` protocol and `.clone()` method are removed. Under value semantics every binding, parameter, return, and field is already an independent value (backed by reference-counted copy-on-write), so explicit cloning is unnecessary — replace `x.clone()` with `x`. This drops the `Clone` protocol definition, its stdlib impls (`List`/`Map`/`Set`/`CPtr`/primitives), the auto-derived `impl Clone for T` synthesizer, and `Clone` from the universal protocol set.
 
 ### Fixed
 
-- Passing a heap-owning local (e.g. a `String` built with `<>`, or a `List`) to a function or method that takes ownership (`move`) no longer crashes or returns corrupt data under `--backend=llvm`.
+- `koja format` now lays out `match`/`cond`/`receive` arms consistently: when any single-expression arm body is long enough to wrap at the page width, every sibling arm breaks onto its own indented line (with blank lines between arms) instead of leaving short siblings inline next to a wrapped one.
+- Passing a heap-owning local (e.g. a `String` built with `<>`, or a `List`) to a function or method that stores it no longer crashes or returns corrupt data under `--backend=llvm`.
 - Fixed a scheduler race that could intermittently crash message-heavy programs (e.g. request/reply between processes) with a segfault. A process that yielded while waiting for a message could be resumed by another worker thread from a stale stack pointer before its post-yield state was saved.
 - Fixed a TOCTOU race in the I/O reactor that could leave a process blocked on a readiness event delivered between fd registration and the blocking state transition.
 - Closing a file descriptor now drops it from the reactor's watched and registered maps, preventing spurious wakeups when the kernel later recycles the fd.

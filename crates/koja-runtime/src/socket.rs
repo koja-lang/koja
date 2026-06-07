@@ -17,7 +17,10 @@ use crate::ffi::{
 };
 use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
-use crate::util::{BITS_PER_BYTE, STRING_HEADER_SIZE, alloc_binary, set_last_error};
+use crate::util::{
+    BITS_PER_BYTE, BLOCK_HEADER_SIZE, alloc_binary, read_bit_length, set_last_error,
+    write_block_header,
+};
 
 /// Accepts a connection on a listening socket. If no connection is
 /// pending, suspends the process until one arrives. Returns the new
@@ -176,11 +179,10 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
     };
 
     let data_len = n as usize;
-    let str_alloc = STRING_HEADER_SIZE + data_len + 1;
+    let str_alloc = BLOCK_HEADER_SIZE + data_len + 1;
     let str_base = memory::alloc(str_alloc);
     unsafe {
-        *(str_base as *mut i64) = (data_len as i64) * BITS_PER_BYTE as i64;
-        let str_payload = str_base.add(STRING_HEADER_SIZE);
+        let str_payload = write_block_header(str_base, (data_len as i64) * BITS_PER_BYTE as i64);
         ptr::copy_nonoverlapping(buf.as_ptr(), str_payload, data_len);
         *str_payload.add(data_len) = 0;
 
@@ -324,7 +326,7 @@ pub extern "C" fn koja_socket_setsockopt_reuse(fd: i32) -> i64 {
 
 /// Constructs a `SockaddrIn` from a Binary-encoded IPv4 address and port number.
 fn build_sockaddr_from_ip(ip_ptr: *const u8, port: i64) -> Result<(SockaddrIn, u32), io::Error> {
-    let bit_len = unsafe { *(ip_ptr.sub(STRING_HEADER_SIZE) as *const i64) };
+    let bit_len = unsafe { read_bit_length(ip_ptr) };
     let byte_len = (bit_len / BITS_PER_BYTE as i64) as usize;
     match byte_len {
         4 => {

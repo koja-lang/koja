@@ -13,7 +13,8 @@ use super::binary_construct::emit_binary_construct;
 use super::binary_match;
 use super::process::{emit_receive, emit_spawn};
 use super::{
-    ValueMap, calls, closures, concat, constants, enums, locals, lookup, ops, structs, unions,
+    ValueMap, calls, clone, closures, concat, constants, enums, locals, lookup, ops, structs,
+    unions,
 };
 
 pub(crate) fn emit_instruction<'ctx>(
@@ -66,6 +67,9 @@ pub(crate) fn emit_instruction<'ctx>(
                 values.insert(*dest, result);
             }
             Ok(())
+        }
+        IRInstruction::Clone { dest, source, ty } => {
+            clone::emit_clone(ctx, *dest, *source, ty, values)
         }
         IRInstruction::Concat {
             dest,
@@ -181,11 +185,7 @@ pub(crate) fn emit_instruction<'ctx>(
             values.insert(*dest, value);
             Ok(())
         }
-        IRInstruction::LocalWrite {
-            local,
-            ownership: _,
-            value,
-        } => {
+        IRInstruction::LocalWrite { local, value } => {
             let resolved = lookup(values, *value)?;
             locals::emit_local_write(ctx, *local, resolved)
         }
@@ -197,11 +197,6 @@ pub(crate) fn emit_instruction<'ctx>(
         } => {
             let result = closures::emit_make_closure(ctx, body, captures, values)?;
             values.insert(*dest, result);
-            Ok(())
-        }
-        IRInstruction::MoveOutLocal { dest, local, ty } => {
-            let value = locals::emit_local_read(ctx, *local, ty)?;
-            values.insert(*dest, value);
             Ok(())
         }
         IRInstruction::StructInit { dest, fields, ty } => {

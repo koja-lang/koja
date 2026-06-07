@@ -50,8 +50,7 @@ pub(super) struct CarrierSpec {
     pub protocol_name: &'static str,
 
     /// The synthesis method on a non-default conformer. Has
-    /// signature `fn <from_method>(move <param>: <DefaultCarrier>)
-    /// -> Self`.
+    /// signature `fn <from_method>(<param>: <DefaultCarrier>) -> Self`.
     pub from_method: &'static str,
 
     /// Diagnostic prefix for the "default carrier missing from
@@ -182,7 +181,7 @@ pub(super) fn dispatch_via_carrier(
             // method-call resolver: it populates the receiver's
             // resolution (`Global(id)` leaf, then upgraded with
             // inferred type-args), validates the arg shape against
-            // `<from_method>(move <param>: <DefaultCarrier>) -> Self`,
+            // `<from_method>(<param>: <DefaultCarrier>) -> Self`,
             // and returns the substituted `Self` (the carrier with
             // its slots filled in).
             resolve_method_call_expr(expr, *expected, resolver, diagnostics)

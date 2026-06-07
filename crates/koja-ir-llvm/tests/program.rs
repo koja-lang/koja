@@ -42,7 +42,7 @@ fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
     // Same inline shape as String concat (no trailing NUL though —
     // `with_nul=false` for `Binary`).
     let source = "
-        fn join(move a: Binary, move b: Binary) -> Binary
+        fn join(a: Binary, b: Binary) -> Binary
           a <> b
         end
 
@@ -130,7 +130,7 @@ fn bits_concat_helper_routes_through_runtime() {
     // declares and calls the runtime `__koja_concat_bits`
     // helper instead.
     let source = "
-        fn join(move a: Bits, move b: Bits) -> Bits
+        fn join(a: Bits, b: Bits) -> Bits
           a <> b
         end
 

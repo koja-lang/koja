@@ -11,7 +11,7 @@
 //! (which pins the runtime byte-for-byte result).
 
 use koja_ast::util::dedent;
-use koja_ir::{ConcatKind, IRFunction, IRInstruction, IRType, Ownership};
+use koja_ir::{ConcatKind, IRFunction, IRInstruction, IRType};
 
 mod common;
 
@@ -29,7 +29,7 @@ fn first_concat(function: &IRFunction) -> &IRInstruction {
 #[test]
 fn string_concat_lowers_to_concat_string() {
     let source = "
-        fn greet(move a: String, move b: String) -> String
+        fn greet(a: String, b: String) -> String
           a <> b
         end
 
@@ -50,7 +50,7 @@ fn string_concat_lowers_to_concat_string() {
 #[test]
 fn binary_concat_lowers_to_concat_binary() {
     let source = "
-        fn join(move a: Binary, move b: Binary) -> Binary
+        fn join(a: Binary, b: Binary) -> Binary
           a <> b
         end
 
@@ -71,7 +71,7 @@ fn binary_concat_lowers_to_concat_binary() {
 #[test]
 fn bits_concat_lowers_to_concat_bits() {
     let source = "
-        fn join(move a: Bits, move b: Bits) -> Bits
+        fn join(a: Bits, b: Bits) -> Bits
           a <> b
         end
 
@@ -87,51 +87,4 @@ fn bits_concat_lowers_to_concat_bits() {
     };
     assert_eq!(*kind, ConcatKind::Bits);
     assert_eq!(join.return_type, IRType::Bits);
-}
-
-#[test]
-fn concat_result_assigned_to_local_stamps_owned() {
-    // `s = "a" <> "b"` should stamp `Ownership::Owned` on the
-    // assignment's `LocalWrite` because the RHS is a concat (a
-    // heap-allocating producer). This pins the
-    // [`koja_ir::lower::ownership::ownership_for_expr`]
-    // classifier's `BinOp::Concat` arm — without the Owned stamp,
-    // drop emission wouldn't free the freshly-allocated payload.
-    let source = "
-        fn build(move a: String, move b: String) -> String
-          s = a <> b
-          s
-        end
-
-        fn main
-          1
-        end
-    ";
-
-    let program = lower(&dedent(source));
-    let build = function(&program, "build");
-
-    let owned_writes: Vec<_> = build
-        .blocks
-        .iter()
-        .flat_map(|b| b.instructions.iter())
-        .filter_map(|i| match i {
-            IRInstruction::LocalWrite {
-                local,
-                ownership: Ownership::Owned,
-                value,
-            } => Some((local, value)),
-            _ => None,
-        })
-        .collect();
-
-    // Three Owned LocalWrites: one each for `a` and `b` (move-param
-    // promotion), plus one for `s` (the concat result).
-    assert_eq!(
-        owned_writes.len(),
-        3,
-        "expected 3 Owned LocalWrites (a, b, s); got {} in {:?}",
-        owned_writes.len(),
-        build,
-    );
 }

@@ -3,7 +3,6 @@
 //! (today private); duplicated here as a small local printer rather
 //! than promoting the upstream helper.
 
-use koja_ast::ast::PassMode;
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};
 use koja_typecheck::{
     FunctionSignature, GlobalRegistry, ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod,
@@ -16,13 +15,7 @@ pub(crate) fn format_resolved_type(ty: &ResolvedType, registry: &GlobalRegistry)
         ResolvedType::Anonymous(AnonymousKind::Function { params, ret }) => {
             let rendered_params = params
                 .iter()
-                .map(|p| {
-                    let inner = format_resolved_type(&p.ty, registry);
-                    match p.mode {
-                        PassMode::Move => format!("move {inner}"),
-                        PassMode::Borrow | PassMode::Copy => inner,
-                    }
-                })
+                .map(|p| format_resolved_type(p, registry))
                 .collect::<Vec<_>>()
                 .join(", ");
             format!(
@@ -100,10 +93,7 @@ pub(crate) fn format_function_signature(
 
 fn format_param(p: &ResolvedParam, registry: &GlobalRegistry) -> String {
     let ty = format_resolved_type(&p.ty, registry);
-    match p.mode {
-        PassMode::Move => format!("move {}: {}", p.name, ty),
-        _ => format!("{}: {}", p.name, ty),
-    }
+    format!("{}: {}", p.name, ty)
 }
 
 /// Render a struct's hover signature: `struct Name<Tp,...>` followed

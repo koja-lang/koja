@@ -16,7 +16,7 @@ struct Cursor
   Consumes the current character and advances offset, line, and column.
   Returns self unchanged if already at end-of-input.
   """
-  fn advance(move self) -> Self
+  fn advance(self) -> Self
     if self.at_end?()
       return self
     end

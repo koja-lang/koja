@@ -31,12 +31,12 @@
 use koja_ast::ast::{Expr, Statement};
 use koja_typecheck::GlobalRegistry;
 
-use crate::function::{BranchTarget, IRBlockId, IRTerminator};
+use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
 use crate::types::ValueId;
 
 use super::arms::emit_unit;
 use super::body::lower_body;
-use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
+use super::ctx::{FlowResult, FnLowerCtx, LowerOutput, SlotStateSnapshot};
 use super::expr::lower_expr;
 
 /// Lower a `while cond ... end`. Builds three blocks:
@@ -77,10 +77,11 @@ pub(super) fn lower_while(
     );
 
     ctx.push_loop_exit(exit_block);
+    let body_snapshot = ctx.snapshot_slot_states();
     let body_flow = lower_body(body, ctx, body_block, registry, output)?;
-    ctx.pop_loop_exit();
     match body_flow {
         FlowResult::Open { block: tail, .. } => {
+            drop_body_scoped_bindings(ctx, tail, &body_snapshot);
             ctx.cfg
                 .set_terminator(tail, IRTerminator::Branch(BranchTarget::to(header)));
         }
@@ -90,9 +91,30 @@ pub(super) fn lower_while(
         // `lower_body`.
         FlowResult::Closed => {}
     }
+    ctx.restore_slot_states(body_snapshot);
+    ctx.pop_loop_exit();
 
     let unit = emit_unit(ctx, exit_block);
     Ok((unit, exit_block))
+}
+
+/// Release every heap-managed binding declared inside a loop body at
+/// the back-edge `tail`. A binding introduced in the body leaves
+/// scope when the iteration ends, so its owned value is dropped here
+/// — each iteration overwrites a fresh value and drops it before the
+/// next, with no stale-overwrite drop on the slot (the body's single
+/// lowered `LocalWrite` was a first declaration). Crucially, these
+/// slots are then restored out of the live set by the caller so they
+/// never reach the function-exit drops, where a zero-trip loop would
+/// leave them uninitialized.
+fn drop_body_scoped_bindings(
+    ctx: &mut FnLowerCtx,
+    tail: IRBlockId,
+    body_snapshot: &SlotStateSnapshot,
+) {
+    for (local, ty) in ctx.heap_slots_declared_since(body_snapshot) {
+        ctx.cfg.append(tail, IRInstruction::DropLocal { local, ty });
+    }
 }
 
 /// Lower an infinite `loop ... end`. Builds two blocks (no header —
@@ -121,12 +143,15 @@ pub(super) fn lower_loop(
         .set_terminator(block, IRTerminator::Branch(BranchTarget::to(body_block)));
 
     ctx.push_loop_exit(exit_block);
+    let body_snapshot = ctx.snapshot_slot_states();
     let body_flow = lower_body(body, ctx, body_block, registry, output)?;
-    ctx.pop_loop_exit();
     if let FlowResult::Open { block: tail, .. } = body_flow {
+        drop_body_scoped_bindings(ctx, tail, &body_snapshot);
         ctx.cfg
             .set_terminator(tail, IRTerminator::Branch(BranchTarget::to(body_block)));
     }
+    ctx.restore_slot_states(body_snapshot);
+    ctx.pop_loop_exit();
 
     let unit = emit_unit(ctx, exit_block);
     Ok((unit, exit_block))

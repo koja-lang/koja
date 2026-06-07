@@ -10,8 +10,8 @@ get tackled.
 
 Almost every runtime bug we've chased — the message-envelope leaks
 (`archive/20260529-MESSAGE-LIFECYCLE.md` phases 1–5), the deferred
-discard-path nested-heap leak (`OWNERSHIP-DROP.md`), the `on_cpu`
-scheduler race, the
+discard-path nested-heap leak (envelope `drop_glue` wiring, §1), the
+`on_cpu` scheduler race, the
 nondeterministic SIGBUS in tight `call` loops — traces to one root:
 
 > **The runtime manages raw memory and process state by hand, with
@@ -67,8 +67,14 @@ drop now. `Timer.msg_buf`'s hand-free is gone — the timer payload is an
 no second free site). The remaining hand-free is the deliberate
 ownership transfer on delivered receive (`free_transport` consumes the
 `Envelope`; nested heap moves to the receiver). Note the one leak still
-open is _nested_ heap inside discarded payloads — that's the recursive
-drop-glue subsystem (`OWNERSHIP-DROP.md`), not a missing `Drop`.
+open is _nested_ heap inside discarded payloads. The recursive drop
+glue that frees it has since landed in the compiler (per-type `drop_T`,
+value-semantics RC — see `MEMORY-MODEL.md`), but it is **not yet wired
+into message passing**: `Envelope::new` still sets `drop_glue: None`
+([wire.rs](koja/crates/koja-runtime/src/wire.rs)), so the discard path
+has no glue to run. The remaining work is codegen stamping the message
+type's `drop_glue_symbol` into the envelope at the `send` site — not a
+missing `Drop`.
 
 ### 2. Two allocators for the same logical types
 
@@ -85,10 +91,9 @@ Heap payloads are allocated through **both** `std::alloc` and libc
 
 Freeing a `std::alloc` block with `free()` (or vice-versa) is undefined
 behavior. It works today only because codegen's `payload - 8` free
-recipe happens to match the allocator used. It also actively **blocks
-recursive drop glue (`OWNERSHIP-DROP.md`)**: drop glue would need to free
-a message's nested `String`s, which may be `malloc`'d while the envelope
-is `std::alloc`'d.
+recipe happens to match the allocator used. It also actively **blocked
+recursive drop glue**: drop glue needs to free a message's nested
+`String`s, which may be `malloc`'d while the envelope is `std::alloc`'d.
 
 **Fix.** Pick one allocator (the global one) for all Koja heap. Funnel
 String/Binary/Bits allocation through a single `alloc`/`free` pair so
@@ -393,11 +398,13 @@ The four highest-leverage fixes have all landed:
 
 ## What's left for soft launch
 
-- **Recursive drop glue** (`OWNERSHIP-DROP.md`) — the largest remaining
-  correctness gap, now unblocked by #2. Nested heap inside discarded
-  structs/enums leaks language-wide. Its own effort (the design doc
-  records the literal-provenance + call-return-mode blockers a naive
-  widening hits).
+- **Wire `Envelope.drop_glue` at the send site** — the recursive drop
+  glue itself landed in the compiler (per-type `drop_T`, value-semantics
+  RC; see `MEMORY-MODEL.md`), but codegen does not yet stamp the message
+  type's glue pointer into the envelope, so `drop_glue` is always null
+  ([wire.rs](koja/crates/koja-runtime/src/wire.rs)) and nested heap
+  inside an undelivered/discarded payload leaks. This is the last
+  message-lifecycle leak (§1).
 - **#5 (reactor strands a worker)** and **#9 (messages don't wake
   `WaitingIo`)** — liveness / shutdown semantics.
 - Deferred: **#7** (typed `EventKey`; de-risked by generational PIDs),

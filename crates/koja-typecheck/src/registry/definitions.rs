@@ -12,7 +12,7 @@
 
 use std::collections::BTreeMap;
 
-use koja_ast::ast::{Expr, PassMode};
+use koja_ast::ast::Expr;
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 
 /// How a function call dispatches on its callee.
@@ -34,15 +34,11 @@ pub enum Dispatch {
     Static,
 }
 
-/// A single resolved parameter: passing mode (`move` / borrow / copy),
-/// surface-syntax name, and resolved type. `mode` mirrors the AST's
-/// [`PassMode`] verbatim — `lift_signatures` reads it off the
-/// matching `Param::{Regular,Self_}` variant. Downstream consumers
-/// (IR parameter promotion, future move analysis) key drop /
-/// borrow-checking decisions on this field.
+/// A single resolved parameter: surface-syntax name and resolved
+/// type, stamped by `lift_signatures` off the matching
+/// `Param::{Regular,Self_}` variant.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ResolvedParam {
-    pub mode: PassMode,
     pub name: String,
     pub ty: ResolvedType,
 }

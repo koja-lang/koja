@@ -1,11 +1,12 @@
 //! `Map<K, V>` family — heap-backed associative container. Eval
-//! mirrors the LLVM ABI's by-value semantics from the outside
-//! (every method takes / returns a `Value::Map`) but stores entries
-//! in a shared `Rc<RefCell<Vec<(Value, Value)>>>` so move-self
-//! mutators (`put`, `remove`) can mutate in place. A linear probe
-//! over the entry vec gives the right semantics — the LLVM
-//! backend's open-addressing hash table is purely a perf detail
-//! that's invisible at the Koja level.
+//! stores entries in `Rc<RefCell<Vec<(Value, Value)>>>`, but under
+//! value semantics every mutator (`put`, `remove`) is
+//! copy-on-write: it clones the receiver's entry vec into a fresh
+//! `Rc` before mutating, so a shared binding is never observably
+//! mutated through another alias. A linear probe over the entry vec
+//! gives the right semantics — the LLVM backend's open-addressing
+//! hash table is purely a perf detail that's invisible at the Koja
+//! level.
 //!
 //! `get` materializes an `Option<V>` value directly. The receiver
 //! symbol for the option shape flows from `function.return_type`.
@@ -25,7 +26,6 @@ pub(super) fn dispatch(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
-        MapMethod::Clone => clone(args),
         MapMethod::EmptyQ => empty_q(args),
         MapMethod::FromMap => from_map(args),
         MapMethod::Get => get(function, args),
@@ -39,22 +39,6 @@ pub(super) fn dispatch(
 
 fn new() -> Result<Value, RuntimeError> {
     Ok(Value::Map(Rc::new(RefCell::new(Vec::new()))))
-}
-
-/// Deep-clones the map: fresh `Rc<RefCell<...>>` plus a fresh entry
-/// vec built by recursively cloning each key/value through
-/// [`super::helpers::deep_clone_value`]. The recursion mirrors the
-/// LLVM backend's per-element K/V clone — mutating the clone (or the
-/// original) after the call must not be observable on the other side
-/// even for `Map<String, List<X>>`-style nested-heap K/V shapes.
-fn clone(args: &[Value]) -> Result<Value, RuntimeError> {
-    let map = expect_map(args, 0, "Map.clone")?;
-    let entries = map.borrow();
-    let cloned: Vec<(Value, Value)> = entries
-        .iter()
-        .map(|(k, v)| (helpers::deep_clone_value(k), helpers::deep_clone_value(v)))
-        .collect();
-    Ok(Value::Map(Rc::new(RefCell::new(cloned))))
 }
 
 fn length(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -95,27 +79,23 @@ fn put(args: &[Value]) -> Result<Value, RuntimeError> {
     let map = expect_map(args, 0, "Map.put")?;
     let key = expect_arg(args, 1, "Map.put")?.clone();
     let value = expect_arg(args, 2, "Map.put")?.clone();
-    {
-        let mut entries = map.borrow_mut();
-        if let Some(slot) = entries.iter_mut().find(|(k, _)| k == &key) {
-            slot.1 = value;
-        } else {
-            entries.push((key, value));
-        }
+    let mut entries = map.borrow().clone();
+    if let Some(slot) = entries.iter_mut().find(|(k, _)| k == &key) {
+        slot.1 = value;
+    } else {
+        entries.push((key, value));
     }
-    Ok(Value::Map(map))
+    Ok(Value::Map(Rc::new(RefCell::new(entries))))
 }
 
 fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
     let map = expect_map(args, 0, "Map.remove")?;
     let key = expect_arg(args, 1, "Map.remove")?.clone();
-    {
-        let mut entries = map.borrow_mut();
-        if let Some(idx) = entries.iter().position(|(k, _)| k == &key) {
-            entries.remove(idx);
-        }
+    let mut entries = map.borrow().clone();
+    if let Some(idx) = entries.iter().position(|(k, _)| k == &key) {
+        entries.remove(idx);
     }
-    Ok(Value::Map(map))
+    Ok(Value::Map(Rc::new(RefCell::new(entries))))
 }
 
 fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Value, RuntimeError> {

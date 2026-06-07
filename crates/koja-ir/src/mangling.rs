@@ -102,7 +102,7 @@ fn mangle_type(ty: &IRType) -> String {
         IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.mangled().to_string(),
         IRType::Float32 => "Float32".to_string(),
         IRType::Float64 => "Float64".to_string(),
-        IRType::Function { params, ret } => {
+        IRType::Function { params, ret, .. } => {
             let rendered_params: Vec<String> = params.iter().map(mangle_type).collect();
             format!("Fn_${};{}$", rendered_params.join(","), mangle_type(ret))
         }
@@ -139,4 +139,52 @@ fn mangle_type(ty: &IRType) -> String {
 pub(crate) fn union_mangle(members: &[IRType]) -> IRSymbol {
     let parts: Vec<String> = members.iter().map(mangle_type).collect();
     IRSymbol::synthetic(format!("Union_{}", parts.join("_or_")))
+}
+
+/// Symbol of the synthesized clone glue for `ty` (`<type>.$clone$`).
+/// Hung off the type's own symbol exactly like [`mangled_method_name`]
+/// hangs a method off its receiver — glue is a synthesized method on
+/// the type, so a struct in `TestApp` gets `TestApp.Point.$clone$` and
+/// stays rooted in its own package. The `$`-fenced suffix can never
+/// collide with a user-defined `fn clone` (which mangles to the bare
+/// `<type>.clone`); acquisition dispatches to this symbol by type,
+/// never by method-name lookup. Both the [`crate::elaborate`] pass
+/// (which registers the glue) and the LLVM backend (which emits the
+/// `call`s) mint through this single helper so they agree by
+/// construction.
+pub fn clone_glue_symbol(ty: &IRType) -> IRSymbol {
+    glue_base(ty).derived(".$clone$")
+}
+
+/// Symbol of the synthesized drop glue for `ty` (`<type>.$drop$`).
+/// Drop analog of [`clone_glue_symbol`]; same rooting and
+/// collision-free guarantee.
+pub fn drop_glue_symbol(ty: &IRType) -> IRSymbol {
+    glue_base(ty).derived(".$drop$")
+}
+
+/// Symbol of the synthesized capture-release glue for a closure body
+/// (`<body>.$drop_env$`). Hung off the closure body's own symbol, so
+/// it stays in the body's package and is collision-free against any
+/// user method (the `$`-fenced suffix can't appear in a surface
+/// name). Both `crate::lower::closures` (which mints the
+/// `FunctionKind::DropClosureGlue` body) and the LLVM backend
+/// (which takes its address at `MakeClosure`) derive through this
+/// single helper so they agree by construction.
+pub fn closure_drop_env_symbol(body: &IRSymbol) -> IRSymbol {
+    body.derived(".$drop_env$")
+}
+
+/// The symbol the per-type glue hangs off. Named types (struct /
+/// enum / union) carry their own package-qualified [`IRSymbol`], so
+/// the glue stays in their package. The structural primitive
+/// collections (`List` / `Map` / `Set` / `Indirect`) have no owning
+/// decl, so they get a synthetic root mangled from their shape —
+/// package-less, the same treatment [`union_mangle`] gives unions.
+fn glue_base(ty: &IRType) -> IRSymbol {
+    match ty {
+        IRType::Enum(symbol) | IRType::Struct(symbol) => symbol.clone(),
+        IRType::Union { mangled, .. } => mangled.clone(),
+        other => IRSymbol::synthetic(mangle_type(other)),
+    }
 }

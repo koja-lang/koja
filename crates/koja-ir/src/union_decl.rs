@@ -316,9 +316,9 @@ fn walk_block_param(param: &BlockParam, out: &mut BTreeMap<IRSymbol, IRType>) {
 fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IRType>) {
     match instruction {
         IRInstruction::CallClosure { result_ty, .. } => walk_type(result_ty, out),
-        IRInstruction::DropLocal { ty, .. } | IRInstruction::DropValue { ty, .. } => {
-            walk_type(ty, out)
-        }
+        IRInstruction::Clone { ty, .. }
+        | IRInstruction::DropLocal { ty, .. }
+        | IRInstruction::DropValue { ty, .. } => walk_type(ty, out),
         IRInstruction::EnumPayloadFieldGet { field_type, .. } => walk_type(field_type, out),
         IRInstruction::FieldGet { field_type, .. } | IRInstruction::FieldSet { field_type, .. } => {
             walk_type(field_type, out)
@@ -327,8 +327,7 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
         | IRInstruction::LoadConst { ty, .. }
         | IRInstruction::LocalDecl { ty, .. }
         | IRInstruction::LocalRead { ty, .. }
-        | IRInstruction::MakeClosure { ty, .. }
-        | IRInstruction::MoveOutLocal { ty, .. } => walk_type(ty, out),
+        | IRInstruction::MakeClosure { ty, .. } => walk_type(ty, out),
         IRInstruction::Receive {
             arms, result_type, ..
         } => {
@@ -437,7 +436,7 @@ fn walk_type(ty: &IRType, out: &mut BTreeMap<IRSymbol, IRType>) {
             walk_type(key, out);
             walk_type(value, out);
         }
-        IRType::Function { params, ret } => {
+        IRType::Function { params, ret, .. } => {
             for param in params {
                 walk_type(param, out);
             }

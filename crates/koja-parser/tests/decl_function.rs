@@ -2,13 +2,13 @@
 //!
 //! Pins:
 //! - bare fn with no params, no return type, no body
-//! - parameter parsing (borrow, move, default value, self receiver)
+//! - parameter parsing (typed param, default value, self receiver)
 //! - return-type parsing
 //! - body presence detection (empty body, normal body, bodyless for
 //!   `@extern` / `@intrinsic`, bodyless before a sibling `fn`)
 //! - visibility (`fn` is Public, `priv fn` is Private)
 
-use koja_ast::ast::{Item, Param, PassMode, TypeExpr, Visibility};
+use koja_ast::ast::{Item, Param, TypeExpr, Visibility};
 use koja_ast::util::dedent;
 
 mod common;
@@ -71,32 +71,12 @@ fn fn_with_typed_params() {
     let f = first_function(&src);
     assert_eq!(f.params.len(), 2);
     match &f.params[0] {
-        Param::Regular { name, mode, .. } => {
+        Param::Regular { name, .. } => {
             assert_eq!(name, "a");
-            assert_eq!(*mode, PassMode::Borrow);
         }
         other => panic!("expected Regular param, got {other:?}"),
     }
     assert!(matches!(f.return_type, Some(TypeExpr::Named { ref path, .. }) if path == &["Int"]));
-}
-
-#[test]
-fn fn_with_move_param() {
-    let src = dedent(
-        "
-        fn consume(move s: String) -> String
-          s
-        end
-        ",
-    );
-    let f = first_function(&src);
-    match &f.params[0] {
-        Param::Regular { name, mode, .. } => {
-            assert_eq!(name, "s");
-            assert_eq!(*mode, PassMode::Move);
-        }
-        other => panic!("expected Regular param, got {other:?}"),
-    }
 }
 
 #[test]
@@ -136,33 +116,7 @@ fn fn_with_self_borrow() {
         other => panic!("expected function member, got {other:?}"),
     };
     match &func.params[0] {
-        Param::Self_ { mode, .. } => assert_eq!(*mode, PassMode::Borrow),
-        other => panic!("expected Self_ param, got {other:?}"),
-    }
-}
-
-#[test]
-fn fn_with_move_self() {
-    let src = dedent(
-        "
-        extend Counter
-          fn into_value(move self) -> Int
-            self.value
-          end
-        end
-        ",
-    );
-    let file = parse_clean(&src);
-    let block = match &file.items[0] {
-        Item::Extend(b) => b,
-        other => panic!("expected extend block, got {other:?}"),
-    };
-    let func = match &block.members[0] {
-        koja_ast::ast::ImplMember::Function(f) => f,
-        other => panic!("expected function member, got {other:?}"),
-    };
-    match &func.params[0] {
-        Param::Self_ { mode, .. } => assert_eq!(*mode, PassMode::Move),
+        Param::Self_ { .. } => {}
         other => panic!("expected Self_ param, got {other:?}"),
     }
 }

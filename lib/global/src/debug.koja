@@ -4,7 +4,7 @@ All types get a compiler-derived implementation.
 
   - `format(self) -> String` returns the round-trippable string representation
   - `print(self)` prints `self.format()` to stdout via `IO.puts`
-  - `inspect(move self) -> Self` prints and returns self for chaining
+  - `inspect(self) -> Self` prints and returns self for chaining
 """
 protocol Debug
   fn format(self) -> String
@@ -13,7 +13,7 @@ protocol Debug
     IO.puts(self.format())
   end
 
-  fn inspect(move self) -> Self
+  fn inspect(self) -> Self
     self.print()
     self
   end

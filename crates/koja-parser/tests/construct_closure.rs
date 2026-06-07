@@ -3,7 +3,7 @@
 //! The short-closure `expr -> expr` form is covered alongside the
 //! Pratt loop in `tests/expr.rs`.
 
-use koja_ast::ast::{ClosureParam, Expr, ExprKind, Item, PassMode, Statement, TypeExpr};
+use koja_ast::ast::{ClosureParam, Expr, ExprKind, Item, Statement, TypeExpr};
 use koja_ast::util::dedent;
 
 mod common;
@@ -105,27 +105,6 @@ fn closure_with_inferred_params() {
                 ));
             }
         }
-        other => panic!("expected Closure, got {other:?}"),
-    }
-}
-
-#[test]
-fn closure_with_move_param() {
-    let src = dedent(
-        "
-        fn run
-          c = fn(move s: String) -> String
-            s
-          end
-        end
-        ",
-    );
-    let expr = first_closure_expr(&src);
-    match expr.kind {
-        ExprKind::Closure { params, .. } => match &params[0] {
-            ClosureParam::Name { mode, .. } => assert_eq!(*mode, PassMode::Move),
-            other => panic!("expected Name param, got {other:?}"),
-        },
         other => panic!("expected Closure, got {other:?}"),
     }
 }
