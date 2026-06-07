@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Fixed a scheduler race that could intermittently crash message-heavy programs (e.g. request/reply between processes) with a segfault. A process that yielded while waiting for a message could be resumed by another worker thread from a stale stack pointer before its post-yield state was saved.
 - Fixed a TOCTOU race in the I/O reactor that could leave a process blocked on a readiness event delivered between fd registration and the blocking state transition.
 - Closing a file descriptor now drops it from the reactor's watched and registered maps, preventing spurious wakeups when the kernel later recycles the fd.
+- Closing a file descriptor that another process is blocked on (e.g. parked in a socket `read`/`write`) now wakes that process with an error instead of stranding it forever; a `Fd.watch` owner of the closed fd is likewise sent a synthetic readiness-error event so its handler observes the hangup.
+- Heap-backed message payloads (`String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, enums) that are never delivered — sent to a dead process, or still queued when the program exits — are now reclaimed instead of leaked. Messages are copied across the process boundary, so the transport owns an independent copy and frees it deterministically when the envelope is dropped.
 
 ## [0.11.0] - 2026-05-27
 

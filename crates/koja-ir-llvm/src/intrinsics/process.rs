@@ -34,19 +34,22 @@
 //!   `koja_rt_receive_timeout` reader pulls `R` straight off the
 //!   envelope's `+8` payload offset.
 
+use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{ArrayValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
-use koja_ir::mangling::global_primitive_symbol;
+use koja_ir::mangling::{drop_glue_symbol, envelope_drop_glue_symbol, global_primitive_symbol};
 use koja_ir::{
     IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, RefMethod, ReplyToMethod,
 };
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
+use crate::emit::heap_layout::is_heap_leaf;
 use crate::emit::inkwell_err;
 use crate::emit::process::serialize_to_stack;
 use crate::error::LlvmError;
+use crate::intrinsics::element::release_in_slot;
 use crate::runtime::{
     declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_receive_timeout_extern,
     declare_rt_self_extern, declare_rt_send_after_extern, declare_rt_send_extern,
@@ -145,12 +148,18 @@ fn emit_cast<'ctx>(
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) =
         build_pair_envelope_alloca(ctx, "cast_envelope", msg_llvm, msg_value, none_payload)?;
+    let drop_glue = payload_drop_glue(ctx, function, msg_ir_type)?;
 
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
         .build_call(
             send_fn,
-            &[pid.into(), envelope_ptr.into(), envelope_size.into()],
+            &[
+                pid.into(),
+                envelope_ptr.into(),
+                envelope_size.into(),
+                drop_glue.into(),
+            ],
             "",
         )
         .map_err(|e| inkwell_err("build_call koja_rt_send (cast)", e))?;
@@ -184,6 +193,7 @@ fn emit_send_after<'ctx>(
         msg_value,
         none_payload,
     )?;
+    let drop_glue = payload_drop_glue(ctx, function, msg_ir_type)?;
 
     let delay = delay_value.into_int_value();
     let send_after_fn = declare_rt_send_after_extern(ctx);
@@ -195,6 +205,7 @@ fn emit_send_after<'ctx>(
                 envelope_ptr.into(),
                 envelope_size.into(),
                 delay.into(),
+                drop_glue.into(),
             ],
             "",
         )
@@ -257,11 +268,17 @@ fn emit_call<'ctx>(
     let some_payload = option_some_payload(ctx, caller_pid)?;
     let (envelope_ptr, envelope_size) =
         build_pair_envelope_alloca(ctx, "call_envelope", msg_llvm, msg_value, some_payload)?;
+    let drop_glue = payload_drop_glue(ctx, function, msg_ir_type)?;
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
         .build_call(
             send_fn,
-            &[target_pid.into(), envelope_ptr.into(), envelope_size.into()],
+            &[
+                target_pid.into(),
+                envelope_ptr.into(),
+                envelope_size.into(),
+                drop_glue.into(),
+            ],
             "",
         )
         .map_err(|e| inkwell_err("build_call koja_rt_send (call)", e))?;
@@ -510,12 +527,18 @@ fn emit_reply_send<'ctx>(
     let (reply_value, reply_ir_type) = nth_param(function, llvm_function, 1)?;
     let reply_llvm = value_basic_type(ctx, reply_ir_type)?;
     let (reply_ptr, reply_len) = serialize_to_stack(ctx, "reply_msg", reply_llvm, reply_value)?;
+    let drop_glue = payload_drop_glue(ctx, function, reply_ir_type)?;
 
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
         .build_call(
             send_fn,
-            &[pid.into(), reply_ptr.into(), reply_len.into()],
+            &[
+                pid.into(),
+                reply_ptr.into(),
+                reply_len.into(),
+                drop_glue.into(),
+            ],
             "",
         )
         .map_err(|e| inkwell_err("build_call koja_rt_send (reply)", e))?;
@@ -628,6 +651,78 @@ fn build_pair_envelope_alloca<'ctx>(
         .get_abi_size(&envelope_ty.as_basic_type_enum());
     let size = ctx.context.i64_type().const_int(abi_size, false);
     Ok((alloca, size))
+}
+
+/// Build (or look up) the by-pointer envelope-payload drop shim for
+/// `payload` and return its address as the `void(i8*)*` value the
+/// `koja_rt_send` / `koja_rt_send_after` `drop_glue` argument expects.
+/// Returns a null pointer when the payload owns no nested Koja heap
+/// (scalars, no-glue aggregates) — the runtime then frees only the
+/// transport buffer on discard.
+///
+/// The runtime's discard path is type-erased (`fn(*mut u8)` over the
+/// payload bytes), an ABI the by-value `drop_T` can't satisfy. The
+/// shim bridges the two: it loads `payload` through the pointer and
+/// routes into `drop_T` via [`release_in_slot`]. Content-addressed by
+/// [`envelope_drop_glue_symbol`], so every send site for the same
+/// message / reply type shares one shim.
+fn payload_drop_glue<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    payload: &IRType,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    if !payload_owns_heap(ctx, payload) {
+        return Ok(ptr_ty.const_null().into());
+    }
+    let symbol = envelope_drop_glue_symbol(payload);
+    let shim = match ctx.module.get_function(symbol.mangled()) {
+        Some(existing) => existing,
+        None => build_payload_drop_shim(ctx, function, payload, symbol.mangled())?,
+    };
+    Ok(shim.as_global_value().as_pointer_value().into())
+}
+
+/// Whether `payload` carries any nested Koja heap to release on
+/// discard: a heap leaf (`String` / `Binary` / `Bits`) or a composite
+/// with declared `drop_T`. Scalars and no-glue aggregates answer
+/// `false`, so [`payload_drop_glue`] hands the runtime a null glue.
+fn payload_owns_heap(ctx: &EmitContext<'_>, payload: &IRType) -> bool {
+    is_heap_leaf(payload) || ctx.declared_function(&drop_glue_symbol(payload)).is_some()
+}
+
+/// Synthesize the `void(i8*)` envelope-drop shim body: load the
+/// payload through its pointer and release it via [`release_in_slot`].
+/// Saves and restores the builder position so it can be minted in the
+/// middle of a send emitter's body.
+fn build_payload_drop_shim<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    payload: &IRType,
+    symbol: &str,
+) -> Result<FunctionValue<'ctx>, LlvmError> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    let shim = ctx.module.add_function(symbol, signature, None);
+    let saved = ctx.builder.get_insert_block();
+    let entry = ctx.context.append_basic_block(shim, "entry");
+    ctx.builder.position_at_end(entry);
+    let payload_ptr = shim
+        .get_nth_param(0)
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!(
+                "envelope drop shim `{symbol}` missing payload param"
+            ))
+        })?
+        .into_pointer_value();
+    release_in_slot(ctx, function, payload, payload_ptr)?;
+    ctx.builder
+        .build_return(None)
+        .map_err(|e| inkwell_err("build_return envelope drop shim", e))?;
+    if let Some(saved) = saved {
+        ctx.builder.position_at_end(saved);
+    }
+    Ok(shim)
 }
 
 /// Recover the `R` IR type from `Result<R, CallError>`'s `Ok(R)`

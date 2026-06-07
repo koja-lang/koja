@@ -163,6 +163,18 @@ pub fn drop_glue_symbol(ty: &IRType) -> IRSymbol {
     glue_base(ty).derived(".$drop$")
 }
 
+/// Symbol of the synthesized *by-pointer* envelope-payload drop shim
+/// for `ty` (`<type>.$envdrop$`). The runtime's type-erased discard
+/// path (`koja-runtime/src/wire.rs`) frees an undelivered message by
+/// calling a `void(ptr)` function over the payload bytes — an ABI the
+/// by-value [`drop_glue_symbol`] can't satisfy. The LLVM backend
+/// synthesizes this thin shim per sent message / reply type: it loads
+/// the payload through the pointer and routes into the by-value
+/// `drop_T`. Same `$`-fenced collision-free rooting as the other glue.
+pub fn envelope_drop_glue_symbol(ty: &IRType) -> IRSymbol {
+    glue_base(ty).derived(".$envdrop$")
+}
+
 /// Symbol of the synthesized capture-release glue for a closure body
 /// (`<body>.$drop_env$`). Hung off the closure body's own symbol, so
 /// it stays in the body's package and is collision-free against any

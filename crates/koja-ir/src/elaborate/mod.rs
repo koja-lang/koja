@@ -64,6 +64,7 @@ use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
     FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
 };
+use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod};
 use crate::local::IRLocalId;
 use crate::mangling::{clone_glue_symbol, drop_glue_symbol};
 use crate::package::IRPackage;
@@ -241,6 +242,19 @@ fn discover_glue_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BTreeSe
         }
     }
 
+    // The message / reply send intrinsics copy their payload across a
+    // process boundary, and the runtime releases an undelivered copy
+    // through the synthesized `drop_T`. Seed each send's payload type
+    // so its glue is registered even when it is only ever sent as a
+    // fresh owned temp (which emits no `Clone` to discover from).
+    for function in packages.iter().flat_map(|pkg| pkg.functions.values()) {
+        if let Some(payload) = send_intrinsic_payload(function)
+            && needs_glue(payload, packages)
+        {
+            work.push(payload.clone());
+        }
+    }
+
     let mut needed: BTreeSet<IRType> = BTreeSet::new();
     while let Some(ty) = work.pop() {
         if !needs_glue(&ty, packages) || !needed.insert(ty.clone()) {
@@ -257,6 +271,20 @@ fn discover_glue_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BTreeSe
         }
     }
     needed
+}
+
+/// The payload type (`M` or `R`) a message / reply send intrinsic
+/// copies across a process boundary — `params[1].ty` of `Ref.cast` /
+/// `Ref.call` / `Ref.send_after` / `ReplyTo.send` (`params[0]` is the
+/// `self` `Ref` / `ReplyTo`). `None` for any other function.
+fn send_intrinsic_payload(function: &IRFunction) -> Option<&IRType> {
+    let is_send = matches!(
+        function.kind,
+        FunctionKind::Intrinsic(IRIntrinsicId::Ref(
+            RefMethod::Call | RefMethod::Cast | RefMethod::SendAfter
+        )) | FunctionKind::Intrinsic(IRIntrinsicId::ReplyTo(ReplyToMethod::Send))
+    );
+    is_send.then(|| function.params.get(1).map(|p| &p.ty))?
 }
 
 /// The operand type of a `Clone` / `DropLocal` / `DropValue`, or

@@ -564,7 +564,8 @@ fn fire_due_timers(table: &mut ProcessTable, now: Instant) {
             ptr::copy_nonoverlapping(entry.msg.ptr, buf.add(TAG_HEADER_SIZE), entry.msg_len);
             buf
         };
-        let envelope = Envelope::new(buf, total);
+        let mut envelope = Envelope::new(buf, total);
+        envelope.drop_glue = entry.drop_glue;
         if let Some(envelope) = table.deliver_back(entry.target_pid, envelope) {
             drop(envelope);
         }
@@ -740,10 +741,22 @@ pub extern "C" fn koja_rt_self() -> i64 {
 /// via `push_back`. If the target is `Blocked`, it is promoted to
 /// `Runnable` and a worker is woken.
 ///
+/// `drop_glue` (null when the payload owns no nested heap) releases the
+/// payload's nested Koja heap if the envelope is ever discarded
+/// undelivered (sent-to-dead, mailbox cleared on process death). The
+/// delivered-receive path moves the payload into the receiver and frees
+/// only the transport buffer (never runs the glue) — see
+/// [`crate::wire::Envelope`].
+///
 /// # Safety
 /// `msg_ptr` must point to `msg_len` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64) {
+pub unsafe extern "C" fn koja_rt_send(
+    pid: i64,
+    msg_ptr: *const u8,
+    msg_len: i64,
+    drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
+) {
     let len = msg_len as usize;
     let total = TAG_HEADER_SIZE + len;
     let buf = unsafe {
@@ -753,7 +766,8 @@ pub unsafe extern "C" fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64
         buf
     };
 
-    let envelope = Envelope::new(buf, total);
+    let mut envelope = Envelope::new(buf, total);
+    envelope.drop_glue = drop_glue;
     {
         let mut guard = SCHED.lock().unwrap();
         if let Some(envelope) = guard.deliver_back(pid, envelope) {
@@ -807,6 +821,11 @@ pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
 /// milliseconds. The message bytes are copied immediately; the
 /// delivery happens in the worker loop when the timer fires.
 ///
+/// `drop_glue` (null when the payload owns no nested heap) rides the
+/// timer entry onto the fired envelope, so an undeliverable fire
+/// (target gone) releases the payload's nested heap instead of leaking
+/// it. See [`koja_rt_send`].
+///
 /// # Safety
 /// `msg_ptr` must point to `msg_len` readable bytes.
 #[unsafe(no_mangle)]
@@ -815,6 +834,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
     msg_ptr: *const u8,
     msg_len: i64,
     delay_ms: i64,
+    drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 ) {
     let len = msg_len as usize;
     let msg_copy = unsafe {
@@ -827,7 +847,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
 
     {
         let mut guard = SCHED.lock().unwrap();
-        guard.push_timer(fire_at, pid, OwnedBuf::new(msg_copy), len);
+        guard.push_timer(fire_at, pid, OwnedBuf::new(msg_copy), len, drop_glue);
     }
 
     WORK_AVAILABLE.notify_one();

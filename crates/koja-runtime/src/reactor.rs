@@ -21,6 +21,7 @@ use std::time::Duration;
 use polling::{Event, Events, PollMode, Poller};
 
 use crate::ffi::{EAGAIN, get_errno, koja_context_switch};
+use crate::process_table::ProcessTable;
 use crate::scheduler::{
     CURRENT_PID, ProcessState, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
 };
@@ -47,10 +48,17 @@ const WATCH_KEY_OFFSET: usize = 1_000_000;
 /// for fds registered via `Fd.watch`. When the reactor fires an event
 /// for a watched key, it sends an `IOReady` message instead of marking
 /// the process Runnable.
+///
+/// `blocking` maps an fd to the pid currently `io_block`-ed on it. The
+/// poller keys those waiters by pid, so without this reverse map a
+/// close-while-blocked (`release_fd`) from another worker can't find
+/// the waiter to wake it. One waiter per fd (last `register` wins),
+/// matching the poller's oneshot semantics.
 struct Reactor {
     poller: Poller,
     registered: Mutex<HashSet<i32>>,
     watched: Mutex<HashMap<usize, (i64, i32)>>,
+    blocking: Mutex<HashMap<i32, i64>>,
 }
 
 /// Singleton reactor instance, created in [`init`].
@@ -63,6 +71,7 @@ pub fn init() {
         poller: Poller::new().expect("failed to create I/O poller"),
         registered: Mutex::new(HashSet::new()),
         watched: Mutex::new(HashMap::new()),
+        blocking: Mutex::new(HashMap::new()),
     });
 }
 
@@ -97,16 +106,34 @@ fn register(fd: i32, interest: Interest, pid: i64) {
         Interest::Readable => Event::readable(pid as usize),
         Interest::Writable => Event::writable(pid as usize),
     };
+    let reactor = REACTOR.get().expect("reactor not initialized");
+    reactor.blocking.lock().unwrap().insert(fd, pid);
     poller_add_or_modify(fd, event);
 }
 
 /// Removes a file descriptor from the reactor.
 fn deregister(fd: i32) {
     let reactor = REACTOR.get().expect("reactor not initialized");
+    reactor.blocking.lock().unwrap().remove(&fd);
     let mut set = reactor.registered.lock().unwrap();
     if set.remove(&fd) {
         let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
         let _ = reactor.poller.delete(borrowed);
+    }
+}
+
+/// Promotes a process from `WaitingIo` to `Runnable` if (and only if)
+/// it is still parked. The state guard is essential: a process whose
+/// state is `Running` (mid-`io_block`, before its context switch) or
+/// already `Runnable` must not be transitioned, or `ProcessTable::
+/// transition` trips its legal-edge assertion. Shared by the reactor
+/// readiness path and `release_fd` so the two can't drift.
+fn promote_io_waiter(sched: &mut ProcessTable, pid: i64) {
+    if sched
+        .get(pid)
+        .is_some_and(|process| process.state == ProcessState::WaitingIo)
+    {
+        sched.transition(pid, ProcessState::Runnable);
     }
 }
 
@@ -160,13 +187,7 @@ pub fn reactor_loop() {
                     };
                     io_events.push((owner_pid, variant, fd as i64));
                 } else {
-                    let pid = ev.key as i64;
-                    if sched_guard
-                        .get(pid)
-                        .is_some_and(|process| process.state == ProcessState::WaitingIo)
-                    {
-                        sched_guard.transition(pid, ProcessState::Runnable);
-                    }
+                    promote_io_waiter(&mut sched_guard, ev.key as i64);
                 }
             }
         }
@@ -215,22 +236,45 @@ pub extern "C" fn koja_rt_unwatch_fd(fd: i32) {
     }
 }
 
-/// Drops `fd` from the reactor's `registered` / `watched` maps so
-/// fd-number reuse can't collide with stale entries. Idempotent.
-/// Does not wake any process currently `WaitingIo` on `fd`, so
-/// close-while-blocked from another worker will strand that worker.
+/// Drops `fd` from the reactor's bookkeeping and wakes anyone parked
+/// on it, so closing an fd from one worker can't strand a process
+/// blocked on it from another. Idempotent.
+///
+/// A process `io_block`-ed on `fd` is promoted `WaitingIo -> Runnable`
+/// (it resumes, retries the syscall, and gets `EBADF`); a `Fd.watch`
+/// owner is sent a synthetic `IOReady.Error` so its handler observes
+/// the hangup. Without this, the poller entry is torn down and no
+/// further readiness event ever fires for that fd.
+///
+/// Lock order mirrors [`reactor_loop`]: `watched` -> `blocking` ->
+/// `registered` -> `SCHED`, with `send_io_event` (which takes `SCHED`
+/// itself) called only after every guard is dropped.
 pub(crate) fn release_fd(fd: i32) {
     let Some(reactor) = REACTOR.get() else {
         return;
     };
     let key = WATCH_KEY_OFFSET + fd as usize;
-    reactor.watched.lock().unwrap().remove(&key);
+    let watch_owner = reactor.watched.lock().unwrap().remove(&key);
+    let blocked_waiter = reactor.blocking.lock().unwrap().remove(&fd);
 
-    let mut reg = reactor.registered.lock().unwrap();
-    if reg.remove(&fd) {
-        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-        let _ = reactor.poller.delete(borrowed);
+    {
+        let mut reg = reactor.registered.lock().unwrap();
+        if reg.remove(&fd) {
+            let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+            let _ = reactor.poller.delete(borrowed);
+        }
     }
+
+    if let Some(pid) = blocked_waiter {
+        let mut sched = SCHED.lock().unwrap();
+        promote_io_waiter(&mut sched, pid);
+    }
+
+    if let Some((owner_pid, _)) = watch_owner {
+        send_io_event(owner_pid, IO_READY_ERROR, fd as i64);
+    }
+
+    WORK_AVAILABLE.notify_all();
 }
 
 /// Suspends the current process until `fd` is ready for the given

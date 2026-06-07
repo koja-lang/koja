@@ -45,7 +45,12 @@ extern crate koja_runtime;
 unsafe extern "C" {
     fn koja_rt_spawn(fn_ptr: extern "C" fn(*const u8), state_ptr: *const u8, state_len: i64)
     -> i64;
-    fn koja_rt_send(pid: i64, msg_ptr: *const u8, msg_len: i64);
+    fn koja_rt_send(
+        pid: i64,
+        msg_ptr: *const u8,
+        msg_len: i64,
+        drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
+    );
     fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64;
     fn koja_rt_self() -> i64;
     fn koja_rt_main_done();
@@ -93,7 +98,7 @@ extern "C" fn child_entry(_state: *const u8) {
     let controller = CONTROLLER_PID.load(Ordering::SeqCst);
     for _ in 0..rounds {
         recv_blocking();
-        unsafe { koja_rt_send(controller, &PONG, 1) };
+        unsafe { koja_rt_send(controller, &PONG, 1, None) };
     }
     CHILDREN_DONE.fetch_add(1, Ordering::SeqCst);
 }
@@ -103,7 +108,7 @@ extern "C" fn child_entry(_state: *const u8) {
 extern "C" fn churn_child_entry(_state: *const u8) {
     let controller = CONTROLLER_PID.load(Ordering::SeqCst);
     CHURN_DONE.fetch_add(1, Ordering::SeqCst);
-    unsafe { koja_rt_send(controller, &CHURN_BYTE, 1) };
+    unsafe { koja_rt_send(controller, &CHURN_BYTE, 1, None) };
 }
 
 /// Controller process body (PID 1): ping-pong with a fixed set of children,
@@ -121,7 +126,7 @@ extern "C" fn controller_entry(_state: *const u8) {
 
     for _ in 0..rounds {
         for &pid in &kids {
-            unsafe { koja_rt_send(pid, &PING, 1) };
+            unsafe { koja_rt_send(pid, &PING, 1, None) };
         }
         for _ in 0..children {
             recv_blocking();

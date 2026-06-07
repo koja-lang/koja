@@ -360,7 +360,7 @@ fn ref_cast_emits_pair_envelope_with_none_reply_to_and_calls_koja_rt_send() {
     );
     let ir_text = emit(&source);
 
-    assert_contains(&ir_text, "declare void @koja_rt_send(i64, ptr, i64)");
+    assert_contains(&ir_text, "declare void @koja_rt_send(i64, ptr, i64, ptr)");
     assert_contains(&ir_text, "call void @koja_rt_send(i64");
     assert_contains(&ir_text, "cast_envelope");
     assert_contains(&ir_text, "pair_msg");
@@ -421,7 +421,7 @@ fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
 
     assert_contains(
         &ir_text,
-        "declare void @koja_rt_send_after(i64, ptr, i64, i64)",
+        "declare void @koja_rt_send_after(i64, ptr, i64, i64, ptr)",
     );
     assert_contains(&ir_text, "call void @koja_rt_send_after(i64");
     assert_contains(&ir_text, "i64 250");

@@ -12,6 +12,7 @@ use koja_typecheck::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, Re
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
+use super::ownership::materialize_owned;
 use super::package::resolved_type_to_ir_type;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
@@ -109,6 +110,7 @@ pub(super) fn lower_call(
         return_ty,
         args,
         prepend: None,
+        acquire_first_arg: false,
     };
     emit_call(site, ctx, block, registry, output)
 }
@@ -370,8 +372,26 @@ pub(super) fn lower_method_call(
         return_ty,
         args,
         prepend,
+        acquire_first_arg: is_message_send(&struct_entry.identifier, method),
     };
     emit_call(site, ctx, current_block, registry, output)
+}
+
+/// Whether a `(receiver, method)` pair is one of the message / reply
+/// send intrinsics that copy their first argument across a process
+/// boundary: `Ref.cast` / `Ref.call` / `Ref.send_after` and
+/// `ReplyTo.send`. Their first surface argument (the message `M` or
+/// reply `R`) must be acquired so the transport owns an independent
+/// reference — see [`CallSite::acquire_first_arg`].
+fn is_message_send(receiver: &Identifier, method: &str) -> bool {
+    if receiver.package() != "Global" {
+        return false;
+    }
+    match receiver.path() {
+        [name] if name == "Ref" => matches!(method, "cast" | "call" | "send_after"),
+        [name] if name == "ReplyTo" => method == "send",
+        _ => false,
+    }
 }
 
 /// Pull the receiver's type-args off a method-call site. For
@@ -504,6 +524,15 @@ struct CallSite<'a> {
     return_ty: IRType,
     args: &'a [Arg],
     prepend: Option<ValueId>,
+    /// When set, the first surface argument is *acquired* (cloned if
+    /// borrowed) before the call — the message / reply send intrinsics
+    /// (`Ref.cast` / `Ref.call` / `Ref.send_after` / `ReplyTo.send`)
+    /// copy the payload across the process boundary, so the transport
+    /// must own an independent reference. The caller's own value keeps
+    /// its normal slot lifecycle; the acquired copy is moved into the
+    /// send and reclaimed by the runtime (delivered to the receiver or
+    /// released via the envelope drop glue on discard).
+    acquire_first_arg: bool,
 }
 
 /// Shared tail of [`lower_call`] / [`lower_method_call`]: lower
@@ -523,16 +552,21 @@ fn emit_call(
         return_ty,
         args,
         prepend,
+        acquire_first_arg,
     } = site;
     let mut lowered_args = Vec::with_capacity(args.len() + usize::from(prepend.is_some()));
     if let Some(receiver) = prepend {
         lowered_args.push(receiver);
     }
     let mut current = block;
-    for arg in args {
-        let (value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
-        lowered_args.push(value);
+    for (index, arg) in args.iter().enumerate() {
+        let (mut value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
         current = next;
+        if acquire_first_arg && index == 0 {
+            let ty = ctx.type_of(value);
+            value = materialize_owned(ctx, current, value, &ty);
+        }
+        lowered_args.push(value);
     }
 
     let dest = ctx.fresh_value(return_ty);

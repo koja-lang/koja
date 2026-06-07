@@ -474,19 +474,22 @@ pub(crate) fn declare_rt_self_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionV
 }
 
 /// Declare (or look up) `koja_rt_send`. Signature:
-/// `void koja_rt_send(i64 pid, i8* msg_ptr, i64 msg_len)`. Copies
-/// `msg_len` bytes into the target's mailbox; the runtime tags the
-/// payload with `tag=0` (business message) before delivery.
+/// `void koja_rt_send(i64 pid, i8* msg_ptr, i64 msg_len, void(i8*)*
+/// drop_glue)`. Copies `msg_len` bytes into the target's mailbox; the
+/// runtime tags the payload with `tag=0` (business message) before
+/// delivery. `drop_glue` (null when the payload owns no nested heap)
+/// releases the payload's nested heap if the envelope is discarded
+/// undelivered.
 pub(crate) fn declare_rt_send_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(RT_SEND_SYMBOL) {
         return existing;
     }
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
-    let signature = ctx
-        .context
-        .void_type()
-        .fn_type(&[i64_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    let signature = ctx.context.void_type().fn_type(
+        &[i64_ty.into(), ptr_ty.into(), i64_ty.into(), ptr_ty.into()],
+        false,
+    );
     ctx.module
         .add_function(RT_SEND_SYMBOL, signature, Some(Linkage::External))
 }
@@ -512,9 +515,11 @@ pub(crate) fn declare_rt_send_lifecycle_extern<'ctx>(
 }
 
 /// Declare (or look up) `koja_rt_send_after`. Signature:
-/// `void koja_rt_send_after(i64 pid, i8* msg_ptr, i64 msg_len, i64 delay_ms)`.
-/// Copies the message immediately; delivery happens when the timer
-/// fires.
+/// `void koja_rt_send_after(i64 pid, i8* msg_ptr, i64 msg_len, i64
+/// delay_ms, void(i8*)* drop_glue)`. Copies the message immediately;
+/// delivery happens when the timer fires. `drop_glue` (null when the
+/// payload owns no nested heap) rides the timer onto the fired
+/// envelope so an undeliverable fire releases the nested heap.
 pub(crate) fn declare_rt_send_after_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(RT_SEND_AFTER_SYMBOL) {
         return existing;
@@ -522,7 +527,13 @@ pub(crate) fn declare_rt_send_after_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fun
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
     let signature = ctx.context.void_type().fn_type(
-        &[i64_ty.into(), ptr_ty.into(), i64_ty.into(), i64_ty.into()],
+        &[
+            i64_ty.into(),
+            ptr_ty.into(),
+            i64_ty.into(),
+            i64_ty.into(),
+            ptr_ty.into(),
+        ],
         false,
     );
     ctx.module

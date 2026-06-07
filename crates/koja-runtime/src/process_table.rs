@@ -50,6 +50,10 @@ pub(crate) struct TimerEntry {
     pub(crate) msg: OwnedBuf,
     pub(crate) msg_len: usize,
     pub(crate) target_pid: i64,
+    /// Payload drop glue, carried onto the fired envelope so an
+    /// undeliverable fire releases the payload's nested heap. Null
+    /// when the message owns no nested heap.
+    pub(crate) drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 }
 
 /// `TimerEntry` owns a heap buffer (`OwnedBuf`) of message bytes that are
@@ -354,9 +358,11 @@ impl ProcessTable {
         target_pid: i64,
         msg: OwnedBuf,
         msg_len: usize,
+        drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
     ) {
         self.timer_seq += 1;
         self.timers.push(Reverse(TimerEntry {
+            drop_glue,
             fire_at,
             msg,
             msg_len,
@@ -524,18 +530,21 @@ mod tests {
             1,
             OwnedBuf::new(ptr::null_mut()),
             0,
+            None,
         );
         table.push_timer(
             base + Duration::from_millis(10),
             2,
             OwnedBuf::new(ptr::null_mut()),
             0,
+            None,
         );
         table.push_timer(
             base + Duration::from_millis(20),
             3,
             OwnedBuf::new(ptr::null_mut()),
             0,
+            None,
         );
 
         let due = table.take_due_timers(base + Duration::from_millis(25));

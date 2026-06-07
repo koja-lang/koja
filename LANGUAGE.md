@@ -991,26 +991,28 @@ For stateful, long-lived processes, implement the `Process` protocol. `C` is the
 
 ```koja
 protocol Process<C, M, R>
-  fn new(config: C) -> Self
-  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Self | StopReason
-  fn handle_signal(self, event: Lifecycle) -> Self | StopReason
+  fn start(config: C) -> Result<Self, StopReason>
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+  fn handle_signal(self, event: Lifecycle) -> Step<Self>
   fn run(self) -> StopReason
 end
 ```
 
-`handle` returns `Self | StopReason`. Returning `Self` continues the process; returning a `StopReason` variant (`Normal` or `Shutdown`) stops it.
+`start` builds the initial state from config in the child process context, before the receive loop begins. Return `Result.Ok(self)` to begin running, or `Result.Err(reason)` to abort startup.
 
-`handle_signal` has a default implementation that stops on `Shutdown`/`Interrupt` and ignores `Reload`. Override it for graceful drain or hot config reload.
+`handle` returns `Step<Self>`. Return `Step.Continue(self)` to keep running with updated state, or `Step.Done(reason)` (with a `StopReason` of `Normal` or `Shutdown`) to stop.
 
-`run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when a `StopReason` is returned:
+`handle_signal` has a default implementation that stops on `Shutdown`/`Interrupt` and continues on `Reload`. Override it for graceful drain or hot config reload.
+
+`run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when `Step.Done` is returned:
 
 ```koja
 fn run(self) -> StopReason
   receive
     pair: Pair<M, Option<ReplyTo<R>>> ->
       match self.handle(pair.first, pair.second)
-        next: Self -> next.run()
-        reason: StopReason -> reason
+        Step.Continue(next) -> next.run()
+        Step.Done(reason) -> reason
       end
   end
 end
@@ -1029,21 +1031,22 @@ struct Counter
 end
 
 impl Process<Counter, CounterMsg, Int> for Counter
-  fn new(config: Counter) -> Self
-    config
+  fn start(config: Counter) -> Result<Self, StopReason>
+    Result.Ok(config)
   end
 
-  fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Self | StopReason
-    match msg
-      CounterMsg.Increment -> self.count += 1
-      CounterMsg.Decrement -> self.count -= 1
-    end
-    ReplyTo.reply(from, self.count)
-    self
+  fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    next_count =
+      match msg
+        CounterMsg.Increment -> self.count + 1
+        CounterMsg.Decrement -> self.count - 1
+      end
+    ReplyTo.reply(from, next_count)
+    Step.Continue(Counter{count: next_count})
   end
 end
 
-ref = spawn Counter.new(Counter{count: 0})
+ref = spawn Counter.start(Counter{count: 0})
 ref.cast(CounterMsg.Increment)
 count = ref.call(CounterMsg.Increment, 5000)
 ```
