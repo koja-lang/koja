@@ -55,6 +55,7 @@ mod binary_match;
 mod calls;
 mod clone;
 mod closures;
+pub(crate) mod collection_glue;
 mod concat;
 pub(crate) mod constants;
 pub(crate) mod enums;

@@ -40,6 +40,11 @@ mod set;
 mod socket;
 mod string;
 
+/// Bucket-occupied state byte, re-exported so the collection glue
+/// emitter ([`crate::emit::collection_glue`]) walks `Map` / `Set`
+/// buffers by the same convention the hashtable intrinsics write.
+pub(crate) use hashtable::STATE_OCCUPIED;
+
 /// Synthesize the body of an `@intrinsic` function. Forwards each
 /// variant to its hand-written emitter; each emitter receives the
 /// inner enum directly (no string-sniffing).

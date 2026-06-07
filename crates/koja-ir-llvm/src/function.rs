@@ -136,8 +136,12 @@ pub(crate) fn define_function<'ctx>(
             if function.blocks.is_empty() {
                 // Collection / `Indirect` glue: a runtime-shaped
                 // deep-copy / element-walk synthesized from the operand
-                // type at emit time. Lands with the collection slice.
-                todo!("collection clone/drop glue body emission (Phase 2)")
+                // type at emit time, not from an IR CFG.
+                return emit::collection_glue::emit_collection_glue_body(
+                    ctx,
+                    function,
+                    llvm_function,
+                );
             }
             // Aggregate glue (struct / enum / union) carries a full
             // `elaborate`-synthesized CFG; emit it exactly like a

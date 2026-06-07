@@ -56,7 +56,7 @@ pub(super) const INITIAL_CAPACITY: u64 = 8;
 /// advance past it" — used by `remove` to keep the linear-probe
 /// chain intact without back-shifting.
 pub(super) const STATE_EMPTY: u64 = 0;
-pub(super) const STATE_OCCUPIED: u64 = 1;
+pub(crate) const STATE_OCCUPIED: u64 = 1;
 pub(super) const STATE_TOMBSTONE: u64 = 2;
 
 /// `Option<V>` variant tags as the stdlib declares them: `Some`
