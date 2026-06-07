@@ -108,6 +108,13 @@ pub(super) fn emit_drop_value<'ctx>(
             let payload = lookup(values, value)?;
             emit_rc_dec(ctx, payload.into_pointer_value(), &value.to_string())
         }
+        // Closure: `rc--` on the env (capture release + free at zero
+        // lives in `koja_closure_rc_dec`). Same path as the slot-keyed
+        // `DropLocal` of a `Function`.
+        IRType::Function { .. } => {
+            let closure_value = lookup(values, value)?;
+            closures::emit_drop_closure_value(ctx, closure_value, &value.to_string())
+        }
         // No-glue aggregate value (every field `Copy`): nothing to
         // release. The heap-owning composites are rewritten to a
         // `Call @drop_T` by `elaborate`.

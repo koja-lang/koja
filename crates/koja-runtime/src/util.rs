@@ -17,6 +17,15 @@ pub const BLOCK_HEADER_SIZE: usize = 16;
 /// Distance in bytes from a payload pointer back to its `i64
 /// bit_length` word. The rc word sits a further `LENGTH_OFFSET` before
 /// that (i.e. at the block base, `BLOCK_HEADER_SIZE` before payload).
+///
+/// A closure env block reuses the same 16-byte header shape with a
+/// different second word: `[i64 rc][ptr drop_fn]`, where `drop_fn`
+/// (`LENGTH_OFFSET` bytes past the base) is the address of the
+/// closure's capture-release glue (or null when no capture is
+/// heap-managed). Captures follow the header. The base pointer is the
+/// env pointer itself, so [`koja_rc_inc`] / [`koja_closure_rc_dec`]
+/// operate on the env directly. Mirrored codegen-side by
+/// `koja-ir-llvm`'s `CLOSURE_ENV_HEADER_FIELDS`.
 pub const LENGTH_OFFSET: usize = 8;
 /// Number of bits in a byte, used for bit-length / byte-length conversions.
 pub const BITS_PER_BYTE: usize = 8;
@@ -95,6 +104,42 @@ pub unsafe extern "C" fn koja_rc_dec(base: *mut u8) {
         } else {
             *base.cast::<i64>() = remaining;
         }
+    }
+}
+
+/// Decrement the refcount of a closure env block, running its
+/// capture-release glue and freeing the block when the count reaches
+/// zero. `env` points at the block base (the `i64 rc` word); the
+/// `drop_fn` pointer sits `LENGTH_OFFSET` bytes past it (see the
+/// closure env header note on [`LENGTH_OFFSET`]). At zero, the glue —
+/// when present (null means no heap-managed capture) — is called with
+/// the env pointer to release each captured value before the block is
+/// freed. Immortal blocks (`rc < 0`) and null are no-ops.
+///
+/// # Safety
+/// `env` must be null or the base of a live closure env block whose
+/// `drop_fn` word is either null or a valid `extern "C" fn(*mut u8)`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_closure_rc_dec(env: *mut u8) {
+    if env.is_null() {
+        return;
+    }
+    unsafe {
+        let rc = *env.cast::<i64>();
+        if rc < 0 {
+            return;
+        }
+        let remaining = rc - 1;
+        if remaining != 0 {
+            *env.cast::<i64>() = remaining;
+            return;
+        }
+        let drop_fn = *env.add(LENGTH_OFFSET).cast::<*const u8>();
+        if !drop_fn.is_null() {
+            let glue = std::mem::transmute::<*const u8, extern "C" fn(*mut u8)>(drop_fn);
+            glue(env);
+        }
+        memory::free(env);
     }
 }
 

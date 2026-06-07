@@ -57,7 +57,9 @@ pub(crate) fn declare_function<'ctx>(
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
     let signature = function_signature(ctx, function)?;
     let llvm_name = match &function.kind {
-        FunctionKind::Closure { .. } => function.symbol.mangled().to_string(),
+        FunctionKind::Closure { .. } | FunctionKind::DropClosureGlue { .. } => {
+            function.symbol.mangled().to_string()
+        }
         FunctionKind::Extern(attrs) => attrs
             .link_name
             .clone()
@@ -83,7 +85,10 @@ fn function_signature<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
 ) -> Result<FunctionType<'ctx>, LlvmError> {
-    if matches!(function.kind, FunctionKind::Closure { .. }) {
+    if matches!(
+        function.kind,
+        FunctionKind::Closure { .. } | FunctionKind::DropClosureGlue { .. }
+    ) {
         let user_params: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
         return closure_body_signature(ctx, &user_params, &function.return_type);
     }
@@ -173,7 +178,9 @@ pub(crate) fn define_function<'ctx>(
             // trampoline returns from.
             return emit_process_entry_wrapper_body(ctx, function, llvm_function, state);
         }
-        FunctionKind::Closure { env_layout } => Some(env_layout.as_slice()),
+        FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
+            Some(env_layout.as_slice())
+        }
         FunctionKind::Regular => None,
     };
     // Slot table is per-function — flush any leftovers from the

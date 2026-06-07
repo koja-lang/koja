@@ -19,11 +19,14 @@
 //!   leaves. The `elaborate` IR sub-pass rewrites only the
 //!   *heap-owning* composites into a `Call` to a synthesized per-type
 //!   `clone_T`, so a scalar aggregate is all that survives to here.
-//! - **Heap composites** (`List` / `Map` / `Set` / `Indirect`, plus
-//!   closure `Function`): unreachable. Collections and boxes always
-//!   own heap and are always rewritten to a glue `Call`; closures are
-//!   a separate slice. A heap composite reaching here is a lowering
-//!   bug (panic loudly rather than silently alias).
+//! - **Closure** (`Function`): an `rc++` on the env block, aliasing
+//!   the same `{fn_ptr, env_ptr}` fat pointer — the env is shared like
+//!   an immutable heap leaf. The matching `Drop` runs
+//!   `koja_closure_rc_dec` (capture release + free at zero).
+//! - **Heap composites** (`List` / `Map` / `Set` / `Indirect`):
+//!   unreachable. Collections and boxes always own heap and are always
+//!   rewritten to a glue `Call`. One reaching here is a lowering bug
+//!   (panic loudly rather than silently alias).
 
 use koja_ir::{IRType, ValueId};
 
@@ -33,7 +36,7 @@ use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::runtime::declare_rc_inc_extern;
 
-use super::{ValueMap, lookup};
+use super::{ValueMap, closures, lookup};
 
 pub(super) fn emit_clone<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -74,14 +77,24 @@ pub(super) fn emit_clone<'ctx>(
         // `Call @clone_T`, so any aggregate surviving to here owns no
         // heap and aliasing its immutable SSA value is sound.
         IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => lookup(values, source)?,
+        // Closure: share the env block. `rc++` on the env (null /
+        // immortal envs are no-ops in the runtime), then alias the same
+        // `{fn_ptr, env_ptr}` fat pointer. The matching `Drop` runs
+        // `koja_closure_rc_dec`, which releases captures + frees at zero.
+        IRType::Function { .. } => {
+            let closure_value = lookup(values, source)?;
+            let env_ptr =
+                closures::load_closure_env_ptr(ctx, closure_value, &format!("{dest}.clone"))?;
+            let rc_inc = declare_rc_inc_extern(ctx);
+            ctx.builder
+                .build_call(rc_inc, &[env_ptr.into()], &format!("{dest}.env_rc_inc"))
+                .map_err(|e| inkwell_err(format_args!("closure env rc_inc for `{dest}`"), e))?;
+            closure_value
+        }
         // Collections and boxed `Indirect` always own heap, so they
-        // always carry glue and must have been rewritten; closures are
-        // a separate slice. Reaching here is a lowering bug.
-        IRType::Function { .. }
-        | IRType::Indirect(_)
-        | IRType::List(_)
-        | IRType::Map { .. }
-        | IRType::Set(_) => panic!(
+        // always carry glue and must have been rewritten. Reaching
+        // here is a lowering bug.
+        IRType::Indirect(_) | IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
             "LLVM emit: composite `IRInstruction::Clone` of type {ty:?} reached the backend — \
              the `elaborate` sub-pass must rewrite it into a `Call @clone_T`",
         ),

@@ -183,6 +183,29 @@ pub enum FunctionKind {
     Closure {
         env_layout: Vec<IRType>,
     },
+    /// Synthesized per-closure-body capture-release glue
+    /// (`<body>.$drop_env$`). A closure env is type-erased behind the
+    /// structural [`IRType::Function`], so a `Drop` at a closure-typed
+    /// slot can't statically pick the right capture-release routine.
+    /// Each closure that owns at least one heap-managed capture gets
+    /// this sibling function; its address is stamped into the env
+    /// block's header by [`IRInstruction::MakeClosure`], and the
+    /// runtime calls it (with the env pointer) when the env's refcount
+    /// hits zero, before freeing the block.
+    ///
+    /// Shape is closure-like — an implicit `env_ptr` parameter at LLVM
+    /// position 0 and a body that reads each heap-managed capture via
+    /// [`IRInstruction::LoadCapture`] (indexed into `env_layout`) and
+    /// [`IRInstruction::DropValue`]s it, returning `Unit`. Unlike
+    /// [`Self::Closure`] it carries no user-visible params and is never
+    /// the target of a `MakeClosure`. Born as real IR during lowering
+    /// so [`crate::elaborate`] discovers any composite capture's
+    /// `drop_T` and rewrites the composite `DropValue`s into glue
+    /// calls, exactly as for a `Regular` body. Eval reclaims via its
+    /// host GC and never invokes it.
+    DropClosureGlue {
+        env_layout: Vec<IRType>,
+    },
     /// Synthesized per-type drop glue (`<T>.$drop$`). The drop analog
     /// of [`Self::CloneGlue`] — releases every heap-managed field /
     /// payload / element of `params[0].ty`, then frees any collection

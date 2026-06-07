@@ -30,12 +30,13 @@ use crate::function::{
     FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
+use crate::mangling::closure_drop_env_symbol;
 use crate::types::{IRType, ValueId};
 
 use super::body::{finalize_open_flow, lower_body};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
-use super::ownership::promote_param;
+use super::ownership::{materialize_owned, promote_param};
 use super::package::resolved_type_to_ir_type;
 
 /// Lower a `fn (x: T) -> U ... end` closure expression.
@@ -68,6 +69,9 @@ pub(super) fn lower_block_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
+    if let Some(drop_env) = synthesize_drop_env(&symbol, &captures_with_types) {
+        output.synthesized_functions.push(drop_env);
+    }
 
     emit_make_closure(
         symbol,
@@ -110,6 +114,9 @@ pub(super) fn lower_short_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
+    if let Some(drop_env) = synthesize_drop_env(&symbol, &captures_with_types) {
+        output.synthesized_functions.push(drop_env);
+    }
 
     emit_make_closure(
         symbol,
@@ -120,6 +127,59 @@ pub(super) fn lower_short_closure(
         registry,
         output,
     )
+}
+
+/// Build the `<body>.$drop_env$` capture-release glue
+/// ([`FunctionKind::DropClosureGlue`]) for a closure that owns at
+/// least one heap-managed capture. Returns `None` otherwise — the env
+/// is then freed without per-capture teardown (the runtime sees a
+/// null glue pointer in the env header).
+///
+/// The body carries the same `env_layout` as the closure body and no
+/// user-visible params: for each heap-managed capture it
+/// [`IRInstruction::LoadCapture`]s the value and [`IRInstruction::DropValue`]s
+/// it. Composite drops are rewritten into `drop_T` calls by
+/// [`crate::elaborate`]; leaf drops stay inline `rc--` in the backend.
+fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Option<IRFunction> {
+    if !captures
+        .iter()
+        .any(|capture| capture.ir_type.is_heap_managed())
+    {
+        return None;
+    }
+    let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
+    let mut ctx = FnLowerCtx::new();
+    let entry = ctx.fresh_block("entry");
+    for (index, capture) in captures.iter().enumerate() {
+        if !capture.ir_type.is_heap_managed() {
+            continue;
+        }
+        let dest = ctx.fresh_value(capture.ir_type.clone());
+        ctx.cfg.append(
+            entry,
+            IRInstruction::LoadCapture {
+                capture_index: index as u32,
+                dest,
+                ty: capture.ir_type.clone(),
+            },
+        );
+        ctx.cfg.append(
+            entry,
+            IRInstruction::DropValue {
+                value: dest,
+                ty: capture.ir_type.clone(),
+            },
+        );
+    }
+    ctx.cfg
+        .set_terminator(entry, IRTerminator::Return { value: None });
+    Some(IRFunction {
+        blocks: ctx.into_blocks(),
+        kind: FunctionKind::DropClosureGlue { env_layout },
+        params: Vec::new(),
+        return_type: IRType::Unit,
+        symbol: closure_drop_env_symbol(body_symbol),
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -572,7 +632,12 @@ fn emit_make_closure(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let mut capture_values = Vec::with_capacity(captures.len());
     for capture in captures {
-        capture_values.push(read_capture(capture, ctx, block));
+        // The env owns its captures under value semantics: acquire
+        // each heap-managed capture into a fresh owned value before
+        // it's stored, so the env can release it on teardown without
+        // disturbing the outer binding (which the read borrowed).
+        let borrowed = read_capture(capture, ctx, block);
+        capture_values.push(materialize_owned(ctx, block, borrowed, &capture.ir_type));
     }
     let ty = resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
     let dest = ctx.fresh_value(ty.clone());

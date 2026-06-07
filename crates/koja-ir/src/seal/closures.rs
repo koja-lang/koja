@@ -30,7 +30,12 @@ use super::{require_supported_type, seal_panic};
 pub(super) fn seal_closure_decls(pkg: &IRPackage) {
     for function in pkg.functions.values() {
         match &function.kind {
-            FunctionKind::Closure { env_layout } => seal_closure_function(function, env_layout),
+            // Both closure-shaped kinds read captures via `LoadCapture`
+            // keyed into `env_layout`: the user-visible body and the
+            // synthesized `$drop_env$` capture-release glue.
+            FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
+                seal_closure_function(function, env_layout)
+            }
             FunctionKind::CloneGlue
             | FunctionKind::DropGlue
             | FunctionKind::Extern(_)
@@ -212,6 +217,7 @@ fn kind_label(kind: &FunctionKind) -> &'static str {
     match kind {
         FunctionKind::CloneGlue => "CloneGlue",
         FunctionKind::Closure { .. } => "Closure",
+        FunctionKind::DropClosureGlue { .. } => "DropClosureGlue",
         FunctionKind::DropGlue => "DropGlue",
         FunctionKind::Extern(_) => "Extern",
         FunctionKind::Intrinsic(_) => "Intrinsic",

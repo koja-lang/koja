@@ -163,6 +163,18 @@ pub fn drop_glue_symbol(ty: &IRType) -> IRSymbol {
     glue_base(ty).derived(".$drop$")
 }
 
+/// Symbol of the synthesized capture-release glue for a closure body
+/// (`<body>.$drop_env$`). Hung off the closure body's own symbol, so
+/// it stays in the body's package and is collision-free against any
+/// user method (the `$`-fenced suffix can't appear in a surface
+/// name). Both `crate::lower::closures` (which mints the
+/// `FunctionKind::DropClosureGlue` body) and the LLVM backend
+/// (which takes its address at `MakeClosure`) derive through this
+/// single helper so they agree by construction.
+pub fn closure_drop_env_symbol(body: &IRSymbol) -> IRSymbol {
+    body.derived(".$drop_env$")
+}
+
 /// The symbol the per-type glue hangs off. Named types (struct /
 /// enum / union) carry their own package-qualified [`IRSymbol`], so
 /// the glue stays in their package. The structural primitive

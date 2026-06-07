@@ -334,10 +334,50 @@ value-semantics tests.
   are now covered by stdlib `list_test` / http `headers_test` plus
   `tail_calls` unit tests.)
 
-### Pending — Phase 3
+### Done — Phase 3
 
-Capture-recursive `drop_closure` (release captures before `free(env)`);
-`clone_closure` if reachable.
+Closures are now first-class heap-managed values: `is_heap_managed`
+returns `true` for `IRType::Function`, so `materialize_owned` /
+`emit_slot_drops` / `drop_discarded_temp` treat a closure exactly like
+a `String` or a `List`. Captures are acquired into the env at
+`MakeClosure` and released transitively when the env's refcount hits
+zero — no more leaked env blocks and no use-after-free when a captured
+heap value's outer binding is dropped first.
+
+**Env ABI.** A (non-null) env block gains a 16-byte header mirroring
+the heap-leaf shape: `[i64 rc][ptr drop_fn]`, captures following.
+`drop_fn` is the address of the closure body's capture-release glue
+(or null when no capture is heap-managed). Both the backend
+(`CLOSURE_ENV_HEADER_FIELDS`) and the runtime (the `LENGTH_OFFSET`
+header note) agree on the layout; capture `i` lives at field
+`2 + i`. The env base pointer doubles as the rc word, so the existing
+`koja_rc_inc` operates on it unchanged.
+
+**Clone / drop.** `Clone` of a `Function` is an `rc++` on the env
+(aliasing the same `{fn_ptr, env_ptr}` fat pointer — the env is shared
+like an immutable leaf). `Drop` calls the new `koja_closure_rc_dec`,
+which null/immortal-checks, decrements, and at zero runs `drop_fn`
+(when present) before `free`ing the block. Both the slot-keyed
+(`DropLocal`) and value-keyed (`DropValue`) closure drop paths funnel
+through `emit_drop_closure_value`.
+
+**Capture-release glue.** A closure body that owns ≥1 heap-managed
+capture gets a sibling `FunctionKind::DropClosureGlue`
+(`<body>.$drop_env$`) minted during lowering: closure-shaped (implicit
+`env_ptr`, env-first ABI), it `LoadCapture`s each heap-managed capture
+and `DropValue`s it, returning `Unit`. Born as real IR so `elaborate`
+discovers any composite capture's `drop_T` and rewrites the composite
+`DropValue`s into glue calls, exactly as for a `Regular` body. Seal
+admits it alongside `Closure` (it's the second `LoadCapture`-bearing
+kind); eval never invokes it (host GC reclaims closures).
+
+**Retain cycles: not reachable.** RC here only *shares* immutable
+values; a closure cannot capture a still-mutable binding to itself
+(captures are by value, taken at `MakeClosure`, and there are no
+reference types). A closure's env can only contain values that
+existed before the env, so the ownership graph stays a DAG — no cycle
+can form, and the naive `rc--`-frees-at-zero scheme is sound without a
+cycle collector.
 
 ### Pending — Phase 4
 

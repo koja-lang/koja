@@ -449,6 +449,14 @@ fn execute_function<R: CallResolver>(
              `CallClosure` (seal invariant violation)",
             function.symbol,
         ),
+        // Capture-release glue exists only to back the LLVM env
+        // teardown ABI. The interpreter reclaims via its host GC and
+        // never calls (or even references) it.
+        FunctionKind::DropClosureGlue { .. } => panic!(
+            "interpreter: `$drop_env$` capture-release glue `{}` is LLVM-only — eval reclaims \
+             closures via the host GC and never invokes it",
+            function.symbol,
+        ),
         FunctionKind::SpawnWrapper { .. } => {
             return Err(RuntimeError::Unsupported {
                 detail: format!(

@@ -13,6 +13,7 @@ use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
 
+pub(crate) const CLOSURE_RC_DEC_SYMBOL: &str = "koja_closure_rc_dec";
 pub(crate) const CONCAT_BITS_SYMBOL: &str = "__koja_concat_bits";
 pub(crate) const FORMAT_BOOL_SYMBOL: &str = "koja_format_bool";
 pub(crate) const FORMAT_F32_SYMBOL: &str = "koja_format_f32";
@@ -138,6 +139,24 @@ pub(crate) fn declare_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(RC_DEC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_closure_rc_dec` extern — the
+/// runtime's refcount decrement for a closure env block. Signature:
+/// `void koja_closure_rc_dec(i8* env)`, where `env` is the env block
+/// base (the `i64 rc` word). At zero it runs the env header's
+/// capture-release glue (if non-null) and frees the block; null /
+/// immortal envs are no-ops. The closure `Drop` emitter calls this
+/// once per closure-typed slot at scope exit / per discarded closure
+/// value.
+pub(crate) fn declare_closure_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(CLOSURE_RC_DEC_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(CLOSURE_RC_DEC_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `koja_int_parse` runtime helper.

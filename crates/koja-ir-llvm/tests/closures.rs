@@ -131,6 +131,31 @@ fn fn_as_value_wrapper_emits_make_closure_with_null_env() {
 }
 
 #[test]
+fn heap_capture_closure_emits_drop_env_glue_and_rc_dec_teardown() {
+    let source = "
+        fn main -> Int
+          greeting = \"hi\"
+          f = fn (x: Int) -> Int
+            x + greeting.length()
+          end
+          f(5)
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    // The env block carries the `[i64 rc][ptr drop_fn]` header: rc is
+    // stamped to 1 and the capture-release glue address is stored.
+    assert_contains(&ir_text, "main__closure0.env.rc");
+    assert_contains(&ir_text, "main__closure0.env.drop_fn");
+    // A `$drop_env$` capture-release glue is synthesized for the
+    // String-capturing closure (closure-shaped, env-first ABI).
+    assert_contains(&ir_text, "$drop_env$");
+    // The closure slot is torn down through the runtime rc-dec, which
+    // runs the glue + frees the env at zero.
+    assert_contains(&ir_text, "@koja_closure_rc_dec");
+}
+
+#[test]
 fn closure_body_loads_user_param_from_alloca_after_env() {
     let source = "
         fn main -> Int

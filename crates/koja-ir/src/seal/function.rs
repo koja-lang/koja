@@ -79,6 +79,14 @@ fn seal_function(function: &IRFunction) {
                 ));
             }
         }
+        FunctionKind::DropClosureGlue { .. } => {
+            if function.blocks.is_empty() {
+                seal_panic(&format!(
+                    "{owner} is closure capture-release glue but carries no basic blocks; its \
+                     `LoadCapture` + `DropValue` body must lower to a non-empty CFG",
+                ));
+            }
+        }
         FunctionKind::SpawnWrapper { .. } => {
             if function.blocks.is_empty() {
                 seal_panic(&format!(

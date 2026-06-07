@@ -484,14 +484,19 @@ impl IRType {
     /// registered, so the backend renders its `Clone` as a register
     /// copy and its `Drop` as a no-op.
     ///
-    /// Closures (`Function`) own a heap env but are *not* counted here:
-    /// their clone / drop glue needs the per-instance capture layout
-    /// the structural `IRType::Function` doesn't carry, so they keep
-    /// their closure-specific drop path.
+    /// Closures (`Function`) are counted here too: a closure value
+    /// owns a heap env, cloned by an `rc++` on the env block and
+    /// released by an `rc--` that, at zero, runs the body's
+    /// capture-release glue (`FunctionKind::DropClosureGlue`) before
+    /// freeing. The acquire / release ops are picked structurally —
+    /// the backend renders a `Clone` / `Drop` of `Function` inline
+    /// against the env header, dispatching capture teardown through
+    /// the env-carried glue pointer rather than the value's type.
     pub fn is_heap_managed(&self) -> bool {
         match self {
             Self::Binary | Self::Bits | Self::String => true,
             Self::Enum(_)
+            | Self::Function { .. }
             | Self::Indirect(_)
             | Self::List(_)
             | Self::Map { .. }
@@ -502,7 +507,6 @@ impl IRType {
             | Self::CPtr(_)
             | Self::Float32
             | Self::Float64
-            | Self::Function { .. }
             | Self::Int8
             | Self::Int16
             | Self::Int32

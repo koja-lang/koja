@@ -14,12 +14,15 @@
 use inkwell::AddressSpace;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum, PointerValue};
+use koja_ir::mangling::closure_drop_env_symbol;
 use koja_ir::{IRLocalId, IRSymbol, IRType, ValueId};
 
 use crate::ctx::{ClosureFrame, EmitContext};
 use crate::error::LlvmError;
-use crate::runtime::{declare_free_extern, declare_malloc_extern};
-use crate::types::{closure_body_signature, closure_fat_ptr_type, ir_basic_type};
+use crate::runtime::{declare_closure_rc_dec_extern, declare_malloc_extern};
+use crate::types::{
+    CLOSURE_ENV_HEADER_FIELDS, closure_body_signature, closure_fat_ptr_type, ir_basic_type,
+};
 
 use super::{ValueMap, inkwell_err, lookup};
 
@@ -50,9 +53,22 @@ pub(super) fn emit_make_closure<'ctx>(
     let env_ptr = if capture_values.is_empty() {
         ctx.context.ptr_type(AddressSpace::default()).const_null()
     } else {
-        emit_env_alloc_and_store(ctx, body, &capture_values)?
+        let drop_fn = closure_drop_env_ptr(ctx, body);
+        emit_env_alloc_and_store(ctx, body, &capture_values, drop_fn)?
     };
     build_closure_fat_pointer(ctx, body, fn_ptr, env_ptr)
+}
+
+/// Resolve the address of a closure's capture-release glue
+/// (`<body>.$drop_env$`, a [`koja_ir::FunctionKind::DropClosureGlue`])
+/// for stashing in the env header. Closures with no heap-managed
+/// capture have no glue, so this returns a null pointer and the
+/// runtime frees the env without per-capture teardown.
+fn closure_drop_env_ptr<'ctx>(ctx: &EmitContext<'ctx>, body: &IRSymbol) -> PointerValue<'ctx> {
+    match ctx.declared_function(&closure_drop_env_symbol(body)) {
+        Some(glue) => glue.as_global_value().as_pointer_value(),
+        None => ctx.context.ptr_type(AddressSpace::default()).const_null(),
+    }
 }
 
 /// Indirect call through a fat-pointer closure value. Splits the
@@ -130,7 +146,7 @@ pub(super) fn emit_load_capture<'ctx>(
         .build_struct_gep(
             env_struct,
             env_ptr,
-            capture_index,
+            capture_index + CLOSURE_ENV_HEADER_FIELDS,
             &format!("env.{capture_index}"),
         )
         .map_err(|e| {
@@ -150,80 +166,85 @@ pub(super) fn emit_load_capture<'ctx>(
         })
 }
 
-/// Drop a closure-typed local: free the env block (skipping null
-/// env_ptrs the captureless adapter shape produces). Heap-typed
-/// captures *inside* the env are not recursively dropped — that
-/// needs a per-body drop function we synthesize alongside the
-/// closure body, a follow-up. Captures of heap-typed locals
-/// therefore leak today; the current milestone accepts the leak in
-/// exchange for a simpler ABI.
+/// Drop a closure value: `rc--` on its env block via
+/// [`declare_closure_rc_dec_extern`]. The runtime handles the null
+/// (captureless adapter) and immortal cases, and at zero runs the
+/// env header's capture-release glue
+/// ([`koja_ir::FunctionKind::DropClosureGlue`]) before freeing — so a
+/// closure capturing heap values releases them transitively. Shared
+/// by the slot-keyed ([`emit_drop_closure_env`]) and value-keyed
+/// (`emit_drop_value`) closure drop paths.
+pub(crate) fn emit_drop_closure_value<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    closure_value: BasicValueEnum<'ctx>,
+    label: &str,
+) -> Result<(), LlvmError> {
+    let env_ptr = load_closure_env_ptr(ctx, closure_value, label)?;
+    let dec = declare_closure_rc_dec_extern(ctx);
+    ctx.builder
+        .build_call(dec, &[env_ptr.into()], &format!("{label}.env_rc_dec"))
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("closure env rc_dec for `{label}`"), e))
+}
+
+/// Slot-keyed closure drop (`DropLocal` of an `IRType::Function`
+/// slot). Thin wrapper over [`emit_drop_closure_value`].
 pub(super) fn emit_drop_closure_env<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
     closure_value: BasicValueEnum<'ctx>,
 ) -> Result<(), LlvmError> {
-    let fat_ty = closure_fat_ptr_type(ctx);
-    let alloca = ctx.build_entry_alloca(fat_ty, &format!("{local}.drop"));
-    ctx.builder
-        .build_store(alloca, closure_value)
-        .map_err(|e| inkwell_err(format_args!("drop spill for `{local}`"), e))?;
-    let env_slot = ctx
-        .builder
-        .build_struct_gep(fat_ty, alloca, 1, &format!("{local}.env_ptr"))
-        .map_err(|e| inkwell_err(format_args!("drop env_ptr GEP for `{local}`"), e))?;
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let env_ptr = ctx
-        .builder
-        .build_load(ptr_ty, env_slot, &format!("{local}.env"))
-        .map_err(|e| inkwell_err(format_args!("drop env_ptr load for `{local}`"), e))?
-        .into_pointer_value();
-    let is_null = ctx
-        .builder
-        .build_is_null(env_ptr, &format!("{local}.env_is_null"))
-        .map_err(|e| inkwell_err(format_args!("drop null check for `{local}`"), e))?;
-    let parent = ctx
-        .builder
-        .get_insert_block()
-        .and_then(|b| b.get_parent())
-        .ok_or_else(|| {
-            LlvmError::Codegen(
-                "DropLocal emitted outside a function context (compiler bug)".to_string(),
-            )
-        })?;
-    let free_block = ctx
-        .context
-        .append_basic_block(parent, &format!("{local}.drop_free"));
-    let cont_block = ctx
-        .context
-        .append_basic_block(parent, &format!("{local}.drop_cont"));
-    ctx.builder
-        .build_conditional_branch(is_null, cont_block, free_block)
-        .map_err(|e| inkwell_err(format_args!("drop branch for `{local}`"), e))?;
-    ctx.builder.position_at_end(free_block);
-    let free = declare_free_extern(ctx);
-    ctx.builder
-        .build_call(free, &[env_ptr.into()], &format!("{local}.free"))
-        .map_err(|e| inkwell_err(format_args!("env free call for `{local}`"), e))?;
-    ctx.builder
-        .build_unconditional_branch(cont_block)
-        .map_err(|e| inkwell_err(format_args!("drop branch-cont for `{local}`"), e))?;
-    ctx.builder.position_at_end(cont_block);
-    Ok(())
+    emit_drop_closure_value(ctx, closure_value, &format!("{local}.drop"))
 }
 
-/// Heap-allocate the env block, populate each capture slot via
-/// `getelementptr inbounds`, and return the env payload pointer.
-/// Empty layouts short-circuit before this is called (see
-/// [`emit_make_closure`]).
+/// Split a `{fn_ptr, env_ptr}` fat pointer and load its `env_ptr`
+/// field. Spill-then-GEP so the load works off the canonical
+/// [`closure_fat_ptr_type`] regardless of how the SSA value was
+/// produced. Shared by the closure clone (`rc++`) and drop
+/// (`rc--`) paths.
+pub(crate) fn load_closure_env_ptr<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    closure_value: BasicValueEnum<'ctx>,
+    label: &str,
+) -> Result<PointerValue<'ctx>, LlvmError> {
+    let fat_ty = closure_fat_ptr_type(ctx);
+    let alloca = ctx.build_entry_alloca(fat_ty, label);
+    ctx.builder
+        .build_store(alloca, closure_value)
+        .map_err(|e| inkwell_err(format_args!("closure spill for `{label}`"), e))?;
+    let env_slot = ctx
+        .builder
+        .build_struct_gep(fat_ty, alloca, 1, &format!("{label}.env_ptr"))
+        .map_err(|e| inkwell_err(format_args!("closure env_ptr GEP for `{label}`"), e))?;
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    ctx.builder
+        .build_load(ptr_ty, env_slot, &format!("{label}.env"))
+        .map(|v| v.into_pointer_value())
+        .map_err(|e| inkwell_err(format_args!("closure env_ptr load for `{label}`"), e))
+}
+
+/// Heap-allocate the env block, stamp its `[i64 rc][ptr drop_fn]`
+/// header (rc = 1, `drop_fn` = the capture-release glue or null),
+/// populate each capture slot via `getelementptr inbounds`, and
+/// return the env base pointer (which doubles as the rc word for
+/// `koja_rc_inc` / `koja_closure_rc_dec`). Empty layouts
+/// short-circuit before this is called (see [`emit_make_closure`]).
 fn emit_env_alloc_and_store<'ctx>(
     ctx: &EmitContext<'ctx>,
     body: &IRSymbol,
     captures: &[BasicValueEnum<'ctx>],
+    drop_fn: PointerValue<'ctx>,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
-    let field_types: Vec<BasicTypeEnum<'ctx>> = captures.iter().map(|c| c.get_type()).collect();
+    let i64_ty = ctx.context.i64_type();
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let mut field_types: Vec<BasicTypeEnum<'ctx>> =
+        Vec::with_capacity(captures.len() + CLOSURE_ENV_HEADER_FIELDS as usize);
+    field_types.push(i64_ty.into());
+    field_types.push(ptr_ty.into());
+    field_types.extend(captures.iter().map(|c| c.get_type()));
     let env_struct = ctx.context.struct_type(&field_types, false);
     let size_bytes = ctx.layouts.target_data.get_abi_size(&env_struct);
-    let size_value = ctx.context.i64_type().const_int(size_bytes, false);
+    let size_value = i64_ty.const_int(size_bytes, false);
     let malloc = declare_malloc_extern(ctx);
     let env_ptr = ctx
         .builder
@@ -233,21 +254,50 @@ fn emit_env_alloc_and_store<'ctx>(
         .basic()
         .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
         .into_pointer_value();
+    store_env_field(
+        ctx,
+        env_struct,
+        env_ptr,
+        0,
+        i64_ty.const_int(1, false).into(),
+        body,
+        "rc",
+    )?;
+    store_env_field(ctx, env_struct, env_ptr, 1, drop_fn.into(), body, "drop_fn")?;
     for (index, capture) in captures.iter().enumerate() {
-        let slot_ptr = ctx
-            .builder
-            .build_struct_gep(
-                env_struct,
-                env_ptr,
-                index as u32,
-                &format!("{body}.env.{index}"),
-            )
-            .map_err(|e| inkwell_err(format_args!("env GEP for `{body}` capture #{index}"), e))?;
-        ctx.builder
-            .build_store(slot_ptr, *capture)
-            .map_err(|e| inkwell_err(format_args!("env store for `{body}` capture #{index}"), e))?;
+        let field = index as u32 + CLOSURE_ENV_HEADER_FIELDS;
+        store_env_field(
+            ctx,
+            env_struct,
+            env_ptr,
+            field,
+            *capture,
+            body,
+            &index.to_string(),
+        )?;
     }
     Ok(env_ptr)
+}
+
+/// `getelementptr inbounds` to `env_struct` field `field` on
+/// `env_ptr` and `store` `value` there. Names the temp `<body>.env.<tag>`.
+fn store_env_field<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    env_struct: inkwell::types::StructType<'ctx>,
+    env_ptr: PointerValue<'ctx>,
+    field: u32,
+    value: BasicValueEnum<'ctx>,
+    body: &IRSymbol,
+    tag: &str,
+) -> Result<(), LlvmError> {
+    let slot_ptr = ctx
+        .builder
+        .build_struct_gep(env_struct, env_ptr, field, &format!("{body}.env.{tag}"))
+        .map_err(|e| inkwell_err(format_args!("env GEP for `{body}` field `{tag}`"), e))?;
+    ctx.builder
+        .build_store(slot_ptr, value)
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("env store for `{body}` field `{tag}`"), e))
 }
 
 /// Pack `{fn_ptr, env_ptr}` into the canonical closure fat-pointer

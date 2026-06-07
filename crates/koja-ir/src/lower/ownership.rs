@@ -17,6 +17,9 @@
 //!   marker into a synthesized `clone_T` / `drop_T` call — or, for an
 //!   all-`Copy` aggregate that needs no glue, the backend renders the
 //!   `Clone` as a register copy and the `Drop` as a no-op.
+//! - **closure** (`Function`): an inline `rc++` / `rc--` on the env
+//!   block, the `rc--` running the body's capture-release glue at zero
+//!   (see `crate::lower::closures` and `FunctionKind::DropClosureGlue`).
 //!
 //! Three lowering-side primitives:
 //!
@@ -25,10 +28,6 @@
 //!   control-flow exit.
 //! - [`drop_discarded_temp`] — release an owned value whose statement
 //!   result is thrown away.
-//!
-//! Closures (`IRType::Function`) own a heap env but are *not*
-//! heap-managed here: they keep their closure-specific drop path until
-//! the closure-glue slice wires capture-recursive release.
 
 use crate::function::{IRBlockId, IRFunctionParam, IRInstruction};
 use crate::local::IRLocalId;
@@ -40,8 +39,7 @@ use super::ctx::FnLowerCtx;
 /// ownership boundary — a binding, parameter promotion, or return.
 ///
 /// - Non-heap-managed types pass through unchanged (scalars are
-///   `Copy`; closures keep their own drop path until the closure-glue
-///   slice).
+///   `Copy`).
 /// - An already-owned value is *moved* (returned as-is).
 /// - A borrowed heap-managed value (literal, `const`, slot/field read,
 ///   parameter) is *cloned* into a fresh owned value so the acquirer

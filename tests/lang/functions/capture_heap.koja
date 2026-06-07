@@ -1,0 +1,22 @@
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
+  f(x)
+end
+
+fn main
+  prefix = "hello"
+
+  nums: List<Int> = List.new()
+  nums = nums.append(10)
+  nums = nums.append(20)
+  nums = nums.append(30)
+
+  measure =
+    fn (n: Int) -> Int n + prefix.length() + nums.length() end
+
+  measure(1).print()
+  measure(2).print()
+  apply(3, fn (n: Int) -> Int n + prefix.length() end).print()
+
+  prefix.length().print()
+  nums.length().print()
+end
