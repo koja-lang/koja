@@ -384,26 +384,31 @@ pub enum IRInstruction {
         dest: ValueId,
         result_ty: IRType,
     },
-    /// `dest = clone(source)` — a deep, independent copy of `source`
-    /// (statically typed `ty`). The drop-glue lowering emits this at
-    /// every *ownership acquisition* of a heap value (binding,
-    /// parameter promotion, field/element store, return) so each
-    /// owner holds a unique payload it can free at scope exit without
-    /// aliasing another owner's storage. The source stays live and
-    /// unmodified.
+    /// `dest = clone(source)` — a value-semantics acquisition that
+    /// yields an independent owner of `source` (statically typed `ty`).
+    /// The drop-glue lowering emits this at every *ownership
+    /// acquisition* of a heap value (binding, parameter promotion,
+    /// field/element store, return) so each owner can drop at scope
+    /// exit without aliasing another owner. Under reference counting
+    /// the independence is logical, not physical: immutable blocks are
+    /// shared and the bookkeeping is an `rc++`. The source stays live.
     ///
     /// Backend lowering by `ty`:
-    /// - Leaf heap (`String` / `Binary` / `Bits`): allocate a fresh
-    ///   `[i64 bit_length][payload]` block and `memcpy` the source in
-    ///   (reuses the `heap_clone` backbone). Eval relies on its host
-    ///   GC and treats the looked-up value as already independent.
+    /// - Leaf heap (`String` / `Binary` / `Bits`): an `rc_inc` on the
+    ///   block base (`payload - HEADER_BYTES`); `dest` re-binds the
+    ///   same payload pointer. Eval relies on its host GC and treats
+    ///   the looked-up value as already independent.
     /// - Stack/`Copy` leaf types (`Int`, `Float`, `Bool`, …): a plain
     ///   register copy — `dest` aliases the same immutable SSA value.
-    /// - Composite heap (`List` / `Map` / `Set` / heap-owning structs
-    ///   and enums, closures): rewritten by the `elaborate` sub-pass
-    ///   into a `Call` to a synthesized per-type `clone_T`, so the
-    ///   backend never recurses inline. A composite `Clone` that
-    ///   survives to a backend is a lowering bug.
+    /// - Closure (`Function`): an `rc_inc` on the captured env block,
+    ///   aliasing the same `{fn_ptr, env_ptr}` fat pointer.
+    /// - No-glue aggregates (`Struct` / `Enum` / `Union` whose fields
+    ///   are all `Copy`): a register copy, like the scalar leaves.
+    /// - Heap composites (`List` / `Map` / `Set` / `Indirect` and
+    ///   heap-owning structs and enums): rewritten by the `elaborate`
+    ///   sub-pass into a `Call` to a synthesized per-type `clone_T`, so
+    ///   the backend never recurses inline. One surviving to a backend
+    ///   is a lowering bug.
     Clone {
         dest: ValueId,
         source: ValueId,

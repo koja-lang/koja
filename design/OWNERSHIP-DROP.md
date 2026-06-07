@@ -193,9 +193,10 @@ established structurally, at lowering, by one rule:
 
 This subsumes literals, consts, and borrows with a single mechanism,
 costs nothing for transient literals, and needs no runtime provenance
-bit or allocator cooperation. It reuses the deep-copy infrastructure
-in `koja-ir-llvm/src/intrinsics/heap_clone.rs`; composite clones
-recurse the same shape drop glue does, inverted.
+bit or allocator cooperation. It lowers to the value-semantics rc glue
+(`IRInstruction::Clone`, emitted in `koja-ir-llvm/src/emit/clone.rs`):
+leaf-heap acquisitions are an `rc_inc` on the shared immutable block,
+and composite clones recurse the same shape drop glue does, inverted.
 
 Heapifying literals would *not* let us skip this rule. `const` stays
 static by design, and borrowed params are never heap-owned here, so

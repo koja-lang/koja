@@ -12,12 +12,11 @@
 //! # Submodule layout
 //!
 //! - [`util`]: low-level helpers ([`call_malloc`](util::call_malloc),
-//!   [`resolve_hash_eq`](util::resolve_hash_eq),
-//!   [`resolve_clone_fn`](util::resolve_clone_fn), …) used by every
+//!   [`resolve_hash_eq`](util::resolve_hash_eq), …) used by every
 //!   other submodule. Pure "build one instruction" wrappers — no
 //!   per-method shape.
-//! - [`lifecycle`]: allocate / inspect / duplicate — `new`, `length`,
-//!   `empty?`, `from_map` identity, and `Map.clone` / `Set.clone`.
+//! - [`lifecycle`]: allocate / inspect — `new`, `length`, `empty?`,
+//!   and the `from_map` identity.
 //! - [`read`]: the read-only probe loop and the `get` / `has?` /
 //!   `remove` tails that consume it.
 //! - [`resize`]: the load-factor check + rehash loop reused by every
@@ -40,7 +39,7 @@ mod util;
 
 pub(super) use from_list::emit_set_from_list;
 pub(super) use insert::{emit_map_put, emit_set_insert};
-pub(super) use lifecycle::{emit_empty_q, emit_identity, emit_length, emit_new, emit_table_clone};
+pub(super) use lifecycle::{emit_empty_q, emit_identity, emit_length, emit_new};
 pub(super) use read::{emit_has_q, emit_map_get, emit_remove};
 pub(super) use util::ir_byte_size;
 pub(crate) use util::occupied_loop;

@@ -26,7 +26,7 @@ use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
-use crate::intrinsics::heap_clone;
+use crate::intrinsics::heap_payload;
 use crate::runtime::{declare_free_extern, declare_malloc_extern};
 use crate::types::ir_basic_type;
 
@@ -230,10 +230,10 @@ fn emit_to_string<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
-    let cloned =
-        heap_clone::copy_heap_payload(ctx, function.symbol.mangled(), self_ptr, true, false)?;
+    let copied =
+        heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), self_ptr, true, false)?;
     ctx.builder
-        .build_return(Some(&cloned))
+        .build_return(Some(&copied))
         .map(|_| ())
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }

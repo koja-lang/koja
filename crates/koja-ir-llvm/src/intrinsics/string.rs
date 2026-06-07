@@ -18,7 +18,7 @@ use crate::emit::heap_layout::load_bit_length;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::intrinsics::cptr::declare_memcpy_extern;
-use crate::intrinsics::heap_clone;
+use crate::intrinsics::heap_payload;
 use crate::runtime::{
     declare_malloc_extern, declare_string_get_extern, declare_string_length_extern,
     declare_string_slice_extern,
@@ -40,9 +40,6 @@ pub(super) fn emit_string<'ctx>(
     ctx.builder.position_at_end(entry);
     match method {
         StringMethod::ByteLength => emit_byte_length(ctx, function, llvm_function),
-        StringMethod::Clone => {
-            heap_clone::emit_payload_clone(ctx, function, llvm_function, true, false)
-        }
         StringMethod::Get => emit_get(ctx, function, llvm_function),
         StringMethod::Length => emit_length(ctx, function, llvm_function),
         StringMethod::Slice => emit_slice(ctx, function, llvm_function),
@@ -64,22 +61,21 @@ fn emit_byte_length<'ctx>(
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
-/// `String.to_binary(self) -> Binary` — a fresh, independent `Binary`
-/// copy of the payload (not a reinterpret of `self`). Cloning on
-/// return keeps the value-semantics invariant that every call result
-/// is owned heap, so the drop pipeline can free it without
-/// double-freeing the borrowed `self`. `with_nul=false`: `Binary`
-/// carries no trailing libc NUL.
+/// `String.to_binary(self) -> Binary` — a zero-cost reinterpret.
+/// `String` and `Binary` share the `[rc][bit_length][bytes]` block
+/// (the String's trailing libc NUL is just unused capacity a `Binary`
+/// never reads), so we rc-acquire the immutable block and hand back
+/// the same payload pointer as an owned `Binary`. The matching `Drop`
+/// rc-decrements either alias.
 fn emit_to_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let payload = self_payload(function, llvm_function)?;
-    let cloned =
-        heap_clone::copy_heap_payload(ctx, function.symbol.mangled(), payload, false, false)?;
+    let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
     ctx.builder
-        .build_return(Some(&cloned))
+        .build_return(Some(&shared))
         .map(|_| ())
         .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }

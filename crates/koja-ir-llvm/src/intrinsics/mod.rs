@@ -27,7 +27,7 @@ pub(crate) mod element;
 mod equality;
 mod hash;
 mod hashtable;
-pub(crate) mod heap_clone;
+pub(crate) mod heap_payload;
 mod kernel;
 mod list;
 mod map;

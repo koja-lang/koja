@@ -35,7 +35,6 @@ pub(super) fn emit_map<'ctx>(
     };
 
     match method {
-        MapMethod::Clone => hashtable::emit_table_clone(ctx, function, llvm_function, &layout),
         MapMethod::EmptyQ => hashtable::emit_empty_q(ctx, function, llvm_function),
         MapMethod::FromMap => hashtable::emit_identity(ctx, function, llvm_function),
         MapMethod::Get => hashtable::emit_map_get(ctx, function, llvm_function, &layout),

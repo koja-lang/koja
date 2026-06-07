@@ -1,6 +1,8 @@
+# Value semantics: assigning a Map yields an independent value; a put
+# on one side copies-on-write, leaving the other side unchanged.
 fn main
   pages: Map<String, String> = ["home": "ok", "about": "ok"]
-  twin = pages.clone()
+  twin = pages
   pages = pages.put("home", "404")
   pages.get("home").unwrap().print()
   twin.get("home").unwrap().print()

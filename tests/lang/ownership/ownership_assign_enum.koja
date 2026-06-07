@@ -1,3 +1,5 @@
+# Value semantics: assigning an enum (incl. heap payloads) yields an
+# independent value; the source and the copy format identically.
 enum Tag
   Unset
   Name(String)
@@ -9,17 +11,17 @@ end
 
 fn main
   a = Tag.Name("hello")
-  a_twin = a.clone()
+  a_twin = a
   a.format().print()
   a_twin.format().print()
 
   b = Tag.Stamped{at: 42, by: "alice"}
-  b_twin = b.clone()
+  b_twin = b
   b.format().print()
   b_twin.format().print()
 
   c = Tag.Unset
-  c_twin = c.clone()
+  c_twin = c
   c.format().print()
   c_twin.format().print()
 end

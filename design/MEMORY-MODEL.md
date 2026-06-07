@@ -310,7 +310,7 @@ value-semantics tests.
   `copy_buffer`. Fixes the `list_test` "pop until empty" teardown
   crash (was the global-stdlib exit-1).
 - **Tail-call composite-arg acquire** (`tail_calls.rs`): the
-  self-tail-call rewrite acquired only *heap-leaf* args before the
+  self-tail-call rewrite acquired only _heap-leaf_ args before the
   trailing exit drops; composite args (`List`, struct, etc.) were
   rebound from the just-dropped slot → use-after-free on the next
   iteration. Now acquires every `is_heap_managed` arg (the inserted
@@ -322,7 +322,7 @@ value-semantics tests.
 
 **Remaining for Phase 2d:**
 
-- **Call-boundary acquire** (`lower/calls.rs`) is *not* needed for
+- **Call-boundary acquire** (`lower/calls.rs`) is _not_ needed for
   correctness under the current "callee acquires on promotion" +
   "intrinsics return freshly-owned heap" convention — the two crashes
   above were the intrinsic empty-branch and the tail-call gap, not a
@@ -371,7 +371,7 @@ discovers any composite capture's `drop_T` and rewrites the composite
 admits it alongside `Closure` (it's the second `LoadCapture`-bearing
 kind); eval never invokes it (host GC reclaims closures).
 
-**Retain cycles: not reachable.** RC here only *shares* immutable
+**Retain cycles: not reachable.** RC here only _shares_ immutable
 values; a closure cannot capture a still-mutable binding to itself
 (captures are by value, taken at `MakeClosure`, and there are no
 reference types). A closure's env can only contain values that
@@ -379,12 +379,53 @@ existed before the env, so the ownership graph stays a DAG — no cycle
 can form, and the naive `rc--`-frees-at-zero scheme is sound without a
 cycle collector.
 
-### Pending — Phase 4
+### Done — Phase 4
 
-Delete `clone.koja` / `derive_clone.rs` + stdlib `List` / `Map` /
-`Set` / `CPtr` `Clone` impls; remove `Clone` from
-`UNIVERSAL_PROTOCOLS` + universal fallback; strip `lib/http` `.clone()`
-call sites; repurpose `ownership_clone` tests.
+The user-facing `Clone` protocol is gone — value semantics makes
+explicit duplication meaningless (every value is already independent,
+and rc copy-on-write makes assignment cheap). Removed:
+
+- `lib/global/src/clone.koja` (protocol decl + every primitive /
+  heap-leaf impl) and its `Global.clone` autoimport entry.
+- The `List` / `Map` / `Set` / `CPtr` `Clone` impls in their
+  respective `.koja` files.
+- `derive_clone.rs` (the auto-`impl Clone for T` synthesizer) and its
+  pre-collect wiring in `program.rs` / `synthesize/mod.rs`.
+- `Clone` from `UNIVERSAL_PROTOCOLS`; the universal fallback in
+  `bounded.rs` now augments bare type-param bounds with `Debug` /
+  `Equality` only.
+- All `.clone()` call sites in `lib/http` (`client.koja`,
+  `parser.koja`) — plain assignment / argument passing replaces them.
+- The protocol-clone test files (`koja-typecheck/tests/clone.rs`,
+  `koja-ir/tests/lower_clone.rs`, `koja-ir-llvm/tests/clone.rs`,
+  `koja-ir-eval/tests/clone.rs`); the `ownership_clone*` lang tests
+  were repurposed as `ownership_assign*` (same independence assertion,
+  via plain assignment instead of `.clone()`).
+
+This was safe because the value-semantics rc glue already covers every
+duplication path: collection copy-on-write
+(`hashtable::clone_table_buffers` → `acquire_in_slot`) and element
+acquisition run on the internal `$clone$` glue (`clone_glue_symbol` /
+`IRInstruction::Clone`), never the protocol. The protocol-clone
+backend chain was reachable _only_ through user-facing `.clone()`.
+
+**Backend dead-code cleanup (done):** the now-unreachable
+protocol-clone backend chain was excised end to end alongside the
+frontend removal — the `*Method::Clone` intrinsic variants and their
+`"clone"` mappings in `koja-ir/src/intrinsic_id.rs`, the per-method
+dispatch arms (`string.rs` / `binary.rs` / `map.rs` / `set.rs` in both
+backends), `emit_table_clone` + `resolve_clone_fn` /
+`clone_receiver_symbol` / `call_clone` (hashtable `lifecycle.rs` /
+`util.rs`), and the eval `deep_clone_value` / `deep_clone_payload`
+helpers. The deep-copy backbone (renamed `heap_clone.rs` →
+`heap_payload.rs`) stays for the conversions that genuinely mint a new
+block (`Binary.to_string` / `CPtr.to_string`, which add a libc NUL),
+and as the seed for future "copy on process boundary" deep copies. The
+same-layout reinterprets (`Binary.to_bits`, `String.to_binary`,
+`Bits.to_binary`) were migrated off the deep copy to an `rc_inc` +
+pointer reinterpret (`heap_payload::share_heap_payload`) — Koja blocks
+are immutable, so sharing is invisible and matches the heap-leaf
+`Clone` path.
 
 ### Pending — Phase 5
 
@@ -394,11 +435,11 @@ glue is landed, not shelved); `just lint` + `just test`; leak audit
 
 ### Known bugs discovered (session notes)
 
-| Symptom                                                                          | Root cause                                                                                      | Fix status                      |
-| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------- |
-| `qualified_signature.koja` SIGBUS (flaky → deterministic with empty list + loop) | Loop-body local dropped at function exit uninitialized when loop runs 0 times                   | Fixed (loop scoping)            |
-| `Map.get` double-free                                                            | Hand-out without `acquire_value`                                                                | Fixed                           |
-| `List.pop()` on empty list, teardown SIGBUS                                      | Empty branch returned the borrowed `self` buffer as `Pair.second`; caller slot + pair drop the same list | Fixed (empty-branch clone)      |
-| Global stdlib exits 1 after ~84 green dots                                       | Same as pop-on-empty (crashes before harness summary)                                           | Fixed                           |
-| `http` `headers_test` "get_all" SIGSEGV in `clone_Header`                        | Tail-call rewrite acquired only heap-*leaf* args; composite args rebound from just-dropped slot | Fixed (acquire heap-managed args) |
-| `lower_process` spawn/receive tests                                              | Expected raw `ValueId`; return now acquires heap-managed values                                 | Fixed (structural assert)       |
+| Symptom                                                                          | Root cause                                                                                               | Fix status                        |
+| -------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | --------------------------------- |
+| `qualified_signature.koja` SIGBUS (flaky → deterministic with empty list + loop) | Loop-body local dropped at function exit uninitialized when loop runs 0 times                            | Fixed (loop scoping)              |
+| `Map.get` double-free                                                            | Hand-out without `acquire_value`                                                                         | Fixed                             |
+| `List.pop()` on empty list, teardown SIGBUS                                      | Empty branch returned the borrowed `self` buffer as `Pair.second`; caller slot + pair drop the same list | Fixed (empty-branch clone)        |
+| Global stdlib exits 1 after ~84 green dots                                       | Same as pop-on-empty (crashes before harness summary)                                                    | Fixed                             |
+| `http` `headers_test` "get_all" SIGSEGV in `clone_Header`                        | Tail-call rewrite acquired only heap-_leaf_ args; composite args rebound from just-dropped slot          | Fixed (acquire heap-managed args) |
+| `lower_process` spawn/receive tests                                              | Expected raw `ValueId`; return now acquires heap-managed values                                          | Fixed (structural assert)         |

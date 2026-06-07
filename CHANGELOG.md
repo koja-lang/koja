@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `koja test` now enforces a 60-second per-binary timeout, so a hung test process fails fast instead of stalling the suite.
 
+### Removed
+
+- **Breaking**: The `Clone` protocol and `.clone()` method are removed. Under value semantics every binding, parameter, return, and field is already an independent value (backed by reference-counted copy-on-write), so explicit cloning is unnecessary — replace `x.clone()` with `x`. This drops the `Clone` protocol definition, its stdlib impls (`List`/`Map`/`Set`/`CPtr`/primitives), the auto-derived `impl Clone for T` synthesizer, and `Clone` from the universal protocol set.
+
 ### Fixed
 
 - Passing a heap-owning local (e.g. a `String` built with `<>`, or a `List`) to a function or method that takes ownership (`move`) no longer crashes or returns corrupt data under `--backend=llvm`.

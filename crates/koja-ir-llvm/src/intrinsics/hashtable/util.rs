@@ -3,13 +3,12 @@
 //! Two flavours of helper live here:
 //!
 //! - Instruction wrappers ([`call_malloc`], [`call_hash`], [`call_eq`],
-//!   [`call_clone`], [`advance_slot`], [`entry_pointer`],
-//!   [`build_table_struct`], [`build_empty_table`]) that bundle the
-//!   inkwell builder calls + `codegen_err` plumbing into a single
-//!   line at the call site.
+//!   [`advance_slot`], [`entry_pointer`], [`build_table_struct`],
+//!   [`build_empty_table`]) that bundle the inkwell builder calls +
+//!   `codegen_err` plumbing into a single line at the call site.
 //! - Symbol / type resolution ([`resolve_hash_eq`],
-//!   [`resolve_clone_fn`], [`expect_enum_symbol`]) for crossing from
-//!   sealed IR ([`IRType`] / [`IRSymbol`]) to monomorphized inkwell
+//!   [`expect_enum_symbol`]) for crossing from sealed IR
+//!   ([`IRType`] / [`IRSymbol`]) to monomorphized inkwell
 //!   [`FunctionValue`]s via [`koja_ir::mangling`].
 //!
 //! Everything is `pub(super)`: visible to sibling submodules, hidden
@@ -457,28 +456,6 @@ pub(super) fn call_eq<'ctx>(
         .map(|v| v.into_int_value())
 }
 
-pub(super) fn call_clone<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    clone_fn: FunctionValue<'ctx>,
-    value: BasicValueEnum<'ctx>,
-    name: &str,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    ctx.builder
-        .build_call(clone_fn, &[value.into()], name)
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_call clone for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!("clone returned no value for `{}`", function.symbol))
-        })
-}
-
 pub(super) fn advance_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -679,70 +656,6 @@ fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
         IRType::String => global_primitive_symbol("String"),
         IRType::Struct(symbol) => symbol.clone(),
         _ => return None,
-    })
-}
-
-/// Resolve the monomorphized `clone` function for `elem_ty` — the
-/// universal-`Clone` contract guarantees every type lands here with
-/// a callable impl (intrinsic for `String` / `Binary` / `Bits` /
-/// `Map` / `Set`, hand-written in `.koja` for primitives + `List` +
-/// `CPtr`, synthesized for user structs and enums). Surfaces a clean
-/// codegen error when the receiver shape isn't one we know how to
-/// mangle (e.g. function-typed `V` in a `Map<K, fn () -> R>` —
-/// that's a follow-up).
-pub(super) fn resolve_clone_fn<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    elem_ty: &IRType,
-) -> Result<FunctionValue<'ctx>, LlvmError> {
-    let (template, args) = clone_receiver_symbol(elem_ty).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "type `{elem_ty:?}` does not have a callable `clone` shape for `{}`",
-            function.symbol,
-        ))
-    })?;
-    let clone_symbol = mangled_method_name(&template, &args, "clone", &[]);
-    ctx.declared_function(&clone_symbol).ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "type `{elem_ty:?}` does not implement Clone (no `{}` function) for `{}`",
-            clone_symbol, function.symbol,
-        ))
-    })
-}
-
-/// Receiver template + args for [`mangled_method_name`] on `clone`.
-/// Generic shapes (`List<T>`, `Map<K, V>`, `Set<T>`, `CPtr<T>`)
-/// reconstruct the receiver pair so the result mangles through the
-/// same path as the original `impl Clone for T` block. Already-
-/// mangled struct / enum symbols pass through verbatim with empty
-/// args — monomorphization stamps the full generic instantiation
-/// into the symbol root before codegen sees the type.
-fn clone_receiver_symbol(elem_ty: &IRType) -> Option<(IRSymbol, Vec<IRType>)> {
-    Some(match elem_ty {
-        IRType::Binary => (global_primitive_symbol("Binary"), Vec::new()),
-        IRType::Bits => (global_primitive_symbol("Bits"), Vec::new()),
-        IRType::Bool => (global_primitive_symbol("Bool"), Vec::new()),
-        IRType::CPtr(inner) => (global_primitive_symbol("CPtr"), vec![(**inner).clone()]),
-        IRType::Enum(symbol) | IRType::Struct(symbol) => (symbol.clone(), Vec::new()),
-        IRType::Float32 => (global_primitive_symbol("Float32"), Vec::new()),
-        IRType::Float64 => (global_primitive_symbol("Float"), Vec::new()),
-        IRType::Int8 => (global_primitive_symbol("Int8"), Vec::new()),
-        IRType::Int16 => (global_primitive_symbol("Int16"), Vec::new()),
-        IRType::Int32 => (global_primitive_symbol("Int32"), Vec::new()),
-        IRType::Int64 => (global_primitive_symbol("Int"), Vec::new()),
-        IRType::List(inner) => (global_primitive_symbol("List"), vec![(**inner).clone()]),
-        IRType::Map { key, value } => (
-            global_primitive_symbol("Map"),
-            vec![(**key).clone(), (**value).clone()],
-        ),
-        IRType::Set(inner) => (global_primitive_symbol("Set"), vec![(**inner).clone()]),
-        IRType::String => (global_primitive_symbol("String"), Vec::new()),
-        IRType::UInt8 => (global_primitive_symbol("UInt8"), Vec::new()),
-        IRType::UInt16 => (global_primitive_symbol("UInt16"), Vec::new()),
-        IRType::UInt32 => (global_primitive_symbol("UInt32"), Vec::new()),
-        IRType::UInt64 => (global_primitive_symbol("UInt64"), Vec::new()),
-        IRType::Unit => (global_primitive_symbol("Unit"), Vec::new()),
-        IRType::Function { .. } | IRType::Indirect(_) | IRType::Union { .. } => return None,
     })
 }
 

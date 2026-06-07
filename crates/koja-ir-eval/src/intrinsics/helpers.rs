@@ -3,9 +3,6 @@
 //! `result_value` / `size_of_primitive` from drifting across
 //! sibling modules.
 
-use std::cell::RefCell;
-use std::rc::Rc;
-
 use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag};
 
 use crate::error::RuntimeError;
@@ -74,78 +71,6 @@ pub(super) fn enum_return_symbol(
         other => Err(RuntimeError::TypeMismatch {
             detail: format!("{label} expected Enum return type, got `{other:?}`"),
         }),
-    }
-}
-
-/// Recursive deep clone of a [`Value`]. Plain `Value::clone()` is a
-/// shallow `Rc::clone` for `List` / `Map` / `Set` storage, which
-/// would leave the clone aliased with the original — observable as
-/// soon as either side mutates. This helper walks the tree and mints
-/// fresh `Rc<RefCell<...>>` for every container layer so the result
-/// is fully independent.
-///
-/// Used by `Map.clone` / `Set.clone` (and reused by any future
-/// container-clone intrinsic) — non-container variants fall back to
-/// `Value::clone`, which already deep-copies their owned payload
-/// (e.g. `Vec<u8>` for `Value::String` / `Value::Binary`).
-pub(super) fn deep_clone_value(value: &Value) -> Value {
-    match value {
-        Value::List(entries) => {
-            let cloned: Vec<Value> = entries.borrow().iter().map(deep_clone_value).collect();
-            Value::List(Rc::new(RefCell::new(cloned)))
-        }
-        Value::Map(entries) => {
-            let cloned: Vec<(Value, Value)> = entries
-                .borrow()
-                .iter()
-                .map(|(k, v)| (deep_clone_value(k), deep_clone_value(v)))
-                .collect();
-            Value::Map(Rc::new(RefCell::new(cloned)))
-        }
-        Value::Set(entries) => {
-            let cloned: Vec<Value> = entries.borrow().iter().map(deep_clone_value).collect();
-            Value::Set(Rc::new(RefCell::new(cloned)))
-        }
-        Value::Enum {
-            name,
-            payload,
-            symbol,
-            tag,
-        } => Value::Enum {
-            name: name.clone(),
-            payload: deep_clone_payload(payload),
-            symbol: symbol.clone(),
-            tag: *tag,
-        },
-        Value::Struct { symbol, fields } => Value::Struct {
-            symbol: symbol.clone(),
-            fields: fields.iter().map(deep_clone_value).collect(),
-        },
-        Value::Union {
-            payload,
-            symbol,
-            tag,
-        } => Value::Union {
-            payload: Box::new(deep_clone_value(payload)),
-            symbol: symbol.clone(),
-            tag: *tag,
-        },
-        other => other.clone(),
-    }
-}
-
-fn deep_clone_payload(payload: &EnumPayload) -> EnumPayload {
-    match payload {
-        EnumPayload::Struct(fields) => EnumPayload::Struct(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), deep_clone_value(value)))
-                .collect(),
-        ),
-        EnumPayload::Tuple(values) => {
-            EnumPayload::Tuple(values.iter().map(deep_clone_value).collect())
-        }
-        EnumPayload::Unit => EnumPayload::Unit,
     }
 }
 

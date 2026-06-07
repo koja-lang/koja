@@ -42,17 +42,6 @@ struct CPtr<T>
   fn null?(self) -> Bool
 end
 
-impl Clone for CPtr<T>
-  @doc """
-  `CPtr<T>` is pointer-shaped Copy at the runtime ABI — `clone` just
-  returns the same address. Provided so universal `Clone` resolves
-  for `CPtr<T>` in generic contexts (e.g. `List<CPtr<UInt8>>.clone()`).
-  """
-  fn clone(self) -> Self
-    self
-  end
-end
-
 extend CPtr<UInt8>
   @doc """
   Creates a `Binary` by copying `len` bytes from this pointer.

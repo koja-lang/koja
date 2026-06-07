@@ -99,7 +99,6 @@ pub enum CStringMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryMethod {
     ByteSize,
-    Clone,
     Ptr,
     ToBits,
     ToString,
@@ -107,7 +106,6 @@ pub enum BinaryMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BitsMethod {
-    Clone,
     ToBinary,
 }
 
@@ -134,7 +132,6 @@ pub enum ListMethod {
 /// from there.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MapMethod {
-    Clone,
     EmptyQ,
     FromMap,
     Get,
@@ -150,7 +147,6 @@ pub enum MapMethod {
 /// [`crate::IRFunction`] signature.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SetMethod {
-    Clone,
     EmptyQ,
     FromList,
     HasQ,
@@ -202,7 +198,6 @@ pub enum SocketMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StringMethod {
     ByteLength,
-    Clone,
     Get,
     Length,
     Slice,
@@ -577,7 +572,6 @@ impl BinaryMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "byte_size" => Self::ByteSize,
-            "clone" => Self::Clone,
             "ptr" => Self::Ptr,
             "to_bits" => Self::ToBits,
             "to_string" => Self::ToString,
@@ -588,7 +582,6 @@ impl BinaryMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::ByteSize => "byte_size",
-            Self::Clone => "clone",
             Self::Ptr => "ptr",
             Self::ToBits => "to_bits",
             Self::ToString => "to_string",
@@ -599,7 +592,6 @@ impl BinaryMethod {
 impl BitsMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
-            "clone" => Self::Clone,
             "to_binary" => Self::ToBinary,
             _ => return None,
         })
@@ -607,7 +599,6 @@ impl BitsMethod {
 
     fn segment(self) -> &'static str {
         match self {
-            Self::Clone => "clone",
             Self::ToBinary => "to_binary",
         }
     }
@@ -649,7 +640,6 @@ impl ListMethod {
 impl MapMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
-            "clone" => Self::Clone,
             "empty?" => Self::EmptyQ,
             "from_map" => Self::FromMap,
             "get" => Self::Get,
@@ -664,7 +654,6 @@ impl MapMethod {
 
     fn segment(self) -> &'static str {
         match self {
-            Self::Clone => "clone",
             Self::EmptyQ => "empty?",
             Self::FromMap => "from_map",
             Self::Get => "get",
@@ -722,7 +711,6 @@ impl ReplyToMethod {
 impl SetMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
-            "clone" => Self::Clone,
             "empty?" => Self::EmptyQ,
             "from_list" => Self::FromList,
             "has?" => Self::HasQ,
@@ -736,7 +724,6 @@ impl SetMethod {
 
     fn segment(self) -> &'static str {
         match self {
-            Self::Clone => "clone",
             Self::EmptyQ => "empty?",
             Self::FromList => "from_list",
             Self::HasQ => "has?",
@@ -786,7 +773,6 @@ impl StringMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "byte_length" => Self::ByteLength,
-            "clone" => Self::Clone,
             "get" => Self::Get,
             "length" => Self::Length,
             "slice" => Self::Slice,
@@ -799,7 +785,6 @@ impl StringMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::ByteLength => "byte_length",
-            Self::Clone => "clone",
             Self::Get => "get",
             Self::Length => "length",
             Self::Slice => "slice",
@@ -909,7 +894,6 @@ mod tests {
     #[test]
     fn map_methods_cover_the_full_surface() {
         for (method, variant) in [
-            ("clone", MapMethod::Clone),
             ("empty?", MapMethod::EmptyQ),
             ("from_map", MapMethod::FromMap),
             ("get", MapMethod::Get),
@@ -930,7 +914,6 @@ mod tests {
     #[test]
     fn set_methods_cover_the_full_surface() {
         for (method, variant) in [
-            ("clone", SetMethod::Clone),
             ("empty?", SetMethod::EmptyQ),
             ("from_list", SetMethod::FromList),
             ("has?", SetMethod::HasQ),

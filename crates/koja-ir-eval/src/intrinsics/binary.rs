@@ -52,7 +52,6 @@ pub(super) fn binary(
 ) -> Result<Value, RuntimeError> {
     match method {
         BinaryMethod::ByteSize => byte_size(args),
-        BinaryMethod::Clone => clone(args),
         BinaryMethod::Ptr => ptr_(args),
         BinaryMethod::ToBits => to_bits(args),
         BinaryMethod::ToString => to_string(function, args),
@@ -65,7 +64,6 @@ pub(super) fn bits(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
-        BitsMethod::Clone => bits_clone(args),
         BitsMethod::ToBinary => bits_to_binary(function, args),
     }
 }
@@ -80,33 +78,6 @@ fn byte_size(args: &[Value]) -> Result<Value, RuntimeError> {
         });
     };
     Ok(Value::Int(bytes.len() as i64))
-}
-
-fn clone(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Binary(bytes)] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "Binary.clone expects a single Binary argument; got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
-    };
-    Ok(Value::Binary(bytes.clone()))
-}
-
-fn bits_clone(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Bits { bytes, bit_length }] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "Bits.clone expects a single Bits argument; got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
-    };
-    Ok(Value::Bits {
-        bytes: bytes.clone(),
-        bit_length: *bit_length,
-    })
 }
 
 fn ptr_(args: &[Value]) -> Result<Value, RuntimeError> {

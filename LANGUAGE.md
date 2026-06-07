@@ -1159,13 +1159,11 @@ The following types and functions are available in every module.
 
 ### Built-in Functions
 
-#### `clone()`
-
-Available on all types. Produces a new owned value:
-
-```koja
-copy = original.clone()
-```
+> **Note:** Koja uses value semantics — every binding, parameter,
+> return, and field is an independent value. Assigning or passing a
+> value already yields an independent copy (cheaply, via reference-
+> counted copy-on-write under the hood), so there is no `clone()`:
+> just assign or pass the value.
 
 ### `Kernel`
 

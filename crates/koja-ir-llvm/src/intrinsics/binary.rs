@@ -30,7 +30,7 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::load_bit_length;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
-use crate::intrinsics::heap_clone;
+use crate::intrinsics::heap_payload;
 use crate::runtime::declare_utf8_validate_extern;
 
 /// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
@@ -50,18 +50,8 @@ pub(super) fn emit_binary<'ctx>(
 
     match method {
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
-        BinaryMethod::Clone => {
-            heap_clone::emit_payload_clone(ctx, function, llvm_function, false, false)
-        }
         BinaryMethod::Ptr => emit_self_passthrough(ctx, function, llvm_function),
-        // `to_bits` is a fresh, independent `Bits` copy of the payload
-        // — structurally identical to `clone` (same bytes, reinterpreted
-        // type), so every call result stays owned heap and the drop
-        // pipeline never double-frees the borrowed `self`. `Binary` is
-        // byte-aligned, so `ceil=false` reproduces the payload exactly.
-        BinaryMethod::ToBits => {
-            heap_clone::emit_payload_clone(ctx, function, llvm_function, false, false)
-        }
+        BinaryMethod::ToBits => emit_to_bits(ctx, function, llvm_function),
         BinaryMethod::ToString => emit_to_string(ctx, function, llvm_function),
     }
 }
@@ -76,11 +66,30 @@ pub(super) fn emit_bits<'ctx>(
     ctx.builder.position_at_end(entry);
 
     match method {
-        BitsMethod::Clone => {
-            heap_clone::emit_payload_clone(ctx, function, llvm_function, false, true)
-        }
         BitsMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
     }
+}
+
+/// `Binary.to_bits(self) -> Bits` — a zero-cost reinterpret: `Binary`
+/// and `Bits` share the identical `[rc][bit_length][bytes]` block, so
+/// we rc-acquire the immutable block and hand back the same payload
+/// pointer as an owned `Bits`. The matching `Drop` rc-decrements.
+fn emit_to_bits<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
+    ctx.builder
+        .build_return(Some(&shared))
+        .map(|_| ())
+        .map_err(|e| {
+            inkwell_err(
+                format_args!("to_bits build_return for `{}`", function.symbol),
+                e,
+            )
+        })
 }
 
 /// `byte_size = bit_length / 8`. Reads the i64 header at
@@ -91,7 +100,7 @@ fn emit_byte_size<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
         .builder
@@ -116,7 +125,7 @@ fn emit_self_passthrough<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
     ctx.builder
         .build_return(Some(&payload))
         .map(|_| ())
@@ -133,7 +142,7 @@ fn emit_to_string<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
     let i64_ty = ctx.context.i64_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let byte_count = ctx
@@ -193,7 +202,7 @@ fn emit_to_string<'ctx>(
 
     ctx.builder.position_at_end(valid_bb);
     let new_payload =
-        heap_clone::copy_heap_payload(ctx, function.symbol.mangled(), payload, true, false)?;
+        heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), payload, true, false)?;
     return_result(
         ctx,
         function,
@@ -215,7 +224,7 @@ fn emit_to_binary<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let result_symbol = expect_enum_symbol(&function.return_type, function)?;
-    let payload = heap_clone::pointer_param(function, llvm_function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
     let i64_ty = ctx.context.i64_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     let remainder = ctx
@@ -251,14 +260,13 @@ fn emit_to_binary<'ctx>(
             )
         })?;
 
-    // A fresh `Binary` copy, not a reinterpret of `self`: the
-    // value-semantics invariant requires every call result to be
-    // owned heap. This branch only runs when `bit_length & 7 == 0`,
-    // so the payload is byte-aligned and `ceil=false` is exact.
+    // Zero-cost reinterpret: `Bits` and `Binary` share the identical
+    // `[rc][bit_length][bytes]` block (this branch only runs when
+    // `bit_length & 7 == 0`, so the payload is exactly byte-aligned),
+    // so rc-acquire the immutable block and hand back its pointer.
     ctx.builder.position_at_end(ok_bb);
-    let cloned =
-        heap_clone::copy_heap_payload(ctx, function.symbol.mangled(), payload, false, false)?;
-    return_result(ctx, function, result_symbol, RESULT_OK_TAG, cloned.into())?;
+    let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
+    return_result(ctx, function, result_symbol, RESULT_OK_TAG, shared.into())?;
 
     emit_err_branch(
         ctx,

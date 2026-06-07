@@ -68,7 +68,7 @@ fn request(method: Method, url: String, headers: Headers, body: String)
       path = url_parts.second.second
 
       socket =
-        match TCPSocket.connect(host.clone(), port)
+        match TCPSocket.connect(host, port)
           Result.Ok(s) -> s
           Result.Err(e) -> return Result.Err(Error.ConnectionFailed(e))
         end
@@ -104,11 +104,11 @@ fn parse_url(url: String) -> Result<Pair<String, Pair<Int, String>>, String>
       remaining = url.slice(Range{start: 7, stop: url.length() - 1})
 
     else ->
-      remaining = url.clone()
+      remaining = url
   end
 
   path = "/"
-  host_port = remaining.clone()
+  host_port = remaining
 
   slash_parts = remaining.split("/")
 
@@ -125,7 +125,7 @@ fn parse_url(url: String) -> Result<Pair<String, Pair<Int, String>>, String>
     path = "/" <> String.join(path_parts, "/")
   end
 
-  host = host_port.clone()
+  host = host_port
   port = default_port
 
   colon_parts = host_port.split(":")
