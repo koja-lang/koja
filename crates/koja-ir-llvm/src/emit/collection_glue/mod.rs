@@ -9,36 +9,24 @@
 //!
 //! - **clone** mallocs a fresh buffer, `memcpy`s the element bytes,
 //!   then *acquires* each element so the copy owns independent
-//!   references — heap leaves bump their rc, composite elements recurse
-//!   through their own `clone_T`. Scalar elements need nothing beyond
-//!   the `memcpy`.
-//! - **drop** *releases* each element (rc-decrement leaves, recurse
-//!   into `drop_T` for composites) then `free`s the backing buffer.
+//!   references.
+//! - **drop** *releases* each element then `free`s the backing buffer.
 //!
-//! This module owns the dispatch entry point, the shared element
-//! *disposition* ([`acquire_element`] / [`release_element`]), and the
-//! low-level buffer helpers both shapes share. The per-collection
-//! bodies live in [`list`] (the dynamic-array walk) and [`table`] (the
-//! open-addressed `Map` / `Set` bucket walk).
-//!
-//! Element disposition is read off the declared-functions index: a
-//! heap leaf bumps/decrements its rc inline; a composite carrying glue
-//! (`clone_glue_symbol` is declared) recurses; anything else is a
-//! trivially-copyable scalar and the `memcpy` already did the work.
+//! The per-element acquire / release lives in [`crate::intrinsics::element`]
+//! (shared with the copy-on-write mutators). This module owns the
+//! dispatch entry point plus the collection-struct field helpers; the
+//! per-collection bodies live in [`list`] (the dynamic-array walk) and
+//! [`table`] (the open-addressed `Map` / `Set` bucket walk).
 
 mod list;
 mod table;
 
-use inkwell::AddressSpace;
 use inkwell::values::{BasicMetadataValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
-use koja_ir::mangling::{clone_glue_symbol, drop_glue_symbol};
 use koja_ir::{FunctionKind, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
-use crate::emit::heap_layout::{block_base, is_heap_leaf};
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
-use crate::runtime::{declare_rc_dec_extern, declare_rc_inc_extern};
 use crate::types::ir_basic_type;
 
 /// Entry point from [`crate::function::define_function`] for an
@@ -72,108 +60,12 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
         (FunctionKind::DropGlue, IRType::Map { key, value }) => {
             table::drop_table(ctx, function, llvm_function, key, Some(value))
         }
-        (_, IRType::Indirect(_)) => todo!("Indirect box glue body emission"),
         (kind, other) => panic!(
             "collection glue `{}`: unexpected ({kind:?}, operand {other:?}) — \
-             only collection / box operands lower with empty blocks",
+             only collection operands lower with empty blocks (`Indirect` is \
+             transparent and carries no glue of its own)",
             function.symbol,
         ),
-    }
-}
-
-/// Acquire the element at `slot` (a pointer into the freshly-cloned
-/// buffer): bump a heap leaf's rc, or overwrite the slot with a deep
-/// clone for a composite. Scalars need nothing — the `memcpy` already
-/// copied them.
-pub(super) fn acquire_element<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    element: &IRType,
-    slot: PointerValue<'ctx>,
-) -> Result<(), LlvmError> {
-    if is_heap_leaf(element) {
-        let payload = load_pointer(ctx, function, slot, "elem")?;
-        let base = block_base(ctx, payload, "elem.block_base")?;
-        let rc_inc = declare_rc_inc_extern(ctx);
-        ctx.builder
-            .build_call(rc_inc, &[base.into()], "elem.rc_inc")
-            .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element rc_inc for `{}`", function.symbol), e))
-    } else if let Some(clone_glue) = ctx.declared_function(&clone_glue_symbol(element)) {
-        let element_ty = ir_basic_type(ctx, element)?;
-        let original = ctx
-            .builder
-            .build_load(element_ty, slot, "elem")
-            .map_err(|e| inkwell_err(format_args!("element load for `{}`", function.symbol), e))?;
-        let cloned = ctx
-            .builder
-            .build_call(clone_glue, &[original.into()], "elem.clone")
-            .map_err(|e| inkwell_err(format_args!("element clone for `{}`", function.symbol), e))?
-            .try_as_basic_value()
-            .basic()
-            .ok_or_else(|| {
-                LlvmError::Codegen(format!(
-                    "clone glue returned void for `{}`",
-                    function.symbol
-                ))
-            })?;
-        ctx.builder
-            .build_store(slot, cloned)
-            .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element store for `{}`", function.symbol), e))
-    } else {
-        Ok(())
-    }
-}
-
-/// Release the element at `slot`: rc-decrement a heap leaf, recurse
-/// into `drop_T` for a composite, or do nothing for a scalar.
-pub(super) fn release_element<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    element: &IRType,
-    slot: PointerValue<'ctx>,
-) -> Result<(), LlvmError> {
-    if is_heap_leaf(element) {
-        let payload = load_pointer(ctx, function, slot, "elem")?;
-        let base = block_base(ctx, payload, "elem.block_base")?;
-        let rc_dec = declare_rc_dec_extern(ctx);
-        ctx.builder
-            .build_call(rc_dec, &[base.into()], "elem.rc_dec")
-            .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element rc_dec for `{}`", function.symbol), e))
-    } else if let Some(drop_glue) = ctx.declared_function(&drop_glue_symbol(element)) {
-        let element_ty = ir_basic_type(ctx, element)?;
-        let value = ctx
-            .builder
-            .build_load(element_ty, slot, "elem")
-            .map_err(|e| inkwell_err(format_args!("element load for `{}`", function.symbol), e))?;
-        ctx.builder
-            .build_call(drop_glue, &[value.into()], "elem.drop")
-            .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element drop for `{}`", function.symbol), e))
-    } else {
-        Ok(())
-    }
-}
-
-/// Pointer to element `index` in a byte-addressed buffer.
-pub(super) fn element_slot<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    buf: PointerValue<'ctx>,
-    index: IntValue<'ctx>,
-    element_size: IntValue<'ctx>,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let i8_ty = ctx.context.i8_type();
-    let offset = ctx
-        .builder
-        .build_int_mul(index, element_size, "elem.off")
-        .map_err(|e| inkwell_err(format_args!("element offset for `{}`", function.symbol), e))?;
-    unsafe {
-        ctx.builder
-            .build_gep(i8_ty, buf, &[offset], "elem.ptr")
-            .map_err(|e| inkwell_err(format_args!("element GEP for `{}`", function.symbol), e))
     }
 }
 
@@ -185,24 +77,6 @@ pub(super) fn abi_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u64
         .layouts
         .target_data
         .get_abi_size(&ir_basic_type(ctx, ty)?))
-}
-
-pub(super) fn load_pointer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    slot: PointerValue<'ctx>,
-    name: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    ctx.builder
-        .build_load(ptr_ty, slot, name)
-        .map(|v| v.into_pointer_value())
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("element ptr load for `{}`", function.symbol),
-                e,
-            )
-        })
 }
 
 pub(super) fn nth_struct<'ctx>(

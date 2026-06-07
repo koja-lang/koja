@@ -15,6 +15,7 @@
 //! Everything is `pub(super)`: visible to sibling submodules, hidden
 //! from the rest of the crate.
 
+use inkwell::IntPredicate;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use koja_ir::mangling::{global_primitive_symbol, mangled_method_name};
@@ -24,10 +25,11 @@ use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
 use crate::intrinsics::cptr::declare_memcpy_extern;
+use crate::intrinsics::element::acquire_in_slot;
 use crate::runtime::{declare_malloc_extern, declare_memset_extern};
 use crate::types::{hashtable_value_type, ir_basic_type};
 
-use super::INITIAL_CAPACITY;
+use super::{HashtableLayout, INITIAL_CAPACITY, STATE_OCCUPIED};
 
 /// Live state of one hashtable: the two buffer pointers plus the
 /// occupancy + capacity ints. Freshly extracted from `self` by
@@ -205,26 +207,27 @@ pub(super) fn call_malloc<'ctx>(
         .map(|v| v.into_pointer_value())
 }
 
-/// Shallow-clone a table's buffers into fresh allocations. Under
-/// value semantics every hashtable mutator is copy-on-write: it
-/// clones the entries + states buffers before writing, so a binding
-/// shared by assignment is never mutated in place through another
-/// alias. Element payloads are byte-copied (not deep-cloned) — the
-/// COW invariant means any nested mutation copies in turn. The source
-/// buffers are left to leak; reclamation lands with the drop-glue
-/// pass.
+/// Copy-on-write clone of a table's buffers into fresh allocations.
+/// Under value semantics every hashtable mutator clones the entries +
+/// states buffers before writing, so a binding shared by assignment is
+/// never mutated in place through another alias. After the `memcpy`s
+/// every occupied bucket is *acquired* — `rc++` a heap-leaf key/value,
+/// deep-clone a composite — so the copy owns independent references and
+/// the shared payloads don't double-free once both tables are reclaimed
+/// by drop glue.
 pub(super) fn clone_table_buffers<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    layout: &HashtableLayout<'_>,
     src: &TableSnapshot<'ctx>,
-    entry_size: u64,
 ) -> Result<TableSnapshot<'ctx>, LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let entries_bytes = ctx
         .builder
         .build_int_mul(
             src.capacity,
-            i64_ty.const_int(entry_size, false),
+            i64_ty.const_int(layout.entry_size, false),
             "entries_bytes",
         )
         .map_err(|e| codegen_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
@@ -264,12 +267,159 @@ pub(super) fn clone_table_buffers<'ctx>(
                 e,
             )
         })?;
-    Ok(TableSnapshot {
+    let dst = TableSnapshot {
         entries_ptr: dst_entries,
         states_ptr: dst_states,
         length: src.length,
         capacity: src.capacity,
-    })
+    };
+    acquire_occupied_entries(ctx, function, llvm_function, layout, &dst)?;
+    Ok(dst)
+}
+
+/// Acquire the key (and, for `Map`, the value) of every occupied bucket
+/// in `table` — the per-element half of a copy-on-write clone. A no-op
+/// walk when both key and value own no heap.
+fn acquire_occupied_entries<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    layout: &HashtableLayout<'_>,
+    table: &TableSnapshot<'ctx>,
+) -> Result<(), LlvmError> {
+    occupied_loop(
+        ctx,
+        llvm_function,
+        table.states_ptr,
+        table.capacity,
+        "cow",
+        |ctx, slot| {
+            let entry_ptr =
+                entry_pointer(ctx, function, table.entries_ptr, slot, layout.entry_size)?;
+            acquire_in_slot(ctx, function, layout.key_ty, entry_ptr)?;
+            if let Some(value_ty) = layout.value_ty {
+                let value_ptr = value_slot(ctx, function, entry_ptr, layout.key_size)?;
+                acquire_in_slot(ctx, function, value_ty, value_ptr)?;
+            }
+            Ok(())
+        },
+    )
+}
+
+/// Pointer to the value half of a `Map` bucket — `key_size` bytes past
+/// the entry base (the key sits at offset 0).
+pub(super) fn value_slot<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    entry_ptr: PointerValue<'ctx>,
+    key_size: u64,
+) -> Result<PointerValue<'ctx>, LlvmError> {
+    let i8_ty = ctx.context.i8_type();
+    let offset = ctx.context.i64_type().const_int(key_size, false);
+    unsafe {
+        ctx.builder
+            .build_gep(i8_ty, entry_ptr, &[offset], "val_ptr")
+            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))
+    }
+}
+
+/// Emit `for slot in 0..capacity { if states[slot] == OCCUPIED { body } }`
+/// over a table's buckets. The straight-line `body` runs once into the
+/// per-occupied-bucket block; this helper owns the counter, the range
+/// guard, the occupancy test, and the back-edge. Shared by the
+/// copy-on-write element acquire here and the `Map` / `Set` clone /
+/// drop glue ([`crate::emit::collection_glue`]).
+pub(crate) fn occupied_loop<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    llvm_function: FunctionValue<'ctx>,
+    states: PointerValue<'ctx>,
+    capacity: IntValue<'ctx>,
+    label: &str,
+    body: impl FnOnce(&EmitContext<'ctx>, IntValue<'ctx>) -> Result<(), LlvmError>,
+) -> Result<(), LlvmError> {
+    let i8_ty = ctx.context.i8_type();
+    let i64_ty = ctx.context.i64_type();
+    let counter = ctx.build_entry_alloca(i64_ty, &format!("{label}.i"));
+    ctx.builder
+        .build_store(counter, i64_ty.const_zero())
+        .map_err(|e| codegen_err(format_args!("{label} loop counter init"), e))?;
+    let head = ctx
+        .context
+        .append_basic_block(llvm_function, &format!("{label}.head"));
+    let check = ctx
+        .context
+        .append_basic_block(llvm_function, &format!("{label}.check"));
+    let occupied = ctx
+        .context
+        .append_basic_block(llvm_function, &format!("{label}.occupied"));
+    let next = ctx
+        .context
+        .append_basic_block(llvm_function, &format!("{label}.next"));
+    let exit = ctx
+        .context
+        .append_basic_block(llvm_function, &format!("{label}.exit"));
+
+    ctx.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| codegen_err(format_args!("{label} loop entry branch"), e))?;
+    ctx.builder.position_at_end(head);
+    let index = ctx
+        .builder
+        .build_load(i64_ty, counter, &format!("{label}.idx"))
+        .map_err(|e| codegen_err(format_args!("{label} loop index load"), e))?
+        .into_int_value();
+    let in_range = ctx
+        .builder
+        .build_int_compare(IntPredicate::ULT, index, capacity, &format!("{label}.cmp"))
+        .map_err(|e| codegen_err(format_args!("{label} loop guard"), e))?;
+    ctx.builder
+        .build_conditional_branch(in_range, check, exit)
+        .map_err(|e| codegen_err(format_args!("{label} loop branch"), e))?;
+
+    ctx.builder.position_at_end(check);
+    let state_ptr = unsafe {
+        ctx.builder
+            .build_gep(i8_ty, states, &[index], &format!("{label}.state_ptr"))
+            .map_err(|e| codegen_err(format_args!("{label} state GEP"), e))?
+    };
+    let state = ctx
+        .builder
+        .build_load(i8_ty, state_ptr, &format!("{label}.state"))
+        .map_err(|e| codegen_err(format_args!("{label} state load"), e))?
+        .into_int_value();
+    let is_occupied = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            state,
+            i8_ty.const_int(STATE_OCCUPIED, false),
+            &format!("{label}.is_occupied"),
+        )
+        .map_err(|e| codegen_err(format_args!("{label} occupancy compare"), e))?;
+    ctx.builder
+        .build_conditional_branch(is_occupied, occupied, next)
+        .map_err(|e| codegen_err(format_args!("{label} occupancy branch"), e))?;
+
+    ctx.builder.position_at_end(occupied);
+    body(ctx, index)?;
+    ctx.builder
+        .build_unconditional_branch(next)
+        .map_err(|e| codegen_err(format_args!("{label} occupied-to-next branch"), e))?;
+
+    ctx.builder.position_at_end(next);
+    let incremented = ctx
+        .builder
+        .build_int_add(index, i64_ty.const_int(1, false), &format!("{label}.inc"))
+        .map_err(|e| codegen_err(format_args!("{label} loop increment"), e))?;
+    ctx.builder
+        .build_store(counter, incremented)
+        .map_err(|e| codegen_err(format_args!("{label} loop counter store"), e))?;
+    ctx.builder
+        .build_unconditional_branch(head)
+        .map_err(|e| codegen_err(format_args!("{label} loop back-edge"), e))?;
+
+    ctx.builder.position_at_end(exit);
+    Ok(())
 }
 
 pub(super) fn call_hash<'ctx>(

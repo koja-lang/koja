@@ -25,7 +25,7 @@ use crate::package::IRPackage;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
-use super::{find_enum, find_struct, is_leaf, needs_drop, needs_glue};
+use super::{find_enum, find_struct, is_leaf, needs_drop, needs_glue, unbox};
 
 /// The glue's sole parameter — `self`, typed as the operand. Both the
 /// shell ([`super::glue_shell`]) and every synthesized body agree on
@@ -122,6 +122,12 @@ impl Synthesizer {
 
     /// Acquire `value` (typed `ty`) into `block`, returning the owned
     /// SSA value to store into the rebuilt aggregate.
+    ///
+    /// `ty` may be the declared field type, including a transparent
+    /// [`IRType::Indirect`] box — but the projected `value` is already
+    /// the unboxed inner (the `FieldGet` / `EnumPayloadFieldGet`
+    /// unboxes), and the rebuild re-boxes, so disposition runs on the
+    /// inner type.
     fn acquire(
         &mut self,
         block: IRBlockId,
@@ -129,6 +135,7 @@ impl Synthesizer {
         ty: &IRType,
         packages: &[IRPackage],
     ) -> ValueId {
+        let ty = unbox(ty);
         match disposition(ty, packages) {
             Disposition::Trivial => value,
             Disposition::Leaf => {
@@ -159,8 +166,10 @@ impl Synthesizer {
     }
 
     /// Release `value` (typed `ty`) in `block`. A no-op for `Copy`
-    /// constituents.
+    /// constituents. As with [`Self::acquire`], a transparent
+    /// [`IRType::Indirect`] box peels to its inner value type.
     fn release(&mut self, block: IRBlockId, value: ValueId, ty: &IRType, packages: &[IRPackage]) {
+        let ty = unbox(ty);
         match disposition(ty, packages) {
             Disposition::Trivial => {}
             Disposition::Leaf => self.append(

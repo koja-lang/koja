@@ -43,6 +43,7 @@ pub(super) use insert::{emit_map_put, emit_set_insert};
 pub(super) use lifecycle::{emit_empty_q, emit_identity, emit_length, emit_new, emit_table_clone};
 pub(super) use read::{emit_has_q, emit_map_get, emit_remove};
 pub(super) use util::ir_byte_size;
+pub(crate) use util::occupied_loop;
 
 /// Initial bucket count for a freshly-allocated hashtable. Matches
 /// v1's `INITIAL_CAPACITY` so eval / native / future JIT all
@@ -56,7 +57,7 @@ pub(super) const INITIAL_CAPACITY: u64 = 8;
 /// advance past it" — used by `remove` to keep the linear-probe
 /// chain intact without back-shifting.
 pub(super) const STATE_EMPTY: u64 = 0;
-pub(crate) const STATE_OCCUPIED: u64 = 1;
+pub(super) const STATE_OCCUPIED: u64 = 1;
 pub(super) const STATE_TOMBSTONE: u64 = 2;
 
 /// `Option<V>` variant tags as the stdlib declares them: `Some`

@@ -12,6 +12,7 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
+use crate::intrinsics::element::acquire_value;
 use crate::types::{hashtable_value_type, ir_basic_type, list_value_type};
 
 use super::insert::emit_insert_probe;
@@ -217,8 +218,11 @@ fn call_set_insert_inline<'ctx>(
         probe.pidx,
         layout.entry_size,
     )?;
+    // Acquire the element so the set owns an independent reference;
+    // the source list it was read from keeps its own.
+    let insert_item = acquire_value(ctx, function, layout.key_ty, item)?;
     ctx.builder
-        .build_store(ins_ptr, item)
+        .build_store(ins_ptr, insert_item)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_OCCUPIED, false))

@@ -28,7 +28,7 @@ use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
 use super::drops::emit_function_exit_drops;
 use super::expr::lower_expr;
 use super::ops::bin_op_result_type;
-use super::ownership::{drop_discarded_temp, is_heap_leaf, materialize_owned};
+use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
 use super::structs::resolved_struct_symbol;
 
@@ -260,10 +260,10 @@ fn lower_assignment(
             },
         );
         ctx.mark_local_declared(ir_local, value_ty.clone());
-    } else if is_heap_leaf(&value_ty) {
-        // Reassignment of a heap-leaf slot: free the prior owned
-        // payload before overwriting so the old allocation doesn't
-        // leak.
+    } else if value_ty.is_heap_managed() {
+        // Reassignment of a heap-managed slot: free the prior owned
+        // value before overwriting so the old allocation doesn't
+        // leak (a heap-leaf `rc--`, a composite `drop_T`).
         let stale = ctx.fresh_value(value_ty.clone());
         ctx.cfg.append(
             current,

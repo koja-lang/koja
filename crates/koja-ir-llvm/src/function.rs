@@ -17,12 +17,11 @@ use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 use koja_ir::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRType,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRType, ValueId,
     function_has_tail_call,
 };
 
 use crate::ctx::{ClosureFrame, EmitContext, TcoFrame};
-use crate::emit::heap_layout::is_heap_leaf;
 use crate::emit::process::{emit_process_entry_wrapper_body, emit_spawn_wrapper_body};
 use crate::emit::{self, BlockMap, ValueMap, inkwell_err};
 use crate::error::LlvmError;
@@ -261,7 +260,7 @@ fn emit_entry_with_tco_split<'ctx>(
     phi_map: &emit::PhiMap<'ctx>,
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let promotion_len = promotion_prefix_len(function);
+    let promotion_len = promotion_prefix_len(function, &block.instructions);
     if block.instructions.len() < promotion_len {
         panic!(
             "LLVM emit: TCO entry block on `{}` is shorter ({}) than the expected \
@@ -293,25 +292,47 @@ fn emit_entry_with_tco_split<'ctx>(
 
 /// Number of leading entry-block instructions lower emits to promote
 /// the parameters into their local slots. Each param is a `LocalDecl`
-/// and `LocalWrite` pair (2); a heap-leaf param additionally clones
-/// the borrowed argument into its owning slot between the two (3), so
-/// the frame holds storage it can drop at scope exit.
-fn promotion_prefix_len(function: &IRFunction) -> usize {
-    function
-        .params
-        .iter()
-        .map(|param| if is_heap_leaf(&param.ty) { 3 } else { 2 })
-        .sum()
+/// then `LocalWrite` pair (2); a heap-managed param additionally
+/// *acquires* the borrowed argument into its owning slot between the
+/// two (3) — an inline `Clone` for a heap leaf / no-glue aggregate, or
+/// the `Call` the [`koja_ir::elaborate`] pass rewrote a composite
+/// clone into. The optional acquire is detected structurally (by its
+/// operand referencing the incoming param) so the count tracks
+/// whatever lowering and elaborate produced without re-deriving the
+/// heap-managed predicate here.
+fn promotion_prefix_len(function: &IRFunction, instructions: &[IRInstruction]) -> usize {
+    let mut len = 0;
+    for param in &function.params {
+        len += 1; // LocalDecl
+        if is_param_acquire(instructions.get(len), param.id) {
+            len += 1; // Clone / rewritten clone-glue Call
+        }
+        len += 1; // LocalWrite
+    }
+    len
+}
+
+/// Whether `instruction` is the acquire a heap-managed param promotion
+/// inserts between its `LocalDecl` and `LocalWrite`: an inline `Clone`
+/// of the incoming param, or the `Call` elaborate rewrote that clone
+/// into (the param is the call's sole argument).
+fn is_param_acquire(instruction: Option<&IRInstruction>, param: ValueId) -> bool {
+    match instruction {
+        Some(IRInstruction::Clone { source, .. }) => *source == param,
+        Some(IRInstruction::Call { args, .. }) => args.first() == Some(&param),
+        _ => false,
+    }
 }
 
 /// Sanity-check that the entry block's leading instructions are the
 /// canonical per-parameter promotion sequences lower emits:
-/// `LocalDecl` → (`Clone` for heap-leaf) → `LocalWrite`. A violation
-/// indicates a lower invariant break that would otherwise corrupt the
-/// back-edge slot writes; we panic with a clear message.
+/// `LocalDecl` → (acquire `Clone` / `Call` for heap-managed) →
+/// `LocalWrite`. A violation indicates a lower invariant break that
+/// would otherwise corrupt the back-edge slot writes; we panic with a
+/// clear message.
 fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction) {
-    debug_assert_eq!(prefix.len(), promotion_prefix_len(function));
-    let mut cursor = prefix.iter().enumerate();
+    debug_assert_eq!(prefix.len(), promotion_prefix_len(function, prefix));
+    let mut cursor = prefix.iter().enumerate().peekable();
     for param in &function.params {
         let (index, decl) = cursor.next().expect("promotion prefix shorter than params");
         let IRInstruction::LocalDecl { local, .. } = decl else {
@@ -322,22 +343,23 @@ fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction)
         };
         debug_assert_eq!(*local, param.local_id);
 
-        // Heap-leaf params clone the borrowed argument into the slot;
-        // the slot then owns `clone.dest` rather than the raw param.
-        let stored = if is_heap_leaf(&param.ty) {
-            let (index, clone) = cursor
-                .next()
-                .expect("promotion prefix missing heap-leaf clone");
-            let IRInstruction::Clone { dest, source, .. } = clone else {
-                panic!(
-                    "LLVM emit: expected `Clone` at promotion #{index} on `{}`, got {clone:?}",
-                    function.symbol,
-                );
-            };
-            debug_assert_eq!(*source, param.id);
-            *dest
-        } else {
-            param.id
+        // A heap-managed param acquires the borrowed argument into its
+        // slot, so the slot owns the acquire's `dest` rather than the
+        // raw param. The acquire is an inline `Clone` (heap leaf /
+        // no-glue aggregate) or the `Call` elaborate rewrote a
+        // composite clone into.
+        let stored = match cursor.peek() {
+            Some((_, IRInstruction::Clone { dest, source, .. })) if *source == param.id => {
+                cursor.next();
+                *dest
+            }
+            Some((_, IRInstruction::Call { dest, args, .. }))
+                if args.first() == Some(&param.id) =>
+            {
+                cursor.next();
+                *dest
+            }
+            _ => param.id,
         };
 
         let (index, write) = cursor.next().expect("promotion prefix missing LocalWrite");

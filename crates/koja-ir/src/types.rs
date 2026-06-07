@@ -469,6 +469,52 @@ impl IRType {
         matches!(self, Self::Float32 | Self::Float64)
     }
 
+    /// True for types value-semantics lowering acquires on binding and
+    /// releases at scope exit: the heap leaves (`Binary` / `Bits` /
+    /// `String`) plus every composite that *might* own heap storage
+    /// (collections, boxed-recursive `Indirect`, and any struct / enum
+    /// / union, conservatively).
+    ///
+    /// The predicate is intentionally structural — generic struct /
+    /// enum instantiations don't exist yet during per-package lowering,
+    /// so the precise "does this aggregate actually own heap" question
+    /// is deferred to the post-merge [`crate::elaborate`] pass (see
+    /// [`crate::elaborate::needs_drop`]). The conservatism is safe and
+    /// cheap: a composite that turns out to be all-`Copy` gets no glue
+    /// registered, so the backend renders its `Clone` as a register
+    /// copy and its `Drop` as a no-op.
+    ///
+    /// Closures (`Function`) own a heap env but are *not* counted here:
+    /// their clone / drop glue needs the per-instance capture layout
+    /// the structural `IRType::Function` doesn't carry, so they keep
+    /// their closure-specific drop path.
+    pub fn is_heap_managed(&self) -> bool {
+        match self {
+            Self::Binary | Self::Bits | Self::String => true,
+            Self::Enum(_)
+            | Self::Indirect(_)
+            | Self::List(_)
+            | Self::Map { .. }
+            | Self::Set(_)
+            | Self::Struct(_)
+            | Self::Union { .. } => true,
+            Self::Bool
+            | Self::CPtr(_)
+            | Self::Float32
+            | Self::Float64
+            | Self::Function { .. }
+            | Self::Int8
+            | Self::Int16
+            | Self::Int32
+            | Self::Int64
+            | Self::UInt8
+            | Self::UInt16
+            | Self::UInt32
+            | Self::UInt64
+            | Self::Unit => false,
+        }
+    }
+
     /// True when this type is one of the integer-family variants
     /// (`Int8`..`Int64`, `UInt8`..`UInt64`). Useful in places that
     /// want to handle "any integer" uniformly — e.g. typecheck

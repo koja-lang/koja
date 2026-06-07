@@ -205,14 +205,36 @@ impl FnLowerCtx {
         self.owned_values.contains(&value)
     }
 
-    /// The heap-leaf local slots declared in this function, in
+    /// The heap-managed local slots declared in this function, in
     /// reverse declaration order (LIFO drop). Used by the drop-glue
     /// lowering to free every owning slot at a control-flow exit.
-    pub(crate) fn heap_leaf_slots(&self) -> Vec<(IRLocalId, IRType)> {
+    pub(crate) fn heap_managed_slots(&self) -> Vec<(IRLocalId, IRType)> {
         let mut slots: Vec<(IRLocalId, IRType)> = self
             .locals
             .iter()
-            .filter(|(_, ty)| super::ownership::is_heap_leaf(ty))
+            .filter(|(_, ty)| ty.is_heap_managed())
+            .map(|(local, ty)| (*local, ty.clone()))
+            .collect();
+        slots.reverse();
+        slots
+    }
+
+    /// The heap-managed local slots declared since `snapshot` was
+    /// captured, in reverse declaration order (LIFO drop). Loop
+    /// lowering ([`super::loops`]) uses this to release body-scoped
+    /// bindings at the end of each iteration: such bindings leave
+    /// scope at the back-edge, so they must be dropped there and kept
+    /// out of the function-exit drop set — where an unexecuted loop
+    /// body would otherwise leave them uninitialized.
+    pub(crate) fn heap_slots_declared_since(
+        &self,
+        snapshot: &SlotStateSnapshot,
+    ) -> Vec<(IRLocalId, IRType)> {
+        let mut slots: Vec<(IRLocalId, IRType)> = self
+            .locals
+            .iter()
+            .filter(|(local, _)| !snapshot.contains_key(local))
+            .filter(|(_, ty)| ty.is_heap_managed())
             .map(|(local, ty)| (*local, ty.clone()))
             .collect();
         slots.reverse();

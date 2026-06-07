@@ -16,9 +16,15 @@
 //! - **Heap leaves** (`String` / `Binary` / `Bits`): inline `rc++` /
 //!   `rc--`. No glue function — handled directly at the instruction.
 //! - **Composites** (`List` / `Map` / `Set`, heap-owning structs /
-//!   enums / unions, boxed-recursive `Indirect`): a `call` to the
-//!   synthesized `<T>.$clone$` / `<T>.$drop$`. This pass registers
-//!   those functions.
+//!   enums / unions): a `call` to the synthesized `<T>.$clone$` /
+//!   `<T>.$drop$`. This pass registers those functions.
+//!
+//! The boxed-recursive [`IRType::Indirect`] is *transparent* — purely
+//! the storage shape the cycle pass stamps on a recursive field, never
+//! a value in its own right (projection unboxes, construction
+//! re-boxes). It carries no glue: the enclosing aggregate's glue
+//! clones / drops the unboxed inner value (recursing into the inner
+//! type's glue), and the rebuild re-boxes.
 //!
 //! A composite that turns out to own no heap (e.g. `struct Point { x:
 //! Int, y: Int }`) has [`needs_drop`] `== false`, so no glue is
@@ -32,11 +38,11 @@
 //!   acquire / release (recursing into constituent glue via `Call`),
 //!   and an aggregate rebuild for clone. These carry a non-empty CFG
 //!   the backend walks like a [`FunctionKind::Regular`] body.
-//! - **Collections** (`List` / `Map` / `Set`) and boxed `Indirect`:
-//!   the body is a runtime-shaped deep-copy / element-walk the LLVM
-//!   backend synthesizes from the operand type at emit time, so the
-//!   shell lowers with empty `blocks` (landing with the collection
-//!   slice). Eval reclaims via its host GC and never invokes either.
+//! - **Collections** (`List` / `Map` / `Set`): the body is a
+//!   runtime-shaped deep-copy / element-walk the LLVM backend
+//!   synthesizes from the operand type at emit time, so the shell
+//!   lowers with empty `blocks`. Eval reclaims via its host GC and
+//!   never invokes either.
 //!
 //! ## Discovery
 //!
@@ -44,9 +50,10 @@
 //! `DropLocal` / `DropValue` across every function body (and, for
 //! scripts, the inline script body). The worklist then transitively
 //! pulls in each composite's heap-managed constituents (struct
-//! fields, enum payloads, collection elements, union members,
-//! `Indirect` inner), because a composite's glue body recurses into
-//! its constituents' glue. Leaves are skipped — they have no glue.
+//! fields, enum payloads, collection elements, union members, and the
+//! inner type behind a transparent `Indirect` box), because a
+//! composite's glue body recurses into its constituents' glue. Leaves
+//! and `Indirect` boxes themselves are skipped — they carry no glue.
 
 mod rewrite;
 mod synthesis;
@@ -118,7 +125,12 @@ pub fn needs_drop(ty: &IRType, packages: &[IRPackage]) -> bool {
 fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<IRSymbol>) -> bool {
     match ty {
         IRType::Binary | IRType::Bits | IRType::String => true,
-        IRType::Indirect(_) | IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => true,
+        IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => true,
+        // `Indirect` is transparent: it is purely the storage shape the
+        // cycle pass stamps on a recursive field, never a value in its
+        // own right (field access unboxes to `inner`, construction
+        // re-boxes). Its drop-ness is the inner type's.
+        IRType::Indirect(inner) => needs_drop_seen(inner, packages, visited),
         IRType::Struct(symbol) => {
             if !visited.insert(symbol.clone()) {
                 return false;
@@ -189,6 +201,17 @@ fn is_leaf(ty: &IRType) -> bool {
     matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
 }
 
+/// Peel a transparent [`IRType::Indirect`] box to its inner type. A
+/// recursive field is stored boxed but read / written as `inner` (the
+/// projection unboxes, the construction re-boxes), so every site that
+/// reasons about a field's *value* type works on `inner`.
+pub(super) fn unbox(ty: &IRType) -> &IRType {
+    match ty {
+        IRType::Indirect(inner) => inner,
+        other => other,
+    }
+}
+
 /// An aggregate whose glue body [`synthesis`] builds in IR (as opposed to
 /// the collection / `Indirect` family, whose body the backend
 /// synthesizes from the operand type at emit time).
@@ -224,6 +247,10 @@ fn discover_glue_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BTreeSe
             continue;
         }
         for constituent in constituent_types(&ty, packages) {
+            // A boxed-recursive field is cloned / dropped as its
+            // unboxed inner value (the aggregate's own glue recurses),
+            // so close over `inner` — no standalone `Indirect` glue.
+            let constituent = unbox(&constituent).clone();
             if needs_glue(&constituent, packages) {
                 work.push(constituent);
             }
@@ -294,8 +321,9 @@ fn glue_registered(packages: &[IRPackage], symbol: &IRSymbol) -> bool {
 
 /// Register the clone + drop glue shells for `ty` (idempotent —
 /// re-registering a symbol already present is a no-op). Aggregate
-/// bodies are synthesized here; collection / `Indirect` bodies stay
-/// empty for the backend to synthesize.
+/// bodies are synthesized here; collection bodies stay empty for the
+/// backend to synthesize. `Indirect` never reaches here — it is
+/// transparent and discovery closes over its inner type instead.
 fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
     let (clone_blocks, drop_blocks) = if is_aggregate(ty) {
         (

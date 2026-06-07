@@ -250,3 +250,115 @@ value, or none).
    explicit `x = x.f()` rebind.
 7. Whether "acyclic by construction" needs enforcement or is
    guaranteed by immutability alone.
+
+## Implementation tracker (drop-glue / RC rollout)
+
+Compiler-internal `clone_T` / `drop_T` glue (via the `elaborate`
+sub-pass), retiring the user-facing `Clone` protocol. Strategy:
+reference-counting for heap leaves; synthesized glue for composites
+(`List`, `Map`, `Set`, struct, enum, union). User-facing value
+semantics: every binding owns an independent value; acquire at
+boundaries (`Clone` / `clone_T`), release at scope exit (`Drop` /
+`drop_T`). Last-use move elision is a future optimizer — the naive
+baseline always acquires at boundaries for now.
+
+### Completed
+
+- **Phase 0 — scaffold.** `is_heap_managed`, `FunctionKind::CloneGlue` /
+  `DropGlue`, `elaborate` wiring, glue symbol mangling, seal + backend
+  match updates.
+- **Phase 1 — struct / enum / union glue.** `elaborate` synthesizes
+  aggregate clone/drop IR bodies; LLVM emits them; seal validation +
+  unit tests.
+- **Phase 2a — IR wiring.** `elaborate` rewrite pass (composite
+  `Clone` / `Drop` → glue `Call`); eval short-circuits
+  `CloneGlue` / `DropGlue`; LLVM no-glue aggregate arms (rebind /
+  no-op).
+- **Phase 2b — collection glue bodies.** LLVM `clone_T` / `drop_T` for
+  `List`, `Map`, `Set`.
+- **Phase 2c — COW correctness.** Shared element acquire/release
+  helpers; list insert/append COW; hashtable clone/insert/resize;
+  `emit_map_get` must call `acquire_value` on hand-out (fixed).
+
+### In progress — Phase 2d
+
+Flip lowering from `is_heap_leaf` to `is_heap_managed`; end-to-end
+value-semantics tests.
+
+**Done in this slice:**
+
+- `materialize_owned`, `emit_slot_drops`, `drop_discarded_temp` use
+  `is_heap_managed`.
+- `heap_leaf_slots` → `heap_managed_slots`.
+- TCO promotion prefix scan is structural (not heap-leaf-specific).
+- `IRType::Indirect` is transparent in `elaborate` (no separate glue;
+  inner type's glue applies).
+- **Loop body scoping fix** (`lower/loops.rs`): bindings declared
+  inside a loop body are dropped at the back-edge and excluded from
+  function-exit drops (fixes zero-trip loop + uninitialized slot drop,
+  e.g. `Headers.set` on empty list).
+- `lower_process` tests updated for acquire-before-return on
+  heap-managed values.
+
+**Done in a later slice:**
+
+- **`List.pop()` empty-branch clone** (`koja-ir-llvm` `intrinsics/list.rs`):
+  the empty branch returned the borrowed `self` buffer directly as the
+  pair's `.second`, so `empty_pair.second` aliased the caller's
+  receiver slot and both freed the same buffer at scope exit. Now
+  clones into a fresh (empty) buffer, mirroring the nonempty branch's
+  `copy_buffer`. Fixes the `list_test` "pop until empty" teardown
+  crash (was the global-stdlib exit-1).
+- **Tail-call composite-arg acquire** (`tail_calls.rs`): the
+  self-tail-call rewrite acquired only *heap-leaf* args before the
+  trailing exit drops; composite args (`List`, struct, etc.) were
+  rebound from the just-dropped slot → use-after-free on the next
+  iteration. Now acquires every `is_heap_managed` arg (the inserted
+  `Clone` is elaborated into `clone_T` for composites). Fixes the
+  `http` `headers_test` "get_all" crash (recursive `collect_all`).
+- **Shared heap predicate**: hoisted `is_heap_managed` to an
+  `IRType` method; `lower::ownership` and `tail_calls` now share it.
+- All of `just doit` green (lint + stdlib + `test-rust` + `test-lang`).
+
+**Remaining for Phase 2d:**
+
+- **Call-boundary acquire** (`lower/calls.rs`) is *not* needed for
+  correctness under the current "callee acquires on promotion" +
+  "intrinsics return freshly-owned heap" convention — the two crashes
+  above were the intrinsic empty-branch and the tail-call gap, not a
+  missing caller-side clone. Revisit only if a future aliasing case
+  surfaces; blanket caller-side cloning would leak against intrinsics
+  that borrow `self`.
+- Optional: regression test for zero-trip loop with body-scoped
+  heap binding. (`pop()`-on-empty and tail-recursive composite args
+  are now covered by stdlib `list_test` / http `headers_test` plus
+  `tail_calls` unit tests.)
+
+### Pending — Phase 3
+
+Capture-recursive `drop_closure` (release captures before `free(env)`);
+`clone_closure` if reachable.
+
+### Pending — Phase 4
+
+Delete `clone.koja` / `derive_clone.rs` + stdlib `List` / `Map` /
+`Set` / `CPtr` `Clone` impls; remove `Clone` from
+`UNIVERSAL_PROTOCOLS` + universal fallback; strip `lib/http` `.clone()`
+call sites; repurpose `ownership_clone` tests.
+
+### Pending — Phase 5
+
+Refresh doc comments + this doc's "Supersedes" paragraph (elaborate
+glue is landed, not shelved); `just lint` + `just test`; leak audit
+(HTTP suite passes without explicit clones).
+
+### Known bugs discovered (session notes)
+
+| Symptom                                                                          | Root cause                                                                                      | Fix status                      |
+| -------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ------------------------------- |
+| `qualified_signature.koja` SIGBUS (flaky → deterministic with empty list + loop) | Loop-body local dropped at function exit uninitialized when loop runs 0 times                   | Fixed (loop scoping)            |
+| `Map.get` double-free                                                            | Hand-out without `acquire_value`                                                                | Fixed                           |
+| `List.pop()` on empty list, teardown SIGBUS                                      | Empty branch returned the borrowed `self` buffer as `Pair.second`; caller slot + pair drop the same list | Fixed (empty-branch clone)      |
+| Global stdlib exits 1 after ~84 green dots                                       | Same as pop-on-empty (crashes before harness summary)                                           | Fixed                           |
+| `http` `headers_test` "get_all" SIGSEGV in `clone_Header`                        | Tail-call rewrite acquired only heap-*leaf* args; composite args rebound from just-dropped slot | Fixed (acquire heap-managed args) |
+| `lower_process` spawn/receive tests                                              | Expected raw `ValueId`; return now acquires heap-managed values                                 | Fixed (structural assert)       |

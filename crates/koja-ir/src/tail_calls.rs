@@ -33,15 +33,6 @@ use crate::function::{
 use crate::package::IRPackage;
 use crate::types::{IRType, ValueId};
 
-/// Leaf heap types whose `Clone` is an rc increment (`String` /
-/// `Binary` / `Bits`). Tail-call back-edges must acquire these before
-/// the trailing exit drops release the slots they rebind. Mirrors
-/// `lower::ownership::is_heap_leaf` (kept local — that one is private
-/// to the lower module).
-fn is_heap_leaf(ty: &IRType) -> bool {
-    matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
-}
-
 /// Rewrite every self-recursive tail-position call across `packages`
 /// into [`IRTerminator::TailCall`]. Idempotent — re-running on an
 /// already-rewritten IR is a no-op since `TailCall` blocks no longer
@@ -145,16 +136,19 @@ fn apply_plan(
 ) {
     block.instructions.remove(plan.call_index);
 
-    // Acquire each heap-leaf arg into a fresh owned value *where the
+    // Acquire each heap-managed arg into a fresh owned value *where the
     // `Call` sat* — i.e. before the trailing exit drops. The back-edge
     // then stores the clone, so rebinding a param slot never reads
-    // through a pointer the drop just rc-released. Without this, a
-    // self-tail-call passing a heap-leaf slot (`f(s, ...)`) would drop
-    // `s`'s block to rc 0 and then store the freed pointer back.
+    // through storage the drop just released. Without this, a
+    // self-tail-call passing a heap slot (`f(list, ...)`) would drop
+    // the slot's allocation and then store the freed pointer back. The
+    // emitted `Clone` is an inline `rc++` for a heap leaf; for a
+    // composite the later [`crate::elaborate`] pass rewrites it into a
+    // `clone_T` call (or a register copy for an all-`Copy` aggregate).
     let mut args = plan.args;
     let mut clones = Vec::new();
     for (arg, ty) in args.iter_mut().zip(param_types) {
-        if is_heap_leaf(ty) {
+        if ty.is_heap_managed() {
             let dest = ValueId(*next_value);
             *next_value += 1;
             clones.push(IRInstruction::Clone {
@@ -191,9 +185,10 @@ mod tests {
     /// Build a one-block self-recursive function whose entry block
     /// matches the canonical tail-call shape: param promotion in the
     /// entry, then `Call self(arg)`, then `Return Some(call_dest)`.
-    /// The returned function is the rewrite-pass input; assertions
-    /// inspect the post-rewrite shape.
-    fn build_self_call_function() -> IRFunction {
+    /// The single param is typed `param_ty`. The returned function is
+    /// the rewrite-pass input; assertions inspect the post-rewrite
+    /// shape.
+    fn build_self_call_with_param(param_ty: IRType) -> IRFunction {
         let symbol = IRSymbol::synthetic("Test.loop_forever".to_string());
         let param_id = ValueId(0);
         let param_local = local(0);
@@ -207,7 +202,7 @@ mod tests {
                 instructions: vec![
                     IRInstruction::LocalDecl {
                         local: param_local,
-                        ty: IRType::Int64,
+                        ty: param_ty.clone(),
                     },
                     IRInstruction::LocalWrite {
                         local: param_local,
@@ -216,7 +211,7 @@ mod tests {
                     IRInstruction::LocalRead {
                         dest: read_dest,
                         local: param_local,
-                        ty: IRType::Int64,
+                        ty: param_ty.clone(),
                     },
                     IRInstruction::Call {
                         dest: call_dest,
@@ -232,11 +227,17 @@ mod tests {
             params: vec![IRFunctionParam {
                 id: param_id,
                 local_id: param_local,
-                ty: IRType::Int64,
+                ty: param_ty.clone(),
             }],
-            return_type: IRType::Int64,
+            return_type: param_ty,
             symbol,
         }
+    }
+
+    /// The canonical Int64-param shape most tests build from — a scalar
+    /// param needs no back-edge acquire.
+    fn build_self_call_function() -> IRFunction {
+        build_self_call_with_param(IRType::Int64)
     }
 
     fn package_with(function: IRFunction) -> IRPackage {
@@ -272,6 +273,67 @@ mod tests {
                 .any(|inst| matches!(inst, IRInstruction::Call { .. })),
             "Call instruction must be removed; got {:?}",
             block.instructions,
+        );
+    }
+
+    /// The destination of the `Clone` inserted for the single arg, if
+    /// any — the rewrite acquires a heap-managed arg before the
+    /// back-edge so the trailing slot drop can't release storage the
+    /// new args still reference.
+    fn rewritten_arg_clone_dest(function: &IRFunction) -> Option<ValueId> {
+        let block = &function.blocks[0];
+        let IRTerminator::TailCall { args, .. } = &block.terminator else {
+            panic!("expected TailCall terminator, got {:?}", block.terminator);
+        };
+        let arg = *args.first().expect("tail call carries one arg");
+        block.instructions.iter().find_map(|inst| match inst {
+            IRInstruction::Clone { dest, .. } if *dest == arg => Some(*dest),
+            _ => None,
+        })
+    }
+
+    #[test]
+    fn scalar_arg_is_not_cloned_before_back_edge() {
+        let function = build_self_call_with_param(IRType::Int64);
+        let symbol = function.symbol.clone();
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        assert!(
+            rewritten_arg_clone_dest(function).is_none(),
+            "a scalar arg needs no acquire: {:?}",
+            function.blocks[0].instructions,
+        );
+    }
+
+    #[test]
+    fn heap_leaf_arg_is_acquired_before_back_edge() {
+        let function = build_self_call_with_param(IRType::String);
+        let symbol = function.symbol.clone();
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        assert!(
+            rewritten_arg_clone_dest(function).is_some(),
+            "a heap-leaf arg must be acquired: {:?}",
+            function.blocks[0].instructions,
+        );
+    }
+
+    #[test]
+    fn composite_arg_is_acquired_before_back_edge() {
+        let function = build_self_call_with_param(IRType::List(Box::new(IRType::Int64)));
+        let symbol = function.symbol.clone();
+        let mut packages = vec![package_with(function)];
+        rewrite_tail_calls(&mut packages);
+        let function = packages[0].functions.get(symbol.mangled()).unwrap();
+        // The composite `Clone` is elaborated into a `clone_T` call
+        // downstream; here it must be present so the back-edge rebinds
+        // an independent value rather than a freed buffer.
+        assert!(
+            rewritten_arg_clone_dest(function).is_some(),
+            "a composite arg must be acquired: {:?}",
+            function.blocks[0].instructions,
         );
     }
 

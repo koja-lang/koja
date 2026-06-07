@@ -20,8 +20,8 @@ use std::path::PathBuf;
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
 use koja_ir::{
-    FunctionKind, IRBlockId, IRFunction, IRInstruction, IRProgram, IRTerminator, IRType,
-    ProjectEntry, ReceiveTag, lower_program,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRProgram, IRTerminator,
+    IRType, ProjectEntry, ReceiveTag, ValueId, lower_program,
 };
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
@@ -125,6 +125,42 @@ fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
         .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
 }
 
+/// Under value semantics, returning a heap-managed value from `block`
+/// acquires it via [`IRInstruction::Clone`] before the `Return` (block
+/// params and call results are borrowed until acquired). Assert the
+/// terminator returns that acquired value, not the borrowed source.
+fn assert_return_acquires(block: &IRBasicBlock, source: ValueId) {
+    let IRTerminator::Return {
+        value: Some(returned),
+    } = block.terminator
+    else {
+        panic!(
+            "expected Return with a value on block `{}`, got {:?}",
+            block.label, block.terminator,
+        );
+    };
+    let acquired = block
+        .instructions
+        .iter()
+        .find_map(|instruction| match instruction {
+            IRInstruction::Clone {
+                dest, source: src, ..
+            } if *src == source => Some(*dest),
+            _ => None,
+        })
+        .unwrap_or_else(|| {
+            panic!(
+                "expected a Clone acquiring {source} before return on block `{}`",
+                block.label,
+            );
+        });
+    assert_eq!(
+        returned, acquired,
+        "Return should target the acquired (cloned) value on block `{}`",
+        block.label,
+    );
+}
+
 #[test]
 fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
     let program = lower(
@@ -206,11 +242,7 @@ fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
         "`run`'s return type should be the same Ref struct Spawn produces",
     );
 
-    assert_eq!(
-        entry.terminator,
-        IRTerminator::Return { value: Some(dest) },
-        "the spawn site's host block should return the freshly-minted Ref value",
-    );
+    assert_return_acquires(entry, dest);
 
     let wrapper_fn = program
         .function(wrapper.mangled())
@@ -350,13 +382,7 @@ fn receive_lowers_to_receive_instruction_with_one_arm_per_body_block() {
         "receive_merge should declare exactly one BlockParam for the join value",
     );
     let merge_param = merge.params[0].dest;
-    assert_eq!(
-        merge.terminator,
-        IRTerminator::Return {
-            value: Some(merge_param)
-        },
-        "merge's terminator should return the joined arm value",
-    );
+    assert_return_acquires(merge, merge_param);
 }
 
 #[test]

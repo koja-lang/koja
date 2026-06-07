@@ -12,13 +12,14 @@ use koja_ir::IRFunction;
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::LlvmError;
+use crate::intrinsics::element::{acquire_value, release_in_slot};
 use crate::types::ir_basic_type;
 
 use super::util::{
     KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
     clone_table_buffers, codegen_err, entry_pointer, expect_enum_symbol, extract_int,
     extract_pointer, extract_table_fields, nth_hashtable, nth_param, resolve_key_hash_ops,
-    ret_basic, ret_struct,
+    ret_basic, ret_struct, value_slot,
 };
 use super::{
     HashtableLayout, OPTION_NONE_TAG, OPTION_SOME_TAG, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE,
@@ -217,7 +218,7 @@ pub(crate) fn emit_remove<'ctx>(
         length: extract_int(ctx, function, self_val, 2, "len")?,
         capacity: extract_int(ctx, function, self_val, 3, "cap")?,
     };
-    let table = clone_table_buffers(ctx, function, &original, layout.entry_size)?;
+    let table = clone_table_buffers(ctx, function, llvm_function, layout, &original)?;
     let key_val = nth_param(function, llvm_function, 1, "key")?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
@@ -229,9 +230,17 @@ pub(crate) fn emit_remove<'ctx>(
         key_val,
         &key_ops,
     )?;
-    let _ = (probe.e_ptr, probe.pidx, probe.pidx_phi, probe.advance_bb);
+    let _ = (probe.pidx, probe.pidx_phi, probe.advance_bb);
 
     ctx.builder.position_at_end(probe.found_bb);
+    // The clone acquired this bucket's key (and value); tombstoning
+    // drops it from the table, so release that reference now —
+    // otherwise the slot's payload leaks once the table is reclaimed.
+    release_in_slot(ctx, function, layout.key_ty, probe.e_ptr)?;
+    if let Some(value_ty) = layout.value_ty {
+        let value_ptr = value_slot(ctx, function, probe.e_ptr, layout.key_size)?;
+        release_in_slot(ctx, function, value_ty, value_ptr)?;
+    }
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_TOMBSTONE, false))
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
@@ -299,7 +308,12 @@ pub(crate) fn emit_map_get<'ctx>(
         .builder
         .build_load(value_basic_ty, val_ptr, "val")
         .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?;
-    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[val])?;
+    // Hand-out: the returned `Some` owns an independent reference, so
+    // acquire the value (heap-leaf `rc++` / composite deep clone).
+    // Otherwise the receiver's table and the returned value share one
+    // reference and both drop it — a double free once glue is active.
+    let owned = acquire_value(ctx, function, value_ty, val)?;
+    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[owned])?;
     ctx.builder
         .build_return(Some(&some))
         .map(|_| ())
