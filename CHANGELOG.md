@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `koja format` now lays out `match`/`cond`/`receive` arms consistently: when any single-expression arm body is long enough to wrap at the page width, every sibling arm breaks onto its own indented line (with blank lines between arms) instead of leaving short siblings inline next to a wrapped one.
 - Passing a heap-owning local (e.g. a `String` built with `<>`, or a `List`) to a function or method that stores it no longer crashes or returns corrupt data under `--backend=llvm`.
 - Fixed a scheduler race that could intermittently crash message-heavy programs (e.g. request/reply between processes) with a segfault. A process that yielded while waiting for a message could be resumed by another worker thread from a stale stack pointer before its post-yield state was saved.
 - Fixed a TOCTOU race in the I/O reactor that could leave a process blocked on a readiness event delivered between fd registration and the blocking state transition.

@@ -6,7 +6,9 @@ struct FileTest
         contents.empty?()
           ? Result.Ok(true)
           : Result.Err("expected empty, got '#{contents}'")
-      Result.Err(msg) -> Result.Err("read /dev/null failed: #{msg}")
+
+      Result.Err(msg) ->
+        Result.Err("read /dev/null failed: #{msg}")
     end
   end
 

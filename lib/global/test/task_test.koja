@@ -5,7 +5,9 @@ struct TaskTest
       Task.async(fn () -> Int 42 end)
 
     match Task.await(t)
-      Result.Err(_) -> Result.Err("Task.await returned Err")
+      Result.Err(_) ->
+        Result.Err("Task.await returned Err")
+
       Result.Ok(v) ->
         v == 42 ? Result.Ok(true) : Result.Err("expected 42, got #{v}")
     end

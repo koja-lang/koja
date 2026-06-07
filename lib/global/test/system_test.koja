@@ -4,7 +4,9 @@ struct SystemTest
     System.set_env("KOJA_SYSTEM_TEST_VAR", "hello")
 
     match System.get_env("KOJA_SYSTEM_TEST_VAR")
-      Option.None -> Result.Err("expected Some, got None")
+      Option.None ->
+        Result.Err("expected Some, got None")
+
       Option.Some(val) ->
         val == "hello"
           ? Result.Ok(true)
@@ -23,7 +25,9 @@ struct SystemTest
   @test "cwd returns a non-empty string"
   fn test_cwd -> Result<Bool, String>
     match System.cwd()
-      Result.Err(msg) -> Result.Err("cwd failed: #{msg}")
+      Result.Err(msg) ->
+        Result.Err("cwd failed: #{msg}")
+
       Result.Ok(dir) ->
         dir.length() > 0
           ? Result.Ok(true)

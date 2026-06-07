@@ -16,52 +16,45 @@ struct Parser
   fn parse_request(raw: String) -> Result<Request, Error>
     p = Parser{input: raw, pos: 0}
 
-    match p.read_line()
-      Option.None ->
-        Result.Err(Error.ParseError("empty request"))
+    line_pair =
+      match p.read_line()
+        Option.Some(lp) -> lp
+        Option.None -> return Result.Err(Error.ParseError("empty request"))
+      end
 
-      Option.Some(line_pair) ->
-        request_line = line_pair.first
-        p = Parser{input: raw, pos: line_pair.second}
+    request_line = line_pair.first
+    p = Parser{input: raw, pos: line_pair.second}
 
-        parts = request_line.split(" ")
+    parts = request_line.split(" ")
 
-        if parts.length() < 3
-          return Result.Err(Error.ParseError("malformed request line: " <>
-          request_line))
-        end
-
-        method_str = parts.get(0).unwrap()
-        path = parts.get(1).unwrap()
-        version = parts.get(2).unwrap()
-
-        method =
-          match Method.from_string(method_str)
-            Result.Ok(m) -> m
-            Result.Err(msg) -> return Result.Err(Error.ParseError(msg))
-          end
-
-        match p.parse_headers()
-          Result.Err(e) ->
-            Result.Err(e)
-
-          Result.Ok(header_pair) ->
-            headers = header_pair.first
-            p = Parser{input: raw, pos: header_pair.second}
-
-            match p.parse_body(headers)
-              Result.Err(e) -> Result.Err(e)
-              Result.Ok(body) ->
-                Result.Ok(Request{
-                  body: body,
-                  headers: headers,
-                  method: method,
-                  path: path,
-                  version: version,
-                })
-            end
-        end
+    if parts.length() < 3
+      error = Error.ParseError("malformed request line: " <> request_line)
+      return Result.Err(error)
     end
+
+    method_str = parts.get(0).unwrap()
+    path = parts.get(1).unwrap()
+    version = parts.get(2).unwrap()
+
+    method =
+      match Method.from_string(method_str)
+        Result.Ok(m) -> m
+        Result.Err(msg) -> return Result.Err(Error.ParseError(msg))
+      end
+
+    rest =
+      match p.parse_headers_and_body()
+        Result.Ok(hb) -> hb
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    Result.Ok(Request{
+      body: rest.second,
+      headers: rest.first,
+      method: method,
+      path: path,
+      version: version,
+    })
   end
 
   @doc """
@@ -71,76 +64,93 @@ struct Parser
   fn parse_response(raw: String) -> Result<Response, Error>
     p = Parser{input: raw, pos: 0}
 
-    match p.read_line()
-      Option.None ->
-        Result.Err(Error.ParseError("empty response"))
+    line_pair =
+      match p.read_line()
+        Option.Some(lp) -> lp
+        Option.None -> return Result.Err(Error.ParseError("empty response"))
+      end
 
-      Option.Some(line_pair) ->
-        status_line = line_pair.first
-        p = Parser{input: raw, pos: line_pair.second}
+    status_line = line_pair.first
+    p = Parser{input: raw, pos: line_pair.second}
 
-        match Parser.parse_status_line(status_line)
-          Result.Err(e) ->
-            Result.Err(e)
+    status_pair =
+      match Parser.parse_status_line(status_line)
+        Result.Ok(sp) -> sp
+        Result.Err(e) -> return Result.Err(e)
+      end
 
-          Result.Ok(status_pair) ->
-            version = status_pair.first
-            status = status_pair.second
+    version = status_pair.first
+    status = status_pair.second
 
-            match p.parse_headers()
-              Result.Err(e) ->
-                Result.Err(e)
+    rest =
+      match p.parse_headers_and_body()
+        Result.Ok(hb) -> hb
+        Result.Err(e) -> return Result.Err(e)
+      end
 
-              Result.Ok(header_pair) ->
-                headers = header_pair.first
-                p = Parser{input: raw, pos: header_pair.second}
+    Result.Ok(Response{
+      body: rest.second,
+      headers: rest.first,
+      status: status,
+      version: version,
+    })
+  end
 
-                match p.parse_body(headers)
-                  Result.Err(e) -> Result.Err(e)
-                  Result.Ok(body) ->
-                    Result.Ok(Response{
-                      body: body,
-                      headers: headers,
-                      status: status,
-                      version: version,
-                    })
-                end
-            end
-        end
-    end
+  @doc """
+  Parses the header block and message body from a parser positioned at
+  the start of the headers (just past the request/status line). Returns
+  the parsed headers paired with the body string. Shared by
+  `parse_request` and `parse_response`.
+  """
+  priv fn parse_headers_and_body(self) -> Result<Pair<Headers, String>, Error>
+    header_pair =
+      match self.parse_headers()
+        Result.Ok(hp) -> hp
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    headers = header_pair.first
+    after_headers = Parser{input: self.input, pos: header_pair.second}
+
+    body =
+      match after_headers.parse_body(headers)
+        Result.Ok(b) -> b
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    Result.Ok(Pair{first: headers, second: body})
   end
 
   priv fn parse_status_line(line: String) -> Result<Pair<String, Status>, Error>
-    match Parser.find_char(line, " ", 0)
-      Option.None ->
-        Result.Err(Error.ParseError("malformed status line: " <> line))
+    sp1 =
+      match Parser.find_char(line, " ", 0)
+        Option.Some(i) -> i
+        Option.None ->
+          return Result.Err(Error.ParseError("malformed status line: " <> line))
+      end
 
-      Option.Some(sp1) ->
-        version = line.slice(Range{start: 0, stop: sp1 - 1})
-        rest = line.slice(Range{start: sp1 + 1, stop: line.length() - 1})
+    version = line.slice(Range{start: 0, stop: sp1 - 1})
+    rest = line.slice(Range{start: sp1 + 1, stop: line.length() - 1})
 
-        match Parser.find_char(rest, " ", 0)
-          Option.None ->
-            Result.Err(Error.ParseError("malformed status line: " <> line))
+    sp2 =
+      match Parser.find_char(rest, " ", 0)
+        Option.Some(i) -> i
+        Option.None ->
+          return Result.Err(Error.ParseError("malformed status line: " <> line))
+      end
 
-          Option.Some(sp2) ->
-            code_str = rest.slice(Range{start: 0, stop: sp2 - 1})
-            reason = rest.slice(Range{start: sp2 + 1, stop: rest.length() - 1})
+    code_str = rest.slice(Range{start: 0, stop: sp2 - 1})
+    reason = rest.slice(Range{start: sp2 + 1, stop: rest.length() - 1})
 
-            match code_str.to_int()
-              Result.Ok(code) ->
-                status = Status{code: code, reason: reason}
-                result: Pair<String, Status> = Pair{
-                  first: version,
-                  second: status,
-                }
-                Result.Ok(result)
+    code =
+      match code_str.to_int()
+        Result.Ok(c) -> c
+        Result.Err(_) ->
+          return Result.Err(Error.ParseError("invalid status code: " <> code_str))
+      end
 
-              Result.Err(_) ->
-                Result.Err(Error.ParseError("invalid status code: " <> code_str))
-            end
-        end
-    end
+    status = Status{code: code, reason: reason}
+    Result.Ok(Pair{first: version, second: status})
   end
 
   priv fn parse_headers(self) -> Result<Pair<Headers, Int>, Error>
@@ -153,42 +163,35 @@ struct Parser
 
     p = Parser{input: input, pos: pos}
 
-    match p.read_line()
-      Option.None ->
-        result: Pair<Headers, Int> = Pair{first: headers, second: pos}
-        Result.Ok(result)
+    line_pair =
+      match p.read_line()
+        Option.Some(lp) -> lp
+        Option.None -> return Result.Ok(Pair{first: headers, second: pos})
+      end
 
-      Option.Some(line_pair) ->
-        line = line_pair.first
-        new_pos = line_pair.second
+    line = line_pair.first
+    new_pos = line_pair.second
 
-        if line.empty?()
-          result: Pair<Headers, Int> = Pair{first: headers, second: new_pos}
-          return Result.Ok(result)
-        end
-
-        match Parser.find_char(line, ":", 0)
-          Option.None ->
-            Result.Err(Error.ParseError("malformed header line: " <> line))
-
-          Option.Some(colon) ->
-            name = line.slice(Range{start: 0, stop: colon - 1})
-            value = line.slice(Range{start: colon + 1, stop: line.length() - 1}).trim_start()
-            headers = headers.append(name, value)
-            Parser.parse_headers_loop(input, new_pos, headers)
-        end
+    if line.empty?()
+      return Result.Ok(Pair{first: headers, second: new_pos})
     end
+
+    colon =
+      match Parser.find_char(line, ":", 0)
+        Option.Some(c) -> c
+        Option.None ->
+          return Result.Err(Error.ParseError("malformed header line: " <> line))
+      end
+
+    name = line.slice(Range{start: 0, stop: colon - 1})
+    value = line.slice(Range{start: colon + 1, stop: line.length() - 1}).trim_start()
+    headers = headers.append(name, value)
+    Parser.parse_headers_loop(input, new_pos, headers)
   end
 
   priv fn parse_body(self, headers: Headers) -> Result<String, Error>
-    match headers.get("Transfer-Encoding")
-      Option.Some(te) ->
-        if te.downcase() == "chunked"
-          return self.parse_chunked_body()
-        end
-
-      Option.None ->
-        ()
+    if Parser.is_chunked(headers)
+      return self.parse_chunked_body()
     end
 
     match headers.content_length()
@@ -207,6 +210,13 @@ struct Parser
     end
   end
 
+  priv fn is_chunked(headers: Headers) -> Bool
+    match headers.get("Transfer-Encoding")
+      Option.Some(te) -> te.downcase() == "chunked"
+      Option.None -> false
+    end
+  end
+
   priv fn parse_chunked_body(self) -> Result<String, Error>
     sb = StringBuilder.new()
     Parser.parse_chunks(self.input, self.pos, sb)
@@ -217,39 +227,36 @@ struct Parser
 
     p = Parser{input: input, pos: pos}
 
-    match p.read_line()
-      Option.None ->
-        Result.Ok(sb.build())
+    size_pair =
+      match p.read_line()
+        Option.Some(sp) -> sp
+        Option.None -> return Result.Ok(sb.build())
+      end
 
-      Option.Some(size_pair) ->
-        size_str = size_pair.first.trim()
-        new_pos = size_pair.second
+    size_str = size_pair.first.trim()
+    new_pos = size_pair.second
 
-        match Parser.parse_hex(size_str)
-          Result.Err(_) ->
-            Result.Err(Error.ParseError("invalid chunk size: " <> size_str))
+    chunk_size =
+      match Parser.parse_hex(size_str)
+        Result.Ok(cs) -> cs
+        Result.Err(_) ->
+          return Result.Err(Error.ParseError("invalid chunk size: " <> size_str))
+      end
 
-          Result.Ok(chunk_size) ->
-            if chunk_size == 0
-              return Result.Ok(sb.build())
-            end
-
-            if new_pos + chunk_size > input.length()
-              return Result.Err(Error.ParseError("chunk extends past end of input"))
-            end
-
-            chunk = input.slice(
-              Range{start: new_pos, stop: new_pos + chunk_size - 1},
-            )
-            sb = sb.add(chunk)
-
-            after_chunk = new_pos + chunk_size
-            next_pos = after_chunk + 2 <= input.length()
-              ? after_chunk + 2
-              : after_chunk
-            Parser.parse_chunks(input, next_pos, sb)
-        end
+    if chunk_size == 0
+      return Result.Ok(sb.build())
     end
+
+    if new_pos + chunk_size > input.length()
+      return Result.Err(Error.ParseError("chunk extends past end of input"))
+    end
+
+    chunk = input.slice(Range{start: new_pos, stop: new_pos + chunk_size - 1})
+    sb = sb.add(chunk)
+
+    after_chunk = new_pos + chunk_size
+    next_pos = after_chunk + 2 <= input.length() ? after_chunk + 2 : after_chunk
+    Parser.parse_chunks(input, next_pos, sb)
   end
 
   priv fn read_line(self) -> Option<Pair<String, Int>>

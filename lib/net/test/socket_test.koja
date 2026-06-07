@@ -95,7 +95,9 @@ struct SocketTest
   @test "resolve localhost returns non-empty list"
   fn test_resolve_localhost -> Result<Bool, String>
     match Socket.resolve("localhost")
-      Result.Err(msg) -> Result.Err("resolve failed: #{msg}")
+      Result.Err(msg) ->
+        Result.Err("resolve failed: #{msg}")
+
       Result.Ok(addrs) ->
         addrs.length() > 0
           ? Result.Ok(true)
