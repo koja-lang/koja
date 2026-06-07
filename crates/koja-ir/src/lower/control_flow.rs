@@ -66,7 +66,7 @@ pub(super) fn lower_if(
     let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
     let then_block = ctx.fresh_block("if_then");
     let merge_block = ctx.fresh_block("if_merge");
-    let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
+    let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
 
     let (else_target, else_block) = match else_body {
         Some(_) => {
@@ -139,7 +139,7 @@ pub(super) fn lower_unless(
     let (cond_value, block) = lower_expr(condition, ctx, block, registry, output)?;
     let body_block = ctx.fresh_block("unless_body");
     let merge_block = ctx.fresh_block("unless_merge");
-    let result_id = ctx.declare_block_param(merge_block, IRType::Unit);
+    let result_id = ctx.declare_merge_param(merge_block, IRType::Unit);
 
     let bypass_unit = emit_unit(ctx, block);
     ctx.cfg.set_terminator(
@@ -198,7 +198,7 @@ pub(super) fn lower_cond(
         result_ty,
     } = inputs;
     let merge_block = ctx.fresh_block("cond_merge");
-    let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
+    let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
 
     // Pre-allocate one body-block per arm and one chained test-block
     // per non-first arm. The first arm's test runs in the surrounding
@@ -320,7 +320,7 @@ pub(super) fn lower_ternary(
     let then_block = ctx.fresh_block("ternary_then");
     let else_block = ctx.fresh_block("ternary_else");
     let merge_block = ctx.fresh_block("ternary_merge");
-    let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
+    let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
 
     ctx.cfg.set_terminator(
         block,

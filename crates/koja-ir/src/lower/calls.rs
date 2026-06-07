@@ -12,7 +12,7 @@ use koja_typecheck::{Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, Re
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
-use super::ownership::materialize_owned;
+use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
 use crate::function::{IRBlockId, IRInstruction, IRSymbol};
 use crate::generics::{Instantiation, substitute_resolved_type};
@@ -205,13 +205,17 @@ fn lower_local_closure_call(
     ctx.cfg.append(
         current,
         IRInstruction::CallClosure {
-            args: lowered_args,
+            args: lowered_args.clone(),
             callee: callee_value,
             dest,
             result_ty: return_ty,
         },
     );
     ctx.mark_owned(dest);
+    // The closure clones each param into its slot and only borrows its
+    // env to dispatch, so owned-temp args (the callee here is a slot
+    // read, never owned) are dead after the call.
+    release_call_temps(ctx, current, &lowered_args, None);
     Ok((dest, current))
 }
 
@@ -248,13 +252,18 @@ fn lower_closure_expr_call(
     ctx.cfg.append(
         current,
         IRInstruction::CallClosure {
-            args: lowered_args,
+            args: lowered_args.clone(),
             callee: callee_value,
             dest,
             result_ty: return_ty,
         },
     );
     ctx.mark_owned(dest);
+    // Release owned-temp args plus the callee fat pointer itself when it
+    // was produced fresh (e.g. a field access that returns a closure) —
+    // the call only borrows the env to dispatch.
+    release_call_temps(ctx, current, &lowered_args, None);
+    drop_discarded_temp(ctx, current, callee_value);
     Ok((dest, current))
 }
 
@@ -559,12 +568,14 @@ fn emit_call(
         lowered_args.push(receiver);
     }
     let mut current = block;
+    let mut transferred: Option<ValueId> = None;
     for (index, arg) in args.iter().enumerate() {
         let (mut value, next) = lower_expr(&arg.value, ctx, current, registry, output)?;
         current = next;
         if acquire_first_arg && index == 0 {
             let ty = ctx.type_of(value);
             value = materialize_owned(ctx, current, value, &ty);
+            transferred = Some(value);
         }
         lowered_args.push(value);
     }
@@ -575,11 +586,35 @@ fn emit_call(
         IRInstruction::Call {
             dest,
             callee: callee_symbol,
-            args: lowered_args,
+            args: lowered_args.clone(),
         },
     );
     ctx.mark_owned(dest);
+    release_call_temps(ctx, current, &lowered_args, transferred);
     Ok((dest, current))
+}
+
+/// Release every owned heap temporary handed to a call once the callee
+/// has taken its own copy. Callees follow the borrow convention — named
+/// fns / closures clone each param into its slot ([`super::ownership::promote_param`]),
+/// collection intrinsics copy-on-write `self` and acquire stored args —
+/// so an owned-temp argument (or fluent-chain receiver) we passed is
+/// dead after the call and would otherwise leak. `transferred` names a
+/// value moved into a transport (the message / reply send payload) that
+/// the runtime now owns; it is skipped. Borrowed values (slot/field
+/// reads) and non-heap values are no-ops in [`drop_discarded_temp`].
+fn release_call_temps(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    values: &[ValueId],
+    transferred: Option<ValueId>,
+) {
+    for &value in values {
+        if Some(value) == transferred {
+            continue;
+        }
+        drop_discarded_temp(ctx, block, value);
+    }
 }
 
 /// `Debug` protocol methods that get the opaque-receiver shortcut.
@@ -651,9 +686,15 @@ fn lower_opaque_debug_call(
     let (receiver_value, mut current) = lower_expr(receiver, ctx, block, registry, output)?;
     let placeholder = emit_opaque_placeholder(ctx, current);
     match method {
-        OpaqueDebugMethod::Format => Ok((placeholder, current)),
+        OpaqueDebugMethod::Format => {
+            // `format` discards the receiver (returns the literal), so a
+            // fresh-temp receiver is dead now.
+            drop_discarded_temp(ctx, current, receiver_value);
+            Ok((placeholder, current))
+        }
         OpaqueDebugMethod::Print => {
             current = emit_io_puts(placeholder, ctx, current);
+            drop_discarded_temp(ctx, current, receiver_value);
             let unit = ctx.fresh_value(IRType::Unit);
             ctx.cfg.append(
                 current,
@@ -665,6 +706,8 @@ fn lower_opaque_debug_call(
             Ok((unit, current))
         }
         OpaqueDebugMethod::Inspect => {
+            // `inspect` returns the receiver unchanged — it is moved out,
+            // not discarded.
             current = emit_io_puts(placeholder, ctx, current);
             Ok((receiver_value, current))
         }

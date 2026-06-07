@@ -97,6 +97,51 @@ analysis isn't lost.
 
 ---
 
+## `match` arm binding a local inside a closure body (seal violation)
+
+A `match` whose arm **binds** a value (tuple- or struct-variant payload,
+e.g. `Shape.Circle(n) ->` or `Shape.Named{label: l} ->`) panics the
+sealer when it appears inside a closure body:
+
+```
+IR seal violation: function `…main` references undeclared local slot `local_N`
+```
+
+Unit-variant arms (no binding) inside a closure are fine, and the same
+`match` at top level / in a named `fn` is fine — only the
+binding-arm-inside-a-closure combination trips it. The payload-binding's
+local appears to be declared against the wrong function: the closure
+body is lowered into its own `FnLowerCtx` (`lower/closures.rs`
+`synthesize_body`), but the arm binding's slot ends up referenced from
+the enclosing function instead of the synthesized closure function.
+
+Confirmed pre-existing (reproduces with the ownership-drop work
+reverted). Minimal repro:
+
+```koja
+fn run(body: fn() -> Unit)
+  body()
+end
+
+fn main
+  run(fn() -> Unit
+    s = Shape.Circle(3)
+    match s
+      Shape.Circle(n) -> sink_int(n)
+      Shape.Square(n) -> sink_int(n)
+    end
+  end)
+end
+```
+
+**Workaround:** lift the `match` into a named `fn` and call it from the
+closure (`run(fn() -> Unit sink_int(describe(s)) end)`).
+
+**Action:** make match-arm pattern bindings declare their slots in the
+closure's lowering context, not the enclosing function's.
+
+---
+
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries

@@ -139,6 +139,11 @@ fn lower_expr_inner(
                     },
                 );
                 ctx.mark_owned(dest);
+                // `Concat` copies both operands into the fresh result, so
+                // any owned operand temp is dead now — mirror the
+                // interpolation fold in `lower_string`.
+                drop_discarded_temp(ctx, block, lhs);
+                drop_discarded_temp(ctx, block, rhs);
                 return Ok((dest, block));
             }
             let ir_op = lower_bin_op(*op, expr.span, &mut output.diagnostics)?;

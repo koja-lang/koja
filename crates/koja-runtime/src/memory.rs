@@ -23,6 +23,20 @@
 //! threaded to the free site.
 
 use std::process;
+use std::sync::atomic::{AtomicI64, Ordering};
+
+/// Net count of live heap blocks handed out by this funnel: bumped on
+/// every non-null [`alloc`] / [`realloc`]-as-alloc and decremented on
+/// every [`free`] / [`realloc`]-as-free. It is *not* a byte total — one
+/// unit per block — so it returns to its starting value once every
+/// allocation made since a checkpoint has been freed.
+///
+/// Exposed via [`koja_rt_live_blocks`] for steady-state leak fixtures:
+/// record the count, run a leak-prone pattern N times, assert the delta
+/// is zero. `Relaxed` is sufficient — we only need eventual per-thread
+/// visibility and an exact total at a quiesced checkpoint, not ordering
+/// against other memory.
+static LIVE_BLOCKS: AtomicI64 = AtomicI64::new(0);
 
 /// Allocate `size` bytes, aborting the process on allocation failure so
 /// callers never have to null-check. A zero-size request returns
@@ -32,6 +46,9 @@ pub(crate) fn alloc(size: usize) -> *mut u8 {
     let ptr = unsafe { libc::malloc(size) } as *mut u8;
     if ptr.is_null() && size != 0 {
         process::abort();
+    }
+    if !ptr.is_null() {
+        LIVE_BLOCKS.fetch_add(1, Ordering::Relaxed);
     }
     ptr
 }
@@ -46,6 +63,16 @@ pub(crate) unsafe fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     if new_ptr.is_null() && size != 0 {
         process::abort();
     }
+    // A resize-in-place / move of a live block leaves the live count
+    // unchanged; only the alloc edge (null in, real bytes out) and the
+    // free edge (live block in, freed via size 0) move the counter.
+    if ptr.is_null() {
+        if !new_ptr.is_null() {
+            LIVE_BLOCKS.fetch_add(1, Ordering::Relaxed);
+        }
+    } else if size == 0 {
+        LIVE_BLOCKS.fetch_sub(1, Ordering::Relaxed);
+    }
     new_ptr
 }
 
@@ -56,7 +83,18 @@ pub(crate) unsafe fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
 /// `ptr` must be null or a live allocation from this funnel that has
 /// not already been freed.
 pub(crate) unsafe fn free(ptr: *mut u8) {
+    if !ptr.is_null() {
+        LIVE_BLOCKS.fetch_sub(1, Ordering::Relaxed);
+    }
     unsafe { libc::free(ptr.cast()) };
+}
+
+/// Current net count of live heap blocks (see [`LIVE_BLOCKS`]). The
+/// codegen-facing symbol steady-state leak fixtures read to assert a
+/// zero delta across a repeated allocation pattern.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_live_blocks() -> i64 {
+    LIVE_BLOCKS.load(Ordering::Relaxed)
 }
 
 /// Codegen-facing allocation symbol. See [`alloc`].

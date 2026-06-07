@@ -18,6 +18,7 @@ use crate::types::{ConstValue, IRType, ValueId};
 use super::body::lower_body;
 use super::ctx::{FlowResult, FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
+use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
 
 /// Lower a statement-body arm into `arm_block`, then unconditionally
@@ -36,7 +37,7 @@ pub(super) fn lower_arm_into(
     match lower_body(body, ctx, arm_block, registry, output)? {
         FlowResult::Open { block, value } => {
             let arg = match value {
-                Some(id) => coerce_arm_value(ctx, block, id, result_ty),
+                Some(id) => finalize_arm_value(ctx, block, id, result_ty),
                 None => emit_unit(ctx, block),
             };
             ctx.cfg.set_terminator(
@@ -64,7 +65,7 @@ pub(super) fn lower_expr_arm_into(
     output: &mut LowerOutput,
 ) -> Result<(), ()> {
     let (value, after) = lower_expr(expr, ctx, arm_block, registry, output)?;
-    let arg = coerce_arm_value(ctx, after, value, result_ty);
+    let arg = finalize_arm_value(ctx, after, value, result_ty);
     ctx.cfg.set_terminator(
         after,
         IRTerminator::Branch(BranchTarget::with_args(merge_block, vec![arg])),
@@ -72,28 +73,33 @@ pub(super) fn lower_expr_arm_into(
     Ok(())
 }
 
-/// Conform an arm tail value to the merge block's `BlockParam` type.
-/// Two cases surface today:
+/// Conform an arm tail value to the merge block's `BlockParam` type
+/// and hand the merge an owned value it can release.
 ///
-/// - Identity match (the arm produced a value of `result_ty`):
-///   no-op, the value flows through.
-/// - `result_ty == Unit` and the arm produced something else:
-///   substitute a fresh `Const::Unit` so the merge edge stays
-///   type-consistent (a no-else `if`'s then-arm tails on a non-Unit
-///   value the surrounding expression types as `Unit`).
+/// - `result_ty == Unit` and the arm produced something else: the
+///   tail value is discarded (a no-else `if`'s then-arm tails on a
+///   non-Unit value the surrounding expression types as `Unit`), so
+///   free it if it owns a heap temp and substitute a fresh
+///   `Const::Unit` to keep the merge edge type-consistent.
+/// - Otherwise (the arm produced a value of `result_ty`): *acquire*
+///   it so the merge `BlockParam` — which the construct's lowering
+///   marks `owned` for heap-managed results — owns an independent
+///   reference. An owned tail moves; a borrowed one clones.
 ///
 /// Other mismatches indicate a typecheck/lowering disagreement and
 /// surface at seal.
-pub(super) fn coerce_arm_value(
+pub(super) fn finalize_arm_value(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     value: ValueId,
     result_ty: &IRType,
 ) -> ValueId {
     if matches!(result_ty, IRType::Unit) && !matches!(ctx.type_of(value), IRType::Unit) {
+        drop_discarded_temp(ctx, block, value);
         return emit_unit(ctx, block);
     }
-    value
+    let ty = ctx.type_of(value);
+    materialize_owned(ctx, block, value, &ty)
 }
 
 /// Map the typecheck-stamped result type on a control-flow

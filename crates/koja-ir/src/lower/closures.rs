@@ -641,6 +641,7 @@ fn emit_make_closure(
     }
     let ty = resolved_type_to_ir_type(closure_resolution, registry, &mut output.instantiations);
     let dest = ctx.fresh_value(ty.clone());
+    let captures_env = !capture_values.is_empty();
     ctx.cfg.append(
         block,
         IRInstruction::MakeClosure {
@@ -650,6 +651,13 @@ fn emit_make_closure(
             ty,
         },
     );
+    // A capturing closure allocates a fresh heap env it owns; a
+    // captureless one carries no env (null pointer) and stays borrowed.
+    // Marking only the capturing case keeps the result move-or-release
+    // without a spurious drop of a null env.
+    if captures_env {
+        ctx.mark_owned(dest);
+    }
     Ok((dest, block))
 }
 

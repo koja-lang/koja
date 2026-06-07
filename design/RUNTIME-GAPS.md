@@ -22,65 +22,19 @@ delivered-receive transfer), a single allocator (`memory.rs`), a
 generational `ProcessTable` (bounded growth, ready queue, timer/deadline
 heaps, bounds-checked access), envelope `drop_glue` wired at the send
 site (undelivered payloads reclaim their nested heap), the
-close-while-blocked reactor wake, and a global panic hook plus
-ThreadSanitizer with transition guards. Each converted a class of
-"correct by careful review" into "correct by construction" or "caught by
-CI." The entries below are what remains.
+close-while-blocked reactor wake, the owned-temporary / construction
+drop discipline in IR lowering (callers release heap temps they pass to
+a clone-on-entry callee; construction results are `owned` and moved, not
+cloned), and a global panic hook plus ThreadSanitizer with transition
+guards. Each converted a class of "correct by careful review" into
+"correct by construction" or "caught by CI." The entries below are what
+remains.
 
 ---
 
 ## Open gaps
 
-### 1. Owned heap temporaries passed as arguments (and construction results) are never dropped
-
-**Severity: high. Bug class: leaks (unbounded for long-running programs).**
-
-Value semantics make every parameter an independent value: a callee
-clones (rc++) its heap-backed parameters on entry. But codegen does not
-treat the *caller's* owned heap temporary as something to drop after the
-call, and IR lowering does not mark construction results (`Struct{...}`,
-enum constructors) as `owned`. Two concrete leaks fall out:
-
-- **Owned temp as argument.** `sink(a <> b)` — the `a <> b`
-  concatenation is a fresh owned `String`. It is passed to `sink`, which
-  clones it on entry; the caller never drops its temporary, so the
-  original allocation leaks once per call.
-- **Construction result.** `m = Msg{text: base}` — the constructed `Msg`
-  is not flagged `owned`, so `materialize_owned` *clones* it into `m`
-  instead of moving it, and the un-owned construction temporary (and its
-  `String` field) is never dropped.
-
-Memory-safe — no use-after-free or double-free, because the leak is a
-missing `rc--`, not an extra one — but it is **unbounded growth** on
-extremely common patterns (`f(a <> b)`, `f(Struct{...})`), so a
-long-running server bleeds memory.
-
-**Where it lives.** This is a koja-ir/codegen ownership-model gap, not a
-`koja-runtime` smell — tracked here because it is the remaining
-unbounded-memory leak, surfaced right after the message-payload
-reclamation work landed. It lives in `lower/calls.rs` (`emit_call`
-doesn't drop owned heap argument temporaries after a regular call) and
-the value-ownership tracking that decides whether a
-`StructInit`/constructor result is `owned` (`lower/ownership.rs`).
-Surfaced via LLVM IR inspection of minimal repros (`f(a <> b)`,
-`m = Struct{...}`, `r.cast(Struct{...})`).
-
-**Fix.** A core ownership-model change in lowering: (1) mark
-construction results (`StructInit`, enum constructors) `owned` so
-`materialize_owned` moves rather than clones them; (2) in `emit_call`,
-drop owned heap-backed argument temporaries after the call returns (the
-callee took its own clone); (3) ensure the message-send intrinsics
-(`Ref.cast`/`call`/`send_after`, `ReplyTo.send`) **opt out** of that
-post-call drop — they already `materialize_owned` the payload and
-transfer the owned copy to the transport, so dropping it after the call
-would double-free.
-
-**Status: open (deferred).** Found while wiring message-payload
-reclamation; intentionally scoped out of the Tier-1 message-lifecycle
-work to keep that change reviewable. This is the next memory-lifecycle
-item to land before a wide launch.
-
-### 2. No exhaustive interleaving coverage of the context switch
+### 1. No exhaustive interleaving coverage of the context switch
 
 **Severity: medium. Bug class: nondeterministic crashes / hangs.**
 
@@ -102,7 +56,7 @@ around it.
 **Fix.** `loom` for exhaustive interleaving tests of the switch/handoff,
 covering the paths the TSan soak doesn't.
 
-### 3. Two keyspaces multiplexed into one integer
+### 2. Two keyspaces multiplexed into one integer
 
 **Severity: low (was medium; de-risked by generational PIDs). Bug class: misrouted I/O events.**
 
@@ -119,7 +73,7 @@ cleanup, not an active bug.
 **Fix.** Fold both into a typed `enum EventKey { Process(Pid),
 Watch(Fd) }` resolved through a table, rather than an integer offset.
 
-### 4. Messages to an I/O-blocked process don't wake it
+### 3. Messages to an I/O-blocked process don't wake it
 
 **Severity: low. Bug class: delivery latency / missed signals.**
 
@@ -132,7 +86,7 @@ its I/O happens to complete.
 wait?). If yes, promote `WaitingIo → Runnable` on message arrival and
 have the resumed process re-check its mailbox before re-blocking on I/O.
 
-### 5. `malloc` results unchecked in several places
+### 4. `malloc` results unchecked in several places
 
 **Severity: low. Bug class: null-deref on OOM.**
 
@@ -148,9 +102,9 @@ its natural home.
 
 ## Launch priority
 
-Only **#1** (owned heap temporaries / construction results never
-dropped) is a launch blocker: it's the one open memory-safety-adjacent
-leak that grows unbounded on everyday code. The rest are
-robustness/coverage cleanups — **#2** (`loom`), **#3** (typed
-`EventKey`), **#4** (wake `WaitingIo` on message), **#5** (`malloc` null
-checks) — and can land after a soft launch.
+No open entry is a launch blocker. With the owned-temporary /
+construction leak now fixed, the unbounded-memory class is closed, and
+everything that remains is a robustness/coverage cleanup — **#1**
+(`loom`), **#2** (typed `EventKey`), **#3** (wake `WaitingIo` on
+message), **#4** (`malloc` null checks) — that can land after a soft
+launch.

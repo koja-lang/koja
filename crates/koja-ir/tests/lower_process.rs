@@ -382,7 +382,18 @@ fn receive_lowers_to_receive_instruction_with_one_arm_per_body_block() {
         "receive_merge should declare exactly one BlockParam for the join value",
     );
     let merge_param = merge.params[0].dest;
-    assert_return_acquires(merge, merge_param);
+    // Owned-merge-param model: each arm acquires its tail value before
+    // branching to the join, so the merge param already owns the join
+    // value and the Return moves it directly. The arm here yields
+    // `StopReason.Shutdown`, owned from construction, so no Clone is
+    // emitted — the merge block simply returns its param.
+    assert_eq!(
+        merge.terminator,
+        IRTerminator::Return {
+            value: Some(merge_param),
+        },
+        "receive_merge should return its owned join param directly",
+    );
 }
 
 #[test]

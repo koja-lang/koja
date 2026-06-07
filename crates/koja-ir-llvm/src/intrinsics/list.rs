@@ -154,9 +154,40 @@ fn emit_from_list<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    // Identity: `List<T>` is the default `ListLiteral<T>` carrier.
+    // `List<T>` is the `ListLiteral<T>` carrier, so this is value-wise an
+    // identity — but `self` is borrowed and the caller drops it, so the
+    // result must own an independent buffer rather than alias `self`'s.
     let self_val = nth_list(function, llvm_function, 0, "self")?;
-    ret_struct(ctx, function, self_val)
+    let cloned = clone_list_value(ctx, function, llvm_function, ListMethod::FromList, self_val)?;
+    ret_struct(ctx, function, cloned)
+}
+
+/// Deep-clone a `List` value into an independent buffer the caller owns
+/// outright. Every intrinsic return obeys this contract: `self` is
+/// borrowed and released by the caller, so handing back `self_val`
+/// (or any struct sharing its buffer) would double-free at scope exit.
+fn clone_list_value<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    method: ListMethod,
+    self_val: StructValue<'ctx>,
+) -> Result<StructValue<'ctx>, LlvmError> {
+    let buf_ptr = build_extract_pointer(ctx, function, self_val, 0, "buf_ptr")?;
+    let len = build_extract_int(ctx, function, self_val, 1, "len")?;
+    let elem_size = element_byte_size(ctx, function, method)?;
+    let new_buf = copy_buffer(
+        ctx,
+        function,
+        llvm_function,
+        element(method, function)?,
+        buf_ptr,
+        len,
+        len,
+        elem_size,
+        "clone_self",
+    )?;
+    build_list_struct(ctx, function, new_buf, len, len)
 }
 
 fn emit_append<'ctx>(
@@ -450,11 +481,19 @@ fn emit_replace_at<'ctx>(
     let replaced = build_list_struct(ctx, function, new_buf, len, len)?;
     ret_struct(ctx, function, replaced)?;
 
-    // Out of bounds: no element changes, so returning the receiver
-    // (which shares the backing buffer) is safe — every mutator is
-    // copy-on-write, so the shared buffer is never mutated in place.
+    // Out of bounds: no element changes, but `self` is borrowed and the
+    // caller drops it, so the result must own an independent buffer
+    // rather than alias `self`'s (which would double-free at scope
+    // exit). Clone the unchanged list, mirroring the in-bounds path.
     ctx.builder.position_at_end(done_bb);
-    ret_struct(ctx, function, self_val)?;
+    let unchanged = clone_list_value(
+        ctx,
+        function,
+        llvm_function,
+        ListMethod::ReplaceAt,
+        self_val,
+    )?;
+    ret_struct(ctx, function, unchanged)?;
 
     let _ = entry;
     Ok(())

@@ -36,7 +36,7 @@ pub(super) fn emit_map<'ctx>(
 
     match method {
         MapMethod::EmptyQ => hashtable::emit_empty_q(ctx, function, llvm_function),
-        MapMethod::FromMap => hashtable::emit_identity(ctx, function, llvm_function),
+        MapMethod::FromMap => hashtable::emit_identity(ctx, function, llvm_function, &layout),
         MapMethod::Get => hashtable::emit_map_get(ctx, function, llvm_function, &layout),
         MapMethod::HasQ => hashtable::emit_has_q(ctx, function, llvm_function, &layout),
         MapMethod::Length => hashtable::emit_length(ctx, function, llvm_function),

@@ -28,7 +28,7 @@ use crate::types::{IRType, ValueId};
 
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
-use super::ownership::materialize_owned;
+use super::ownership::{drop_discarded_temp, materialize_owned};
 use super::package::resolved_type_to_ir_type;
 
 /// Lower an `Item::Struct` against the typecheck registry. Returns
@@ -102,6 +102,11 @@ pub(super) fn lower_struct_construction(
             ty: symbol,
         },
     );
+    // A struct literal allocates a fresh block whose fields it owns, so
+    // the result is an owned temp: a binding moves it, a use-and-release
+    // site frees it. Without this it would be cloned on acquisition and
+    // the original construction leaked.
+    ctx.mark_owned(dest);
     Ok((dest, current))
 }
 
@@ -213,6 +218,10 @@ pub(super) fn lower_field_access(
     // independent value (rc-bumped), balancing the drop the caller's
     // binding/temp will emit — without disturbing the receiver's field.
     let owned = materialize_owned(ctx, current, dest, &field_type);
+    // The base is only borrowed for the read; if it was a fresh temp
+    // (e.g. `make_struct().field`) it is dead now that the field has
+    // been acquired, so free it.
+    drop_discarded_temp(ctx, current, base);
     Ok((owned, current))
 }
 

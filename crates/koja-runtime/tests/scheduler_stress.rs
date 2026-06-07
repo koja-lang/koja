@@ -24,9 +24,9 @@
 //! slot per spawn. This exercises slot reuse, generation bumping, and the
 //! ready queue under real worker concurrency. The churn is configurable and
 //! is disabled (`KOJA_STRESS_WAVES=0`) by `just tsan`: concurrent TSan fiber
-//! reuse trips TSan's cooperative-fiber bookkeeping (see the recipe and
-//! design/RUNTIME-GAPS.md #3), so reuse is validated in the debug build here
-//! while TSan focuses on the ping-pong concurrency soak.
+//! reuse trips TSan's cooperative-fiber bookkeeping (see the recipe), so reuse
+//! is validated in the debug build here while TSan focuses on the ping-pong
+//! concurrency soak.
 //!
 //! The runtime is a process-global singleton (`SCHED`, the reactor
 //! `OnceLock`, signal handlers, and a one-shot `SHUTDOWN` flag), so this

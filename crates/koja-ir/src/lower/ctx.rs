@@ -121,15 +121,23 @@ pub(crate) struct FnLowerCtx {
     /// target. Mirrors v1's `FnLowerState::loop_exit` stack.
     loop_exit: Vec<IRBlockId>,
     /// SSA values that own a fresh heap allocation (and so may be
-    /// moved into an owner or dropped as a temp). The drop-glue
-    /// lowering ([`super::ownership`]) marks the result of every
-    /// instruction that is *certain* to produce a fresh allocation
-    /// (`Call` / `CallClosure` / `Concat` / `BinaryConstruct` /
-    /// `Clone`); everything absent is treated as **borrowed** (a
-    /// literal, `const`, slot/field read, or parameter), which is
-    /// cloned on acquisition and never freed as a temp. Defaulting
-    /// to borrowed keeps a misclassification leak-only, never a
-    /// double-free.
+    /// moved into an owner or dropped as a temp). Marked at every
+    /// producer that is *certain* to allocate fresh:
+    ///
+    /// - `Call` / `CallClosure` (callee returns an owned value),
+    /// - `Concat` / `Clone`,
+    /// - `StructInit` / `EnumConstruct` / `BinaryConstruct`,
+    /// - a capturing `MakeClosure` (the heap env),
+    /// - a heap-typed control-flow merge `BlockParam` (`if` / `cond` /
+    ///   ternary / `match` / `receive`), whose arms hand it an acquired
+    ///   value.
+    ///
+    /// Everything absent is treated as **borrowed** (a literal, `const`,
+    /// slot/field read, or parameter), cloned on acquisition and never
+    /// freed as a temp. Defaulting to borrowed keeps a misclassification
+    /// leak-only, never a double-free. Each owned value has exactly one
+    /// consumer: it is *moved* into an owner ([`super::ownership::materialize_owned`])
+    /// or *released* at a use-and-release site ([`super::ownership::drop_discarded_temp`]).
     owned_values: BTreeSet<ValueId>,
 }
 
@@ -304,6 +312,22 @@ impl FnLowerCtx {
     pub(crate) fn declare_block_param(&mut self, block: IRBlockId, ty: IRType) -> ValueId {
         let dest = self.fresh_value(ty.clone());
         self.cfg.declare_block_param(block, dest, ty);
+        dest
+    }
+
+    /// Declare a control-flow merge `BlockParam` and mark it `owned`
+    /// when the joined type is heap-managed. Every reaching arm hands
+    /// the param an *acquired* value (see
+    /// [`super::arms::finalize_arm_value`]), so the merged result is a
+    /// single-owner temp the consumer moves into an owner or releases —
+    /// without it, a constructed/called arm value would leak through the
+    /// join.
+    pub(crate) fn declare_merge_param(&mut self, block: IRBlockId, ty: IRType) -> ValueId {
+        let owned = ty.is_heap_managed();
+        let dest = self.declare_block_param(block, ty);
+        if owned {
+            self.mark_owned(dest);
+        }
         dest
     }
 

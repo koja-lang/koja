@@ -69,7 +69,7 @@ pub(super) fn lower_match(
     let (subject_value, block) = lower_expr(subject, ctx, block, registry, output)?;
 
     let merge_block = ctx.fresh_block("match_merge");
-    let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
+    let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
 
     let entry_snapshot = ctx.snapshot_slot_states();
     let mut arm_post_states: Vec<SlotStateSnapshot> = Vec::with_capacity(arms.len());

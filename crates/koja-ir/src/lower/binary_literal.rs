@@ -89,6 +89,9 @@ pub(super) fn lower_binary_literal(
             segments: lowered,
         },
     );
+    // A `<<...>>` literal allocates a fresh `Binary` / `Bits` block, so
+    // the result is an owned temp the consumer moves or releases.
+    ctx.mark_owned(dest);
     Ok((dest, current_block))
 }
 

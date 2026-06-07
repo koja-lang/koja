@@ -10,10 +10,11 @@ use crate::ctx::EmitContext;
 use crate::error::LlvmError;
 use crate::runtime::{declare_malloc_extern, declare_memset_extern};
 
-use super::INITIAL_CAPACITY;
 use super::util::{
-    build_table_struct, call_malloc, codegen_err, extract_int, nth_hashtable, ret_basic, ret_struct,
+    TableSnapshot, build_table_struct, call_malloc, clone_table_buffers, codegen_err, extract_int,
+    extract_pointer, nth_hashtable, ret_basic, ret_struct,
 };
+use super::{HashtableLayout, INITIAL_CAPACITY};
 
 /// `fn new() -> Self` — allocate the entries + states buffers and
 /// initialize state to `EMPTY`. Same shape for `Map.new` and
@@ -99,13 +100,31 @@ pub(crate) fn emit_empty_q<'ctx>(
     ret_basic(ctx, function, is_empty.into())
 }
 
-/// Identity-shaped intrinsics: `Map.from_map(self) -> Self`.
-/// Returns the receiver unchanged.
+/// Identity-shaped intrinsics: `Map.from_map(self) -> Self` and
+/// `Set.from_set(self) -> Self`. Value-wise an identity, but `self` is
+/// borrowed and dropped by the caller, so the result must own
+/// independent buffers — clone rather than alias `self`'s.
 pub(crate) fn emit_identity<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
+    layout: &HashtableLayout<'_>,
 ) -> Result<(), LlvmError> {
     let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
-    ret_struct(ctx, function, self_val)
+    let original = TableSnapshot {
+        entries_ptr: extract_pointer(ctx, function, self_val, 0, "entries")?,
+        states_ptr: extract_pointer(ctx, function, self_val, 1, "states")?,
+        length: extract_int(ctx, function, self_val, 2, "len")?,
+        capacity: extract_int(ctx, function, self_val, 3, "cap")?,
+    };
+    let cloned = clone_table_buffers(ctx, function, llvm_function, layout, &original)?;
+    let result = build_table_struct(
+        ctx,
+        function,
+        cloned.entries_ptr,
+        cloned.states_ptr,
+        cloned.length,
+        cloned.capacity,
+    )?;
+    ret_struct(ctx, function, result)
 }

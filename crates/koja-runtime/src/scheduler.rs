@@ -634,6 +634,23 @@ pub extern "C" fn koja_rt_main_done() {
     for h in handles {
         let _ = h.join();
     }
+
+    maybe_report_live_heap();
+}
+
+/// When `KOJA_HEAP_REPORT` is set, print the runtime's net live-block
+/// count at shutdown. Informational only — it does *not* alter the exit
+/// code: runtime-internal allocations (and any orphaned live processes)
+/// are still counted here, so a nonzero total is expected for real
+/// programs. The robust leak guard is the steady-state delta check in
+/// the `lang_ownership` fixtures (see [`crate::memory::koja_rt_live_blocks`]).
+fn maybe_report_live_heap() {
+    if std::env::var_os("KOJA_HEAP_REPORT").is_some() {
+        eprintln!(
+            "koja: live heap blocks at shutdown: {}",
+            crate::memory::koja_rt_live_blocks(),
+        );
+    }
 }
 
 /// Hands a delivered envelope to the receiving frame: copies its

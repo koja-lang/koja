@@ -216,6 +216,7 @@ fn lower_unit_variant(
             ty: symbol,
         },
     );
+    ctx.mark_owned(dest);
     (dest, block)
 }
 
@@ -251,6 +252,7 @@ fn lower_tuple_variant(
             ty: symbol,
         },
     );
+    ctx.mark_owned(dest);
     Ok((dest, current))
 }
 
@@ -276,6 +278,7 @@ fn lower_struct_variant(
             ty: symbol,
         },
     );
+    ctx.mark_owned(dest);
     Ok((dest, current))
 }
 

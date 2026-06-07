@@ -258,8 +258,20 @@ pub(crate) fn emit_remove<'ctx>(
     )?;
     ret_struct(ctx, function, removed)?;
 
+    // Not found: nothing is removed, but `self` is borrowed and dropped
+    // by the caller, so returning `self_val` would alias its buffers and
+    // double-free (and would also leak the clone made above). Return the
+    // untouched clone instead — an independent copy the caller owns.
     ctx.builder.position_at_end(probe.not_found_bb);
-    ret_struct(ctx, function, self_val)
+    let unchanged = build_table_struct(
+        ctx,
+        function,
+        table.entries_ptr,
+        table.states_ptr,
+        table.length,
+        table.capacity,
+    )?;
+    ret_struct(ctx, function, unchanged)
 }
 
 pub(crate) fn emit_map_get<'ctx>(

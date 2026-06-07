@@ -46,6 +46,7 @@ use crate::types::{ConstValue, IRType, ValueId};
 use super::arms::{lower_arm_into, lower_result_ty};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
+use super::ownership::materialize_owned;
 use super::package::resolved_type_to_ir_type;
 
 /// Lower `spawn Type.start(config)`. Typecheck has already validated
@@ -78,6 +79,14 @@ pub(super) fn lower_spawn(
     })?;
     let (config_value, current) = lower_expr(&config_arg.value, ctx, block, registry, output)?;
     let config_type = ctx.type_of(config_value);
+    // `spawn` copies the config across the process boundary (see
+    // `emit_spawn`'s serialize-to-blob), so acquire an independent owned
+    // copy the child can hold without aliasing the spawner's heap —
+    // mirroring the message-send payload acquire. The copy is
+    // *transferred*: it is never released here (the child borrows the
+    // serialized bytes). Runtime-side reclamation of the transferred
+    // config — the envelope `drop_glue` analogue — remains a follow-up.
+    let config_value = materialize_owned(ctx, current, config_value, &config_type);
 
     let state_ir_type = resolved_type_to_ir_type(
         &target.receiver_resolution,
@@ -154,7 +163,7 @@ pub(super) fn lower_receive(
     }
     let result_ty = lower_result_ty(result_resolution, registry, output);
     let merge_block = ctx.fresh_block("receive_merge");
-    let result_id = ctx.declare_block_param(merge_block, result_ty.clone());
+    let result_id = ctx.declare_merge_param(merge_block, result_ty.clone());
 
     let mut lowered_arms = Vec::with_capacity(arms.len());
     for (index, arm) in arms.iter().enumerate() {
