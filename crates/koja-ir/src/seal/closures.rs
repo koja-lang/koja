@@ -31,7 +31,9 @@ pub(super) fn seal_closure_decls(pkg: &IRPackage) {
     for function in pkg.functions.values() {
         match &function.kind {
             FunctionKind::Closure { env_layout } => seal_closure_function(function, env_layout),
-            FunctionKind::Extern(_)
+            FunctionKind::CloneGlue
+            | FunctionKind::DropGlue
+            | FunctionKind::Extern(_)
             | FunctionKind::Intrinsic(_)
             | FunctionKind::ProcessEntryWrapper { .. }
             | FunctionKind::Regular
@@ -208,7 +210,9 @@ fn require_value_type_matches_body(
 
 fn kind_label(kind: &FunctionKind) -> &'static str {
     match kind {
+        FunctionKind::CloneGlue => "CloneGlue",
         FunctionKind::Closure { .. } => "Closure",
+        FunctionKind::DropGlue => "DropGlue",
         FunctionKind::Extern(_) => "Extern",
         FunctionKind::Intrinsic(_) => "Intrinsic",
         FunctionKind::ProcessEntryWrapper { .. } => "ProcessEntryWrapper",

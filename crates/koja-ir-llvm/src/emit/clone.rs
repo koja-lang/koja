@@ -14,12 +14,16 @@
 //! - **Copy leaves** (`Bool`, the int / uint / float families, `Unit`,
 //!   raw `CPtr`): a register copy. SSA values are immutable, so `dest`
 //!   simply re-binds the source value — no rc, no allocation.
-//! - **Composite heap** (`List` / `Map` / `Set` / `Struct` / `Enum` /
-//!   `Union` / closure `Function` / `Indirect`): unreachable. The
-//!   `elaborate` IR sub-pass rewrites composite `Clone`s into a `Call`
-//!   to a synthesized per-type `clone_T` before codegen, so a
-//!   composite reaching here is a lowering bug (panic loudly rather
-//!   than silently alias).
+//! - **No-glue aggregates** (`Struct` / `Enum` / `Union` whose every
+//!   field is `Copy`): a register copy, exactly like the scalar
+//!   leaves. The `elaborate` IR sub-pass rewrites only the
+//!   *heap-owning* composites into a `Call` to a synthesized per-type
+//!   `clone_T`, so a scalar aggregate is all that survives to here.
+//! - **Heap composites** (`List` / `Map` / `Set` / `Indirect`, plus
+//!   closure `Function`): unreachable. Collections and boxes always
+//!   own heap and are always rewritten to a glue `Call`; closures are
+//!   a separate slice. A heap composite reaching here is a lowering
+//!   bug (panic loudly rather than silently alias).
 
 use koja_ir::{IRType, ValueId};
 
@@ -64,14 +68,20 @@ pub(super) fn emit_clone<'ctx>(
         | IRType::UInt32
         | IRType::UInt64
         | IRType::Unit => lookup(values, source)?,
-        IRType::Enum(_)
-        | IRType::Function { .. }
+        // No-glue aggregates (a struct / enum / union whose every
+        // field is `Copy`): a register copy, like the scalar leaves.
+        // `elaborate` rewrites only the heap-owning composites into
+        // `Call @clone_T`, so any aggregate surviving to here owns no
+        // heap and aliasing its immutable SSA value is sound.
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => lookup(values, source)?,
+        // Collections and boxed `Indirect` always own heap, so they
+        // always carry glue and must have been rewritten; closures are
+        // a separate slice. Reaching here is a lowering bug.
+        IRType::Function { .. }
         | IRType::Indirect(_)
         | IRType::List(_)
         | IRType::Map { .. }
-        | IRType::Set(_)
-        | IRType::Struct(_)
-        | IRType::Union { .. } => panic!(
+        | IRType::Set(_) => panic!(
             "LLVM emit: composite `IRInstruction::Clone` of type {ty:?} reached the backend — \
              the `elaborate` sub-pass must rewrite it into a `Call @clone_T`",
         ),

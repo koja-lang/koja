@@ -33,6 +33,52 @@ pub(super) fn is_heap_leaf(ty: &IRType) -> bool {
     matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
 }
 
+/// Types lowering acquires on binding and releases at scope exit —
+/// the heap leaves plus every composite that *might* own heap storage
+/// (collections, boxed-recursive `Indirect`, closures, and any struct
+/// / enum / union, conservatively). This predicate is intentionally
+/// pure (no program access): generic struct / enum instantiations
+/// don't exist yet during per-package lowering, so the precise
+/// "does this aggregate actually own heap" question is deferred to
+/// the post-merge [`crate::elaborate`] pass via
+/// [`crate::elaborate::needs_drop`].
+///
+/// The conservatism is safe and cheap: a composite that turns out to
+/// be all-`Copy` (e.g. `struct Point { x: Int, y: Int }`) gets no glue
+/// registered, so the backend renders its `Clone` as a register copy
+/// and its `Drop` as a no-op — identical to never having emitted them.
+pub(super) fn is_heap_managed(ty: &IRType) -> bool {
+    match ty {
+        IRType::Binary | IRType::Bits | IRType::String => true,
+        IRType::Enum(_)
+        | IRType::Indirect(_)
+        | IRType::List(_)
+        | IRType::Map { .. }
+        | IRType::Set(_)
+        | IRType::Struct(_)
+        | IRType::Union { .. } => true,
+        // Closures (`Function`) own a heap env, but their clone / drop
+        // glue needs the per-instance capture layout, which the
+        // structural `IRType::Function` doesn't carry. They keep their
+        // existing closure-specific drop path until the closure-glue
+        // slice (plan phase 3) wires capture-recursive release.
+        IRType::Function { .. }
+        | IRType::Bool
+        | IRType::CPtr(_)
+        | IRType::Float32
+        | IRType::Float64
+        | IRType::Int8
+        | IRType::Int16
+        | IRType::Int32
+        | IRType::Int64
+        | IRType::UInt8
+        | IRType::UInt16
+        | IRType::UInt32
+        | IRType::UInt64
+        | IRType::Unit => false,
+    }
+}
+
 /// Acquire `value` (typed `ty`) as an owned, independent value at an
 /// ownership boundary — a binding, parameter promotion, or return.
 ///

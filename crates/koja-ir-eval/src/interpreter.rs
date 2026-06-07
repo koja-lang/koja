@@ -435,6 +435,15 @@ fn execute_function<R: CallResolver>(
                 }),
             };
         }
+        // Acquisition / release glue is a no-op under the interpreter:
+        // every host `Value` is independent (deep-cloned on `lookup`)
+        // and reclaimed by the host GC, so a clone is a rebind of the
+        // argument and a drop returns unit. Short-circuiting here means
+        // eval never executes a glue body — neither the aggregate CFG
+        // `elaborate` synthesizes nor the empty collection shell the
+        // LLVM backend fills.
+        FunctionKind::CloneGlue => return Ok(args.into_iter().next().unwrap_or(Value::Unit)),
+        FunctionKind::DropGlue => return Ok(Value::Unit),
         FunctionKind::Closure { .. } => panic!(
             "interpreter: direct `Call` to closure body `{}` — must dispatch via \
              `CallClosure` (seal invariant violation)",

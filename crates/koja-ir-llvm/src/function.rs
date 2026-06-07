@@ -63,7 +63,9 @@ pub(crate) fn declare_function<'ctx>(
             .link_name
             .clone()
             .unwrap_or_else(|| function.symbol.last_segment().to_string()),
-        FunctionKind::Intrinsic(_)
+        FunctionKind::CloneGlue
+        | FunctionKind::DropGlue
+        | FunctionKind::Intrinsic(_)
         | FunctionKind::ProcessEntryWrapper { .. }
         | FunctionKind::Regular
         | FunctionKind::SpawnWrapper { .. } => function.symbol.mangled().to_string(),
@@ -130,6 +132,18 @@ pub(crate) fn define_function<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let env_layout = match &function.kind {
+        FunctionKind::CloneGlue | FunctionKind::DropGlue => {
+            if function.blocks.is_empty() {
+                // Collection / `Indirect` glue: a runtime-shaped
+                // deep-copy / element-walk synthesized from the operand
+                // type at emit time. Lands with the collection slice.
+                todo!("collection clone/drop glue body emission (Phase 2)")
+            }
+            // Aggregate glue (struct / enum / union) carries a full
+            // `elaborate`-synthesized CFG; emit it exactly like a
+            // `Regular` body (no closure env).
+            None
+        }
         FunctionKind::Intrinsic(id) => {
             return intrinsics::emit_intrinsic_body(ctx, function, llvm_function, id);
         }

@@ -161,12 +161,47 @@ impl fmt::Display for IRBlockId {
 /// interior mutation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum FunctionKind {
-    Closure { env_layout: Vec<IRType> },
+    /// Synthesized per-type clone glue (`<T>.$clone$`). Registered by
+    /// the `elaborate` sub-pass for every heap-managed composite type
+    /// (`List` / `Map` / `Set` / heap-owning structs, enums, unions,
+    /// `Indirect` boxes). The operand type is `params[0].ty`; the
+    /// return type matches it. Lowering's composite `IRInstruction::Clone`
+    /// is rewritten into a `call` to this glue, so backends only ever
+    /// see leaf `Clone`s inline and a uniform `call` for composites.
+    ///
+    /// Its body is born one of two ways:
+    /// - **Aggregates** (`Struct` / `Enum` / `Union`): `elaborate::synth`
+    ///   builds a full CFG (project each field / payload, acquire it,
+    ///   rebuild). `blocks` is non-empty and the LLVM backend walks it
+    ///   like a [`Self::Regular`] body.
+    /// - **Collections / `Indirect`**: a runtime-shaped deep-copy the
+    ///   LLVM backend synthesizes from the operand type at emit time,
+    ///   so `blocks` lowers empty like [`Self::Intrinsic`].
+    ///
+    /// Eval reclaims via its host GC and never invokes the glue.
+    CloneGlue,
+    Closure {
+        env_layout: Vec<IRType>,
+    },
+    /// Synthesized per-type drop glue (`<T>.$drop$`). The drop analog
+    /// of [`Self::CloneGlue`] — releases every heap-managed field /
+    /// payload / element of `params[0].ty`, then frees any collection
+    /// backing buffer. Returns `Unit`. Lowering's composite
+    /// `DropLocal` / `DropValue` is rewritten into a `call` to this
+    /// glue. Same two body shapes as [`Self::CloneGlue`]: an
+    /// `elaborate`-synthesized CFG for aggregates, an emit-time
+    /// backend body (empty `blocks`) for collections / `Indirect`.
+    /// Eval reclaims via its host GC and never invokes it.
+    DropGlue,
     Extern(IRExternAttrs),
     Intrinsic(IRIntrinsicId),
-    ProcessEntryWrapper { state: IRType },
+    ProcessEntryWrapper {
+        state: IRType,
+    },
     Regular,
-    SpawnWrapper { state: IRType },
+    SpawnWrapper {
+        state: IRType,
+    },
 }
 
 /// A lowered function. `blocks[0]` is the entry block; `params`

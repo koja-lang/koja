@@ -39,6 +39,15 @@ pub(super) fn seal_package(pkg: &IRPackage) {
 fn seal_function(function: &IRFunction) {
     let owner = format!("function `{}`", function.symbol);
     match &function.kind {
+        FunctionKind::CloneGlue | FunctionKind::DropGlue => {
+            // Glue bodies come in two shapes, both valid: aggregate
+            // glue (struct / enum / union / `Indirect`) carries a full
+            // elaborate-synthesized CFG, validated by the standard
+            // SSA / block walk below; collection glue (`List` / `Map`
+            // / `Set`) lowers empty and is synthesized at emit time
+            // from the operand type, caught by the empty-blocks
+            // early-return after the parameter checks.
+        }
         FunctionKind::Intrinsic(_) => {
             if !function.blocks.is_empty() {
                 seal_panic(&format!(

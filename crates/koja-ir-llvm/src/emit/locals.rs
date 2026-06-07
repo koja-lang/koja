@@ -63,9 +63,9 @@ pub(super) fn emit_local_write<'ctx>(
 /// payload), so a single block-base GEP + `koja_rc_dec` covers all
 /// three: the rc is decremented and the block freed at zero (immortal
 /// rodata blocks are skipped by the runtime). `Function`-typed slots
-/// delegate to the closure drop helper. Non-heap types panic loudly:
-/// the lowerer is responsible for never emitting `DropLocal` for stack
-/// types.
+/// delegate to the closure drop helper; no-glue aggregate slots are a
+/// no-op. Collections / boxes panic loudly — they always carry glue
+/// and must have been rewritten to a `Call @drop_T` by `elaborate`.
 pub(super) fn emit_drop_local<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
@@ -80,9 +80,14 @@ pub(super) fn emit_drop_local<'ctx>(
             let value = emit_local_read(ctx, local, ty)?;
             closures::emit_drop_closure_env(ctx, local, value)
         }
+        // No-glue aggregate slot (every field `Copy`): nothing to
+        // release. `elaborate` rewrites the heap-owning composites
+        // into a `LocalRead` + `Call @drop_T`, so a scalar aggregate
+        // is all that survives as a bare `DropLocal` here.
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => Ok(()),
         _ => panic!(
             "LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}` — \
-             extend `emit_drop_local` when more heap types ship",
+             collections / boxes always carry glue and must be rewritten to a `Call @drop_T`",
         ),
     }
 }
@@ -103,9 +108,14 @@ pub(super) fn emit_drop_value<'ctx>(
             let payload = lookup(values, value)?;
             emit_rc_dec(ctx, payload.into_pointer_value(), &value.to_string())
         }
+        // No-glue aggregate value (every field `Copy`): nothing to
+        // release. The heap-owning composites are rewritten to a
+        // `Call @drop_T` by `elaborate`.
+        IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => Ok(()),
         _ => panic!(
             "LLVM emit: unsupported `IRInstruction::DropValue` type {ty:?} for value \
-             `{value}` — extend `emit_drop_value` when more heap types ship",
+             `{value}` — collections / boxes always carry glue and must be rewritten to a \
+             `Call @drop_T`",
         ),
     }
 }
