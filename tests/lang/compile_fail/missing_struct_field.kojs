@@ -1,0 +1,7 @@
+struct User
+  name: String
+  age: Int
+end
+
+u = User{age: 30}
+u.age.print()

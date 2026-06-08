@@ -7,24 +7,26 @@
 //! `BinaryOp` / `UnaryOp` for the result.
 
 use koja_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRProgram, IRTerminator,
-    IRUnaryOp, ValueId,
+    ConstValue, IRBasicBlock, IRBinOp, IRInstruction, IRScript, IRTerminator, IRUnaryOp, ValueId,
 };
 
 mod common;
 
-use common::{lower_program_source as lower, lower_script_source as lower_as_script};
+use common::lower_script_source as lower;
 
-fn entry_block(program: &IRProgram) -> &IRBasicBlock {
-    let main: &IRFunction = program.entry_function();
-    assert_eq!(main.blocks.len(), 1, "fns lower to one basic block");
-    &main.blocks[0]
+fn entry_block(script: &IRScript) -> &IRBasicBlock {
+    assert_eq!(
+        script.blocks.len(),
+        1,
+        "script bodies lower to a single basic block",
+    );
+    &script.blocks[0]
 }
 
 #[test]
 fn and_lowers_to_two_consts_and_a_binary_op() {
-    let program = lower("fn main\n  true and false\nend\n");
-    let block = entry_block(&program);
+    let script = lower("true and false\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![
@@ -54,8 +56,8 @@ fn and_lowers_to_two_consts_and_a_binary_op() {
 
 #[test]
 fn or_lowers_to_ir_bin_op_or() {
-    let program = lower("fn main\n  true or false\nend\n");
-    let block = entry_block(&program);
+    let script = lower("true or false\n");
+    let block = entry_block(&script);
     assert!(matches!(
         block.instructions.last(),
         Some(IRInstruction::BinaryOp {
@@ -67,8 +69,8 @@ fn or_lowers_to_ir_bin_op_or() {
 
 #[test]
 fn not_lowers_to_unary_op_not() {
-    let program = lower("fn main\n  not true\nend\n");
-    let block = entry_block(&program);
+    let script = lower("not true\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![
@@ -93,8 +95,8 @@ fn not_lowers_to_unary_op_not() {
 
 #[test]
 fn neg_lowers_to_unary_op_neg() {
-    let program = lower("fn main\n  -7\nend\n");
-    let block = entry_block(&program);
+    let script = lower("-7\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![
@@ -112,53 +114,17 @@ fn neg_lowers_to_unary_op_neg() {
 }
 
 #[test]
-fn script_mode_and_lowers_to_two_consts_and_a_binary_op() {
-    let script = lower_as_script("true and false\n");
-    assert_eq!(
-        script.blocks.len(),
-        1,
-        "script bodies lower to a single basic block",
-    );
-    let block = &script.blocks[0];
-    assert_eq!(
-        block.instructions,
-        vec![
-            IRInstruction::Const {
-                dest: ValueId(0),
-                value: ConstValue::Bool(true),
-            },
-            IRInstruction::Const {
-                dest: ValueId(1),
-                value: ConstValue::Bool(false),
-            },
-            IRInstruction::BinaryOp {
-                dest: ValueId(2),
-                lhs: ValueId(0),
-                op: IRBinOp::And,
-                rhs: ValueId(1),
-            },
-        ],
-    );
-    assert_eq!(
-        block.terminator,
-        IRTerminator::Return {
-            value: Some(ValueId(2)),
-        },
-    );
-}
-
-#[test]
 fn comparisons_lower_to_matching_ir_bin_ops() {
     for (source, expected) in [
-        ("fn main\n  1 == 2\nend\n", IRBinOp::Eq),
-        ("fn main\n  1 != 2\nend\n", IRBinOp::NotEq),
-        ("fn main\n  1 < 2\nend\n", IRBinOp::Lt),
-        ("fn main\n  1 > 2\nend\n", IRBinOp::Gt),
-        ("fn main\n  1 <= 2\nend\n", IRBinOp::LtEq),
-        ("fn main\n  1 >= 2\nend\n", IRBinOp::GtEq),
+        ("1 == 2\n", IRBinOp::Eq),
+        ("1 != 2\n", IRBinOp::NotEq),
+        ("1 < 2\n", IRBinOp::Lt),
+        ("1 > 2\n", IRBinOp::Gt),
+        ("1 <= 2\n", IRBinOp::LtEq),
+        ("1 >= 2\n", IRBinOp::GtEq),
     ] {
-        let program = lower(source);
-        let block = entry_block(&program);
+        let script = lower(source);
+        let block = entry_block(&script);
         let Some(IRInstruction::BinaryOp { op, .. }) = block.instructions.last() else {
             panic!("expected trailing BinaryOp for source {source:?}");
         };
@@ -171,8 +137,8 @@ fn hex_int_literal_lowers_with_correct_radix() {
     // The lexer hands lower the raw text `0xFF` (prefix preserved);
     // `lower/ops.rs::parse_int_literal` strips `0x` and dispatches
     // to `i64::from_str_radix(_, 16)`.
-    let program = lower("fn main\n  0xFF\nend\n");
-    let block = entry_block(&program);
+    let script = lower("0xFF\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -184,8 +150,8 @@ fn hex_int_literal_lowers_with_correct_radix() {
 
 #[test]
 fn binary_int_literal_lowers_with_correct_radix() {
-    let program = lower("fn main\n  0b1010\nend\n");
-    let block = entry_block(&program);
+    let script = lower("0b1010\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -199,8 +165,8 @@ fn binary_int_literal_lowers_with_correct_radix() {
 fn underscore_separated_int_literal_strips_separators() {
     // `1_000_000` is decimal-with-underscores; the parser keeps the
     // underscores in the token text, so lower must strip them.
-    let program = lower("fn main\n  1_000_000\nend\n");
-    let block = entry_block(&program);
+    let script = lower("1_000_000\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -212,8 +178,8 @@ fn underscore_separated_int_literal_strips_separators() {
 
 #[test]
 fn float_literal_lowers_to_const_float64() {
-    let program = lower("fn main\n  1.5\nend\n");
-    let block = entry_block(&program);
+    let script = lower("1.5\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![IRInstruction::Const {
@@ -231,8 +197,8 @@ fn float_literal_lowers_to_const_float64() {
 
 #[test]
 fn float_arithmetic_lowers_with_float64_operand_type() {
-    let program = lower("fn main\n  2.0 + 2.0\nend\n");
-    let block = entry_block(&program);
+    let script = lower("2.0 + 2.0\n");
+    let block = entry_block(&script);
     assert_eq!(
         block.instructions,
         vec![
@@ -270,8 +236,8 @@ fn float_arithmetic_lowers_with_float64_operand_type() {
 
 #[test]
 fn call_arg_uint8_coerces_literal_to_const_uint8() {
-    let program = lower("fn take(x: UInt8) -> Unit\n  ()\nend\n\nfn main\n  take(255)\nend\n");
-    let block = entry_block(&program);
+    let script = lower("fn take(x: UInt8) -> Unit\n  ()\nend\n\ntake(255)\n");
+    let block = entry_block(&script);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -287,9 +253,8 @@ fn call_arg_uint8_coerces_literal_to_const_uint8() {
 
 #[test]
 fn struct_field_int8_coerces_literal_to_const_int8() {
-    let program =
-        lower("struct Sample\n  amplitude: Int8\nend\n\nfn main\n  Sample{amplitude: -8}\nend\n");
-    let block = entry_block(&program);
+    let script = lower("struct Sample\n  amplitude: Int8\nend\n\nSample{amplitude: -8}\n");
+    let block = entry_block(&script);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -319,8 +284,8 @@ fn struct_field_int8_coerces_literal_to_const_int8() {
 
 #[test]
 fn return_type_uint16_coerces_literal_to_const_uint16() {
-    let program = lower("fn answer -> UInt16\n  65_535\nend\n\nfn main\n  answer()\nend\n");
-    let answer = program
+    let script = lower("fn answer -> UInt16\n  65_535\nend\n\nanswer()\n");
+    let answer = script
         .function(&format!("{}.answer", common::PACKAGE))
         .expect("missing `answer` function in lowered program");
     let block = answer
@@ -342,8 +307,8 @@ fn return_type_uint16_coerces_literal_to_const_uint16() {
 
 #[test]
 fn return_type_float32_coerces_literal_to_const_float32() {
-    let program = lower("fn half -> Float32\n  0.5\nend\n\nfn main\n  half()\nend\n");
-    let half = program
+    let script = lower("fn half -> Float32\n  0.5\nend\n\nhalf()\n");
+    let half = script
         .function(&format!("{}.half", common::PACKAGE))
         .expect("missing `half` function in lowered program");
     let block = half
@@ -368,8 +333,8 @@ fn negated_literal_in_uncoerced_position_keeps_runtime_neg() {
     // Without a narrow-target site, `-7` still lowers to the
     // pre-coercion shape: `Const Int64(7)` + `UnaryOp::Neg`. Pins
     // that the fold only fires when a coercion record is present.
-    let program = lower("fn main\n  -7\nend\n");
-    let block = entry_block(&program);
+    let script = lower("-7\n");
+    let block = entry_block(&script);
     assert!(
         block.instructions.iter().any(|i| matches!(
             i,
@@ -385,8 +350,8 @@ fn negated_literal_in_uncoerced_position_keeps_runtime_neg() {
 
 #[test]
 fn float_comparison_lowers_with_bool_result() {
-    let program = lower("fn main\n  1.0 < 2.0\nend\n");
-    let block = entry_block(&program);
+    let script = lower("1.0 < 2.0\n");
+    let block = entry_block(&script);
     let Some(IRInstruction::BinaryOp { op, lhs, rhs, .. }) = block.instructions.last() else {
         panic!(
             "expected trailing BinaryOp for `1.0 < 2.0`, got {:?}",

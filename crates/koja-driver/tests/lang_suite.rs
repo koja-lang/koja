@@ -16,12 +16,12 @@ fn koja_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_BIN_EXE_koja"))
 }
 
-fn collect_koja_files(dir: &Path) -> Vec<PathBuf> {
+fn collect_test_files(dir: &Path) -> Vec<PathBuf> {
     let mut files = Vec::new();
     for entry in fs::read_dir(dir).expect("failed to read test dir") {
         let entry = entry.unwrap();
         let path = entry.path();
-        if path.is_file() && path.extension().is_some_and(|e| e == "koja") {
+        if path.is_file() && path.extension().is_some_and(|e| e == "koja" || e == "kojs") {
             files.push(path);
         }
     }
@@ -91,10 +91,10 @@ fn run_with_timeout(configure: impl FnOnce(&mut Command)) -> (String, String, i3
 // ---------------------------------------------------------------------------
 
 fn run_pass_dir(dir: &Path, label: &str) {
-    let files = collect_koja_files(dir);
+    let files = collect_test_files(dir);
     assert!(
         !files.is_empty(),
-        "no .koja test files found in {label} ({})",
+        "no .koja/.kojs test files found in {label} ({})",
         dir.display()
     );
 
@@ -139,7 +139,7 @@ fn run_compile_fail_dir(dir: &Path, label: &str) {
         return;
     }
 
-    let files = collect_koja_files(dir);
+    let files = collect_test_files(dir);
     let mut failures = Vec::new();
 
     for file in &files {
@@ -185,7 +185,7 @@ fn run_runtime_fail_dir(dir: &Path, label: &str) {
         return;
     }
 
-    let files = collect_koja_files(dir);
+    let files = collect_test_files(dir);
     let mut failures = Vec::new();
 
     for file in &files {

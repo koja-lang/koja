@@ -1,17 +1,17 @@
 //! Typecheck coverage for boolean and comparison operators
 //! (`and`/`or`/`not`/`== != < > <= >=`) — pairs with
-//! `pipeline::resolve::ops` in src. Mirrors `program.rs`: parse +
-//! check a tiny `fn main`, then inspect the trailing expression's
-//! `resolution`. Error paths assert a diagnostic on ill-typed
-//! programs.
+//! `pipeline::resolve::ops` in src. Mirrors `program_script.rs`: parse
+//! and check a tiny script body, then inspect the trailing
+//! expression's `resolution`. Error paths assert a diagnostic on
+//! ill-typed programs.
 
-use koja_ast::ast::{Item, Statement};
+use koja_ast::ast::Statement;
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail};
+use common::{PACKAGE, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail};
 
 fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
     let pkg = checked
@@ -20,18 +20,10 @@ fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
     let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    let body = main
+    let body = file
         .body
         .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point");
+        .expect("script-mode file must keep statements on File.body");
     let trailing = body.last().expect("expected at least one statement");
     match trailing {
         Statement::Expr(expr) => expr.resolution.clone(),
@@ -73,29 +65,24 @@ fn assert_trailing_is(source: &str, expected_name: &str) {
 
 #[test]
 fn logical_and_or_resolve_to_bool() {
-    assert_trailing_is("fn main\n  true and false\nend\n", "Bool");
-    assert_trailing_is("fn main\n  true or false\nend\n", "Bool");
+    assert_trailing_is("true and false\n", "Bool");
+    assert_trailing_is("true or false\n", "Bool");
 }
 
 #[test]
 fn unary_not_resolves_to_bool() {
-    assert_trailing_is("fn main\n  not true\nend\n", "Bool");
+    assert_trailing_is("not true\n", "Bool");
 }
 
 #[test]
 fn unary_neg_resolves_to_int() {
-    assert_trailing_is("fn main\n  -7\nend\n", "Int");
+    assert_trailing_is("-7\n", "Int");
 }
 
 #[test]
 fn comparisons_resolve_to_bool() {
     for source in [
-        "fn main\n  1 == 1\nend\n",
-        "fn main\n  1 != 2\nend\n",
-        "fn main\n  1 < 2\nend\n",
-        "fn main\n  1 > 2\nend\n",
-        "fn main\n  1 <= 2\nend\n",
-        "fn main\n  1 >= 2\nend\n",
+        "1 == 1\n", "1 != 2\n", "1 < 2\n", "1 > 2\n", "1 <= 2\n", "1 >= 2\n",
     ] {
         let checked = typecheck(source);
         assert_eq!(
@@ -108,7 +95,7 @@ fn comparisons_resolve_to_bool() {
 
 #[test]
 fn bool_equality_is_allowed() {
-    let checked = typecheck("fn main\n  true == false\nend\n");
+    let checked = typecheck("true == false\n");
     assert_eq!(trailing_resolution(&checked), bool_type(&checked));
 }
 
@@ -116,14 +103,14 @@ fn bool_equality_is_allowed() {
 fn int_type_helper_still_references_int() {
     // Sanity check that both `int_type` and `bool_type` correspond to
     // the stubs the resolver emits; catches reverse-index breakage.
-    let checked = typecheck("fn main\n  1 + 1\nend\n");
+    let checked = typecheck("1 + 1\n");
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
     assert_ne!(int_type(&checked), bool_type(&checked));
 }
 
 #[test]
 fn mixed_int_and_bool_and_diagnoses() {
-    let failure = typecheck_fail("fn main\n  1 and true\nend\n");
+    let failure = typecheck_fail("1 and true\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
         failure.diagnostics[0].message.contains("`and`"),
@@ -134,7 +121,7 @@ fn mixed_int_and_bool_and_diagnoses() {
 
 #[test]
 fn ordering_on_bool_diagnoses() {
-    let failure = typecheck_fail("fn main\n  true < false\nend\n");
+    let failure = typecheck_fail("true < false\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
         failure.diagnostics[0].message.contains("Int or Float"),
@@ -145,7 +132,7 @@ fn ordering_on_bool_diagnoses() {
 
 #[test]
 fn not_on_int_diagnoses() {
-    let failure = typecheck_fail("fn main\n  not 1\nend\n");
+    let failure = typecheck_fail("not 1\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
         failure.diagnostics[0].message.contains("Bool operand"),
@@ -156,7 +143,7 @@ fn not_on_int_diagnoses() {
 
 #[test]
 fn neg_on_bool_diagnoses() {
-    let failure = typecheck_fail("fn main\n  -true\nend\n");
+    let failure = typecheck_fail("-true\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
         failure.diagnostics[0].message.contains("Int or Float"),
@@ -167,7 +154,7 @@ fn neg_on_bool_diagnoses() {
 
 #[test]
 fn string_concat_resolves_to_string() {
-    assert_trailing_is("fn main\n  \"foo\" <> \"bar\"\nend\n", "String");
+    assert_trailing_is("\"foo\" <> \"bar\"\n", "String");
 }
 
 #[test]
@@ -176,8 +163,7 @@ fn binary_concat_requires_binary_operands() {
     // must convert through an explicit stdlib helper. Pin the
     // diagnostic shape so accidental cross-type acceptance gets
     // caught.
-    let failure =
-        typecheck_fail("fn copy(b: Binary) -> Binary\n  \"hi\" <> b\nend\n\nfn main\n  1\nend\n");
+    let failure = typecheck_fail("fn copy(b: Binary) -> Binary\n  \"hi\" <> b\nend\n\n1\n");
     assert!(
         failure
             .diagnostics
@@ -190,7 +176,7 @@ fn binary_concat_requires_binary_operands() {
 
 #[test]
 fn int_concat_diagnoses() {
-    let failure = typecheck_fail("fn main\n  1 <> 2\nend\n");
+    let failure = typecheck_fail("1 <> 2\n");
     assert!(
         failure
             .diagnostics
@@ -204,11 +190,11 @@ fn int_concat_diagnoses() {
 #[test]
 fn float_arithmetic_resolves_to_float() {
     for source in [
-        "fn main\n  1.0 + 2.0\nend\n",
-        "fn main\n  1.0 - 2.0\nend\n",
-        "fn main\n  1.0 * 2.0\nend\n",
-        "fn main\n  1.0 / 2.0\nend\n",
-        "fn main\n  1.0 % 2.0\nend\n",
+        "1.0 + 2.0\n",
+        "1.0 - 2.0\n",
+        "1.0 * 2.0\n",
+        "1.0 / 2.0\n",
+        "1.0 % 2.0\n",
     ] {
         let checked = typecheck(source);
         assert_eq!(
@@ -221,12 +207,7 @@ fn float_arithmetic_resolves_to_float() {
 
 #[test]
 fn float_comparison_resolves_to_bool() {
-    for source in [
-        "fn main\n  1.0 < 2.0\nend\n",
-        "fn main\n  1.0 > 2.0\nend\n",
-        "fn main\n  1.0 <= 2.0\nend\n",
-        "fn main\n  1.0 >= 2.0\nend\n",
-    ] {
+    for source in ["1.0 < 2.0\n", "1.0 > 2.0\n", "1.0 <= 2.0\n", "1.0 >= 2.0\n"] {
         let checked = typecheck(source);
         assert_eq!(
             trailing_resolution(&checked),
@@ -238,19 +219,19 @@ fn float_comparison_resolves_to_bool() {
 
 #[test]
 fn float_equality_resolves_to_bool() {
-    let checked = typecheck("fn main\n  1.0 == 2.0\nend\n");
+    let checked = typecheck("1.0 == 2.0\n");
     assert_eq!(trailing_resolution(&checked), bool_type(&checked));
 }
 
 #[test]
 fn unary_neg_on_float_resolves_to_float() {
-    let checked = typecheck("fn main\n  -3.14\nend\n");
+    let checked = typecheck("-3.14\n");
     assert_eq!(trailing_resolution(&checked), float_type(&checked));
 }
 
 #[test]
 fn mixed_int_float_arith_diagnoses() {
-    let failure = typecheck_fail("fn main\n  1 + 1.0\nend\n");
+    let failure = typecheck_fail("1 + 1.0\n");
     assert_eq!(failure.diagnostics.len(), 1);
     assert!(
         failure.diagnostics[0]
@@ -273,12 +254,12 @@ fn mixed_int_float_arith_diagnoses() {
 
 fn use_alias_int(extra: &str) -> String {
     let extern_decl = "@extern \"C\"\nfn produce_int64() -> Int64\n\n";
-    format!("{extern_decl}fn main\n  result = produce_int64()\n  {extra}\nend\n")
+    format!("{extern_decl}result = produce_int64()\n{extra}\n")
 }
 
 fn use_alias_float(extra: &str) -> String {
     let extern_decl = "@extern \"C\"\nfn produce_float64() -> Float64\n\n";
-    format!("{extern_decl}fn main\n  result = produce_float64()\n  {extra}\nend\n")
+    format!("{extern_decl}result = produce_float64()\n{extra}\n")
 }
 
 #[test]
@@ -325,7 +306,7 @@ fn float_alias_comparison_resolves_to_bool() {
 
 fn use_sized_pair(sized: &str, op_expr: &str) -> String {
     let extern_decl = format!("@extern \"C\"\nfn produce() -> {sized}\n\n");
-    format!("{extern_decl}fn main\n  a = produce()\n  b = produce()\n  {op_expr}\nend\n")
+    format!("{extern_decl}a = produce()\nb = produce()\n{op_expr}\n")
 }
 
 #[test]
@@ -349,7 +330,7 @@ fn same_sized_numeric_eq_resolves_to_bool() {
 fn cross_sized_numeric_eq_is_rejected() {
     let source = "@extern \"C\"\nfn produce_u8() -> UInt8\n\
         @extern \"C\"\nfn produce_i32() -> Int32\n\
-        fn main\n  a = produce_u8()\n  b = produce_i32()\n  a == b\nend\n";
+        a = produce_u8()\n  b = produce_i32()\n  a == b\n";
     let failure = typecheck_fail(source);
     assert!(
         failure.diagnostics.iter().any(|d| d
@@ -392,7 +373,7 @@ fn same_sized_numeric_arith_resolves_to_operand_type() {
 #[test]
 fn sized_int_plus_int_literal_resolves_to_sized() {
     let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
-        fn main\n  a = produce_i32()\n  a + 5\nend\n";
+        a = produce_i32()\n  a + 5\n";
     let checked = typecheck(source);
     let expected = global_leaf(&checked, "Int32");
     assert_eq!(trailing_resolution(&checked), expected);
@@ -401,7 +382,7 @@ fn sized_int_plus_int_literal_resolves_to_sized() {
 #[test]
 fn int_literal_plus_sized_int_resolves_to_sized() {
     let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
-        fn main\n  a = produce_i32()\n  5 + a\nend\n";
+        a = produce_i32()\n  5 + a\n";
     let checked = typecheck(source);
     let expected = global_leaf(&checked, "Int32");
     assert_eq!(trailing_resolution(&checked), expected);
@@ -411,7 +392,7 @@ fn int_literal_plus_sized_int_resolves_to_sized() {
 fn cross_sized_numeric_arith_is_rejected() {
     let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
         @extern \"C\"\nfn produce_i64() -> Int64\n\
-        fn main\n  a = produce_i32()\n  b = produce_i64()\n  a + b\nend\n";
+        a = produce_i32()\n  b = produce_i64()\n  a + b\n";
     let failure = typecheck_fail(source);
     assert!(
         failure
@@ -426,7 +407,7 @@ fn cross_sized_numeric_arith_is_rejected() {
 #[test]
 fn unary_neg_on_sized_int_resolves_to_sized() {
     let source = "@extern \"C\"\nfn produce_i32() -> Int32\n\
-        fn main\n  a = produce_i32()\n  -a\nend\n";
+        a = produce_i32()\n  -a\n";
     let checked = typecheck(source);
     let expected = global_leaf(&checked, "Int32");
     assert_eq!(trailing_resolution(&checked), expected);
@@ -435,7 +416,7 @@ fn unary_neg_on_sized_int_resolves_to_sized() {
 #[test]
 fn unary_neg_on_unsigned_int_is_rejected() {
     let source = "@extern \"C\"\nfn produce_u8() -> UInt8\n\
-        fn main\n  a = produce_u8()\n  -a\nend\n";
+        a = produce_u8()\n  -a\n";
     let failure = typecheck_fail(source);
     assert!(
         failure

@@ -1,0 +1,7 @@
+double = fn (x: Int) -> Int x * 2 end
+
+double(5).print()
+
+add = fn (a: Int, b: Int) -> Int a + b end
+
+add(3, 7).print()

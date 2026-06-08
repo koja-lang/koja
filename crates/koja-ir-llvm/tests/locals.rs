@@ -9,26 +9,25 @@
 //! reorder attributes / metadata between LLVM patch versions.
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::emit_llvm_ir;
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
 use common::{
     APP_NAME, assert_contains, assert_main_shape, extract_function_body,
-    lower_program_source as lower,
+    lower_script_source as lower,
 };
 
 #[test]
 fn local_decl_emits_alloca_store_load_for_i64_slot() {
     let source = "
-        fn main -> Int
-          x = 7
-          x
-        end
+        x = 7
+        x
         ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "alloca i64");
@@ -39,15 +38,14 @@ fn local_decl_emits_alloca_store_load_for_i64_slot() {
 #[test]
 fn reassignment_emits_a_second_store_into_the_same_slot() {
     let source = "
-        fn main -> Int
-          x = 1
-          x = 9
-          x
-        end
+        x = 1
+        x = 9
+        x
         ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     let user_main = extract_function_body(&ir_text, "__koja_user_main");
@@ -71,19 +69,17 @@ fn param_promotion_emits_alloca_and_initial_store_in_callee() {
           n
         end
 
-        fn main -> Int
-          id(42)
-        end
+        id(42)
         ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     // Each function gets its own alloca in its own entry block;
-    // we expect at least two i64 allocas (one for `id`'s param
-    // slot, one for `main`'s call-result slot — wait, main has no
-    // body local). Pin one alloca minimum and a store of the param.
+    // we expect at least one i64 alloca for `id`'s param slot. Pin
+    // one alloca minimum and a store of the param.
     assert!(
         ir_text.contains("alloca i64"),
         "expected at least one i64 alloca for `id`'s param slot.\nIR:\n{ir_text}",
@@ -99,17 +95,16 @@ fn local_inside_if_arm_still_uses_a_single_alloca() {
     // emit a second `alloca` even though the `store` lives in the
     // arm's basic block.
     let source = "
-        fn main -> Int
-          x = 0
-          if true
-            x = 1
-          end
-          x
+        x = 0
+        if true
+          x = 1
         end
+        x
         ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     let user_main = extract_function_body(&ir_text, "__koja_user_main");

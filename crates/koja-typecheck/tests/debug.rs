@@ -13,7 +13,7 @@ use koja_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
     let id = Identifier::new("Global", segments.iter().map(|s| s.to_string()).collect());
@@ -25,7 +25,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn debug_protocol_registers_with_format_print_inspect() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     let id = Identifier::new("Global", vec!["Debug".to_string()]);
     let (_, entry) = checked
         .registry
@@ -51,7 +51,7 @@ fn debug_protocol_registers_with_format_print_inspect() {
 
 #[test]
 fn primitive_debug_impls_register_format_method() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for prim in [
         "Bool", "Float", "Float32", "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32",
         "UInt64",
@@ -65,7 +65,7 @@ fn binary_and_bits_have_debug_impls() {
     // `Binary` and `Bits` carry placeholder Debug impls so generic
     // containers carrying them (`Result<Binary, _>`, `Option<Bits>`)
     // monomorphize cleanly. See `lib/global/src/debug.koja`.
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["Binary", "format"]);
     assert_registered(&checked, &["Bits", "format"]);
 }
@@ -76,7 +76,7 @@ fn generic_container_debug_impls_register_format_method() {
     // `lib/global/src/debug_containers.koja`. Each one stamps a
     // `<Type>.format` entry in the registry; calling it requires
     // monomorphization (covered in `koja-ir/tests`).
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for ty in ["List", "Map", "Option", "Pair", "Result", "Set"] {
         assert_registered(&checked, &[ty, "format"]);
     }
@@ -92,10 +92,8 @@ fn universal_debug_fallback_resolves_format_on_bare_type_param() {
           value.format()
         end
 
-        fn main
-          show(1)
-          0
-        end
+        show(1)
+        0
         ";
 
     let checked = typecheck(&dedent(source));

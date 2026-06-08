@@ -108,3 +108,10 @@ pub fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {
         .function(&mangled)
         .unwrap_or_else(|| panic!("missing function `{mangled}` in IRProgram"))
 }
+
+pub fn script_function<'a>(script: &'a IRScript, name: &str) -> &'a IRFunction {
+    let mangled = format!("{PACKAGE}.{name}");
+    script
+        .function(&mangled)
+        .unwrap_or_else(|| panic!("missing function `{mangled}` in IRScript"))
+}

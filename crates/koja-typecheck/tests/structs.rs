@@ -23,8 +23,8 @@ use koja_typecheck::{
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 fn struct_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a StructDefinition {
@@ -57,26 +57,21 @@ fn find_struct_decl<'a>(checked: &'a CheckedProgram, name: &str) -> &'a StructDe
     panic!("struct `{name}` not found in checked program");
 }
 
-fn body_trailing_expr<'a>(checked: &'a CheckedProgram, fn_name: &str) -> &'a Expr {
+fn script_trailing_expr(checked: &CheckedProgram) -> &Expr {
     let pkg = checked
         .packages
         .iter()
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
-    for file in &pkg.files {
-        for item in &file.items {
-            if let Item::Function(function) = item
-                && function.name == fn_name
-            {
-                let body = function.body.as_deref().expect("function has no body");
-                return match body.last().expect("function body is empty") {
-                    Statement::Expr(expr) => expr,
-                    other => panic!("expected trailing Statement::Expr, got {other:?}"),
-                };
-            }
-        }
+    let file = pkg.files.first().expect("package has no files");
+    let body = file
+        .body
+        .as_deref()
+        .expect("script-mode file must keep statements on File.body");
+    match body.last().expect("script body is empty") {
+        Statement::Expr(expr) => expr,
+        other => panic!("expected trailing Statement::Expr, got {other:?}"),
     }
-    panic!("fn `{fn_name}` not found in checked program");
 }
 
 fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
@@ -224,13 +219,11 @@ fn struct_construction_resolves_to_struct_leaf() {
           y: Int
         end
 
-        fn main
           Point{x: 1, y: 2}
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     let expected = package_leaf(&checked, "Point");
     assert_eq!(trailing.resolution, expected);
 
@@ -253,13 +246,11 @@ fn struct_construction_accepts_out_of_order_fields() {
           y: Int
         end
 
-        fn main
           Point{y: 2, x: 1}
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     let expected = package_leaf(&checked, "Point");
     assert_eq!(trailing.resolution, expected);
 }
@@ -276,13 +267,11 @@ fn field_access_resolves_to_declared_field_type() {
           y: Int
         end
 
-        fn main
           Point{x: 1, y: 2}.x
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     let int = global_leaf(&checked, "Int");
     assert_eq!(trailing.resolution, int);
 
@@ -305,13 +294,11 @@ fn nested_field_access_resolves_through_inner_struct() {
           inner: Inner
         end
 
-        fn main
           Outer{inner: Inner{n: 5}}.inner.n
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     let int = global_leaf(&checked, "Int");
     assert_eq!(trailing.resolution, int);
 }
@@ -363,9 +350,7 @@ fn default_field_value_diagnoses_feature_gap() {
 #[test]
 fn unknown_struct_type_diagnoses() {
     let source = "
-        fn main
           Missing{x: 1}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -381,9 +366,7 @@ fn unknown_struct_type_diagnoses() {
 #[test]
 fn primitive_struct_construction_diagnoses() {
     let source = "
-        fn main
           Int{x: 1}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -404,9 +387,7 @@ fn unknown_field_in_construction_diagnoses() {
           y: Int
         end
 
-        fn main
           Point{x: 1, y: 2, z: 3}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -427,9 +408,7 @@ fn missing_field_in_construction_diagnoses() {
           y: Int
         end
 
-        fn main
           Point{x: 1}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -450,9 +429,7 @@ fn duplicate_field_in_construction_diagnoses() {
           y: Int
         end
 
-        fn main
           Point{x: 1, x: 2, y: 3}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -473,9 +450,7 @@ fn wrong_field_type_in_construction_diagnoses() {
           y: Int
         end
 
-        fn main
           Point{x: true, y: 2}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -500,9 +475,7 @@ fn unknown_field_on_struct_access_diagnoses() {
           y: Int
         end
 
-        fn main
           Point{x: 1, y: 2}.z
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -518,9 +491,7 @@ fn unknown_field_on_struct_access_diagnoses() {
 #[test]
 fn field_access_on_non_struct_diagnoses() {
     let source = "
-        fn main
           1.x
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -664,13 +635,11 @@ fn static_method_call_resolves_to_method_return_type() {
           end
         end
 
-        fn main
           Point.origin()
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Point"));
 
     let ExprKind::MethodCall {
@@ -697,13 +666,11 @@ fn static_method_with_args_validates_arity_and_types() {
           end
         end
 
-        fn main
           Point.make(1, 2)
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(trailing.resolution, global_leaf(&checked, "Int"));
 }
 
@@ -718,9 +685,7 @@ fn static_method_call_arity_mismatch_diagnoses() {
           end
         end
 
-        fn main
           Point.make(1)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -744,9 +709,7 @@ fn static_method_call_arg_type_mismatch_diagnoses() {
           end
         end
 
-        fn main
           Point.make(true)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -768,9 +731,7 @@ fn nonexistent_static_method_diagnoses() {
           y: Int
         end
 
-        fn main
           Point.frobnicate()
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -891,13 +852,11 @@ fn instance_method_call_resolves_to_method_return_type() {
           end
         end
 
-        fn main
           Point{x: 1, y: 2}.first()
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(
         trailing.resolution,
         global_leaf(&checked, "Int"),
@@ -920,9 +879,7 @@ fn instance_method_called_as_static_diagnoses() {
           end
         end
 
-        fn main
           Point.distance()
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -947,9 +904,7 @@ fn static_method_called_on_instance_diagnoses() {
           end
         end
 
-        fn main
           Point{x: 1, y: 2}.origin()
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -973,9 +928,7 @@ fn instance_method_with_args_validates_explicit_args() {
           end
         end
 
-        fn main
           Point{x: 1}.shifted()
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -1409,16 +1362,14 @@ fn generic_struct_construction_infers_type_args_from_field_values() {
           b: U
         end
 
-        fn main
           Pair{a: 1, b: \"x\"}
-        end
         ";
 
     let checked = typecheck(&dedent(source));
     let pair_id = lookup_struct_id(&checked, PACKAGE, "Pair");
     let int = global_leaf(&checked, "Int");
     let string = global_leaf(&checked, "String");
-    let expr = body_trailing_expr(&checked, "main");
+    let expr = script_trailing_expr(&checked);
     assert_eq!(
         expr.resolution,
         ResolvedType::Named {
@@ -1436,9 +1387,7 @@ fn generic_struct_construction_with_conflicting_inferences_diagnoses() {
           b: T
         end
 
-        fn main
           Pair{a: 1, b: \"x\"}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -1458,9 +1407,7 @@ fn generic_struct_phantom_type_param_diagnoses() {
           marker: Int
         end
 
-        fn main
           Phantom{marker: 1}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -1524,17 +1471,15 @@ fn instance_method_call_on_fn_field_rewrites_to_field_access_call() {
           work: fn () -> Int
         end
 
-        fn main
           t = Task{work: fn () -> Int
             7
           end}
           t.work()
-        end
         ";
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
-    let call = body_trailing_expr(&checked, "main");
+    let call = script_trailing_expr(&checked);
     assert_eq!(call.resolution, int, "field call should resolve to Int");
 
     let ExprKind::Call { callee, args, .. } = &call.kind else {
@@ -1556,17 +1501,15 @@ fn instance_method_call_on_fn_field_with_args_validates_signature() {
           add: fn (Int, Int) -> Int
         end
 
-        fn main
           a = Adder{add: fn (x: Int, y: Int) -> Int
             x + y
           end}
           a.add(2, 3)
-        end
         ";
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
-    let call = body_trailing_expr(&checked, "main");
+    let call = script_trailing_expr(&checked);
     assert_eq!(call.resolution, int);
 
     let ExprKind::Call { args, .. } = &call.kind else {
@@ -1582,12 +1525,10 @@ fn instance_method_call_on_fn_field_arg_type_mismatch_diagnoses() {
           work: fn (Int) -> Int
         end
 
-        fn main
           t = Task{work: fn (x: Int) -> Int
             x
           end}
           t.work(true)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -1607,10 +1548,8 @@ fn instance_method_call_on_non_fn_field_falls_through_to_method_diagnostic() {
           work: Int
         end
 
-        fn main
           t = Task{work: 1}
           t.work()
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));

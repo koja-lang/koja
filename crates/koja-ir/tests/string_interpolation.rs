@@ -16,11 +16,10 @@ use koja_ir::{ConcatKind, IRInstruction, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::lower_script_source as lower;
 
-fn count_string_concats(function: &koja_ir::IRFunction) -> usize {
-    function
-        .blocks
+fn count_string_concats(blocks: &[koja_ir::IRBasicBlock]) -> usize {
+    blocks
         .iter()
         .flat_map(|b| b.instructions.iter())
         .filter(|inst| {
@@ -35,9 +34,8 @@ fn count_string_concats(function: &koja_ir::IRFunction) -> usize {
         .count()
 }
 
-fn count_string_consts(function: &koja_ir::IRFunction) -> usize {
-    function
-        .blocks
+fn count_string_consts(blocks: &[koja_ir::IRBasicBlock]) -> usize {
+    blocks
         .iter()
         .flat_map(|b| b.instructions.iter())
         .filter(|inst| {
@@ -58,17 +56,14 @@ fn three_part_interpolation_emits_two_string_concats() {
     // Literal "b") so the lowerer threads two binary concats:
     // `(("a=" <> x.format()) <> "b")`.
     let source = "
-        fn main -> String
-          x = 1
-          \"a=#{x.format()}b\"
-        end
+        x = 1
+        \"a=#{x.format()}b\"
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    assert_eq!(main.return_type, IRType::String);
+    let script = lower(&dedent(source));
+    assert_eq!(script.return_type, IRType::String);
     assert_eq!(
-        count_string_concats(main),
+        count_string_concats(&script.blocks),
         2,
         "expected N-1 = 2 string concats for 3 string parts",
     );
@@ -79,16 +74,13 @@ fn five_part_interpolation_emits_four_string_concats() {
     // Two interleaved interpolations between three literal segments
     // → 5 parts → 4 concats.
     let source = "
-        fn main -> String
-          x = 1
-          y = 2
-          \"x=#{x.format()} y=#{y.format()}.\"
-        end
+        x = 1
+        y = 2
+        \"x=#{x.format()} y=#{y.format()}.\"
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    assert_eq!(count_string_concats(main), 4);
+    let script = lower(&dedent(source));
+    assert_eq!(count_string_concats(&script.blocks), 4);
 }
 
 #[test]
@@ -97,16 +89,13 @@ fn lone_interpolation_emits_no_concat_just_the_inner_value() {
     // `format()` call's `String` value flows straight through to the
     // function return.
     let source = "
-        fn main -> String
-          x = 1
-          \"#{x.format()}\"
-        end
+        x = 1
+        \"#{x.format()}\"
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower(&dedent(source));
     assert_eq!(
-        count_string_concats(main),
+        count_string_concats(&script.blocks),
         0,
         "single-part interpolation should not emit a Concat",
     );
@@ -118,15 +107,12 @@ fn lone_literal_emits_one_const_no_concat() {
     // plain (non-interpolated) string literals — the existing
     // `lower_string` fast path stays intact.
     let source = "
-        fn main -> String
-          \"hello\"
-        end
+        \"hello\"
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    assert_eq!(count_string_concats(main), 0);
-    assert_eq!(count_string_consts(main), 1);
+    let script = lower(&dedent(source));
+    assert_eq!(count_string_concats(&script.blocks), 0);
+    assert_eq!(count_string_consts(&script.blocks), 1);
 }
 
 #[test]
@@ -136,15 +122,12 @@ fn literal_then_interpolation_then_literal_concats_are_string_kinded() {
     // `Bits` interpolation surfaces as a test failure rather than
     // a runtime mismatch.
     let source = "
-        fn main -> String
-          x = 1
-          \"prefix-#{x.format()}-suffix\"
-        end
+        x = 1
+        \"prefix-#{x.format()}-suffix\"
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let kinds: Vec<ConcatKind> = main
+    let script = lower(&dedent(source));
+    let kinds: Vec<ConcatKind> = script
         .blocks
         .iter()
         .flat_map(|b| b.instructions.iter())

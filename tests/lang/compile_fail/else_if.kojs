@@ -1,0 +1,9 @@
+x = 5
+if x > 10
+  "big".print()
+else if x > 3
+  "medium".print()
+else
+  "small".print()
+end
+end

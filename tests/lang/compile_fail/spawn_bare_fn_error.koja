@@ -1,9 +1,0 @@
-fn worker
-  receive
-    msg -> msg.print()
-  end
-end
-
-fn main
-  spawn worker
-end

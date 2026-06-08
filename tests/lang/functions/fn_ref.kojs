@@ -1,0 +1,30 @@
+fn double(n: Int) -> Int
+  n * 2
+end
+
+fn greet(name: String) -> String
+  "hello #{name}"
+end
+
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
+  f(x)
+end
+
+# assign a function to a variable and call it
+f = double
+f(5).print()
+
+# pass a bare function name as an argument
+apply(10, double).print()
+
+# bare function ref with list.map
+nums: List<Int> = [1, 2, 3]
+doubled = nums.map(double)
+
+for d in doubled
+  d.print()
+end
+
+# bare function ref returning String
+g = greet
+g("world").print()

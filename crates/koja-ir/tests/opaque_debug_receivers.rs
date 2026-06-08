@@ -31,7 +31,7 @@ use koja_ir::IRFunction;
 
 mod common;
 
-use common::lower_program_source;
+use common::lower_script_source;
 
 /// Walk every `IRInstruction::Const` in `function`'s blocks and
 /// collect the string literals folded into them. Used to assert
@@ -74,15 +74,13 @@ fn pair_of_union_format_substitutes_to_opaque_placeholder() {
           value
         end
 
-        fn main
-          pair: Pair<Foo | Bar, Int> = Pair{first: widen(Foo.F), second: 1}
-          _ = pair.format()
-          0
-        end
+        pair: Pair<Foo | Bar, Int> = Pair{first: widen(Foo.F), second: 1}
+        _ = pair.format()
+        0
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let mono = program
+    let script = lower_script_source(&dedent(source));
+    let mono = script
         .packages
         .iter()
         .flat_map(|p| p.functions.iter())
@@ -108,16 +106,14 @@ fn pair_with_function_field_format_substitutes_to_opaque_placeholder() {
     // pinned here so a future refactor doesn't re-introduce the
     // panic for closure-typed type-param values.
     let source = "
-        fn main
-          inc = fn (x: Int) -> Int x + 1 end
-          pair: Pair<fn (Int) -> Int, Int> = Pair{first: inc, second: 1}
-          _ = pair.format()
-          0
-        end
+        inc = fn (x: Int) -> Int x + 1 end
+        pair: Pair<fn (Int) -> Int, Int> = Pair{first: inc, second: 1}
+        _ = pair.format()
+        0
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let all_pair_format_mangles: Vec<String> = program
+    let script = lower_script_source(&dedent(source));
+    let all_pair_format_mangles: Vec<String> = script
         .packages
         .iter()
         .flat_map(|p| p.functions.keys())
@@ -128,7 +124,7 @@ fn pair_with_function_field_format_substitutes_to_opaque_placeholder() {
     // marker that ir can rename later; pin the search to the
     // mono that wasn't there before (anything except the bare
     // `Pair_$.Int64$.format` autoimport shape).
-    let mono = program
+    let mono = script
         .packages
         .iter()
         .flat_map(|p| p.functions.iter())

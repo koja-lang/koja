@@ -1,0 +1,31 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+struct Describer
+end
+
+extend Describer
+  fn describe(self, p: Point) -> String
+    # Field bindings are always explicit: `name: pattern`. To bind a
+    # field under a local with the same name, write `x: x` (no shorthand
+    # form like `Point{x, y}`). Wildcards (`_`) and arbitrary sub-
+    # patterns work exactly as in any other position.
+    match p
+      Point{x: 0, y: 0} -> "at origin"
+      Point{x: x, y: y} -> "x=#{x}, y=#{y}"
+    end
+  end
+
+  fn x_only(self, p: Point) -> Int
+    match p
+      Point{x: only} -> only
+    end
+  end
+end
+
+d = Describer{}
+d.describe(Point{x: 0, y: 0}).print()
+d.describe(Point{x: 3, y: 4}).print()
+d.x_only(Point{x: 42, y: 99}).print()

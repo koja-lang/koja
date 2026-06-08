@@ -14,11 +14,11 @@
 //!   stamps the bit-length header for the new payload.
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::emit_llvm_ir;
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower};
+use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower};
 
 #[test]
 fn binary_match_int_literal_emits_byte_extract_and_eq() {
@@ -28,17 +28,16 @@ fn binary_match_int_literal_emits_byte_extract_and_eq() {
     // running `bin_pat_byte_len` SSA name from
     // `emit_binary_match::shift_right_by_three`.
     let source = "
-        fn main
-          data = <<0x01, 0x02, 0x03>>
-          match data
-            <<0x01, 0x02, 0x03>> -> 1
-            _ -> 0
-          end
+        data = <<0x01, 0x02, 0x03>>
+        match data
+          <<0x01, 0x02, 0x03>> -> 1
+          _ -> 0
         end
     ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "bin_pat_bit_len");
@@ -53,17 +52,16 @@ fn binary_match_string_literal_segment_emits_memcmp_extern() {
     // payload. Pins the extern declaration so a regression that
     // drops the bytes path surfaces as a compile-time miss.
     let source = "
-        fn main
-          data = <<0x48, 0x49>>
-          match data
-            <<\"HI\">> -> 1
-            _ -> 0
-          end
+        data = <<0x48, 0x49>>
+        match data
+          <<\"HI\">> -> 1
+          _ -> 0
         end
     ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "@memcmp(ptr, ptr, i64)");
@@ -76,17 +74,16 @@ fn binary_match_signed_binding_emits_sign_extend_shl_ashr() {
     // modifier — the pipeline fixes that by routing `BinarySign::Signed`
     // through `extend_for_sign`).
     let source = "
-        fn main
-          neg = <<0xFF>>
-          match neg
-            <<v::8 signed>> -> v
-            _ -> 0
-          end
+        neg = <<0xFF>>
+        match neg
+          <<v::8 signed>> -> v
+          _ -> 0
         end
     ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "sign_shl");
@@ -99,17 +96,16 @@ fn binary_match_unsigned_binding_skips_sign_extend() {
     // `sign_*` IR (otherwise the v1 fix would have over-rotated and
     // changed unsigned semantics).
     let source = "
-        fn main
-          data = <<0xAB>>
-          match data
-            <<v::8>> -> v
-            _ -> 0
-          end
+        data = <<0xAB>>
+        match data
+          <<v::8>> -> v
+          _ -> 0
         end
     ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert!(
@@ -125,17 +121,16 @@ fn binary_match_greedy_tail_emits_malloc_and_memcpy() {
     // remaining bytes into it. Pins the tail-alloc-size add, the
     // bit-length header GEP (`tail_len`), and the memcpy call.
     let source = "
-        fn main
-          stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
-          match stream
-            <<head::8, rest: Binary>> -> head
-            _ -> 0
-          end
+        stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
+        match stream
+          <<head::8, rest: Binary>> -> head
+          _ -> 0
         end
     ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "tail_alloc_size");
@@ -149,17 +144,16 @@ fn binary_match_uge_length_check_for_greedy_tail() {
     // Greedy tails must use unsigned-greater-or-equal for the length
     // check; without a greedy tail it's equality.
     let source = "
-        fn main
-          stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
-          match stream
-            <<head::8, rest: Binary>> -> head
-            _ -> 0
-          end
+        stream = <<0xAA, 0xBB, 0xCC, 0xDD>>
+        match stream
+          <<head::8, rest: Binary>> -> head
+          _ -> 0
         end
     ";
 
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     // `icmp uge` for the greedy-tail length check.

@@ -24,8 +24,8 @@ use koja_ir_eval::Value;
 
 mod common;
 
-fn evaluate_program(source: &str) -> Value {
-    common::evaluate_program(source).expect("interpreter should not error on this fixture")
+fn evaluate_script(source: &str) -> Value {
+    common::evaluate_script(source).expect("interpreter should not error on this fixture")
 }
 
 #[test]
@@ -45,11 +45,9 @@ fn member_widens_into_union_and_match_catch_all_returns() {
           end
         end
 
-        fn main -> String
-          describe(Post{title: \"hi\"})
-        end
+        describe(Post{title: \"hi\"})
         ";
-    let value = evaluate_program(&dedent(source));
+    let value = evaluate_script(&dedent(source));
     let Value::String(bytes) = value else {
         panic!("expected Value::String, got {value:?}");
     };
@@ -81,11 +79,9 @@ fn typed_binding_arm_extracts_member_payload() {
           end
         end
 
-        fn main -> String
-          describe(Comment{body: \"bee\"})
-        end
+        describe(Comment{body: \"bee\"})
         ";
-    let value = evaluate_program(&dedent(source));
+    let value = evaluate_script(&dedent(source));
     let Value::String(bytes) = value else {
         panic!("expected Value::String, got {value:?}");
     };
@@ -120,11 +116,9 @@ fn alias_fronted_union_is_runtime_equivalent_to_bare_union() {
           end
         end
 
-        fn main -> String
-          describe(Dog{name: \"rex\"})
-        end
+        describe(Dog{name: \"rex\"})
         ";
-    let value = evaluate_program(&dedent(source));
+    let value = evaluate_script(&dedent(source));
     let Value::String(bytes) = value else {
         panic!("expected Value::String, got {value:?}");
     };
@@ -159,11 +153,9 @@ fn enum_in_union_runs_nested_match() {
           end
         end
 
-        fn main -> String
-          handle(Sig.Stop)
-        end
+        handle(Sig.Stop)
         ";
-    let value = evaluate_program(&dedent(source));
+    let value = evaluate_script(&dedent(source));
     let Value::String(bytes) = value else {
         panic!("expected Value::String, got {value:?}");
     };
@@ -195,11 +187,9 @@ fn struct_field_union_round_trips_through_field_read() {
           end
         end
 
-        fn main -> String
-          name_of(Holder{pet: Cat{name: \"whiskers\"}})
-        end
+        name_of(Holder{pet: Cat{name: \"whiskers\"}})
         ";
-    let value = evaluate_program(&dedent(source));
+    let value = evaluate_script(&dedent(source));
     let Value::String(bytes) = value else {
         panic!("expected Value::String, got {value:?}");
     };

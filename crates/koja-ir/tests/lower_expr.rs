@@ -9,15 +9,14 @@
 //! `lower_ops.rs`, `if`/`unless` in `lower_control_flow.rs`).
 
 use koja_ast::util::dedent;
-use koja_ir::{IRFunction, IRInstruction, IRTerminator, IRType};
+use koja_ir::{IRBasicBlock, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::{PACKAGE, function, lower_program_source as lower};
+use common::{PACKAGE, lower_script_source as lower, script_function};
 
-fn count_calls(function: &IRFunction) -> usize {
-    function
-        .blocks
+fn count_calls(blocks: &[IRBasicBlock]) -> usize {
+    blocks
         .iter()
         .flat_map(|b| b.instructions.iter())
         .filter(|i| matches!(i, IRInstruction::Call { .. }))
@@ -31,14 +30,14 @@ fn zero_arg_call_lowers_to_single_call_instruction() {
           42
         end
 
-        fn main
-          answer()
-        end
+        answer()
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let block = main.blocks.first().expect("main has at least one block");
+    let script = lower(&dedent(source));
+    let block = script
+        .blocks
+        .first()
+        .expect("script has at least one block");
     assert_eq!(
         block.instructions.len(),
         1,
@@ -61,7 +60,7 @@ fn zero_arg_call_lowers_to_single_call_instruction() {
     );
 
     // `answer` itself should have been lowered with zero params.
-    let answer = function(&program, "answer");
+    let answer = script_function(&script, "answer");
     assert_eq!(answer.params.len(), 0);
 }
 
@@ -72,13 +71,11 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
           7
         end
 
-        fn main
-          take(99)
-        end
+        take(99)
         ";
 
-    let program = lower(&dedent(source));
-    let take = function(&program, "take");
+    let script = lower(&dedent(source));
+    let take = script_function(&script, "take");
     assert_eq!(take.params.len(), 1, "take has one declared param");
     // Params are the first ids allocated, so the body's const
     // instruction should land at the *next* id.
@@ -106,8 +103,7 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
     );
 
     // The call site wires `99` into the Call's args.
-    let main = function(&program, "main");
-    let calls: Vec<_> = main
+    let calls: Vec<_> = script
         .blocks
         .iter()
         .flat_map(|b| b.instructions.iter())
@@ -116,7 +112,7 @@ fn arg_taking_callee_allocates_param_value_ids_before_body() {
             _ => None,
         })
         .collect();
-    assert_eq!(calls.len(), 1, "main should emit exactly one Call");
+    assert_eq!(calls.len(), 1, "script body should emit exactly one Call");
     assert_eq!(calls[0].len(), 1, "call passes one arg");
 }
 
@@ -131,20 +127,17 @@ fn nested_calls_chain_through_value_ids() {
           2
         end
 
-        fn main
-          a() + b()
-        end
+        a() + b()
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower(&dedent(source));
     assert_eq!(
-        count_calls(main),
+        count_calls(&script.blocks),
         2,
-        "main should emit one Call per nested callee",
+        "script body should emit one Call per nested callee",
     );
 
-    let block = &main.blocks[0];
+    let block = &script.blocks[0];
     // Expected sequence: Call(a), Call(b), BinaryOp(Add). The
     // BinaryOp's operands should be the two Call dests.
     let [call_a, call_b, binop] = block.instructions.as_slice() else {
@@ -187,17 +180,14 @@ fn returned_value_flows_through_call_terminator() {
           42
         end
 
-        fn main
-          answer()
-        end
+        answer()
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let block = &main.blocks[0];
+    let script = lower(&dedent(source));
+    let block = &script.blocks[0];
     let Some(IRInstruction::Call { dest, .. }) = block.instructions.last() else {
         panic!(
-            "main's last instruction should be Call; got {:?}",
+            "script body's last instruction should be Call; got {:?}",
             block.instructions.last(),
         );
     };

@@ -7,7 +7,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -27,9 +27,7 @@ fn primitive_string_and_struct_literal_constants_typecheck() {
         const HEADING = Direction.North
         const ORIGIN = Point{x: 1, y: 2}
 
-        fn main
-          N
-        end
+        N
         ";
     typecheck(&dedent(source));
 }
@@ -44,9 +42,7 @@ fn constant_annotation_mismatch_diagnoses() {
 
         const P: String = Point{x: 0, y: 0}
 
-        fn main
-          0
-        end
+        0
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -64,9 +60,7 @@ fn non_literal_rhs_diagnoses() {
     let source = "
         const X = 1 + 1
 
-        fn main
-          X
-        end
+        X
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -84,9 +78,7 @@ fn interpolated_string_constant_diagnoses() {
     let source = "
         const S = \"a #{7} b\"
 
-        fn main
-          S
-        end
+        S
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -105,9 +97,7 @@ fn duplicate_constant_collides_like_other_globals() {
         const SAME = 1
         const SAME = 2
 
-        fn main
-          SAME
-        end
+        SAME
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -123,10 +113,8 @@ fn assignment_cannot_use_package_constant_as_lhs() {
     let source = "
         const PI = 3.14
 
-        fn main
-          PI = 5.0
-          0
-        end
+        PI = 5.0
+        0
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -144,10 +132,8 @@ fn compound_assign_on_package_constant_diagnoses() {
     let source = "
         const STEP = 1
 
-        fn main
-          STEP += 2
-          0
-        end
+        STEP += 2
+        0
         ";
 
     let failure = typecheck_fail(&dedent(source));

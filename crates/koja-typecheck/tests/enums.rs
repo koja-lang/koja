@@ -13,7 +13,7 @@
 //! construction / static methods) so the diagnostic surface stays
 //! parallel between the two type-decl families.
 
-use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Item, Statement};
+use koja_ast::ast::{EnumConstructionData, Expr, ExprKind, Statement};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{
@@ -24,8 +24,8 @@ use koja_typecheck::{
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 fn enum_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a EnumDefinition {
@@ -40,26 +40,21 @@ fn enum_definition<'a>(checked: &'a CheckedProgram, name: &str) -> &'a EnumDefin
     }
 }
 
-fn body_trailing_expr<'a>(checked: &'a CheckedProgram, fn_name: &str) -> &'a Expr {
+fn script_trailing_expr(checked: &CheckedProgram) -> &Expr {
     let pkg = checked
         .packages
         .iter()
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
-    for file in &pkg.files {
-        for item in &file.items {
-            if let Item::Function(function) = item
-                && function.name == fn_name
-            {
-                let body = function.body.as_deref().expect("function has no body");
-                return match body.last().expect("function body is empty") {
-                    Statement::Expr(expr) => expr,
-                    other => panic!("expected trailing Statement::Expr, got {other:?}"),
-                };
-            }
-        }
+    let file = pkg.files.first().expect("package has no files");
+    let body = file
+        .body
+        .as_deref()
+        .expect("script-mode file must keep statements on File.body");
+    match body.last().expect("script body is empty") {
+        Statement::Expr(expr) => expr,
+        other => panic!("expected trailing Statement::Expr, got {other:?}"),
     }
-    panic!("fn `{fn_name}` not found in checked program");
 }
 
 fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
@@ -204,13 +199,11 @@ fn unit_variant_construction_resolves_to_enum_leaf() {
           Blue
         end
 
-        fn main
           Color.Red
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Color"));
 
     let ExprKind::EnumConstruction {
@@ -233,9 +226,7 @@ fn unit_variant_with_payload_supplied_diagnoses_shape_mismatch() {
           Red
         end
 
-        fn main
           Color.Red(42)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -260,13 +251,11 @@ fn tuple_variant_construction_resolves_argument_types() {
           Err(String)
         end
 
-        fn main
           Result.Ok(42)
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Result"));
 
     let ExprKind::EnumConstruction { variant, data, .. } = &trailing.kind else {
@@ -287,9 +276,7 @@ fn tuple_variant_arity_mismatch_diagnoses() {
           Ok(Int)
         end
 
-        fn main
           Result.Ok(1, 2)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -309,9 +296,7 @@ fn tuple_variant_argument_type_mismatch_diagnoses() {
           Ok(Int)
         end
 
-        fn main
           Result.Ok(true)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -337,13 +322,11 @@ fn struct_variant_construction_resolves_field_types() {
           Rect{w: Int, h: Int}
         end
 
-        fn main
           Shape.Rect{w: 10, h: 20}
-        end
         ";
 
     let checked = typecheck(&dedent(source));
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Shape"));
 
     let ExprKind::EnumConstruction { data, .. } = &trailing.kind else {
@@ -365,9 +348,7 @@ fn struct_variant_unknown_field_diagnoses() {
           Rect{w: Int, h: Int}
         end
 
-        fn main
           Shape.Rect{w: 10, h: 20, z: 30}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -387,9 +368,7 @@ fn struct_variant_missing_field_diagnoses() {
           Rect{w: Int, h: Int}
         end
 
-        fn main
           Shape.Rect{w: 10}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -409,9 +388,7 @@ fn struct_variant_wrong_field_type_diagnoses() {
           Rect{w: Int, h: Int}
         end
 
-        fn main
           Shape.Rect{w: true, h: 20}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -432,9 +409,7 @@ fn shape_mismatch_struct_supplied_to_tuple_variant_diagnoses() {
           Ok(Int)
         end
 
-        fn main
           Result.Ok{value: 1}
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -454,9 +429,7 @@ fn shape_mismatch_struct_supplied_to_tuple_variant_diagnoses() {
 #[test]
 fn unknown_enum_in_construction_diagnoses() {
     let source = "
-        fn main
           Missing.Variant
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -476,9 +449,7 @@ fn unknown_variant_in_construction_diagnoses() {
           Red
         end
 
-        fn main
           Color.Purple
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -595,16 +566,14 @@ fn impl_block_on_enum_admits_static_methods() {
           end
         end
 
-        fn main
           Color.primary()
-        end
         ";
 
     let checked = typecheck(&dedent(source));
     let signature = method_signature(&checked, "Color", "primary");
     assert_eq!(signature.return_type, package_leaf(&checked, "Color"));
 
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Color"));
 }
 
@@ -650,15 +619,13 @@ fn generic_enum_tuple_variant_construction_infers_type_args() {
           Of(T)
         end
 
-        fn main
           Box.Of(42)
-        end
         ";
 
     let checked = typecheck(&dedent(source));
     let box_id = lookup_enum_id(&checked, "Box");
     let int = global_leaf(&checked, "Int");
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(
         trailing.resolution,
         ResolvedType::Named {
@@ -676,9 +643,7 @@ fn generic_enum_partial_construction_diagnoses_phantom_for_unbound_param() {
           Err(E)
         end
 
-        fn main
           Result.Ok(42)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -703,9 +668,7 @@ fn generic_enum_unit_variant_construction_diagnoses_phantom() {
           None
         end
 
-        fn main
           Maybe.None
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -726,9 +689,7 @@ fn generic_enum_tuple_variant_arity_mismatch_diagnoses() {
           Of(T, T)
         end
 
-        fn main
           Box.Of(1)
-        end
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -748,16 +709,14 @@ fn generic_enum_struct_variant_construction_infers_type_args() {
           Of { a: T, b: U }
         end
 
-        fn main
           Pair.Of{a: 1, b: \"x\"}
-        end
         ";
 
     let checked = typecheck(&dedent(source));
     let pair_id = lookup_enum_id(&checked, "Pair");
     let int = global_leaf(&checked, "Int");
     let string = global_leaf(&checked, "String");
-    let trailing = body_trailing_expr(&checked, "main");
+    let trailing = script_trailing_expr(&checked);
     assert_eq!(
         trailing.resolution,
         ResolvedType::Named {

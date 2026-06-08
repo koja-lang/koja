@@ -14,7 +14,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{PACKAGE, lower_program_source};
+use common::{PACKAGE, lower_script_source};
 
 #[test]
 fn doc_annotated_struct_lowers_through_ir() {
@@ -25,15 +25,13 @@ fn doc_annotated_struct_lowers_through_ir() {
           y: Int
         end
 
-        fn main -> Int
-          Point{x: 1, y: 2}.x
-        end
+        Point{x: 1, y: 2}.x
         ";
 
-    let program = lower_program_source(&dedent(source));
+    let script = lower_script_source(&dedent(source));
     let mangled = format!("{PACKAGE}.Point");
     assert!(
-        program.struct_decl(&mangled).is_some(),
+        script.struct_decl(&mangled).is_some(),
         "expected `Point` struct decl in lowered IR after `@doc` relaxation",
     );
 }
@@ -48,16 +46,14 @@ fn doc_annotated_enum_lowers_through_ir() {
           Blue
         end
 
-        fn main -> Int
-          c: Color = Color.Red
-          1
-        end
+        c: Color = Color.Red
+        1
         ";
 
-    let program = lower_program_source(&dedent(source));
+    let script = lower_script_source(&dedent(source));
     let mangled = format!("{PACKAGE}.Color");
     assert!(
-        program.enum_decl(&mangled).is_some(),
+        script.enum_decl(&mangled).is_some(),
         "expected `Color` enum decl in lowered IR after `@doc` relaxation",
     );
 }

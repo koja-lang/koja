@@ -30,7 +30,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
     warning_messages,
 };
 
@@ -55,9 +55,7 @@ fn bare_union_in_param_signature_typechecks() {
           end
         end
 
-        fn main -> String
           describe(Post{title: \"hi\"})
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -83,9 +81,7 @@ fn union_member_order_is_canonical() {
           v
         end
 
-        fn main -> B | A
           flip(A{x: 1})
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -108,9 +104,7 @@ fn union_member_dedup_collapses_repeats() {
           v
         end
 
-        fn main -> A | B
           one(A{x: 1})
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -138,9 +132,7 @@ fn nested_union_in_signature_typechecks() {
           v
         end
 
-        fn main -> A | B | C
           flatten(A{x: 1})
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -166,10 +158,8 @@ fn member_type_widens_into_union_call_arg() {
           end
         end
 
-        fn main -> String
           p = Post{title: \"hi\"}
           take(p)
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -185,11 +175,9 @@ fn member_type_widens_into_union_let_binding() {
           y: Int
         end
 
-        fn main -> A | B
           a = A{x: 1}
           v: A | B = a
           v
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -209,9 +197,7 @@ fn member_type_widens_into_union_return_slot() {
           A{x: 1}
         end
 
-        fn main -> A | B
           make_a()
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -237,9 +223,7 @@ fn non_member_into_union_diagnoses() {
           end
         end
 
-        fn main -> Int
           take(C{z: 0})
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -270,10 +254,8 @@ fn field_access_on_union_diagnoses() {
           body: String
         end
 
-        fn main -> String
           v: Post | Comment = Post{title: \"hi\"}
           v.title
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -309,10 +291,8 @@ fn method_call_on_union_diagnoses() {
           end
         end
 
-        fn main -> String
           v: A | B = A{x: 1}
           v.label()
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -350,9 +330,7 @@ fn typed_binding_arm_resolves_with_member_type() {
           end
         end
 
-        fn main -> String
           describe(Post{title: \"hi\"})
-        end
         ";
     typecheck(&dedent(source));
 }
@@ -379,9 +357,7 @@ fn typed_binding_missing_member_diagnoses() {
           end
         end
 
-        fn main -> String
           describe(Post{title: \"hi\"})
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -412,9 +388,7 @@ fn typed_binding_duplicate_member_warns_unreachable() {
           end
         end
 
-        fn main -> Int
           describe(A{x: 0})
-        end
         ";
     let checked = typecheck(&dedent(source));
     let warnings = warning_messages(&checked);
@@ -433,12 +407,10 @@ fn typed_binding_not_in_union_diagnoses() {
           id: Int
         end
 
-        fn main -> Int
           match 1
             p: Post -> p.id
             _ -> 0
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -476,9 +448,7 @@ fn typed_binding_member_not_in_union_diagnoses() {
           end
         end
 
-        fn main -> Int
           describe(A{x: 1})
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);

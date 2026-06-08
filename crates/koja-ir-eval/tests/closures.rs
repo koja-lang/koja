@@ -12,17 +12,15 @@ use koja_ir_eval::Value;
 
 mod common;
 
-use common::evaluate_program as evaluate;
+use common::evaluate_script as evaluate;
 
 #[test]
 fn captureless_block_closure_invokes_through_local_call() {
     let source = "
-        fn main -> Int
-          f = fn (x: Int) -> Int
-            x + 1
-          end
-          f(41)
+        f = fn (x: Int) -> Int
+          x + 1
         end
+        f(41)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(42));
 }
@@ -30,13 +28,11 @@ fn captureless_block_closure_invokes_through_local_call() {
 #[test]
 fn block_closure_with_int_capture_reads_through_load_capture() {
     let source = "
-        fn main -> Int
-          y = 10
-          f = fn (x: Int) -> Int
-            x + y
-          end
-          f(5)
+        y = 10
+        f = fn (x: Int) -> Int
+          x + y
         end
+        f(5)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(15));
 }
@@ -44,14 +40,12 @@ fn block_closure_with_int_capture_reads_through_load_capture() {
 #[test]
 fn closure_capturing_two_locals_indexes_env_in_declaration_order() {
     let source = "
-        fn main -> Int
-          a = 100
-          b = 20
-          f = fn (x: Int) -> Int
-            a + b + x
-          end
-          f(3)
+        a = 100
+        b = 20
+        f = fn (x: Int) -> Int
+          a + b + x
         end
+        f(3)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(123));
 }
@@ -59,13 +53,11 @@ fn closure_capturing_two_locals_indexes_env_in_declaration_order() {
 #[test]
 fn closure_invoked_twice_reuses_environment() {
     let source = "
-        fn main -> Int
-          y = 7
-          f = fn (x: Int) -> Int
-            x + y
-          end
-          f(1) + f(2)
+        y = 7
+        f = fn (x: Int) -> Int
+          x + y
         end
+        f(1) + f(2)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(17));
 }
@@ -82,13 +74,11 @@ fn heap_typed_capture_routes_through_env_and_runs_inside_body() {
           3
         end
 
-        fn main -> Int
-          s = \"hi\" <> \"there\"
-          f = fn (n: Int) -> Int
-            length(s) + n
-          end
-          f(10)
+        s = \"hi\" <> \"there\"
+        f = fn (n: Int) -> Int
+          length(s) + n
         end
+        f(10)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(13));
 }
@@ -105,15 +95,13 @@ fn heap_capture_is_independent_and_survives_repeated_invocation() {
           5
         end
 
-        fn main -> Int
-          s = \"hello\"
-          f = fn (n: Int) -> Int
-            length(s) + n
-          end
-          a = f(1)
-          b = f(2)
-          a + b + length(s)
+        s = \"hello\"
+        f = fn (n: Int) -> Int
+          length(s) + n
         end
+        a = f(1)
+        b = f(2)
+        a + b + length(s)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(18));
 }
@@ -129,9 +117,7 @@ fn fn_as_value_adapter_dispatches_through_make_closure() {
           f(x, y)
         end
 
-        fn main -> Int
-          apply(add, 40, 2)
-        end
+        apply(add, 40, 2)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(42));
 }
@@ -143,13 +129,11 @@ fn higher_order_function_invokes_user_closure_through_param_slot() {
           f(x)
         end
 
-        fn main -> Int
-          y = 10
-          g = fn (x: Int) -> Int
-            x + y
-          end
-          apply(g, 5)
+        y = 10
+        g = fn (x: Int) -> Int
+          x + y
         end
+        apply(g, 5)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(15));
 }
@@ -161,10 +145,8 @@ fn short_closure_form_runs_with_capture() {
           f(x)
         end
 
-        fn main -> Int
-          y = 3
-          apply(x -> x * y, 14)
-        end
+        y = 3
+        apply(x -> x * y, 14)
         ";
     assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(42));
 }
@@ -177,11 +159,9 @@ fn closure_value_renders_through_display() {
     // inline; the body symbol stays mangled (matches the LLVM
     // backend's expected stdout).
     let source = "
-        fn main -> fn (Int) -> Int
-          y = 7
-          fn (x: Int) -> Int
-            x + y
-          end
+        y = 7
+        fn (x: Int) -> Int
+          x + y
         end
         ";
     let value = evaluate(&dedent(source)).unwrap();

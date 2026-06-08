@@ -12,7 +12,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
     let id = Identifier::new("Global", segments.iter().map(|s| s.to_string()).collect());
@@ -24,7 +24,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn io_struct_and_public_methods_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["IO"]);
     assert_registered(&checked, &["IO", "gets"]);
     assert_registered(&checked, &["IO", "puts"]);
@@ -34,13 +34,13 @@ fn io_struct_and_public_methods_register() {
 
 #[test]
 fn io_ready_enum_registers() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["IOReady"]);
 }
 
 #[test]
 fn standard_fd_constants_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["STDERR"]);
     assert_registered(&checked, &["STDIN"]);
     assert_registered(&checked, &["STDOUT"]);
@@ -50,9 +50,7 @@ fn standard_fd_constants_register() {
 fn user_code_can_call_io_puts() {
     typecheck(&dedent(
         "
-        fn main
-          IO.puts(\"hello\")
-        end
+        IO.puts(\"hello\")
         ",
     ));
 }
@@ -61,9 +59,7 @@ fn user_code_can_call_io_puts() {
 fn user_code_can_call_io_warn() {
     typecheck(&dedent(
         "
-        fn main
-          IO.warn(\"oops\")
-        end
+        IO.warn(\"oops\")
         ",
     ));
 }
@@ -72,9 +68,7 @@ fn user_code_can_call_io_warn() {
 fn user_code_can_call_io_write() {
     typecheck(&dedent(
         "
-        fn main
-          IO.write(\"hello\")
-        end
+        IO.write(\"hello\")
         ",
     ));
 }

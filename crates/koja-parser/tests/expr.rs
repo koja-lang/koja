@@ -9,22 +9,18 @@
 //! - the `expr -> expr` short-closure shape and its single-param /
 //!   wildcard / parenthesized variants
 
-use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Item, Literal, Statement, UnaryOp};
+use koja_ast::ast::{BinOp, ClosureParam, Expr, ExprKind, Literal, Statement, UnaryOp};
 use koja_parser::{ParseMode, parse};
 
 fn parse_first_expr(src: &str) -> Expr {
-    let wrapped = format!("fn main\n  {src}\nend\n");
-    let result = parse(&wrapped, ParseMode::File);
-    for item in result.ast.items {
-        if let Item::Function(f) = item {
-            for stmt in f.body.unwrap_or_default() {
-                if let Statement::Expr(e) = stmt {
-                    return e;
-                }
-                if let Statement::Assignment { value, .. } = stmt {
-                    return value;
-                }
-            }
+    let source = format!("{src}\n");
+    let result = parse(&source, ParseMode::Script);
+    for stmt in result.ast.body.unwrap_or_default() {
+        if let Statement::Expr(e) = stmt {
+            return e;
+        }
+        if let Statement::Assignment { value, .. } = stmt {
+            return value;
         }
     }
     panic!("no expression found in parsed output");
@@ -265,27 +261,23 @@ fn short_closure_lower_precedence_than_arithmetic() {
 
 #[test]
 fn short_closure_in_parenthesized_context() {
-    let wrapped = "fn main\n  apply(5, x -> x + 1)\nend\n";
-    let result = parse(wrapped, ParseMode::File);
-    let func = result.ast.items.into_iter().find_map(|item| {
-        if let Item::Function(f) = item {
-            Some(f)
-        } else {
-            None
-        }
-    });
-    let f = func.expect("expected a function");
-    let call = f.body.unwrap_or_default().into_iter().find_map(|s| {
-        if let Statement::Expr(Expr {
-            kind: ExprKind::Call { args, .. },
-            ..
-        }) = s
-        {
-            Some(args)
-        } else {
-            None
-        }
-    });
+    let result = parse("apply(5, x -> x + 1)\n", ParseMode::Script);
+    let call = result
+        .ast
+        .body
+        .unwrap_or_default()
+        .into_iter()
+        .find_map(|s| {
+            if let Statement::Expr(Expr {
+                kind: ExprKind::Call { args, .. },
+                ..
+            }) = s
+            {
+                Some(args)
+            } else {
+                None
+            }
+        });
     let args = call.expect("expected a call expression");
     assert_eq!(args.len(), 2);
     assert!(matches!(args[1].value.kind, ExprKind::ShortClosure { .. }));

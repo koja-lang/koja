@@ -1,0 +1,16 @@
+# Value semantics: assigning a struct with heap fields (String + List)
+# gives an independent value; mutating one side via copy-on-write does
+# not disturb the other.
+struct Bag
+  label: String
+  scores: List<Int>
+end
+
+bag = Bag{label: "alpha", scores: [1, 2, 3]}
+twin = bag
+bag.scores = bag.scores.replace_at(0, 99)
+bag.label.print()
+bag.scores.length().print()
+twin.label.print()
+twin.scores.length().print()
+twin.scores.get(0).unwrap().print()

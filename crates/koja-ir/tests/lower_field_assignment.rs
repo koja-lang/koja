@@ -18,15 +18,14 @@
 //!   `DropValue` of the prior payload before the rebuild.
 
 use koja_ast::util::dedent;
-use koja_ir::{IRFunction, IRInstruction};
+use koja_ir::{IRBasicBlock, IRInstruction};
 
 mod common;
 
-use common::{function, lower_program_source};
+use common::lower_script_source;
 
-fn instructions(function: &IRFunction) -> Vec<&IRInstruction> {
-    function
-        .blocks
+fn instructions(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
+    blocks
         .iter()
         .flat_map(|block| block.instructions.iter())
         .collect()
@@ -40,15 +39,12 @@ fn single_segment_assignment_emits_local_write_only() {
           y: Int
         end
 
-        fn main -> Int
-          p = Point{x: 1, y: 2}
-          p.x
-        end
+        p = Point{x: 1, y: 2}
+        p.x
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let main = function(&program, "main");
-    let instructions = instructions(main);
+    let script = lower_script_source(&dedent(source));
+    let instructions = instructions(&script.blocks);
     assert!(
         !instructions
             .iter()
@@ -65,16 +61,13 @@ fn depth_one_field_write_emits_field_set_around_local() {
           y: Int
         end
 
-        fn main -> Int
-          p = Point{x: 1, y: 2}
-          p.x = 10
-          p.x
-        end
+        p = Point{x: 1, y: 2}
+        p.x = 10
+        p.x
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let main = function(&program, "main");
-    let instructions = instructions(main);
+    let script = lower_script_source(&dedent(source));
+    let instructions = instructions(&script.blocks);
     let field_sets: Vec<_> = instructions
         .iter()
         .filter_map(|inst| match inst {
@@ -106,16 +99,13 @@ fn depth_two_field_write_chains_field_get_then_field_set_walk_up() {
           tag: Bool
         end
 
-        fn main -> Int
-          o = Outer{inner: Inner{n: 1}, tag: true}
-          o.inner.n = 42
-          o.inner.n
-        end
+        o = Outer{inner: Inner{n: 1}, tag: true}
+        o.inner.n = 42
+        o.inner.n
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let main = function(&program, "main");
-    let instructions = instructions(main);
+    let script = lower_script_source(&dedent(source));
+    let instructions = instructions(&script.blocks);
     let field_sets: Vec<_> = instructions
         .iter()
         .filter_map(|inst| match inst {
@@ -153,16 +143,13 @@ fn compound_assign_on_field_emits_field_get_binary_op_field_set() {
           y: Int
         end
 
-        fn main -> Int
-          p = Point{x: 1, y: 2}
-          p.x += 5
-          p.x
-        end
+        p = Point{x: 1, y: 2}
+        p.x += 5
+        p.x
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let main = function(&program, "main");
-    let instructions = instructions(main);
+    let script = lower_script_source(&dedent(source));
+    let instructions = instructions(&script.blocks);
 
     let field_get_count = instructions
         .iter()
@@ -197,16 +184,13 @@ fn heap_leaf_overwrite_emits_drop_value_before_field_set() {
           name: String
         end
 
-        fn main -> Int
-          h = Holder{name: \"old\"}
-          h.name = \"new\"
-          1
-        end
+        h = Holder{name: \"old\"}
+        h.name = \"new\"
+        1
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let main = function(&program, "main");
-    let instructions = instructions(main);
+    let script = lower_script_source(&dedent(source));
+    let instructions = instructions(&script.blocks);
     let drop_value_count = instructions
         .iter()
         .filter(|inst| matches!(inst, IRInstruction::DropValue { .. }))

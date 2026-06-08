@@ -20,7 +20,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -32,11 +32,9 @@ fn depth_one_field_write_on_int_field_typechecks() {
           y: Int
         end
 
-        fn main
-          p = Point{x: 1, y: 2}
-          p.x = 10
-          p
-        end
+        p = Point{x: 1, y: 2}
+        p.x = 10
+        p
         ",
     ));
 }
@@ -53,11 +51,9 @@ fn depth_two_field_write_typechecks_through_nested_struct() {
           inner: Inner
         end
 
-        fn main
-          o = Outer{inner: Inner{n: 1}}
-          o.inner.n = 42
-          o
-        end
+        o = Outer{inner: Inner{n: 1}}
+        o.inner.n = 42
+        o
         ",
     ));
 }
@@ -71,11 +67,9 @@ fn field_write_type_mismatch_diagnoses_against_leaf_type() {
           y: Int
         end
 
-        fn main
-          p = Point{x: 1, y: 2}
-          p.x = true
-          p
-        end
+        p = Point{x: 1, y: 2}
+        p.x = true
+        p
         ",
     ));
     let messages = diagnostic_messages(&failure);
@@ -95,11 +89,9 @@ fn field_write_on_unknown_field_diagnoses_against_struct_name() {
           x: Int
         end
 
-        fn main
-          p = Point{x: 1}
-          p.z = 5
-          p
-        end
+        p = Point{x: 1}
+        p.z = 5
+        p
         ",
     ));
     let messages = diagnostic_messages(&failure);
@@ -124,10 +116,8 @@ fn self_field_write_with_return_typechecks() {
           end
         end
 
-        fn main
-          c = Counter{n: 0}
-          c.bump()
-        end
+        c = Counter{n: 0}
+        c.bump()
         ",
     ));
 }
@@ -146,11 +136,9 @@ fn self_field_write_typechecks() {
           end
         end
 
-        fn main
-          c = Counter{n: 0}
-          c.bump()
-          c
-        end
+        c = Counter{n: 0}
+        c.bump()
+        c
         ",
     ));
 }
@@ -163,11 +151,9 @@ fn compound_assign_on_field_requires_arithmetic_leaf() {
           flag: Bool
         end
 
-        fn main
-          h = Holder{flag: true}
-          h.flag += true
-          h
-        end
+        h = Holder{flag: true}
+        h.flag += true
+        h
         ",
     ));
     let messages = diagnostic_messages(&failure);

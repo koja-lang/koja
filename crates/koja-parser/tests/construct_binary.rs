@@ -11,13 +11,9 @@ use koja_parser::{ParseMode, parse};
 
 #[test]
 fn test_binary_literal_empty() {
-    let result = parse("fn main\n  x = <<>>\nend\n", ParseMode::File);
+    let result = parse("x = <<>>\n", ParseMode::Script);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    let func = match &result.ast.items[0] {
-        Item::Function(f) => f,
-        _ => panic!("expected function"),
-    };
-    match &func.body.as_ref().unwrap()[0] {
+    match &result.ast.body.as_ref().unwrap()[0] {
         Statement::Assignment {
             value:
                 Expr {
@@ -32,13 +28,9 @@ fn test_binary_literal_empty() {
 
 #[test]
 fn test_binary_literal_segments() {
-    let result = parse("fn main\n  x = <<0xFF, 0x00>>\nend\n", ParseMode::File);
+    let result = parse("x = <<0xFF, 0x00>>\n", ParseMode::Script);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    let func = match &result.ast.items[0] {
-        Item::Function(f) => f,
-        _ => panic!("expected function"),
-    };
-    match &func.body.as_ref().unwrap()[0] {
+    match &result.ast.body.as_ref().unwrap()[0] {
         Statement::Assignment {
             value:
                 Expr {
@@ -53,16 +45,9 @@ fn test_binary_literal_segments() {
 
 #[test]
 fn test_binary_literal_with_size() {
-    let result = parse(
-        "fn main\n  x = <<header::8, length::16 big>>\nend\n",
-        ParseMode::File,
-    );
+    let result = parse("x = <<header::8, length::16 big>>\n", ParseMode::Script);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    let func = match &result.ast.items[0] {
-        Item::Function(f) => f,
-        _ => panic!("expected function"),
-    };
-    match &func.body.as_ref().unwrap()[0] {
+    match &result.ast.body.as_ref().unwrap()[0] {
         Statement::Assignment {
             value:
                 Expr {
@@ -82,13 +67,9 @@ fn test_binary_literal_with_size() {
 
 #[test]
 fn test_binary_literal_with_type() {
-    let result = parse("fn main\n  x = <<value: Int>>\nend\n", ParseMode::File);
+    let result = parse("x = <<value: Int>>\n", ParseMode::Script);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    let func = match &result.ast.items[0] {
-        Item::Function(f) => f,
-        _ => panic!("expected function"),
-    };
-    match &func.body.as_ref().unwrap()[0] {
+    match &result.ast.body.as_ref().unwrap()[0] {
         Statement::Assignment {
             value:
                 Expr {
@@ -107,16 +88,9 @@ fn test_binary_literal_with_type() {
 
 #[test]
 fn test_binary_literal_byte_modifier() {
-    let result = parse(
-        "fn main\n  x = <<data::32 byte unsigned little>>\nend\n",
-        ParseMode::File,
-    );
+    let result = parse("x = <<data::32 byte unsigned little>>\n", ParseMode::Script);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
-    let func = match &result.ast.items[0] {
-        Item::Function(f) => f,
-        _ => panic!("expected function"),
-    };
-    match &func.body.as_ref().unwrap()[0] {
+    match &result.ast.body.as_ref().unwrap()[0] {
         Statement::Assignment {
             value:
                 Expr {
@@ -137,18 +111,15 @@ fn test_binary_literal_byte_modifier() {
 #[test]
 fn test_binary_pattern() {
     let result = parse(
-        "fn main\n  match msg\n    <<tag::8, payload::16 big>> -> tag\n    <<>> -> 0\n  end\nend\n",
-        ParseMode::File,
+        "match msg\n  <<tag::8, payload::16 big>> -> tag\n  <<>> -> 0\nend\n",
+        ParseMode::Script,
     );
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 }
 
 #[test]
 fn test_generics_still_work_after_gtgt() {
-    let result = parse(
-        "fn main\n  x: List<Option<Int>> = []\nend\n",
-        ParseMode::File,
-    );
+    let result = parse("x: List<Option<Int>> = []\n", ParseMode::Script);
     assert!(result.errors.is_empty(), "errors: {:?}", result.errors);
 }
 

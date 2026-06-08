@@ -24,18 +24,7 @@ use koja_ir::{IRFunction, IRType};
 
 mod common;
 
-use common::{lower_program_source, lower_script_source};
-
-fn collect_function_names(program: &koja_ir::IRProgram) -> Vec<String> {
-    let mut names: Vec<String> = program
-        .packages
-        .iter()
-        .flat_map(|p| p.functions.keys())
-        .map(|sym| sym.mangled().to_string())
-        .collect();
-    names.sort();
-    names
-}
+use common::lower_script_source;
 
 fn collect_script_function_names(script: &koja_ir::IRScript) -> Vec<String> {
     let mut names: Vec<String> = script
@@ -221,14 +210,12 @@ fn method_on_generic_struct_monomorphizes_with_struct_mangled_prefix() {
           end
         end
 
-        fn main
-          p = Pair{a: 1, b: \"x\"}
-          0
-        end
+        p = Pair{a: 1, b: \"x\"}
+        0
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let names = collect_function_names(&program);
+    let script = lower_script_source(&dedent(source));
+    let names = collect_script_function_names(&script);
     assert!(
         names.contains(&"TestApp.Pair_$Int64.String$.first".to_string()),
         "method `Pair<Int, String>.first` should monomorphize when `Pair<Int, String>` is \
@@ -240,9 +227,7 @@ fn method_on_generic_struct_monomorphizes_with_struct_mangled_prefix() {
     );
 
     let mangled = "TestApp.Pair_$Int64.String$.first";
-    let method = program
-        .function(mangled)
-        .unwrap_or_else(|| panic!("missing method `{mangled}`"));
+    let method = function(&script, mangled);
     assert_eq!(method.return_type, IRType::Int64);
 }
 
@@ -258,15 +243,13 @@ fn method_on_generic_struct_for_distinct_args_mints_distinct_methods() {
           end
         end
 
-        fn main
-          p = Pair{a: 1, b: \"x\"}
-          q = Pair{a: \"y\", b: 2}
-          0
-        end
+        p = Pair{a: 1, b: \"x\"}
+        q = Pair{a: \"y\", b: 2}
+        0
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let mut firsts: Vec<_> = collect_function_names(&program)
+    let script = lower_script_source(&dedent(source));
+    let mut firsts: Vec<_> = collect_script_function_names(&script)
         .into_iter()
         .filter(|n| n.starts_with("TestApp.Pair_") && n.ends_with(".first"))
         .collect();

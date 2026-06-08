@@ -1,0 +1,17 @@
+a = [1, 2]
+b = a
+b = b.append(3)
+a.length().print()
+b.length().print()
+
+m: Map<String, Int> = ["x": 1]
+n = m
+n = n.put("y", 2)
+m.length().print()
+n.length().print()
+
+s: Set<Int> = [1, 2]
+t = s
+t = t.insert(3)
+s.length().print()
+t.length().print()

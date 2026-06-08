@@ -52,14 +52,29 @@ mod tests {
     use super::*;
 
     fn fmt(source: &str) -> String {
-        match format(&dedent(source), ParseMode::File) {
+        fmt_mode(source, ParseMode::File)
+    }
+
+    fn fmt_script(source: &str) -> String {
+        fmt_mode(source, ParseMode::Script)
+    }
+
+    fn fmt_mode(source: &str, mode: ParseMode) -> String {
+        match format(&dedent(source), mode) {
             FormatResult::Ok(s) => s,
             FormatResult::ParseErrors(e) => panic!("parse error: {:?}", e),
         }
     }
 
     fn assert_fmt(input: &str, expected: &str) {
-        let actual = fmt(input);
+        assert_formatted(fmt(input), expected);
+    }
+
+    fn assert_fmt_script(input: &str, expected: &str) {
+        assert_formatted(fmt_script(input), expected);
+    }
+
+    fn assert_formatted(actual: String, expected: &str) {
         let mut expected = dedent(expected);
         if !expected.ends_with('\n') {
             expected.push('\n');
@@ -200,131 +215,103 @@ mod tests {
 
     #[test]
     fn short_closure_inline() {
-        assert_fmt(
+        assert_fmt_script(
             "
             fn apply(f: fn(Int) -> Int, x: Int) -> Int
               f(x)
             end
 
-            fn main
-              apply(x -> x * 2, 5)
-            end
+            apply(x -> x * 2, 5)
         ",
             "
             fn apply(f: fn (Int) -> Int, x: Int) -> Int
               f(x)
             end
 
-            fn main
-              apply(x -> x * 2, 5)
-            end
+            apply(x -> x * 2, 5)
         ",
         );
     }
 
     #[test]
     fn short_block_closure_assignment_stays_inline() {
-        assert_fmt(
+        assert_fmt_script(
             "
-            fn main
-              f =
-                fn (x: Int, y: Int) -> Int x + y end
-            end
+            f =
+              fn (x: Int, y: Int) -> Int x + y end
         ",
             "
-            fn main
-              f = fn (x: Int, y: Int) -> Int x + y end
-            end
+            f = fn (x: Int, y: Int) -> Int x + y end
         ",
         );
     }
 
     #[test]
     fn long_block_closure_assignment_breaks_after_eq() {
-        assert_fmt(
+        assert_fmt_script(
             "
-            fn main
-              transform = fn (input_value: Int, scaling_factor: Int) -> Int input_value * scaling_factor + 1 end
-            end
+            transform = fn (input_value: Int, scaling_factor: Int) -> Int input_value * scaling_factor + 1 end
         ",
             "
-            fn main
-              transform =
-                fn (input_value: Int, scaling_factor: Int) -> Int
-                  input_value * scaling_factor + 1
-                end
-            end
+            transform =
+              fn (input_value: Int, scaling_factor: Int) -> Int
+                input_value * scaling_factor + 1
+              end
         ",
         );
     }
 
     #[test]
     fn binary_literal_formatting() {
-        assert_fmt(
+        assert_fmt_script(
             "
-            fn main
-              b = <<1, 2, 3>>
-              c = <<header::8, payload::16 big>>
-            end
+            b = <<1, 2, 3>>
+            c = <<header::8, payload::16 big>>
         ",
             "
-            fn main
-              b = <<1, 2, 3>>
-              c = <<header::8, payload::16 big>>
-            end
+            b = <<1, 2, 3>>
+            c = <<header::8, payload::16 big>>
         ",
         );
     }
 
     #[test]
     fn concat_operator() {
-        assert_fmt(
+        assert_fmt_script(
             r#"
-            fn main
-              s = "hello" <> " " <> "world"
-            end
+            s = "hello" <> " " <> "world"
         "#,
             r#"
-            fn main
-              s = "hello" <> " " <> "world"
-            end
+            s = "hello" <> " " <> "world"
         "#,
         );
     }
 
     #[test]
     fn struct_construction_short_inline() {
-        assert_fmt(
+        assert_fmt_script(
             r#"
-            fn main
-              c = Config{name: "yo", enabled: true}
-            end
+            c = Config{name: "yo", enabled: true}
         "#,
             r#"
-            fn main
-              c = Config{name: "yo", enabled: true}
-            end
+            c = Config{name: "yo", enabled: true}
         "#,
         );
     }
 
     #[test]
     fn struct_construction_long_multiline() {
-        assert_fmt(
+        assert_fmt_script(
             r#"
-            fn main
-              c = Config{name: "a very long name here", enabled: true, verbose: false, timeout: 3000}
-            end
+            c = Config{name: "a very long name here", enabled: true, verbose: false, timeout: 3000}
         "#,
             r#"
-            fn main
-              c = Config{
-                name: "a very long name here",
-                enabled: true,
-                verbose: false,
-                timeout: 3000,
-              }
-            end
+            c = Config{
+              name: "a very long name here",
+              enabled: true,
+              verbose: false,
+              timeout: 3000,
+            }
         "#,
         );
     }

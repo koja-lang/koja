@@ -16,7 +16,7 @@ use koja_ir::{BranchTarget, ConstValue, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::{lower_script_source as lower, script_function};
 
 #[test]
 fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
@@ -25,23 +25,20 @@ fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
           true
         end
 
-        fn main
-          if cond_true()
-            1
-          end
+        if cond_true()
+          1
         end
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower(&dedent(source));
     assert_eq!(
-        main.blocks.len(),
+        script.blocks.len(),
         3,
         "expected entry/then/merge blocks; got {} blocks",
-        main.blocks.len(),
+        script.blocks.len(),
     );
 
-    let entry = &main.blocks[0];
+    let entry = &script.blocks[0];
     let IRTerminator::CondBranch {
         cond: _,
         else_target,
@@ -54,12 +51,12 @@ fn if_no_else_lowers_to_three_blocks_with_unit_merge_param() {
         );
     };
 
-    let then_block = main
+    let then_block = script
         .blocks
         .iter()
         .find(|b| b.id == then_target.block)
         .expect("then-block missing");
-    let merge_block = main
+    let merge_block = script
         .blocks
         .iter()
         .find(|b| b.id == else_target.block)
@@ -130,13 +127,11 @@ fn if_else_lowers_to_four_blocks_with_typed_merge_param() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
     assert_eq!(
         pick.blocks.len(),
         4,
@@ -201,16 +196,13 @@ fn unless_swaps_then_and_else_relative_to_if() {
           false
         end
 
-        fn main
-          unless cond_false()
-            1
-          end
+        unless cond_false()
+          1
         end
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let entry = &main.blocks[0];
+    let script = lower(&dedent(source));
+    let entry = &script.blocks[0];
     let IRTerminator::CondBranch {
         else_target,
         then_target,
@@ -236,7 +228,7 @@ fn unless_swaps_then_and_else_relative_to_if() {
         "unless's else-target should branch to the body block with no args",
     );
 
-    let merge_block = main
+    let merge_block = script
         .blocks
         .iter()
         .find(|b| b.id == then_target.block)
@@ -252,17 +244,14 @@ fn if_function_returns_unit() {
           true
         end
 
-        fn main
-          if cond_true()
-            1
-          end
+        if cond_true()
+          1
         end
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower(&dedent(source));
     assert_eq!(
-        main.return_type,
+        script.return_type,
         IRType::Unit,
         "if without else is Unit-typed",
     );
@@ -278,13 +267,11 @@ fn early_return_inside_if_closes_then_branch() {
           2
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
     let return_blocks: Vec<_> = pick
         .blocks
         .iter()
@@ -309,13 +296,11 @@ fn cond_lowers_to_chained_test_blocks_with_typed_merge_param() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
     let merge = pick
         .blocks
         .iter()
@@ -362,13 +347,11 @@ fn ternary_emits_cond_branch_to_two_arms_and_merge_block_param() {
           true ? 1 : 2
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
     assert_eq!(
         pick.blocks.len(),
         4,
@@ -451,13 +434,11 @@ fn merge_block_param_value_drives_function_return() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
     let merge = pick
         .blocks
         .iter()

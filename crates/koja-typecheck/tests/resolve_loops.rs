@@ -16,7 +16,7 @@
 //! method-lookup / constructor-pattern paths (no `for`-specific
 //! validator).
 
-use koja_ast::ast::{Expr, ExprKind, Item, Statement};
+use koja_ast::ast::{Expr, ExprKind, Statement};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
@@ -24,9 +24,21 @@ use koja_typecheck::CheckedProgram;
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
+
+fn script_body(checked: &CheckedProgram) -> &[Statement] {
+    let pkg = checked
+        .packages
+        .iter()
+        .find(|p| p.package == PACKAGE)
+        .expect("checked program is missing the test package");
+    let file = pkg.files.first().expect("package has no files");
+    file.body
+        .as_deref()
+        .expect("script-mode file must keep statements on File.body")
+}
 
 /// `Enumeration<Int>` fixture using stdlib `Option<Int>`. `get`
 /// returns `Some(...)` unconditionally — the desugar's `__idx <
@@ -51,25 +63,9 @@ const ENUMERABLE_FIXTURE: &str = "
     ";
 
 fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    let body = main
-        .body
-        .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point");
-    let trailing = body.last().expect("expected at least one statement");
+    let trailing = script_body(checked)
+        .last()
+        .expect("expected at least one statement");
     match trailing {
         Statement::Expr(expr) => expr.resolution.clone(),
         other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
@@ -108,25 +104,9 @@ fn trailing_loop_inner_expr(checked: &CheckedProgram) -> Expr {
 }
 
 fn trailing_resolution_expr(checked: &CheckedProgram) -> Expr {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    let body = main
-        .body
-        .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point");
-    let trailing = body.last().expect("expected at least one statement");
+    let trailing = script_body(checked)
+        .last()
+        .expect("expected at least one statement");
     match trailing {
         Statement::Expr(expr) => expr.clone(),
         other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
@@ -136,11 +116,9 @@ fn trailing_resolution_expr(checked: &CheckedProgram) -> Expr {
 #[test]
 fn while_with_bool_condition_resolves_to_unit() {
     let source = "
-        fn main
-          i = 0
-          while i < 3
-            i = i + 1
-          end
+        i = 0
+        while i < 3
+          i = i + 1
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -150,10 +128,8 @@ fn while_with_bool_condition_resolves_to_unit() {
 #[test]
 fn while_with_int_condition_diagnoses() {
     let source = "
-        fn main
-          while 1
-            2
-          end
+        while 1
+          2
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -173,32 +149,16 @@ fn while_body_assignment_propagates_local_type() {
     // same `LocalScope::declare` path as anywhere else; subsequent
     // reads see the same `LocalId`.
     let source = "
-        fn main
-          i = 0
-          sum = 0
-          while i < 10
-            sum = sum + i
-            i = i + 1
-          end
-          sum
+        i = 0
+        sum = 0
+        while i < 10
+          sum = sum + i
+          i = i + 1
         end
+        sum
         ";
     let checked = typecheck(&dedent(source));
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("missing test package");
-    let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == "main" => Some(f),
-            _ => None,
-        })
-        .expect("missing `fn main`");
-    let body = main.body.as_deref().expect("`fn main` has no body");
+    let body = script_body(&checked);
     let int_ty = primitive_type(&checked, "Int");
     // Trailing `sum` reads the body-mutated local — its resolution
     // is `Int`, proving the body's writes propagated.
@@ -212,10 +172,8 @@ fn while_body_assignment_propagates_local_type() {
 #[test]
 fn while_with_string_condition_diagnoses() {
     let source = "
-        fn main
-          while \"yes\"
-            1
-          end
+        while \"yes\"
+          1
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -239,14 +197,12 @@ fn for_over_enumerable_resolves_to_unit_and_binds_int() {
     // typechecks; trailing `sum` proves the binding flowed.
     let source = with_fixture(
         "
-        fn main
-          c = Counter{start: 10, finish: 13}
-          sum = 0
-          for x in c
-            sum = sum + x
-          end
-          sum
+        c = Counter{start: 10, finish: 13}
+        sum = 0
+        for x in c
+          sum = sum + x
         end
+        sum
         ",
     );
     let checked = typecheck(&dedent(&source));
@@ -262,14 +218,12 @@ fn for_with_wildcard_pattern_typechecks() {
     // there's no binding to consult.
     let source = with_fixture(
         "
-        fn main
-          c = Counter{start: 0, finish: 5}
-          count = 0
-          for _ in c
-            count = count + 1
-          end
-          count
+        c = Counter{start: 0, finish: 5}
+        count = 0
+        for _ in c
+          count = count + 1
         end
+        count
         ",
     );
     let checked = typecheck(&dedent(&source));
@@ -284,10 +238,8 @@ fn for_over_int_diagnoses_missing_length() {
     // `Int` is a Global struct stub with no `length` method, so
     // the desugar's `__it.length()` call fails to resolve.
     let source = "
-        fn main
-          for x in 5
-            x
-          end
+        for x in 5
+          x
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -305,11 +257,9 @@ fn for_over_struct_without_length_diagnoses() {
           x: Int
         end
 
-        fn main
-          b = Bare{x: 1}
-          for v in b
-            v
-          end
+        b = Bare{x: 1}
+        for v in b
+          v
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -339,11 +289,9 @@ fn for_with_get_returning_non_enum_diagnoses() {
           end
         end
 
-        fn main
-          b = Bad{x: 7}
-          for v in b
-            v
-          end
+        b = Bad{x: 7}
+        for v in b
+          v
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -381,11 +329,9 @@ fn for_with_get_returning_wrong_enum_diagnoses_missing_some_none() {
           end
         end
 
-        fn main
-          w = Wrong{x: 0}
-          for v in w
-            v
-          end
+        w = Wrong{x: 0}
+        for v in w
+          v
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -406,9 +352,7 @@ fn loop_with_no_break_resolves_to_never() {
     // `Never`. The function returns `Never`-shorted by the existing
     // `check_return_type` short-circuit.
     let source = "
-        fn main
-          loop
-          end
+        loop
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -420,10 +364,8 @@ fn loop_with_break_resolves_to_unit() {
     // A reachable `break` flips the loop's type to `Unit` — the
     // value the loop yields when control exits at the break.
     let source = "
-        fn main
-          loop
-            break
-          end
+        loop
+          break
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -433,14 +375,12 @@ fn loop_with_break_resolves_to_unit() {
 #[test]
 fn loop_with_only_inner_return_resolves_to_never() {
     // Body's only "exit" is a nested `return` (no `break`), so the
-    // loop stays `Never` and the outer `fn -> Int` typechecks via
+    // loop stays `Never` and the script typechecks via
     // `check_return_type`'s `Never` short-circuit. Mirrors v1's
     // `match_loop_return.koja` shape.
     let source = "
-        fn main -> Int
-          loop
-            return 7
-          end
+        loop
+          return 7
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -454,11 +394,12 @@ fn fn_int_loop_with_break_diagnoses_unit_int_mismatch() {
     // sound win over typing `loop` as always-`Never`: nothing in
     // this function actually produces an `Int`.
     let source = "
-        fn main -> Int
+        fn run -> Int
           loop
             break
           end
         end
+        run()
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -473,10 +414,8 @@ fn break_inside_while_typechecks() {
     // `while` also bumps `loop_depth`, so a break in its body is
     // admitted; `while` keeps its `Unit` return type regardless.
     let source = "
-        fn main
-          while true
-            break
-          end
+        while true
+          break
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -490,11 +429,9 @@ fn nested_break_marks_only_inner_loop() {
     // `Unit` and the outer loop's slot stays `false` — outer
     // resolves `Never`.
     let source = "
-        fn main
+        loop
           loop
-            loop
-              break
-            end
+            break
           end
         end
         ";
@@ -509,9 +446,7 @@ fn break_outside_loop_diagnoses() {
     // `break` at function-body top level — no enclosing loop, so
     // `loop_depth == 0` triggers the diagnostic.
     let source = "
-        fn main
-          break
-        end
+        break
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -529,11 +464,9 @@ fn break_inside_closure_inside_loop_diagnoses_and_outer_loop_stays_never() {
     // is untouched, so the outer loop still resolves `Never`. Pins
     // both the gate and the closure-boundary reset.
     let source = "
-        fn main
-          loop
-            f = fn () -> Unit
-              break
-            end
+        loop
+          f = fn () -> Unit
+            break
           end
         end
         ";

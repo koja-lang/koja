@@ -9,10 +9,10 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{diagnostic_messages, typecheck_file, typecheck_file_fail};
+use common::{diagnostic_messages, typecheck_script, typecheck_script_fail};
 
 fn assert_clean(source: &str) {
-    let checked = typecheck_file(source);
+    let checked = typecheck_script(source);
     assert!(
         checked.diagnostics.is_empty(),
         "expected no diagnostics, got: {:?}",
@@ -21,7 +21,7 @@ fn assert_clean(source: &str) {
 }
 
 fn assert_diagnostic(source: &str, needle: &str) {
-    let failure = typecheck_file_fail(source);
+    let failure = typecheck_script_fail(source);
     let messages = diagnostic_messages(&failure);
     assert!(
         messages.iter().any(|m| m.contains(needle)),
@@ -39,12 +39,10 @@ fn reading_a_local_after_assigning_it_is_clean() {
           y: Int
         end
 
-        fn main
-          p1 = Point{x: 1, y: 2}
-          p2 = p1
-          p2.y
-          p1.x
-        end
+        p1 = Point{x: 1, y: 2}
+        p2 = p1
+        p2.y
+        p1.x
         "#,
     ));
 }
@@ -59,11 +57,9 @@ fn local_read_after_passing_to_call_is_clean() {
           n + 1
         end
 
-        fn main
-          x = 42
-          consume(x)
-          x
-        end
+        x = 42
+        consume(x)
+        x
         "#,
     ));
 }
@@ -76,12 +72,10 @@ fn read_after_passing_and_reassigning_is_clean() {
           s.length()
         end
 
-        fn main
-          greeting = "hello"
-          consume(greeting)
-          greeting = "world"
-          greeting.length()
-        end
+        greeting = "hello"
+        consume(greeting)
+        greeting = "world"
+        greeting.length()
         "#,
     ));
 }
@@ -91,9 +85,7 @@ fn binary_overflow_bare_segment_diagnoses() {
     assert_diagnostic(
         &dedent(
             r#"
-            fn main
-              bad = <<256>>
-            end
+            bad = <<256>>
             "#,
         ),
         "does not fit in 8 unsigned bits",
@@ -105,9 +97,7 @@ fn binary_overflow_int8_signed_segment_diagnoses() {
     assert_diagnostic(
         &dedent(
             r#"
-            fn main
-              bad = <<200 : Int8>>
-            end
+            bad = <<200 : Int8>>
             "#,
         ),
         "does not fit in 8 signed bits",
@@ -118,9 +108,7 @@ fn binary_overflow_int8_signed_segment_diagnoses() {
 fn binary_in_range_is_clean() {
     assert_clean(&dedent(
         r#"
-        fn main
-          ok = <<255, 0 : Int8, 65535 : UInt16>>
-        end
+        ok = <<255, 0 : Int8, 65535 : UInt16>>
         "#,
     ));
 }

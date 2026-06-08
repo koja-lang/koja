@@ -14,34 +14,33 @@
 //! non-heap slots.
 
 use koja_ast::util::dedent;
-use koja_ir::{IRFunction, IRInstruction};
+use koja_ir::{IRBasicBlock, IRInstruction};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::{lower_script_source as lower, script_function};
 
-/// Assert `function` emits at least one `DropLocal` (rc drop glue is
-/// active for its heap-leaf locals).
-fn assert_has_drop(function: &IRFunction, name: &str) {
-    let has_drop = function
-        .blocks
+/// Assert `blocks` emit at least one `DropLocal` (rc drop glue is
+/// active for the body's heap-leaf locals).
+fn assert_has_drop(blocks: &[IRBasicBlock], name: &str) {
+    let has_drop = blocks
         .iter()
         .flat_map(|block| &block.instructions)
         .any(|inst| matches!(inst, IRInstruction::DropLocal { .. }));
     assert!(
         has_drop,
-        "function `{name}` should emit a DropLocal for its heap-leaf local under the rc baseline",
+        "`{name}` should emit a DropLocal for its heap-leaf local under the rc baseline",
     );
 }
 
-/// Assert `function` carries no `DropLocal` in any block — the shape a
-/// purely scalar function must keep (no heap slots to reclaim).
-fn assert_no_drops(function: &IRFunction, name: &str) {
-    for block in &function.blocks {
+/// Assert `blocks` carry no `DropLocal` — the shape a purely scalar
+/// body must keep (no heap slots to reclaim).
+fn assert_no_drops(blocks: &[IRBasicBlock], name: &str) {
+    for block in blocks {
         for inst in &block.instructions {
             assert!(
                 !matches!(inst, IRInstruction::DropLocal { .. }),
-                "function `{name}` should emit no DropLocal (no heap locals); \
+                "`{name}` should emit no DropLocal (no heap locals); \
                  got {inst:?} in block `{}`",
                 block.label,
             );
@@ -58,13 +57,11 @@ fn reassigned_heap_local_emits_droplocal() {
           s
         end
 
-        fn main
-          taker(\"hi\")
-        end
+        taker(\"hi\")
     ";
 
-    let program = lower(&dedent(source));
-    assert_has_drop(function(&program, "taker"), "taker");
+    let script = lower(&dedent(source));
+    assert_has_drop(&script_function(&script, "taker").blocks, "taker");
 }
 
 #[test]
@@ -75,13 +72,11 @@ fn returned_heap_local_emits_droplocal() {
           s
         end
 
-        fn main
-          shout(\"hi\")
-        end
+        shout(\"hi\")
     ";
 
-    let program = lower(&dedent(source));
-    assert_has_drop(function(&program, "shout"), "shout");
+    let script = lower(&dedent(source));
+    assert_has_drop(&script_function(&script, "shout").blocks, "shout");
 }
 
 #[test]
@@ -97,13 +92,11 @@ fn match_arms_writing_heap_emit_droplocal() {
           result
         end
 
-        fn main
-          render(\"a\")
-        end
+        render(\"a\")
     ";
 
-    let program = lower(&dedent(source));
-    assert_has_drop(function(&program, "render"), "render");
+    let script = lower(&dedent(source));
+    assert_has_drop(&script_function(&script, "render").blocks, "render");
 }
 
 #[test]
@@ -119,13 +112,11 @@ fn cond_arms_writing_heap_emit_droplocal() {
           result
         end
 
-        fn main
-          classify(0)
-        end
+        classify(0)
     ";
 
-    let program = lower(&dedent(source));
-    assert_has_drop(function(&program, "classify"), "classify");
+    let script = lower(&dedent(source));
+    assert_has_drop(&script_function(&script, "classify").blocks, "classify");
 }
 
 #[test]
@@ -140,13 +131,11 @@ fn struct_field_init_from_heap_local_emits_droplocal() {
           Box{body: text}
         end
 
-        fn main
-          build()
-        end
+        build()
     ";
 
-    let program = lower(&dedent(source));
-    assert_has_drop(function(&program, "build"), "build");
+    let script = lower(&dedent(source));
+    assert_has_drop(&script_function(&script, "build").blocks, "build");
 }
 
 #[test]
@@ -161,13 +150,11 @@ fn heap_local_passed_as_arg_emits_droplocal() {
           examine(text)
         end
 
-        fn main
-          build()
-        end
+        build()
     ";
 
-    let program = lower(&dedent(source));
-    assert_has_drop(function(&program, "build"), "build");
+    let script = lower(&dedent(source));
+    assert_has_drop(&script_function(&script, "build").blocks, "build");
 }
 
 #[test]
@@ -177,12 +164,10 @@ fn scalar_program_emits_no_droplocal() {
           a + b
         end
 
-        fn main
-          add(1, 2)
-        end
+        add(1, 2)
     ";
 
-    let program = lower(&dedent(source));
-    assert_no_drops(function(&program, "add"), "add");
-    assert_no_drops(function(&program, "main"), "main");
+    let script = lower(&dedent(source));
+    assert_no_drops(&script_function(&script, "add").blocks, "add");
+    assert_no_drops(&script.blocks, "script body");
 }

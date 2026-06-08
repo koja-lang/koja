@@ -4,37 +4,42 @@
 
 use koja_ast::util::dedent;
 
-use koja_ir::{IRInstruction, IRProgram};
+use koja_ir::{IRInstruction, IRScript};
 
 mod common;
 
-use common::{PACKAGE, lower_program_source};
+use common::{PACKAGE, lower_script_source};
 
-/// Counts `LoadConst` instructions in the test package only.
-/// Stdlib autoimport packages (e.g. `Global.io`'s `STDIN`/`STDOUT`/
-/// `STDERR` struct constants) emit their own `LoadConst`s on field
-/// access — those would inflate the count and obscure what these
-/// tests are actually asserting about user-package lowering.
-fn count_load_const(program: &IRProgram) -> usize {
-    let mut count = 0;
-    for pkg in program.packages.iter().filter(|p| p.package == PACKAGE) {
-        for function in pkg.functions.values() {
-            for block in &function.blocks {
-                count += block
-                    .instructions
-                    .iter()
-                    .filter(|inst| matches!(inst, IRInstruction::LoadConst { .. }))
-                    .count();
-            }
-        }
-    }
-    count
+/// Counts `LoadConst` instructions reachable from the test package —
+/// both the script body and any user-package helper fns. Stdlib
+/// autoimport packages (e.g. `Global.io`'s `STDIN`/`STDOUT`/`STDERR`
+/// struct constants) emit their own `LoadConst`s on field access —
+/// those would inflate the count and obscure what these tests are
+/// actually asserting about user-package lowering.
+fn count_load_const(script: &IRScript) -> usize {
+    let is_load_const = |inst: &&IRInstruction| matches!(inst, IRInstruction::LoadConst { .. });
+    let in_body = script
+        .blocks
+        .iter()
+        .flat_map(|block| block.instructions.iter())
+        .filter(is_load_const)
+        .count();
+    let in_fns = script
+        .packages
+        .iter()
+        .filter(|p| p.package == PACKAGE)
+        .flat_map(|p| p.functions.values())
+        .flat_map(|function| function.blocks.iter())
+        .flat_map(|block| block.instructions.iter())
+        .filter(is_load_const)
+        .count();
+    in_body + in_fns
 }
 
 /// Pooled-constant count for the test package only — same scoping
 /// rationale as [`count_load_const`].
-fn pooled_constants_len(program: &IRProgram) -> usize {
-    program
+fn pooled_constants_len(script: &IRScript) -> usize {
+    script
         .packages
         .iter()
         .filter(|p| p.package == PACKAGE)
@@ -52,24 +57,22 @@ fn struct_constant_pools_once_and_emits_load_const_per_field_read() {
 
         const ORIGIN = Point{x: 10, y: 32}
 
-        fn main
-          ORIGIN.x + ORIGIN.y
-        end
+        ORIGIN.x + ORIGIN.y
         ";
 
-    let program = lower_program_source(&dedent(source));
+    let script = lower_script_source(&dedent(source));
     assert_eq!(
-        pooled_constants_len(&program),
+        pooled_constants_len(&script),
         1,
         "expected one pooled struct constant, constants={:?}",
-        program
+        script
             .packages
             .iter()
             .find(|p| p.package == PACKAGE)
             .map(|p| &p.constants)
     );
     assert_eq!(
-        count_load_const(&program),
+        count_load_const(&script),
         2,
         "each field read should load the pooled constant",
     );
@@ -80,12 +83,10 @@ fn primitive_constant_does_not_pool_or_emit_load_const() {
     let source = "
         const K = 99
 
-        fn main
-          K + K
-        end
+        K + K
         ";
 
-    let program = lower_program_source(&dedent(source));
-    assert_eq!(pooled_constants_len(&program), 0);
-    assert_eq!(count_load_const(&program), 0);
+    let script = lower_script_source(&dedent(source));
+    assert_eq!(pooled_constants_len(&script), 0);
+    assert_eq!(count_load_const(&script), 0);
 }

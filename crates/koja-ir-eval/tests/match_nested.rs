@@ -11,8 +11,8 @@ use koja_ir_eval::Value;
 
 mod common;
 
-fn evaluate_program(source: &str) -> Value {
-    common::evaluate_program(source).expect("interpreter should not error on this fixture")
+fn evaluate_script(source: &str) -> Value {
+    common::evaluate_script(source).expect("interpreter should not error on this fixture")
 }
 
 fn assert_string(value: Value, expected: &str) {
@@ -41,11 +41,9 @@ fn struct_pattern_basic_literal_arms_select_exact_match() {
           end
         end
 
-        fn main -> String
-          classify(Point{x: 5, y: 2})
-        end
+        classify(Point{x: 5, y: 2})
         ";
-    assert_string(evaluate_program(&dedent(source)), "exact");
+    assert_string(evaluate_script(&dedent(source)), "exact");
 }
 
 #[test]
@@ -67,11 +65,9 @@ fn struct_pattern_basic_second_literal_arm_is_reachable() {
           end
         end
 
-        fn main -> String
-          classify(Point{x: 0, y: 0})
-        end
+        classify(Point{x: 0, y: 0})
         ";
-    assert_string(evaluate_program(&dedent(source)), "origin");
+    assert_string(evaluate_script(&dedent(source)), "origin");
 }
 
 #[test]
@@ -92,11 +88,9 @@ fn struct_pattern_basic_partial_match_on_first_field_falls_through() {
           end
         end
 
-        fn main -> String
-          classify(Point{x: 5, y: 9})
-        end
+        classify(Point{x: 5, y: 9})
         ";
-    assert_string(evaluate_program(&dedent(source)), "other");
+    assert_string(evaluate_script(&dedent(source)), "other");
 }
 
 #[test]
@@ -116,11 +110,9 @@ fn struct_pattern_bind_extracts_named_fields_into_locals() {
           end
         end
 
-        fn main -> String
-          describe(Point{x: 3, y: 4})
-        end
+        describe(Point{x: 3, y: 4})
         ";
-    assert_string(evaluate_program(&dedent(source)), "x=3, y=4");
+    assert_string(evaluate_script(&dedent(source)), "x=3, y=4");
 }
 
 #[test]
@@ -141,11 +133,9 @@ fn struct_pattern_partial_omitted_field_is_implicit_wildcard() {
           end
         end
 
-        fn main -> String
-          classify(Point{x: 5, y: 99})
-        end
+        classify(Point{x: 5, y: 99})
         ";
-    assert_string(evaluate_program(&dedent(source)), "x is five");
+    assert_string(evaluate_script(&dedent(source)), "x is five");
 }
 
 #[test]
@@ -163,11 +153,9 @@ fn struct_pattern_partial_empty_destructure_acts_as_catch_all() {
           end
         end
 
-        fn main -> String
-          classify(Point{x: 1, y: 2})
-        end
+        classify(Point{x: 1, y: 2})
         ";
-    assert_string(evaluate_program(&dedent(source)), "any point");
+    assert_string(evaluate_script(&dedent(source)), "any point");
 }
 
 #[test]
@@ -190,11 +178,9 @@ fn struct_pattern_nested_inside_option_some_matches_inner_literal() {
           end
         end
 
-        fn main -> String
-          label(Option.Some(Point{x: 0, y: 0}))
-        end
+        label(Option.Some(Point{x: 0, y: 0}))
         ";
-    assert_string(evaluate_program(&dedent(source)), "some origin");
+    assert_string(evaluate_script(&dedent(source)), "some origin");
 }
 
 #[test]
@@ -216,11 +202,9 @@ fn struct_pattern_nested_falls_through_to_partial_then_catch_all() {
           end
         end
 
-        fn main -> String
-          label(Option.Some(Point{x: 5, y: 9}))
-        end
+        label(Option.Some(Point{x: 5, y: 9}))
         ";
-    assert_string(evaluate_program(&dedent(source)), "some x=5");
+    assert_string(evaluate_script(&dedent(source)), "some x=5");
 }
 
 #[test]
@@ -243,11 +227,9 @@ fn struct_pattern_nested_extracts_inner_struct_via_chained_bind() {
           end
         end
 
-        fn main -> String
-          label(Option.Some(Point{x: 7, y: 8}))
-        end
+        label(Option.Some(Point{x: 7, y: 8}))
         ";
-    assert_string(evaluate_program(&dedent(source)), "some (7, 8)");
+    assert_string(evaluate_script(&dedent(source)), "some (7, 8)");
 }
 
 #[test]
@@ -269,12 +251,10 @@ fn struct_pattern_nested_option_none_does_not_segfault_on_payload_read() {
           end
         end
 
-        fn main -> String
-          op: Option<Point> = Option.None
-          label(op)
-        end
+        op: Option<Point> = Option.None
+        label(op)
         ";
-    assert_string(evaluate_program(&dedent(source)), "none");
+    assert_string(evaluate_script(&dedent(source)), "none");
 }
 
 #[test]
@@ -298,11 +278,9 @@ fn nested_enum_pattern_literal_matches_inner_string_literal() {
           end
         end
 
-        fn main -> String
-          classify(Option.Some(TokenKind.Ident(\"and\")))
-        end
+        classify(Option.Some(TokenKind.Ident(\"and\")))
         ";
-    assert_string(evaluate_program(&dedent(source)), "matched and");
+    assert_string(evaluate_script(&dedent(source)), "matched and");
 }
 
 #[test]
@@ -323,11 +301,9 @@ fn nested_enum_pattern_falls_through_to_inner_binding_arm() {
           end
         end
 
-        fn main -> String
-          classify(Option.Some(TokenKind.Ident(\"xyz\")))
-        end
+        classify(Option.Some(TokenKind.Ident(\"xyz\")))
         ";
-    assert_string(evaluate_program(&dedent(source)), "xyz");
+    assert_string(evaluate_script(&dedent(source)), "xyz");
 }
 
 #[test]
@@ -350,11 +326,9 @@ fn multi_arg_tuple_variant_with_literal_short_circuits_on_first_slot() {
           end
         end
 
-        fn main -> String
-          pair_kind(IntPair.Just(0, 99))
-        end
+        pair_kind(IntPair.Just(0, 99))
         ";
-    assert_string(evaluate_program(&dedent(source)), "starts zero");
+    assert_string(evaluate_script(&dedent(source)), "starts zero");
 }
 
 #[test]
@@ -374,9 +348,7 @@ fn multi_arg_tuple_variant_matches_both_literal_payload_slots() {
           end
         end
 
-        fn main -> String
-          pair_kind(IntPair.Just(1, 2))
-        end
+        pair_kind(IntPair.Just(1, 2))
         ";
-    assert_string(evaluate_program(&dedent(source)), "one two");
+    assert_string(evaluate_script(&dedent(source)), "one two");
 }

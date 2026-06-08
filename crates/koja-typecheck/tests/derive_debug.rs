@@ -11,7 +11,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 /// Find the synthesized `format` body for `Type` in the test app
 /// package and return the body's string parts. Panics if the type
@@ -92,9 +92,7 @@ fn struct_with_primitive_fields_synthesizes_field_format_chain() {
           y: Int
         end
 
-        fn main
-          1
-        end
+        1
         ";
 
     let checked = typecheck(&dedent(source));
@@ -123,9 +121,7 @@ fn opaque_field_types_render_as_dotdotdot_placeholder() {
           payload: Binary
         end
 
-        fn main
-          1
-        end
+        1
         ";
 
     let checked = typecheck(&dedent(source));
@@ -151,9 +147,7 @@ fn enum_synthesizes_match_body_with_per_variant_arms() {
           Labeled{name: String, count: Int}
         end
 
-        fn main
-          1
-        end
+        1
         ";
 
     let checked = typecheck(&dedent(source));
@@ -207,9 +201,7 @@ fn generic_struct_synthesizes_full_body_for_universal_debug_dispatch() {
           right: B
         end
 
-        fn main
-          1
-        end
+        1
         ";
 
     let checked = typecheck(&dedent(source));
@@ -236,9 +228,7 @@ fn user_supplied_debug_impl_suppresses_synthesis() {
           end
         end
 
-        fn main
-          1
-        end
+        1
         ";
 
     let checked = typecheck(&dedent(source));

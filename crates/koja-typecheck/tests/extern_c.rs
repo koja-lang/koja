@@ -13,8 +13,8 @@ use koja_typecheck::GlobalKind;
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 #[test]

@@ -1,0 +1,27 @@
+struct Counter
+  n: Int
+
+  @doc "Self-tail-call as the value of an `if` (no early return)."
+  fn via_if(self) -> Int
+    if self.n <= 0
+      0
+    else
+      Counter{n: self.n - 1}.via_if()
+    end
+  end
+
+  @doc "Self-tail-call as the value of a `match`."
+  fn via_match(self) -> Int
+    match self.n
+      0 -> 0
+      _ -> Counter{n: self.n - 1}.via_match()
+    end
+  end
+end
+
+# Both loops recurse 500_000 times with the recursive call sitting in
+# control-flow merge position. Without tail-call optimization through
+# the merge the native stack overflows long before the base case; the
+# program completing and printing `0` is the regression pin.
+IO.puts("if: #{Counter{n: 500000}.via_if()}")
+IO.puts("match: #{Counter{n: 500000}.via_match()}")

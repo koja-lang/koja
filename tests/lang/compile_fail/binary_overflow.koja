@@ -1,3 +1,0 @@
-fn main
-  bad = <<256>>
-end

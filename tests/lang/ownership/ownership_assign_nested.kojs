@@ -1,0 +1,14 @@
+# Value semantics: assigning a List of structs yields an independent
+# value; replace_at on one side copies-on-write, leaving the other
+# side's element untouched.
+struct Point
+  x: Int
+  y: Int
+end
+
+pts: List<Point> = [Point{x: 1, y: 2}, Point{x: 3, y: 4}, Point{x: 5, y: 6}]
+twin = pts
+pts = pts.replace_at(0, Point{x: 99, y: 99})
+pts.get(0).unwrap().format().print()
+twin.get(0).unwrap().format().print()
+twin.length().print()

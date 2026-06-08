@@ -14,7 +14,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 // ---------------------------------------------------------------------------
@@ -79,9 +79,7 @@ fn doc_string_on_constant_is_accepted() {
         @doc \"The arithmetic origin.\"
         const ORIGIN = Point{x: 0, y: 0}
 
-        fn main
-          ORIGIN.x
-        end
+        ORIGIN.x
         ";
     typecheck(&dedent(source));
 }
@@ -97,9 +95,7 @@ fn doc_false_on_constant_is_accepted() {
         @doc false
         const ORIGIN = Point{x: 0, y: 0}
 
-        fn main
-          ORIGIN.x
-        end
+        ORIGIN.x
         ";
     typecheck(&dedent(source));
 }
@@ -246,9 +242,7 @@ fn non_doc_annotation_on_constant_still_diagnoses() {
         @derive
         const ORIGIN = Point{x: 0, y: 0}
 
-        fn main
-          ORIGIN.x
-        end
+        ORIGIN.x
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -306,9 +300,7 @@ fn doc_alongside_unsupported_annotation_on_constant_only_diagnoses_the_unsupport
         @derive
         const ORIGIN = Point{x: 0, y: 0}
 
-        fn main
-          ORIGIN.x
-        end
+        ORIGIN.x
         ";
 
     let failure = typecheck_fail(&dedent(source));

@@ -6,30 +6,22 @@
 //! Per-function fail-fast within the body is exercised end-to-end
 //! by `lower_package.rs:partial_failure_reports_only_the_failing_function_diagnostic`.
 
-use koja_ast::util::dedent;
 use koja_ir::{IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::lower_script_source as lower;
 
 #[test]
 fn explicit_return_with_value_terminates_block() {
-    let source = "
-        fn main
-          return 7
-        end
-        ";
-
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower("return 7\n");
     assert_eq!(
-        main.blocks.len(),
+        script.blocks.len(),
         1,
         "a single explicit `return` produces one block",
     );
 
-    let block = &main.blocks[0];
+    let block = &script.blocks[0];
     let last = block.instructions.last().expect("expected a Const for `7`");
     let dest = last.dest().expect("Const produces a value");
     assert!(
@@ -41,15 +33,12 @@ fn explicit_return_with_value_terminates_block() {
 
 #[test]
 fn empty_main_body_returns_unit_with_no_value() {
-    let source = "
-        fn main
-        end
-        ";
-
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    assert_eq!(main.return_type, IRType::Unit);
-    let block = main.blocks.first().expect("main has at least one block");
+    let script = lower("\n");
+    assert_eq!(script.return_type, IRType::Unit);
+    let block = script
+        .blocks
+        .first()
+        .expect("script has at least one block");
     assert!(
         block.instructions.is_empty(),
         "an empty body should not emit any instructions; got {:?}",

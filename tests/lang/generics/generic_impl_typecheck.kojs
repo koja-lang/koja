@@ -1,0 +1,42 @@
+# Locks in the typecheck improvements made when generic impl method bodies
+# were turned on (see check.rs `check_impl_block`). Each call below exercises
+# a stdlib generic-impl method whose body relies on a typecheck fix that
+# landed alongside the body-checking flip:
+#
+# - `Option<T>::unwrap` -> `infer_match` must treat `Type::Parameter(T)` as
+# meaningful when aggregating arm result types and must skip diverging
+# arms (`panic`). Pre-fix the result aggregated to `Unit` and conflicted
+# with the declared `-> T` return type.
+#
+# - `Option<T>::map<U>` -> generic methods on inherent generic impls must
+# body-check (Stage 3 + Stage 1). Inside the body, `Option.Some(f(val))`
+# needs the struct/enum-literal generic-args-from-field-value inference
+# to bind `U` from `f`'s return type.
+#
+# - `List<T>::filter` and `List<T>::map<U>` -> same generic body-check path,
+# exercised against the more complex `List` impl.
+#
+# Regressing any of these would also break the stdlib build, but having an
+# explicit lang-level test makes the intent visible and gives a focused
+# failure surface.
+some: Option<Int> = Option.Some(7)
+some.unwrap().print()
+
+doubled =
+  some.map(fn (x: Int) -> Int x * 2 end)
+doubled.unwrap().print()
+
+none: Option<Int> = Option.None
+(none.or(99)).print()
+
+evens =
+  [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n % 2 == 0 end)
+evens.length().print()
+
+labels =
+  [1, 2, 3].map(fn (n: Int) -> String "item_#{n}" end)
+
+match labels.get(0)
+  Option.Some(s) -> s.print()
+  Option.None -> "missing".print()
+end

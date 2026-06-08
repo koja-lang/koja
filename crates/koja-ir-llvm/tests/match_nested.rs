@@ -8,11 +8,11 @@
 //! rather than a runtime miscompile.
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::emit_llvm_ir;
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower};
+use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower};
 
 #[test]
 fn struct_literal_field_pattern_lowers_to_and_chained_test_blocks() {
@@ -32,12 +32,10 @@ fn struct_literal_field_pattern_lowers_to_and_chained_test_blocks() {
           end
         end
 
-        fn main
-          classify(Point{x: 5, y: 6})
-        end
+        classify(Point{x: 5, y: 6})
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_and_field");
     assert_contains(&ir_text, "icmp eq i64");
@@ -62,12 +60,10 @@ fn struct_partial_field_pattern_emits_only_one_field_test_no_follow_on() {
           end
         end
 
-        fn main
-          classify(Point{x: 5, y: 9})
-        end
+        classify(Point{x: 5, y: 9})
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert!(
         !ir_text.contains("match_and_field"),
@@ -91,12 +87,10 @@ fn nested_enum_payload_literal_orders_tag_check_before_payload_projection() {
           end
         end
 
-        fn main
-          classify(Option.Some(5))
-        end
+        classify(Option.Some(5))
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "icmp eq i8");
     assert_contains(&ir_text, "match_and_field");
@@ -121,12 +115,10 @@ fn nested_struct_inside_enum_chains_payload_extraction_then_field_test() {
           end
         end
 
-        fn main
-          classify(Option.Some(Point{x: 5, y: 9}))
-        end
+        classify(Option.Some(Point{x: 5, y: 9}))
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_and_field");
     assert_contains(&ir_text, "icmp eq i8");
@@ -152,12 +144,10 @@ fn nested_struct_binding_chain_extracts_through_payload_then_field_in_body() {
           end
         end
 
-        fn main
-          classify(Option.Some(Point{x: 3, y: 4}))
-        end
+        classify(Option.Some(Point{x: 3, y: 4}))
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_body_0");
     // Enum tag check (i8) followed by integer arithmetic (i64

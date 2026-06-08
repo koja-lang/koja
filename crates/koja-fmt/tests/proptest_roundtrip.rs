@@ -1,8 +1,10 @@
 //! Property-based tests for the formatter.
 //!
-//! - `corpus_idempotence`: every `.koja` file under `lib/` and `tests/lang/`
-//!   (excluding `compile_fail/`) must format successfully and reach a fixed
-//!   point on the second formatting pass.
+//! - `corpus_idempotence`: every `.koja` and `.kojs` file under `lib/` and
+//!   `tests/lang/` (excluding `compile_fail/`) must format successfully and
+//!   reach a fixed point on the second formatting pass. `.koja` files are
+//!   formatted in [`ParseMode::File`] and `.kojs` scripts in
+//!   [`ParseMode::Script`], dispatched via [`ParseMode::for_path`].
 //! - `corpus_canonical`: every `.koja` file under `lib/` (the standard
 //!   library) must already be in canonical form: `format(src) == src`
 //!   byte-for-byte. Test fixtures under `tests/lang/` are not held to this
@@ -18,7 +20,9 @@ use koja_fmt::{FormatResult, format};
 use koja_parser::ParseMode;
 use proptest::prelude::*;
 
-fn collect_koja_files(roots: &[&Path]) -> Vec<PathBuf> {
+/// Collects source files under `roots` whose extension is in `extensions`,
+/// skipping `compile_fail/` directories. Results are sorted for determinism.
+fn collect_files(roots: &[&Path], extensions: &[&str]) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let mut stack: Vec<PathBuf> = roots.iter().map(|r| r.to_path_buf()).collect();
     while let Some(dir) = stack.pop() {
@@ -33,7 +37,11 @@ fn collect_koja_files(roots: &[&Path]) -> Vec<PathBuf> {
                     continue;
                 }
                 stack.push(path);
-            } else if path.extension().is_some_and(|ext| ext == "koja") {
+            } else if path
+                .extension()
+                .and_then(|ext| ext.to_str())
+                .is_some_and(|ext| extensions.contains(&ext))
+            {
                 out.push(path);
             }
         }
@@ -50,8 +58,8 @@ fn tests_lang_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../tests/lang")
 }
 
-fn fmt_ok(src: &str) -> Option<String> {
-    match format(src, ParseMode::File) {
+fn fmt_ok(src: &str, mode: ParseMode) -> Option<String> {
+    match format(src, mode) {
         FormatResult::Ok(s) => Some(s),
         FormatResult::ParseErrors(_) => None,
     }
@@ -62,11 +70,12 @@ fn corpus_idempotence() {
     let lib = lib_root();
     let tests_lang = tests_lang_root();
     let roots = [lib.as_path(), tests_lang.as_path()];
-    let fixtures = collect_koja_files(&roots);
+    let fixtures = collect_files(&roots, &["koja", "kojs"]);
     assert!(!fixtures.is_empty(), "no fixtures found");
 
     let mut failures = Vec::new();
     for path in &fixtures {
+        let mode = ParseMode::for_path(path);
         let src = match fs::read_to_string(path) {
             Ok(src) => src,
             Err(err) => {
@@ -74,11 +83,11 @@ fn corpus_idempotence() {
                 continue;
             }
         };
-        let Some(once) = fmt_ok(&src) else {
+        let Some(once) = fmt_ok(&src, mode) else {
             failures.push(format!("{}: failed to parse/format", path.display()));
             continue;
         };
-        let Some(twice) = fmt_ok(&once) else {
+        let Some(twice) = fmt_ok(&once, mode) else {
             failures.push(format!(
                 "{}: formatted output failed to reparse",
                 path.display()
@@ -104,7 +113,7 @@ fn corpus_idempotence() {
 #[test]
 fn corpus_canonical() {
     let root = lib_root();
-    let fixtures = collect_koja_files(&[root.as_path()]);
+    let fixtures = collect_files(&[root.as_path()], &["koja"]);
     assert!(
         !fixtures.is_empty(),
         "no stdlib files found under {}",
@@ -114,7 +123,7 @@ fn corpus_canonical() {
     let mut failures = Vec::new();
     for path in &fixtures {
         let src = fs::read_to_string(path).unwrap();
-        let Some(formatted) = fmt_ok(&src) else {
+        let Some(formatted) = fmt_ok(&src, ParseMode::File) else {
             failures.push(format!("{}: failed to parse/format", path.display()));
             continue;
         };
@@ -148,8 +157,8 @@ proptest! {
 
     #[test]
     fn idempotent_on_parseable_random(s in ".{0,500}") {
-        let Some(once) = fmt_ok(&s) else { return Ok(()); };
-        let Some(twice) = fmt_ok(&once) else {
+        let Some(once) = fmt_ok(&s, ParseMode::File) else { return Ok(()); };
+        let Some(twice) = fmt_ok(&once, ParseMode::File) else {
             return Err(TestCaseError::fail(format!(
                 "formatted output failed to reparse:\n{once}"
             )));

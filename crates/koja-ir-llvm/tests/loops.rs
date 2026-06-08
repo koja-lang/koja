@@ -7,24 +7,22 @@
 //! `break` exits.
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::emit_llvm_ir;
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower};
+use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower};
 
 #[test]
 fn while_emits_header_body_exit_blocks_and_back_edge() {
     let source = "
-        fn main
-          i = 0
-          while i < 3
-            i = i + 1
-          end
+        i = 0
+        while i < 3
+          i = i + 1
         end
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     // Each IR block lowers to a labeled LLVM block whose label is
     // the IR block's `label` field. Pin the trio.
@@ -57,14 +55,12 @@ fn for_emits_while_shape_and_calls_iterable_methods() {
           end
         end
 
-        fn main
-          c = Counter{start: 0, finish: 3}
-          for _ in c
-          end
+        c = Counter{start: 0, finish: 3}
+        for _ in c
         end
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "while_header");
     assert_contains(&ir_text, "while_body");
@@ -80,18 +76,16 @@ fn while_with_string_concat_emits_alloca_for_loop_carried_slot() {
     // against the slot's `alloca`, and the header's cond-side
     // LocalRead emits a `load`. Pin the alloca presence.
     let source = "
-        fn main -> String
-          i = 0
-          s = \"\"
-          while i < 3
-            s = s <> \"x\"
-            i = i + 1
-          end
-          s
+        i = 0
+        s = \"\"
+        while i < 3
+          s = s <> \"x\"
+          i = i + 1
         end
+        s
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "while_header");
     assert_contains(&ir_text, "while_body");
@@ -106,19 +100,17 @@ fn loop_emits_loop_body_and_loop_exit_blocks_with_break_branch() {
     // labeled blocks. The `break` becomes a `br label %loop_exit`
     // (no condition — break is always-taken).
     let source = "
-        fn main -> Int
-          i = 0
-          loop
-            if i >= 5
-              break
-            end
-            i = i + 1
+        i = 0
+        loop
+          if i >= 5
+            break
           end
-          i
+          i = i + 1
         end
+        i
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "loop_body");
     assert_contains(&ir_text, "loop_exit");

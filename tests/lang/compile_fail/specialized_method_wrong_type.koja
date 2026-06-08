@@ -1,5 +1,0 @@
-fn main
-  ptr: CPtr<Int32> = CPtr.null()
-  cs = ptr.to_cstring()
-  cs.print()
-end
