@@ -36,7 +36,7 @@ cargo build
 4. Run the hello world example.
 
 ```sh
-./target/debug/koja run examples/hello.koja
+./target/debug/koja run examples/hello.kojs
 ```
 
 ## Language Overview

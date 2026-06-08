@@ -6,11 +6,9 @@ fn fib(n: Int) -> Int
   end
 end
 
-fn main
-  i = 0
+i = 0
 
-  while i < 10
-    fib(i).print()
-    i += 1
-  end
+while i < 10
+  fib(i).print()
+  i += 1
 end

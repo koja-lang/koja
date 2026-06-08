@@ -1,6 +1,6 @@
 name = "Koja"
 grammar = "koja"
-path_suffixes = ["koja"]
+path_suffixes = ["koja", "kojs"]
 line_comments = ["# "]
 autoclose_before = ";:.,=}])>"
 tab_size = 2

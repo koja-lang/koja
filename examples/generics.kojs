@@ -1,0 +1,33 @@
+fn identity<T>(x: T) -> T
+  x
+end
+
+fn make_pair<A, B>(a: A, b: B) -> Pair<A, B>
+  Pair{first: a, second: b}
+end
+
+identity(42).print()
+identity("hello").print()
+
+p = make_pair(10, 20)
+p.first.print()
+p.second.print()
+
+p2 = Pair{first: "foo", second: 100}
+p2.first.print()
+p2.second.print()
+
+x = Option.Some(42)
+x.unwrap().print()
+(x.or(0)).print()
+(x.some?()).print()
+
+y = Option.Some("hello")
+y.unwrap().print()
+
+z: Option<Int32> = Option.None
+(z.or(99)).print()
+(z.none?()).print()
+
+a = Option.Some(77)
+(a.or(0)).print()

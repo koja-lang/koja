@@ -16,7 +16,7 @@ syn sync fromstart
 " --- Keywords ---------------------------------------------------------------
 
 syn keyword kojaKeyword     after alias as break const end enum extend fn for impl
-syn keyword kojaKeyword     in move priv protocol receive return spawn struct type
+syn keyword kojaKeyword     in priv protocol receive return spawn struct type
 syn keyword kojaConditional cond else if match unless when
 syn keyword kojaRepeat      for loop while
 syn keyword kojaOperatorKw  and not or

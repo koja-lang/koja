@@ -454,7 +454,7 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
             }
         };
 
-        let result = koja_fmt::format(&source);
+        let result = koja_fmt::format(&source, ParseMode::for_path(Path::new(path)));
 
         let formatted = match result {
             koja_fmt::FormatResult::Ok(s) => s,
@@ -492,9 +492,10 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     }
 }
 
-/// Recursively gather every `.koja` file under `dir`. Returns an
-/// empty vec if `dir` isn't readable so format/lex callers degrade
-/// gracefully on an unreadable subdirectory rather than aborting.
+/// Recursively gather every Koja source file (`.koja` modules and
+/// `.kojs` scripts) under `dir`. Returns an empty vec if `dir` isn't
+/// readable so format/lex callers degrade gracefully on an unreadable
+/// subdirectory rather than aborting.
 fn collect_koja_files_recursive(dir: &Path) -> Vec<PathBuf> {
     let mut result = Vec::new();
     let entries = match fs::read_dir(dir) {
@@ -505,7 +506,10 @@ fn collect_koja_files_recursive(dir: &Path) -> Vec<PathBuf> {
         let path = entry.path();
         if path.is_dir() {
             result.extend(collect_koja_files_recursive(&path));
-        } else if path.extension().is_some_and(|ext| ext == "koja") {
+        } else if path
+            .extension()
+            .is_some_and(|ext| ext == "koja" || ext == "kojs")
+        {
             result.push(path);
         }
     }

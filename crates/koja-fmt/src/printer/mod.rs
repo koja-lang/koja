@@ -32,6 +32,44 @@ pub(super) struct Printer<'a> {
     pub(super) comments: CommentCursor<'a>,
 }
 
+/// A single script top-level element — either a declaration or a
+/// statement. Used by [`Printer::print_script`] to merge `file.items`
+/// and `file.body` back into source order.
+enum TopLevel<'a> {
+    Item(&'a Item),
+    Stmt(&'a Statement),
+}
+
+impl TopLevel<'_> {
+    fn start_line(&self) -> u32 {
+        match self {
+            TopLevel::Item(item) => item_span(item).start.line,
+            TopLevel::Stmt(stmt) => stmt_start_line(stmt),
+        }
+    }
+
+    fn end_line(&self) -> u32 {
+        match self {
+            TopLevel::Item(item) => item_span(item).end.line,
+            TopLevel::Stmt(stmt) => stmt_end_line(stmt),
+        }
+    }
+
+    /// Whether this element forces blank-line separation from its
+    /// neighbors. Multi-line declarations and block statements read
+    /// better with surrounding blank lines; single-line `const`/`alias`
+    /// declarations flow with adjacent statements.
+    fn is_block(&self) -> bool {
+        match self {
+            TopLevel::Item(item) => !matches!(
+                item,
+                Item::Constant(_) | Item::Alias(_) | Item::TypeAlias(_)
+            ),
+            TopLevel::Stmt(stmt) => stmt_is_block(stmt),
+        }
+    }
+}
+
 impl<'a> Printer<'a> {
     /// Creates a new printer with a comment cursor over the file's comments.
     fn new(comments: &'a [Comment]) -> Self {
@@ -40,8 +78,20 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats an entire file: items with interleaved comments.
+    /// Formats an entire file. `.kojs` scripts carry top-level
+    /// statements in `file.body`; those interleave with declarations and
+    /// need the script-aware renderer. `.koja` modules leave `body` as
+    /// `None` and route through the declaration-only module renderer.
     fn print_file(&mut self, file: &File) -> Doc {
+        if file.body.is_some() {
+            self.print_script(file)
+        } else {
+            self.print_module(file)
+        }
+    }
+
+    /// Formats a declaration-only module: items with interleaved comments.
+    fn print_module(&mut self, file: &File) -> Doc {
         let mut parts: Vec<Doc> = Vec::new();
         let mut emitted = false;
 
@@ -82,6 +132,67 @@ impl<'a> Printer<'a> {
                 emitted = true;
                 i += 1;
             }
+        }
+
+        let trailing = self.comments.drain_rest();
+        for c in trailing {
+            parts.push(c);
+        }
+
+        concat(parts)
+    }
+
+    /// Formats a script: top-level declarations and statements merged in
+    /// source order. The parser splits them into `file.items` and
+    /// `file.body`, so we re-interleave by start line to avoid reordering
+    /// the user's code. Spacing mirrors [`Self::statements_to_doc`]:
+    /// blank lines are preserved from the source and forced around block
+    /// constructs (declarations, `if`/`while`/`for`/...).
+    fn print_script(&mut self, file: &File) -> Doc {
+        let mut nodes: Vec<TopLevel<'_>> = Vec::new();
+        for item in &file.items {
+            nodes.push(TopLevel::Item(item));
+        }
+        if let Some(body) = &file.body {
+            for stmt in body {
+                nodes.push(TopLevel::Stmt(stmt));
+            }
+        }
+        nodes.sort_by_key(TopLevel::start_line);
+
+        let mut parts: Vec<Doc> = Vec::new();
+        let mut prev_end: u32 = 0;
+        for (i, node) in nodes.iter().enumerate() {
+            let start_line = node.start_line();
+            let next_line = self.comments.peek_before(start_line).unwrap_or(start_line);
+            let (comment_docs, last_comment_line) = self.comments.drain_before(start_line);
+
+            if i > 0 {
+                let source_has_blank = next_line > prev_end + 1;
+                if source_has_blank || node.is_block() || nodes[i - 1].is_block() {
+                    parts.push(hardline());
+                }
+            }
+
+            for c in comment_docs {
+                parts.push(c);
+            }
+            if let Some(lcl) = last_comment_line
+                && start_line > lcl + 1
+            {
+                parts.push(hardline());
+            }
+
+            match node {
+                TopLevel::Item(item) => parts.push(self.item_to_doc(item)),
+                TopLevel::Stmt(stmt) => parts.push(self.statement_to_doc(stmt)),
+            }
+            let end_line = node.end_line();
+            if let Some(tc) = self.comments.drain_trailing(end_line) {
+                parts.push(tc);
+            }
+            parts.push(hardline());
+            prev_end = end_line;
         }
 
         let trailing = self.comments.drain_rest();
@@ -511,7 +622,15 @@ impl<'a> Printer<'a> {
                     target_doc
                 };
                 let value_doc = self.expr_to_doc(value);
-                if expr_contains_block(value) {
+                if is_inline_closure(value) {
+                    // Stay inline when the closure fits; break after `=`
+                    // (soft line) only when it overflows the line width.
+                    group(concat(vec![
+                        lhs,
+                        text(" ="),
+                        indent(2, concat(vec![line(), value_doc])),
+                    ]))
+                } else if expr_contains_block(value) {
                     concat(vec![
                         lhs,
                         text(" ="),

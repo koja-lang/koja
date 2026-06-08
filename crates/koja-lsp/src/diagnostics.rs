@@ -219,7 +219,7 @@ impl Backend {
         let sources =
             self.build_bundle(&active_package, &active_path, text, project_root.as_deref());
 
-        let parsed = parse_program(sources, ParseMode::File);
+        let parsed = parse_program(sources, ParseMode::for_path(&active_path));
 
         let parse_diags = collect_parse_diagnostics(&parsed, &active_path);
         let check_result = check_program(parsed);

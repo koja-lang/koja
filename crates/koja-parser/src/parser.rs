@@ -1,3 +1,5 @@
+use std::path::Path;
+
 use koja_ast::ast::{Comment, Diagnostic, File, Item, Severity, Statement, Visibility};
 use koja_ast::span::{Position, Span};
 use koja_ast::token::{Token, TokenKind};
@@ -26,6 +28,21 @@ pub enum ParseMode {
     #[default]
     File,
     Script,
+}
+
+impl ParseMode {
+    /// Selects the parse mode for a source file by extension: `.kojs`
+    /// scripts allow top-level statements ([`ParseMode::Script`]);
+    /// `.koja` modules and everything else are declaration-only
+    /// compilation units ([`ParseMode::File`]). Mirrors the CLI's
+    /// source-shape dispatch so `check`, `format`, and the LSP agree on
+    /// how a file is parsed.
+    pub fn for_path(path: &Path) -> ParseMode {
+        match path.extension().and_then(|ext| ext.to_str()) {
+            Some("kojs") => ParseMode::Script,
+            _ => ParseMode::File,
+        }
+    }
 }
 
 pub struct ParseResult {

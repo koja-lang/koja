@@ -1,1 +1,1 @@
-autocmd BufRead,BufNewFile *.koja setfiletype koja
+autocmd BufRead,BufNewFile *.koja,*.kojs setfiletype koja

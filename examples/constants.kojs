@@ -7,11 +7,9 @@ fn circumference(radius: Float) -> Float
   2.0 * PI * radius
 end
 
-fn main
-  "Max size: #{MAX_SIZE}".print()
-  "Circumference: #{circumference(5.0)}".print()
+IO.puts("Max size: #{MAX_SIZE}")
+IO.puts("Circumference: #{circumference(5.0)}")
 
-  if DEBUG
-    "debug mode enabled".print()
-  end
+if DEBUG
+  IO.puts("debug mode enabled")
 end

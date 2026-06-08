@@ -62,10 +62,6 @@
 (break_statement) @keyword
 
 [
-  "move"
-] @keyword
-
-[
   "self"
 ] @variable.builtin
 

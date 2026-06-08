@@ -113,7 +113,7 @@
         },
         {
           "name": "keyword.control.concurrency.koja",
-          "match": "\\b(spawn|receive|after|move)\\b"
+          "match": "\\b(spawn|receive|after)\\b"
         },
         {
           "name": "keyword.other.fn.koja",

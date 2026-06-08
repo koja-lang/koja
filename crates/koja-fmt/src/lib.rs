@@ -14,13 +14,18 @@ pub enum FormatResult {
 }
 
 /// Formats Koja source code using the default line width (80 columns).
-pub fn format(source: &str) -> FormatResult {
-    format_width(source, 80)
+///
+/// `mode` selects the top-level grammar: [`ParseMode::Script`] for
+/// `.kojs` scripts (top-level statements), [`ParseMode::File`] for
+/// `.koja` modules. Callers typically derive it via
+/// [`ParseMode::for_path`].
+pub fn format(source: &str, mode: ParseMode) -> FormatResult {
+    format_width(source, 80, mode)
 }
 
 /// Formats Koja source code, wrapping lines at `width` columns.
-pub fn format_width(source: &str, width: u32) -> FormatResult {
-    let result = koja_parser::parse(source, ParseMode::File);
+pub fn format_width(source: &str, width: u32, mode: ParseMode) -> FormatResult {
+    let result = koja_parser::parse(source, mode);
     if !result.errors.is_empty() {
         return FormatResult::ParseErrors(result.errors);
     }
@@ -47,7 +52,7 @@ mod tests {
     use super::*;
 
     fn fmt(source: &str) -> String {
-        match format(&dedent(source)) {
+        match format(&dedent(source), ParseMode::File) {
             FormatResult::Ok(s) => s,
             FormatResult::ParseErrors(e) => panic!("parse error: {:?}", e),
         }
@@ -218,7 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn block_closure_formatting() {
+    fn short_block_closure_assignment_stays_inline() {
         assert_fmt(
             "
             fn main
@@ -228,8 +233,26 @@ mod tests {
         ",
             "
             fn main
-              f =
-                fn (x: Int, y: Int) -> Int x + y end
+              f = fn (x: Int, y: Int) -> Int x + y end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn long_block_closure_assignment_breaks_after_eq() {
+        assert_fmt(
+            "
+            fn main
+              transform = fn (input_value: Int, scaling_factor: Int) -> Int input_value * scaling_factor + 1 end
+            end
+        ",
+            "
+            fn main
+              transform =
+                fn (input_value: Int, scaling_factor: Int) -> Int
+                  input_value * scaling_factor + 1
+                end
             end
         ",
         );

@@ -24,7 +24,8 @@
           "koja"
         ],
         "extensions": [
-          ".koja"
+          ".koja",
+          ".kojs"
         ],
         "configuration": "./language-configuration.json",
         "icon": {

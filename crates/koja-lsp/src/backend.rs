@@ -14,7 +14,7 @@ use tower_lsp_server::ls_types::*;
 use tower_lsp_server::{Client, LanguageServer};
 
 use koja_ast::ast::File;
-use koja_parser::{ParsedProgram, SourceFile};
+use koja_parser::{ParseMode, ParsedProgram, SourceFile};
 use koja_typecheck::{CheckedProgram, GlobalRegistry};
 
 use crate::lookup::LocalIndex;
@@ -212,8 +212,9 @@ impl LanguageServer for Backend {
             None => return Ok(None),
         };
         let source = &state.source;
+        let mode = ParseMode::for_path(&state.active_path);
 
-        match koja_fmt::format(source) {
+        match koja_fmt::format(source, mode) {
             koja_fmt::FormatResult::Ok(formatted) => {
                 let line_count = source.lines().count() as u32;
                 let last_line_len = source.lines().last().map_or(0, |l| l.len() as u32);

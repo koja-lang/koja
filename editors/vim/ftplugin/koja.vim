@@ -13,7 +13,7 @@ setlocal shiftwidth=2
 setlocal softtabstop=2
 setlocal commentstring=#\ %s
 setlocal comments=:#
-setlocal suffixesadd=.koja
+setlocal suffixesadd=.koja,.kojs
 
 compiler koja
 

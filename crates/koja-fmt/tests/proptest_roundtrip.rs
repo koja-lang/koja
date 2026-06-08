@@ -51,7 +51,7 @@ fn tests_lang_root() -> PathBuf {
 }
 
 fn fmt_ok(src: &str) -> Option<String> {
-    match format(src) {
+    match format(src, ParseMode::File) {
         FormatResult::Ok(s) => Some(s),
         FormatResult::ParseErrors(_) => None,
     }
@@ -137,13 +137,13 @@ fn corpus_canonical() {
 proptest! {
     #[test]
     fn never_panics_on_random_string(s in ".{0,500}") {
-        let _ = format(&s);
+        let _ = format(&s, ParseMode::File);
     }
 
     #[test]
     fn never_panics_on_random_bytes(bytes in proptest::collection::vec(any::<u8>(), 0..500)) {
         let s = String::from_utf8_lossy(&bytes);
-        let _ = format(&s);
+        let _ = format(&s, ParseMode::File);
     }
 
     #[test]
@@ -159,7 +159,7 @@ proptest! {
 
     #[test]
     fn formatted_output_always_parses(s in ".{0,500}") {
-        if let FormatResult::Ok(out) = format(&s) {
+        if let FormatResult::Ok(out) = format(&s, ParseMode::File) {
             let result = koja_parser::parse(&out, ParseMode::File);
             prop_assert!(
                 result.errors.is_empty(),

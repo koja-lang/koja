@@ -9,8 +9,6 @@ extend Point
   end
 end
 
-fn main
-  p = Point{x: 3, y: 4}
-  p.distance_squared().print()
-  "x = #{p.x}, y = #{p.y}".print()
-end
+p = Point{x: 3, y: 4}
+p.distance_squared().print()
+IO.puts("x = #{p.x}, y = #{p.y}")

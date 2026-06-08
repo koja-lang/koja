@@ -1,0 +1,47 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+extend Point
+  fn distance_squared(self) -> Int
+    self.x * self.x + self.y * self.y
+  end
+end
+
+enum Shape
+  Circle(Int)
+  Rect(Int, Int)
+end
+
+fn area(s: Shape) -> Int
+  match s
+    Shape.Circle(r) -> r * r * 3
+    Shape.Rect(w, h) -> w * h
+  end
+end
+
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
+  f(x)
+end
+
+p = Point{x: 3, y: 4}
+IO.puts("distance²: #{p.distance_squared()}")
+IO.puts("circle area: #{area(Shape.Circle(5))}")
+
+for name in ["Alice", "Bob", "Charlie"]
+  IO.puts("Hello, #{name}!")
+end
+
+scores: Map<String, Int> = ["Alice": 95, "Bob": 87]
+IO.puts("has Alice? #{scores.has?("Alice")}")
+
+score = Option.Some(42)
+IO.puts("doubled: #{score.map(fn (n: Int) -> Int n * 2 end).or(0)}")
+
+threshold = 80
+
+passing = fn (s: Int) -> Bool s >= threshold end
+
+IO.puts("87 passing? #{passing(87)}")
+IO.puts("applied: #{apply(5, fn (n: Int) -> Int n * n end)}")

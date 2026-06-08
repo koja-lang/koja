@@ -444,6 +444,14 @@ pub(super) fn is_block_expr(expr: &Expr) -> bool {
     )
 }
 
+/// Returns `true` if the expression is a single-statement closure —
+/// one that the closure printer lays out inline when it fits (e.g.
+/// `fn (x: Int) -> Int x * 2 end`). Assignments to such a closure stay
+/// on one line rather than forcing a break after `=`.
+pub(super) fn is_inline_closure(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::Closure { body, .. } if body.len() == 1)
+}
+
 /// Returns `true` if the statement is or contains a block expression
 /// at its top level (if, match, cond, while, for, loop, etc.).
 pub(super) fn stmt_is_block(stmt: &Statement) -> bool {

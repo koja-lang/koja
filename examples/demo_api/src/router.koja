@@ -16,7 +16,9 @@ struct Router
   """
   fn route(req: Request) -> Response
     match req.method
-      Method.Get -> Router.route_get(req.path)
+      Method.Get ->
+        Router.route_get(req.path)
+
       _ ->
         Router.error(
           Status.method_not_allowed(),
