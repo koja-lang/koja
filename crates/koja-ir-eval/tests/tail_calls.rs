@@ -38,6 +38,32 @@ fn self_recursive_tail_call_runs_in_constant_stack() {
 }
 
 #[test]
+fn self_recursive_tail_call_as_if_value_runs_in_constant_stack() {
+    // No early `return`: the recursive call is the *value* of the
+    // `if`, reaching `Return` through a merge-block param. Without the
+    // return-forwarder collapse the trampoline never fires and 100 000
+    // frames overflow the host stack.
+    let source = "
+        struct Counter
+          n: Int
+
+          fn count_down(self) -> Int
+            if self.n <= 0
+              0
+            else
+              Counter{n: self.n - 1}.count_down()
+            end
+          end
+        end
+
+        fn main -> Int
+          Counter{n: 100000}.count_down()
+        end
+        ";
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(0));
+}
+
+#[test]
 fn self_recursive_unit_tail_call_runs_in_constant_stack() {
     // Unit-returning self-recursion: the rewrite still fires
     // because the `Return Some(call_dest)` shape lower emits for

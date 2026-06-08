@@ -9,7 +9,7 @@ use koja_ir_llvm::emit_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, assert_contains, lower_program_source as lower};
+use common::{APP_NAME, assert_contains, extract_function_body, lower_program_source as lower};
 
 #[test]
 fn self_recursive_tail_call_emits_tco_loop_header_and_back_edge() {
@@ -44,6 +44,74 @@ fn self_recursive_tail_call_emits_tco_loop_header_and_back_edge() {
 }
 
 #[test]
+fn self_recursive_tail_call_as_if_value_is_optimized() {
+    // The recursive call is the *value* of the `if` (no early
+    // `return`), so it reaches the function's `Return` through a merge
+    // block param. The return-forwarder collapse must still expose it
+    // as a tail call — otherwise long-running `receive` loops grow the
+    // stack one frame per iteration.
+    let source = "
+        struct Counter
+          n: Int
+
+          fn count_down(self) -> Int
+            if self.n <= 0
+              0
+            else
+              Counter{n: self.n - 1}.count_down()
+            end
+          end
+        end
+
+        fn main
+          Counter{n: 3}.count_down()
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let body = extract_function_body(&ir_text, "TestApp.Counter.count_down");
+    assert!(
+        body.contains("tco_loop"),
+        "if-wrapped self-call must gain a tco_loop header; got:\n{body}",
+    );
+    assert!(
+        !body.contains("call i64 @TestApp.Counter.count_down"),
+        "no self-`call` may survive after TCO; got:\n{body}",
+    );
+}
+
+#[test]
+fn self_recursive_tail_call_as_match_value_is_optimized() {
+    let source = "
+        struct Counter
+          n: Int
+
+          fn count_down(self) -> Int
+            match self.n
+              0 -> 0
+              _ -> Counter{n: self.n - 1}.count_down()
+            end
+          end
+        end
+
+        fn main
+          Counter{n: 3}.count_down()
+        end
+        ";
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let body = extract_function_body(&ir_text, "TestApp.Counter.count_down");
+    assert!(
+        body.contains("tco_loop"),
+        "match-wrapped self-call must gain a tco_loop header; got:\n{body}",
+    );
+    assert!(
+        !body.contains("call i64 @TestApp.Counter.count_down"),
+        "no self-`call` may survive after TCO; got:\n{body}",
+    );
+}
+
+#[test]
 fn non_recursive_function_emits_no_tco_loop() {
     let source = "
         fn add_one(n: Int) -> Int
@@ -56,8 +124,11 @@ fn non_recursive_function_emits_no_tco_loop() {
         ";
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    // Scope to `add_one` itself — auto-imported stdlib may carry its
+    // own (now-optimized) recursive loops elsewhere in the module.
+    let body = extract_function_body(&ir_text, "TestApp.add_one");
     assert!(
-        !ir_text.contains("tco_loop"),
-        "non-recursive function must not gain a `tco_loop` header; got:\n{ir_text}",
+        !body.contains("tco_loop"),
+        "non-recursive function must not gain a `tco_loop` header; got:\n{body}",
     );
 }
