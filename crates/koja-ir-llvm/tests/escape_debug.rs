@@ -10,11 +10,11 @@
 //! lives in the driver crate (see `alpha_two_plus_two.rs`).
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::emit_llvm_ir;
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{APP_NAME, extract_function_body, lower_program_source as lower};
+use common::{APP_NAME, extract_function_body, lower_script_source as lower};
 
 #[test]
 fn escape_debug_emits_no_free_call_inside_match_arm_bodies() {
@@ -40,14 +40,12 @@ fn escape_debug_emits_no_free_call_inside_match_arm_bodies() {
     // emitted body carries no `call void @koja_free` at all (the
     // drop insertion is deferred under the value-semantics leak
     // baseline, so no free lands).
-    let program = lower(&dedent(
+    let script = lower(&dedent(
         "
-        fn main -> String
-          \"hi\".escape_debug()
-        end
+        \"hi\".escape_debug()
         ",
     ));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     let body = extract_function_body(&ir_text, "Global.String.escape_debug");
     assert!(
         !body.contains("call void @koja_free"),
@@ -66,14 +64,12 @@ fn debug_format_for_string_compiles_without_free_in_concat_chain() {
     // executed `free` on a literal. With the fix in place we can
     // emit the IR and observe that the surrounding format body's
     // single function-exit drop is the only `free` site.
-    let program = lower(&dedent(
+    let script = lower(&dedent(
         "
-        fn main -> String
-          \"hi\".format()
-        end
+        \"hi\".format()
         ",
     ));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     let body = extract_function_body(&ir_text, "Global.String.format");
     // `format` always returns a freshly-concat'd heap string; under
     // the leak baseline no drops are emitted in the body.

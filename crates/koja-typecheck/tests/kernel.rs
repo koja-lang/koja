@@ -10,13 +10,14 @@
 //! the rest of the stdlib; surface coverage for it lives in
 //! [`random`].
 
+use koja_ast::ast::Statement;
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{CheckedProgram, GlobalKind};
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
     let id = Identifier::new("Global", segments.iter().map(|s| s.to_string()).collect());
@@ -28,7 +29,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn kernel_panic_registers_with_never_return() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     let id = Identifier::new("Global", vec!["Kernel".to_string(), "panic".to_string()]);
     let (_, entry) = checked
         .registry
@@ -78,21 +79,36 @@ fn kernel_panic_callable_in_arm_tail_with_polymorphic_return() {
     // `Never` rewrite + bidirectional inference are both wired.
     let checked = typecheck(&dedent(
         "
-        fn main -> Int
-          Option.Some(7).unwrap()
-        end
+        Option.Some(7).unwrap()
         ",
     ));
-    let main = Identifier::new("TestApp", vec!["main".to_string()]);
-    assert!(
-        checked.registry.lookup(&main).is_some(),
-        "TestApp.main should typecheck end-to-end",
+    let pkg = checked
+        .packages
+        .iter()
+        .find(|p| p.package == "TestApp")
+        .expect("TestApp package present");
+    let file = pkg.files.first().expect("package has no files");
+    let body = file
+        .body
+        .as_deref()
+        .expect("script-mode file must keep statements on File.body");
+    let Statement::Expr(trailing) = body.last().expect("expected a trailing statement") else {
+        panic!("expected a trailing expression on the script body");
+    };
+    let (int_id, _) = checked
+        .registry
+        .lookup(&Identifier::new("Global", vec!["Int".to_string()]))
+        .expect("Global.Int registered");
+    assert_eq!(
+        trailing.resolution,
+        ResolvedType::leaf(Resolution::Global(int_id)),
+        "`Option.Some(7).unwrap()` should resolve to Int end-to-end",
     );
 }
 
 #[test]
 fn option_result_pair_range_register_after_autoimport() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["Option"]);
     assert_registered(&checked, &["Result"]);
     assert_registered(&checked, &["Pair"]);
@@ -101,7 +117,7 @@ fn option_result_pair_range_register_after_autoimport() {
 
 #[test]
 fn random_registers_after_autoimport() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     let id = Identifier::new("Global", vec!["Random".to_string()]);
     assert!(
         checked.registry.lookup(&id).is_some(),
@@ -113,7 +129,7 @@ fn random_registers_after_autoimport() {
 
 #[test]
 fn equality_eq_registers_for_bool_and_each_int_width() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for receiver in [
         "Bool", "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
     ] {
@@ -123,7 +139,7 @@ fn equality_eq_registers_for_bool_and_each_int_width() {
 
 #[test]
 fn hash_hash_registers_for_bool_and_each_int_width() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for receiver in [
         "Bool", "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
     ] {
@@ -133,14 +149,14 @@ fn hash_hash_registers_for_bool_and_each_int_width() {
 
 #[test]
 fn int_parse_and_float_parse_register_with_result_returns() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["Int", "parse"]);
     assert_registered(&checked, &["Float", "parse"]);
 }
 
 #[test]
 fn binary_intrinsics_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for method in ["byte_size", "ptr", "to_bits", "to_string"] {
         assert_registered(&checked, &["Binary", method]);
     }
@@ -151,16 +167,12 @@ fn binary_intrinsics_register() {
 fn user_code_can_call_eq_and_hash_through_method_chain() {
     typecheck(&dedent(
         "
-        fn main -> Bool
-          1.eq(1)
-        end
+        1.eq(1)
         ",
     ));
     typecheck(&dedent(
         "
-        fn main -> Int
-          42.hash()
-        end
+        42.hash()
         ",
     ));
 }

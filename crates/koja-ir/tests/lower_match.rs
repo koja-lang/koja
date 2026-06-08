@@ -24,7 +24,7 @@ use koja_ir::{ConstValue, IRBinOp, IRInstruction, IRTerminator, IRType, IRVarian
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::{lower_script_source as lower, script_function};
 
 #[test]
 fn match_int_literal_chain_lowers_to_test_blocks_and_typed_merge() {
@@ -37,13 +37,11 @@ fn match_int_literal_chain_lowers_to_test_blocks_and_typed_merge() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let merge = pick
         .blocks
@@ -122,13 +120,11 @@ fn match_literal_arm_emits_subject_eq_const_predicate() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let entry = &pick.blocks[0];
     let has_eq = entry.instructions.iter().any(|i| {
@@ -163,13 +159,11 @@ fn match_catch_all_branches_unconditionally_to_body() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let entry = &pick.blocks[0];
     let IRTerminator::Branch(target) = &entry.terminator else {
@@ -197,13 +191,11 @@ fn match_binding_emits_local_decl_and_write() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let has_decl = pick.blocks.iter().any(|b| {
         b.instructions
@@ -236,13 +228,11 @@ fn match_string_literal_arm_lowers_const_string_and_eq() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let entry = &pick.blocks[0];
     let has_string_const = entry.instructions.iter().any(|i| {
@@ -290,13 +280,11 @@ fn match_enum_unit_arm_emits_tag_get_and_eq_chain() {
           end
         end
 
-        fn main
-          pick(Color.Red)
-        end
+        pick(Color.Red)
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let entry = &pick.blocks[0];
     let has_tag_get = entry
@@ -352,13 +340,11 @@ fn match_enum_tuple_binding_emits_payload_field_get_and_local_write() {
           end
         end
 
-        fn main
-          unwrap(Box.Some(7))
-        end
+        unwrap(Box.Some(7))
         ";
 
-    let program = lower(&dedent(source));
-    let unwrap_fn = function(&program, "unwrap");
+    let script = lower(&dedent(source));
+    let unwrap_fn = script_function(&script, "unwrap");
 
     let payload_get = unwrap_fn.blocks.iter().find_map(|b| {
         b.instructions.iter().find_map(|i| match i {
@@ -425,13 +411,11 @@ fn match_exhaustive_enum_synthesizes_unreachable_trap_block() {
           end
         end
 
-        fn main
-          pick(Color.Red)
-        end
+        pick(Color.Red)
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let unreachable_block = pick
         .blocks
@@ -457,13 +441,11 @@ fn match_or_alternatives_chain_through_dedicated_test_blocks() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let alt_count = pick
         .blocks
@@ -499,13 +481,11 @@ fn match_guarded_arm_interposes_guard_block_between_test_and_body() {
           end
         end
 
-        fn main
-          pick(7)
-        end
+        pick(7)
         ";
 
-    let program = lower(&dedent(source));
-    let pick = function(&program, "pick");
+    let script = lower(&dedent(source));
+    let pick = script_function(&script, "pick");
 
     let guard_block = pick
         .blocks
@@ -572,13 +552,11 @@ fn match_guarded_enum_payload_binds_land_in_guard_block() {
           end
         end
 
-        fn main
-          unwrap(Box.Some(7))
-        end
+        unwrap(Box.Some(7))
         ";
 
-    let program = lower(&dedent(source));
-    let unwrap_fn = function(&program, "unwrap");
+    let script = lower(&dedent(source));
+    let unwrap_fn = script_function(&script, "unwrap");
 
     let guard_block = unwrap_fn
         .blocks
@@ -609,13 +587,11 @@ fn match_struct_destructure_emits_field_get_in_body_block() {
           end
         end
 
-        fn main
-          add()
-        end
+        add()
         ";
 
-    let program = lower(&dedent(source));
-    let add_fn = function(&program, "add");
+    let script = lower(&dedent(source));
+    let add_fn = script_function(&script, "add");
 
     let body_block = add_fn
         .blocks
@@ -673,13 +649,11 @@ fn match_enum_struct_destructure_emits_payload_field_get_by_declared_index() {
           end
         end
 
-        fn main
-          area(Shape.Rect{w: 3, h: 4})
-        end
+        area(Shape.Rect{w: 3, h: 4})
         ";
 
-    let program = lower(&dedent(source));
-    let area_fn = function(&program, "area");
+    let script = lower(&dedent(source));
+    let area_fn = script_function(&script, "area");
 
     let rect_body = area_fn
         .blocks
@@ -737,13 +711,11 @@ fn match_struct_destructure_acts_as_catch_all_in_chain() {
           end
         end
 
-        fn main
-          first()
-        end
+        first()
         ";
 
-    let program = lower(&dedent(source));
-    let first_fn = function(&program, "first");
+    let script = lower(&dedent(source));
+    let first_fn = script_function(&script, "first");
 
     let entry = &first_fn.blocks[0];
     assert!(
@@ -779,13 +751,11 @@ fn match_literal_against_narrow_subject_mints_narrow_const() {
           end
         end
 
-        fn main
-          classify(5)
-        end
+        classify(5)
         ";
 
-    let program = lower(&dedent(source));
-    let classify = function(&program, "classify");
+    let script = lower(&dedent(source));
+    let classify = script_function(&script, "classify");
 
     let has_uint8_const = classify
         .blocks
@@ -827,13 +797,11 @@ fn lower_match_constructor_tuple_emits_enum_tuple_shape() {
           end
         end
 
-        fn main
-          unwrap(Box.Some(7))
-        end
+        unwrap(Box.Some(7))
         ";
 
-    let program = lower(&dedent(source));
-    let unwrap_fn = function(&program, "unwrap");
+    let script = lower(&dedent(source));
+    let unwrap_fn = script_function(&script, "unwrap");
 
     let has_tag_check = unwrap_fn
         .blocks
@@ -883,13 +851,11 @@ fn match_struct_literal_field_emits_field_get_and_eq_test_in_entry_block() {
           end
         end
 
-        fn main
-          classify(Point{x: 5, y: 6})
-        end
+        classify(Point{x: 5, y: 6})
         ";
 
-    let program = lower(&dedent(source));
-    let classify = function(&program, "classify");
+    let script = lower(&dedent(source));
+    let classify = script_function(&script, "classify");
 
     let entry = &classify.blocks[0];
     let field_indices: Vec<u32> = entry
@@ -1027,13 +993,11 @@ fn match_struct_partial_field_pattern_omits_other_fields_from_tests() {
           end
         end
 
-        fn main
-          classify(Point{x: 5, y: 9})
-        end
+        classify(Point{x: 5, y: 9})
         ";
 
-    let program = lower(&dedent(source));
-    let classify = function(&program, "classify");
+    let script = lower(&dedent(source));
+    let classify = script_function(&script, "classify");
 
     let field_indices: Vec<u32> = classify
         .blocks
@@ -1076,13 +1040,11 @@ fn match_nested_enum_with_inner_literal_orders_tag_before_payload_extraction() {
           end
         end
 
-        fn main
-          classify(Option.Some(5))
-        end
+        classify(Option.Some(5))
         ";
 
-    let program = lower(&dedent(source));
-    let classify = function(&program, "classify");
+    let script = lower(&dedent(source));
+    let classify = script_function(&script, "classify");
 
     let entry = &classify.blocks[0];
     let entry_has_tag_get = entry
@@ -1149,13 +1111,11 @@ fn match_nested_struct_inside_enum_tuple_chains_field_test_after_tag() {
           end
         end
 
-        fn main
-          classify(Option.Some(Point{x: 5, y: 9}))
-        end
+        classify(Option.Some(Point{x: 5, y: 9}))
         ";
 
-    let program = lower(&dedent(source));
-    let classify = function(&program, "classify");
+    let script = lower(&dedent(source));
+    let classify = script_function(&script, "classify");
 
     let entry = &classify.blocks[0];
     let entry_tag_gets = entry
@@ -1233,13 +1193,11 @@ fn match_nested_struct_binding_emits_chained_field_gets_in_body_block() {
           end
         end
 
-        fn main
-          classify(Option.Some(Point{x: 5, y: 9}))
-        end
+        classify(Option.Some(Point{x: 5, y: 9}))
         ";
 
-    let program = lower(&dedent(source));
-    let classify = function(&program, "classify");
+    let script = lower(&dedent(source));
+    let classify = script_function(&script, "classify");
 
     let body = classify
         .blocks
@@ -1304,9 +1262,7 @@ fn match_struct_or_pattern_inside_field_still_wires_or_chain_for_inner() {
           end
         end
 
-        fn main
-          classify(Point{x: 2, y: 9})
-        end
+        classify(Point{x: 2, y: 9})
         ";
 
     // The typecheck-side and IR-lowering-side restriction on
@@ -1321,8 +1277,8 @@ fn match_struct_or_pattern_inside_field_still_wires_or_chain_for_inner() {
         // clear message rather than miscompile.
         return;
     }
-    let program = result.unwrap();
-    let classify = function(&program, "classify");
+    let script = result.unwrap();
+    let classify = script_function(&script, "classify");
     assert!(
         classify
             .blocks

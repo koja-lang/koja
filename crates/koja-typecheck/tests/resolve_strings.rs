@@ -12,7 +12,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, diagnostic_messages, parse_and_check, typecheck_file as typecheck};
+use common::{PACKAGE, diagnostic_messages, parse_and_check, typecheck_script as typecheck};
 use koja_parser::ParseMode;
 
 fn find_function<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Function {
@@ -231,7 +231,7 @@ fn string_interpolation_without_format_method_diagnoses() {
         end
         ";
 
-    let failure = parse_and_check(&dedent(source), ParseMode::File)
+    let failure = parse_and_check(&dedent(source), ParseMode::Script)
         .expect_err("expected typecheck to fail when the interp receiver has no `format` method");
     let messages = diagnostic_messages(&failure);
     assert!(

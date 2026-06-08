@@ -1,9 +1,0 @@
-struct User
-  name: String
-  age: Int
-end
-
-fn main
-  u = User{age: 30}
-  u.age.print()
-end

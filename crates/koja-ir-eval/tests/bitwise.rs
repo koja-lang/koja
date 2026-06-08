@@ -24,7 +24,7 @@ use koja_ir_eval::Value;
 
 mod common;
 
-use common::{evaluate_program, evaluate_script};
+use common::evaluate_script;
 
 fn run_int(source: &str) -> i64 {
     match evaluate_script(&dedent(source)).unwrap() {
@@ -96,24 +96,15 @@ fn int_bsr_positive_value_matches_arithmetic_shift() {
 // Driven through the wrapper rather than `0xFF.band(0x0F)` so the
 // receiver actually flows through a `UInt8` slot instead of `Int`.
 
-fn run_program_int(source: &str) -> i64 {
-    match evaluate_program(&dedent(source)).unwrap() {
-        Value::Int(v) => v,
-        other => panic!("expected Value::Int, got {other:?}"),
-    }
-}
-
 #[test]
 fn uint8_band_dispatches_through_narrow_impl() {
-    let v = run_program_int(
+    let v = run_int(
         "
         fn band_u8(x: UInt8, y: UInt8) -> UInt8
           x.band(y)
         end
 
-        fn main -> UInt8
-          band_u8(0xFF, 0x0F)
-        end
+        band_u8(0xFF, 0x0F)
         ",
     );
     assert_eq!(v, 0x0F);
@@ -124,15 +115,13 @@ fn int8_negative_literal_folds_through_narrow_band() {
     // `-1: Int8` flows in via the `-1` literal-fit coercion (typecheck
     // records the negation fold at the call-site span); pinned here
     // through a narrow-typed wrapper.
-    let v = run_program_int(
+    let v = run_int(
         "
         fn band_i8(x: Int8, y: Int8) -> Int8
           x.band(y)
         end
 
-        fn main -> Int8
-          band_i8(-1, 5)
-        end
+        band_i8(-1, 5)
         ",
     );
     assert_eq!(v, 5);
@@ -140,15 +129,13 @@ fn int8_negative_literal_folds_through_narrow_band() {
 
 #[test]
 fn int32_bsl_dispatches_through_narrow_impl() {
-    let v = run_program_int(
+    let v = run_int(
         "
         fn shifted(x: Int32) -> Int32
           x.bsl(8)
         end
 
-        fn main -> Int32
-          shifted(1)
-        end
+        shifted(1)
         ",
     );
     assert_eq!(v, 256);

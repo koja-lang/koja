@@ -1,0 +1,12 @@
+struct Counter
+  value: Int
+end
+
+extend Counter
+  fn bad<U>(self) -> U
+    self.value + "string"
+  end
+end
+
+c = Counter{value: 1}
+c.value.print()

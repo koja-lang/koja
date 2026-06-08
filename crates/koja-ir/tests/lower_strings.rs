@@ -8,26 +8,21 @@
 //! immortal rodata literal) follows the `Const`, and the `Return`
 //! targets the clone.
 
-use koja_ast::util::dedent;
 use koja_ir::{ConstValue, IRInstruction, IRTerminator, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::lower_script_source as lower;
 
 #[test]
 fn string_literal_lowers_to_const_string() {
-    let source = "
-        fn main -> String
-          \"hello\"
-        end
-        ";
+    let script = lower("\"hello\"\n");
+    assert_eq!(script.return_type, IRType::String);
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    assert_eq!(main.return_type, IRType::String);
-
-    let block = main.blocks.first().expect("main has at least one block");
+    let block = script
+        .blocks
+        .first()
+        .expect("script has at least one block");
 
     let IRInstruction::Const { dest, value } = &block.instructions[0] else {
         panic!(
@@ -64,15 +59,11 @@ fn string_literal_lowers_to_const_string() {
 
 #[test]
 fn empty_string_literal_lowers_to_empty_const_string() {
-    let source = "
-        fn main -> String
-          \"\"
-        end
-        ";
-
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let block = main.blocks.first().expect("main has at least one block");
+    let script = lower("\"\"\n");
+    let block = script
+        .blocks
+        .first()
+        .expect("script has at least one block");
 
     let IRInstruction::Const { value, .. } = &block.instructions[0] else {
         panic!("expected a Const instruction");

@@ -6,33 +6,25 @@
 //! stamps `Set<T>` and dispatches through the normal method-call
 //! resolver.
 
-use koja_ast::ast::{ExprKind, Item, Statement};
+use koja_ast::ast::{ExprKind, Statement};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, typecheck_file as typecheck};
+use common::{PACKAGE, typecheck_script as typecheck};
 
-fn main_body(checked: &CheckedProgram) -> &[Statement] {
+fn body_statements(checked: &CheckedProgram) -> &[Statement] {
     let pkg = checked
         .packages
         .iter()
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
     let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    main.body
+    file.body
         .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point")
+        .expect("script-mode file must keep statements on File.body")
 }
 
 fn set_named_type(checked: &CheckedProgram, element: &str) -> ResolvedType {
@@ -72,13 +64,11 @@ fn list_named_type(checked: &CheckedProgram, element: &str) -> ResolvedType {
 #[test]
 fn set_literal_with_int_elements_synthesizes_from_list_call() {
     let source = "
-        fn main
-          numbers: Set<Int> = [1, 2, 3]
-          numbers
-        end
+        numbers: Set<Int> = [1, 2, 3]
+        numbers
         ";
     let checked = typecheck(&dedent(source));
-    let body = main_body(&checked);
+    let body = body_statements(&checked);
     let assignment = body.first().expect("missing assignment");
     let Statement::Assignment { value, .. } = assignment else {
         panic!("expected Statement::Assignment, got {assignment:?}");
@@ -123,13 +113,11 @@ fn set_literal_with_int_elements_synthesizes_from_list_call() {
 #[test]
 fn empty_set_literal_pins_element_from_binding_annotation() {
     let source = "
-        fn main
-          numbers: Set<Int> = []
-          numbers
-        end
+        numbers: Set<Int> = []
+        numbers
         ";
     let checked = typecheck(&dedent(source));
-    let body = main_body(&checked);
+    let body = body_statements(&checked);
     let assignment = body.first().expect("missing assignment");
     let Statement::Assignment { value, .. } = assignment else {
         panic!("expected Statement::Assignment, got {assignment:?}");

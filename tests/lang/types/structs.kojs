@@ -1,0 +1,13 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+p = Point{x: 3, y: 4}
+p.x.print()
+p.y.print()
+
+p.x = 10
+p.x.print()
+
+"(#{p.x}, #{p.y})".print()

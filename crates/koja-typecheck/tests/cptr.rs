@@ -13,7 +13,7 @@ use koja_typecheck::CheckedProgram;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
@@ -26,7 +26,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn cptr_struct_and_generic_methods_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["CPtr"]);
     for method in ["alloc", "null", "free", "offset", "read", "write", "null?"] {
         assert_registered(&checked, &["CPtr", method]);
@@ -37,7 +37,7 @@ fn cptr_struct_and_generic_methods_register() {
 fn cptr_uint8_concrete_impl_methods_register() {
     // `to_binary` and `to_string` live on `impl CPtr<UInt8>`, plus
     // the pure-Koja `to_cstring` and the private `strlen` extern.
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for method in ["to_binary", "to_string", "to_cstring", "strlen"] {
         assert_registered(&checked, &["CPtr", method]);
     }
@@ -63,11 +63,9 @@ fn cptr_int32_write_accepts_int_literal_arg() {
     // sized-int slot widened by a default-`Int` literal arrival.
     typecheck(&dedent(
         "
-        fn main
-          ptr: CPtr<Int32> = CPtr.alloc(1)
-          ptr.write(42)
-          ptr.free()
-        end
+        ptr: CPtr<Int32> = CPtr.alloc(1)
+        ptr.write(42)
+        ptr.free()
         ",
     ));
 }
@@ -76,12 +74,10 @@ fn cptr_int32_write_accepts_int_literal_arg() {
 fn cptr_uint8_write_accepts_int_literal_arg() {
     typecheck(&dedent(
         "
-        fn main
-          byte_ptr: CPtr<UInt8> = CPtr.alloc(2)
-          byte_ptr.write(65)
-          byte_ptr.offset(1).write(0)
-          byte_ptr.free()
-        end
+        byte_ptr: CPtr<UInt8> = CPtr.alloc(2)
+        byte_ptr.write(65)
+        byte_ptr.offset(1).write(0)
+        byte_ptr.free()
         ",
     ));
 }
@@ -95,12 +91,10 @@ fn cptr_int32_write_rejects_non_literal_int_value() {
     // "argument expects `Int32`, got `Int`" — pin the new wording.
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          x: Int = 5
-          ptr: CPtr<Int32> = CPtr.alloc(1)
-          ptr.write(x)
-          ptr.free()
-        end
+        x: Int = 5
+        ptr: CPtr<Int32> = CPtr.alloc(1)
+        ptr.write(x)
+        ptr.free()
         ",
     ));
     let messages = diagnostic_messages(&failure);

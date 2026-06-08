@@ -21,30 +21,29 @@
 //!   [`IRInstruction::MakeClosure`] with no captures.
 
 use koja_ast::util::dedent;
-use koja_ir::{FunctionKind, IRFunction, IRInstruction, IRProgram, IRType};
+use koja_ir::{FunctionKind, IRBasicBlock, IRFunction, IRInstruction, IRScript, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::lower_script_source as lower;
 
-fn function_opt<'a>(program: &'a IRProgram, mangled: &str) -> Option<&'a IRFunction> {
-    program.function(mangled)
+fn function_opt<'a>(script: &'a IRScript, mangled: &str) -> Option<&'a IRFunction> {
+    script.function(mangled)
 }
 
-fn require_synthesized<'a>(program: &'a IRProgram, mangled: &str) -> &'a IRFunction {
-    function_opt(program, mangled).unwrap_or_else(|| {
-        let names: Vec<_> = program
+fn require_synthesized<'a>(script: &'a IRScript, mangled: &str) -> &'a IRFunction {
+    function_opt(script, mangled).unwrap_or_else(|| {
+        let names: Vec<_> = script
             .packages
             .iter()
             .flat_map(|p| p.functions.values().map(|f| f.symbol.mangled().to_string()))
             .collect();
-        panic!("missing synthesized function `{mangled}` in IRProgram; have: {names:?}",);
+        panic!("missing synthesized function `{mangled}` in IRScript; have: {names:?}",);
     })
 }
 
-fn make_closure_in(function: &IRFunction) -> Vec<&IRInstruction> {
-    function
-        .blocks
+fn make_closure_in(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
+    blocks
         .iter()
         .flat_map(|b| &b.instructions)
         .filter(|i| matches!(i, IRInstruction::MakeClosure { .. }))
@@ -60,9 +59,8 @@ fn load_captures_in(function: &IRFunction) -> Vec<&IRInstruction> {
         .collect()
 }
 
-fn call_closures_in(function: &IRFunction) -> Vec<&IRInstruction> {
-    function
-        .blocks
+fn call_closures_in(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
+    blocks
         .iter()
         .flat_map(|b| &b.instructions)
         .filter(|i| matches!(i, IRInstruction::CallClosure { .. }))
@@ -79,18 +77,15 @@ fn int_fn_type(arity: usize) -> IRType {
 #[test]
 fn block_closure_without_captures_synthesizes_empty_env_body() {
     let source = "
-        fn main -> Int
-          f = fn (x: Int) -> Int
-            x + 1
-          end
-          0
+        f = fn (x: Int) -> Int
+          x + 1
         end
+        0
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower(&dedent(source));
 
-    let body = require_synthesized(&program, "TestApp.main__closure0");
+    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &body.kind else {
         panic!(
             "synthesized closure body should be FunctionKind::Closure, got {:?}",
@@ -105,7 +100,7 @@ fn block_closure_without_captures_synthesizes_empty_env_body() {
     assert_eq!(body.params[0].ty, IRType::Int64);
     assert_eq!(body.return_type, IRType::Int64);
 
-    let makes = make_closure_in(main);
+    let makes = make_closure_in(&script.blocks);
     assert_eq!(makes.len(), 1, "exactly one MakeClosure in the outer fn");
     let IRInstruction::MakeClosure {
         body: body_symbol,
@@ -116,7 +111,7 @@ fn block_closure_without_captures_synthesizes_empty_env_body() {
     else {
         unreachable!()
     };
-    assert_eq!(body_symbol.mangled(), "TestApp.main__closure0");
+    assert_eq!(body_symbol.mangled(), "TestApp.__script_body__closure0");
     assert!(captures.is_empty(), "no captures => empty captures vec");
     assert_eq!(*ty, int_fn_type(1));
 }
@@ -124,18 +119,15 @@ fn block_closure_without_captures_synthesizes_empty_env_body() {
 #[test]
 fn block_closure_with_capture_loads_through_env_layout() {
     let source = "
-        fn main -> Int
-          y = 10
-          f = fn (x: Int) -> Int
-            x + y
-          end
-          0
+        y = 10
+        f = fn (x: Int) -> Int
+          x + y
         end
+        0
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let body = require_synthesized(&program, "TestApp.main__closure0");
+    let script = lower(&dedent(source));
+    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
 
     let FunctionKind::Closure { env_layout } = &body.kind else {
         unreachable!("body kind already checked in the no-capture test")
@@ -153,7 +145,7 @@ fn block_closure_with_capture_loads_through_env_layout() {
     assert_eq!(*capture_index, 0);
     assert_eq!(*ty, IRType::Int64);
 
-    let makes = make_closure_in(main);
+    let makes = make_closure_in(&script.blocks);
     let IRInstruction::MakeClosure { captures, .. } = makes[0] else {
         unreachable!()
     };
@@ -163,21 +155,19 @@ fn block_closure_with_capture_loads_through_env_layout() {
 #[test]
 fn unused_outer_local_is_not_captured() {
     let source = "
-        fn main -> Int
-          s = \"hi\"
-          f = fn (x: Int) -> Int
-            x
-          end
-          0
+        s = \"hi\"
+        f = fn (x: Int) -> Int
+          x
         end
+        0
         ";
 
     // `s` is unused inside the closure body, so it should NOT appear
     // in env_layout or carry a capture value. Pins the
     // capture-analysis dedup/visibility rules so a future walker bug
     // doesn't accidentally lift unused outer locals.
-    let program = lower(&dedent(source));
-    let body = require_synthesized(&program, "TestApp.main__closure0");
+    let script = lower(&dedent(source));
+    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &body.kind else {
         unreachable!("body kind already checked in the no-capture test")
     };
@@ -185,8 +175,7 @@ fn unused_outer_local_is_not_captured() {
         env_layout.is_empty(),
         "unused outer locals are not captured"
     );
-    let main = function(&program, "main");
-    let makes = make_closure_in(main);
+    let makes = make_closure_in(&script.blocks);
     let IRInstruction::MakeClosure { captures, .. } = makes[0] else {
         unreachable!()
     };
@@ -199,22 +188,19 @@ fn heap_capture_copies_into_env_via_local_read() {
     // capture copies into the env via a `LocalRead` of the outer slot
     // (the binding stays live) — there is no move-out.
     let source = "
-        fn main -> Int
-          s = \"hi\" <> \"there\"
-          g = fn (x: Int) -> Int
-            len(s) + x
-          end
-          0
+        s = \"hi\" <> \"there\"
+        g = fn (x: Int) -> Int
+          len(s) + x
         end
+        0
 
         fn len(s: String) -> Int
           0
         end
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let g_body = require_synthesized(&program, "TestApp.main__closure0");
+    let script = lower(&dedent(source));
+    let g_body = require_synthesized(&script, "TestApp.__script_body__closure0");
     let FunctionKind::Closure { env_layout } = &g_body.kind else {
         unreachable!("g_body should be a closure")
     };
@@ -226,12 +212,12 @@ fn heap_capture_copies_into_env_via_local_read() {
 
     // The captured value forwarded to MakeClosure is read from the
     // outer slot, not moved out of it.
-    let makes = make_closure_in(main);
+    let makes = make_closure_in(&script.blocks);
     let IRInstruction::MakeClosure { captures, .. } = makes[0] else {
         unreachable!()
     };
     assert_eq!(captures.len(), 1, "g forwards one captured value");
-    let reads_string = main
+    let reads_string = script
         .blocks
         .iter()
         .flat_map(|b| &b.instructions)
@@ -245,18 +231,15 @@ fn heap_capture_copies_into_env_via_local_read() {
 #[test]
 fn closure_typed_local_call_lowers_to_call_closure() {
     let source = "
-        fn main -> Int
-          f = fn (x: Int) -> Int
-            x + 1
-          end
-          f(5)
+        f = fn (x: Int) -> Int
+          x + 1
         end
+        f(5)
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower(&dedent(source));
 
-    let calls = call_closures_in(main);
+    let calls = call_closures_in(&script.blocks);
     assert_eq!(calls.len(), 1, "exactly one CallClosure for `f(5)`");
     let IRInstruction::CallClosure {
         args, result_ty, ..
@@ -269,7 +252,7 @@ fn closure_typed_local_call_lowers_to_call_closure() {
 
     // Also: no direct `Call` to a `__closure*` symbol — the indirect
     // path is the only dispatch for closure-typed locals.
-    for inst in main.blocks.iter().flat_map(|b| &b.instructions) {
+    for inst in script.blocks.iter().flat_map(|b| &b.instructions) {
         if let IRInstruction::Call { callee, .. } = inst {
             assert!(
                 !callee.mangled().contains("__closure"),
@@ -291,14 +274,11 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
           f(x, y)
         end
 
-        fn main -> Int
-          apply(add, 1, 2)
-        end
+        apply(add, 1, 2)
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let wrapper = require_synthesized(&program, "TestApp.add__as_closure");
+    let script = lower(&dedent(source));
+    let wrapper = require_synthesized(&script, "TestApp.add__as_closure");
 
     let FunctionKind::Closure { env_layout } = &wrapper.kind else {
         panic!(
@@ -325,7 +305,7 @@ fn fn_as_value_synthesizes_captureless_wrapper_and_emits_make_closure() {
         "wrapper body forwards directly to the wrapped fn",
     );
 
-    let makes = make_closure_in(main);
+    let makes = make_closure_in(&script.blocks);
     assert_eq!(
         makes.len(),
         1,
@@ -356,15 +336,13 @@ fn fn_as_value_wrapper_is_cached_across_repeated_references() {
           f(x, y)
         end
 
-        fn main -> Int
-          apply(add, 1, 2) + apply(add, 3, 4)
-        end
+        apply(add, 1, 2) + apply(add, 3, 4)
         ";
 
-    let program = lower(&dedent(source));
-    require_synthesized(&program, "TestApp.add__as_closure");
+    let script = lower(&dedent(source));
+    require_synthesized(&script, "TestApp.add__as_closure");
 
-    let wrapper_count: usize = program
+    let wrapper_count: usize = script
         .packages
         .iter()
         .map(|p| {
@@ -379,8 +357,7 @@ fn fn_as_value_wrapper_is_cached_across_repeated_references() {
         "two `add` references must reuse a single wrapper, got {wrapper_count}",
     );
 
-    let main = function(&program, "main");
-    let makes = make_closure_in(main);
+    let makes = make_closure_in(&script.blocks);
     assert_eq!(
         makes.len(),
         2,

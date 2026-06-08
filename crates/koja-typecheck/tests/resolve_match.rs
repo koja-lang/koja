@@ -29,7 +29,7 @@
 //!   following an unguarded catch-all, duplicate enum-variant or literal
 //!   arms, and overlapping alternatives within an or-pattern
 
-use koja_ast::ast::{ExprKind, Function, Item, Pattern, Statement};
+use koja_ast::ast::{ExprKind, Item, Pattern, Statement};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
@@ -37,49 +37,30 @@ use koja_typecheck::CheckedProgram;
 mod common;
 
 use common::{
-    PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail, warning_messages,
+    PACKAGE, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
+    warning_messages,
 };
 
-fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
+fn script_body(checked: &CheckedProgram) -> &[Statement] {
     let pkg = checked
         .packages
         .iter()
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
     let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    let body = main
-        .body
+    file.body
         .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point");
-    let trailing = body.last().expect("expected at least one statement");
+        .expect("script-mode file must keep statements on File.body")
+}
+
+fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
+    let trailing = script_body(checked)
+        .last()
+        .expect("expected at least one statement");
     match trailing {
         Statement::Expr(expr) => expr.resolution.clone(),
         other => panic!("expected Statement::Expr as trailing statement, got {other:?}"),
     }
-}
-
-fn main_fn(checked: &CheckedProgram) -> &Function {
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("checked program is missing the test package");
-    let file = pkg.files.first().expect("package has no files");
-    file.items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`")
 }
 
 fn primitive_type(checked: &CheckedProgram, name: &str) -> ResolvedType {
@@ -102,13 +83,11 @@ fn string_type(checked: &CheckedProgram) -> ResolvedType {
 #[test]
 fn match_int_literal_arms_resolve_to_int() {
     let source = "
-        fn main
           match 1
             1 -> 10
             2 -> 20
             _ -> 30
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -117,12 +96,10 @@ fn match_int_literal_arms_resolve_to_int() {
 #[test]
 fn match_string_literal_arms_resolve_to_int() {
     let source = "
-        fn main
           match \"hi\"
             \"hi\" -> 1
             _ -> 0
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -131,11 +108,9 @@ fn match_string_literal_arms_resolve_to_int() {
 #[test]
 fn match_binding_arm_resolves_to_subject_type() {
     let source = "
-        fn main
           match 7
             x -> x
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -144,29 +119,15 @@ fn match_binding_arm_resolves_to_subject_type() {
 #[test]
 fn match_binding_stamps_local_id() {
     let source = "
-        fn main
           match 7
             x -> x
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("missing test package");
-    let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == "main" => Some(f),
-            _ => None,
-        })
-        .expect("missing fn main");
-    let body = main.body.as_deref().expect("missing fn main body");
-    let Statement::Expr(match_expr) = body.last().expect("missing trailing match-expr") else {
+    let Statement::Expr(match_expr) = script_body(&checked)
+        .last()
+        .expect("missing trailing match-expr")
+    else {
         panic!("expected trailing Statement::Expr");
     };
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
@@ -192,9 +153,7 @@ fn match_with_diverging_arms_resolves_to_else_type() {
           end
         end
 
-        fn main
           pick()
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -203,12 +162,10 @@ fn match_with_diverging_arms_resolves_to_else_type() {
 #[test]
 fn match_without_catch_all_diagnoses() {
     let source = "
-        fn main
           match 1
             1 -> 10
             2 -> 20
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -224,12 +181,10 @@ fn match_without_catch_all_diagnoses() {
 #[test]
 fn match_with_mismatched_arms_diagnoses() {
     let source = "
-        fn main
           match 1
             1 -> 10
             _ -> false
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -245,12 +200,10 @@ fn match_with_mismatched_arms_diagnoses() {
 #[test]
 fn match_with_literal_type_mismatch_diagnoses() {
     let source = "
-        fn main
           match 1
             \"hi\" -> 10
             _ -> 20
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -266,17 +219,14 @@ fn match_with_literal_type_mismatch_diagnoses() {
 #[test]
 fn match_guard_resolves_against_pattern_locals() {
     let source = "
-        fn main
           match 7
             x when x > 0 -> 10
             _ -> 20
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
-    let main = main_fn(&checked);
-    let Statement::Expr(match_expr) = main.body.as_deref().unwrap().last().unwrap() else {
+    let Statement::Expr(match_expr) = script_body(&checked).last().unwrap() else {
         panic!("expected trailing Statement::Expr");
     };
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
@@ -303,12 +253,10 @@ fn match_guard_resolves_against_pattern_locals() {
 #[test]
 fn match_guard_non_bool_diagnoses() {
     let source = "
-        fn main
           match 1
             x when x -> 10
             _ -> 20
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -323,11 +271,9 @@ fn match_guard_non_bool_diagnoses() {
 #[test]
 fn match_guarded_catch_all_does_not_close_chain() {
     let source = "
-        fn main
           match 1
             _ when 1 > 0 -> 10
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -368,12 +314,10 @@ fn match_guarded_enum_arm_does_not_count_as_coverage() {
 #[test]
 fn match_string_subject_resolves() {
     let source = "
-        fn main
           match \"hi\"
             \"hi\" -> \"yes\"
             _ -> \"no\"
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), string_type(&checked));
@@ -394,9 +338,7 @@ fn match_unit_only_enum_no_catch_all_resolves() {
           end
         end
 
-        fn main
           pick(Color.Red)
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -444,9 +386,7 @@ fn match_enum_tuple_binding_stamps_local_id() {
           end
         end
 
-        fn main
           unwrap(Box.Some(7))
-        end
         ";
     let checked = typecheck(&dedent(source));
     let pkg = checked
@@ -512,12 +452,10 @@ fn match_enum_tuple_arity_mismatch_diagnoses() {
 #[test]
 fn match_or_of_strings_resolves() {
     let source = "
-        fn main
           match \"a\"
             \"a\" | \"b\" | \"c\" -> 1
             _ -> 0
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -539,9 +477,7 @@ fn match_or_of_enum_units_resolves() {
           end
         end
 
-        fn main
           classify(Lifecycle.Reload)
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -550,12 +486,10 @@ fn match_or_of_enum_units_resolves() {
 #[test]
 fn match_or_with_binding_diagnoses() {
     let source = "
-        fn main
           match 1
             x | 2 -> 0
             _ -> 0
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -570,30 +504,16 @@ fn match_or_with_binding_diagnoses() {
 #[test]
 fn match_arm_binding_does_not_leak_to_following_arm() {
     let source = "
-        fn main
           match 1
             x -> 0
             y -> y
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
-    let pkg = checked
-        .packages
-        .iter()
-        .find(|p| p.package == PACKAGE)
-        .expect("missing test package");
-    let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(f) if f.name == "main" => Some(f),
-            _ => None,
-        })
-        .expect("missing fn main");
-    let body = main.body.as_deref().expect("missing fn main body");
-    let Statement::Expr(match_expr) = body.last().expect("missing trailing match") else {
+    let Statement::Expr(match_expr) = script_body(&checked)
+        .last()
+        .expect("missing trailing match")
+    else {
         panic!("expected trailing Statement::Expr");
     };
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
@@ -621,16 +541,13 @@ fn match_struct_destructure_binds_resolve_against_field_types() {
           y: Int
         end
 
-        fn main
           match Point{x: 1, y: 2}
             Point{x: a, y: b} -> a + b
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
-    let main = main_fn(&checked);
-    let Statement::Expr(match_expr) = main.body.as_deref().unwrap().last().unwrap() else {
+    let Statement::Expr(match_expr) = script_body(&checked).last().unwrap() else {
         panic!("expected trailing Statement::Expr");
     };
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
@@ -660,11 +577,9 @@ fn match_struct_destructure_unknown_field_diagnoses() {
           y: Int
         end
 
-        fn main
           match Point{x: 1, y: 2}
             Point{z: a} -> a
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -689,17 +604,14 @@ fn match_struct_destructure_literal_field_resolves() {
           y: Int
         end
 
-        fn main
           match Point{x: 1, y: 2}
             Point{x: 1, y: b} -> b
             _other -> 0
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
-    let main = main_fn(&checked);
-    let Statement::Expr(match_expr) = main.body.as_deref().unwrap().last().unwrap() else {
+    let Statement::Expr(match_expr) = script_body(&checked).last().unwrap() else {
         panic!("expected trailing Statement::Expr");
     };
     let ExprKind::Match { arms, .. } = &match_expr.kind else {
@@ -737,9 +649,7 @@ fn match_struct_partial_omitted_fields_match_anything() {
           end
         end
 
-        fn main
           classify(Point{x: 5, y: 1})
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -764,9 +674,7 @@ fn match_nested_struct_inside_enum_tuple_resolves() {
           end
         end
 
-        fn main
           label(Option.Some(Point{x: 5, y: 9}))
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -792,9 +700,7 @@ fn match_enum_tuple_literal_payload_resolves() {
           end
         end
 
-        fn main
           classify(TokenKind.Ident(\"and\"))
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -812,9 +718,7 @@ fn match_enum_tuple_with_literal_payload_still_satisfies_variant_coverage() {
           end
         end
 
-        fn main
           classify(Option.Some(5))
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -836,9 +740,7 @@ fn match_enum_struct_with_literal_field_still_satisfies_variant_coverage() {
           end
         end
 
-        fn main
           classify(Shape.Circle{r: 7})
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -865,9 +767,7 @@ fn match_some_with_distinct_enum_payloads_does_not_warn_unreachable() {
           end
         end
 
-        fn main
           classify(Option.Some(Color.Red))
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -888,9 +788,7 @@ fn match_some_binding_then_none_exhausts_without_catch_all() {
           end
         end
 
-        fn main
           classify(Option.None)
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -919,9 +817,7 @@ fn match_some_binding_then_narrow_some_warns_unreachable() {
           end
         end
 
-        fn main
           classify(Option.Some(Color.Red))
-        end
         ";
     let checked = typecheck(&dedent(source));
     let warnings = warning_messages(&checked);
@@ -946,9 +842,7 @@ fn match_distinct_some_literal_payloads_do_not_warn_unreachable() {
           end
         end
 
-        fn main
           classify(Option.Some(1))
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -972,9 +866,7 @@ fn match_enum_tuple_with_bindings_only_still_covers_variant() {
           end
         end
 
-        fn main
           classify(Option.Some(5))
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -991,11 +883,9 @@ fn match_struct_with_only_literal_fields_is_not_catch_all() {
           y: Int
         end
 
-        fn main
           match Point{x: 5, y: 2}
             Point{x: 5, y: 2} -> 1
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1023,9 +913,7 @@ fn match_enum_struct_destructure_binds_resolve() {
           end
         end
 
-        fn main
           area(Shape.Rect{w: 3, h: 4})
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -1039,12 +927,10 @@ fn match_enum_struct_destructure_against_tuple_variant_diagnoses() {
           None
         end
 
-        fn main
           match Box.Some(7)
             Box.Some{x: x} -> x
             Box.None -> 0
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1065,11 +951,9 @@ fn match_struct_destructure_acts_as_catch_all() {
           y: Int
         end
 
-        fn main
           match Point{x: 1, y: 2}
             Point{x: a, y: _} -> a
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -1080,12 +964,10 @@ fn match_struct_destructure_acts_as_catch_all() {
 #[test]
 fn match_arm_after_catch_all_warns_unreachable() {
     let source = "
-        fn main
           match 1
             _ -> 10
             2 -> 20
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     let warnings = warning_messages(&checked);
@@ -1100,13 +982,11 @@ fn match_arm_after_catch_all_warns_unreachable() {
 #[test]
 fn match_duplicate_literal_arm_warns_unreachable() {
     let source = "
-        fn main
           match 1
             1 -> 10
             1 -> 11
             _ -> 20
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     let warnings = warning_messages(&checked);
@@ -1134,9 +1014,7 @@ fn match_duplicate_enum_variant_arm_warns_unreachable() {
           end
         end
 
-        fn main
           pick(Color.Red)
-        end
         ";
     let checked = typecheck(&dedent(source));
     let warnings = warning_messages(&checked);
@@ -1151,12 +1029,10 @@ fn match_duplicate_enum_variant_arm_warns_unreachable() {
 #[test]
 fn match_overlapping_or_alternative_warns_unreachable() {
     let source = "
-        fn main
           match 1
             1 | 1 -> 10
             _ -> 20
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     let warnings = warning_messages(&checked);
@@ -1171,13 +1047,11 @@ fn match_overlapping_or_alternative_warns_unreachable() {
 #[test]
 fn match_multiple_catch_alls_warns_on_each_extra() {
     let source = "
-        fn main
           match 1
             _ -> 10
             _ -> 20
             _ -> 30
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     let warnings = warning_messages(&checked);
@@ -1207,9 +1081,7 @@ fn match_missing_variant_diagnostic_carries_hint() {
           end
         end
 
-        fn main
           pick(Color.Red)
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let with_hint = failure
@@ -1230,12 +1102,10 @@ fn match_missing_variant_diagnostic_carries_hint() {
 #[test]
 fn match_missing_catch_all_diagnostic_carries_hint_with_subject_type() {
     let source = "
-        fn main
           match 1
             1 -> 10
             2 -> 20
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     let with_hint = failure
@@ -1256,12 +1126,10 @@ fn match_missing_catch_all_diagnostic_carries_hint_with_subject_type() {
 #[test]
 fn match_bool_exhaustive_without_catch_all_typechecks() {
     let source = "
-        fn main
           match true
             true -> 1
             false -> 0
           end
-        end
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -1275,11 +1143,9 @@ fn match_bool_exhaustive_without_catch_all_typechecks() {
 #[test]
 fn match_bool_only_true_arm_still_requires_catch_all() {
     let source = "
-        fn main
           match true
             true -> 1
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1309,9 +1175,7 @@ fn match_constructor_unit_resolves() {
           end
         end
 
-        fn main
           pick(Box.None)
-        end
         ";
     let checked = typecheck(&dedent(source));
     let pkg = checked
@@ -1357,9 +1221,7 @@ fn match_constructor_tuple_resolves_and_binds() {
           end
         end
 
-        fn main
           unwrap(Box.Some(7))
-        end
         ";
     let checked = typecheck(&dedent(source));
     let pkg = checked
@@ -1414,9 +1276,7 @@ fn match_constructor_unknown_variant_diagnoses() {
           end
         end
 
-        fn main
           unwrap(Box.None)
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1444,9 +1304,7 @@ fn match_constructor_arity_mismatch_diagnoses() {
           end
         end
 
-        fn main
           unwrap(Box.None)
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1474,9 +1332,7 @@ fn match_constructor_struct_variant_diagnoses() {
           end
         end
 
-        fn main
           area(Shape.Circle(3))
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1505,9 +1361,7 @@ fn match_constructor_unit_variant_with_payload_diagnoses() {
           end
         end
 
-        fn main
           unwrap(Box.None)
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1523,12 +1377,10 @@ fn match_constructor_unit_variant_with_payload_diagnoses() {
 #[test]
 fn match_constructor_non_enum_subject_diagnoses() {
     let source = "
-        fn main
           match 1
             Some(x) -> x
             _ -> 0
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1544,12 +1396,10 @@ fn match_constructor_non_enum_subject_diagnoses() {
 #[test]
 fn match_list_pattern_still_diagnoses_feature_gap() {
     let source = "
-        fn main
           match 1
             [a, b] -> a + b
             _ -> 0
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -1577,12 +1427,10 @@ fn match_typed_binding_against_non_union_diagnoses() {
           id: Int
         end
 
-        fn main
           match 1
             p: Post -> p.id
             _ -> 0
           end
-        end
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(

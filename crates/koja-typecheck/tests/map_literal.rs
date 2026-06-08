@@ -5,37 +5,29 @@
 //! These tests confirm the literal's shape, the per-entry
 //! resolutions, and the bidirectional `Map<K, V>` hint flow.
 
-use koja_ast::ast::{Expr, ExprKind, Item, Literal, Statement};
+use koja_ast::ast::{Expr, ExprKind, Literal, Statement};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, typecheck_file as typecheck};
+use common::{PACKAGE, typecheck_script as typecheck};
 
-fn main_body(checked: &CheckedProgram) -> &[Statement] {
+fn body_statements(checked: &CheckedProgram) -> &[Statement] {
     let pkg = checked
         .packages
         .iter()
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
     let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    main.body
+    file.body
         .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point")
+        .expect("script-mode file must keep statements on File.body")
 }
 
 fn trailing_expr(checked: &CheckedProgram) -> &Expr {
-    let body = main_body(checked);
+    let body = body_statements(checked);
     let trailing = body.last().expect("expected at least one statement");
     match trailing {
         Statement::Expr(expr) => expr,
@@ -78,13 +70,11 @@ fn assert_map_literal(expr: &Expr) -> &[(Expr, Expr)] {
 #[test]
 fn empty_map_literal_pins_entry_types_from_binding_annotation() {
     let source = "
-        fn main
-          my_map: Map<String, Int> = [:]
-          my_map
-        end
+        my_map: Map<String, Int> = [:]
+        my_map
         ";
     let checked = typecheck(&dedent(source));
-    let body = main_body(&checked);
+    let body = body_statements(&checked);
     let assignment = body.first().expect("missing assignment");
     let Statement::Assignment { value, .. } = assignment else {
         panic!("expected Statement::Assignment, got {assignment:?}");
@@ -97,9 +87,7 @@ fn empty_map_literal_pins_entry_types_from_binding_annotation() {
 #[test]
 fn nonempty_map_literal_resolves_each_entry_in_source_order() {
     let source = "
-        fn main
-          [\"a\": 10, \"b\": 20]
-        end
+        [\"a\": 10, \"b\": 20]
         ";
     let checked = typecheck(&dedent(source));
     let trailing = trailing_expr(&checked);
@@ -131,13 +119,11 @@ fn nonempty_map_literal_resolves_each_entry_in_source_order() {
 #[test]
 fn map_literal_typed_binding_pins_entry_types() {
     let source = "
-        fn main
-          counts: Map<String, Int> = [\"hits\": 1, \"misses\": 2]
-          counts
-        end
+        counts: Map<String, Int> = [\"hits\": 1, \"misses\": 2]
+        counts
         ";
     let checked = typecheck(&dedent(source));
-    let body = main_body(&checked);
+    let body = body_statements(&checked);
     let assignment = body.first().expect("missing assignment");
     let Statement::Assignment { value, .. } = assignment else {
         panic!("expected Statement::Assignment, got {assignment:?}");

@@ -13,22 +13,18 @@
 //!   on this for single-`alloca` hoisting).
 
 use koja_ast::util::dedent;
-use koja_ir::{IRFunction, IRInstruction, IRType};
+use koja_ir::{IRBasicBlock, IRInstruction, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::{lower_script_source as lower, script_function};
 
-fn entry_block(function: &IRFunction) -> &koja_ir::IRBasicBlock {
-    function
-        .blocks
-        .first()
-        .expect("function should have at least one block")
+fn entry_block(blocks: &[IRBasicBlock]) -> &IRBasicBlock {
+    blocks.first().expect("body should have at least one block")
 }
 
-fn local_decls(function: &IRFunction) -> Vec<&IRInstruction> {
-    function
-        .blocks
+fn local_decls(blocks: &[IRBasicBlock]) -> Vec<&IRInstruction> {
+    blocks
         .iter()
         .flat_map(|b| b.instructions.iter())
         .filter(|i| matches!(i, IRInstruction::LocalDecl { .. }))
@@ -38,15 +34,12 @@ fn local_decls(function: &IRFunction) -> Vec<&IRInstruction> {
 #[test]
 fn body_decl_emits_local_decl_then_local_write() {
     let source = "
-        fn main
-          x = 42
-          x
-        end
+        x = 42
+        x
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let entry = entry_block(main);
+    let script = lower(&dedent(source));
+    let entry = entry_block(&script.blocks);
     let body = &entry.instructions;
 
     let const_pos = body
@@ -105,23 +98,20 @@ fn body_decl_emits_local_decl_then_local_write() {
 #[test]
 fn reassignment_emits_only_local_write() {
     let source = "
-        fn main
-          x = 1
-          x = 2
-          x
-        end
+        x = 1
+        x = 2
+        x
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
-    let decls = local_decls(main);
+    let script = lower(&dedent(source));
+    let decls = local_decls(&script.blocks);
     assert_eq!(
         decls.len(),
         1,
         "exactly one LocalDecl per slot — reassignment reuses it; got {decls:?}",
     );
 
-    let writes: Vec<_> = main
+    let writes: Vec<_> = script
         .blocks
         .iter()
         .flat_map(|b| b.instructions.iter())
@@ -144,14 +134,12 @@ fn param_promotion_emits_local_decl_and_local_write_in_entry() {
           n
         end
 
-        fn main
-          id(7)
-        end
+        id(7)
         ";
 
-    let program = lower(&dedent(source));
-    let id_fn = function(&program, "id");
-    let entry = entry_block(id_fn);
+    let script = lower(&dedent(source));
+    let id_fn = script_function(&script, "id");
+    let entry = entry_block(&id_fn.blocks);
 
     assert_eq!(id_fn.params.len(), 1);
     let param = &id_fn.params[0];
@@ -196,17 +184,14 @@ fn local_decl_lives_in_entry_block_for_if_branch_assignment() {
     // hoisting. The corresponding `LocalWrite` stays where the
     // surface assignment was lowered (in the arm).
     let source = "
-        fn main
-          if true
-            x = 1
-          end
+        if true
+          x = 1
         end
         ";
 
-    let program = lower(&dedent(source));
-    let main = function(&program, "main");
+    let script = lower(&dedent(source));
 
-    let entry = entry_block(main);
+    let entry = entry_block(&script.blocks);
     let entry_decl = entry
         .instructions
         .iter()
@@ -218,7 +203,7 @@ fn local_decl_lives_in_entry_block_for_if_branch_assignment() {
     );
 
     // No other block should carry a LocalDecl — only the entry.
-    for block in main.blocks.iter().skip(1) {
+    for block in script.blocks.iter().skip(1) {
         for inst in &block.instructions {
             assert!(
                 !matches!(inst, IRInstruction::LocalDecl { .. }),

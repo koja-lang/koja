@@ -18,14 +18,11 @@
 //! between patch versions).
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{
-    APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower_program,
-    lower_script_source as lower_script,
-};
+use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower_script};
 
 #[test]
 fn identity_function_distinct_args_emit_distinct_defines() {
@@ -82,14 +79,13 @@ fn method_on_generic_struct_emits_define_with_struct_mangled_prefix() {
           end
         end
 
-        fn main -> Int
-          p = Pair{a: 1, b: \"x\"}
-          p.first()
-        end
+        p = Pair{a: 1, b: \"x\"}
+        p.first()
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(

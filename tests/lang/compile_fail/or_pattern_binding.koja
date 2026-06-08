@@ -1,8 +1,0 @@
-fn main
-  x = 5
-
-  match x
-    1 | n -> n.print()
-    _ -> "other".print()
-  end
-end

@@ -18,7 +18,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::{PACKAGE, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail};
+use common::{PACKAGE, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail};
 
 fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
     let pkg = checked
@@ -27,18 +27,10 @@ fn trailing_resolution(checked: &CheckedProgram) -> ResolvedType {
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
     let file = pkg.files.first().expect("package has no files");
-    let main = file
-        .items
-        .iter()
-        .find_map(|item| match item {
-            Item::Function(function) if function.name == "main" => Some(function),
-            _ => None,
-        })
-        .expect("file is missing `fn main`");
-    let body = main
+    let body = file
         .body
         .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point");
+        .expect("script-mode file must keep statements on File.body");
     let trailing = body.last().expect("expected at least one statement");
     match trailing {
         Statement::Expr(expr) => expr.resolution.clone(),
@@ -70,10 +62,8 @@ fn never_type(checked: &CheckedProgram) -> ResolvedType {
 #[test]
 fn if_with_bool_condition_resolves_to_unit() {
     let source = "
-        fn main
-          if true
-            1
-          end
+        if true
+          1
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -83,10 +73,8 @@ fn if_with_bool_condition_resolves_to_unit() {
 #[test]
 fn unless_with_bool_condition_resolves_to_unit() {
     let source = "
-        fn main
-          unless false
-            1
-          end
+        unless false
+          1
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -96,10 +84,8 @@ fn unless_with_bool_condition_resolves_to_unit() {
 #[test]
 fn if_with_int_condition_diagnoses() {
     let source = "
-        fn main
-          if 1
-            2
-          end
+        if 1
+          2
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -116,10 +102,8 @@ fn if_with_int_condition_diagnoses() {
 #[test]
 fn unless_with_int_condition_diagnoses() {
     let source = "
-        fn main
-          unless 1
-            2
-          end
+        unless 1
+          2
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -136,12 +120,10 @@ fn unless_with_int_condition_diagnoses() {
 #[test]
 fn if_else_with_matching_int_arms_resolves_to_int() {
     let source = "
-        fn main
-          if true
-            1
-          else
-            2
-          end
+        if true
+          1
+        else
+          2
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -151,12 +133,10 @@ fn if_else_with_matching_int_arms_resolves_to_int() {
 #[test]
 fn if_else_with_mismatched_arms_diagnoses() {
     let source = "
-        fn main
-          if true
-            1
-          else
-            true
-          end
+        if true
+          1
+        else
+          true
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -181,9 +161,7 @@ fn if_else_with_diverging_then_arm_resolves_to_else_type() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -225,12 +203,10 @@ fn if_else_with_both_arms_diverging_resolves_to_never() {
 #[test]
 fn cond_with_matching_int_arms_resolves_to_int() {
     let source = "
-        fn main
-          cond
-            true -> 1
-            false -> 2
-            else -> 3
-          end
+        cond
+          true -> 1
+          false -> 2
+          else -> 3
         end
         ";
     let checked = typecheck(&dedent(source));
@@ -240,12 +216,10 @@ fn cond_with_matching_int_arms_resolves_to_int() {
 #[test]
 fn cond_with_mismatched_arms_diagnoses() {
     let source = "
-        fn main
-          cond
-            true -> 1
-            false -> false
-            else -> 3
-          end
+        cond
+          true -> 1
+          false -> false
+          else -> 3
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -262,11 +236,9 @@ fn cond_with_mismatched_arms_diagnoses() {
 #[test]
 fn cond_with_int_condition_diagnoses() {
     let source = "
-        fn main
-          cond
-            1 -> 1
-            else -> 2
-          end
+        cond
+          1 -> 1
+          else -> 2
         end
         ";
     let failure = typecheck_fail(&dedent(source));
@@ -291,9 +263,7 @@ fn cond_with_diverging_arms_joins_against_else() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -302,9 +272,7 @@ fn cond_with_diverging_arms_joins_against_else() {
 #[test]
 fn ternary_with_matching_int_arms_resolves_to_int() {
     let source = "
-        fn main
-          true ? 1 : 2
-        end
+        true ? 1 : 2
         ";
     let checked = typecheck(&dedent(source));
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
@@ -313,9 +281,7 @@ fn ternary_with_matching_int_arms_resolves_to_int() {
 #[test]
 fn ternary_with_mismatched_arms_diagnoses() {
     let source = "
-        fn main
-          true ? 1 : false
-        end
+        true ? 1 : false
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -331,9 +297,7 @@ fn ternary_with_mismatched_arms_diagnoses() {
 #[test]
 fn ternary_with_int_condition_diagnoses() {
     let source = "
-        fn main
-          1 ? 2 : 3
-        end
+        1 ? 2 : 3
         ";
     let failure = typecheck_fail(&dedent(source));
     assert!(
@@ -349,11 +313,9 @@ fn ternary_with_int_condition_diagnoses() {
 #[test]
 fn nested_if_inside_unless_resolves_to_unit() {
     let source = "
-        fn main
-          unless false
-            if true
-              1
-            end
+        unless false
+          if true
+            1
           end
         end
         ";

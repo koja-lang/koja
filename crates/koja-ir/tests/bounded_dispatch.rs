@@ -24,10 +24,10 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::lower_program_source;
+use common::lower_script_source;
 
-fn collect_function_names(program: &koja_ir::IRProgram) -> Vec<String> {
-    let mut names: Vec<String> = program
+fn collect_function_names(script: &koja_ir::IRScript) -> Vec<String> {
+    let mut names: Vec<String> = script
         .packages
         .iter()
         .flat_map(|p| p.functions.keys())
@@ -63,14 +63,12 @@ fn bounded_dispatch_monomorphizes_show_at_concrete_arg() {
           value.greet()
         end
 
-        fn main
-          show(Point{x: 1})
-          0
-        end
+        show(Point{x: 1})
+        0
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let names = collect_function_names(&program);
+    let script = lower_script_source(&dedent(source));
+    let names = collect_function_names(&script);
     assert!(
         names.contains(&"TestApp.show_$TestApp.Point$".to_string()),
         "expected mono'd `show_$TestApp.Point$`, got {names:?}",
@@ -120,15 +118,13 @@ fn bounded_dispatch_distinct_concrete_args_mint_distinct_show_decls() {
           value.greet()
         end
 
-        fn main
-          show(Point{x: 1})
-          show(Tag{label: \"hi\"})
-          0
-        end
+        show(Point{x: 1})
+        show(Tag{label: \"hi\"})
+        0
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let mut shows: Vec<_> = collect_function_names(&program)
+    let script = lower_script_source(&dedent(source));
+    let mut shows: Vec<_> = collect_function_names(&script)
         .into_iter()
         .filter(|n| n.starts_with("TestApp.show"))
         .collect();
@@ -169,14 +165,12 @@ fn bounded_dispatch_generic_struct_receiver_resolves_through_substitution() {
           value.greet()
         end
 
-        fn main
-          show(Bag{item: 1})
-          0
-        end
+        show(Bag{item: 1})
+        0
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let names = collect_function_names(&program);
+    let script = lower_script_source(&dedent(source));
+    let names = collect_function_names(&script);
     assert!(
         names.contains(&"TestApp.show_$TestApp.Bag_$Int64$$".to_string()),
         "expected mono'd `show_$Bag<Int>$`, got {names:?}",

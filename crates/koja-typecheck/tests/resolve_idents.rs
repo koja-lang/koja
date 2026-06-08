@@ -8,14 +8,12 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{diagnostic_messages, typecheck_file_fail as typecheck_fail};
+use common::{diagnostic_messages, typecheck_script_fail as typecheck_fail};
 
 #[test]
 fn unknown_identifier_diagnoses() {
     let source = "
-        fn main
-          undefined
-        end
+        undefined
         ";
 
     let failure = typecheck_fail(&dedent(source));

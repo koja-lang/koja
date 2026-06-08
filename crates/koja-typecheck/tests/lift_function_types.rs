@@ -13,7 +13,7 @@ use koja_typecheck::GlobalKind;
 
 mod common;
 
-use common::{PACKAGE, typecheck_file as typecheck};
+use common::{PACKAGE, typecheck_script as typecheck};
 
 fn lookup_function_signature<'a>(
     checked: &'a koja_typecheck::CheckedProgram,

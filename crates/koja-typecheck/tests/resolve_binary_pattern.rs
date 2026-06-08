@@ -13,19 +13,17 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::{typecheck_file as typecheck, typecheck_file_fail as typecheck_fail};
+use common::{typecheck_script as typecheck, typecheck_script_fail as typecheck_fail};
 
 #[test]
 fn literal_only_pattern_typechecks() {
     typecheck(&dedent(
         "
-        fn main
-          data = <<0xFF, 0x01, 0x02>>
+        data = <<0xFF, 0x01, 0x02>>
           match data
             <<0xFF, _::8, _::8>> -> 1
             _ -> 0
           end
-        end
         ",
     ));
 }
@@ -34,13 +32,11 @@ fn literal_only_pattern_typechecks() {
 fn binding_only_pattern_typechecks() {
     typecheck(&dedent(
         "
-        fn main
-          data = <<0xFF, 0x01, 0x02>>
+        data = <<0xFF, 0x01, 0x02>>
           match data
             <<tag::8, val::16>> -> tag + val
             _ -> 0
           end
-        end
         ",
     ));
 }
@@ -49,13 +45,11 @@ fn binding_only_pattern_typechecks() {
 fn greedy_tail_binary_typechecks() {
     typecheck(&dedent(
         "
-        fn main
-          data = <<0xFF, 0x01, 0x02>>
+        data = <<0xFF, 0x01, 0x02>>
           match data
             <<head::8, rest: Binary>> -> head
             _ -> 0
           end
-        end
         ",
     ));
 }
@@ -64,13 +58,11 @@ fn greedy_tail_binary_typechecks() {
 fn greedy_tail_bits_typechecks() {
     typecheck(&dedent(
         "
-        fn main
-          data = <<0xFF, 0x01, 0x02>>
+        data = <<0xFF, 0x01, 0x02>>
           match data
             <<head::8, rest: Bits>> -> head
             _ -> 0
           end
-        end
         ",
     ));
 }
@@ -79,13 +71,11 @@ fn greedy_tail_bits_typechecks() {
 fn typed_binding_pattern_typechecks() {
     typecheck(&dedent(
         "
-        fn main
-          data = <<0xFF, 0x01, 0x02>>
+        data = <<0xFF, 0x01, 0x02>>
           match data
             <<tag: UInt8, len: UInt16>> -> 1
             _ -> 0
           end
-        end
         ",
     ));
 }
@@ -94,13 +84,11 @@ fn typed_binding_pattern_typechecks() {
 fn string_literal_segment_typechecks() {
     typecheck(&dedent(
         "
-        fn main
-          data = <<\"GET hi\">>
+        data = <<\"GET hi\">>
           match data
             <<\"GET \", rest: Binary>> -> 1
             _ -> 0
           end
-        end
         ",
     ));
 }
@@ -109,13 +97,11 @@ fn string_literal_segment_typechecks() {
 fn non_binary_subject_diagnoses() {
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          x = 1
-          match x
+        x = 1
+        match x
             <<tag::8>> -> 1
             _ -> 0
           end
-        end
         ",
     ));
     assert!(
@@ -132,14 +118,12 @@ fn non_binary_subject_diagnoses() {
 fn dynamic_width_pattern_diagnoses() {
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          data = <<0xFF>>
+        data = <<0xFF>>
           n = 8
           match data
             <<x::n>> -> x
             _ -> 0
           end
-        end
         ",
     ));
     assert!(
@@ -156,13 +140,11 @@ fn dynamic_width_pattern_diagnoses() {
 fn byte_unit_pattern_diagnoses() {
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          data = <<0xFF, 0x01, 0x02, 0x03>>
+        data = <<0xFF, 0x01, 0x02, 0x03>>
           match data
             <<x::2 byte>> -> x
             _ -> 0
           end
-        end
         ",
     ));
     assert!(
@@ -179,13 +161,11 @@ fn byte_unit_pattern_diagnoses() {
 fn float_extract_diagnoses() {
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          data = <<1.0: Float32>>
+        data = <<1.0: Float32>>
           match data
             <<x: Float32>> -> 1
             _ -> 0
           end
-        end
         ",
     ));
     assert!(
@@ -204,13 +184,11 @@ fn unaligned_binary_tail_diagnoses() {
     // byte-aligned → reject.
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          data = <<0::3, 0::5>>
+        data = <<0::3, 0::5>>
           match data
             <<tag::3, rest: Binary>> -> tag
             _ -> 0
           end
-        end
         ",
     ));
     assert!(
@@ -227,13 +205,11 @@ fn unaligned_binary_tail_diagnoses() {
 fn literal_overflow_diagnoses() {
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          data = <<0xFF>>
+        data = <<0xFF>>
           match data
             <<300::8>> -> 1
             _ -> 0
           end
-        end
         ",
     ));
     assert!(
@@ -250,12 +226,10 @@ fn literal_overflow_diagnoses() {
 fn missing_catch_all_diagnoses() {
     let failure = typecheck_fail(&dedent(
         "
-        fn main
-          data = <<0xFF>>
+        data = <<0xFF>>
           match data
             <<tag::8>> -> tag
           end
-        end
         ",
     ));
     assert!(

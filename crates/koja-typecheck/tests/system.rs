@@ -10,7 +10,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
     let id = Identifier::new("Global", segments.iter().map(|s| s.to_string()).collect());
@@ -22,7 +22,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn system_struct_and_public_methods_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["System"]);
     assert_registered(&checked, &["System", "cwd"]);
     assert_registered(&checked, &["System", "get_env"]);
@@ -32,7 +32,7 @@ fn system_struct_and_public_methods_register() {
 
 #[test]
 fn system_extern_shims_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["System", "koja_cwd"]);
     assert_registered(&checked, &["System", "koja_get_env"]);
     assert_registered(&checked, &["System", "koja_hostname"]);
@@ -43,9 +43,7 @@ fn system_extern_shims_register() {
 fn user_code_can_call_system_cwd() {
     typecheck(&dedent(
         "
-        fn main -> Result<String, String>
-          System.cwd()
-        end
+        System.cwd()
         ",
     ));
 }
@@ -54,9 +52,7 @@ fn user_code_can_call_system_cwd() {
 fn user_code_can_call_system_get_env() {
     typecheck(&dedent(
         "
-        fn main -> Option<String>
-          System.get_env(\"HOME\")
-        end
+        System.get_env(\"HOME\")
         ",
     ));
 }
@@ -65,9 +61,7 @@ fn user_code_can_call_system_get_env() {
 fn user_code_can_call_system_set_env() {
     typecheck(&dedent(
         "
-        fn main
-          System.set_env(\"FOO\", \"bar\")
-        end
+        System.set_env(\"FOO\", \"bar\")
         ",
     ));
 }
@@ -76,9 +70,7 @@ fn user_code_can_call_system_set_env() {
 fn user_code_can_call_system_hostname() {
     typecheck(&dedent(
         "
-        fn main -> String
-          System.hostname()
-        end
+        System.hostname()
         ",
     ));
 }

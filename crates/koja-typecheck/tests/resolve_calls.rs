@@ -5,7 +5,7 @@
 //! non-identifier, and wrong-kind callees, plus return-type
 //! propagation through arithmetic.
 
-use koja_ast::ast::{Expr, ExprKind, Function, Item, Literal, Statement};
+use koja_ast::ast::{Expr, ExprKind, Literal, Statement};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::{CheckedProgram, GlobalKind};
@@ -13,33 +13,21 @@ use koja_typecheck::{CheckedProgram, GlobalKind};
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
-fn find_function<'a>(checked: &'a CheckedProgram, name: &str) -> &'a Function {
+fn trailing_expr(checked: &CheckedProgram) -> &Expr {
     let pkg = checked
         .packages
         .iter()
         .find(|p| p.package == PACKAGE)
         .expect("checked program is missing the test package");
-    for file in &pkg.files {
-        for item in &file.items {
-            if let Item::Function(function) = item
-                && function.name == name
-            {
-                return function;
-            }
-        }
-    }
-    panic!("fn {name} not found in checked program");
-}
-
-fn trailing_expr(function: &Function) -> &Expr {
-    let body = function
+    let file = pkg.files.first().expect("package has no files");
+    let body = file
         .body
         .as_deref()
-        .expect("function has no body (extern?)");
+        .expect("script-mode file must keep statements on File.body");
     let trailing = body.last().expect("expected at least one statement");
     match trailing {
         Statement::Expr(expr) => expr,
@@ -67,16 +55,13 @@ fn zero_arg_call_resolves_to_callee_return_type() {
           42
         end
 
-        fn main
-          answer()
-        end
+        answer()
         ";
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
 
-    let main = find_function(&checked, "main");
-    let call = trailing_expr(main);
+    let call = trailing_expr(&checked);
     assert_eq!(
         call.resolution, int,
         "call site should resolve to `answer`'s return type (Int)",
@@ -112,16 +97,13 @@ fn arg_taking_call_resolves_and_registers_signature() {
           1
         end
 
-        fn main
-          add(2, 3)
-        end
+        add(2, 3)
         ";
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
 
-    let main = find_function(&checked, "main");
-    let call = trailing_expr(main);
+    let call = trailing_expr(&checked);
     assert_eq!(call.resolution, int);
 
     let ExprKind::Call { args, .. } = &call.kind else {
@@ -168,15 +150,12 @@ fn return_type_propagates_through_arithmetic() {
           42
         end
 
-        fn main
-          answer() + 1
-        end
+        answer() + 1
         ";
 
     let checked = typecheck(&dedent(source));
     let int = global_leaf(&checked, "Int");
-    let main = find_function(&checked, "main");
-    let trailing = trailing_expr(main);
+    let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, int);
 }
 
@@ -191,9 +170,7 @@ fn arity_mismatch_diagnoses() {
           1
         end
 
-        fn main
-          add(1)
-        end
+        add(1)
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -211,9 +188,7 @@ fn arg_type_mismatch_diagnoses() {
           1
         end
 
-        fn main
-          only_int(true)
-        end
+        only_int(true)
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -228,7 +203,7 @@ fn arg_type_mismatch_diagnoses() {
 
 #[test]
 fn unknown_callee_diagnoses() {
-    let failure = typecheck_fail("fn main\n  missing()\nend\n");
+    let failure = typecheck_fail("missing()\n");
     let messages = diagnostic_messages(&failure);
     assert!(
         messages
@@ -241,9 +216,7 @@ fn unknown_callee_diagnoses() {
 #[test]
 fn wrong_kind_callee_diagnoses() {
     let source = "
-        fn main
-          Int()
-        end
+        Int()
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -269,7 +242,7 @@ fn non_ident_callee_diagnoses() {
     // `(42)()` parses as Call { callee: Group { Literal } }. The
     // resolve_call arm pattern-matches on `ExprKind::Ident`; the
     // Group falls through to the non-Ident diagnose path.
-    let failure = typecheck_fail("fn main\n  (42)()\nend\n");
+    let failure = typecheck_fail("(42)()\n");
     let messages = diagnostic_messages(&failure);
     assert!(
         messages
@@ -286,9 +259,7 @@ fn named_args_diagnoses() {
           1
         end
 
-        fn main
-          add(a: 1, b: 2)
-        end
+        add(a: 1, b: 2)
         ";
 
     let failure = typecheck_fail(&dedent(source));

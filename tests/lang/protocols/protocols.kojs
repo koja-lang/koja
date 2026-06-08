@@ -1,0 +1,18 @@
+protocol Greeter
+  fn greet(self) -> String
+end
+
+struct Point
+  x: Int
+  y: Int
+end
+
+impl Greeter for Point
+  fn greet(self) -> String
+    "Point"
+  end
+end
+
+p = Point{x: 1, y: 2}
+label = p.greet()
+label.print()

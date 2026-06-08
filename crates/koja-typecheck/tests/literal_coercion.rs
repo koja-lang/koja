@@ -9,7 +9,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 // ------------------------------------------------------------------
@@ -23,9 +23,7 @@ fn positive_int_literal_fits_call_arg_uint8() {
           ()
         end
 
-        fn main -> Unit
-          take(255)
-        end
+        take(255)
         ";
     typecheck(&dedent(source));
 }
@@ -37,9 +35,7 @@ fn negative_int_literal_fits_call_arg_int8() {
           ()
         end
 
-        fn main -> Unit
-          take(-128)
-        end
+        take(-128)
         ";
     typecheck(&dedent(source));
 }
@@ -51,9 +47,7 @@ fn negative_int_literal_into_uint8_diagnoses_out_of_range() {
           ()
         end
 
-        fn main -> Unit
-          take(-1)
-        end
+        take(-1)
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -72,9 +66,7 @@ fn hex_int_literal_fits_call_arg_uint8() {
           ()
         end
 
-        fn main -> Unit
-          take(0xFF)
-        end
+        take(0xFF)
         ";
     typecheck(&dedent(source));
 }
@@ -86,9 +78,7 @@ fn decimal_overflow_into_int8_diagnoses_out_of_range() {
           ()
         end
 
-        fn main -> Unit
-          take(128)
-        end
+        take(128)
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -111,9 +101,7 @@ fn struct_field_uint8_accepts_fitting_literal() {
           descriptor: UInt8
         end
 
-        fn main
-          Fd{descriptor: 1}
-        end
+        Fd{descriptor: 1}
         ";
     typecheck(&dedent(source));
 }
@@ -125,9 +113,7 @@ fn struct_field_uint8_rejects_overflow_literal() {
           descriptor: UInt8
         end
 
-        fn main
-          Fd{descriptor: 256}
-        end
+        Fd{descriptor: 256}
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -150,9 +136,7 @@ fn enum_tuple_payload_int16_accepts_fitting_literal() {
           Tone(Int16)
         end
 
-        fn main
-          Signal.Tone(32_767)
-        end
+        Signal.Tone(32_767)
         ";
     typecheck(&dedent(source));
 }
@@ -164,9 +148,7 @@ fn enum_tuple_payload_int16_rejects_overflow_literal() {
           Tone(Int16)
         end
 
-        fn main
-          Signal.Tone(40_000)
-        end
+        Signal.Tone(40_000)
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -218,9 +200,7 @@ fn const_initializer_uint8_accepts_fitting_literal() {
     let source = "
         const STDOUT: UInt8 = 1
 
-        fn main -> Unit
-          ()
-        end
+        ()
         ";
     typecheck(&dedent(source));
 }
@@ -230,9 +210,7 @@ fn const_initializer_uint8_rejects_negative_literal() {
     let source = "
         const BAD: UInt8 = -1
 
-        fn main -> Unit
-          ()
-        end
+        ()
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -257,9 +235,7 @@ fn alias_int_accepts_negative_literal() {
           ()
         end
 
-        fn main -> Unit
-          take(-1)
-        end
+        take(-1)
         ";
     typecheck(&dedent(source));
 }
@@ -271,9 +247,7 @@ fn alias_float_accepts_arbitrary_value() {
           ()
         end
 
-        fn main -> Unit
-          take(3.14)
-        end
+        take(3.14)
         ";
     typecheck(&dedent(source));
 }
@@ -291,9 +265,7 @@ fn float32_accepts_round_trip_safe_literal() {
           ()
         end
 
-        fn main -> Unit
-          take(0.5)
-        end
+        take(0.5)
         ";
     typecheck(&dedent(source));
 }
@@ -305,9 +277,7 @@ fn float32_rejects_non_representable_literal() {
           ()
         end
 
-        fn main -> Unit
-          take(0.1)
-        end
+        take(0.1)
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -332,9 +302,7 @@ fn non_numeric_source_keeps_strict_type_mismatch() {
           ()
         end
 
-        fn main -> Unit
-          take(\"hello\")
-        end
+        take(\"hello\")
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -364,10 +332,8 @@ fn pattern_literal_uint8_fits_subject_uint8() {
           end
         end
 
-        fn main -> Unit
-          classify(5)
-          ()
-        end
+        classify(5)
+        ()
         ";
     typecheck(&dedent(source));
 }
@@ -382,10 +348,8 @@ fn pattern_literal_uint8_out_of_range_diagnoses() {
           end
         end
 
-        fn main -> Unit
-          classify(5)
-          ()
-        end
+        classify(5)
+        ()
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -407,10 +371,8 @@ fn pattern_literal_int8_negative_fits() {
           end
         end
 
-        fn main -> Unit
-          classify(-1)
-          ()
-        end
+        classify(-1)
+        ()
         ";
     typecheck(&dedent(source));
 }
@@ -431,10 +393,8 @@ fn binary_eq_int8_with_int_literal_fits() {
           x == 0
         end
 
-        fn main -> Unit
-          check(1)
-          ()
-        end
+        check(1)
+        ()
         ";
     typecheck(&dedent(source));
 }
@@ -446,10 +406,8 @@ fn binary_gte_int32_with_int_literal_fits() {
           fd >= 0
         end
 
-        fn main -> Unit
-          nonneg(1)
-          ()
-        end
+        nonneg(1)
+        ()
         ";
     typecheck(&dedent(source));
 }
@@ -461,10 +419,8 @@ fn binary_eq_uint8_with_int_literal_out_of_range_diagnoses() {
           x == 256
         end
 
-        fn main -> Unit
-          check(1)
-          ()
-        end
+        check(1)
+        ()
         ";
     let failure = typecheck_fail(&dedent(source));
     let messages = diagnostic_messages(&failure);
@@ -484,10 +440,8 @@ fn binary_gt_float32_with_float_literal_fits() {
           x > 1.5
         end
 
-        fn main -> Unit
-          check(2.0)
-          ()
-        end
+        check(2.0)
+        ()
         ";
     typecheck(&dedent(source));
 }
@@ -511,9 +465,7 @@ fn binary_gte_int64_with_int_literal_aliases() {
           result >= 0
         end
 
-        fn main -> Unit
-          ()
-        end
+        ()
         ";
     typecheck(&dedent(source));
 }
@@ -532,9 +484,7 @@ fn result_ok_payload_int64_unifies_with_expected_int() {
           result >= 0 ? Result.Ok(result) : Result.Err(\"failed\")
         end
 
-        fn main -> Unit
-          ()
-        end
+        ()
         ";
     typecheck(&dedent(source));
 }

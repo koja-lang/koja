@@ -1,0 +1,21 @@
+struct Point
+  x: Int
+  y: Int
+end
+
+extend Point
+  fn distance_squared(self) -> Int
+    self.x * self.x + self.y * self.y
+  end
+
+  fn translate(self, dx: Int, dy: Int) -> Point
+    Point{x: self.x + dx, y: self.y + dy}
+  end
+end
+
+p = Point{x: 3, y: 4}
+p.distance_squared().print()
+
+p2 = p.translate(1, 2)
+p2.x.print()
+p2.y.print()

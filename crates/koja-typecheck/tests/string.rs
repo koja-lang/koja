@@ -12,7 +12,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
     let id = Identifier::new("Global", segments.iter().map(|s| s.to_string()).collect());
@@ -24,7 +24,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn string_intrinsic_methods_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for method in [
         "byte_length",
         "get",
@@ -39,14 +39,14 @@ fn string_intrinsic_methods_register() {
 
 #[test]
 fn string_equality_and_hash_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["String", "eq"]);
     assert_registered(&checked, &["String", "hash"]);
 }
 
 #[test]
 fn string_pure_koja_helpers_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     for method in [
         "alpha?",
         "at",
@@ -79,23 +79,17 @@ fn string_pure_koja_helpers_register() {
 fn user_code_can_call_string_intrinsics() {
     typecheck(&dedent(
         "
-        fn main -> Int
-          \"hello\".length()
-        end
+        \"hello\".length()
         ",
     ));
     typecheck(&dedent(
         "
-        fn main -> Int
-          \"hello\".byte_length()
-        end
+        \"hello\".byte_length()
         ",
     ));
     typecheck(&dedent(
         "
-        fn main -> Bool
-          \"hello\".eq(\"hello\")
-        end
+        \"hello\".eq(\"hello\")
         ",
     ));
 }
@@ -104,23 +98,17 @@ fn user_code_can_call_string_intrinsics() {
 fn user_code_can_call_pure_koja_helpers() {
     typecheck(&dedent(
         "
-        fn main -> Bool
-          \"hello\".empty?()
-        end
+        \"hello\".empty?()
         ",
     ));
     typecheck(&dedent(
         "
-        fn main -> String
-          \"  hi  \".trim()
-        end
+        \"  hi  \".trim()
         ",
     ));
     typecheck(&dedent(
         "
-        fn main -> Bool
-          \"hello world\".contains?(\"world\")
-        end
+        \"hello world\".contains?(\"world\")
         ",
     ));
 }

@@ -27,7 +27,7 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    diagnostic_messages, typecheck_file as typecheck, typecheck_file_fail as typecheck_fail,
+    diagnostic_messages, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -215,9 +215,7 @@ fn trait_impl_on_concrete_specialization_satisfies_call_site_bounds() {
           value.render()
         end
 
-        fn main
-          show(Bag{item: 1})
-        end
+        show(Bag{item: 1})
         ";
 
     typecheck(&dedent(source));

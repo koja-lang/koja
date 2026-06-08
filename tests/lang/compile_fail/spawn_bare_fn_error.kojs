@@ -1,0 +1,7 @@
+fn worker
+  receive
+    msg -> msg.print()
+  end
+end
+
+spawn worker

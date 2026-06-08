@@ -6,23 +6,22 @@
 //! untouched — including across a function-call boundary, where the
 //! callee's local mutation can't reach back to the caller's binding.
 
+use koja_ast::util::dedent;
 use koja_ir_eval::Value;
 
 mod common;
 
-use common::evaluate_program as evaluate;
+use common::evaluate_script as evaluate;
 
 #[test]
 fn list_assignment_is_a_copy_not_an_alias() {
     let source = "
-        fn main -> Int
-          a = [1, 2]
-          b = a
-          b = b.append(3)
-          a.length()
-        end
+        a = [1, 2]
+        b = a
+        b = b.append(3)
+        a.length()
         ";
-    assert_eq!(evaluate(source).unwrap(), Value::Int(2));
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2));
 }
 
 #[test]
@@ -32,11 +31,9 @@ fn list_is_unchanged_after_a_helper_mutates_its_own_binding() {
           xs.append(99)
         end
 
-        fn main -> Int
-          a = [1, 2]
-          ignored = grow(a)
-          a.length()
-        end
+        a = [1, 2]
+        ignored = grow(a)
+        a.length()
         ";
-    assert_eq!(evaluate(source).unwrap(), Value::Int(2));
+    assert_eq!(evaluate(&dedent(source)).unwrap(), Value::Int(2));
 }

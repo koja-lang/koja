@@ -1,0 +1,11 @@
+fn apply(x: Int, f: fn (Int) -> Int) -> Int
+  f(x)
+end
+
+double = fn (n: Int) -> Int n * 2 end
+
+apply(5, double).print()
+
+result =
+  apply(7, fn (n: Int) -> Int n + 3 end)
+result.print()

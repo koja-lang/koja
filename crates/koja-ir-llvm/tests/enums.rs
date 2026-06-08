@@ -1,5 +1,5 @@
 //! IR-text snapshot tests for the enum slice in
-//! [`koja_ir_llvm::emit_llvm_ir`].
+//! [`koja_ir_llvm::emit_script_llvm_ir`].
 //!
 //! Three contracts are pinned:
 //!
@@ -32,14 +32,11 @@
 //! script's trailing expression references it.
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::{emit_llvm_ir, emit_script_llvm_ir};
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
-use common::{
-    APP_NAME, assert_contains, assert_main_shape, lower_program_source as lower_program,
-    lower_script_source as lower_script,
-};
+use common::{APP_NAME, assert_contains, assert_main_shape, lower_script_source as lower_script};
 
 // ---------------------------------------------------------------------------
 // Decl emission — Unit-only enum
@@ -66,13 +63,12 @@ fn unit_only_enum_emits_outer_blob_and_per_variant_complete_types() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     // Outer blob: every variant is Unit so max_align == 1, max_size == 1
@@ -112,13 +108,12 @@ fn tuple_variant_emits_payload_struct_and_complete_with_padding() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "%TestApp.Result.Ok.payload = type { i64 }");
@@ -146,13 +141,12 @@ fn struct_variant_emits_payload_struct_and_complete_with_padding() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "%TestApp.Shape.Rect.payload = type { i64, i64 }");
@@ -178,13 +172,12 @@ fn unit_variant_construction_lowers_to_alloca_and_tag_store() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "alloca %TestApp.Color");
     // Tag-only store at field index 0 of the per-variant complete type.
@@ -205,13 +198,12 @@ fn higher_position_variant_uses_higher_tag_value() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     // `Blue` is the third variant (position 2) so its tag is `i8 2`.
     assert_contains(&ir_text, "store i8 2");
@@ -229,13 +221,12 @@ fn tuple_variant_construction_writes_tag_and_payload_field() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     // Tag at field 0 of the complete struct.
     assert_contains(&ir_text, "store i8 0");
@@ -261,13 +252,12 @@ fn struct_variant_construction_writes_tag_and_each_named_field() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "alloca %TestApp.Shape");
     assert_contains(&ir_text, "store i8 0");
@@ -296,13 +286,12 @@ fn outer_blob_uses_i64_chunks_when_payload_contains_int() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     // `Ok(Int)`'s complete struct is 16 bytes (tag + 7 bytes padding +
     // i64 payload). The outer blob is `{ [2 x i64] }` — 2 i64 chunks
@@ -329,13 +318,12 @@ fn struct_variant_carrying_user_struct_resolves_field_through_pre_emit() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "%TestApp.Inner = type { i64 }");
     assert_contains(
@@ -360,13 +348,12 @@ fn static_method_returning_enum_emits_outer_typed_signature() {
           end
         end
 
-        fn main -> Int
-          1
-        end
+        1
         ";
 
-    let program = lower_program(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
+    let script = lower_script(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
     assert_contains(&ir_text, "define %TestApp.Color @TestApp.Color.primary()");
 }

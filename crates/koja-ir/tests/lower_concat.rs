@@ -15,7 +15,7 @@ use koja_ir::{ConcatKind, IRFunction, IRInstruction, IRType};
 
 mod common;
 
-use common::{function, lower_program_source as lower};
+use common::{lower_script_source as lower, script_function};
 
 fn first_concat(function: &IRFunction) -> &IRInstruction {
     function
@@ -32,14 +32,10 @@ fn string_concat_lowers_to_concat_string() {
         fn greet(a: String, b: String) -> String
           a <> b
         end
-
-        fn main
-          1
-        end
     ";
 
-    let program = lower(&dedent(source));
-    let greet = function(&program, "greet");
+    let script = lower(&dedent(source));
+    let greet = script_function(&script, "greet");
     let IRInstruction::Concat { kind, .. } = first_concat(greet) else {
         unreachable!()
     };
@@ -53,14 +49,10 @@ fn binary_concat_lowers_to_concat_binary() {
         fn join(a: Binary, b: Binary) -> Binary
           a <> b
         end
-
-        fn main
-          1
-        end
     ";
 
-    let program = lower(&dedent(source));
-    let join = function(&program, "join");
+    let script = lower(&dedent(source));
+    let join = script_function(&script, "join");
     let IRInstruction::Concat { kind, .. } = first_concat(join) else {
         unreachable!()
     };
@@ -74,14 +66,10 @@ fn bits_concat_lowers_to_concat_bits() {
         fn join(a: Bits, b: Bits) -> Bits
           a <> b
         end
-
-        fn main
-          1
-        end
     ";
 
-    let program = lower(&dedent(source));
-    let join = function(&program, "join");
+    let script = lower(&dedent(source));
+    let join = script_function(&script, "join");
     let IRInstruction::Concat { kind, .. } = first_concat(join) else {
         unreachable!()
     };

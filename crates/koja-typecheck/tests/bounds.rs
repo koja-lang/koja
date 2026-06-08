@@ -15,8 +15,8 @@ use koja_ast::util::dedent;
 mod common;
 
 use common::{
-    PACKAGE, diagnostic_messages, typecheck_file as typecheck,
-    typecheck_file_fail as typecheck_fail,
+    PACKAGE, diagnostic_messages, typecheck_script as typecheck,
+    typecheck_script_fail as typecheck_fail,
 };
 
 #[test]
@@ -139,9 +139,7 @@ fn call_site_with_unimplemented_bound_diagnoses() {
           value.greet()
         end
 
-        fn main
-          show(Point{x: 1})
-        end
+        show(Point{x: 1})
         ";
 
     let failure = typecheck_fail(&dedent(source));
@@ -176,9 +174,7 @@ fn call_site_with_implemented_bound_succeeds() {
           value.greet()
         end
 
-        fn main
-          show(Point{x: 1})
-        end
+        show(Point{x: 1})
         ";
 
     typecheck(&dedent(source));
@@ -212,9 +208,7 @@ fn call_site_with_partial_multi_bound_diagnoses_missing_protocol() {
           value.greet()
         end
 
-        fn main
-          render(Point{x: 1})
-        end
+        render(Point{x: 1})
         ";
 
     let failure = typecheck_fail(&dedent(source));

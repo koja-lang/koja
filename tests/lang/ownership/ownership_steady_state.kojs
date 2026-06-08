@@ -1,0 +1,139 @@
+# Steady-state leak guard for value-semantics drop discipline.
+#
+# Each pattern allocates fresh heap every iteration and must release it
+# again, so the runtime's live-block count after a warmed loop equals the
+# count before it. A nonzero delta means an owned temporary leaked.
+# `koja_rt_live_blocks` is the runtime's net malloc/free counter.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct Msg
+  text: String
+  count: Int
+end
+
+enum Shape
+  Circle(Int)
+  Named {
+    label: String,
+  }
+end
+
+fn sink_string(s: String) -> Int
+  s.length()
+end
+
+fn sink_int(n: Int) -> Int
+  n
+end
+
+fn make_msg(t: String) -> Msg
+  Msg{text: t, count: 1}
+end
+
+fn describe_shape(s: Shape) -> Int
+  match s
+    Shape.Named{label: l} -> sink_string(l)
+    Shape.Circle(n) -> sink_int(n)
+  end
+end
+
+# Run `body` once to absorb any one-time lazy init, then loop it and
+# assert the live-block count is unchanged across the loop.
+fn check(label: String, body: fn () -> Unit)
+  body()
+  start = Rt.koja_rt_live_blocks()
+
+  i = 0
+
+  loop
+    body()
+    i += 1
+
+    if i >= 500
+      break
+    end
+  end
+
+  finish = Rt.koja_rt_live_blocks()
+
+  if start == finish
+    (label <> ": ok").print()
+  else
+    (label <> ": LEAK").print()
+    (finish - start).print()
+  end
+end
+
+# owned-temp call argument: f(a <> b)
+check("call_arg", fn () -> Unit sink_string("a" <> "b") end)
+
+# method-receiver chain: each intermediate receiver is a fresh temp
+check(
+  "method_chain",
+  fn () -> Unit sink_int([1, 2].append(3).append(4).length()) end,
+)
+
+# list literal as an owned temp
+check("list_literal", fn () -> Unit sink_int([1, 2, 3].length()) end)
+
+# map literal as an owned temp
+check("map_literal", fn () -> Unit
+    m: Map<String, Int> = ["a": 1, "b": 2]
+    sink_int(m.length())
+  end)
+
+# struct construction bound to a local, then dropped at scope exit
+check("struct_bind", fn () -> Unit
+    m = Msg{text: "x" <> "y", count: 1}
+    sink_int(m.count)
+  end)
+
+# enum struct-variant construction passed as an owned argument, then
+# consumed through a match (arm-tail acquire / merge release)
+check(
+  "enum_bind",
+  fn () -> Unit sink_int(describe_shape(Shape.Named{label: "p" <> "q"})) end,
+)
+
+# `<>` chain
+check("concat_chain", fn () -> Unit
+    r = "a" <> "b" <> "c"
+    sink_string(r)
+  end)
+
+# FieldGet on a fresh temp: the base struct is dead after the read
+check("fieldget_temp", fn () -> Unit
+    t = make_msg("u" <> "v").text
+    sink_string(t)
+  end)
+
+# if-expression whose heap-typed merge value must be owned at the join
+check("if_merge", fn () -> Unit
+    flag = true
+
+    r =
+      if flag
+        "x" <> "y"
+      else
+        "z" <> "w"
+      end
+
+    sink_string(r)
+  end)
+
+# identity/no-op returns must clone, not alias the borrowed receiver:
+# an out-of-bounds replace_at returns the (unchanged) list...
+check(
+  "replace_at_oob",
+  fn () -> Unit sink_int([1, 2, 3].replace_at(10, 99).length()) end,
+)
+
+# ...and removing an absent key returns the (unchanged) map
+check("map_remove_absent", fn () -> Unit
+    m: Map<String, Int> = ["a": 1, "b": 2]
+    sink_int(m.remove("z").length())
+  end)

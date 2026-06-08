@@ -23,7 +23,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 #[test]
 fn unit_variant_inferred_from_function_return_type() {
@@ -212,7 +212,7 @@ fn return_inside_closure_uses_closure_return_type_not_outer_fn() {
 
 #[test]
 fn unit_variant_without_expected_still_diagnoses() {
-    use common::typecheck_file_fail as typecheck_fail;
+    use common::typecheck_script_fail as typecheck_fail;
 
     // Bare assignment inside a Unit-returning function: the rhs
     // sits outside any expected-type position, so the unit-variant
@@ -237,7 +237,7 @@ fn unit_variant_without_expected_still_diagnoses() {
 
 #[test]
 fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
-    use common::typecheck_file_fail as typecheck_fail;
+    use common::typecheck_script_fail as typecheck_fail;
 
     let source = "
         enum Maybe<T>
@@ -278,9 +278,7 @@ fn generic_return_hint_widens_int_literal_arg_to_int32() {
           x
         end
 
-        fn main
-          x: Int32 = identity(42)
-        end
+        x: Int32 = identity(42)
         ";
     typecheck(&dedent(source));
 }
@@ -292,16 +290,14 @@ fn generic_return_hint_widens_int_literal_arg_to_int8() {
           x
         end
 
-        fn main
-          x: Int8 = identity(7)
-        end
+        x: Int8 = identity(7)
         ";
     typecheck(&dedent(source));
 }
 
 #[test]
 fn generic_return_hint_unrelated_to_arg_type_still_errors() {
-    use common::typecheck_file_fail as typecheck_fail;
+    use common::typecheck_script_fail as typecheck_fail;
 
     // `identity(42)` returns `Int`; annotating it as `String` must
     // still surface a diagnostic. The exact message may shift between
@@ -313,9 +309,7 @@ fn generic_return_hint_unrelated_to_arg_type_still_errors() {
           x
         end
 
-        fn main
-          x: String = identity(42)
-        end
+        x: String = identity(42)
         ";
     typecheck_fail(&dedent(source));
 }
@@ -336,9 +330,7 @@ fn option_none_in_struct_field_infers_from_declared_type() {
           hint: Option<String>
         end
 
-        fn main
-          d = Diagnostic{message: \"hi\", hint: Option.None}
-        end
+        d = Diagnostic{message: \"hi\", hint: Option.None}
         ";
     typecheck(&dedent(source));
 }
@@ -350,9 +342,7 @@ fn empty_list_in_struct_field_infers_from_declared_type() {
           items: List<Int>
         end
 
-        fn main
-          b = Bag{items: []}
-        end
+        b = Bag{items: []}
         ";
     typecheck(&dedent(source));
 }
@@ -370,9 +360,7 @@ fn generic_struct_type_args_seed_field_inits_from_outer_annotation() {
           alt: Maybe<T>
         end
 
-        fn main
-          b: Bag<Int> = Bag{value: 1, alt: Maybe.None}
-        end
+        b: Bag<Int> = Bag{value: 1, alt: Maybe.None}
         ";
     typecheck(&dedent(source));
 }
@@ -388,9 +376,7 @@ fn nested_struct_field_propagates_through_two_levels() {
           inner: Inner
         end
 
-        fn main
-          o = Outer{inner: Inner{deep: Option.None}}
-        end
+        o = Outer{inner: Inner{deep: Option.None}}
         ";
     typecheck(&dedent(source));
 }
@@ -402,28 +388,24 @@ fn option_none_in_enum_struct_variant_field_infers_from_declared_type() {
           Tick{at: Int, hint: Option<String>}
         end
 
-        fn main
-          e = Event.Tick{at: 1, hint: Option.None}
-        end
+        e = Event.Tick{at: 1, hint: Option.None}
         ";
     typecheck(&dedent(source));
 }
 
 #[test]
 fn generic_return_hint_inside_unit_body_does_not_widen_unrelated_call() {
-    // Regression for the `fn main` (Unit return) + trailing
-    // `identity(1)` case: the outer expected hint is `Unit`, but
-    // `T = Int` from the arg must win — the speculative pre-seed
-    // would set `T = Unit` then conflict on the arg unify, so the
-    // fallback path runs and the call types as `Int`.
+    // Regression for the trailing-`identity(1)` case in a Unit-typed
+    // script body: the outer expected hint is `Unit`, but `T = Int`
+    // from the arg must win — the speculative pre-seed would set
+    // `T = Unit` then conflict on the arg unify, so the fallback path
+    // runs and the call types as `Int`.
     let source = "
         fn identity<T>(value: T) -> T
           value
         end
 
-        fn main
-          identity(1)
-        end
+        identity(1)
         ";
     typecheck(&dedent(source));
 }

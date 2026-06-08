@@ -16,10 +16,10 @@ use koja_ir_eval::Value;
 
 mod common;
 
-use common::evaluate_program as evaluate;
+use common::evaluate_script as evaluate;
 
 fn run(body: &str) -> Vec<u8> {
-    let source = format!("fn main -> String\n  {body}\nend\n");
+    let source = format!("{body}\n");
     match evaluate(&source).expect("evaluation should succeed") {
         Value::String(bytes) => bytes,
         other => panic!("expected `Value::String`, got `{other}`"),

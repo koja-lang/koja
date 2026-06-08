@@ -12,7 +12,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
     let id = Identifier::new("Global", segments.iter().map(|s| s.to_string()).collect());
@@ -24,7 +24,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn fd_struct_and_public_methods_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["Fd"]);
     assert_registered(&checked, &["Fd", "block"]);
     assert_registered(&checked, &["Fd", "close"]);
@@ -36,7 +36,7 @@ fn fd_struct_and_public_methods_register() {
 
 #[test]
 fn file_struct_and_public_methods_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["File"]);
     assert_registered(&checked, &["File", "close"]);
     assert_registered(&checked, &["File", "delete"]);
@@ -49,13 +49,13 @@ fn file_struct_and_public_methods_register() {
 
 #[test]
 fn file_mode_enum_registers() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["FileMode"]);
 }
 
 #[test]
 fn fd_extern_shims_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["Fd", "koja_fd_close"]);
     assert_registered(&checked, &["Fd", "koja_fd_read"]);
     assert_registered(&checked, &["Fd", "koja_fd_write"]);
@@ -66,7 +66,7 @@ fn fd_extern_shims_register() {
 
 #[test]
 fn file_extern_shims_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["File", "koja_file_delete"]);
     assert_registered(&checked, &["File", "koja_file_exists"]);
     assert_registered(&checked, &["File", "koja_file_open"]);
@@ -79,10 +79,8 @@ fn file_extern_shims_register() {
 fn user_code_can_call_file_write_and_read() {
     typecheck(&dedent(
         "
-        fn main -> Result<String, String>
-          _ = File.write(\"out.txt\", \"hello\")
-          File.read(\"out.txt\")
-        end
+        _ = File.write(\"out.txt\", \"hello\")
+        File.read(\"out.txt\")
         ",
     ));
 }
@@ -91,9 +89,7 @@ fn user_code_can_call_file_write_and_read() {
 fn user_code_can_call_file_exists_predicate() {
     typecheck(&dedent(
         "
-        fn main -> Bool
-          File.exists?(\"out.txt\")
-        end
+        File.exists?(\"out.txt\")
         ",
     ));
 }
@@ -102,9 +98,7 @@ fn user_code_can_call_file_exists_predicate() {
 fn user_code_can_open_with_file_mode_match() {
     typecheck(&dedent(
         "
-        fn main -> Result<File, String>
-          File.open(\"out.txt\", FileMode.Read)
-        end
+        File.open(\"out.txt\", FileMode.Read)
         ",
     ));
 }

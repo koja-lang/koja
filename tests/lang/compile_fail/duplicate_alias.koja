@@ -1,6 +1,0 @@
-alias HTTP.Headers
-alias JSON.Encoder as Headers
-
-fn main
-  "unreachable".print()
-end

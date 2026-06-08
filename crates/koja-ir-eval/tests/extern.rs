@@ -12,7 +12,7 @@ use koja_ir_eval::RuntimeError;
 
 mod common;
 
-use common::{PACKAGE, evaluate_program};
+use common::{PACKAGE, evaluate_script};
 
 #[test]
 fn calling_extern_c_fn_surfaces_extern_not_supported() {
@@ -28,13 +28,11 @@ fn calling_extern_c_fn_surfaces_extern_not_supported() {
           rand32()
         end
 
-        fn main -> Int
-          driver()
-          1
-        end
+        driver()
+        1
         ";
 
-    let outcome = evaluate_program(&dedent(source));
+    let outcome = evaluate_script(&dedent(source));
     let err = outcome.expect_err(
         "calling an extern fn from a regular fn should error at runtime, not return a value",
     );
@@ -54,12 +52,10 @@ fn declaring_but_not_calling_extern_c_evaluates_normally() {
         @link \"m\"
         fn cosf(x: Float32) -> Float32
 
-        fn main -> Int
-          7
-        end
+        7
         ";
 
-    let value = evaluate_program(&dedent(source))
+    let value = evaluate_script(&dedent(source))
         .expect("script that never calls the extern should evaluate cleanly");
     assert_eq!(value, koja_ir_eval::Value::Int(7));
 }
@@ -75,14 +71,12 @@ fn extern_error_message_points_at_llvm_backend() {
           host_now()
         end
 
-        fn main -> Int
-          driver()
-          1
-        end
+        driver()
+        1
         ";
 
-    let err =
-        evaluate_program(&dedent(source)).expect_err("calling an extern from main should error");
+    let err = evaluate_script(&dedent(source))
+        .expect_err("calling an extern from the script body should error");
     let message = format!("{err}");
     assert!(
         message.contains("--backend=llvm"),

@@ -21,10 +21,6 @@ fn evaluate_script(source: &str) -> Value {
     common::evaluate_script(source).expect("interpreter should not error on this fixture")
 }
 
-fn evaluate_program(source: &str) -> Value {
-    common::evaluate_program(source).expect("interpreter should not error on this fixture")
-}
-
 #[test]
 fn identity_function_returns_each_concrete_call_site_value() {
     assert_eq!(
@@ -73,7 +69,7 @@ fn generic_function_calling_another_generic_threads_through_runtime() {
 
 #[test]
 fn method_on_generic_struct_dispatches_under_mangled_symbol() {
-    let value = evaluate_program(&dedent(
+    let value = evaluate_script(&dedent(
         "
         struct Pair<T, U>
           a: T
@@ -84,10 +80,8 @@ fn method_on_generic_struct_dispatches_under_mangled_symbol() {
           end
         end
 
-        fn main -> Int
-          p = Pair{a: 1, b: \"x\"}
-          p.first()
-        end
+        p = Pair{a: 1, b: \"x\"}
+        p.first()
         ",
     ));
     assert_eq!(value, Value::Int(1));

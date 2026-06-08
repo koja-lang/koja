@@ -1,0 +1,18 @@
+enum Color
+  Red
+  Green
+  Blue
+  Yellow
+  Cyan
+  Magenta
+end
+
+a: Option<Color> = Option.Some(Color.Green)
+b: Option<Color> = Option.Some(Color.Green)
+c: Option<Color> = Option.Some(Color.Blue)
+n: Option<Color> = Option.None
+
+(a == b).print()
+(a == c).print()
+(a == n).print()
+(n == n).print()

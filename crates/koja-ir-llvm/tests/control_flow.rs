@@ -7,13 +7,13 @@
 //! the incoming wiring shows up as a substring miss.
 
 use koja_ast::util::dedent;
-use koja_ir_llvm::emit_llvm_ir;
+use koja_ir_llvm::emit_script_llvm_ir;
 
 mod common;
 
 use common::{
     APP_NAME, assert_contains, assert_main_shape, extract_function_body,
-    lower_program_source as lower,
+    lower_script_source as lower,
 };
 
 #[test]
@@ -31,12 +31,10 @@ fn if_else_merge_emits_phi_for_int_arms() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "phi i64");
     // Pin the merge-block label-name shape so an accidental rename
@@ -59,12 +57,10 @@ fn cond_merge_emits_phi_with_incoming_per_arm() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "phi i64");
     assert_contains(&ir_text, "cond_merge");
@@ -77,14 +73,12 @@ fn if_no_else_emits_unit_typed_merge() {
     // `Unit` to). Pin the shape so a regression in Unit handling
     // surfaces clearly.
     let source = "
-        fn main
-          if true
-            1
-          end
+        if true
+          1
         end
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "if_merge");
 }
@@ -106,12 +100,10 @@ fn if_else_with_both_arms_diverging_emits_unreachable_merge_phi() {
           end
         end
 
-        fn main
-          diverge()
-        end
+        diverge()
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
 }
 
@@ -126,12 +118,10 @@ fn ternary_emits_phi_for_int_arms() {
           true ? 7 : 9
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "phi i64");
     assert_contains(&ir_text, "ternary_merge");
@@ -152,12 +142,10 @@ fn if_else_with_diverging_arm_still_emits_phi_with_one_incoming() {
           end
         end
 
-        fn main
-          pick()
-        end
+        pick()
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "phi i64");
     assert_contains(&ir_text, "if_merge");
@@ -181,12 +169,10 @@ fn match_int_chain_emits_chained_test_blocks_and_merge_phi() {
           end
         end
 
-        fn main
-          pick(1)
-        end
+        pick(1)
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_merge");
     assert_contains(&ir_text, "match_test_");
@@ -211,12 +197,10 @@ fn match_string_literal_arm_emits_strcmp_test() {
           end
         end
 
-        fn main
-          pick(\"hi\")
-        end
+        pick(\"hi\")
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_merge");
     assert_contains(&ir_text, "@strcmp");
@@ -237,12 +221,10 @@ fn match_binding_arm_emits_local_alloca_and_store() {
           end
         end
 
-        fn main
-          pick(7)
-        end
+        pick(7)
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "alloca i64");
     assert_contains(&ir_text, "store i64");
@@ -268,12 +250,10 @@ fn match_enum_unit_arm_emits_tag_gep_and_load() {
           end
         end
 
-        fn main
-          pick(Color.Red)
-        end
+        pick(Color.Red)
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "_tag_src");
     assert_contains(&ir_text, "_tag_ptr");
@@ -301,12 +281,10 @@ fn match_enum_tuple_payload_emits_field_gep_chain() {
           end
         end
 
-        fn main
-          unwrap(Box.Some(7))
-        end
+        unwrap(Box.Some(7))
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "_payload_src");
     assert_contains(&ir_text, "_payload");
@@ -327,12 +305,10 @@ fn match_guarded_arm_emits_dedicated_guard_block_with_cond_branch() {
           end
         end
 
-        fn main
-          pick(7)
-        end
+        pick(7)
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_guard_");
     assert_contains(&ir_text, "match_merge");
@@ -358,12 +334,10 @@ fn match_struct_destructure_emits_field_geps_and_no_tag_check() {
           end
         end
 
-        fn main
-          add()
-        end
+        add()
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     let add_body = extract_function_body(&ir_text, "TestApp.add");
     assert_contains(add_body, "field_0");
@@ -394,12 +368,10 @@ fn match_enum_struct_destructure_emits_payload_field_geps_per_variant() {
           end
         end
 
-        fn main
-          area(Shape.Rect{w: 3, h: 4})
-        end
+        area(Shape.Rect{w: 3, h: 4})
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "icmp eq i8");
     assert_contains(&ir_text, "_payload_src");
@@ -427,12 +399,10 @@ fn match_exhaustive_enum_emits_unreachable_trap_block() {
           end
         end
 
-        fn main
-          pick(Color.Red)
-        end
+        pick(Color.Red)
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_unreachable");
     assert_contains(&ir_text, "unreachable");
@@ -458,12 +428,10 @@ fn match_constructor_shorthand_emits_same_tag_check_as_enum_tuple() {
           end
         end
 
-        fn main
-          unwrap(Box.Some(7))
-        end
+        unwrap(Box.Some(7))
         ";
-    let program = lower(&dedent(source));
-    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let script = lower(&dedent(source));
+    let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "_payload_src");
     assert_contains(&ir_text, "_payload");

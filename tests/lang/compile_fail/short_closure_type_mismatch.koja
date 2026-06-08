@@ -1,7 +1,0 @@
-fn apply(x: Int, f: fn (Int) -> String) -> String
-  f(x)
-end
-
-fn main
-  apply(5, x -> x + 1).print()
-end

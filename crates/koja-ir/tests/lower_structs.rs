@@ -17,17 +17,17 @@
 //!   and the offending struct is dropped from the package fragment.
 
 use koja_ast::util::dedent;
-use koja_ir::{IRInstruction, IRProgram, IRStructDecl, IRType};
+use koja_ir::{IRInstruction, IRScript, IRStructDecl, IRType};
 
 mod common;
 
-use common::{PACKAGE, lower_program_source, lower_script_source};
+use common::{PACKAGE, lower_script_source};
 
-fn struct_decl<'a>(program: &'a IRProgram, name: &str) -> &'a IRStructDecl {
+fn struct_decl<'a>(script: &'a IRScript, name: &str) -> &'a IRStructDecl {
     let mangled = format!("{PACKAGE}.{name}");
-    program
+    script
         .struct_decl(&mangled)
-        .unwrap_or_else(|| panic!("struct `{mangled}` missing from IRProgram"))
+        .unwrap_or_else(|| panic!("struct `{mangled}` missing from IRScript"))
 }
 
 // ---------------------------------------------------------------------------
@@ -42,13 +42,10 @@ fn struct_decl_lowers_to_ir_struct_decl_with_dense_indices() {
           y: Int
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let decl = struct_decl(&program, "Point");
+    let script = lower_script_source(&dedent(source));
+    let decl = struct_decl(&script, "Point");
 
     assert_eq!(decl.symbol.mangled(), "TestApp.Point");
     assert_eq!(decl.fields.len(), 2);
@@ -71,13 +68,10 @@ fn mixed_field_struct_translates_each_field_independently() {
           count: Int
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let decl = struct_decl(&program, "Mixed");
+    let script = lower_script_source(&dedent(source));
+    let decl = struct_decl(&script, "Mixed");
     let kinds: Vec<_> = decl.fields.iter().map(|f| f.ir_type.clone()).collect();
     assert_eq!(kinds, vec![IRType::Bool, IRType::String, IRType::Int64]);
 }
@@ -94,14 +88,11 @@ fn nested_struct_field_lowers_to_inner_struct_ir_type() {
           tag: Bool
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let outer = struct_decl(&program, "Outer");
-    let inner = struct_decl(&program, "Inner");
+    let script = lower_script_source(&dedent(source));
+    let outer = struct_decl(&script, "Outer");
+    let inner = struct_decl(&script, "Inner");
     assert_eq!(
         outer.fields[0].ir_type,
         IRType::Struct(inner.symbol.clone())
@@ -115,13 +106,10 @@ fn empty_struct_lowers_to_empty_field_list() {
         struct Marker
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let decl = struct_decl(&program, "Marker");
+    let script = lower_script_source(&dedent(source));
+    let decl = struct_decl(&script, "Marker");
     assert!(decl.fields.is_empty());
 }
 
@@ -257,13 +245,11 @@ fn inline_static_method_lowers_into_package_function_map() {
           end
         end
 
-        fn main -> Int
-          Point.origin().x
-        end
+        Point.origin().x
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let function = program
+    let script = lower_script_source(&dedent(source));
+    let function = script
         .function("TestApp.Point.origin")
         .expect("inline static method missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
@@ -284,13 +270,11 @@ fn impl_block_static_method_lowers_into_package_function_map() {
           end
         end
 
-        fn main -> Int
-          Point.origin().x
-        end
+        Point.origin().x
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let function = program
+    let script = lower_script_source(&dedent(source));
+    let function = script
         .function("TestApp.Point.origin")
         .expect("impl-block static method missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
@@ -384,13 +368,11 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
           end
         end
 
-        fn main -> Int
-          Point{x: 1, y: 2}.first()
-        end
+        Point{x: 1, y: 2}.first()
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let method = program
+    let script = lower_script_source(&dedent(source));
+    let method = script
         .function("TestApp.Point.first")
         .expect("inline instance method missing from program");
     assert_eq!(method.kind, FunctionKind::Regular);
@@ -402,7 +384,7 @@ fn inline_instance_method_lowers_with_self_param_promoted() {
     let self_param = &method.params[0];
     assert_eq!(
         self_param.ty,
-        IRType::Struct(struct_decl(&program, "Point").symbol.clone()),
+        IRType::Struct(struct_decl(&script, "Point").symbol.clone()),
         "self's IRType should be the receiver struct",
     );
 
@@ -458,20 +440,18 @@ fn impl_block_instance_method_lowers_with_self_param_promoted() {
           end
         end
 
-        fn main -> Int
-          Point{x: 1, y: 2}.first()
-        end
+        Point{x: 1, y: 2}.first()
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let method = program
+    let script = lower_script_source(&dedent(source));
+    let method = script
         .function("TestApp.Point.first")
         .expect("impl-block instance method missing from program");
     assert_eq!(method.kind, FunctionKind::Regular);
     assert_eq!(method.params.len(), 1);
     assert_eq!(
         method.params[0].ty,
-        IRType::Struct(struct_decl(&program, "Point").symbol.clone()),
+        IRType::Struct(struct_decl(&script, "Point").symbol.clone()),
     );
 }
 
@@ -487,14 +467,11 @@ fn instance_method_call_prepends_receiver_to_call_args() {
           end
         end
 
-        fn main -> Int
-          Point{x: 1, y: 2}.shift(7)
-        end
+        Point{x: 1, y: 2}.shift(7)
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let main = function(&program, "main");
-    let block = main.blocks.first().expect("main has one block");
+    let script = lower_script_source(&dedent(source));
+    let block = script.blocks.first().expect("main has one block");
 
     let (callee, args) = block
         .instructions
@@ -505,7 +482,11 @@ fn instance_method_call_prepends_receiver_to_call_args() {
         })
         .expect("expected an instance Call in main");
     assert_eq!(callee.mangled(), "TestApp.Point.shift");
-    assert_eq!(args.len(), 2, "instance call passes (self, dx) — 2 args");
+    assert_eq!(
+        args.len(),
+        2,
+        "instance call passes (self, dx) — 2 args, receiver-first"
+    );
 
     // The first arg should be the receiver value — the StructInit's
     // dest — the second the lowered explicit `7` Const.
@@ -522,7 +503,3 @@ fn instance_method_call_prepends_receiver_to_call_args() {
         "first arg of an instance Call must be the receiver value",
     );
 }
-
-// `function` is private to the common helper module via its
-// re-export; pull it in here without re-importing common.
-use common::function;

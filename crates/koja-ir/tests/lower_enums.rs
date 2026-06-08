@@ -20,19 +20,19 @@
 
 use koja_ast::util::dedent;
 use koja_ir::{
-    EnumPayloadInit, FunctionKind, IREnumDecl, IRInstruction, IRProgram, IRType, IRVariantPayload,
+    EnumPayloadInit, FunctionKind, IREnumDecl, IRInstruction, IRScript, IRType, IRVariantPayload,
     IRVariantTag,
 };
 
 mod common;
 
-use common::{PACKAGE, lower_program_source, lower_script_source};
+use common::{PACKAGE, lower_script_source};
 
-fn enum_decl<'a>(program: &'a IRProgram, name: &str) -> &'a IREnumDecl {
+fn enum_decl<'a>(script: &'a IRScript, name: &str) -> &'a IREnumDecl {
     let mangled = format!("{PACKAGE}.{name}");
-    program
+    script
         .enum_decl(&mangled)
-        .unwrap_or_else(|| panic!("enum `{mangled}` missing from IRProgram"))
+        .unwrap_or_else(|| panic!("enum `{mangled}` missing from IRScript"))
 }
 
 fn first_enum_construct(
@@ -71,13 +71,10 @@ fn unit_only_enum_lowers_with_dense_declaration_order_tags() {
           Blue
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let decl = enum_decl(&program, "Color");
+    let script = lower_script_source(&dedent(source));
+    let decl = enum_decl(&script, "Color");
     assert_eq!(decl.symbol.mangled(), "TestApp.Color");
     let names: Vec<&str> = decl.variants.iter().map(|v| v.name.as_str()).collect();
     assert_eq!(names, vec!["Red", "Green", "Blue"]);
@@ -101,13 +98,10 @@ fn tuple_variant_lowers_with_translated_element_types() {
           Err(String)
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let decl = enum_decl(&program, "Result");
+    let script = lower_script_source(&dedent(source));
+    let decl = enum_decl(&script, "Result");
     assert_eq!(decl.variants.len(), 2);
 
     let ok = &decl.variants[0];
@@ -136,13 +130,10 @@ fn struct_variant_lowers_with_dense_declaration_order_field_indices() {
           Rect{w: Int, h: Int}
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let decl = enum_decl(&program, "Shape");
+    let script = lower_script_source(&dedent(source));
+    let decl = enum_decl(&script, "Shape");
     assert_eq!(decl.variants.len(), 1);
     let rect = &decl.variants[0];
     match &rect.payload {
@@ -168,13 +159,10 @@ fn mixed_shape_enum_preserves_per_variant_payload_kind() {
           Rect{w: Int, h: Int}
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let decl = enum_decl(&program, "Shape");
+    let script = lower_script_source(&dedent(source));
+    let decl = enum_decl(&script, "Shape");
     let kinds: Vec<&str> = decl
         .variants
         .iter()
@@ -290,13 +278,10 @@ fn inline_static_method_on_enum_lowers_into_package_function_map() {
           end
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let function = program
+    let script = lower_script_source(&dedent(source));
+    let function = script
         .function("TestApp.Color.primary")
         .expect("inline static method on enum missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
@@ -317,13 +302,10 @@ fn impl_block_on_enum_lowers_static_method_into_package_function_map() {
           end
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let function = program
+    let script = lower_script_source(&dedent(source));
+    let function = script
         .function("TestApp.Color.primary")
         .expect("impl-block static method on enum missing from program");
     assert_eq!(function.kind, FunctionKind::Regular);
@@ -374,15 +356,12 @@ fn tuple_variant_carrying_user_struct_lowers_to_struct_ir_type() {
           None
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let wrap = enum_decl(&program, "Wrap");
+    let script = lower_script_source(&dedent(source));
+    let wrap = enum_decl(&script, "Wrap");
     let some = &wrap.variants[0];
-    let inner_symbol = program
+    let inner_symbol = script
         .struct_decl("TestApp.Inner")
         .expect("Inner struct missing")
         .symbol
@@ -407,14 +386,11 @@ fn struct_variant_carrying_user_enum_lowers_to_enum_ir_type() {
           Tagged{value: Color}
         end
 
-        fn main -> Int
-          1
-        end
         ";
 
-    let program = lower_program_source(&dedent(source));
-    let wrap = enum_decl(&program, "Wrap");
-    let color_symbol = enum_decl(&program, "Color").symbol.clone();
+    let script = lower_script_source(&dedent(source));
+    let wrap = enum_decl(&script, "Wrap");
+    let color_symbol = enum_decl(&script, "Color").symbol.clone();
     let tagged = &wrap.variants[0];
     match &tagged.payload {
         IRVariantPayload::Struct(fields) => {

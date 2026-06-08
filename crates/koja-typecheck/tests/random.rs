@@ -10,7 +10,7 @@ use koja_typecheck::CheckedProgram;
 
 mod common;
 
-use common::typecheck_file as typecheck;
+use common::typecheck_script as typecheck;
 
 fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
     let id = Identifier::new("Global", segments.iter().map(|s| s.to_string()).collect());
@@ -22,7 +22,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 
 #[test]
 fn random_struct_and_public_methods_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["Random"]);
     assert_registered(&checked, &["Random", "bytes"]);
     assert_registered(&checked, &["Random", "int"]);
@@ -30,7 +30,7 @@ fn random_struct_and_public_methods_register() {
 
 #[test]
 fn random_extern_shims_register() {
-    let checked = typecheck("fn main\n  1\nend\n");
+    let checked = typecheck("1\n");
     assert_registered(&checked, &["Random", "koja_random_bytes"]);
     assert_registered(&checked, &["Random", "koja_random_int"]);
 }
@@ -39,9 +39,7 @@ fn random_extern_shims_register() {
 fn user_code_can_call_random_int() {
     typecheck(&dedent(
         "
-        fn main -> Int
-          Random.int(0, 100)
-        end
+        Random.int(0, 100)
         ",
     ));
 }
@@ -50,9 +48,7 @@ fn user_code_can_call_random_int() {
 fn user_code_can_call_random_bytes() {
     typecheck(&dedent(
         "
-        fn main -> Binary
-          Random.bytes(16)
-        end
+        Random.bytes(16)
         ",
     ));
 }

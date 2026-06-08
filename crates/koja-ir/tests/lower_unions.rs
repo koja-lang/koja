@@ -22,7 +22,7 @@ use koja_ir::{IRInstruction, IRType};
 
 mod common;
 
-use common::{PACKAGE, function, lower_program_source as lower};
+use common::{PACKAGE, lower_script_source as lower, script_function};
 
 #[test]
 fn union_widening_arg_lowers_to_union_wrap() {
@@ -41,14 +41,11 @@ fn take(item: Post | Comment) -> Int
   end
 end
 
-fn main -> Int
-  take(Post{title: \"hi\"})
-end
+take(Post{title: \"hi\"})
 ";
-    let program = lower(source);
-    let main_fn = function(&program, "main");
+    let script = lower(source);
 
-    let wrap_count = main_fn
+    let wrap_count = script
         .blocks
         .iter()
         .flat_map(|b| b.instructions.iter())
@@ -62,7 +59,7 @@ end
     // Scope to the test package: the autoimported stdlib carries its
     // own unions (e.g. `Fd.write`'s `Binary | String`), so summing
     // across every package would also count those.
-    let union_decl_count = program
+    let union_decl_count = script
         .packages
         .iter()
         .filter(|p| p.package == PACKAGE)
@@ -92,12 +89,10 @@ fn describe(item: Post | Comment) -> String
   end
 end
 
-fn main -> String
-  describe(Post{title: \"hi\"})
-end
+describe(Post{title: \"hi\"})
 ";
-    let program = lower(source);
-    let describe_fn = function(&program, "describe");
+    let script = lower(source);
+    let describe_fn = script_function(&script, "describe");
 
     let tag_count = describe_fn
         .blocks
@@ -172,15 +167,13 @@ fn two(item: Comment | Post) -> Int
   end
 end
 
-fn main -> Int
-  one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
-end
+one(Post{title: \"hi\"}) + two(Comment{body: \"oh\"})
 ";
-    let program = lower(source);
+    let script = lower(source);
     // Scope to the test package so stdlib unions in autoimported
     // packages (e.g. `Fd.write`'s `Binary | String`) don't inflate
     // the count we're pinning the dedupe against.
-    let union_decl_count = program
+    let union_decl_count = script
         .packages
         .iter()
         .filter(|p| p.package == PACKAGE)
@@ -196,8 +189,8 @@ end
     // member list — both `take_ab` and `take_ba` should reference
     // the *same* `IRType::Union` instance, including identical
     // mangle and member ordering.
-    let one_param = &function(&program, "one").params[0].ty;
-    let two_param = &function(&program, "two").params[0].ty;
+    let one_param = &script_function(&script, "one").params[0].ty;
+    let two_param = &script_function(&script, "two").params[0].ty;
     assert_eq!(
         one_param, two_param,
         "expected the canonical IRType::Union to compare equal across surface spellings",

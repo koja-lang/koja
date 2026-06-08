@@ -1,4 +1,0 @@
-fn main
-  h = Headers{}
-  h.print()
-end

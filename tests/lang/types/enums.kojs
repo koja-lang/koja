@@ -1,0 +1,33 @@
+enum Direction
+  North
+  South
+  East
+  West
+end
+
+enum Tagged
+  Integer(Int)
+  Text(String)
+end
+
+fn opposite(dir: Direction) -> String
+  match dir
+    North -> "south"
+    South -> "north"
+    East -> "west"
+    West -> "east"
+  end
+end
+
+fn describe(v: Tagged) -> Int
+  match v
+    Tagged.Integer(n) -> n
+    Tagged.Text(_) -> 0
+  end
+end
+
+opposite(Direction.North).print()
+opposite(Direction.East).print()
+
+describe(Tagged.Integer(42)).print()
+describe(Tagged.Text("hello")).print()
