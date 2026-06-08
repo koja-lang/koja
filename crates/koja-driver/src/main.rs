@@ -136,7 +136,11 @@ enum Command {
     /// Start an interactive REPL backed by the interpreter
     Shell,
     /// Run tests (requires koja.toml)
-    Test,
+    Test {
+        /// Print each test name and per-test timing as it runs instead of progress dots
+        #[arg(long)]
+        trace: bool,
+    },
 }
 
 /// Arguments for `koja doc`. The optional `action` subcommand
@@ -213,7 +217,7 @@ fn main() {
             args,
         } => pipeline::cmd_run(file, backend, release, args),
         Command::Shell => pipeline::cmd_shell(),
-        Command::Test => pipeline::cmd_test(),
+        Command::Test { trace } => pipeline::cmd_test(trace, color),
     }
 }
 

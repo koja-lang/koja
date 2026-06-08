@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `koja test --trace` prints each test grouped by struct with its `path:line` and per-test timing (`name (file:line) ... ok (Nms)`) instead of progress dots. The name is written before the test runs, so a crashing test leaves its name as the last line of output — making the culprit obvious. With color enabled, each completed line is rewritten whole in green (pass) or red (fail); the uncolored pre-run name stays as the crash anchor. Trace runs also skip the per-binary timeout for long debugging sessions, and failure output now includes `path:line` in both modes.
 - `koja test` now enforces a 60-second per-binary timeout, so a hung test process fails fast instead of stalling the suite.
 - `Fd.read_binary(count)` and `TCPSocket.read_binary(count)` -- read up to `count` bytes as a `Binary` for binary wire protocols.
 

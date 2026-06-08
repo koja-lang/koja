@@ -1,0 +1,11 @@
+struct AlphaTest
+  @test "first alpha test"
+  fn test_one -> Result<Bool, String>
+    Result.Ok(true)
+  end
+
+  @test "second alpha test"
+  fn test_two -> Result<Bool, String>
+    Result.Ok(true)
+  end
+end

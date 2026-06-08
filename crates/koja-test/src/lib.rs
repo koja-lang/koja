@@ -15,6 +15,8 @@
 //! the AST + parser surface so both the pipeline and (any
 //! future) v1 fallback can share the same harness shape.
 
+use std::path::Path;
+
 use koja_ast::ast::{AnnotationValue, Item};
 use koja_parser::ParsedProgram;
 
@@ -24,26 +26,50 @@ use koja_parser::ParsedProgram;
 /// name emitted by [`generate_harness`].
 pub const HARNESS_ENTRY: &str = "__koja_test_entry";
 
+/// Output knobs for the synthesized harness.
+///
+/// `trace` swaps the compact dots-and-summary output for one group
+/// header per struct and one timed line per test (modeled on
+/// `mix test --trace`); `color` gates the ANSI escapes so
+/// `--no-color` / `NO_COLOR` reach the generated source.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TestOptions {
+    pub color: bool,
+    pub trace: bool,
+}
+
 /// A discovered `@test` function inside a struct, called as
-/// `StructName.fn_name()` from the generated harness.
+/// `StructName.fn_name()` from the generated harness. `file` and
+/// `line` record the source location (`file` is rendered relative
+/// to the project root) for navigable trace and failure output.
 #[derive(Clone, Debug)]
 pub struct TestCase {
     pub description: String,
+    pub file: String,
     pub fn_name: String,
+    pub line: u32,
     pub struct_name: String,
 }
 
 /// Walks the parsed program and collects `@test`-annotated functions
 /// inside structs. Only scans files belonging to the current project
 /// (matched by the per-file `package` field), so deps' fixtures don't
-/// sneak into the harness.
-pub fn discover_tests(parsed: &ParsedProgram, project_name: &str) -> Vec<TestCase> {
+/// sneak into the harness. `root` relativizes each test's source path
+/// for clean, navigable `path:line` output.
+pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -> Vec<TestCase> {
     let mut tests = Vec::new();
 
     for file in parsed.iter() {
         if file.package != project_name {
             continue;
         }
+
+        let display_path = file
+            .path
+            .strip_prefix(root)
+            .unwrap_or(&file.path)
+            .to_string_lossy()
+            .into_owned();
 
         for item in &file.ast.items {
             let Item::Struct(s) = item else {
@@ -59,7 +85,9 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str) -> Vec<TestCas
                 };
                 tests.push(TestCase {
                     description,
+                    file: display_path.clone(),
                     fn_name: func.name.clone(),
+                    line: func.span.start.line,
                     struct_name: s.name.clone(),
                 });
             }
@@ -67,6 +95,37 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str) -> Vec<TestCas
     }
 
     tests
+}
+
+/// Escape a Rust string for embedding inside a double-quoted Koja
+/// string literal in the generated harness source.
+fn escape_koja_string(s: &str) -> String {
+    s.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
+/// The completion line for one trace-mode test.
+///
+/// In color mode the whole line is rewritten in the result color: a
+/// leading `\r` returns to column 0 and the name + location + result
+/// are reprinted colored, overwriting the uncolored pre-run anchor
+/// (which stays put on a crash, preserving attribution). In no-color
+/// mode the result is appended to the existing name line so piped
+/// output carries no carriage returns.
+fn trace_result_line(
+    opts: TestOptions,
+    escaped_desc: &str,
+    location: &str,
+    word: &str,
+    color: &str,
+    reset: &str,
+) -> String {
+    if opts.color {
+        format!(
+            "      IO.puts(\"\\r{color}  {escaped_desc} ({location}) ... {word} (#{{test_elapsed_ms}}ms){reset}\")\n"
+        )
+    } else {
+        format!("      IO.puts(\" ... {word} (#{{test_elapsed_ms}}ms)\")\n")
+    }
 }
 
 /// Generate the Koja source for the test harness file.
@@ -77,35 +136,91 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str) -> Vec<TestCas
 /// even when some fail. A final non-zero exit (via `Kernel.exit(1)`)
 /// is triggered when any test failed.
 ///
+/// Default output is a row of pass/fail dots followed by a summary.
+/// [`TestOptions::trace`] swaps this for one group header per struct
+/// and one timed line per test: the test name and `path:line` are
+/// written first (no newline) so a crashing test leaves its name
+/// dangling as the last output, then ` ... ok/FAIL (Nms)` is appended
+/// once the test returns.
+///
 /// No imports are needed — the gather-then-check pipeline makes
 /// every project type visible to every file automatically.
-pub fn generate_harness(tests: &[TestCase]) -> String {
-    let green = "\x1b[32m";
-    let red = "\x1b[31m";
-    let reset = "\x1b[0m";
+pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
+    let (green, red, reset) = if opts.color {
+        ("\x1b[32m", "\x1b[31m", "\x1b[0m")
+    } else {
+        ("", "", "")
+    };
 
     let mut body = String::new();
     body.push_str("  failures: List<String> = []\n");
     body.push_str("  passed = 0\n");
     body.push_str("  failed = 0\n");
 
+    let mut prev_struct: Option<&str> = None;
     for test in tests {
-        let escaped_desc = test.description.replace('\\', "\\\\").replace('"', "\\\"");
-        body.push_str(&format!(
-            "  match {}.{}()\n",
-            test.struct_name, test.fn_name
-        ));
-        body.push_str("    Result.Ok(_) ->\n");
-        body.push_str("      passed = passed + 1\n");
-        body.push_str(&format!("      IO.write(\"{green}.{reset}\")\n"));
-        body.push_str("    Result.Err(msg) ->\n");
-        body.push_str("      failed = failed + 1\n");
-        body.push_str(&format!("      IO.write(\"{red}X{reset}\")\n"));
-        body.push_str(&format!(
-            "      failures = failures.append(\"  #{{failed}}) {} ({})\\n     \" <> msg)\n",
-            escaped_desc, test.struct_name
-        ));
-        body.push_str("  end\n");
+        let escaped_desc = escape_koja_string(&test.description);
+        let location = escape_koja_string(&format!("{}:{}", test.file, test.line));
+        let failure_append = format!(
+            "      failures = failures.append(\"  #{{failed}}) {escaped_desc} ({location})\\n     \" <> msg)\n",
+        );
+
+        if opts.trace {
+            if prev_struct != Some(test.struct_name.as_str()) {
+                if prev_struct.is_some() {
+                    body.push_str("  IO.puts(\"\")\n");
+                }
+                body.push_str(&format!("  IO.puts(\"{}\")\n", test.struct_name));
+                prev_struct = Some(test.struct_name.as_str());
+            }
+            body.push_str(&format!("  IO.write(\"  {escaped_desc} ({location})\")\n"));
+            body.push_str("  test_start_ms = DateTime.now().timestamp_millis()\n");
+            body.push_str(&format!(
+                "  match {}.{}()\n",
+                test.struct_name, test.fn_name
+            ));
+            body.push_str("    Result.Ok(_) ->\n");
+            body.push_str("      passed = passed + 1\n");
+            body.push_str(
+                "      test_elapsed_ms = DateTime.now().timestamp_millis() - test_start_ms\n",
+            );
+            body.push_str(&trace_result_line(
+                opts,
+                &escaped_desc,
+                &location,
+                "ok",
+                green,
+                reset,
+            ));
+            body.push_str("    Result.Err(msg) ->\n");
+            body.push_str("      failed = failed + 1\n");
+            body.push_str(
+                "      test_elapsed_ms = DateTime.now().timestamp_millis() - test_start_ms\n",
+            );
+            body.push_str(&trace_result_line(
+                opts,
+                &escaped_desc,
+                &location,
+                "FAIL",
+                red,
+                reset,
+            ));
+            body.push_str(&failure_append);
+            body.push_str("  end\n");
+        } else {
+            body.push_str(&format!(
+                "  match {}.{}()\n",
+                test.struct_name, test.fn_name
+            ));
+            body.push_str("    Result.Ok(_) ->\n");
+            body.push_str("      passed = passed + 1\n");
+            body.push_str(&format!("      IO.write(\"{green}.{reset}\")\n"));
+            body.push_str("    Result.Err(msg) ->\n");
+            body.push_str("      failed = failed + 1\n");
+            body.push_str(&format!("      IO.write(\"{red}X{reset}\")\n"));
+            body.push_str(&failure_append);
+            body.push_str("  end\n");
+        }
     }
 
     body.push_str("  IO.puts(\"\")\n");

@@ -726,3 +726,74 @@ fn lang_release_build_test() {
 
     let _ = std::fs::remove_file(&binary_path);
 }
+
+/// Run `koja test <extra args>` in the `test_trace` fixture and return
+/// `(stdout, stderr, exit_code)`.
+fn run_koja_test_trace(extra_args: &[&str]) -> (String, String, i32) {
+    let project_dir = lang_dir().join("test_trace");
+    assert!(
+        project_dir.exists(),
+        "test fixture tests/lang/test_trace/ not found"
+    );
+
+    let mut cmd = Command::new(koja_bin());
+    cmd.arg("test").args(extra_args).current_dir(&project_dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", lib_path);
+    }
+    // The colored path is gated on NO_COLOR being unset; clear it so the
+    // assertions are stable regardless of the surrounding environment.
+    cmd.env_remove("NO_COLOR");
+
+    let output = cmd.output().expect("failed to execute koja test");
+    (
+        String::from_utf8_lossy(&output.stdout).to_string(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+        output.status.code().unwrap_or(-1),
+    )
+}
+
+/// `koja test --trace` groups by struct, prints each test's name with
+/// its `path:line` plus same-line result + timing, honors `--no-color`,
+/// and (with color) rewrites each completed line whole in the result
+/// color. Both invocations live in one test because they share the
+/// fixture's build dir/binary path; running them as separate `#[test]`s
+/// would race under the parallel harness.
+#[test]
+fn lang_test_trace() {
+    // No-color: clean appended output, no ANSI escapes.
+    let (stdout, stderr, code) = run_koja_test_trace(&["--trace", "--no-color"]);
+    assert_eq!(
+        code, 0,
+        "expected all fixture tests to pass\nstderr:\n{stderr}"
+    );
+    for needle in [
+        "AlphaTest",
+        "BetaTest",
+        "first alpha test (test/alpha_test.koja:",
+        "beta passes (test/beta_test.koja:",
+        "... ok (",
+        "ms)",
+    ] {
+        assert!(
+            stdout.contains(needle),
+            "expected trace stdout to contain {needle:?}, got:\n{stdout}"
+        );
+    }
+    assert!(
+        !stdout.contains('\u{1b}'),
+        "expected --no-color to strip ANSI escapes, got:\n{stdout}"
+    );
+
+    // Color: each completed line is rewritten whole in green via a
+    // leading CR (the uncolored pre-run name stays as the crash anchor).
+    let (stdout, stderr, code) = run_koja_test_trace(&["--trace"]);
+    assert_eq!(
+        code, 0,
+        "expected all fixture tests to pass\nstderr:\n{stderr}"
+    );
+    assert!(
+        stdout.contains("\r\u{1b}[32m  first alpha test (test/alpha_test.koja:"),
+        "expected a carriage-return whole-line green rewrite, got:\n{stdout:?}"
+    );
+}
