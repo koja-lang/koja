@@ -107,8 +107,16 @@ pub(crate) struct EmitContext<'ctx> {
 /// `(local_id, type)` of the function's i-th parameter — the
 /// terminator emitter rebuilds the slot's `store` keyed at
 /// `local_id` against the value held by the i-th tail-call arg.
+///
+/// `body_slots` lists every non-parameter `LocalDecl` in the
+/// function. The back-edge zeroes them so the next iteration starts
+/// from the fresh-activation state — a slot written on one iteration
+/// but not revisited on the next (e.g. an untaken `receive` arm's
+/// payload local) would otherwise be exit-dropped a second time with
+/// its stale, already-released value.
 #[derive(Clone)]
 pub(crate) struct TcoFrame<'ctx> {
+    pub(crate) body_slots: Vec<(IRLocalId, IRType)>,
     pub(crate) loop_block: BasicBlock<'ctx>,
     pub(crate) param_slots: Vec<(IRLocalId, IRType)>,
 }
@@ -295,6 +303,15 @@ impl<'ctx> EmitContext<'ctx> {
                  IR seal invariant violation",
             );
         }
+    }
+
+    /// Resolve `local` to its registered `alloca` when present.
+    /// `None` means the slot hasn't been created yet — the TCO
+    /// pre-registration path in [`crate::function::define_function`]
+    /// creates every slot up front, so the `LocalDecl` emitter checks
+    /// here before minting a fresh alloca.
+    pub(crate) fn try_local_slot(&self, local: IRLocalId) -> Option<PointerValue<'ctx>> {
+        self.local_slots.borrow().get(&local).copied()
     }
 
     /// Resolve `local` to its registered `alloca`. Misses panic — the

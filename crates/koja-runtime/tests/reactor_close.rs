@@ -26,8 +26,12 @@ use std::time::Duration;
 extern crate koja_runtime;
 
 unsafe extern "C" {
-    fn koja_rt_spawn(fn_ptr: extern "C" fn(*const u8), state_ptr: *const u8, state_len: i64)
-    -> i64;
+    fn koja_rt_spawn(
+        fn_ptr: extern "C" fn(*const u8),
+        state_ptr: *const u8,
+        state_len: i64,
+        drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
+    ) -> i64;
     fn koja_rt_send(
         pid: i64,
         msg_ptr: *const u8,
@@ -101,7 +105,7 @@ extern "C" fn controller_entry(_state: *const u8) {
     CONTROLLER_PID.store(unsafe { koja_rt_self() }, Ordering::SeqCst);
     READER_FD.store(never_readable_fd() as i64, Ordering::SeqCst);
 
-    unsafe { koja_rt_spawn(reader_entry, std::ptr::null(), 0) };
+    unsafe { koja_rt_spawn(reader_entry, std::ptr::null(), 0, None) };
 
     // First message: the reader is about to enter its blocking read. The
     // short pause lets it actually park in `io_block` (register in the
@@ -132,7 +136,7 @@ fn close_wakes_blocked_reader() {
     });
 
     unsafe {
-        koja_rt_spawn(controller_entry, std::ptr::null(), 0);
+        koja_rt_spawn(controller_entry, std::ptr::null(), 0, None);
         koja_rt_main_done();
     }
 

@@ -43,8 +43,12 @@ use std::sync::atomic::{AtomicI64, AtomicUsize, Ordering};
 extern crate koja_runtime;
 
 unsafe extern "C" {
-    fn koja_rt_spawn(fn_ptr: extern "C" fn(*const u8), state_ptr: *const u8, state_len: i64)
-    -> i64;
+    fn koja_rt_spawn(
+        fn_ptr: extern "C" fn(*const u8),
+        state_ptr: *const u8,
+        state_len: i64,
+        drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
+    ) -> i64;
     fn koja_rt_send(
         pid: i64,
         msg_ptr: *const u8,
@@ -121,7 +125,7 @@ extern "C" fn controller_entry(_state: *const u8) {
     let rounds = ROUNDS.load(Ordering::SeqCst);
 
     let kids: Vec<i64> = (0..children)
-        .map(|_| unsafe { koja_rt_spawn(child_entry, std::ptr::null(), 0) })
+        .map(|_| unsafe { koja_rt_spawn(child_entry, std::ptr::null(), 0, None) })
         .collect();
 
     for _ in 0..rounds {
@@ -142,7 +146,7 @@ extern "C" fn controller_entry(_state: *const u8) {
     let wave_size = CHURN_WAVE_SIZE.load(Ordering::SeqCst);
     for _ in 0..waves {
         for _ in 0..wave_size {
-            unsafe { koja_rt_spawn(churn_child_entry, std::ptr::null(), 0) };
+            unsafe { koja_rt_spawn(churn_child_entry, std::ptr::null(), 0, None) };
         }
         for _ in 0..wave_size {
             recv_blocking();
@@ -170,7 +174,7 @@ fn scheduler_ping_pong_storm() {
     CHURN_WAVE_SIZE.store(wave_size, Ordering::SeqCst);
 
     unsafe {
-        koja_rt_spawn(controller_entry, std::ptr::null(), 0);
+        koja_rt_spawn(controller_entry, std::ptr::null(), 0, None);
         koja_rt_main_done();
     }
 

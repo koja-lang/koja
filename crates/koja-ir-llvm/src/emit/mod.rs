@@ -48,7 +48,7 @@ use koja_ir::{
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
-use crate::types::ir_basic_type;
+use crate::types::{ir_basic_type, value_basic_type};
 
 mod binary_construct;
 mod binary_match;
@@ -376,12 +376,19 @@ pub(crate) fn emit_terminator_default<'ctx>(
 
 /// Lower an [`IRTerminator::TailCall`] to the per-function TCO
 /// scheme: store each `args[i]` into the matching parameter's
-/// local slot, then branch back to the synthesized `tco_loop`
-/// header staged on [`EmitContext::tco_frame`] by
+/// local slot, zero every body slot, then branch back to the
+/// synthesized `tco_loop` header staged on
+/// [`EmitContext::tco_frame`] by
 /// [`crate::function::define_function`]. Reuses the already-
 /// allocated entry-block alloca so there's no per-iteration stack
 /// growth — the CFG just loops back through the same slots and
 /// the body re-runs against fresh values.
+///
+/// The body-slot zeroing restores the fresh-activation invariant
+/// the trailing exit drops rely on: those drops have already
+/// released every slot's heap, so any slot the next iteration's
+/// taken path doesn't re-declare must read as zero (a no-op drop)
+/// at that iteration's exit, not as the stale released value.
 ///
 /// The seal pass guarantees `args.len()` matches the function's
 /// param arity; missing the TCO frame here is a compiler bug
@@ -412,6 +419,13 @@ fn emit_tail_call<'ctx>(
         ctx.builder
             .build_store(slot, value)
             .map_err(|e| inkwell_err(format_args!("TailCall store into `{local}`"), e))?;
+    }
+    for (local, ty) in &frame.body_slots {
+        let llvm_ty = value_basic_type(ctx, ty)?;
+        let slot = ctx.local_slot(*local);
+        ctx.builder
+            .build_store(slot, llvm_ty.const_zero())
+            .map_err(|e| inkwell_err(format_args!("TailCall slot reset for `{local}`"), e))?;
     }
     ctx.builder
         .build_unconditional_branch(frame.loop_block)

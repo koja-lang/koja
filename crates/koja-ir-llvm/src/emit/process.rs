@@ -44,6 +44,7 @@ use koja_ir::{
 use crate::ctx::EmitContext;
 use crate::emit::inkwell_err;
 use crate::error::LlvmError;
+use crate::intrinsics::process::payload_drop_glue;
 use crate::main_wrapper::EXIT_CODE_SYMBOL;
 use crate::runtime::{
     declare_rt_receive_extern, declare_rt_receive_timeout_extern, declare_rt_spawn_extern,
@@ -469,9 +470,12 @@ fn read_variant_tag<'ctx>(
 // ----- IRInstruction::Spawn ------------------------------------------------
 
 /// Emit a single `IRInstruction::Spawn`. Serializes the config
-/// value into a stack alloca, hands the raw pointer + byte size to
-/// `koja_rt_spawn` along with the wrapper, then wraps the returned
-/// pid in a `Ref<M, R>` struct value bound to `dest`.
+/// value into a stack alloca, hands the raw pointer + byte size +
+/// config drop glue to `koja_rt_spawn` along with the wrapper, then
+/// wraps the returned pid in a `Ref<M, R>` struct value bound to
+/// `dest`. The runtime owns its config copy and runs the glue at
+/// process reclaim, so the spawn site transfers the config's nested
+/// heap rather than sharing it.
 pub(super) fn emit_spawn<'ctx>(
     ctx: &EmitContext<'ctx>,
     config: ValueId,
@@ -486,6 +490,7 @@ pub(super) fn emit_spawn<'ctx>(
 
     let (config_ptr, config_size) =
         serialize_to_stack(ctx, "spawn_config", config_llvm_type, config_value)?;
+    let drop_glue = payload_drop_glue(ctx, wrapper, config_type)?;
 
     let wrapper_fn = ctx.declared_function(wrapper).ok_or_else(|| {
         LlvmError::Codegen(format!(
@@ -499,7 +504,12 @@ pub(super) fn emit_spawn<'ctx>(
         .builder
         .build_call(
             spawn_fn,
-            &[wrapper_ptr.into(), config_ptr.into(), config_size.into()],
+            &[
+                wrapper_ptr.into(),
+                config_ptr.into(),
+                config_size.into(),
+                drop_glue.into(),
+            ],
             "spawn_pid",
         )
         .map_err(|e| inkwell_err("build_call koja_rt_spawn", e))?;

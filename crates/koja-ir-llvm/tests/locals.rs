@@ -36,6 +36,47 @@ fn local_decl_emits_alloca_store_load_for_i64_slot() {
 }
 
 #[test]
+fn local_decl_zero_initializes_the_slot() {
+    // Every `LocalDecl` stores a zero of the slot type at the decl
+    // site, so exit drops on paths that never wrote the slot release
+    // nothing (null-safe rc primitives).
+    let source = "
+        x = 7
+        x
+        ";
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    assert_main_shape(&ir_text);
+    let user_main = extract_function_body(&ir_text, "__koja_user_main");
+    assert_contains(user_main, "store i64 0");
+    assert_contains(user_main, "store i64 7");
+}
+
+#[test]
+fn heap_local_drop_null_checks_the_payload_before_rc_dec() {
+    // The exit drop's payload→block-base mapping must propagate a
+    // null payload to a null base (`select`) rather than wrapping to
+    // `0 - HEADER_BYTES` — a zero-initialized, never-written slot is
+    // a legal drop target.
+    let source = r#"
+        s = "a" <> "b"
+        s.length()
+        "#;
+
+    let script = lower(&dedent(source));
+    let ir_text =
+        emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
+
+    let user_main = extract_function_body(&ir_text, "__koja_user_main");
+    assert_contains(user_main, "koja_rc_dec");
+    assert_contains(user_main, ".is_null");
+    assert_contains(user_main, ".or_null");
+}
+
+#[test]
 fn reassignment_emits_a_second_store_into_the_same_slot() {
     let source = "
         x = 1

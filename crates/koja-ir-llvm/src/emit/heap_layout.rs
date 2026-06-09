@@ -93,17 +93,32 @@ pub(crate) fn neg_header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx>
 /// HEADER_BYTES`. This is the pointer to hand to `koja_rc_inc` /
 /// `koja_rc_dec` (the `i64 rc` word lives here); the `i64 bit_length`
 /// sits [`LENGTH_OFFSET`] after it.
+///
+/// A null payload selects a null base rather than the wrapped
+/// `0 - HEADER_BYTES` address, so the (null-safe) runtime rc
+/// primitives no-op. Local slots are zero-initialized at `LocalDecl`,
+/// making "drop a never-written slot" a legal path — e.g. a `receive`
+/// arm's payload slot when a different arm matched.
 pub(crate) fn block_base<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
     name: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
     let i8_ty = ctx.context.i8_type();
-    unsafe {
+    let raw_base = unsafe {
         ctx.builder
             .build_gep(i8_ty, payload, &[neg_header_offset(ctx)], name)
     }
-    .map_err(|e| inkwell_err(format_args!("heap block-base GEP `{name}`"), e))
+    .map_err(|e| inkwell_err(format_args!("heap block-base GEP `{name}`"), e))?;
+    let is_null = ctx
+        .builder
+        .build_is_null(payload, &format!("{name}.is_null"))
+        .map_err(|e| inkwell_err(format_args!("heap block-base null test `{name}`"), e))?;
+    let null_base = raw_base.get_type().const_null();
+    ctx.builder
+        .build_select(is_null, null_base, raw_base, &format!("{name}.or_null"))
+        .map(|v| v.into_pointer_value())
+        .map_err(|e| inkwell_err(format_args!("heap block-base select `{name}`"), e))
 }
 
 /// Load the `i64 bit_length` header for a heap payload (the word at

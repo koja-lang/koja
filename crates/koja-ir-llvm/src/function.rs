@@ -17,7 +17,7 @@ use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 use koja_ir::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRType, ValueId,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRLocalId, IRType, ValueId,
     function_has_tail_call,
 };
 
@@ -201,12 +201,14 @@ pub(crate) fn define_function<'ctx>(
     let tco_active = function_has_tail_call(function);
     if tco_active {
         let loop_block = ctx.context.append_basic_block(llvm_function, "tco_loop");
-        let param_slots = function
+        let param_slots: Vec<(IRLocalId, IRType)> = function
             .params
             .iter()
             .map(|p| (p.local_id, p.ty.clone()))
             .collect();
+        let body_slots = preregister_local_slots(ctx, function, &block_map, &param_slots)?;
         ctx.set_tco_frame(TcoFrame {
+            body_slots,
             loop_block,
             param_slots,
         });
@@ -241,6 +243,42 @@ pub(crate) fn define_function<'ctx>(
     }
     ctx.clear_block_map();
     result
+}
+
+/// Create and register the entry-block `alloca` for every `LocalDecl`
+/// in a TCO body before any block is walked, returning the
+/// non-parameter `(local, type)` pairs for [`TcoFrame::body_slots`].
+///
+/// A `TailCall` back-edge zeroes every body slot, and the terminator
+/// can be emitted before a later block's `LocalDecl` has run — so the
+/// slots must all exist up front. [`crate::emit`]'s `LocalDecl`
+/// emitter detects the pre-registered slot and only emits its
+/// zero-init store.
+fn preregister_local_slots<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    block_map: &BlockMap<'ctx>,
+    param_slots: &[(IRLocalId, IRType)],
+) -> Result<Vec<(IRLocalId, IRType)>, LlvmError> {
+    // `build_entry_alloca` needs an insertion block to find the
+    // function; park the builder at the entry block for the walk.
+    ctx.builder
+        .position_at_end(block_map[&function.blocks[0].id]);
+    let mut body_slots = Vec::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let IRInstruction::LocalDecl { local, ty } = instruction else {
+                continue;
+            };
+            let llvm_ty = value_basic_type(ctx, ty)?;
+            let slot = ctx.build_entry_alloca(llvm_ty, &local.to_string());
+            ctx.register_local_slot(*local, slot);
+            if !param_slots.iter().any(|(param, _)| param == local) {
+                body_slots.push((*local, ty.clone()));
+            }
+        }
+    }
+    Ok(body_slots)
 }
 
 /// Emit the IR entry block with a tail-call-optimization split.

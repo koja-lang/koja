@@ -295,10 +295,10 @@ fn acquire_occupied_entries<'ctx>(
         |ctx, slot| {
             let entry_ptr =
                 entry_pointer(ctx, function, table.entries_ptr, slot, layout.entry_size)?;
-            acquire_in_slot(ctx, function, layout.key_ty, entry_ptr)?;
+            acquire_in_slot(ctx, &function.symbol, layout.key_ty, entry_ptr)?;
             if let Some(value_ty) = layout.value_ty {
                 let value_ptr = value_slot(ctx, function, entry_ptr, layout.key_size)?;
-                acquire_in_slot(ctx, function, value_ty, value_ptr)?;
+                acquire_in_slot(ctx, &function.symbol, value_ty, value_ptr)?;
             }
             Ok(())
         },

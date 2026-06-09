@@ -236,10 +236,10 @@ pub(crate) fn emit_remove<'ctx>(
     // The clone acquired this bucket's key (and value); tombstoning
     // drops it from the table, so release that reference now —
     // otherwise the slot's payload leaks once the table is reclaimed.
-    release_in_slot(ctx, function, layout.key_ty, probe.e_ptr)?;
+    release_in_slot(ctx, &function.symbol, layout.key_ty, probe.e_ptr)?;
     if let Some(value_ty) = layout.value_ty {
         let value_ptr = value_slot(ctx, function, probe.e_ptr, layout.key_size)?;
-        release_in_slot(ctx, function, value_ty, value_ptr)?;
+        release_in_slot(ctx, &function.symbol, value_ty, value_ptr)?;
     }
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_TOMBSTONE, false))
@@ -324,7 +324,7 @@ pub(crate) fn emit_map_get<'ctx>(
     // acquire the value (heap-leaf `rc++` / composite deep clone).
     // Otherwise the receiver's table and the returned value share one
     // reference and both drop it — a double free once glue is active.
-    let owned = acquire_value(ctx, function, value_ty, val)?;
+    let owned = acquire_value(ctx, &function.symbol, value_ty, val)?;
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[owned])?;
     ctx.builder
         .build_return(Some(&some))

@@ -57,8 +57,8 @@ pub(crate) fn emit_map_put<'ctx>(
     // value. The matched key stays put (no key acquire / release).
     ctx.builder.position_at_end(probe.update_bb);
     let val_ptr = value_slot(ctx, function, probe.e_ptr, layout.key_size)?;
-    release_in_slot(ctx, function, value_ty, val_ptr)?;
-    let update_value = acquire_value(ctx, function, value_ty, value_val)?;
+    release_in_slot(ctx, &function.symbol, value_ty, val_ptr)?;
+    let update_value = acquire_value(ctx, &function.symbol, value_ty, value_val)?;
     ctx.builder
         .build_store(val_ptr, update_value)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
@@ -84,12 +84,12 @@ pub(crate) fn emit_map_put<'ctx>(
         probe.pidx,
         layout.entry_size,
     )?;
-    let insert_key = acquire_value(ctx, function, layout.key_ty, key_val)?;
+    let insert_key = acquire_value(ctx, &function.symbol, layout.key_ty, key_val)?;
     ctx.builder
         .build_store(ins_ptr, insert_key)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
     let ins_val_ptr = value_slot(ctx, function, ins_ptr, layout.key_size)?;
-    let insert_value = acquire_value(ctx, function, value_ty, value_val)?;
+    let insert_value = acquire_value(ctx, &function.symbol, value_ty, value_val)?;
     ctx.builder
         .build_store(ins_val_ptr, insert_value)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
@@ -158,7 +158,7 @@ pub(crate) fn emit_set_insert<'ctx>(
         probe.pidx,
         layout.entry_size,
     )?;
-    let insert_item = acquire_value(ctx, function, layout.key_ty, item_val)?;
+    let insert_item = acquire_value(ctx, &function.symbol, layout.key_ty, item_val)?;
     ctx.builder
         .build_store(ins_ptr, insert_item)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;

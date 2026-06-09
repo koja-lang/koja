@@ -10,6 +10,7 @@ mod ffi;
 mod format;
 mod fs;
 mod intrinsics;
+mod mailbox;
 mod memory;
 mod panic;
 mod process_table;

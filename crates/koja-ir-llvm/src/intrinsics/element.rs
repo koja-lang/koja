@@ -22,7 +22,7 @@ use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::mangling::{clone_glue_symbol, drop_glue_symbol};
-use koja_ir::{IRFunction, IRType};
+use koja_ir::{IRSymbol, IRType};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_base, is_heap_leaf};
@@ -41,7 +41,7 @@ use crate::types::ir_basic_type;
 /// on a buffer slot in place.
 pub(crate) fn acquire_value<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     element: &IRType,
     value: BasicValueEnum<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
@@ -50,22 +50,15 @@ pub(crate) fn acquire_value<'ctx>(
         let rc_inc = declare_rc_inc_extern(ctx);
         ctx.builder
             .build_call(rc_inc, &[base.into()], "elem.rc_inc")
-            .map_err(|e| {
-                inkwell_err(format_args!("element rc_inc for `{}`", function.symbol), e)
-            })?;
+            .map_err(|e| inkwell_err(format_args!("element rc_inc for `{}`", site), e))?;
         Ok(value)
     } else if let Some(clone_glue) = ctx.declared_function(&clone_glue_symbol(element)) {
         ctx.builder
             .build_call(clone_glue, &[value.into()], "elem.clone")
-            .map_err(|e| inkwell_err(format_args!("element clone for `{}`", function.symbol), e))?
+            .map_err(|e| inkwell_err(format_args!("element clone for `{}`", site), e))?
             .try_as_basic_value()
             .basic()
-            .ok_or_else(|| {
-                LlvmError::Codegen(format!(
-                    "clone glue returned void for `{}`",
-                    function.symbol
-                ))
-            })
+            .ok_or_else(|| LlvmError::Codegen(format!("clone glue returned void for `{}`", site)))
     } else {
         Ok(value)
     }
@@ -77,40 +70,37 @@ pub(crate) fn acquire_value<'ctx>(
 /// copied them.
 pub(crate) fn acquire_in_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     element: &IRType,
     slot: PointerValue<'ctx>,
 ) -> Result<(), LlvmError> {
     if is_heap_leaf(element) {
-        let payload = load_pointer(ctx, function, slot, "elem")?;
+        let payload = load_pointer(ctx, site, slot, "elem")?;
         let base = block_base(ctx, payload, "elem.block_base")?;
         let rc_inc = declare_rc_inc_extern(ctx);
         ctx.builder
             .build_call(rc_inc, &[base.into()], "elem.rc_inc")
             .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element rc_inc for `{}`", function.symbol), e))
+            .map_err(|e| inkwell_err(format_args!("element rc_inc for `{}`", site), e))
     } else if let Some(clone_glue) = ctx.declared_function(&clone_glue_symbol(element)) {
         let element_ty = ir_basic_type(ctx, element)?;
         let original = ctx
             .builder
             .build_load(element_ty, slot, "elem")
-            .map_err(|e| inkwell_err(format_args!("element load for `{}`", function.symbol), e))?;
+            .map_err(|e| inkwell_err(format_args!("element load for `{}`", site), e))?;
         let cloned = ctx
             .builder
             .build_call(clone_glue, &[original.into()], "elem.clone")
-            .map_err(|e| inkwell_err(format_args!("element clone for `{}`", function.symbol), e))?
+            .map_err(|e| inkwell_err(format_args!("element clone for `{}`", site), e))?
             .try_as_basic_value()
             .basic()
             .ok_or_else(|| {
-                LlvmError::Codegen(format!(
-                    "clone glue returned void for `{}`",
-                    function.symbol
-                ))
+                LlvmError::Codegen(format!("clone glue returned void for `{}`", site))
             })?;
         ctx.builder
             .build_store(slot, cloned)
             .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element store for `{}`", function.symbol), e))
+            .map_err(|e| inkwell_err(format_args!("element store for `{}`", site), e))
     } else {
         Ok(())
     }
@@ -120,28 +110,28 @@ pub(crate) fn acquire_in_slot<'ctx>(
 /// into `drop_T` for a composite, or do nothing for a scalar.
 pub(crate) fn release_in_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     element: &IRType,
     slot: PointerValue<'ctx>,
 ) -> Result<(), LlvmError> {
     if is_heap_leaf(element) {
-        let payload = load_pointer(ctx, function, slot, "elem")?;
+        let payload = load_pointer(ctx, site, slot, "elem")?;
         let base = block_base(ctx, payload, "elem.block_base")?;
         let rc_dec = declare_rc_dec_extern(ctx);
         ctx.builder
             .build_call(rc_dec, &[base.into()], "elem.rc_dec")
             .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element rc_dec for `{}`", function.symbol), e))
+            .map_err(|e| inkwell_err(format_args!("element rc_dec for `{}`", site), e))
     } else if let Some(drop_glue) = ctx.declared_function(&drop_glue_symbol(element)) {
         let element_ty = ir_basic_type(ctx, element)?;
         let value = ctx
             .builder
             .build_load(element_ty, slot, "elem")
-            .map_err(|e| inkwell_err(format_args!("element load for `{}`", function.symbol), e))?;
+            .map_err(|e| inkwell_err(format_args!("element load for `{}`", site), e))?;
         ctx.builder
             .build_call(drop_glue, &[value.into()], "elem.drop")
             .map(|_| ())
-            .map_err(|e| inkwell_err(format_args!("element drop for `{}`", function.symbol), e))
+            .map_err(|e| inkwell_err(format_args!("element drop for `{}`", site), e))
     } else {
         Ok(())
     }
@@ -153,7 +143,7 @@ pub(crate) fn release_in_slot<'ctx>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn acquire_buffer<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     llvm_function: FunctionValue<'ctx>,
     element: &IRType,
     buf: PointerValue<'ctx>,
@@ -165,8 +155,8 @@ pub(crate) fn acquire_buffer<'ctx>(
         return Ok(());
     }
     index_loop(ctx, llvm_function, count, label, |ctx, index| {
-        let slot = element_slot(ctx, function, buf, index, element_size)?;
-        acquire_in_slot(ctx, function, element, slot)
+        let slot = element_slot(ctx, site, buf, index, element_size)?;
+        acquire_in_slot(ctx, site, element, slot)
     })
 }
 
@@ -175,7 +165,7 @@ pub(crate) fn acquire_buffer<'ctx>(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn release_buffer<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     llvm_function: FunctionValue<'ctx>,
     element: &IRType,
     buf: PointerValue<'ctx>,
@@ -187,8 +177,8 @@ pub(crate) fn release_buffer<'ctx>(
         return Ok(());
     }
     index_loop(ctx, llvm_function, count, label, |ctx, index| {
-        let slot = element_slot(ctx, function, buf, index, element_size)?;
-        release_in_slot(ctx, function, element, slot)
+        let slot = element_slot(ctx, site, buf, index, element_size)?;
+        release_in_slot(ctx, site, element, slot)
     })
 }
 
@@ -203,7 +193,7 @@ fn owns_heap<'ctx>(ctx: &EmitContext<'ctx>, element: &IRType) -> bool {
 /// Pointer to element `index` in a byte-addressed buffer.
 pub(crate) fn element_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     buf: PointerValue<'ctx>,
     index: IntValue<'ctx>,
     element_size: IntValue<'ctx>,
@@ -212,11 +202,11 @@ pub(crate) fn element_slot<'ctx>(
     let offset = ctx
         .builder
         .build_int_mul(index, element_size, "elem.off")
-        .map_err(|e| inkwell_err(format_args!("element offset for `{}`", function.symbol), e))?;
+        .map_err(|e| inkwell_err(format_args!("element offset for `{}`", site), e))?;
     unsafe {
         ctx.builder
             .build_gep(i8_ty, buf, &[offset], "elem.ptr")
-            .map_err(|e| inkwell_err(format_args!("element GEP for `{}`", function.symbol), e))
+            .map_err(|e| inkwell_err(format_args!("element GEP for `{}`", site), e))
     }
 }
 
@@ -282,7 +272,7 @@ fn index_loop<'ctx>(
 
 fn load_pointer<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     slot: PointerValue<'ctx>,
     name: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
@@ -290,10 +280,5 @@ fn load_pointer<'ctx>(
     ctx.builder
         .build_load(ptr_ty, slot, name)
         .map(|v| v.into_pointer_value())
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("element ptr load for `{}`", function.symbol),
-                e,
-            )
-        })
+        .map_err(|e| inkwell_err(format_args!("element ptr load for `{}`", site), e))
 }

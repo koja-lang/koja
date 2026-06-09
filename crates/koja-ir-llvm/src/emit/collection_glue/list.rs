@@ -50,7 +50,7 @@ pub(super) fn clone_list<'ctx>(
 
     acquire_buffer(
         ctx,
-        function,
+        &function.symbol,
         llvm_function,
         element,
         new_buf,
@@ -80,7 +80,7 @@ pub(super) fn drop_list<'ctx>(
 
     release_buffer(
         ctx,
-        function,
+        &function.symbol,
         llvm_function,
         element,
         buf,

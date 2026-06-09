@@ -202,7 +202,7 @@ fn emit_append<'ctx>(
     let item_val = nth_param(function, llvm_function, 1, "item")?;
     let item_val = acquire_value(
         ctx,
-        function,
+        &function.symbol,
         element(ListMethod::Append, function)?,
         item_val,
     )?;
@@ -295,7 +295,12 @@ fn emit_get<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?;
-    let value = acquire_value(ctx, function, element(ListMethod::Get, function)?, value)?;
+    let value = acquire_value(
+        ctx,
+        &function.symbol,
+        element(ListMethod::Get, function)?,
+        value,
+    )?;
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[value])?;
     ctx.builder
         .build_return(Some(&some))
@@ -397,7 +402,12 @@ fn emit_pop<'ctx>(
         .builder
         .build_load(elem_ty, elem_ptr, "elem_val")
         .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?;
-    let elem_val = acquire_value(ctx, function, element(ListMethod::Pop, function)?, elem_val)?;
+    let elem_val = acquire_value(
+        ctx,
+        &function.symbol,
+        element(ListMethod::Pop, function)?,
+        elem_val,
+    )?;
     let some = build_enum_value(ctx, &option_symbol, OPTION_SOME_TAG, &[elem_val])?;
     let new_buf = copy_buffer(
         ctx,
@@ -469,12 +479,12 @@ fn emit_replace_at<'ctx>(
         elem_size,
         "replace",
     )?;
-    let elem_ptr = element_slot(ctx, function, new_buf, index, elem_size)?;
+    let elem_ptr = element_slot(ctx, &function.symbol, new_buf, index, elem_size)?;
     // `copy_buffer` acquired every retained element, including the one
     // at `index` we're about to overwrite — release that copy so the
     // incoming value (acquired next) is the slot's sole owner.
-    release_in_slot(ctx, function, elem_ty, elem_ptr)?;
-    let value = acquire_value(ctx, function, elem_ty, value)?;
+    release_in_slot(ctx, &function.symbol, elem_ty, elem_ptr)?;
+    let value = acquire_value(ctx, &function.symbol, elem_ty, value)?;
     ctx.builder
         .build_store(elem_ptr, value)
         .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
@@ -624,7 +634,7 @@ fn emit_slice<'ctx>(
         })?;
     acquire_buffer(
         ctx,
-        function,
+        &function.symbol,
         llvm_function,
         element(ListMethod::Slice, function)?,
         new_buf,
@@ -734,7 +744,7 @@ fn emit_concat<'ctx>(
     // references to every element.
     acquire_buffer(
         ctx,
-        function,
+        &function.symbol,
         llvm_function,
         elem_ty,
         dst_ptr,
@@ -807,7 +817,7 @@ fn copy_buffer<'ctx>(
         })?;
     acquire_buffer(
         ctx,
-        function,
+        &function.symbol,
         llvm_function,
         element,
         new_buf,

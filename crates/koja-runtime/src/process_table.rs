@@ -17,9 +17,10 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Instant;
 
-use crate::scheduler::{OwnedBuf, Process, ProcessFn, ProcessStack, ProcessState, Reclaim};
+use crate::mailbox::Mailbox;
+use crate::scheduler::{Process, ProcessFn, ProcessStack, ProcessState, Reclaim};
 use crate::tsan::{self, Fiber};
-use crate::wire::Envelope;
+use crate::wire::{Envelope, OwnedPayload};
 
 /// Splits a packed PID into `(slot_index, generation)`.
 fn decode(pid: i64) -> (u32, u32) {
@@ -44,21 +45,15 @@ struct Slot {
 
 /// A pending delayed message (`send_after`). Ordered in the min-heap by
 /// `(fire_at, seq)`; `seq` is a unique tie-breaker so the order is total.
+/// The message is staged as a finished [`Envelope`] at schedule time, so
+/// firing is just a delivery and an unfired or undeliverable entry
+/// reclaims its payload by dropping the envelope.
 pub(crate) struct TimerEntry {
+    pub(crate) envelope: Envelope,
     fire_at: Instant,
     seq: u64,
-    pub(crate) msg: OwnedBuf,
-    pub(crate) msg_len: usize,
     pub(crate) target_pid: i64,
-    /// Payload drop glue, carried onto the fired envelope so an
-    /// undeliverable fire releases the payload's nested heap. Null
-    /// when the message owns no nested heap.
-    pub(crate) drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 }
-
-/// `TimerEntry` owns a heap buffer (`OwnedBuf`) of message bytes that are
-/// not thread-affine, so moving it across worker threads is sound.
-unsafe impl Send for TimerEntry {}
 
 impl PartialEq for TimerEntry {
     fn eq(&self, other: &Self) -> bool {
@@ -189,7 +184,7 @@ impl ProcessTable {
     pub(crate) fn spawn(
         &mut self,
         func: ProcessFn,
-        init_state: OwnedBuf,
+        init_state: OwnedPayload,
         stack: ProcessStack,
         sp: *mut u8,
     ) -> i64 {
@@ -318,62 +313,42 @@ impl ProcessTable {
         }
     }
 
-    /// Appends `envelope` to a process's mailbox, waking it if it was
-    /// `Blocked`. Returns `Some(envelope)` if the target is gone or dead so
-    /// the caller can drop it.
-    pub(crate) fn deliver_back(&mut self, pid: i64, envelope: Envelope) -> Option<Envelope> {
-        self.deliver(pid, envelope, false)
-    }
-
-    /// Like [`deliver_back`](Self::deliver_back) but inserts at the front
-    /// (priority delivery for lifecycle signals).
-    pub(crate) fn deliver_front(&mut self, pid: i64, envelope: Envelope) -> Option<Envelope> {
-        self.deliver(pid, envelope, true)
-    }
-
-    fn deliver(&mut self, pid: i64, envelope: Envelope, front: bool) -> Option<Envelope> {
-        let blocked = match self.get_mut(pid) {
+    /// Routes `envelope` into a process's mailbox (see
+    /// [`Mailbox::push`]), waking the process if it is parked waiting on
+    /// the part of the mailbox this envelope satisfies. Returns an
+    /// envelope the caller must drop after releasing the lock: the
+    /// original when the target is gone or dead, or a stale reply
+    /// displaced from the reply slot.
+    pub(crate) fn deliver(&mut self, pid: i64, envelope: Envelope) -> Option<Envelope> {
+        let target = Mailbox::target_of(&envelope);
+        let (displaced, wake) = match self.get_mut(pid) {
             Some(process) if process.state != ProcessState::Dead => {
-                if front {
-                    process.mailbox.push_front(envelope);
-                } else {
-                    process.mailbox.push_back(envelope);
-                }
-                process.state == ProcessState::Blocked
+                let wake = process.state == ProcessState::Blocked && process.waiting == target;
+                (process.mailbox.push(envelope), wake)
             }
             _ => return Some(envelope),
         };
-        if blocked {
+        if wake {
             self.transition(pid, ProcessState::Runnable);
         }
-        None
+        displaced
     }
 
     /// Schedules a delayed message. Cancellation is lazy: a timer aimed at a
     /// process that later dies is simply dropped (undeliverable) when it
-    /// fires, freeing its staging buffer then.
-    pub(crate) fn push_timer(
-        &mut self,
-        fire_at: Instant,
-        target_pid: i64,
-        msg: OwnedBuf,
-        msg_len: usize,
-        drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
-    ) {
+    /// fires, reclaiming its envelope then.
+    pub(crate) fn push_timer(&mut self, fire_at: Instant, target_pid: i64, envelope: Envelope) {
         self.timer_seq += 1;
         self.timers.push(Reverse(TimerEntry {
-            drop_glue,
+            envelope,
             fire_at,
-            msg,
-            msg_len,
             seq: self.timer_seq,
             target_pid,
         }));
     }
 
     /// Removes and returns every timer whose `fire_at` is at or before `now`,
-    /// soonest first. The caller builds and delivers each envelope; dropping
-    /// each returned entry frees its staging buffer.
+    /// soonest first. The caller delivers each staged envelope.
     pub(crate) fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry> {
         let mut due = Vec::new();
         while self
@@ -459,10 +434,15 @@ mod tests {
     fn fake_spawn(table: &mut ProcessTable) -> i64 {
         table.spawn(
             noop_entry,
-            OwnedBuf::new(ptr::null_mut()),
+            OwnedPayload::default(),
             ProcessStack::null(),
             ptr::null_mut(),
         )
+    }
+
+    /// A minimal business envelope (empty payload, no glue).
+    fn fake_envelope() -> Envelope {
+        unsafe { Envelope::from_payload(crate::wire::TAG_BUSINESS, ptr::null(), 0, None) }
     }
 
     #[test]
@@ -525,27 +505,9 @@ mod tests {
     fn timer_heap_pops_in_fire_order() {
         let mut table = ProcessTable::new();
         let base = Instant::now();
-        table.push_timer(
-            base + Duration::from_millis(30),
-            1,
-            OwnedBuf::new(ptr::null_mut()),
-            0,
-            None,
-        );
-        table.push_timer(
-            base + Duration::from_millis(10),
-            2,
-            OwnedBuf::new(ptr::null_mut()),
-            0,
-            None,
-        );
-        table.push_timer(
-            base + Duration::from_millis(20),
-            3,
-            OwnedBuf::new(ptr::null_mut()),
-            0,
-            None,
-        );
+        table.push_timer(base + Duration::from_millis(30), 1, fake_envelope());
+        table.push_timer(base + Duration::from_millis(10), 2, fake_envelope());
+        table.push_timer(base + Duration::from_millis(20), 3, fake_envelope());
 
         let due = table.take_due_timers(base + Duration::from_millis(25));
         let pids: Vec<i64> = due.iter().map(|entry| entry.target_pid).collect();

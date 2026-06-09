@@ -7,21 +7,21 @@
 
 use std::alloc;
 use std::cell::{Cell, UnsafeCell};
-use std::collections::VecDeque;
 use std::mem;
 use std::ptr;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Condvar, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
+use crate::mailbox::{Mailbox, WaitTarget};
 use crate::memory;
 use crate::process_table::ProcessTable;
 use crate::tsan;
 use crate::wire::{
     Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
-    TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE,
+    OwnedPayload, TAG_BUSINESS, TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE, TAG_REPLY,
 };
 
 // ---------------------------------------------------------------------------
@@ -71,9 +71,9 @@ fn install_signals() {
 }
 
 /// Checks atomic signal flags and injects lifecycle messages into the main
-/// process's mailbox. Called from the worker loop. Lifecycle variant indices
-/// match the `Lifecycle` enum declaration order: Shutdown=0, Interrupt=1,
-/// Reload=2. Only takes the lock when a signal actually fired.
+/// process's system queue. Called from the worker loop. Lifecycle variant
+/// indices match the `Lifecycle` enum declaration order: Shutdown=0,
+/// Interrupt=1, Reload=2. Only takes the lock when a signal actually fired.
 fn poll_signals() {
     let term = GOT_SIGTERM.swap(false, Ordering::Relaxed);
     let int = GOT_SIGINT.swap(false, Ordering::Relaxed);
@@ -95,7 +95,7 @@ fn poll_signals() {
 }
 
 /// Internal helper: allocates a tagged lifecycle message buffer and
-/// pushes it to the front of the target process's mailbox.
+/// delivers it to the target process's system queue.
 fn send_lifecycle_to(pid: i64, variant: i64) {
     let buf = unsafe {
         let buf = memory::alloc(LIFECYCLE_BUF_SIZE);
@@ -105,15 +105,7 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
         buf
     };
 
-    let envelope = Envelope::new(buf, LIFECYCLE_BUF_SIZE);
-    {
-        let mut guard = SCHED.lock().unwrap();
-        if let Some(envelope) = guard.deliver_front(pid, envelope) {
-            drop(envelope);
-            return;
-        }
-    }
-
+    deliver_or_discard(pid, Envelope::new(buf, LIFECYCLE_BUF_SIZE));
     WORK_AVAILABLE.notify_all();
 }
 
@@ -159,40 +151,6 @@ pub(crate) enum ProcessState {
     Dead,
 }
 
-/// An owned byte buffer from the allocator funnel ([`memory::alloc`]),
-/// freed on drop. Wraps the scheduler's hand-managed heap runs — a
-/// process's initial state and a pending timer's staged message bytes —
-/// so they reclaim by RAII rather than a matching manual free on every
-/// path.
-///
-/// The empty value (`Default`) is null and drops as a no-op, so it also
-/// serves as the placeholder left behind when ownership is moved out
-/// via [`mem::take`].
-pub(crate) struct OwnedBuf {
-    ptr: *mut u8,
-}
-
-impl OwnedBuf {
-    /// Wraps an allocation from [`memory::alloc`], or null for empty.
-    pub(crate) fn new(ptr: *mut u8) -> Self {
-        Self { ptr }
-    }
-}
-
-impl Default for OwnedBuf {
-    fn default() -> Self {
-        Self {
-            ptr: ptr::null_mut(),
-        }
-    }
-}
-
-impl Drop for OwnedBuf {
-    fn drop(&mut self) {
-        unsafe { memory::free(self.ptr) };
-    }
-}
-
 /// An `mmap`-backed process stack: a `PROT_NONE` guard page at the
 /// lowest address (the growth end, since stacks grow down) followed by
 /// the usable region. Held on each [`Process`] so the mapping is
@@ -229,22 +187,23 @@ impl Drop for ProcessStack {
 
 /// A single lightweight Koja process.
 ///
-/// Each process has its own stack, a FIFO mailbox of raw message buffers,
-/// and a state machine driven by the scheduler. Processes live in a
-/// generational slotmap ([`ProcessTable`]); a PID packs the slot index and
-/// generation rather than being a bare `Vec` offset.
+/// Each process has its own stack, a routed [`Mailbox`] of message
+/// envelopes, and a state machine driven by the scheduler. Processes live
+/// in a generational slotmap ([`ProcessTable`]); a PID packs the slot
+/// index and generation rather than being a bare `Vec` offset.
 pub(crate) struct Process {
-    /// Optional receive timeout. Set by `koja_rt_receive_timeout`, cleared
-    /// on resume. The worker loop promotes `Blocked → Runnable` when the
-    /// deadline passes.
+    /// Optional wake deadline. Set by `koja_rt_receive_timeout` and
+    /// `koja_rt_call_receive`, cleared on resume. The worker loop promotes
+    /// `Blocked → Runnable` when the deadline passes.
     pub(crate) deadline: Option<Instant>,
     /// The compiled Koja function to call when first entering this process.
     func: ProcessFn,
-    /// Heap-allocated initial state passed to `func` on first entry,
-    /// owned by the process and freed when its resources are reclaimed.
-    init_state: OwnedBuf,
-    /// FIFO queue of message envelopes delivered via `send`.
-    pub(crate) mailbox: VecDeque<Envelope>,
+    /// Heap-allocated initial state passed to `func` on first entry. Owned
+    /// by the process: its payload drop glue runs (releasing the config's
+    /// nested heap) when the process's resources are reclaimed.
+    init_state: OwnedPayload,
+    /// Routed message queues plus the one-shot reply slot.
+    pub(crate) mailbox: Mailbox,
     /// Claim flag: `true` from the moment a worker switches into this
     /// process until that same worker has persisted the post-yield `sp`.
     ///
@@ -263,6 +222,11 @@ pub(crate) struct Process {
     stack: ProcessStack,
     /// Current lifecycle state, driven by the scheduler and runtime intrinsics.
     pub(crate) state: ProcessState,
+    /// What a `Blocked` process is waiting on, so delivery only wakes it
+    /// for traffic that can satisfy the wait (a business message must not
+    /// wake a caller parked on its reply slot, and vice versa). Only
+    /// meaningful while `state` is `Blocked`.
+    pub(crate) waiting: WaitTarget,
 }
 
 /// Process contains raw pointers that are heap-allocated and not
@@ -274,7 +238,7 @@ impl Process {
     /// [`ProcessTable::spawn`], which owns the slot/PID assignment.
     pub(crate) fn new(
         func: ProcessFn,
-        init_state: OwnedBuf,
+        init_state: OwnedPayload,
         stack: ProcessStack,
         sp: *mut u8,
     ) -> Self {
@@ -282,18 +246,19 @@ impl Process {
             deadline: None,
             func,
             init_state,
-            mailbox: VecDeque::new(),
+            mailbox: Mailbox::default(),
             on_cpu: false,
             sp,
             stack,
             state: ProcessState::Created,
+            waiting: WaitTarget::Receive,
         }
     }
 
     /// The entry function and its heap-allocated initial state, read by
     /// [`process_trampoline`] on first entry.
     pub(crate) fn entry(&self) -> (ProcessFn, *const u8) {
-        (self.func, self.init_state.ptr)
+        (self.func, self.init_state.as_ptr())
     }
 
     /// Moves a dead process's reclaimable resources out of its slot,
@@ -315,15 +280,16 @@ impl Process {
 /// dropped — which the reclaim sites do only after the `SCHED` lock is
 /// released. Produced by [`Process::take_resources`]. Each field is an
 /// RAII owner, so dropping a `Reclaim` drains the mailbox (running each
-/// envelope's drop glue), unmaps the stack, and frees `init_state`; an
-/// already-reclaimed `Reclaim` holds empty owners and drops as a no-op.
+/// envelope's drop glue), unmaps the stack, and releases `init_state`
+/// (running its config drop glue); an already-reclaimed `Reclaim` holds
+/// empty owners and drops as a no-op.
 ///
 /// The fields are never read by name — they exist purely so their own
 /// `Drop` runs at this controlled point — hence `allow(dead_code)`.
 #[allow(dead_code)]
 pub(crate) struct Reclaim {
-    init_state: OwnedBuf,
-    mailbox: VecDeque<Envelope>,
+    init_state: OwnedPayload,
+    mailbox: Mailbox,
     stack: ProcessStack,
 }
 
@@ -366,6 +332,40 @@ thread_local! {
 // Private helpers
 // ---------------------------------------------------------------------------
 
+/// Yields the current process back to its worker's scheduling loop,
+/// returning when the worker resumes this process.
+fn yield_to_scheduler() {
+    tsan::switch_to_scheduler();
+    let yield_sp_ptr = YIELD_SP.with(|c| c.get());
+    let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
+    unsafe {
+        koja_context_switch(yield_sp_ptr, sched_sp);
+    }
+}
+
+/// Parks the current process as `Blocked`, recording which part of its
+/// mailbox it waits on and an optional wake deadline. Call with the
+/// scheduler lock held, then release it and [`yield_to_scheduler`].
+fn block_on(guard: &mut ProcessTable, pid: i64, target: WaitTarget, deadline: Option<Instant>) {
+    guard.transition(pid, ProcessState::Blocked);
+    if let Some(process) = guard.get_mut(pid) {
+        process.deadline = deadline;
+        process.waiting = target;
+    }
+    if let Some(deadline) = deadline {
+        guard.push_deadline(pid, deadline);
+    }
+}
+
+/// Routes `envelope` to `pid` under the scheduler lock, then drops any
+/// leftover (an undeliverable envelope, or a stale reply displaced from
+/// the reply slot) after the lock is released — payload drop glue is
+/// arbitrary emitted code and shouldn't run while holding `SCHED`.
+fn deliver_or_discard(pid: i64, envelope: Envelope) {
+    let leftover = SCHED.lock().unwrap().deliver(pid, envelope);
+    drop(leftover);
+}
+
 /// Prepares a fresh process stack so the first `koja_context_switch`
 /// into it will "return" to `entry`. Zeroes the initial frame and
 /// writes the trampoline address at the platform-specific return slot.
@@ -401,13 +401,7 @@ unsafe extern "C" fn process_trampoline() {
     }
 
     WORK_AVAILABLE.notify_all();
-
-    tsan::switch_to_scheduler();
-    let yield_sp_ptr = YIELD_SP.with(|c| c.get());
-    let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
-    unsafe {
-        koja_context_switch(yield_sp_ptr, sched_sp);
-    }
+    yield_to_scheduler();
 }
 
 /// Maps a fresh [`STACK_SIZE`] process stack with a `PROT_NONE` guard
@@ -551,23 +545,14 @@ fn worker_loop() {
     }
 }
 
-/// Delivers every timer due at `now`. Each fired timer's staged payload is
-/// copied into a fresh envelope and handed to the target; an undeliverable
-/// timer (target gone or dead) drops its envelope. Dropping each drained
-/// [`TimerEntry`] frees its staging buffer.
+/// Delivers every timer due at `now`. The envelope was staged in wire
+/// format at schedule time, so firing is a plain delivery; an
+/// undeliverable timer (target gone or dead) drops its envelope,
+/// running its payload drop glue.
 fn fire_due_timers(table: &mut ProcessTable, now: Instant) {
     for entry in table.take_due_timers(now) {
-        let total = TAG_HEADER_SIZE + entry.msg_len;
-        let buf = unsafe {
-            let buf = memory::alloc(total);
-            ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
-            ptr::copy_nonoverlapping(entry.msg.ptr, buf.add(TAG_HEADER_SIZE), entry.msg_len);
-            buf
-        };
-        let mut envelope = Envelope::new(buf, total);
-        envelope.drop_glue = entry.drop_glue;
-        if let Some(envelope) = table.deliver_back(entry.target_pid, envelope) {
-            drop(envelope);
+        if let Some(undelivered) = table.deliver(entry.target_pid, entry.envelope) {
+            drop(undelivered);
         }
     }
 }
@@ -673,32 +658,29 @@ fn deliver_envelope(envelope: Envelope, out: *mut u8, out_cap: i64) -> i64 {
 /// Blocking receive. Copies the next message's payload into `out` (at
 /// most `out_cap` bytes), frees the transport buffer, and returns its
 /// wire tag; context-switches back to the scheduler (marking the
-/// process `Blocked`) until a message arrives. Returns `-1` only if
-/// woken with an empty mailbox.
+/// process `Blocked`) until a message arrives. System traffic is
+/// drained before business traffic (see [`Mailbox::pop_received`]).
+/// Returns `-1` only if woken with empty queues, which no live wake
+/// path produces.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
 
     {
         let mut guard = SCHED.lock().unwrap();
-        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_front());
+        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_received());
         if let Some(envelope) = popped {
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        guard.transition(pid, ProcessState::Blocked);
+        block_on(&mut guard, pid, WaitTarget::Receive, None);
     }
 
-    tsan::switch_to_scheduler();
-    let yield_sp_ptr = YIELD_SP.with(|c| c.get());
-    let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
-    unsafe {
-        koja_context_switch(yield_sp_ptr, sched_sp);
-    }
+    yield_to_scheduler();
 
     let envelope = {
         let mut guard = SCHED.lock().unwrap();
-        guard.get_mut(pid).and_then(|p| p.mailbox.pop_front())
+        guard.get_mut(pid).and_then(|p| p.mailbox.pop_received())
     };
     envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
 }
@@ -713,34 +695,89 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
 
     {
         let mut guard = SCHED.lock().unwrap();
-        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_front());
+        let popped = guard.get_mut(pid).and_then(|p| p.mailbox.pop_received());
         if let Some(envelope) = popped {
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        guard.transition(pid, ProcessState::Blocked);
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        if let Some(p) = guard.get_mut(pid) {
-            p.deadline = Some(deadline);
-        }
-        guard.push_deadline(pid, deadline);
+        block_on(&mut guard, pid, WaitTarget::Receive, Some(deadline));
     }
 
-    tsan::switch_to_scheduler();
-    let yield_sp_ptr = YIELD_SP.with(|c| c.get());
-    let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
-    unsafe {
-        koja_context_switch(yield_sp_ptr, sched_sp);
-    }
+    yield_to_scheduler();
 
     let envelope = {
         let mut guard = SCHED.lock().unwrap();
         guard.get_mut(pid).and_then(|p| {
             p.deadline = None;
-            p.mailbox.pop_front()
+            p.mailbox.pop_received()
         })
     };
     envelope.map_or(-1, |envelope| deliver_envelope(envelope, out, out_cap))
+}
+
+/// Monotonic source of call-correlation tokens. Global rather than
+/// per-process so tokens never repeat for the lifetime of the runtime —
+/// a stale reply can never collide with a later call's token.
+static CALL_TOKEN: AtomicI64 = AtomicI64::new(0);
+
+/// Mints a fresh correlation token for a `Ref.call`. The caller stamps
+/// it into the outgoing request's `ReplyTo` and then waits for it via
+/// [`koja_rt_call_receive`].
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_call_token() -> i64 {
+    CALL_TOKEN.fetch_add(1, Ordering::Relaxed) + 1
+}
+
+/// Blocks until the reply correlated with `token` lands in this
+/// process's reply slot, copies its payload into `out` (at most
+/// `out_cap` bytes), and returns `0`; returns `-1` if `timeout_ms`
+/// elapses first. A slotted reply with a different token is a stale
+/// leftover from an earlier call that timed out — it is dropped (running
+/// its payload drop glue) and the wait continues. Queue traffic is left
+/// untouched: calls are atomic, so the caller resumes handling its
+/// mailbox only after the call completes.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_call_receive(
+    token: i64,
+    out: *mut u8,
+    out_cap: i64,
+    timeout_ms: i64,
+) -> i64 {
+    let pid = CURRENT_PID.with(|c| c.get());
+    let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+
+    loop {
+        let stale = {
+            let mut guard = SCHED.lock().unwrap();
+            match guard.get_mut(pid).and_then(|p| p.mailbox.take_reply()) {
+                Some(envelope) if envelope.reply_token == token => {
+                    if let Some(p) = guard.get_mut(pid) {
+                        p.deadline = None;
+                    }
+                    drop(guard);
+                    deliver_envelope(envelope, out, out_cap);
+                    return 0;
+                }
+                Some(stale) => Some(stale),
+                None => {
+                    if Instant::now() >= deadline {
+                        if let Some(p) = guard.get_mut(pid) {
+                            p.deadline = None;
+                        }
+                        return -1;
+                    }
+                    block_on(&mut guard, pid, WaitTarget::Reply, Some(deadline));
+                    None
+                }
+            }
+        };
+
+        match stale {
+            Some(stale) => drop(stale),
+            None => yield_to_scheduler(),
+        }
+    }
 }
 
 /// Returns the PID of the currently executing process on this worker
@@ -750,13 +787,12 @@ pub extern "C" fn koja_rt_self() -> i64 {
     CURRENT_PID.with(|c| c.get())
 }
 
-/// Sends a message to the process identified by `pid`.
+/// Sends a business message to the process identified by `pid`.
 ///
-/// Copies `msg_len` bytes from `msg_ptr` into a heap-allocated buffer
-/// with an 8-byte tag header (tag=0 for business messages). The payload
-/// starts at offset 8 in the buffer. Appends to the target's mailbox
-/// via `push_back`. If the target is `Blocked`, it is promoted to
-/// `Runnable` and a worker is woken.
+/// Copies `msg_len` bytes from `msg_ptr` into a fresh envelope (tag=0)
+/// and routes it to the target's business queue. If the target is
+/// parked waiting on its queues, it is promoted to `Runnable` and a
+/// worker is woken.
 ///
 /// `drop_glue` (null when the payload owns no nested heap) releases the
 /// payload's nested Koja heap if the envelope is ever discarded
@@ -774,31 +810,38 @@ pub unsafe extern "C" fn koja_rt_send(
     msg_len: i64,
     drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 ) {
-    let len = msg_len as usize;
-    let total = TAG_HEADER_SIZE + len;
-    let buf = unsafe {
-        let buf = memory::alloc(total);
-        ptr::write_bytes(buf, 0, TAG_HEADER_SIZE);
-        ptr::copy_nonoverlapping(msg_ptr, buf.add(TAG_HEADER_SIZE), len);
-        buf
-    };
-
-    let mut envelope = Envelope::new(buf, total);
-    envelope.drop_glue = drop_glue;
-    {
-        let mut guard = SCHED.lock().unwrap();
-        if let Some(envelope) = guard.deliver_back(pid, envelope) {
-            drop(envelope);
-            return;
-        }
-    }
-
+    let envelope =
+        unsafe { Envelope::from_payload(TAG_BUSINESS, msg_ptr, msg_len as usize, drop_glue) };
+    deliver_or_discard(pid, envelope);
     WORK_AVAILABLE.notify_one();
 }
 
-/// Sends a lifecycle event to the given process. Allocates a tagged
-/// buffer with tag=1 (lifecycle) and the variant byte, inserted at
-/// the front of the mailbox for priority delivery.
+/// Sends a reply for the in-flight call identified by `token` back to
+/// the caller `pid`. Like [`koja_rt_send`] but the envelope is tagged
+/// `TAG_REPLY` and routed to the caller's one-shot reply slot, where
+/// `koja_rt_call_receive` correlates it by token; it never enters the
+/// receive queues. A stale occupant displaced from the slot is dropped
+/// here, releasing its payload.
+///
+/// # Safety
+/// `msg_ptr` must point to `msg_len` readable bytes.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_rt_reply(
+    pid: i64,
+    token: i64,
+    msg_ptr: *const u8,
+    msg_len: i64,
+    drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
+) {
+    let mut envelope =
+        unsafe { Envelope::from_payload(TAG_REPLY, msg_ptr, msg_len as usize, drop_glue) };
+    envelope.reply_token = token;
+    deliver_or_discard(pid, envelope);
+    WORK_AVAILABLE.notify_one();
+}
+
+/// Sends a lifecycle event to the given process, routed to its system
+/// queue so `receive` sees it before any queued business traffic.
 ///
 /// Variant indices: 0=Shutdown, 1=Interrupt, 2=Reload.
 #[unsafe(no_mangle)]
@@ -810,8 +853,8 @@ pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
 ///
 /// Constructs a tagged buffer: tag=2 (IO event), then the IOReady enum
 /// layout: variant byte (0=Read, 1=Write, 2=Error) at offset 8, followed
-/// by the Fd struct (i64 descriptor) at offset 16. Appends to the target's
-/// mailbox via `push_back`.
+/// by the Fd struct (i64 descriptor) at offset 16. Routed to the
+/// target's business queue.
 pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
     let buf = unsafe {
         let buf = memory::alloc(IO_READY_BUF_SIZE);
@@ -822,26 +865,17 @@ pub fn send_io_event(pid: i64, variant: u8, fd: i64) {
         buf
     };
 
-    let envelope = Envelope::new(buf, IO_READY_BUF_SIZE);
-    {
-        let mut guard = SCHED.lock().unwrap();
-        if let Some(envelope) = guard.deliver_back(pid, envelope) {
-            drop(envelope);
-            return;
-        }
-    }
-
+    deliver_or_discard(pid, Envelope::new(buf, IO_READY_BUF_SIZE));
     WORK_AVAILABLE.notify_one();
 }
 
 /// Schedules a message to be delivered to `pid` after `delay_ms`
-/// milliseconds. The message bytes are copied immediately; the
-/// delivery happens in the worker loop when the timer fires.
+/// milliseconds. The message is staged as a finished envelope
+/// immediately; the worker loop delivers it when the timer fires.
 ///
 /// `drop_glue` (null when the payload owns no nested heap) rides the
-/// timer entry onto the fired envelope, so an undeliverable fire
-/// (target gone) releases the payload's nested heap instead of leaking
-/// it. See [`koja_rt_send`].
+/// staged envelope, so an unfired or undeliverable timer releases the
+/// payload's nested heap instead of leaking it. See [`koja_rt_send`].
 ///
 /// # Safety
 /// `msg_ptr` must point to `msg_len` readable bytes.
@@ -853,18 +887,13 @@ pub unsafe extern "C" fn koja_rt_send_after(
     delay_ms: i64,
     drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 ) {
-    let len = msg_len as usize;
-    let msg_copy = unsafe {
-        let buf = memory::alloc(len);
-        ptr::copy_nonoverlapping(msg_ptr, buf, len);
-        buf
-    };
-
+    let envelope =
+        unsafe { Envelope::from_payload(TAG_BUSINESS, msg_ptr, msg_len as usize, drop_glue) };
     let fire_at = Instant::now() + Duration::from_millis(delay_ms as u64);
 
     {
         let mut guard = SCHED.lock().unwrap();
-        guard.push_timer(fire_at, pid, OwnedBuf::new(msg_copy), len, drop_glue);
+        guard.push_timer(fire_at, pid, envelope);
     }
 
     WORK_AVAILABLE.notify_one();
@@ -888,9 +917,9 @@ pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
 /// If the target is currently executing on another worker (`on_cpu`),
 /// all of its resources -- stack, initial state, and any undelivered
 /// mailbox envelopes -- are reclaimed by that worker when it switches
-/// out; otherwise they are freed here. Nested heap inside a discarded
-/// payload is not yet freed (it waits on the deferred drop-glue work;
-/// see the message/envelope-lifecycle design).
+/// out; otherwise they are freed here. Either way the [`Reclaim`] drop
+/// runs every discarded envelope's payload glue and the init-state
+/// config glue, so nested heap is released too.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_kill(pid: i64) {
     let reclaim = {
@@ -921,6 +950,10 @@ pub extern "C" fn koja_rt_kill(pid: i64) {
 /// registers the process as `Created`. Wakes an idle worker via
 /// [`WORK_AVAILABLE`]. Returns the new process's PID.
 ///
+/// The process owns its config copy: `drop_glue` (null when the config
+/// owns no nested heap) runs over it when the process's resources are
+/// reclaimed — whether it exited normally, was killed, or never ran.
+///
 /// # Safety
 /// `state_ptr` must point to `state_len` readable bytes (or be null if `state_len` is 0).
 #[unsafe(no_mangle)]
@@ -928,29 +961,24 @@ pub unsafe extern "C" fn koja_rt_spawn(
     fn_ptr: ProcessFn,
     state_ptr: *const u8,
     state_len: i64,
+    drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 ) -> i64 {
     ensure_runtime_init();
 
-    let heap_state_len = if state_len > 0 && !state_ptr.is_null() {
-        state_len as usize
+    let init_state = if state_len > 0 && !state_ptr.is_null() {
+        let len = state_len as usize;
+        let buf = memory::alloc(len);
+        unsafe { ptr::copy_nonoverlapping(state_ptr, buf, len) };
+        OwnedPayload::new(buf, drop_glue)
     } else {
-        0
-    };
-    let heap_state = if heap_state_len > 0 {
-        unsafe {
-            let buf = memory::alloc(heap_state_len);
-            ptr::copy_nonoverlapping(state_ptr, buf, heap_state_len);
-            buf
-        }
-    } else {
-        ptr::null_mut()
+        OwnedPayload::default()
     };
 
     let (stack, sp) = allocate_process_stack();
 
     let id = {
         let mut guard = SCHED.lock().unwrap();
-        guard.spawn(fn_ptr, OwnedBuf::new(heap_state), stack, sp)
+        guard.spawn(fn_ptr, init_state, stack, sp)
     };
 
     WORK_AVAILABLE.notify_one();

@@ -43,11 +43,14 @@ pub(crate) const STRING_SLICE_SYMBOL: &str = "koja_string_slice";
 // `koja-runtime/src/scheduler.rs`. Backend-side declare helpers
 // live below the existing `declare_*_extern` family.
 pub(crate) const RT_BUILD_ARGV_SYMBOL: &str = "koja_rt_build_argv";
+pub(crate) const RT_CALL_RECEIVE_SYMBOL: &str = "koja_rt_call_receive";
+pub(crate) const RT_CALL_TOKEN_SYMBOL: &str = "koja_rt_call_token";
 pub(crate) const RT_KILL_SYMBOL: &str = "koja_rt_kill";
 pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "koja_rt_main_done";
 pub(crate) const RT_PROCESS_ALIVE_SYMBOL: &str = "koja_rt_is_process_alive";
 pub(crate) const RT_RECEIVE_SYMBOL: &str = "koja_rt_receive";
 pub(crate) const RT_RECEIVE_TIMEOUT_SYMBOL: &str = "koja_rt_receive_timeout";
+pub(crate) const RT_REPLY_SYMBOL: &str = "koja_rt_reply";
 pub(crate) const RT_SELF_SYMBOL: &str = "koja_rt_self";
 pub(crate) const RT_SEND_AFTER_SYMBOL: &str = "koja_rt_send_after";
 pub(crate) const RT_SEND_LIFECYCLE_SYMBOL: &str = "koja_rt_send_lifecycle";
@@ -413,15 +416,21 @@ pub(crate) fn declare_panic_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVal
 // `koja_rt_*` mailbox / scheduler externs ----------------------------------
 
 /// Declare (or look up) `koja_rt_spawn`. Signature:
-/// `i64 koja_rt_spawn(void (*fn)(i8*), i8* state_ptr, i64 state_len)`.
-/// Returns the new process's pid (1-indexed).
+/// `i64 koja_rt_spawn(void (*fn)(i8*), i8* state_ptr, i64 state_len,
+/// void(i8*)* drop_glue)`. Returns the new process's pid. The runtime
+/// copies the config bytes and owns them: `drop_glue` (null when the
+/// config owns no nested heap) runs over the copy when the process's
+/// resources are reclaimed.
 pub(crate) fn declare_rt_spawn_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(RT_SPAWN_SYMBOL) {
         return existing;
     }
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
-    let signature = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into(), i64_ty.into()], false);
+    let signature = i64_ty.fn_type(
+        &[ptr_ty.into(), ptr_ty.into(), i64_ty.into(), ptr_ty.into()],
+        false,
+    );
     ctx.module
         .add_function(RT_SPAWN_SYMBOL, signature, Some(Linkage::External))
 }
@@ -497,8 +506,8 @@ pub(crate) fn declare_rt_send_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionV
 /// Declare (or look up) `koja_rt_send_lifecycle`. Signature:
 /// `void koja_rt_send_lifecycle(i64 pid, i64 variant)`. Variant
 /// indices follow the `Lifecycle` enum: 0=Shutdown, 1=Interrupt,
-/// 2=Reload. Inserted at the front of the mailbox for priority
-/// delivery.
+/// 2=Reload. Routed to the target's system queue, which `receive`
+/// drains before business traffic.
 pub(crate) fn declare_rt_send_lifecycle_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -538,6 +547,66 @@ pub(crate) fn declare_rt_send_after_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fun
     );
     ctx.module
         .add_function(RT_SEND_AFTER_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `koja_rt_reply`. Signature:
+/// `void koja_rt_reply(i64 pid, i64 token, i8* msg_ptr, i64 msg_len,
+/// void(i8*)* drop_glue)`. Like `koja_rt_send` but the envelope is
+/// routed to the caller's one-shot reply slot, where
+/// `koja_rt_call_receive` correlates it by `token`; it never enters
+/// the receive queues.
+pub(crate) fn declare_rt_reply_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_REPLY_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx.context.void_type().fn_type(
+        &[
+            i64_ty.into(),
+            i64_ty.into(),
+            ptr_ty.into(),
+            i64_ty.into(),
+            ptr_ty.into(),
+        ],
+        false,
+    );
+    ctx.module
+        .add_function(RT_REPLY_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `koja_rt_call_token`. Signature:
+/// `i64 koja_rt_call_token()`. Mints a fresh correlation token for a
+/// `Ref.call`; the caller stamps it into the outgoing `ReplyTo` and
+/// waits for it via `koja_rt_call_receive`.
+pub(crate) fn declare_rt_call_token_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_CALL_TOKEN_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[], false);
+    ctx.module
+        .add_function(RT_CALL_TOKEN_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `koja_rt_call_receive`. Signature:
+/// `i64 koja_rt_call_receive(i64 token, i8* out, i64 out_cap, i64
+/// timeout_ms)`. Blocks until the reply correlated with `token`
+/// arrives, copies its payload into `out`, and returns `0`; returns
+/// `-1` on timeout. Stale replies (token mismatch) are discarded by
+/// the runtime.
+pub(crate) fn declare_rt_call_receive_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_CALL_RECEIVE_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(
+        &[i64_ty.into(), ptr_ty.into(), i64_ty.into(), i64_ty.into()],
+        false,
+    );
+    ctx.module
+        .add_function(RT_CALL_RECEIVE_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) `koja_rt_kill`. Signature:

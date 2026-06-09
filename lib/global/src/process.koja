@@ -64,11 +64,13 @@ end
 
 @doc """
 A typed reply channel for process handlers. Wraps the caller's process
-id and enforces that replies match the expected type `R` at compile time.
-At runtime this is a bare integer (the caller's pid).
+id plus a correlation token minted per call, and enforces that replies
+match the expected type `R` at compile time. The token lets the caller
+discard stale replies from earlier calls that already timed out.
 """
 struct ReplyTo<R>
   id: Int
+  token: Int
 end
 
 extend ReplyTo<R>

@@ -33,7 +33,7 @@ mod list;
 mod map;
 mod parse;
 mod print;
-mod process;
+pub(crate) mod process;
 mod set;
 mod socket;
 mod string;

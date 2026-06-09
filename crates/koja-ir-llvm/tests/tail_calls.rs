@@ -112,6 +112,44 @@ fn self_recursive_tail_call_as_match_value_is_optimized() {
 }
 
 #[test]
+fn tail_call_back_edge_zeroes_body_slots() {
+    // The back-edge must reset every non-parameter slot to zero so an
+    // iteration that doesn't revisit a slot's declaring block (e.g. a
+    // different `receive`/`match` arm) exit-drops zero instead of the
+    // previous iteration's stale, already-released value.
+    let source = r#"
+        struct Counter
+          n: Int
+
+          fn count_down(self) -> Int
+            if self.n <= 0
+              0
+            else
+              s = "x" <> "y"
+              Counter{n: self.n - s.length()}.count_down()
+            end
+          end
+        end
+
+        fn main
+          Counter{n: 4}.count_down()
+        end
+        "#;
+    let program = lower(&dedent(source));
+    let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir");
+    let body = extract_function_body(&ir_text, "TestApp.Counter.count_down");
+    assert!(body.contains("tco_loop"), "expected TCO loop; got:\n{body}");
+    // `s` is a heap (`ptr`) slot: one null store for the decl-site
+    // zero-init plus one for the back-edge reset.
+    let null_stores = body.matches("store ptr null").count();
+    assert!(
+        null_stores >= 2,
+        "expected decl zero-init + back-edge reset null stores for `s`, \
+         found {null_stores}; got:\n{body}",
+    );
+}
+
+#[test]
 fn non_recursive_function_emits_no_tco_loop() {
     let source = "
         fn add_one(n: Int) -> Int

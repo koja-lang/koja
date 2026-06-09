@@ -21,18 +21,18 @@
 //!   - `SendAfter` → wrap `msg` in the same `Pair` envelope as
 //!     `Cast` (`Option::None` reply slot), then call
 //!     `koja_rt_send_after(pid, blob, sizeof(envelope), delay_ms)`.
-//!   - `Call` → wrap `msg` in `Pair<M, Option::Some(ReplyTo {
-//!     id: caller_pid })>`, call `koja_rt_send`, then
-//!     `koja_rt_receive_timeout(timeout)`. Three-way dispatch
-//!     on the result: non-null envelope → deserialize `R` →
-//!     `Result.Ok(R)`; null envelope + target alive → `Result.Err(
-//!     CallError.Timeout)`; null envelope + target dead →
+//!   - `Call` → mint a token via `koja_rt_call_token()`, wrap `msg`
+//!     in `Pair<M, Option::Some(ReplyTo { id: caller_pid, token })>`,
+//!     call `koja_rt_send`, then `koja_rt_call_receive(token,
+//!     timeout)`. Three-way dispatch on the result: `0` →
+//!     deserialize `R` → `Result.Ok(R)`; `-1` + target alive →
+//!     `Result.Err(CallError.Timeout)`; `-1` + target dead →
 //!     `Result.Err(CallError.ProcessDown)`.
 //! - [`emit_reply_to`] dispatches the single [`ReplyToMethod::Send`]
-//!   to a serializer + `koja_rt_send`. The reply payload is the
-//!   bare `R` value (no `Pair` envelope) — the call-side
-//!   `koja_rt_receive_timeout` reader pulls `R` straight off the
-//!   envelope's `+8` payload offset.
+//!   to a serializer + `koja_rt_reply`. The reply payload is the
+//!   bare `R` value (no `Pair` envelope), correlated to the
+//!   in-flight call by the `ReplyTo`'s token; the runtime routes it
+//!   to the caller's one-shot reply slot.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -51,7 +51,8 @@ use crate::emit::process::serialize_to_stack;
 use crate::error::LlvmError;
 use crate::intrinsics::element::release_in_slot;
 use crate::runtime::{
-    declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_receive_timeout_extern,
+    declare_rt_call_receive_extern, declare_rt_call_token_extern,
+    declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_reply_extern,
     declare_rt_self_extern, declare_rt_send_after_extern, declare_rt_send_extern,
     declare_rt_send_lifecycle_extern,
 };
@@ -148,7 +149,7 @@ fn emit_cast<'ctx>(
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) =
         build_pair_envelope_alloca(ctx, "cast_envelope", msg_llvm, msg_value, none_payload)?;
-    let drop_glue = payload_drop_glue(ctx, function, msg_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, &function.symbol, msg_ir_type)?;
 
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
@@ -193,7 +194,7 @@ fn emit_send_after<'ctx>(
         msg_value,
         none_payload,
     )?;
-    let drop_glue = payload_drop_glue(ctx, function, msg_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, &function.symbol, msg_ir_type)?;
 
     let delay = delay_value.into_int_value();
     let send_after_fn = declare_rt_send_after_extern(ctx);
@@ -219,16 +220,18 @@ fn emit_send_after<'ctx>(
 /// `Ref.call(self, msg: M, timeout: Int) -> Result<R, CallError>`
 /// — the synchronous request/reply primitive.
 ///
-/// Build a `Pair<M, Option<ReplyTo<R>>>` envelope with the second
-/// field set to `Option::Some(ReplyTo { id: caller_pid })` (the
-/// caller's pid serves as the one-shot reply mailbox), `koja_rt_
-/// send` it to the target, then `koja_rt_receive_timeout(timeout)`
-/// against the caller's mailbox. Three-way dispatch on the result:
+/// Mint a correlation token via `koja_rt_call_token()`, build a
+/// `Pair<M, Option<ReplyTo<R>>>` envelope with the second field set
+/// to `Option::Some(ReplyTo { id: caller_pid, token })`, `koja_rt_
+/// send` it to the target, then block on `koja_rt_call_receive(
+/// token, timeout)` — which waits on the caller's one-shot reply
+/// slot, discarding stale replies from earlier timed-out calls, and
+/// never touches queued business / lifecycle traffic (calls are
+/// atomic). Three-way dispatch on the result:
 ///
-/// - non-null envelope → load `R` from `envelope + 8` →
-///   `Result.Ok(R)`.
-/// - null envelope + target alive → `Result.Err(CallError.Timeout)`.
-/// - null envelope + target dead → `Result.Err(CallError.ProcessDown)`.
+/// - `0` → load `R` from the reply slot → `Result.Ok(R)`.
+/// - `-1` + target alive → `Result.Err(CallError.Timeout)`.
+/// - `-1` + target dead → `Result.Err(CallError.ProcessDown)`.
 fn emit_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -265,10 +268,21 @@ fn emit_call<'ctx>(
         .basic()
         .ok_or_else(|| LlvmError::Codegen("koja_rt_self did not produce a value".to_string()))?
         .into_int_value();
-    let some_payload = option_some_payload(ctx, caller_pid)?;
+    let token_fn = declare_rt_call_token_extern(ctx);
+    let token = ctx
+        .builder
+        .build_call(token_fn, &[], "call_token")
+        .map_err(|e| inkwell_err("build_call koja_rt_call_token", e))?
+        .try_as_basic_value()
+        .basic()
+        .ok_or_else(|| {
+            LlvmError::Codegen("koja_rt_call_token did not produce a value".to_string())
+        })?
+        .into_int_value();
+    let some_payload = option_some_payload(ctx, caller_pid, token)?;
     let (envelope_ptr, envelope_size) =
         build_pair_envelope_alloca(ctx, "call_envelope", msg_llvm, msg_value, some_payload)?;
-    let drop_glue = payload_drop_glue(ctx, function, msg_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, &function.symbol, msg_ir_type)?;
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
         .build_call(
@@ -288,19 +302,24 @@ fn emit_call<'ctx>(
         .context
         .i64_type()
         .const_int(ctx.layouts.target_data.get_abi_size(&reply_llvm), false);
-    let receive_fn = declare_rt_receive_timeout_extern(ctx);
-    let reply_tag = ctx
+    let receive_fn = declare_rt_call_receive_extern(ctx);
+    let reply_status = ctx
         .builder
         .build_call(
             receive_fn,
-            &[reply_slot.into(), reply_cap.into(), timeout.into()],
-            "reply_tag",
+            &[
+                token.into(),
+                reply_slot.into(),
+                reply_cap.into(),
+                timeout.into(),
+            ],
+            "reply_status",
         )
-        .map_err(|e| inkwell_err("build_call koja_rt_receive_timeout (call)", e))?
+        .map_err(|e| inkwell_err("build_call koja_rt_call_receive", e))?
         .try_as_basic_value()
         .basic()
         .ok_or_else(|| {
-            LlvmError::Codegen("koja_rt_receive_timeout did not produce a value".to_string())
+            LlvmError::Codegen("koja_rt_call_receive did not produce a value".to_string())
         })?
         .into_int_value();
 
@@ -318,14 +337,19 @@ fn emit_call<'ctx>(
         .append_basic_block(llvm_function, "call_build_down");
     let merge_bb = ctx.context.append_basic_block(llvm_function, "call_merge");
 
-    let none_tag = ctx.context.i64_type().const_int(-1i64 as u64, true);
-    let is_none = ctx
+    let timeout_status = ctx.context.i64_type().const_int(-1i64 as u64, true);
+    let timed_out = ctx
         .builder
-        .build_int_compare(IntPredicate::EQ, reply_tag, none_tag, "reply_is_none")
-        .map_err(|e| inkwell_err("build_int_compare reply_is_none", e))?;
+        .build_int_compare(
+            IntPredicate::EQ,
+            reply_status,
+            timeout_status,
+            "call_timed_out",
+        )
+        .map_err(|e| inkwell_err("build_int_compare call_timed_out", e))?;
     ctx.builder
-        .build_conditional_branch(is_none, timeout_check_bb, got_reply_bb)
-        .map_err(|e| inkwell_err("build_conditional_branch reply_is_none", e))?;
+        .build_conditional_branch(timed_out, timeout_check_bb, got_reply_bb)
+        .map_err(|e| inkwell_err("build_conditional_branch call_timed_out", e))?;
 
     ctx.builder.position_at_end(timeout_check_bb);
     let alive_fn = declare_rt_is_process_alive_extern(ctx);
@@ -511,10 +535,11 @@ fn emit_alive<'ctx>(
 // ----- ReplyTo method emitters --------------------------------------------
 
 /// `ReplyTo.send(self, reply: R)` — serialize `reply` (bare `R`,
-/// no `Pair` envelope) and route through `koja_rt_send` to the
-/// originating caller's pid. The call-side `koja_rt_receive_timeout`
-/// reader pulls `R` straight off the envelope's `+8` payload offset
-/// in [`emit_call`].
+/// no `Pair` envelope) and route through `koja_rt_reply` to the
+/// originating caller, stamping the call's correlation token from
+/// `self`. The runtime parks the envelope in the caller's one-shot
+/// reply slot, where `koja_rt_call_receive` matches it by token in
+/// [`emit_call`].
 fn emit_reply_send<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -524,24 +549,26 @@ fn emit_reply_send<'ctx>(
     ctx.builder.position_at_end(entry_bb);
 
     let pid = pid_from_self(ctx, llvm_function, function)?;
+    let token = token_from_self(ctx, llvm_function, function)?;
     let (reply_value, reply_ir_type) = nth_param(function, llvm_function, 1)?;
     let reply_llvm = value_basic_type(ctx, reply_ir_type)?;
     let (reply_ptr, reply_len) = serialize_to_stack(ctx, "reply_msg", reply_llvm, reply_value)?;
-    let drop_glue = payload_drop_glue(ctx, function, reply_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, &function.symbol, reply_ir_type)?;
 
-    let send_fn = declare_rt_send_extern(ctx);
+    let reply_fn = declare_rt_reply_extern(ctx);
     ctx.builder
         .build_call(
-            send_fn,
+            reply_fn,
             &[
                 pid.into(),
+                token.into(),
                 reply_ptr.into(),
                 reply_len.into(),
                 drop_glue.into(),
             ],
             "",
         )
-        .map_err(|e| inkwell_err("build_call koja_rt_send (reply)", e))?;
+        .map_err(|e| inkwell_err("build_call koja_rt_reply", e))?;
     ctx.builder
         .build_return(None)
         .map(|_| ())
@@ -567,39 +594,41 @@ const CALL_ERROR_PROCESS_DOWN_TAG: u8 = 1;
 
 /// Synthesized LLVM type for the second field of a `Pair<M, Option
 /// <ReplyTo<R>>>` envelope. `R` has no LLVM-side influence —
-/// `ReplyTo<R>` always lays out as `{ i64 }`, so `Option<ReplyTo<
-/// R>>` is `{ i8 tag, [7 x i8] padding, i64 reply_id }` = 16 bytes
-/// regardless of `R`. We pack it into `[2 x i64]` so the writer
-/// side doesn't need the receive-side's pre-emit Pair / Option
-/// registry lookup; binary layout matches the receiver's typed
-/// load by construction.
+/// `ReplyTo<R>` always lays out as `{ i64 id, i64 token }`, so
+/// `Option<ReplyTo<R>>` is `{ i8 tag, [7 x i8] padding, i64
+/// reply_id, i64 token }` = 24 bytes regardless of `R`. We pack it
+/// into `[3 x i64]` so the writer side doesn't need the
+/// receive-side's pre-emit Pair / Option registry lookup; binary
+/// layout matches the receiver's typed load by construction.
 fn option_reply_to_payload_ty<'ctx>(ctx: &EmitContext<'ctx>) -> BasicTypeEnum<'ctx> {
-    ctx.context.i64_type().array_type(2).into()
+    ctx.context.i64_type().array_type(3).into()
 }
 
-/// `[OPTION_NONE_TAG, 0]` — the second-field bytes for an
+/// `[OPTION_NONE_TAG, 0, 0]` — the second-field bytes for an
 /// `Option::None` reply slot (`Ref.cast` / `Ref.send_after`).
 fn option_none_payload<'ctx>(ctx: &EmitContext<'ctx>) -> ArrayValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
     i64_ty.const_array(&[
         i64_ty.const_int(OPTION_NONE_TAG, false),
         i64_ty.const_int(0, false),
+        i64_ty.const_int(0, false),
     ])
 }
 
-/// `[OPTION_SOME_TAG, reply_pid]` — the second-field bytes for an
-/// `Option::Some(ReplyTo { id: reply_pid })` reply slot
-/// (`Ref.call`). On little-endian hosts the tag byte sits in the
-/// low byte of the first `i64`, with the trailing 7 padding bytes
-/// zeroed; the reply pid occupies the second `i64`. SSA-built
-/// because `reply_pid` is an `IntValue` SSA result of
-/// `koja_rt_self()`.
+/// `[OPTION_SOME_TAG, reply_pid, token]` — the second-field bytes
+/// for an `Option::Some(ReplyTo { id: reply_pid, token })` reply
+/// slot (`Ref.call`). On little-endian hosts the tag byte sits in
+/// the low byte of the first `i64`, with the trailing 7 padding
+/// bytes zeroed; the reply pid and correlation token occupy the
+/// next two. SSA-built because both are SSA results
+/// (`koja_rt_self()` / `koja_rt_call_token()`).
 fn option_some_payload<'ctx>(
     ctx: &EmitContext<'ctx>,
     reply_pid: IntValue<'ctx>,
+    token: IntValue<'ctx>,
 ) -> Result<ArrayValue<'ctx>, LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let undef = i64_ty.array_type(2).get_undef();
+    let undef = i64_ty.array_type(3).get_undef();
     let with_tag = ctx
         .builder
         .build_insert_value(
@@ -609,10 +638,14 @@ fn option_some_payload<'ctx>(
             "opt_tag",
         )
         .map_err(|e| inkwell_err("build_insert_value option some tag", e))?;
-    Ok(ctx
+    let with_pid = ctx
         .builder
         .build_insert_value(with_tag, reply_pid, 1, "opt_pid")
-        .map_err(|e| inkwell_err("build_insert_value option some pid", e))?
+        .map_err(|e| inkwell_err("build_insert_value option some pid", e))?;
+    Ok(ctx
+        .builder
+        .build_insert_value(with_pid, token, 2, "opt_token")
+        .map_err(|e| inkwell_err("build_insert_value option some token", e))?
         .into_array_value())
 }
 
@@ -653,22 +686,23 @@ fn build_pair_envelope_alloca<'ctx>(
     Ok((alloca, size))
 }
 
-/// Build (or look up) the by-pointer envelope-payload drop shim for
-/// `payload` and return its address as the `void(i8*)*` value the
-/// `koja_rt_send` / `koja_rt_send_after` `drop_glue` argument expects.
-/// Returns a null pointer when the payload owns no nested Koja heap
-/// (scalars, no-glue aggregates) — the runtime then frees only the
-/// transport buffer on discard.
+/// Build (or look up) the by-pointer payload drop shim for `payload`
+/// and return its address as the `void(i8*)*` value the `koja_rt_send`
+/// / `koja_rt_send_after` / `koja_rt_reply` / `koja_rt_spawn`
+/// `drop_glue` argument expects. Returns a null pointer when the
+/// payload owns no nested Koja heap (scalars, no-glue aggregates) —
+/// the runtime then frees only its own buffer on discard.
 ///
 /// The runtime's discard path is type-erased (`fn(*mut u8)` over the
 /// payload bytes), an ABI the by-value `drop_T` can't satisfy. The
 /// shim bridges the two: it loads `payload` through the pointer and
 /// routes into `drop_T` via [`release_in_slot`]. Content-addressed by
 /// [`envelope_drop_glue_symbol`], so every send site for the same
-/// message / reply type shares one shim.
-fn payload_drop_glue<'ctx>(
+/// message / reply / config type shares one shim. `site` labels emit
+/// errors with the function being emitted.
+pub(crate) fn payload_drop_glue<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     payload: &IRType,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -678,7 +712,7 @@ fn payload_drop_glue<'ctx>(
     let symbol = envelope_drop_glue_symbol(payload);
     let shim = match ctx.module.get_function(symbol.mangled()) {
         Some(existing) => existing,
-        None => build_payload_drop_shim(ctx, function, payload, symbol.mangled())?,
+        None => build_payload_drop_shim(ctx, site, payload, symbol.mangled())?,
     };
     Ok(shim.as_global_value().as_pointer_value().into())
 }
@@ -697,7 +731,7 @@ fn payload_owns_heap(ctx: &EmitContext<'_>, payload: &IRType) -> bool {
 /// middle of a send emitter's body.
 fn build_payload_drop_shim<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
+    site: &IRSymbol,
     payload: &IRType,
     symbol: &str,
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
@@ -715,7 +749,7 @@ fn build_payload_drop_shim<'ctx>(
             ))
         })?
         .into_pointer_value();
-    release_in_slot(ctx, function, payload, payload_ptr)?;
+    release_in_slot(ctx, site, payload, payload_ptr)?;
     ctx.builder
         .build_return(None)
         .map_err(|e| inkwell_err("build_return envelope drop shim", e))?;
@@ -773,12 +807,33 @@ fn build_call_error_result<'ctx>(
 // ----- shared helpers -----------------------------------------------------
 
 /// Pull the i64 pid out of the `self` parameter (always param #0
-/// for these methods). `Ref<M, R>` and `ReplyTo<R>` both layout as
-/// `{ i64 id }`; we read field 0 directly.
+/// for these methods). `Ref<M, R>` lays out as `{ i64 id }` and
+/// `ReplyTo<R>` as `{ i64 id, i64 token }`; the pid is field 0 of
+/// both.
 fn pid_from_self<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
     function: &IRFunction,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    self_field(ctx, llvm_function, function, 0, "pid")
+}
+
+/// Pull the i64 correlation token out of a `ReplyTo<R>` `self`
+/// parameter (field 1; see [`pid_from_self`] for the layout).
+fn token_from_self<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    llvm_function: FunctionValue<'ctx>,
+    function: &IRFunction,
+) -> Result<IntValue<'ctx>, LlvmError> {
+    self_field(ctx, llvm_function, function, 1, "token")
+}
+
+fn self_field<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    llvm_function: FunctionValue<'ctx>,
+    function: &IRFunction,
+    index: u32,
+    name: &str,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let self_value = llvm_function.get_nth_param(0).ok_or_else(|| {
         LlvmError::Codegen(format!(
@@ -788,9 +843,9 @@ fn pid_from_self<'ctx>(
     })?;
     let self_struct = self_value.into_struct_value();
     ctx.builder
-        .build_extract_value(self_struct, 0, "pid")
+        .build_extract_value(self_struct, index, name)
         .map(|v| v.into_int_value())
-        .map_err(|e| inkwell_err("build_extract_value pid", e))
+        .map_err(|e| inkwell_err(format_args!("build_extract_value {name}"), e))
 }
 
 /// Read the LLVM value + IR type for the `index`-th parameter,

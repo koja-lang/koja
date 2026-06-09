@@ -525,7 +525,11 @@ pub enum IRInstruction {
     DropValue { value: ValueId, ty: IRType },
     /// Declare a local-variable storage slot. Emitted exactly once
     /// per [`IRLocalId`] per function in the entry block (LLVM hoists
-    /// the `alloca`; eval inserts a fresh hashmap entry). Produces no
+    /// the `alloca`; eval inserts a fresh hashmap entry). The LLVM
+    /// backend zero-initializes the slot at the decl site, so a
+    /// `DropLocal` on a path that never wrote the slot (an untaken
+    /// `receive` arm's payload local, say) releases nothing — the
+    /// runtime rc primitives treat null as a no-op. Produces no
     /// value.
     LocalDecl { local: IRLocalId, ty: IRType },
     /// Read the current contents of `local` into a fresh `ValueId`.

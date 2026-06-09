@@ -63,6 +63,7 @@ const PROCESS_STUB: &str = "
 
     struct ReplyTo<R>
       id: Int
+      token: Int
     end
 
     extend ReplyTo<R>
@@ -207,7 +208,7 @@ fn spawn_calls_koja_rt_spawn_with_wrapper_and_serialized_config() {
     );
     let ir_text = emit(&source);
 
-    assert_contains(&ir_text, "declare i64 @koja_rt_spawn(ptr, ptr, i64)");
+    assert_contains(&ir_text, "declare i64 @koja_rt_spawn(ptr, ptr, i64, ptr)");
     // Unquoted symbol form (no `_$..$` suffix means inkwell skips
     // the quoting). Asserts the wrapper symbol is the one fed to
     // `koja_rt_spawn`, the config blob is freshly allocated on the
@@ -365,11 +366,11 @@ fn ref_cast_emits_pair_envelope_with_none_reply_to_and_calls_koja_rt_send() {
     assert_contains(&ir_text, "cast_envelope");
     assert_contains(&ir_text, "pair_msg");
     assert_contains(&ir_text, "pair_option");
-    // The Pair envelope packs `Option::None` as `[i64 1, i64 0]`
-    // (tag byte = 1 in little-endian first lane, padding word
-    // zero), independent of `R`. Pinning the literal here
-    // catches accidental tag-flip regressions.
-    assert_contains(&ir_text, "[2 x i64] [i64 1, i64 0]");
+    // The Pair envelope packs `Option::None` as `[i64 1, i64 0,
+    // i64 0]` (tag byte = 1 in little-endian first lane, pid and
+    // token words zero), independent of `R`. Pinning the literal
+    // here catches accidental tag-flip regressions.
+    assert_contains(&ir_text, "[3 x i64] [i64 1, i64 0, i64 0]");
 }
 
 #[test]
@@ -429,7 +430,7 @@ fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
     // with `Option::None` in the reply slot (the runtime delivers
     // the message into the same mailbox the receive arm reads).
     assert_contains(&ir_text, "send_after_envelope");
-    assert_contains(&ir_text, "[2 x i64] [i64 1, i64 0]");
+    assert_contains(&ir_text, "[3 x i64] [i64 1, i64 0, i64 0]");
 }
 
 /// Pins the Unit-as-msg-payload codegen surface used by
@@ -477,17 +478,17 @@ fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
 
     // Signature carries the i8 placeholder where M = Unit lands;
     // the Pair envelope still packs an Option::None reply slot in
-    // the trailing `[2 x i64]` array.
+    // the trailing `[3 x i64]` array.
     assert_contains(
         &ir_text,
         "define void @\"Global.Ref_$Unit.Int64$.cast\"(%\"Global.Ref_$Unit.Int64$\" %0, i8 %1)",
     );
-    assert_contains(&ir_text, "%cast_envelope = alloca { i8, [2 x i64] }");
+    assert_contains(&ir_text, "%cast_envelope = alloca { i8, [3 x i64] }");
     assert_contains(
         &ir_text,
-        "%pair_msg = insertvalue { i8, [2 x i64] } undef, i8 %1, 0",
+        "%pair_msg = insertvalue { i8, [3 x i64] } undef, i8 %1, 0",
     );
-    assert_contains(&ir_text, "[2 x i64] [i64 1, i64 0]");
+    assert_contains(&ir_text, "[3 x i64] [i64 1, i64 0, i64 0]");
 }
 
 #[test]
@@ -505,32 +506,36 @@ fn ref_call_emits_pair_envelope_with_some_reply_to_and_receive_loop() {
 
     // Writer side: the call envelope is the same `Pair<M,
     // Option<ReplyTo<R>>>` shape as cast / send_after, but the
-    // reply slot is `Option::Some(ReplyTo { id: caller_pid })`
-    // — caller pid sourced from `koja_rt_self`, packed as the
-    // second word of the option payload. inkwell folds the initial
-    // tag insert into the array literal, leaving only the runtime
-    // pid insert as a named SSA value.
+    // reply slot is `Option::Some(ReplyTo { id: caller_pid,
+    // token })` — caller pid sourced from `koja_rt_self`, token
+    // from `koja_rt_call_token`, packed as the second and third
+    // words of the option payload. inkwell folds the initial tag
+    // insert into the array literal, leaving the runtime pid /
+    // token inserts as named SSA values.
     assert_contains(&ir_text, "declare i64 @koja_rt_self()");
     assert_contains(&ir_text, "call i64 @koja_rt_self()");
+    assert_contains(&ir_text, "declare i64 @koja_rt_call_token()");
+    assert_contains(&ir_text, "call i64 @koja_rt_call_token()");
     assert_contains(&ir_text, "call_envelope");
-    assert_contains(&ir_text, "[2 x i64] [i64 0, i64 undef]");
+    assert_contains(&ir_text, "[3 x i64] [i64 0, i64 undef, i64 undef]");
     assert_contains(&ir_text, "opt_pid");
+    assert_contains(&ir_text, "opt_token");
     assert_contains(&ir_text, "call void @koja_rt_send(i64");
 
-    // Reader side: paired `koja_rt_receive_timeout` against the
-    // caller's own mailbox. Three-way dispatch on the result
-    // (timeout / process-down / Ok) feeds a single phi that
-    // returns `Result<R, CallError>`.
+    // Reader side: paired `koja_rt_call_receive` against the
+    // caller's one-shot reply slot, correlated by token. Three-way
+    // dispatch on the status (timeout / process-down / Ok) feeds a
+    // single phi that returns `Result<R, CallError>`.
     assert_contains(
         &ir_text,
-        "declare i64 @koja_rt_receive_timeout(ptr, i64, i64)",
+        "declare i64 @koja_rt_call_receive(i64, ptr, i64, i64)",
     );
     // The literal `100` is consumed at the `.call` call site;
     // inside the intrinsic body the timeout flows through `%2`
-    // (the third intrinsic parameter) into the receive's third arg.
-    assert_contains(&ir_text, "call i64 @koja_rt_receive_timeout(ptr");
+    // (the third intrinsic parameter) into the receive's last arg.
+    assert_contains(&ir_text, "call i64 @koja_rt_call_receive(i64");
     assert_contains(&ir_text, "i64 %2)");
-    assert_contains(&ir_text, "reply_is_none");
+    assert_contains(&ir_text, "call_timed_out");
     assert_contains(&ir_text, "call_timeout_check:");
     assert_contains(&ir_text, "call_got_reply:");
     assert_contains(&ir_text, "call_build_timeout:");

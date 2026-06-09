@@ -220,7 +220,7 @@ fn call_set_insert_inline<'ctx>(
     )?;
     // Acquire the element so the set owns an independent reference;
     // the source list it was read from keeps its own.
-    let insert_item = acquire_value(ctx, function, layout.key_ty, item)?;
+    let insert_item = acquire_value(ctx, &function.symbol, layout.key_ty, item)?;
     ctx.builder
         .build_store(ins_ptr, insert_item)
         .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;

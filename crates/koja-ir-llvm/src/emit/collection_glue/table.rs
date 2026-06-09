@@ -88,11 +88,12 @@ pub(super) fn clone_table<'ctx>(
         capacity,
         "clone",
         |ctx, index| {
-            let entry_ptr = element_slot(ctx, function, dst_entries, index, entry_size_const)?;
-            acquire_in_slot(ctx, function, key, entry_ptr)?;
+            let entry_ptr =
+                element_slot(ctx, &function.symbol, dst_entries, index, entry_size_const)?;
+            acquire_in_slot(ctx, &function.symbol, key, entry_ptr)?;
             if let Some(value_ty) = value {
                 let value_ptr = offset_ptr(ctx, function, entry_ptr, key_size, "value_ptr")?;
-                acquire_in_slot(ctx, function, value_ty, value_ptr)?;
+                acquire_in_slot(ctx, &function.symbol, value_ty, value_ptr)?;
             }
             Ok(())
         },
@@ -130,11 +131,11 @@ pub(super) fn drop_table<'ctx>(
         capacity,
         "drop",
         |ctx, index| {
-            let entry_ptr = element_slot(ctx, function, entries, index, entry_size_const)?;
-            release_in_slot(ctx, function, key, entry_ptr)?;
+            let entry_ptr = element_slot(ctx, &function.symbol, entries, index, entry_size_const)?;
+            release_in_slot(ctx, &function.symbol, key, entry_ptr)?;
             if let Some(value_ty) = value {
                 let value_ptr = offset_ptr(ctx, function, entry_ptr, key_size, "value_ptr")?;
-                release_in_slot(ctx, function, value_ty, value_ptr)?;
+                release_in_slot(ctx, &function.symbol, value_ty, value_ptr)?;
             }
             Ok(())
         },

@@ -45,6 +45,7 @@ use crate::ctx::EmitContext;
 use crate::emit::{self, ValueMap, inkwell_err};
 use crate::error::LlvmError;
 use crate::function::declare_blocks;
+use crate::intrinsics::process::payload_drop_glue;
 use crate::runtime::{
     declare_rt_build_argv_extern, declare_rt_main_done_extern, declare_rt_spawn_extern,
 };
@@ -243,11 +244,17 @@ pub(crate) fn emit_process_entry_main<'ctx>(
         ctx.layouts.target_data.get_abi_size(&config_llvm_type),
         false,
     );
+    let drop_glue = payload_drop_glue(ctx, &entry.symbol, config_type)?;
     let spawn_fn = declare_rt_spawn_extern(ctx);
     ctx.builder
         .build_call(
             spawn_fn,
-            &[wrapper_ptr.into(), config_alloca.into(), config_size.into()],
+            &[
+                wrapper_ptr.into(),
+                config_alloca.into(),
+                config_size.into(),
+                drop_glue.into(),
+            ],
             "",
         )
         .map_err(|e| inkwell_err("call koja_rt_spawn (process entry main)", e))?;
@@ -304,7 +311,12 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
     ctx.builder
         .build_call(
             spawn_fn,
-            &[user_main_ptr.into(), null_ptr.into(), zero_i64.into()],
+            &[
+                user_main_ptr.into(),
+                null_ptr.into(),
+                zero_i64.into(),
+                null_ptr.into(),
+            ],
             "",
         )
         .map_err(|e| inkwell_err("call koja_rt_spawn (main trampoline)", e))?;

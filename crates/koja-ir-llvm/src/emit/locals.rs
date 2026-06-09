@@ -16,17 +16,37 @@ use super::heap_layout::block_base;
 use super::{ValueMap, closures, inkwell_err, lookup};
 
 /// Materialize a `LocalDecl` as an entry-block `alloca`, stashed on
-/// the [`EmitContext`] keyed by [`IRLocalId`] for later `load` / `store`.
+/// the [`EmitContext`] keyed by [`IRLocalId`] for later `load` /
+/// `store`. TCO bodies pre-register every slot (see
+/// [`crate::function::define_function`]), in which case the existing
+/// alloca is reused.
+///
+/// The slot is zero-initialized *at the decl site* (not the hoisted
+/// alloca), so re-entering the declaring block — a loop body, a TCO
+/// iteration — restores the fresh-slot state. Exit drops therefore
+/// always see either a live value or zero, and dropping zero is a
+/// no-op (null-safe rc primitives + null-propagating
+/// [`block_base`]). This is what makes "drop a slot the taken path
+/// never wrote" — e.g. the payload local of an untaken `receive`
+/// arm — safe.
 pub(super) fn emit_local_decl<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
     ty: &IRType,
 ) -> Result<(), LlvmError> {
     let llvm_ty = value_basic_type(ctx, ty)?;
-    let name = local.to_string();
-    let slot = ctx.build_entry_alloca(llvm_ty, &name);
-    ctx.register_local_slot(local, slot);
-    Ok(())
+    let slot = match ctx.try_local_slot(local) {
+        Some(existing) => existing,
+        None => {
+            let slot = ctx.build_entry_alloca(llvm_ty, &local.to_string());
+            ctx.register_local_slot(local, slot);
+            slot
+        }
+    };
+    ctx.builder
+        .build_store(slot, llvm_ty.const_zero())
+        .map(|_| ())
+        .map_err(|e| inkwell_err(format_args!("zero-init store for `{local}`"), e))
 }
 
 /// Lower a `LocalRead` to an LLVM `load`. Pointer comes from the
