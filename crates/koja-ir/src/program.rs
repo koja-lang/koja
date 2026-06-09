@@ -28,7 +28,9 @@ use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
 use crate::function::{FunctionKind, IRFunction, IRSymbol};
 use crate::generics::{self, Instantiation};
-use crate::lower::{LowerOutput, resolved_type_to_ir_type, synthesize_process_entry_wrapper};
+use crate::lower::{
+    LowerOutput, ProcessBodyTypes, resolved_type_to_ir_type, synthesize_process_entry_wrapper,
+};
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::tail_calls::rewrite_tail_calls;
@@ -302,8 +304,16 @@ fn stage_process_entry(
 
     enqueue_process_methods(state_id, &checked.registry, output);
 
-    let wrapper = synthesize_process_entry_wrapper(&state_symbol, state_ir, config_type);
+    let body_types = ProcessBodyTypes::resolve(
+        &state_resolved,
+        state_ir,
+        config_type,
+        &checked.registry,
+        output,
+    );
+    let [body, wrapper] = synthesize_process_entry_wrapper(&state_symbol, body_types);
     let wrapper_symbol = wrapper.symbol.clone();
+    insert_into_owning_package(packages, body);
     insert_into_owning_package(packages, wrapper);
 
     Ok((state.clone(), wrapper_symbol))

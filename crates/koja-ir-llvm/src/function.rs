@@ -181,22 +181,20 @@ pub(crate) fn define_function<'ctx>(
             // C linker provides the implementation at link time.
             return Ok(());
         }
-        FunctionKind::SpawnWrapper { state } => {
-            // Spawn wrappers ignore the IR-level placeholder body
-            // synthesized by `lower::process` and instead emit the
-            // scheduler entry directly: load typed config from the
-            // raw `i8*` parameter, call the state's `start`, branch
-            // on the `Result` tag, and chain into `run` on success.
-            return emit_spawn_wrapper_body(ctx, function, llvm_function, state);
+        FunctionKind::SpawnWrapper { .. } => {
+            // Spawn wrappers are pure ABI shims: the real semantics
+            // live in the IR-synthesized `<state>.__spawn_body` the
+            // wrapper's IR `Call` names. The emitter only loads the
+            // typed config from the raw `i8*` parameter and calls it.
+            return emit_spawn_wrapper_body(ctx, function, llvm_function);
         }
-        FunctionKind::ProcessEntryWrapper { state } => {
-            // Process-entry wrappers extend the spawn-wrapper shape
-            // with an exit-code hand-off: the `StopReason` returned
-            // from `run` (or carried in the `Err` arm of `start`)
-            // funnels through `ExitStatus.code()` into the module's
-            // `__koja_exit_code` global, which the synthesized main
-            // trampoline returns from.
-            return emit_process_entry_wrapper_body(ctx, function, llvm_function, state);
+        FunctionKind::ProcessEntryWrapper { .. } => {
+            // Process-entry wrappers extend the spawn-wrapper shim
+            // with an exit-code hand-off: the `i64` the IR-synthesized
+            // `<state>.__entry_body` returns is stored into the
+            // module's `__koja_exit_code` global, which the
+            // synthesized main trampoline returns from.
+            return emit_process_entry_wrapper_body(ctx, function, llvm_function);
         }
         FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
             Some(env_layout.as_slice())

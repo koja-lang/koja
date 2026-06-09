@@ -35,18 +35,23 @@ use koja_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, Re
 use koja_ast::span::Span;
 use koja_typecheck::{GlobalRegistry, RegistryEntry};
 
+use crate::enum_decl::IRVariantTag;
 use crate::function::{
-    FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
-    ReceiveAfter, ReceiveArm, ReceiveTag,
+    BranchTarget, FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
+    IRTerminator, ReceiveAfter, ReceiveArm, ReceiveTag,
 };
 use crate::generics::Instantiation;
 use crate::local::IRLocalId;
-use crate::types::{ConstValue, IRType, ValueId};
+use crate::mangling::mangled_method_name;
+use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
 use super::arms::{lower_arm_into, lower_result_ty};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
-use super::ownership::{drop_discarded_temp, materialize_boundary_copy};
+use super::ownership::{
+    drop_discarded_temp, emit_slot_drops, materialize_boundary_copy, materialize_owned,
+    promote_param,
+};
 use super::package::resolved_type_to_ir_type;
 
 /// Lower `spawn Type.start(config)`. Typecheck has already validated
@@ -108,12 +113,14 @@ pub(super) fn lower_spawn(
 
     enqueue_process_method_instantiations(&target, registry, output);
 
-    let wrapper_symbol = synthesize_spawn_wrapper(
-        &state_symbol,
+    let body_types = ProcessBodyTypes::resolve(
+        &target.receiver_resolution,
         state_ir_type.clone(),
         config_type.clone(),
+        registry,
         output,
     );
+    let wrapper_symbol = synthesize_spawn_wrapper(&state_symbol, body_types, output);
 
     let ref_ir_type =
         resolved_type_to_ir_type(ref_resolution, registry, &mut output.instantiations);
@@ -399,88 +406,423 @@ fn receiver_type_args(receiver: &ResolvedType) -> Vec<ResolvedType> {
     }
 }
 
+/// The IR types a process body needs beyond the state symbol itself.
+/// Resolved once per synthesis site via [`Self::resolve`] so the
+/// body builder never touches the AST or registry.
+pub(crate) struct ProcessBodyTypes {
+    pub(crate) config: IRType,
+    pub(crate) result: IRType,
+    pub(crate) state: IRType,
+    pub(crate) stop_reason: IRType,
+}
+
+impl ProcessBodyTypes {
+    /// Resolve the `Result<State, StopReason>` cell and the
+    /// `StopReason` enum for `state_resolved`. Constructed from the
+    /// registry rather than read off `start`'s signature: typecheck
+    /// already guarantees `start` returns exactly this shape, and
+    /// building it here keeps the path free of `Self`-typed
+    /// signatures. Routing through [`resolved_type_to_ir_type`]
+    /// enqueues the generic `Result` cell instantiation.
+    pub(crate) fn resolve(
+        state_resolved: &ResolvedType,
+        state: IRType,
+        config: IRType,
+        registry: &GlobalRegistry,
+        output: &mut LowerOutput,
+    ) -> Self {
+        let result_id = lookup_global(registry, "Result");
+        let stop_reason_id = lookup_global(registry, "StopReason");
+        let stop_reason_resolved = ResolvedType::leaf(Resolution::Global(stop_reason_id));
+        let result_resolved = ResolvedType::Named {
+            resolution: Resolution::Global(result_id),
+            type_args: vec![state_resolved.clone(), stop_reason_resolved.clone()],
+        };
+        let result =
+            resolved_type_to_ir_type(&result_resolved, registry, &mut output.instantiations);
+        let stop_reason =
+            resolved_type_to_ir_type(&stop_reason_resolved, registry, &mut output.instantiations);
+        Self {
+            config,
+            result,
+            state,
+            stop_reason,
+        }
+    }
+}
+
+fn lookup_global(registry: &GlobalRegistry, name: &str) -> GlobalRegistryId {
+    registry
+        .lookup(&Identifier::new("Global", vec![name.to_string()]))
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("IR lower: `Global.{name}` missing from registry"))
+}
+
 /// Mint (or reuse) the [`FunctionKind::SpawnWrapper`] thunk keyed by
-/// `state_symbol`. The wrapper is content-addressed off the state
-/// type so distinct `spawn S.start(...)` sites for the same `S`
-/// share one wrapper; distinct monomorphized state cells get
-/// distinct wrappers exactly like generic structs do.
+/// `state_symbol`, plus its `<state>.__spawn_body` companion. The
+/// pair is content-addressed off the state type so distinct
+/// `spawn S.start(...)` sites for the same `S` share one wrapper;
+/// distinct monomorphized state cells get distinct pairs exactly
+/// like generic structs do.
 ///
-/// The body is intentionally minimal: a single entry block that
-/// promotes `config` into a slot, emits `Const Unit`, and returns.
-/// The wrapper's real semantics — deserializing config, calling
-/// `start`, then chaining into `run` — live in the LLVM emit pass
-/// which uses [`FunctionKind::SpawnWrapper::state`] to drive its
-/// per-state shim. Keeping the IR body trivial avoids re-emitting
-/// the `Result<Self, StopReason>` match shape here before the
-/// runtime ABI is wired up.
+/// The wrapper is a pure ABI shim: the LLVM emit pass declares it
+/// `void(i8*)` (the scheduler's `ProcessFn` shape), loads the typed
+/// config out of the runtime-provided pointer, and calls the body —
+/// which is the function its IR `Call` already names. All real
+/// semantics (`start`, the `Result` match, `run`) live in the body,
+/// a [`FunctionKind::Regular`] function built by
+/// [`build_process_body`] with normal ownership markers.
 fn synthesize_spawn_wrapper(
     state_symbol: &IRSymbol,
-    state_type: IRType,
-    config_type: IRType,
+    types: ProcessBodyTypes,
     output: &mut LowerOutput,
 ) -> IRSymbol {
     let wrapper_symbol = state_symbol.derived(".__spawn_wrapper");
     if !output.spawn_wrappers.insert(wrapper_symbol.clone()) {
         return wrapper_symbol;
     }
-    let function = build_wrapper_body(
-        wrapper_symbol.clone(),
-        FunctionKind::SpawnWrapper { state: state_type },
-        config_type,
+    let body = build_process_body(
+        state_symbol.derived(".__spawn_body"),
+        state_symbol,
+        &types,
+        ProcessBodyTail::Discard,
     );
-    output.synthesized_functions.push(function);
+    let wrapper = build_wrapper_shim(
+        wrapper_symbol.clone(),
+        FunctionKind::SpawnWrapper { state: types.state },
+        &body,
+    );
+    output.synthesized_functions.push(body);
+    output.synthesized_functions.push(wrapper);
     wrapper_symbol
 }
 
 /// Mint the project-mode [`FunctionKind::ProcessEntryWrapper`] thunk
-/// for `state_symbol`. Differs from [`synthesize_spawn_wrapper`] in
-/// two ways: the resulting symbol carries the `.__entry_wrapper`
-/// suffix (so it can coexist with a regular `.__spawn_wrapper` if
-/// the program also spawns its own state cell), and the LLVM emit
-/// pass picks up the `ProcessEntryWrapper` kind to thread the
-/// `StopReason` returned from `run` through `ExitStatus.code()` and
-/// store it in the module-level `__koja_exit_code` global that the
-/// synthesized `main` trampoline returns from.
+/// for `state_symbol`, plus its `<state>.__entry_body` companion.
+/// Differs from [`synthesize_spawn_wrapper`] in two ways: the
+/// symbols carry `.__entry_*` suffixes (so they can coexist with a
+/// regular `.__spawn_*` pair if the program also spawns its own
+/// state cell), and the body routes both arms' `StopReason` through
+/// `Global.StopReason.code` and returns the exit code, which the
+/// LLVM shim stores into the module-level `__koja_exit_code` global
+/// that the synthesized `main` trampoline returns from.
+///
+/// Returns `[body, wrapper]`; the caller routes both into the
+/// state's owning package.
 pub(crate) fn synthesize_process_entry_wrapper(
     state_symbol: &IRSymbol,
-    state_type: IRType,
-    config_type: IRType,
-) -> IRFunction {
-    let wrapper_symbol = state_symbol.derived(".__entry_wrapper");
-    build_wrapper_body(
-        wrapper_symbol,
-        FunctionKind::ProcessEntryWrapper { state: state_type },
-        config_type,
-    )
+    types: ProcessBodyTypes,
+) -> [IRFunction; 2] {
+    let body = build_process_body(
+        state_symbol.derived(".__entry_body"),
+        state_symbol,
+        &types,
+        ProcessBodyTail::ExitCode,
+    );
+    let wrapper = build_wrapper_shim(
+        state_symbol.derived(".__entry_wrapper"),
+        FunctionKind::ProcessEntryWrapper { state: types.state },
+        &body,
+    );
+    [body, wrapper]
 }
 
-fn build_wrapper_body(
+/// What a process body does with the `StopReason` each arm ends up
+/// holding (`run`'s return on the `Ok` path, `start`'s `Err` payload
+/// otherwise).
+enum ProcessBodyTail {
+    /// Drop it and return `Unit` — the scheduler manages the spawned
+    /// process's lifecycle; nobody reads the wrapper's result.
+    Discard,
+    /// Hand it to `Global.StopReason.code` and return the `Int64`
+    /// exit code for the LLVM shim to store into `__koja_exit_code`.
+    ExitCode,
+}
+
+impl ProcessBodyTail {
+    fn return_type(&self) -> IRType {
+        match self {
+            Self::Discard => IRType::Unit,
+            Self::ExitCode => IRType::Int64,
+        }
+    }
+}
+
+/// Hand-build the `(config) -> Unit | Int64` process body:
+///
+/// ```text
+/// entry:
+///   slot = promote(config)            ; normal param acquisition
+///   result = call <state>.start(slot)
+///   cond_br result.tag == Ok, start_ok, start_err
+/// start_ok:
+///   state = clone result.Ok.0 ; drop result
+///   stop_reason = call <state>.run(state) ; drop state
+///   <tail>
+/// start_err:
+///   stop_reason = clone result.Err.0 ; drop result
+///   <tail>
+/// ```
+///
+/// Every owned value is paired with a `Clone` / `Drop` marker, so
+/// the [`crate::elaborate`] pass rewrites composite ownership into
+/// glue exactly as for AST-lowered functions — no manual lifetime
+/// obligations survive into the backends.
+fn build_process_body(
+    body_symbol: IRSymbol,
+    state_symbol: &IRSymbol,
+    types: &ProcessBodyTypes,
+    tail: ProcessBodyTail,
+) -> IRFunction {
+    let IRType::Enum(result_symbol) = &types.result else {
+        panic!(
+            "IR lower: process body `{}` start return must lower to an enum, got `{:?}`",
+            body_symbol.mangled(),
+            types.result,
+        );
+    };
+    let result_symbol = result_symbol.clone();
+
+    let mut ctx = FnLowerCtx::new();
+    ctx.closures_mut().set_enclosing_symbol(body_symbol.clone());
+    let entry = ctx.fresh_block("entry");
+
+    let config_local = IRLocalId::from_local_id(LocalId::new(0));
+    let param = promote_param(&mut ctx, entry, config_local, types.config.clone());
+    let config_read = ctx.fresh_value(types.config.clone());
+    ctx.cfg.append(
+        entry,
+        IRInstruction::LocalRead {
+            dest: config_read,
+            local: config_local,
+            ty: types.config.clone(),
+        },
+    );
+
+    let start_result = ctx.fresh_value(types.result.clone());
+    ctx.cfg.append(
+        entry,
+        IRInstruction::Call {
+            args: vec![config_read],
+            callee: mangled_method_name(state_symbol, &[], "start", &[]),
+            dest: start_result,
+        },
+    );
+    ctx.mark_owned(start_result);
+
+    let ok_block = ctx.fresh_block("start_ok");
+    let err_block = ctx.fresh_block("start_err");
+    emit_result_tag_branch(
+        &mut ctx,
+        entry,
+        start_result,
+        &result_symbol,
+        ok_block,
+        err_block,
+    );
+
+    // Ok arm: clone the state out, release the scrutinee, chain into
+    // the run loop (which borrows the state), release the state.
+    let state_field = extract_result_payload(
+        &mut ctx,
+        ok_block,
+        start_result,
+        &result_symbol,
+        0,
+        &types.state,
+    );
+    drop_discarded_temp(&mut ctx, ok_block, start_result);
+    let stop_reason = ctx.fresh_value(types.stop_reason.clone());
+    ctx.cfg.append(
+        ok_block,
+        IRInstruction::Call {
+            args: vec![state_field],
+            callee: mangled_method_name(state_symbol, &[], "run", &[]),
+            dest: stop_reason,
+        },
+    );
+    ctx.mark_owned(stop_reason);
+    drop_discarded_temp(&mut ctx, ok_block, state_field);
+    finish_process_arm(&mut ctx, ok_block, stop_reason, types, &tail);
+
+    // Err arm: `start` declined; its `StopReason` payload is the
+    // process's stop reason directly.
+    let err_reason = extract_result_payload(
+        &mut ctx,
+        err_block,
+        start_result,
+        &result_symbol,
+        1,
+        &types.stop_reason,
+    );
+    drop_discarded_temp(&mut ctx, err_block, start_result);
+    finish_process_arm(&mut ctx, err_block, err_reason, types, &tail);
+
+    IRFunction {
+        blocks: ctx.into_blocks(),
+        kind: FunctionKind::Regular,
+        params: vec![param],
+        return_type: tail.return_type(),
+        symbol: body_symbol,
+    }
+}
+
+/// Emit `cond_br (result.tag == 0) ok, err` as `block`'s terminator.
+fn emit_result_tag_branch(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    result: ValueId,
+    result_symbol: &IRSymbol,
+    ok_block: IRBlockId,
+    err_block: IRBlockId,
+) {
+    let tag = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::EnumTagGet {
+            dest: tag,
+            value: result,
+            ty: result_symbol.clone(),
+        },
+    );
+    let ok_tag = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest: ok_tag,
+            value: ConstValue::Int8(0),
+        },
+    );
+    let is_ok = ctx.fresh_value(IRType::Bool);
+    ctx.cfg.append(
+        block,
+        IRInstruction::BinaryOp {
+            dest: is_ok,
+            lhs: tag,
+            op: IRBinOp::Eq,
+            rhs: ok_tag,
+        },
+    );
+    ctx.cfg.set_terminator(
+        block,
+        IRTerminator::CondBranch {
+            cond: is_ok,
+            else_target: BranchTarget::to(err_block),
+            then_target: BranchTarget::to(ok_block),
+        },
+    );
+}
+
+/// Project the `Result` variant's single payload field and acquire
+/// it as an owned value (the standard match-arm pattern: the clone
+/// is taken while the scrutinee is still live).
+fn extract_result_payload(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    result: ValueId,
+    result_symbol: &IRSymbol,
+    tag: u8,
+    field_type: &IRType,
+) -> ValueId {
+    let field = ctx.fresh_value(field_type.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::EnumPayloadFieldGet {
+            dest: field,
+            field_type: field_type.clone(),
+            payload_index: 0,
+            tag: IRVariantTag(tag),
+            ty: result_symbol.clone(),
+            value: result,
+        },
+    );
+    materialize_owned(ctx, block, field, field_type)
+}
+
+/// Close a process-body arm: dispose of the `StopReason` per the
+/// tail mode, release the config slot, and return.
+fn finish_process_arm(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    stop_reason: ValueId,
+    types: &ProcessBodyTypes,
+    tail: &ProcessBodyTail,
+) {
+    let result = match tail {
+        ProcessBodyTail::Discard => {
+            drop_discarded_temp(ctx, block, stop_reason);
+            let unit = ctx.fresh_value(IRType::Unit);
+            ctx.cfg.append(
+                block,
+                IRInstruction::Const {
+                    dest: unit,
+                    value: ConstValue::Unit,
+                },
+            );
+            unit
+        }
+        ProcessBodyTail::ExitCode => {
+            let IRType::Enum(stop_reason_symbol) = &types.stop_reason else {
+                panic!(
+                    "IR lower: `StopReason` must lower to an enum, got `{:?}`",
+                    types.stop_reason,
+                );
+            };
+            let code = ctx.fresh_value(IRType::Int64);
+            ctx.cfg.append(
+                block,
+                IRInstruction::Call {
+                    args: vec![stop_reason],
+                    callee: mangled_method_name(stop_reason_symbol, &[], "code", &[]),
+                    dest: code,
+                },
+            );
+            drop_discarded_temp(ctx, block, stop_reason);
+            code
+        }
+    };
+    emit_slot_drops(ctx, block);
+    ctx.cfg.set_terminator(
+        block,
+        IRTerminator::Return {
+            value: Some(result),
+        },
+    );
+}
+
+/// Hand-build the wrapper shim's IR body: a single `Call` into the
+/// process body, discarding its result. Backends never emit this CFG
+/// — the LLVM declaration is the scheduler's `void(i8*)` `ProcessFn`
+/// shape, whose signature can't be expressed in IR, so its emitter
+/// reads the callee out of this `Call` and synthesizes only the
+/// load-config ABI adaptation around it.
+fn build_wrapper_shim(
     wrapper_symbol: IRSymbol,
     kind: FunctionKind,
-    config_type: IRType,
+    body: &IRFunction,
 ) -> IRFunction {
     let mut ctx = FnLowerCtx::new();
     ctx.closures_mut()
         .set_enclosing_symbol(wrapper_symbol.clone());
     let entry = ctx.fresh_block("entry");
 
+    let config_type = body
+        .params
+        .first()
+        .map(|param| param.ty.clone())
+        .expect("IR lower: process body must carry a config parameter");
     let config_id = ctx.fresh_value(config_type.clone());
     let config_local = IRLocalId::from_local_id(LocalId::new(0));
+
+    let body_result = ctx.fresh_value(body.return_type.clone());
     ctx.cfg.append(
         entry,
-        IRInstruction::LocalDecl {
-            local: config_local,
-            ty: config_type.clone(),
+        IRInstruction::Call {
+            args: vec![config_id],
+            callee: body.symbol.clone(),
+            dest: body_result,
         },
     );
-    ctx.cfg.append(
-        entry,
-        IRInstruction::LocalWrite {
-            local: config_local,
-            value: config_id,
-        },
-    );
-    ctx.mark_local_declared(config_local, config_type.clone());
 
     let unit_dest = ctx.fresh_value(IRType::Unit);
     ctx.cfg.append(

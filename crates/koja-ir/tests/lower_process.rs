@@ -4,7 +4,9 @@
 //! - `spawn S.start(config)` lowers to a single
 //!   [`IRInstruction::Spawn`] in the host block, producing a
 //!   `Ref<M, R>`-typed value, plus a synthesized
-//!   [`FunctionKind::SpawnWrapper`] keyed by the state symbol.
+//!   [`FunctionKind::SpawnWrapper`] shim keyed by the state symbol
+//!   whose IR body calls the IR-synthesized `<state>.__spawn_body`
+//!   carrying the `start` → `run` dispatch with ownership markers.
 //! - `receive` lowers to a host block that ends with
 //!   [`IRInstruction::Receive`] + [`IRTerminator::Unreachable`],
 //!   one body block per arm carrying its lattice-coerced tail
@@ -161,6 +163,81 @@ fn assert_return_acquires(block: &IRBasicBlock, source: ValueId) {
     );
 }
 
+/// Assert the wrapper shim's IR body is a single call into
+/// `body_mangled`, and that the body function carries the full
+/// dispatch shape: the `start` call, the `Result` tag branch, the
+/// `run` call, and the Clone/Drop ownership markers (the test
+/// states are all-`Copy`, so elaborate leaves the markers in place
+/// rather than rewriting them into glue calls).
+fn assert_process_body_shape(program: &IRProgram, wrapper: &IRFunction, state_mangled: &str) {
+    let body_callee = wrapper
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .find_map(|instruction| match instruction {
+            IRInstruction::Call { callee, .. } => Some(callee.clone()),
+            _ => None,
+        })
+        .expect("wrapper shim's IR body should call the process body");
+    let body = program
+        .function(body_callee.mangled())
+        .unwrap_or_else(|| panic!("process body `{body_callee}` should be registered"));
+
+    assert!(
+        matches!(body.kind, FunctionKind::Regular),
+        "process body should be a Regular function, got {:?}",
+        body.kind,
+    );
+
+    let callees: Vec<&str> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            IRInstruction::Call { callee, .. } => Some(callee.mangled()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        callees.contains(&format!("{state_mangled}.start").as_str()),
+        "process body should call `{state_mangled}.start`, calls: {callees:?}",
+    );
+    assert!(
+        callees.contains(&format!("{state_mangled}.run").as_str()),
+        "process body should call `{state_mangled}.run`, calls: {callees:?}",
+    );
+
+    let instructions: Vec<&IRInstruction> = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .collect();
+    assert!(
+        instructions
+            .iter()
+            .any(|i| matches!(i, IRInstruction::EnumTagGet { .. })),
+        "process body should read the start result's tag",
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|i| matches!(i, IRInstruction::Clone { .. })),
+        "process body should acquire the extracted payload via a Clone marker",
+    );
+    assert!(
+        instructions
+            .iter()
+            .any(|i| matches!(i, IRInstruction::DropValue { .. })),
+        "process body should release the start result via a DropValue marker",
+    );
+    assert!(
+        body.blocks
+            .iter()
+            .any(|block| matches!(block.terminator, IRTerminator::CondBranch { .. })),
+        "process body should branch on the Result tag",
+    );
+}
+
 #[test]
 fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
     let program = lower(
@@ -256,6 +333,7 @@ fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
         !wrapper_fn.blocks.is_empty(),
         "spawn wrapper must carry a non-empty block list (seal invariant)",
     );
+    assert_process_body_shape(&program, wrapper_fn, &format!("{PACKAGE}.Counter"));
 }
 
 #[test]
@@ -574,7 +652,7 @@ fn process_entry_lowers_to_process_entry_wrapper() {
         "entry wrapper's config type should match the App state",
     );
 
-    // start/run must be registered so the seal pass + LLVM body emit can
+    // start/run must be registered so the synthesized entry body can
     // dispatch through them.
     assert!(
         program.function(&format!("{PACKAGE}.App.start")).is_some(),
@@ -583,5 +661,29 @@ fn process_entry_lowers_to_process_entry_wrapper() {
     assert!(
         program.function(&format!("{PACKAGE}.App.run")).is_some(),
         "App.run must be registered when the entry is a Process state",
+    );
+
+    assert_process_body_shape(&program, wrapper, &format!("{PACKAGE}.App"));
+    let body = program
+        .function(&format!("{PACKAGE}.App.__entry_body"))
+        .expect("entry body must be registered under `<state>.__entry_body`");
+    assert_eq!(
+        body.return_type,
+        IRType::Int64,
+        "entry body returns the exit code for the shim to store",
+    );
+    let routes_through_code = body
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| {
+            matches!(
+                instruction,
+                IRInstruction::Call { callee, .. } if callee.mangled() == "Global.StopReason.code"
+            )
+        });
+    assert!(
+        routes_through_code,
+        "entry body should route both arms' StopReason through `Global.StopReason.code`",
     );
 }

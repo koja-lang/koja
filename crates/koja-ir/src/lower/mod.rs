@@ -68,4 +68,4 @@ mod structs;
 pub(crate) use body::lower_body_to_blocks;
 pub(crate) use ctx::LowerOutput;
 pub(crate) use package::{lower_package, resolved_type_to_ir_type};
-pub(crate) use process::synthesize_process_entry_wrapper;
+pub(crate) use process::{ProcessBodyTypes, synthesize_process_entry_wrapper};

@@ -234,17 +234,26 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
     );
     let ir_text = emit(&source);
 
+    // The wrapper is a pure ABI shim: load the typed config from the
+    // scheduler's raw pointer, call the IR-synthesized body.
     assert_contains(&ir_text, "define void @TestApp.Counter.__spawn_wrapper(ptr");
     assert_contains(&ir_text, "loaded_config");
-    // start returns Result<Counter, StopReason>; the name mangler
-    // qualifies StopReason with the package it was lifted from
-    // (today: `Global`, since the protocol stub lifts every type
+    assert_contains(
+        &ir_text,
+        "call void @TestApp.Counter.__spawn_body(i64 %loaded_config)",
+    );
+
+    // The start → run dispatch lives in the IR-synthesized body,
+    // emitted by the normal instruction pipeline. start returns
+    // Result<Counter, StopReason>; the name mangler qualifies
+    // StopReason with the package it was lifted from (today:
+    // `Global`, since the protocol stub lifts every type
     // declaration into the `Global` package).
+    assert_contains(&ir_text, "define void @TestApp.Counter.__spawn_body(i64");
     assert_contains(
         &ir_text,
         "call %\"Global.Result_$TestApp.Counter.Global.StopReason$\" @TestApp.Counter.start",
     );
-    assert_contains(&ir_text, "is_ok");
     assert_contains(&ir_text, "start_ok:");
     assert_contains(&ir_text, "start_err:");
     assert_contains(&ir_text, "call %Global.StopReason @TestApp.Counter.run");
@@ -591,11 +600,23 @@ fn process_entry_declares_exit_code_global_and_main_trampoline() {
 fn process_entry_wrapper_body_calls_stopreason_code_on_both_paths() {
     let ir_text = emit_with_process_entry(APP_PROCESS_ENTRY, "App");
 
+    // Shim: load config, call the IR-synthesized entry body, store
+    // the returned exit code.
     assert_contains(&ir_text, "define void @TestApp.App.__entry_wrapper(ptr");
+    assert_contains(
+        &ir_text,
+        "call i64 @TestApp.App.__entry_body(%TestApp.App %loaded_config)",
+    );
+    assert_contains(&ir_text, "@__koja_exit_code");
+
+    // Body: both Result arms route their StopReason through code().
+    assert_contains(
+        &ir_text,
+        "define i64 @TestApp.App.__entry_body(%TestApp.App",
+    );
     assert_contains(&ir_text, "start_ok:");
     assert_contains(&ir_text, "start_err:");
     assert_contains(&ir_text, "call i64 @Global.StopReason.code");
-    assert_contains(&ir_text, "@__koja_exit_code");
 }
 
 #[test]
