@@ -1,0 +1,76 @@
+# Race regression: a kill landing while the victim runs on another
+# worker must never produce an illegal lifecycle edge — in particular
+# the shipped kill-vs-park race, where the victim's next receive park
+# tried `Dead -> Blocked` over the kill's tombstone. Each iteration
+# races spawn -> first receive park (and a woken handle -> re-park)
+# against an immediate cross-process kill, sweeping the kill across the
+# Created / claimed / parking / parked windows.
+#
+# `koja_rt_sched_violations` counts illegal edges in every build (the
+# debug assert only fires in debug runtimes), so this guards release
+# CI too. On failure, re-run with KOJA_SCHED_TRACE=1 to dump the
+# offending interleaving; `koja_rt_parks_refused` in that dump shows
+# how often the tombstone guard actually fired.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_sched_violations -> Int64
+end
+
+struct Victim
+  seen: Int
+end
+
+impl Process<Int, String, Int> for Victim
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Victim{seen: 0})
+  end
+
+  fn handle(self, msg: String, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(Victim{seen: self.seen + 1})
+  end
+end
+
+fn wait_dead(r: Ref<String, Int>)
+  loop
+    if r.alive?()
+      ()
+    else
+      break
+    end
+  end
+end
+
+# Kill races the victim's spawn -> start -> first receive park.
+fn race_fresh_park()
+  r = spawn Victim.start(0)
+  r.kill()
+  wait_dead(r)
+end
+
+# Kill races a woken victim's handle -> re-park.
+fn race_repark()
+  r = spawn Victim.start(0)
+  r.cast("wake")
+  r.kill()
+  wait_dead(r)
+end
+
+i = 0
+
+loop
+  race_fresh_park()
+  race_repark()
+  i += 1
+
+  if i >= 200
+    break
+  end
+end
+
+if Rt.koja_rt_sched_violations() == 0
+  "kill park race: ok".print()
+else
+  # The count and interleaving are in the KOJA_SCHED_TRACE=1 dump.
+  "kill park race: VIOLATIONS".print()
+end

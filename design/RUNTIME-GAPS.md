@@ -30,10 +30,12 @@ cloned), deep-copy at every process boundary (`IRInstruction::DeepCopy`
 rc stays non-atomic), a unified `OwnedPayload` RAII owner across
 envelopes / timers / spawn configs, the two-queue mailbox with a tokened
 one-shot reply slot (stale replies are discarded by correlation, not
-delivered to the next call), kill-tombstone guards at every park site
-(`block_on` / `io_block` / the trampoline's own death mark skip the
-transition when a cross-worker kill already marked the process `Dead`),
-and a global panic hook plus ThreadSanitizer with transition guards.
+delivered to the next call), the kill-tombstone policy owned by
+`ProcessTable` (`try_park` / `try_park_io` atomically refuse when a
+cross-worker kill already marked the process `Dead`, and
+`mark_dead_if_alive` makes the death mark idempotent — a new park site
+cannot reintroduce the park-over-tombstone race), and a global panic
+hook plus ThreadSanitizer with transition guards.
 Each converted a class of "correct by careful review" into "correct by
 construction" or "caught by CI." The `tests/lang/memory/` fixtures pin
 the payload-reclaim behavior with `koja_rt_live_blocks` steady-state
@@ -56,17 +58,29 @@ with a `debug_assert!` edge check, and `just tsan` runs a
 fiber-annotated, multi-worker ping-pong soak (`scheduler_stress.rs`)
 that reports no data races over ~32k cross-worker handoffs.
 
-What's missing is *exhaustive* coverage. The TSan harness only exercises
-spawn/send/receive — not `kill`, timers, or I/O readiness — and TSan
-cannot follow the hand-written asm stack swap itself
-(`koja_context_switch` faults its shadow stack), only the Rust state
-around it. The gap is not hypothetical: the kill-vs-park interleaving
-(cross-worker `kill` marks a mid-run process `Dead`; its next
-`block_on` tried `Dead -> Blocked` and tripped the transition guard)
-shipped until the `tests/lang/memory/` kill fixtures caught it.
+The runtime is also self-reporting now: `ProcessTable` keeps invariant
+counters (`ScheduleCounters`) and a lifecycle event ring, bumped at the
+policy chokepoints while the lock is already held. Illegal edges are
+*counted* in every build — not just debug-asserted — and exposed via
+`koja_rt_sched_violations`, so the `tests/lang/memory/kill_park_race`
+fixture asserts race-correctness on the real release runtime (asm
+switch included) in every CI run. `koja_rt_parks_refused` gives the
+fixture's storms positive coverage evidence (the kill-vs-park window —
+the interleaving that actually shipped — is hit dozens of times per
+run, visibly refused), and `KOJA_SCHED_TRACE=1` dumps the event ring at
+shutdown so a failing run's interleaving can be read directly.
 
-**Fix.** `loom` for exhaustive interleaving tests of the switch/handoff,
-covering the paths the TSan soak doesn't.
+What's missing is *exhaustive* coverage. TSan only exercises
+spawn/send/receive — not `kill`, timers, or I/O readiness — and cannot
+follow the hand-written asm stack swap itself (`koja_context_switch`
+faults its shadow stack); the counters detect a bad interleaving only
+when a run happens to produce one.
+
+**Fix.** Seeded deterministic scheduling: drive `claim_next` pickup and
+preemption decisions from a `KOJA_SCHED_SEED` PRNG so interleaving
+soaks are replayable by seed (the counters above become the oracle).
+Alternatively `loom` models of the `ProcessTable` protocols for true
+exhaustiveness over a small state space.
 
 ### 2. Two keyspaces multiplexed into one integer
 

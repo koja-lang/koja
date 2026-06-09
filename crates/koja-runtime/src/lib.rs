@@ -15,6 +15,7 @@ mod memory;
 mod panic;
 mod process_table;
 mod reactor;
+mod sched_trace;
 mod scheduler;
 mod socket;
 mod string;

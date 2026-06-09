@@ -287,22 +287,9 @@ pub(crate) fn release_fd(fd: i32) {
 pub fn io_block(fd: i32, interest: Interest) {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    // A kill can land while this process is mid-run on another worker.
-    // Don't park over the `Dead` tombstone or register the fd — the
-    // switch-out below is then permanent (`after_switch` reclaims the
-    // slot and the frame never resumes). See `scheduler::block_on`.
-    let killed = {
-        let mut guard = SCHED.lock().unwrap();
-        match guard.get(pid) {
-            Some(process) if process.state != ProcessState::Dead => {
-                guard.transition(pid, ProcessState::WaitingIo);
-                false
-            }
-            _ => true,
-        }
-    };
-
-    if !killed {
+    // A refused park means a kill landed mid-run: skip the registration
+    // (no waiter to wake) and let the switch-out below be permanent.
+    if SCHED.lock().unwrap().try_park_io(pid) {
         register(fd, interest, pid);
     }
 

@@ -17,7 +17,8 @@ use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Instant;
 
-use crate::mailbox::Mailbox;
+use crate::mailbox::{Mailbox, WaitTarget};
+use crate::sched_trace::{SchedTrace, TraceEntry, TraceEvent};
 use crate::scheduler::{Process, ProcessFn, ProcessStack, ProcessState, Reclaim};
 use crate::tsan::{self, Fiber};
 use crate::wire::{Envelope, OwnedPayload};
@@ -109,6 +110,44 @@ fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
     )
 }
 
+/// Monotonic invariant counters bumped at the [`ProcessTable`]
+/// chokepoints while the `SCHED` lock is already held. `violations` is
+/// the machine oracle (must stay zero); the rest are coverage evidence
+/// — e.g. a kill-storm fixture observing `parks_refused > 0` knows the
+/// kill-vs-park window was actually hit, not merely survived. Exposed
+/// to lang fixtures via `koja_rt_sched_violations` /
+/// `koja_rt_parks_refused`.
+pub(crate) struct ScheduleCounters {
+    /// Kills that found the target `on_cpu` and deferred reclaim.
+    pub(crate) kills_deferred: u64,
+    /// Parks refused because the target was already `Dead` (or stale).
+    pub(crate) parks_refused: u64,
+    /// Ready-queue entries skipped by `claim_next` (killed, already
+    /// resumed, or still `on_cpu`).
+    pub(crate) stale_claims_skipped: u64,
+    /// Deadline-heap entries rejected by `promote_due_deadlines`.
+    pub(crate) stale_deadlines_skipped: u64,
+    /// Envelopes bounced off a dead or stale target.
+    pub(crate) undeliverable_envelopes: u64,
+    /// Illegal lifecycle edges applied by `transition`. Always zero in
+    /// a correct runtime; counted (not just debug-asserted) so release
+    /// builds can detect ordering bugs too.
+    pub(crate) violations: u64,
+}
+
+impl ScheduleCounters {
+    const fn new() -> Self {
+        Self {
+            kills_deferred: 0,
+            parks_refused: 0,
+            stale_claims_skipped: 0,
+            stale_deadlines_skipped: 0,
+            undeliverable_envelopes: 0,
+            violations: 0,
+        }
+    }
+}
+
 /// The scheduler's process store: a generational slotmap with a ready queue
 /// and timer / deadline min-heaps. Protected by `crate::scheduler::SCHED`.
 pub(crate) struct ProcessTable {
@@ -130,10 +169,14 @@ pub(crate) struct ProcessTable {
     alive: usize,
     /// Count of `Running` + `WaitingIo` processes (park-timeout heuristic).
     active: usize,
+    /// Invariant counters, exposed to fixtures via `koja_rt_sched_*`.
+    counters: ScheduleCounters,
     /// Monotonic tie-breaker for deadline-heap ordering.
     deadline_seq: u64,
     /// Monotonic tie-breaker for timer-heap ordering.
     timer_seq: u64,
+    /// Lifecycle event ring, dumped at shutdown under `KOJA_SCHED_TRACE`.
+    trace: SchedTrace,
 }
 
 impl ProcessTable {
@@ -141,6 +184,7 @@ impl ProcessTable {
         Self {
             active: 0,
             alive: 0,
+            counters: ScheduleCounters::new(),
             deadline_seq: 0,
             deadlines: BinaryHeap::new(),
             free: Vec::new(),
@@ -149,7 +193,18 @@ impl ProcessTable {
             slots: Vec::new(),
             timer_seq: 0,
             timers: BinaryHeap::new(),
+            trace: SchedTrace::new(),
         }
+    }
+
+    /// The invariant counters (read under the `SCHED` lock).
+    pub(crate) fn counters(&self) -> &ScheduleCounters {
+        &self.counters
+    }
+
+    /// Recorded lifecycle events, oldest first.
+    pub(crate) fn trace_entries(&self) -> impl Iterator<Item = &TraceEntry> {
+        self.trace.iter()
     }
 
     /// The program entry process, or `0` before the first spawn.
@@ -176,6 +231,13 @@ impl ProcessTable {
             return None;
         }
         slot.process.as_mut()
+    }
+
+    /// Whether `pid` resolves to a live (non-`Dead`) process. Stale and
+    /// freed PIDs are not alive.
+    pub(crate) fn is_alive(&self, pid: i64) -> bool {
+        self.get(pid)
+            .is_some_and(|process| process.state != ProcessState::Dead)
     }
 
     /// Registers a new process in a free (or freshly grown) slot, queues it
@@ -227,26 +289,32 @@ impl ProcessTable {
             reclaim
         };
         self.free.push(index);
+        self.trace.record(pid, TraceEvent::Freed);
         Some(reclaim)
     }
 
-    /// Single chokepoint for lifecycle state changes. Asserts the edge in
-    /// debug builds, keeps the `alive` / `active` counts current, and enqueues
-    /// the PID when it becomes `Runnable`. A `None` lookup (stale PID) is a
-    /// no-op so racing wakeups against a freed slot are harmless.
+    /// Single chokepoint for lifecycle state changes. Counts (and, in debug
+    /// builds, asserts) illegal edges, keeps the `alive` / `active` counts
+    /// current, and enqueues the PID when it becomes `Runnable`. A `None`
+    /// lookup (stale PID) is a no-op so racing wakeups against a freed slot
+    /// are harmless.
     pub(crate) fn transition(&mut self, pid: i64, to: ProcessState) {
         let from = match self.get_mut(pid) {
             Some(process) => {
                 let from = process.state;
-                debug_assert!(
-                    is_legal_transition(from, to),
-                    "illegal process state transition for pid {pid}: {from:?} -> {to:?}",
-                );
                 process.state = to;
                 from
             }
             None => return,
         };
+        if !is_legal_transition(from, to) {
+            self.counters.violations += 1;
+            debug_assert!(
+                false,
+                "illegal process state transition for pid {pid}: {from:?} -> {to:?}",
+            );
+        }
+        self.trace.record(pid, TraceEvent::Transition { from, to });
 
         match (is_active(from), is_active(to)) {
             (true, false) => self.active -= 1,
@@ -258,6 +326,85 @@ impl ProcessTable {
         }
         if to == ProcessState::Runnable {
             self.ready.push_back(pid);
+        }
+    }
+
+    /// Parks `pid` as `Blocked`, recording which part of its mailbox it
+    /// waits on and an optional wake deadline. Refuses — returning `false`
+    /// without touching the state — when the process is dead or stale: a
+    /// kill can land while the process is mid-run on another worker
+    /// (`* -> Dead` is a legal cross-worker edge), and parking over the
+    /// tombstone would resurrect it. A refused caller should still yield;
+    /// the worker sees `Dead` on switch-out and reclaims the slot, so the
+    /// frame never resumes.
+    pub(crate) fn try_park(
+        &mut self,
+        pid: i64,
+        target: WaitTarget,
+        deadline: Option<Instant>,
+    ) -> bool {
+        if !self.is_alive(pid) {
+            self.note_refused_park(pid);
+            return false;
+        }
+        self.transition(pid, ProcessState::Blocked);
+        if let Some(process) = self.get_mut(pid) {
+            process.deadline = deadline;
+            process.waiting = target;
+        }
+        if let Some(deadline) = deadline {
+            self.push_deadline(pid, deadline);
+        }
+        true
+    }
+
+    /// Parks `pid` as `WaitingIo`, with the same kill-tombstone refusal as
+    /// [`try_park`](Self::try_park). A refused caller must not register
+    /// the fd with the reactor — there is no waiter to wake.
+    pub(crate) fn try_park_io(&mut self, pid: i64) -> bool {
+        if !self.is_alive(pid) {
+            self.note_refused_park(pid);
+            return false;
+        }
+        self.transition(pid, ProcessState::WaitingIo);
+        true
+    }
+
+    fn note_refused_park(&mut self, pid: i64) {
+        self.counters.parks_refused += 1;
+        self.trace.record(pid, TraceEvent::ParkRefused);
+    }
+
+    /// Marks `pid` `Dead` unless it already is (a racing kill may have won)
+    /// or the slot is stale — re-marking would be an illegal self-edge and
+    /// would double-decrement the `alive` count. Returns whether this call
+    /// performed the transition.
+    pub(crate) fn mark_dead_if_alive(&mut self, pid: i64) -> bool {
+        if !self.is_alive(pid) {
+            return false;
+        }
+        self.transition(pid, ProcessState::Dead);
+        true
+    }
+
+    /// The "last resort" termination primitive: marks `pid` `Dead` and
+    /// reclaims its slot, returning the detached resources for the caller
+    /// to drop off-lock. `None` when the target was already dead/stale, or
+    /// when it is still `on_cpu` — reclaiming a stack a worker is running
+    /// on would be a use-after-free, so the owning worker reclaims on
+    /// switch-out instead (it sees `Dead` in [`after_switch`](Self::after_switch)
+    /// after persisting `sp`). The mailbox rides along either way, so
+    /// envelopes are freed exactly once.
+    pub(crate) fn kill(&mut self, pid: i64) -> Option<Reclaim> {
+        if !self.mark_dead_if_alive(pid) {
+            return None;
+        }
+        if self.get(pid).is_some_and(|process| process.on_cpu) {
+            self.counters.kills_deferred += 1;
+            self.trace.record(pid, TraceEvent::KillDeferred);
+            None
+        } else {
+            self.free(pid)
         }
     }
 
@@ -277,7 +424,10 @@ impl ProcessTable {
                 {
                     process.on_cpu = true;
                 }
-                _ => continue,
+                _ => {
+                    self.counters.stale_claims_skipped += 1;
+                    continue;
+                }
             }
             self.transition(pid, ProcessState::Running);
             let (index, _) = decode(pid);
@@ -320,14 +470,18 @@ impl ProcessTable {
     /// original when the target is gone or dead, or a stale reply
     /// displaced from the reply slot.
     pub(crate) fn deliver(&mut self, pid: i64, envelope: Envelope) -> Option<Envelope> {
+        if !self.is_alive(pid) {
+            self.counters.undeliverable_envelopes += 1;
+            self.trace.record(pid, TraceEvent::Undeliverable);
+            return Some(envelope);
+        }
         let target = Mailbox::target_of(&envelope);
-        let (displaced, wake) = match self.get_mut(pid) {
-            Some(process) if process.state != ProcessState::Dead => {
-                let wake = process.state == ProcessState::Blocked && process.waiting == target;
-                (process.mailbox.push(envelope), wake)
-            }
-            _ => return Some(envelope),
-        };
+        let process = self
+            .get_mut(pid)
+            .expect("is_alive implies the process exists");
+        let wake = process.state == ProcessState::Blocked && process.waiting == target;
+        let displaced = process.mailbox.push(envelope);
+        self.trace.record(pid, TraceEvent::Delivered);
         if wake {
             self.transition(pid, ProcessState::Runnable);
         }
@@ -391,6 +545,8 @@ impl ProcessTable {
             );
             if expired {
                 self.transition(entry.pid, ProcessState::Runnable);
+            } else {
+                self.counters.stale_deadlines_skipped += 1;
             }
         }
     }
@@ -403,11 +559,7 @@ impl ProcessTable {
     /// Whether the runtime should tear down: no live processes remain, or the
     /// program entry process has died (or its slot is already reclaimed).
     pub(crate) fn should_shutdown(&self) -> bool {
-        self.alive == 0
-            || (self.main_pid != 0
-                && self
-                    .get(self.main_pid)
-                    .is_none_or(|process| process.state == ProcessState::Dead))
+        self.alive == 0 || (self.main_pid != 0 && !self.is_alive(self.main_pid))
     }
 
     /// The soonest pending timer or deadline, for sizing the idle park.
@@ -517,6 +669,129 @@ mod tests {
             Some(base + Duration::from_millis(30)),
             "remaining timer still pending"
         );
+    }
+
+    #[test]
+    fn park_refuses_killed_process() {
+        // A cross-worker kill can land while the victim is mid-run; its
+        // next park must not resurrect it over the `Dead` tombstone.
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+        assert!(table.mark_dead_if_alive(pid), "first kill wins");
+
+        assert!(!table.try_park(pid, WaitTarget::Receive, None));
+        assert!(!table.try_park_io(pid));
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Dead);
+        assert_eq!(table.counters().parks_refused, 2);
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn kill_defers_reclaim_while_on_cpu() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        let (claimed, sp, _) = table.claim_next().unwrap();
+        assert_eq!(claimed, pid);
+
+        // The worker is mid-run on this stack: kill must not reclaim it.
+        assert!(table.kill(pid).is_none(), "reclaim deferred to the worker");
+        assert_eq!(table.counters().kills_deferred, 1);
+
+        // The owning worker switches out, sees `Dead`, and reclaims.
+        assert!(table.after_switch(pid, sp).is_some());
+        assert!(table.kill(pid).is_none(), "second kill is a no-op");
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn kill_reclaims_parked_process_directly() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        let (_, sp, _) = table.claim_next().unwrap();
+        assert!(table.try_park(pid, WaitTarget::Receive, None));
+        assert!(table.after_switch(pid, sp).is_none(), "parked, not dead");
+
+        assert!(table.kill(pid).is_some(), "off-cpu target frees here");
+        assert_eq!(table.counters().kills_deferred, 0);
+        assert!(table.get(pid).is_none(), "slot reclaimed");
+    }
+
+    #[test]
+    fn undeliverable_envelope_bounces_and_counts() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+        table.mark_dead_if_alive(pid);
+
+        let bounced = table.deliver(pid, fake_envelope());
+        assert!(bounced.is_some(), "caller must reclaim the envelope");
+        assert_eq!(table.counters().undeliverable_envelopes, 1);
+    }
+
+    #[test]
+    fn stale_ready_entry_skip_is_counted() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        table.kill(pid);
+
+        assert!(table.claim_next().is_none(), "killed entry never claimed");
+        assert_eq!(table.counters().stale_claims_skipped, 1);
+    }
+
+    #[test]
+    fn stale_deadline_skip_is_counted() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+        let deadline = Instant::now() + Duration::from_millis(5);
+        assert!(table.try_park(pid, WaitTarget::Receive, Some(deadline)));
+
+        // A message wins the race: the waiter is promoted, leaving the
+        // deadline entry stale.
+        assert!(table.deliver(pid, fake_envelope()).is_none());
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+
+        table.promote_due_deadlines(deadline + Duration::from_millis(1));
+        assert_eq!(table.counters().stale_deadlines_skipped, 1);
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+    }
+
+    #[test]
+    #[cfg(debug_assertions)]
+    #[should_panic(expected = "illegal process state transition")]
+    fn illegal_transition_asserts_in_debug() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        // `Created -> Blocked` is not a legal edge.
+        table.transition(pid, ProcessState::Blocked);
+    }
+
+    #[test]
+    fn mark_dead_if_alive_is_idempotent() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+
+        assert!(table.mark_dead_if_alive(pid));
+        assert!(!table.mark_dead_if_alive(pid), "second kill is a no-op");
+        assert!(!table.mark_dead_if_alive(0), "stale PID is a no-op");
+        assert!(table.should_shutdown(), "alive count decremented once");
+    }
+
+    #[test]
+    fn try_park_records_wait_target_and_deadline() {
+        let mut table = ProcessTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+
+        let deadline = Instant::now() + Duration::from_millis(10);
+        assert!(table.try_park(pid, WaitTarget::Reply, Some(deadline)));
+        let process = table.get(pid).unwrap();
+        assert_eq!(process.state, ProcessState::Blocked);
+        assert_eq!(process.waiting, WaitTarget::Reply);
+        assert_eq!(process.deadline, Some(deadline));
+        assert_eq!(table.nearest_wakeup(), Some(deadline));
     }
 
     #[test]

@@ -343,29 +343,6 @@ fn yield_to_scheduler() {
     }
 }
 
-/// Parks the current process as `Blocked`, recording which part of its
-/// mailbox it waits on and an optional wake deadline. Call with the
-/// scheduler lock held, then release it and [`yield_to_scheduler`].
-fn block_on(guard: &mut ProcessTable, pid: i64, target: WaitTarget, deadline: Option<Instant>) {
-    // A kill can land while this process is mid-run on another worker
-    // (`* -> Dead` is a legal cross-worker edge). Don't park over the
-    // tombstone: leave the state `Dead` so the caller's imminent
-    // `yield_to_scheduler` switches out for good — `after_switch`
-    // reclaims the slot and the frame never resumes.
-    match guard.get(pid) {
-        Some(process) if process.state != ProcessState::Dead => {}
-        _ => return,
-    }
-    guard.transition(pid, ProcessState::Blocked);
-    if let Some(process) = guard.get_mut(pid) {
-        process.deadline = deadline;
-        process.waiting = target;
-    }
-    if let Some(deadline) = deadline {
-        guard.push_deadline(pid, deadline);
-    }
-}
-
 /// Routes `envelope` to `pid` under the scheduler lock, then drops any
 /// leftover (an undeliverable envelope, or a stale reply displaced from
 /// the reply slot) after the lock is released — payload drop glue is
@@ -404,18 +381,7 @@ unsafe extern "C" fn process_trampoline() {
         fflush(ptr::null_mut());
     }
 
-    {
-        let mut guard = SCHED.lock().unwrap();
-        // A kill may have landed while the body was mid-run; the state
-        // is then already `Dead` and re-marking it would be an illegal
-        // self-edge.
-        match guard.get(pid) {
-            Some(process) if process.state != ProcessState::Dead => {
-                guard.transition(pid, ProcessState::Dead);
-            }
-            _ => {}
-        }
-    }
+    SCHED.lock().unwrap().mark_dead_if_alive(pid);
 
     WORK_AVAILABLE.notify_all();
     yield_to_scheduler();
@@ -638,6 +604,7 @@ pub extern "C" fn koja_rt_main_done() {
     }
 
     maybe_report_live_heap();
+    maybe_dump_sched_trace();
 }
 
 /// When `KOJA_HEAP_REPORT` is set, print the runtime's net live-block
@@ -653,6 +620,34 @@ fn maybe_report_live_heap() {
             crate::memory::koja_rt_live_blocks(),
         );
     }
+}
+
+/// When `KOJA_SCHED_TRACE` is set, dump the scheduler's lifecycle event
+/// ring (oldest first) and counter totals at shutdown. The debugging
+/// companion to `koja_rt_sched_violations`: when a race fixture fails,
+/// re-run with this set and read the offending interleaving directly.
+fn maybe_dump_sched_trace() {
+    if std::env::var_os("KOJA_SCHED_TRACE").is_none() {
+        return;
+    }
+    let guard = SCHED.lock().unwrap();
+    for entry in guard.trace_entries() {
+        eprintln!(
+            "koja sched: {:>8} pid {:#012x} {}",
+            entry.seq, entry.pid, entry.event,
+        );
+    }
+    let counters = guard.counters();
+    eprintln!(
+        "koja sched: violations={} parks_refused={} kills_deferred={} \
+         stale_claims_skipped={} stale_deadlines_skipped={} undeliverable_envelopes={}",
+        counters.violations,
+        counters.parks_refused,
+        counters.kills_deferred,
+        counters.stale_claims_skipped,
+        counters.stale_deadlines_skipped,
+        counters.undeliverable_envelopes,
+    );
 }
 
 /// Hands a delivered envelope to the receiving frame: copies its
@@ -690,7 +685,7 @@ pub extern "C" fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64 {
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        block_on(&mut guard, pid, WaitTarget::Receive, None);
+        guard.try_park(pid, WaitTarget::Receive, None);
     }
 
     yield_to_scheduler();
@@ -718,7 +713,7 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
             return deliver_envelope(envelope, out, out_cap);
         }
         let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        block_on(&mut guard, pid, WaitTarget::Receive, Some(deadline));
+        guard.try_park(pid, WaitTarget::Receive, Some(deadline));
     }
 
     yield_to_scheduler();
@@ -784,7 +779,7 @@ pub extern "C" fn koja_rt_call_receive(
                         }
                         return -1;
                     }
-                    block_on(&mut guard, pid, WaitTarget::Reply, Some(deadline));
+                    guard.try_park(pid, WaitTarget::Reply, Some(deadline));
                     None
                 }
             }
@@ -920,11 +915,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
 /// 0 otherwise. An out-of-range PID returns 0.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
-    let guard = SCHED.lock().unwrap();
-    match guard.get(pid) {
-        Some(process) if process.state != ProcessState::Dead => 1,
-        _ => 0,
-    }
+    SCHED.lock().unwrap().is_alive(pid) as i64
 }
 
 /// Immediately marks a process as `Dead`, reclaiming its stack and
@@ -939,26 +930,23 @@ pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
 /// config glue, so nested heap is released too.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_kill(pid: i64) {
-    let reclaim = {
-        let mut guard = SCHED.lock().unwrap();
-        match guard.get(pid) {
-            Some(process) if process.state != ProcessState::Dead => {}
-            _ => return,
-        }
-        guard.transition(pid, ProcessState::Dead);
-        // Reclaiming a stack a worker is still running on would be a
-        // use-after-free; in that case let the owning worker reclaim on
-        // switch-out (it sees `Dead` after persisting `sp`). The mailbox
-        // rides along so its envelopes are freed exactly once.
-        if guard.get(pid).is_some_and(|process| process.on_cpu) {
-            None
-        } else {
-            guard.free(pid)
-        }
-    };
-    if let Some(reclaim) = reclaim {
-        drop(reclaim);
-    }
+    let reclaim = SCHED.lock().unwrap().kill(pid);
+    drop(reclaim);
+}
+
+/// Count of illegal lifecycle edges the scheduler has applied — zero in
+/// a correct runtime, in release builds too. The machine oracle for the
+/// race-regression lang fixtures (see `tests/lang/memory/`).
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_sched_violations() -> i64 {
+    SCHED.lock().unwrap().counters().violations as i64
+}
+
+/// Count of parks refused over a kill tombstone. Positive evidence that
+/// the kill-vs-park window was actually hit during a storm fixture.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_parks_refused() -> i64 {
+    SCHED.lock().unwrap().counters().parks_refused as i64
 }
 
 /// Spawns a new lightweight process that will call `fn_ptr(state)`.
