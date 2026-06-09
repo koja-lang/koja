@@ -1,9 +1,9 @@
-//! IR body synthesis for *aggregate* clone / drop glue (`Struct` /
-//! `Enum` / `Union`). Given the operand type and the program's decls,
-//! [`clone_body`] / [`drop_body`] build a self-contained CFG that
-//! projects each constituent, acquires / releases it (recursing into
-//! the constituent's own glue by `Call`), and — for clone — rebuilds
-//! the aggregate.
+//! IR body synthesis for *aggregate* clone / deep-copy / drop glue
+//! (`Struct` / `Enum` / `Union`). Given the operand type and the
+//! program's decls, [`copy_body`] / [`drop_body`] build a
+//! self-contained CFG that projects each constituent, acquires /
+//! releases it (recursing into the constituent's own glue by
+//! `Call`), and — for the copy family — rebuilds the aggregate.
 //!
 //! Every body's single parameter is [`SELF_VALUE`] (`ValueId(0)`),
 //! typed as the operand. Fresh SSA values number from 1 and blocks
@@ -20,27 +20,59 @@ use crate::enum_decl::{EnumPayloadInit, IRVariantPayload};
 use crate::function::{
     BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator,
 };
-use crate::mangling::{clone_glue_symbol, drop_glue_symbol};
+use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
 use crate::package::IRPackage;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{ConstValue, IRBinOp, IRType, ValueId};
 
-use super::{find_enum, find_struct, is_leaf, needs_drop, needs_glue, unbox};
+use super::{find_enum, find_struct, is_inline_managed, needs_drop, needs_glue, unbox};
 
 /// The glue's sole parameter — `self`, typed as the operand. Both the
 /// shell ([`super::glue_shell`]) and every synthesized body agree on
 /// this id so projections read straight off it.
 pub(super) const SELF_VALUE: ValueId = ValueId(0);
 
-/// Build the `clone_T` body for an aggregate `ty`. Panics if `ty` is
-/// not a synthesizable aggregate — callers gate on [`super::is_aggregate`].
-pub(super) fn clone_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBlock> {
-    let mut synthesizer = Synthesizer::new();
+/// Which copy family an aggregate body belongs to. The projection /
+/// rebuild walk is identical; the mode only selects the inline
+/// instruction for leaf / closure constituents and the glue symbol
+/// composite ones `Call` into.
+#[derive(Clone, Copy)]
+pub(super) enum CopyMode {
+    /// Intra-process acquisition: `rc++` sharing (copy-on-write).
+    Clone,
+    /// Process-boundary copy: physically independent storage.
+    DeepCopy,
+}
+
+impl CopyMode {
+    /// The inline acquisition instruction for a leaf / closure
+    /// constituent.
+    fn inline_acquire(self, dest: ValueId, source: ValueId, ty: IRType) -> IRInstruction {
+        match self {
+            Self::Clone => IRInstruction::Clone { dest, source, ty },
+            Self::DeepCopy => IRInstruction::DeepCopy { dest, source, ty },
+        }
+    }
+
+    /// The per-type glue symbol a composite constituent `Call`s into.
+    fn glue_symbol(self, ty: &IRType) -> IRSymbol {
+        match self {
+            Self::Clone => clone_glue_symbol(ty),
+            Self::DeepCopy => deep_copy_glue_symbol(ty),
+        }
+    }
+}
+
+/// Build the `clone_T` / `deep_copy_T` body for an aggregate `ty`.
+/// Panics if `ty` is not a synthesizable aggregate — callers gate on
+/// [`super::is_aggregate`].
+pub(super) fn copy_body(ty: &IRType, packages: &[IRPackage], mode: CopyMode) -> Vec<IRBasicBlock> {
+    let mut synthesizer = Synthesizer::new(mode);
     match ty {
-        IRType::Struct(symbol) => synthesizer.struct_clone(symbol, packages),
-        IRType::Enum(symbol) => synthesizer.enum_clone(ty, symbol, packages),
-        IRType::Union { members, .. } => synthesizer.union_clone(ty, members, packages),
-        other => panic!("elaborate synthesis: clone_body on non-aggregate {other:?}"),
+        IRType::Struct(symbol) => synthesizer.struct_copy(symbol, packages),
+        IRType::Enum(symbol) => synthesizer.enum_copy(ty, symbol, packages),
+        IRType::Union { members, .. } => synthesizer.union_copy(ty, members, packages),
+        other => panic!("elaborate synthesis: copy_body on non-aggregate {other:?}"),
     }
     synthesizer.finish()
 }
@@ -48,7 +80,7 @@ pub(super) fn clone_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBloc
 /// Build the `drop_T` body for an aggregate `ty`. Panics if `ty` is
 /// not a synthesizable aggregate — callers gate on [`super::is_aggregate`].
 pub(super) fn drop_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBlock> {
-    let mut synthesizer = Synthesizer::new();
+    let mut synthesizer = Synthesizer::new(CopyMode::Clone);
     match ty {
         IRType::Struct(symbol) => synthesizer.struct_drop(symbol, packages),
         IRType::Enum(symbol) => synthesizer.enum_drop(symbol, packages),
@@ -58,21 +90,23 @@ pub(super) fn drop_body(ty: &IRType, packages: &[IRPackage]) -> Vec<IRBasicBlock
     synthesizer.finish()
 }
 
-/// How a single constituent is acquired at a clone boundary / released
+/// How a single constituent is acquired at a copy boundary / released
 /// at a drop boundary.
 enum Disposition {
-    /// `Copy` scalar (or a no-glue aggregate): clone is the same SSA
+    /// `Copy` scalar (or a no-glue aggregate): copy is the same SSA
     /// value, drop is a no-op.
     Trivial,
-    /// Heap leaf: inline `Clone` (`rc++`) / `DropValue` (`rc--`).
-    Leaf,
-    /// Heap-managed composite: `Call` its own `clone_T` / `drop_T`.
+    /// Heap leaf or closure: inline `Clone` / `DeepCopy` / `DropValue`
+    /// the backend renders directly (rc traffic or runtime copy
+    /// helpers on the block / env base).
+    Inline,
+    /// Heap-managed composite: `Call` its own per-type glue.
     Glue,
 }
 
 fn disposition(ty: &IRType, packages: &[IRPackage]) -> Disposition {
-    if is_leaf(ty) {
-        Disposition::Leaf
+    if is_inline_managed(ty) {
+        Disposition::Inline
     } else if needs_glue(ty, packages) {
         Disposition::Glue
     } else {
@@ -82,17 +116,20 @@ fn disposition(ty: &IRType, packages: &[IRPackage]) -> Disposition {
 
 /// Self-contained CFG accumulator for one glue body: a [`CFGBuilder`]
 /// plus the fresh-value / fresh-block counters lowering would
-/// otherwise own on [`crate::FnLowerCtx`].
+/// otherwise own on [`crate::FnLowerCtx`]. `mode` selects the copy
+/// family [`Self::acquire`] emits; drop bodies never consult it.
 struct Synthesizer {
     cfg: CFGBuilder,
+    mode: CopyMode,
     next_block: u32,
     next_value: u32,
 }
 
 impl Synthesizer {
-    fn new() -> Self {
+    fn new(mode: CopyMode) -> Self {
         Self {
             cfg: CFGBuilder::new(),
+            mode,
             next_block: 0,
             // 0 is the `self` parameter; bodies number from 1.
             next_value: 1,
@@ -138,16 +175,9 @@ impl Synthesizer {
         let ty = unbox(ty);
         match disposition(ty, packages) {
             Disposition::Trivial => value,
-            Disposition::Leaf => {
+            Disposition::Inline => {
                 let dest = self.value();
-                self.append(
-                    block,
-                    IRInstruction::Clone {
-                        dest,
-                        source: value,
-                        ty: ty.clone(),
-                    },
-                );
+                self.append(block, self.mode.inline_acquire(dest, value, ty.clone()));
                 dest
             }
             Disposition::Glue => {
@@ -156,7 +186,7 @@ impl Synthesizer {
                     block,
                     IRInstruction::Call {
                         dest,
-                        callee: clone_glue_symbol(ty),
+                        callee: self.mode.glue_symbol(ty),
                         args: vec![value],
                     },
                 );
@@ -172,7 +202,7 @@ impl Synthesizer {
         let ty = unbox(ty);
         match disposition(ty, packages) {
             Disposition::Trivial => {}
-            Disposition::Leaf => self.append(
+            Disposition::Inline => self.append(
                 block,
                 IRInstruction::DropValue {
                     value,
@@ -195,9 +225,9 @@ impl Synthesizer {
 
     // --- struct ----------------------------------------------------
 
-    fn struct_clone(&mut self, symbol: &IRSymbol, packages: &[IRPackage]) {
+    fn struct_copy(&mut self, symbol: &IRSymbol, packages: &[IRPackage]) {
         let decl = find_struct(packages, symbol)
-            .unwrap_or_else(|| panic!("elaborate synth: clone of unregistered struct `{symbol}`"));
+            .unwrap_or_else(|| panic!("elaborate synth: copy of unregistered struct `{symbol}`"));
         let fields = decl.fields.clone();
         let entry = self.block("entry");
         let mut inits = Vec::with_capacity(fields.len());
@@ -264,9 +294,9 @@ impl Synthesizer {
 
     // --- enum ------------------------------------------------------
 
-    fn enum_clone(&mut self, enum_ty: &IRType, symbol: &IRSymbol, packages: &[IRPackage]) {
+    fn enum_copy(&mut self, enum_ty: &IRType, symbol: &IRSymbol, packages: &[IRPackage]) {
         let decl = find_enum(packages, symbol)
-            .unwrap_or_else(|| panic!("elaborate synth: clone of unregistered enum `{symbol}`"));
+            .unwrap_or_else(|| panic!("elaborate synth: copy of unregistered enum `{symbol}`"));
         let variants = decl.variants.clone();
         let entry = self.block("entry");
         let tag = self.value();
@@ -424,7 +454,7 @@ impl Synthesizer {
 
     // --- union -----------------------------------------------------
 
-    fn union_clone(&mut self, union_ty: &IRType, members: &[IRType], packages: &[IRPackage]) {
+    fn union_copy(&mut self, union_ty: &IRType, members: &[IRType], packages: &[IRPackage]) {
         let entry = self.block("entry");
         let tag = self.value();
         self.append(

@@ -241,8 +241,22 @@ value, or none).
    readers rather than shared through a common crate.
 2. COW retrofit on the current runtime: `List` flat buffer,
    `String`/`Binary`/`Bits`, the `Map`/`Set` hashtables.
-3. Message-boundary policy: deep copy vs atomic-rc handoff per type
-   (large binaries especially).
+3. ~~Message-boundary policy: deep copy vs atomic-rc handoff per
+   type (large binaries especially).~~ **Resolved: deep copy at the
+   boundary (BEAM-style), keeping intra-process rc non-atomic.**
+   Send (`Ref.cast` / `Ref.call` / `Ref.send_after` / `ReplyTo.send`)
+   and spawn-config sites lower to `IRInstruction::DeepCopy`, which
+   produces a physically independent payload — no heap storage shared
+   with the sender. Leaves deep-copy via `koja_heap_deep_copy`;
+   composites via synthesized `deep_copy_T` glue
+   (`FunctionKind::DeepCopyGlue`, the process-boundary analog of
+   `clone_T`); closures via a third env-header word (`copy_fn`,
+   stamped by `MakeClosure` with the body's
+   `FunctionKind::CopyClosureGlue`). The transferred copy is owned by
+   the runtime transport and reclaimed through the envelope drop glue
+   on discard, or handed whole to the receiver on delivery. An
+   atomic-rc handoff for large binaries remains a possible future
+   optimization, layered behind the same `DeepCopy` seam.
 4. Arena mechanism: ambient-context representation, escape analysis /
    copy-out insertion, interaction with closures that capture arena
    values and with message sends from inside a region.
@@ -262,3 +276,12 @@ the `elaborate` sub-pass, closure-env RC, and removal of the
 user-facing `Clone` protocol. See
 [`archive/20260607-MEMORY-MODEL-RC-ROLLOUT.md`](archive/20260607-MEMORY-MODEL-RC-ROLLOUT.md)
 for the full implementation history and the bugs fixed along the way.
+
+The process-boundary deep-copy rollout has also landed (open question
+3 above): `IRInstruction::DeepCopy` + the `deep_copy_T` glue family,
+deep-copy lowering at every send / spawn site, runtime ownership of
+the transferred payload (unified `OwnedPayload` RAII across envelopes,
+timers, and spawn configs), the two-queue mailbox with a tokened
+one-shot reply slot, and zero-init / drop-then-zero receive-slot
+discipline. The `tests/lang/memory/` fixtures pin the reclaim
+behavior with `koja_rt_live_blocks` steady-state checks.

@@ -38,7 +38,6 @@
 //! reserved for the IR-instruction-to-LLVM-instruction layer.
 
 use std::collections::{BTreeMap, HashSet, VecDeque};
-use std::fmt::Display;
 
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, IntValue, PhiValue};
@@ -47,17 +46,18 @@ use koja_ir::{
 };
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::types::{ir_basic_type, value_basic_type};
 
 mod binary_construct;
 mod binary_match;
 mod calls;
 mod clone;
-mod closures;
+pub(crate) mod closures;
 pub(crate) mod collection_glue;
 mod concat;
 pub(crate) mod constants;
+mod deep_copy;
 pub(crate) mod enums;
 pub(crate) mod heap_layout;
 mod indirect;
@@ -92,14 +92,6 @@ pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 /// terminator walk skips `None` slots without looking up the
 /// corresponding arg.
 pub(crate) type PhiMap<'ctx> = BTreeMap<IRBlockId, Vec<Option<PhiValue<'ctx>>>>;
-
-/// Wrap an inkwell builder error into [`LlvmError::Codegen`]. `op`
-/// names the operation that failed (e.g. `"build_store"`,
-/// `"build_call for `Foo`"`); pair with `format_args!` when the
-/// operation needs runtime context.
-pub(crate) fn inkwell_err(op: impl Display, e: impl Display) -> LlvmError {
-    LlvmError::Codegen(format!("inkwell rejected {op}: {e}"))
-}
 
 /// Compute the set of [`IRBlockId`]s reachable from the entry block
 /// (`blocks[0]`) via the terminator-edge graph. Used by the LLVM
@@ -186,10 +178,7 @@ pub(crate) fn emit_unreachable_terminator<'ctx>(
 ) -> Result<(), LlvmError> {
     let llvm_block = lookup_block(block_map, block_id)?;
     ctx.builder.position_at_end(llvm_block);
-    ctx.builder
-        .build_unreachable()
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_unreachable", e))
+    ctx.builder.build_unreachable().or_ice().map(|_| ())
 }
 
 /// Emit `block` (instructions + terminator) into the builder's
@@ -264,10 +253,7 @@ pub(crate) fn declare_block_param_phis<'ctx>(
             }
             let llvm_ty = ir_basic_type(ctx, &param.ty)?;
             let name = format!("param_{}_{}", block.id, index);
-            let phi = ctx
-                .builder
-                .build_phi(llvm_ty, &name)
-                .map_err(|e| inkwell_err(format_args!("build_phi for {}", param.dest), e))?;
+            let phi = ctx.builder.build_phi(llvm_ty, &name).or_ice()?;
             values.insert(param.dest, phi.as_basic_value());
             phis.push(Some(phi));
         }
@@ -322,7 +308,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
             let llvm_target = lookup_block(block_map, target.block)?;
             ctx.builder
                 .build_unconditional_branch(llvm_target)
-                .map_err(|e| inkwell_err("build_unconditional_branch", e))?;
+                .or_ice()?;
             wire_phi_incomings(target, pred, values, block_map, phi_map)
         }
         IRTerminator::CondBranch {
@@ -335,15 +321,11 @@ pub(crate) fn emit_terminator_default<'ctx>(
             let llvm_else = lookup_block(block_map, else_target.block)?;
             ctx.builder
                 .build_conditional_branch(cond_value, llvm_then, llvm_else)
-                .map_err(|e| inkwell_err("build_conditional_branch", e))?;
+                .or_ice()?;
             wire_phi_incomings(then_target, pred, values, block_map, phi_map)?;
             wire_phi_incomings(else_target, pred, values, block_map, phi_map)
         }
-        IRTerminator::Return { value: None } => ctx
-            .builder
-            .build_return(None)
-            .map(|_| ())
-            .map_err(|e| inkwell_err("build_return", e)),
+        IRTerminator::Return { value: None } => ctx.builder.build_return(None).or_ice().map(|_| ()),
         IRTerminator::Return { value: Some(id) } => {
             // A `Return { value: Some(id) }` against a Unit-typed slot
             // is the trailing-statement-of-a-Unit-fn shape: the IR
@@ -353,24 +335,17 @@ pub(crate) fn emit_terminator_default<'ctx>(
             // the `lookup` keeps a void-returning call's unregistered
             // dest from surfacing as "undefined SSA value".
             if current_function_returns_void(ctx) {
-                ctx.builder
-                    .build_return(None)
-                    .map(|_| ())
-                    .map_err(|e| inkwell_err("build_return", e))
+                ctx.builder.build_return(None).or_ice().map(|_| ())
             } else {
                 let return_value = lookup(values, *id)?;
                 ctx.builder
                     .build_return(Some(&return_value))
+                    .or_ice()
                     .map(|_| ())
-                    .map_err(|e| inkwell_err("build_return", e))
             }
         }
         IRTerminator::TailCall { args, .. } => emit_tail_call(ctx, args, values),
-        IRTerminator::Unreachable => ctx
-            .builder
-            .build_unreachable()
-            .map(|_| ())
-            .map_err(|e| inkwell_err("build_unreachable", e)),
+        IRTerminator::Unreachable => ctx.builder.build_unreachable().or_ice().map(|_| ()),
     }
 }
 
@@ -416,21 +391,19 @@ fn emit_tail_call<'ctx>(
     for (arg, (local, _ty)) in args.iter().zip(frame.param_slots.iter()) {
         let value = lookup(values, *arg)?;
         let slot = ctx.local_slot(*local);
-        ctx.builder
-            .build_store(slot, value)
-            .map_err(|e| inkwell_err(format_args!("TailCall store into `{local}`"), e))?;
+        ctx.builder.build_store(slot, value).or_ice()?;
     }
     for (local, ty) in &frame.body_slots {
         let llvm_ty = value_basic_type(ctx, ty)?;
         let slot = ctx.local_slot(*local);
         ctx.builder
             .build_store(slot, llvm_ty.const_zero())
-            .map_err(|e| inkwell_err(format_args!("TailCall slot reset for `{local}`"), e))?;
+            .or_ice()?;
     }
     ctx.builder
         .build_unconditional_branch(frame.loop_block)
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err("TailCall back-edge to tco_loop", e))
 }
 
 /// For each non-`None` phi, look up the matching branch arg's LLVM

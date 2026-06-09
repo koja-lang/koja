@@ -442,16 +442,25 @@ fn execute_function<R: CallResolver>(
         // eval never executes a glue body — neither the aggregate CFG
         // `elaborate` synthesizes nor the empty collection shell the
         // LLVM backend fills.
-        FunctionKind::CloneGlue => return Ok(args.into_iter().next().unwrap_or(Value::Unit)),
+        FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue => {
+            return Ok(args.into_iter().next().unwrap_or(Value::Unit));
+        }
         FunctionKind::DropGlue => return Ok(Value::Unit),
         FunctionKind::Closure { .. } => panic!(
             "interpreter: direct `Call` to closure body `{}` — must dispatch via \
              `CallClosure` (seal invariant violation)",
             function.symbol,
         ),
-        // Capture-release glue exists only to back the LLVM env
-        // teardown ABI. The interpreter reclaims via its host GC and
-        // never calls (or even references) it.
+        // The env glue siblings exist only to back the LLVM env block
+        // ABI (teardown via the header's `drop_fn`, process-boundary
+        // copy via `copy_fn`). The interpreter's `Value::Closure`
+        // carries its captures by value and is reclaimed by the host
+        // GC, so it never calls (or even references) either.
+        FunctionKind::CopyClosureGlue { .. } => panic!(
+            "interpreter: `$copy_env$` env deep-copy glue `{}` is LLVM-only — eval copies \
+             closures structurally and never invokes it",
+            function.symbol,
+        ),
         FunctionKind::DropClosureGlue { .. } => panic!(
             "interpreter: `$drop_env$` capture-release glue `{}` is LLVM-only — eval reclaims \
              closures via the host GC and never invokes it",
@@ -686,7 +695,11 @@ fn execute_instruction<R: CallResolver>(
         // `Clone` is just a re-bind: the result is already an
         // independent copy with no shared backing. The LLVM backend
         // does the real allocation; here the GC handles reclamation.
-        IRInstruction::Clone { dest, source, .. } => {
+        // `DeepCopy` (the process-boundary copy) gets the same
+        // treatment for the same reason — lookup's clone is already
+        // physically independent.
+        IRInstruction::Clone { dest, source, .. }
+        | IRInstruction::DeepCopy { dest, source, .. } => {
             let value = lookup(&frame.values, *source)?;
             frame.values.insert(*dest, value);
             Ok(())

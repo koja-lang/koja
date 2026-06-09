@@ -7,11 +7,10 @@ use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use koja_ir::ConcatKind;
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_concat_bits_extern, declare_malloc_extern};
 
 use super::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
-use super::inkwell_err;
 
 /// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
 /// and `Binary` both byte-align — the common shape is `malloc(8 +
@@ -27,18 +26,7 @@ pub(super) fn emit_concat<'ctx>(
     match kind {
         ConcatKind::Bits => {
             let helper = declare_concat_bits_extern(ctx);
-            let result = ctx
-                .builder
-                .build_call(helper, &[lhs.into(), rhs.into()], "concat_bits")
-                .map_err(|e| inkwell_err(format_args!("concat_bits call"), e))?;
-            let basic = result.try_as_basic_value().basic().ok_or_else(|| {
-                LlvmError::Codegen(
-                    "LLVM emit: __koja_concat_bits returned void; \
-                     runtime declaration drift?"
-                        .to_string(),
-                )
-            })?;
-            Ok(basic)
+            ctx.call_basic(helper, &[lhs.into(), rhs.into()], "concat_bits")
         }
         ConcatKind::String | ConcatKind::Binary => {
             emit_byte_aligned_concat(ctx, lhs, rhs, matches!(kind, ConcatKind::String))
@@ -69,47 +57,42 @@ fn emit_byte_aligned_concat<'ctx>(
     let total_bits = ctx
         .builder
         .build_int_add(l_bits, r_bits, "cat_total_bits")
-        .map_err(|e| inkwell_err(format_args!("concat total_bits"), e))?;
+        .or_ice()?;
     let total_bytes = ctx
         .builder
         .build_int_add(l_bytes, r_bytes, "cat_total_bytes")
-        .map_err(|e| inkwell_err(format_args!("concat total_bytes"), e))?;
+        .or_ice()?;
     let alloc_size = block_alloc_size(ctx, total_bytes, with_nul, "cat_alloc")?;
 
     let malloc = declare_malloc_extern(ctx);
     let base = ctx
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "cat_base")
-        .map_err(|e| inkwell_err(format_args!("concat malloc"), e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
+        .call_basic(malloc, &[alloc_size.into()], "cat_base")?
         .into_pointer_value();
 
     let payload = init_heap_block(ctx, base, total_bits, "cat")?;
 
     ctx.builder
         .build_memcpy(payload, 1, l_ptr, 1, l_bytes)
-        .map_err(|e| inkwell_err(format_args!("concat memcpy lhs"), e))?;
+        .or_ice()?;
 
     let mid = unsafe {
         ctx.builder
             .build_in_bounds_gep(i8_ty, payload, &[l_bytes], "cat_mid")
-            .map_err(|e| inkwell_err(format_args!("concat mid GEP"), e))?
+            .or_ice()?
     };
     ctx.builder
         .build_memcpy(mid, 1, r_ptr, 1, r_bytes)
-        .map_err(|e| inkwell_err(format_args!("concat memcpy rhs"), e))?;
+        .or_ice()?;
 
     if with_nul {
         let end = unsafe {
             ctx.builder
                 .build_in_bounds_gep(i8_ty, payload, &[total_bytes], "cat_end")
-                .map_err(|e| inkwell_err(format_args!("concat end GEP"), e))?
+                .or_ice()?
         };
         ctx.builder
             .build_store(end, i8_ty.const_int(0, false))
-            .map_err(|e| inkwell_err(format_args!("concat NUL store"), e))?;
+            .or_ice()?;
     }
 
     Ok(payload.into())
@@ -129,6 +112,6 @@ fn bits_and_bytes<'ctx>(
     let bytes = ctx
         .builder
         .build_right_shift(bits, three, false, &format!("{prefix}_bytes"))
-        .map_err(|e| inkwell_err(format_args!("concat byte count for `{prefix}`"), e))?;
+        .or_ice()?;
     Ok((bits, bytes))
 }

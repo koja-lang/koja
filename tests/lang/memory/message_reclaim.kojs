@@ -1,0 +1,74 @@
+# Regression: heap message payloads are deep-copied at the send site,
+# delivered, consumed, and reclaimed — both for `cast` (fire-and-
+# forget) and `call` (request/reply) — and a send to an already-dead
+# pid reclaims the payload through the envelope drop glue.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct Sink
+  seen: Int
+end
+
+impl Process<Int, String, Int> for Sink
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Sink{seen: 0})
+  end
+
+  fn handle(self, msg: String, from: Option<ReplyTo<Int>>) -> Step<Self>
+    ReplyTo.reply(from, msg.length())
+    Step.Continue(Sink{seen: self.seen + 1})
+  end
+end
+
+fn wait_dead(r: Ref<String, Int>)
+  loop
+    if r.alive?()
+      ()
+    else
+      break
+    end
+  end
+end
+
+fn deliver_once()
+  r = spawn Sink.start(0)
+  r.cast("h" <> "ello")
+  _ = r.call("w" <> "orld", 5000)
+  r.signal(Lifecycle.Shutdown)
+  wait_dead(r)
+end
+
+fn dead_send_once()
+  r = spawn Sink.start(0)
+  r.kill()
+  wait_dead(r)
+  r.cast("into " <> "the void")
+end
+
+deliver_once()
+dead_send_once()
+start = Rt.koja_rt_live_blocks()
+
+i = 0
+
+loop
+  deliver_once()
+  dead_send_once()
+  i += 1
+
+  if i >= 100
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+
+if finish - start < 10
+  "message reclaim: ok".print()
+else
+  "message reclaim: LEAK".print()
+  (finish - start).print()
+end

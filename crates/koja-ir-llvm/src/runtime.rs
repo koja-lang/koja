@@ -13,7 +13,9 @@ use inkwell::values::FunctionValue;
 
 use crate::ctx::EmitContext;
 
+pub(crate) const CLOSURE_DEEP_COPY_SYMBOL: &str = "koja_closure_deep_copy";
 pub(crate) const CLOSURE_RC_DEC_SYMBOL: &str = "koja_closure_rc_dec";
+pub(crate) const HEAP_DEEP_COPY_SYMBOL: &str = "koja_heap_deep_copy";
 pub(crate) const CONCAT_BITS_SYMBOL: &str = "__koja_concat_bits";
 pub(crate) const FORMAT_BOOL_SYMBOL: &str = "koja_format_bool";
 pub(crate) const FORMAT_F32_SYMBOL: &str = "koja_format_f32";
@@ -160,6 +162,43 @@ pub(crate) fn declare_closure_rc_dec_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fu
     let signature = ctx.context.void_type().fn_type(&[ptr_ty.into()], false);
     ctx.module
         .add_function(CLOSURE_RC_DEC_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_heap_deep_copy` extern — the
+/// runtime's deep copy for an rc-managed leaf heap block. Signature:
+/// `i8* koja_heap_deep_copy(i8* payload)`; returns a fresh payload
+/// pointer with `rc = 1` and the bytes copied (immortal rodata
+/// blocks are shared as-is, null returns null). The `DeepCopy`
+/// emitter calls this once per heap-leaf value crossing a process
+/// boundary.
+pub(crate) fn declare_heap_deep_copy_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(HEAP_DEEP_COPY_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(HEAP_DEEP_COPY_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_closure_deep_copy` extern — the
+/// runtime's deep copy for a closure env block. Signature:
+/// `i8* koja_closure_deep_copy(i8* env)`; dispatches through the env
+/// header's `copy_fn` glue and returns a fresh env base with `rc = 1`
+/// and every heap-managed capture recursively copied (null envs
+/// return null). The `DeepCopy` emitter calls this once per closure
+/// value crossing a process boundary, then rebuilds the fat pointer
+/// around the fresh env.
+pub(crate) fn declare_closure_deep_copy_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(CLOSURE_DEEP_COPY_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let signature = ptr_ty.fn_type(&[ptr_ty.into()], false);
+    ctx.module
+        .add_function(CLOSURE_DEEP_COPY_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `koja_int_parse` runtime helper.

@@ -40,7 +40,7 @@ use super::ops::{
 };
 use super::ownership::drop_discarded_temp;
 use super::package::resolved_type_to_ir_type;
-use super::process::{lower_receive, lower_spawn};
+use super::process::{ReceiveLowering, lower_receive, lower_spawn};
 use super::structs::{lower_field_access, lower_struct_construction};
 
 pub(super) fn lower_expr(
@@ -411,11 +411,13 @@ fn lower_expr_inner(
             after_timeout,
             after_body,
         } => lower_receive(
-            arms,
-            after_timeout.as_deref(),
-            after_body,
-            &expr.resolution,
-            expr.span,
+            ReceiveLowering {
+                after_body,
+                after_timeout: after_timeout.as_deref(),
+                arms,
+                result_resolution: &expr.resolution,
+                span: expr.span,
+            },
             ctx,
             block,
             registry,

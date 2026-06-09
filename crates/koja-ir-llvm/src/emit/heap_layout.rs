@@ -36,9 +36,7 @@ use inkwell::values::{IntValue, PointerValue};
 use koja_ir::IRType;
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
-
-use super::inkwell_err;
+use crate::error::{IceExt, LlvmError};
 
 /// The leaf heap types backed by the single
 /// `[i64 rc][i64 bit_length][payload]` block this module describes —
@@ -109,16 +107,16 @@ pub(crate) fn block_base<'ctx>(
         ctx.builder
             .build_gep(i8_ty, payload, &[neg_header_offset(ctx)], name)
     }
-    .map_err(|e| inkwell_err(format_args!("heap block-base GEP `{name}`"), e))?;
+    .or_ice()?;
     let is_null = ctx
         .builder
         .build_is_null(payload, &format!("{name}.is_null"))
-        .map_err(|e| inkwell_err(format_args!("heap block-base null test `{name}`"), e))?;
+        .or_ice()?;
     let null_base = raw_base.get_type().const_null();
     ctx.builder
         .build_select(is_null, null_base, raw_base, &format!("{name}.or_null"))
+        .or_ice()
         .map(|v| v.into_pointer_value())
-        .map_err(|e| inkwell_err(format_args!("heap block-base select `{name}`"), e))
 }
 
 /// Load the `i64 bit_length` header for a heap payload (the word at
@@ -136,12 +134,12 @@ pub(crate) fn load_bit_length<'ctx>(
     let length_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, payload, &[neg_length], &format!("{name}_len_ptr"))
-            .map_err(|e| inkwell_err(format_args!("heap bit-length GEP `{name}`"), e))?
+            .or_ice()?
     };
     ctx.builder
         .build_load(ctx.context.i64_type(), length_ptr, name)
+        .or_ice()
         .map(|value| value.into_int_value())
-        .map_err(|e| inkwell_err(format_args!("heap bit-length load `{name}`"), e))
 }
 
 /// Initialize a freshly-`malloc`'d leaf heap block: store `rc = 1` at
@@ -160,11 +158,9 @@ pub(crate) fn init_heap_block<'ctx>(
     let i64_ty = ctx.context.i64_type();
     ctx.builder
         .build_store(base, i64_ty.const_int(1, false))
-        .map_err(|e| inkwell_err(format_args!("heap rc init `{name}`"), e))?;
+        .or_ice()?;
     let length_ptr = payload_from_length_base(ctx, base, name)?;
-    ctx.builder
-        .build_store(length_ptr, bit_length)
-        .map_err(|e| inkwell_err(format_args!("heap bit-length init `{name}`"), e))?;
+    ctx.builder.build_store(length_ptr, bit_length).or_ice()?;
     payload_from_base(ctx, base, name)
 }
 
@@ -181,7 +177,7 @@ fn payload_from_length_base<'ctx>(
         ctx.builder
             .build_in_bounds_gep(i8_ty, base, &[length_off], &format!("{name}_len"))
     }
-    .map_err(|e| inkwell_err(format_args!("heap bit-length base GEP `{name}`"), e))
+    .or_ice()
 }
 
 /// GEP from a freshly-allocated block base to its payload pointer:
@@ -196,7 +192,7 @@ pub(crate) fn payload_from_base<'ctx>(
         ctx.builder
             .build_in_bounds_gep(i8_ty, base, &[header_offset(ctx)], name)
     }
-    .map_err(|e| inkwell_err(format_args!("heap payload GEP `{name}`"), e))
+    .or_ice()
 }
 
 /// Total block size for a heap value with `body_bytes` of payload:
@@ -217,5 +213,5 @@ pub(crate) fn block_alloc_size<'ctx>(
             ctx.context.i64_type().const_int(overhead, false),
             name,
         )
-        .map_err(|e| inkwell_err(format_args!("heap alloc-size add `{name}`"), e))
+        .or_ice()
 }

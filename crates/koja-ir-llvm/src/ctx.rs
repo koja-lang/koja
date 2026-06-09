@@ -21,6 +21,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap};
+use std::panic::Location;
 use std::sync::Arc;
 
 use inkwell::basic_block::BasicBlock;
@@ -28,12 +29,14 @@ use inkwell::builder::Builder;
 use inkwell::context::Context;
 use inkwell::module::Module;
 use inkwell::types::{BasicType, StructType};
+use inkwell::values::BasicMetadataValueEnum;
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
 use koja_ir::{IRBlockId, IRLocalId, IRSymbol, IRType};
 
 use crate::constant_pool::ConstantPoolSnapshot;
+use crate::error::{IceExt, LlvmError};
 use crate::layout::TypeLayouts;
 
 /// Fields are `pub(crate)` so sibling emission modules can borrow
@@ -384,5 +387,28 @@ impl<'ctx> EmitContext<'ctx> {
             .expect("inkwell rejected build_alloca in entry block");
         self.builder.position_at_end(saved);
         alloca
+    }
+
+    /// Emit a call to `function` and unwrap its return as a
+    /// [`BasicValueEnum`] named `name`. Collapses the `build_call` →
+    /// `try_as_basic_value` → `basic` ceremony every value-returning
+    /// runtime call repeats; a void return is an internal compiler
+    /// error reported with the caller's `file:line`.
+    #[track_caller]
+    pub(crate) fn call_basic(
+        &self,
+        function: FunctionValue<'ctx>,
+        args: &[BasicMetadataValueEnum<'ctx>],
+        name: &str,
+    ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+        let at = Location::caller();
+        self.builder
+            .build_call(function, args, name)
+            .or_ice()?
+            .try_as_basic_value()
+            .basic()
+            .ok_or_else(|| {
+                LlvmError::Codegen(format!("call `{name}` at {at} did not produce a value"))
+            })
     }
 }

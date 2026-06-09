@@ -32,8 +32,7 @@ use koja_ir::{IRType, ValueId};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::block_base;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::declare_rc_inc_extern;
 
 use super::{ValueMap, closures, lookup};
@@ -55,7 +54,7 @@ pub(super) fn emit_clone<'ctx>(
             let rc_inc = declare_rc_inc_extern(ctx);
             ctx.builder
                 .build_call(rc_inc, &[base.into()], &format!("{dest}.rc_inc"))
-                .map_err(|e| inkwell_err(format_args!("rc_inc call for `{dest}`"), e))?;
+                .or_ice()?;
             payload.into()
         }
         IRType::Bool
@@ -88,7 +87,7 @@ pub(super) fn emit_clone<'ctx>(
             let rc_inc = declare_rc_inc_extern(ctx);
             ctx.builder
                 .build_call(rc_inc, &[env_ptr.into()], &format!("{dest}.env_rc_inc"))
-                .map_err(|e| inkwell_err(format_args!("closure env rc_inc for `{dest}`"), e))?;
+                .or_ice()?;
             closure_value
         }
         // Collections and boxed `Indirect` always own heap, so they

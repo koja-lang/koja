@@ -183,6 +183,41 @@ pub enum FunctionKind {
     Closure {
         env_layout: Vec<IRType>,
     },
+    /// Synthesized per-closure-body env deep-copy glue
+    /// (`<body>.$copy_env$`). The copy analog of
+    /// [`Self::DropClosureGlue`]: its address is stamped into the env
+    /// block's `copy_fn` header word by [`IRInstruction::MakeClosure`],
+    /// and the runtime calls it (`*mut u8 -> *mut u8` over the env
+    /// base) when the closure crosses a process boundary, returning a
+    /// fresh env with `rc = 1` and every heap-managed capture
+    /// deep-copied.
+    ///
+    /// Unlike `DropClosureGlue` the body cannot be expressed in IR —
+    /// it returns a raw env pointer, which has no IR type — so
+    /// `blocks` lowers empty and the LLVM backend synthesizes the
+    /// whole body from `env_layout` at emit time (the same treatment
+    /// collection [`Self::CloneGlue`] bodies get). Lowering registers
+    /// one for every closure that captures, since any closure value
+    /// may flow into a send. Eval copies closures structurally via
+    /// its host `Value` model and never invokes it.
+    CopyClosureGlue {
+        env_layout: Vec<IRType>,
+    },
+    /// Synthesized per-type deep-copy glue (`<T>.$deep_copy$`). The
+    /// process-boundary analog of [`Self::CloneGlue`]: where clone
+    /// shares immutable heap blocks with an `rc++`, deep copy
+    /// produces a physically independent value with no storage shared
+    /// with the source, so the copy can be handed to another process
+    /// without cross-process rc traffic. Registered by the
+    /// `elaborate` sub-pass for every heap-managed composite type
+    /// reachable from an [`IRInstruction::DeepCopy`] site or a
+    /// [`Self::CopyClosureGlue`] env layout. Operand and return type
+    /// are both `params[0].ty`. Same two body shapes as
+    /// [`Self::CloneGlue`]: an `elaborate`-synthesized CFG for
+    /// aggregates, an emit-time backend body (empty `blocks`) for
+    /// collections. Eval's host `Value`s are already independent, so
+    /// it short-circuits the call to an identity.
+    DeepCopyGlue,
     /// Synthesized per-closure-body capture-release glue
     /// (`<body>.$drop_env$`). A closure env is type-erased behind the
     /// structural [`IRType::Function`], so a `Drop` at a closure-typed
@@ -437,6 +472,37 @@ pub enum IRInstruction {
     },
     /// `dest = <constant>`.
     Const { dest: ValueId, value: ConstValue },
+    /// `dest = deep_copy(source)` — a process-boundary copy that
+    /// yields a *physically* independent value: no heap storage is
+    /// shared with `source`, transitively. Where [`Self::Clone`]
+    /// models intra-process acquisition (`rc++`, copy-on-write),
+    /// `DeepCopy` is emitted at send / spawn sites so the payload a
+    /// process hands off never aliases blocks the sender might
+    /// mutate or release — Koja's rc bookkeeping is unsynchronized,
+    /// so sharing across processes is unsound. The source stays
+    /// live (the sender's own copy drops normally at scope exit).
+    ///
+    /// Backend lowering by `ty` mirrors `Clone`'s shape:
+    /// - Leaf heap (`String` / `Binary` / `Bits`): runtime
+    ///   `koja_heap_deep_copy` — fresh block, `rc = 1`, bytes copied.
+    /// - Stack/`Copy` leaf types: a plain register copy.
+    /// - Closure (`Function`): runtime `koja_closure_deep_copy`,
+    ///   which dispatches through the env header's `copy_fn` glue
+    ///   ([`FunctionKind::CopyClosureGlue`]); the fat pointer is
+    ///   rebuilt around the fresh env.
+    /// - No-glue aggregates: a register copy.
+    /// - Heap composites: rewritten by `elaborate` into a `Call` to
+    ///   a synthesized per-type `deep_copy_T`
+    ///   ([`FunctionKind::DeepCopyGlue`]); one surviving to a
+    ///   backend is a lowering bug.
+    ///
+    /// Eval's host `Value`s are deep-cloned on every lookup, so a
+    /// `DeepCopy` there is a re-bind, exactly like its `Clone`.
+    DeepCopy {
+        dest: ValueId,
+        source: ValueId,
+        ty: IRType,
+    },
     /// `dest = <ty>.<variant>(<payload>)`. `tag` is the variant's
     /// 0-based position in [`crate::IREnumDecl::variants`] (also
     /// the wire byte of the LLVM tag field); `payload` carries the
@@ -712,6 +778,7 @@ impl IRInstruction {
             | IRInstruction::Clone { dest, .. }
             | IRInstruction::Concat { dest, .. }
             | IRInstruction::Const { dest, .. }
+            | IRInstruction::DeepCopy { dest, .. }
             | IRInstruction::EnumConstruct { dest, .. }
             | IRInstruction::EnumPayloadFieldGet { dest, .. }
             | IRInstruction::EnumTagGet { dest, .. }

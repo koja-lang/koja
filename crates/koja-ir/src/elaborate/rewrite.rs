@@ -1,15 +1,16 @@
 //! Acquisition / release rewrite: turn every *composite* ownership
-//! `Clone` / `DropLocal` / `DropValue` lowering emitted into a `Call`
-//! to the synthesized per-type glue, so backends only ever see leaf
-//! `Clone` / `Drop` inline and a uniform `Call` for composites
-//! (northstar: no dynamic-dispatch IR).
+//! `Clone` / `DeepCopy` / `DropLocal` / `DropValue` lowering emitted
+//! into a `Call` to the synthesized per-type glue, so backends only
+//! ever see leaf `Clone` / `DeepCopy` / `Drop` inline and a uniform
+//! `Call` for composites (northstar: no dynamic-dispatch IR).
 //!
 //! A composite is rewritten iff its type carries glue — i.e. it is in
-//! the `needed` set [`super::discover_glue_types`] produced. That set
-//! is exactly the heap-managed composites; a no-glue composite (a
-//! struct of scalars, say) is left as a plain `Clone` / `Drop` the
-//! backend renders as a register copy / no-op. Leaves stay inline
-//! `rc++` / `rc--`.
+//! the `needed` set [`super::discover_glue_types`] produced (or, for
+//! `DeepCopy`, the `deep_needed` set from
+//! [`super::discover_deep_copy_types`]). Those sets are exactly the
+//! heap-managed composites; a no-glue composite (a struct of scalars,
+//! say) is left as a plain `Clone` / `Drop` the backend renders as a
+//! register copy / no-op. Leaves stay inline `rc++` / `rc--`.
 //!
 //! `DropLocal` names a *slot*, not a value, so its rewrite expands to
 //! a `LocalRead` of the slot followed by the glue `Call`. `Clone` and
@@ -22,14 +23,18 @@
 use std::collections::BTreeSet;
 
 use crate::function::{IRBasicBlock, IRFunction, IRInstruction};
-use crate::mangling::{clone_glue_symbol, drop_glue_symbol};
+use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
 use crate::types::{IRType, ValueId};
 
 /// Rewrite every function body in `packages` plus the (optional)
-/// script `body`. Borrows only `needed` for classification, so it can
+/// script `body`. Borrows only the classification sets, so it can
 /// mutate each body freely.
-pub(super) fn rewrite_function(function: &mut IRFunction, needed: &BTreeSet<IRType>) {
-    if needed.is_empty() {
+pub(super) fn rewrite_function(
+    function: &mut IRFunction,
+    needed: &BTreeSet<IRType>,
+    deep_needed: &BTreeSet<IRType>,
+) {
+    if needed.is_empty() && deep_needed.is_empty() {
         return;
     }
     let seed = function
@@ -38,24 +43,33 @@ pub(super) fn rewrite_function(function: &mut IRFunction, needed: &BTreeSet<IRTy
         .map(|param| param.id.0)
         .max()
         .map_or(0, |max| max + 1);
-    rewrite_blocks(&mut function.blocks, needed, seed);
+    rewrite_blocks(&mut function.blocks, needed, deep_needed, seed);
 }
 
 /// Rewrite a standalone block list (the script body, which has no
 /// function params to seed the value counter).
-pub(super) fn rewrite_blocks_standalone(blocks: &mut [IRBasicBlock], needed: &BTreeSet<IRType>) {
-    if needed.is_empty() {
+pub(super) fn rewrite_blocks_standalone(
+    blocks: &mut [IRBasicBlock],
+    needed: &BTreeSet<IRType>,
+    deep_needed: &BTreeSet<IRType>,
+) {
+    if needed.is_empty() && deep_needed.is_empty() {
         return;
     }
-    rewrite_blocks(blocks, needed, 0);
+    rewrite_blocks(blocks, needed, deep_needed, 0);
 }
 
-fn rewrite_blocks(blocks: &mut [IRBasicBlock], needed: &BTreeSet<IRType>, seed: u32) {
+fn rewrite_blocks(
+    blocks: &mut [IRBasicBlock],
+    needed: &BTreeSet<IRType>,
+    deep_needed: &BTreeSet<IRType>,
+    seed: u32,
+) {
     let mut next = ValueId(seed.max(high_water_mark(blocks)));
     for block in blocks.iter_mut() {
         let mut rewritten = Vec::with_capacity(block.instructions.len());
         for instruction in block.instructions.drain(..) {
-            rewrite_instruction(instruction, needed, &mut next, &mut rewritten);
+            rewrite_instruction(instruction, needed, deep_needed, &mut next, &mut rewritten);
         }
         block.instructions = rewritten;
     }
@@ -64,6 +78,7 @@ fn rewrite_blocks(blocks: &mut [IRBasicBlock], needed: &BTreeSet<IRType>, seed: 
 fn rewrite_instruction(
     instruction: IRInstruction,
     needed: &BTreeSet<IRType>,
+    deep_needed: &BTreeSet<IRType>,
     next: &mut ValueId,
     out: &mut Vec<IRInstruction>,
 ) {
@@ -72,6 +87,13 @@ fn rewrite_instruction(
             out.push(IRInstruction::Call {
                 dest,
                 callee: clone_glue_symbol(&ty),
+                args: vec![source],
+            });
+        }
+        IRInstruction::DeepCopy { dest, source, ty } if deep_needed.contains(&ty) => {
+            out.push(IRInstruction::Call {
+                dest,
+                callee: deep_copy_glue_symbol(&ty),
                 args: vec![source],
             });
         }
@@ -163,7 +185,7 @@ mod tests {
             terminator: IRTerminator::Return { value: None },
         }];
 
-        rewrite_blocks_standalone(&mut blocks, &needed);
+        rewrite_blocks_standalone(&mut blocks, &needed, &BTreeSet::new());
         let instructions = &blocks[0].instructions;
         // Clone -> Call clone glue; DropValue -> Call drop glue;
         // DropLocal -> LocalRead + Call drop glue; leaf Clone intact.
@@ -191,6 +213,56 @@ mod tests {
     }
 
     #[test]
+    fn composite_deep_copy_rewrites_to_deep_copy_glue_call() {
+        let composite = IRType::Struct(IRSymbol::synthetic("Test.S".to_string()));
+        let mut deep_needed = BTreeSet::new();
+        deep_needed.insert(composite.clone());
+
+        let mut blocks = vec![IRBasicBlock {
+            id: IRBlockId(0),
+            label: "entry".to_string(),
+            params: Vec::new(),
+            instructions: vec![
+                IRInstruction::DeepCopy {
+                    dest: ValueId(1),
+                    source: ValueId(0),
+                    ty: composite.clone(),
+                },
+                // A `Clone` of the same type stays inline — only the
+                // deep-copy family is in `deep_needed`.
+                IRInstruction::Clone {
+                    dest: ValueId(2),
+                    source: ValueId(0),
+                    ty: composite.clone(),
+                },
+                // A leaf `DeepCopy` is left inline (backend heap copy).
+                IRInstruction::DeepCopy {
+                    dest: ValueId(3),
+                    source: ValueId(0),
+                    ty: IRType::String,
+                },
+            ],
+            terminator: IRTerminator::Return { value: None },
+        }];
+
+        rewrite_blocks_standalone(&mut blocks, &BTreeSet::new(), &deep_needed);
+        let instructions = &blocks[0].instructions;
+        assert_eq!(instructions.len(), 3);
+        assert!(matches!(
+            &instructions[0],
+            IRInstruction::Call { callee, .. } if callee.mangled().ends_with(".$deep_copy$")
+        ));
+        assert!(matches!(&instructions[1], IRInstruction::Clone { .. }));
+        assert!(matches!(
+            &instructions[2],
+            IRInstruction::DeepCopy {
+                ty: IRType::String,
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn no_glue_set_leaves_everything_untouched() {
         let mut blocks = vec![IRBasicBlock {
             id: IRBlockId(0),
@@ -203,7 +275,7 @@ mod tests {
             }],
             terminator: IRTerminator::Return { value: None },
         }];
-        rewrite_blocks_standalone(&mut blocks, &BTreeSet::new());
+        rewrite_blocks_standalone(&mut blocks, &BTreeSet::new(), &BTreeSet::new());
         assert!(matches!(
             &blocks[0].instructions[0],
             IRInstruction::Clone { .. }

@@ -46,7 +46,7 @@ use crate::types::{ConstValue, IRType, ValueId};
 use super::arms::{lower_arm_into, lower_result_ty};
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::expr::lower_expr;
-use super::ownership::materialize_owned;
+use super::ownership::{drop_discarded_temp, materialize_boundary_copy};
 use super::package::resolved_type_to_ir_type;
 
 /// Lower `spawn Type.start(config)`. Typecheck has already validated
@@ -79,14 +79,17 @@ pub(super) fn lower_spawn(
     })?;
     let (config_value, current) = lower_expr(&config_arg.value, ctx, block, registry, output)?;
     let config_type = ctx.type_of(config_value);
-    // `spawn` copies the config across the process boundary (see
-    // `emit_spawn`'s serialize-to-blob), so acquire an independent owned
-    // copy the child can hold without aliasing the spawner's heap —
-    // mirroring the message-send payload acquire. The copy is
-    // *transferred*: it is never released here (the child borrows the
-    // serialized bytes). Runtime-side reclamation of the transferred
-    // config — the envelope `drop_glue` analogue — remains a follow-up.
-    let config_value = materialize_owned(ctx, current, config_value, &config_type);
+    // `spawn` hands the config to the child process, so deep-copy it —
+    // the child must share no heap storage with the spawner (rc
+    // bookkeeping is unsynchronized), mirroring the message-send
+    // payload copy. The copy is *transferred*: it is never released
+    // here (the runtime owns it through the spawn payload's drop glue);
+    // an owned temp source is dead once the copy is taken.
+    let copied_config = materialize_boundary_copy(ctx, current, config_value, &config_type);
+    if copied_config != config_value {
+        drop_discarded_temp(ctx, current, config_value);
+    }
+    let config_value = copied_config;
 
     let state_ir_type = resolved_type_to_ir_type(
         &target.receiver_resolution,
@@ -135,6 +138,17 @@ pub(super) fn lower_spawn(
     Ok((dest, current))
 }
 
+/// AST-side inputs to [`lower_receive`]. Bundled per the same
+/// `too_many_arguments` discipline [`super::match_expr::MatchLowering`]
+/// uses.
+pub(super) struct ReceiveLowering<'a> {
+    pub(super) after_body: &'a [Statement],
+    pub(super) after_timeout: Option<&'a Expr>,
+    pub(super) arms: &'a [MatchArm],
+    pub(super) result_resolution: &'a ResolvedType,
+    pub(super) span: Span,
+}
+
 /// Lower `receive arms after timeout body end`. Each arm becomes an
 /// [`IRBlockId`] whose payload local has been declared in the
 /// function's entry block and whose tail branches to a synthesized
@@ -142,18 +156,20 @@ pub(super) fn lower_spawn(
 /// The host block ends with the [`IRInstruction::Receive`] dispatch
 /// followed by [`IRTerminator::Unreachable`] — every reachable exit
 /// goes through the arm bodies into the merge block.
-#[allow(clippy::too_many_arguments)]
 pub(super) fn lower_receive(
-    arms: &[MatchArm],
-    after_timeout: Option<&Expr>,
-    after_body: &[Statement],
-    result_resolution: &ResolvedType,
-    span: Span,
+    inputs: ReceiveLowering<'_>,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<(ValueId, IRBlockId), ()> {
+    let ReceiveLowering {
+        after_body,
+        after_timeout,
+        arms,
+        result_resolution,
+        span,
+    } = inputs;
     if arms.is_empty() {
         output.diagnostics.push(Diagnostic::error(
             "IR lower: `receive` reaches lower with zero arms — typecheck seal violation",

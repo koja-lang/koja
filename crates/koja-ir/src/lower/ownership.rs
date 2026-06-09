@@ -21,9 +21,11 @@
 //!   block, the `rc--` running the body's capture-release glue at zero
 //!   (see `crate::lower::closures` and `FunctionKind::DropClosureGlue`).
 //!
-//! Three lowering-side primitives:
+//! Four lowering-side primitives:
 //!
 //! - [`materialize_owned`] — acquire a value at an ownership boundary.
+//! - [`materialize_boundary_copy`] — deep-copy a value at a process
+//!   boundary (send / spawn payloads).
 //! - [`emit_slot_drops`] — release every heap-managed local at a
 //!   control-flow exit.
 //! - [`drop_discarded_temp`] — release an owned value whose statement
@@ -71,6 +73,40 @@ pub(super) fn materialize_owned(
     );
     ctx.mark_owned(cloned);
     cloned
+}
+
+/// Deep-copy `value` (typed `ty`) at a process boundary — a message
+/// send or spawn-config payload. Unlike [`materialize_owned`], which
+/// shares heap blocks with an `rc++`, the emitted
+/// [`IRInstruction::DeepCopy`] produces a *physically* independent
+/// value: Koja's rc bookkeeping is unsynchronized, so a payload that
+/// aliases sender-owned blocks cannot cross to another process. The
+/// copy happens unconditionally for heap-managed types — even an owned
+/// source may share storage with other live bindings.
+///
+/// The copy is marked owned and is *transferred*: the caller hands it
+/// to the transport and never releases it (the runtime reclaims it via
+/// the envelope drop glue). The source keeps its normal lifecycle.
+pub(super) fn materialize_boundary_copy(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    value: ValueId,
+    ty: &IRType,
+) -> ValueId {
+    if !ty.is_heap_managed() {
+        return value;
+    }
+    let copied = ctx.fresh_value(ty.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::DeepCopy {
+            dest: copied,
+            source: value,
+            ty: ty.clone(),
+        },
+    );
+    ctx.mark_owned(copied);
+    copied
 }
 
 /// Promote one function parameter into its local slot at the entry

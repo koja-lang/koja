@@ -20,8 +20,7 @@ use inkwell::values::{FunctionValue, IntValue};
 use koja_ir::{BitOp, IRFunction, IntType};
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::types::ir_basic_type;
 
 pub(super) fn emit_bitwise<'ctx>(
@@ -38,54 +37,30 @@ pub(super) fn emit_bitwise<'ctx>(
     let result: IntValue<'ctx> = match op {
         BitOp::Band => {
             let rhs = other_param(function, llvm_function);
-            ctx.builder
-                .build_and(lhs, rhs, "band")
-                .map_err(|e| inkwell_err(format_args!("build_and for `{}`", function.symbol), e))?
+            ctx.builder.build_and(lhs, rhs, "band").or_ice()?
         }
-        BitOp::Bnot => ctx
-            .builder
-            .build_not(lhs, "bnot")
-            .map_err(|e| inkwell_err(format_args!("build_not for `{}`", function.symbol), e))?,
+        BitOp::Bnot => ctx.builder.build_not(lhs, "bnot").or_ice()?,
         BitOp::Bor => {
             let rhs = other_param(function, llvm_function);
-            ctx.builder
-                .build_or(lhs, rhs, "bor")
-                .map_err(|e| inkwell_err(format_args!("build_or for `{}`", function.symbol), e))?
+            ctx.builder.build_or(lhs, rhs, "bor").or_ice()?
         }
         BitOp::Bsl => {
             let count = shift_count(ctx, function, llvm_function, &lhs)?;
-            ctx.builder
-                .build_left_shift(lhs, count, "bsl")
-                .map_err(|e| {
-                    inkwell_err(
-                        format_args!("build_left_shift for `{}`", function.symbol),
-                        e,
-                    )
-                })?
+            ctx.builder.build_left_shift(lhs, count, "bsl").or_ice()?
         }
         BitOp::Bsr => {
             let count = shift_count(ctx, function, llvm_function, &lhs)?;
             ctx.builder
                 .build_right_shift(lhs, count, ty.is_signed(), "bsr")
-                .map_err(|e| {
-                    inkwell_err(
-                        format_args!("build_right_shift for `{}`", function.symbol),
-                        e,
-                    )
-                })?
+                .or_ice()?
         }
         BitOp::Bxor => {
             let rhs = other_param(function, llvm_function);
-            ctx.builder
-                .build_xor(lhs, rhs, "bxor")
-                .map_err(|e| inkwell_err(format_args!("build_xor for `{}`", function.symbol), e))?
+            ctx.builder.build_xor(lhs, rhs, "bxor").or_ice()?
         }
     };
 
-    ctx.builder
-        .build_return(Some(&result))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&result)).or_ice().map(|_| ())
 }
 
 /// Read the receiver (`self`) param, the first positional parameter
@@ -146,10 +121,5 @@ fn shift_count<'ctx>(
     };
     ctx.builder
         .build_int_truncate(raw, target, "shift_count")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("truncate shift count for `{}`", function.symbol),
-                e,
-            )
-        })
+        .or_ice()
 }

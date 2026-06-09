@@ -1,0 +1,49 @@
+# Regression: `match` on an owned heap temp must release the subject
+# after the taken arm finishes. The leak this guards against pinned
+# one rc per match (e.g. every `match self.handle(...)` in a process
+# run loop leaked the state's heap), so the delta here would be 100.
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+enum Wrapped
+  Value(String)
+  Empty
+end
+
+fn make(n: Int) -> Wrapped
+  Wrapped.Value("item " <> n.format())
+end
+
+fn consume(n: Int) -> Int
+  match make(n)
+    Wrapped.Value(s) -> s.length()
+    Wrapped.Empty -> 0
+  end
+end
+
+_ = consume(0)
+start = Rt.koja_rt_live_blocks()
+
+i = 0
+total = 0
+
+loop
+  total += consume(i)
+  i += 1
+
+  if i >= 100
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+
+if finish == start
+  "match temp reclaim: ok".print()
+else
+  "match temp reclaim: LEAK".print()
+  (finish - start).print()
+end

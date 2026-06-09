@@ -24,8 +24,7 @@ use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
 use crate::runtime::{declare_free_extern, declare_malloc_extern};
 use crate::types::ir_basic_type;
@@ -42,7 +41,7 @@ pub(super) fn emit_cptr<'ctx>(
     match method {
         CPtrMethod::Alloc => emit_alloc(ctx, function, llvm_function),
         CPtrMethod::Free => emit_free(ctx, function, llvm_function),
-        CPtrMethod::Null => emit_null(ctx, function),
+        CPtrMethod::Null => emit_null(ctx),
         CPtrMethod::NullQ => emit_null_check(ctx, function, llvm_function),
         CPtrMethod::Offset => emit_offset(ctx, function, llvm_function),
         CPtrMethod::Read => emit_read(ctx, function, llvm_function),
@@ -70,12 +69,12 @@ fn pointee(method: CPtrMethod, function: &IRFunction) -> Result<&IRType, LlvmErr
     }
 }
 
-fn emit_null<'ctx>(ctx: &EmitContext<'ctx>, function: &IRFunction) -> Result<(), LlvmError> {
+fn emit_null<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     ctx.builder
         .build_return(Some(&ptr_ty.const_null()))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
 fn emit_alloc<'ctx>(
@@ -95,29 +94,10 @@ fn emit_alloc<'ctx>(
     let total = ctx
         .builder
         .build_int_mul(count, element_size, "alloc_bytes")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let malloc = declare_malloc_extern(ctx);
-    let raw = ctx
-        .builder
-        .build_call(malloc, &[total.into()], "alloc_ptr")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call malloc for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "malloc returned no value for `{}`",
-                function.symbol,
-            ))
-        })?;
-    ctx.builder
-        .build_return(Some(&raw))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    let raw = ctx.call_basic(malloc, &[total.into()], "alloc_ptr")?;
+    ctx.builder.build_return(Some(&raw)).or_ice().map(|_| ())
 }
 
 fn emit_free<'ctx>(
@@ -129,11 +109,8 @@ fn emit_free<'ctx>(
     let free = declare_free_extern(ctx);
     ctx.builder
         .build_call(free, &[self_ptr.into()], "")
-        .map_err(|e| inkwell_err(format_args!("build_call free for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 fn emit_offset<'ctx>(
@@ -148,12 +125,9 @@ fn emit_offset<'ctx>(
     let gep = unsafe {
         ctx.builder
             .build_gep(element_ty, self_ptr, &[n], "offset_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
+            .or_ice()?
     };
-    ctx.builder
-        .build_return(Some(&gep))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&gep)).or_ice().map(|_| ())
 }
 
 fn emit_read<'ctx>(
@@ -167,11 +141,8 @@ fn emit_read<'ctx>(
     let val = ctx
         .builder
         .build_load(element_ty, self_ptr, "read_val")
-        .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_return(Some(&val))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_return(Some(&val)).or_ice().map(|_| ())
 }
 
 fn emit_write<'ctx>(
@@ -186,13 +157,8 @@ fn emit_write<'ctx>(
             function.symbol,
         ))
     })?;
-    ctx.builder
-        .build_store(self_ptr, value)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_store(self_ptr, value).or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 fn emit_null_check<'ctx>(
@@ -205,16 +171,8 @@ fn emit_null_check<'ctx>(
     let cmp = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, self_ptr, ptr_ty.const_null(), "is_null")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_return(Some(&cmp))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
 }
 
 /// `to_string(self): String` — `self` must already point at a valid
@@ -232,10 +190,7 @@ fn emit_to_string<'ctx>(
     let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
     let copied =
         heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), self_ptr, true, false)?;
-    ctx.builder
-        .build_return(Some(&copied))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&copied)).or_ice().map(|_| ())
 }
 
 /// `to_binary(self, len): Binary` — malloc a `[i64 bit_len][len bytes]`
@@ -256,28 +211,13 @@ fn emit_to_binary<'ctx>(
     let total = block_alloc_size(ctx, byte_len, false, "total")?;
     let malloc = declare_malloc_extern(ctx);
     let base_ptr = ctx
-        .builder
-        .build_call(malloc, &[total.into()], "base_ptr")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call malloc for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "malloc returned no value for `{}`",
-                function.symbol,
-            ))
-        })?
+        .call_basic(malloc, &[total.into()], "base_ptr")?
         .into_pointer_value();
 
     let bit_len = ctx
         .builder
         .build_int_mul(byte_len, i64_ty.const_int(8, false), "bit_len")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let payload_ptr = init_heap_block(ctx, base_ptr, bit_len, "cptr_str")?;
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
@@ -286,16 +226,11 @@ fn emit_to_binary<'ctx>(
             &[payload_ptr.into(), src_ptr.into(), byte_len.into()],
             "",
         )
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call memcpy for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     ctx.builder
         .build_return(Some(&payload_ptr))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
 fn nth_pointer<'ctx>(

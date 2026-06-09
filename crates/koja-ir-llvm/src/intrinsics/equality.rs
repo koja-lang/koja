@@ -11,8 +11,7 @@ use inkwell::{FloatPredicate, IntPredicate};
 use koja_ir::{EqualityImpl, IRFunction};
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::declare_strcmp_extern;
 
 pub(super) fn emit_eq<'ctx>(
@@ -49,22 +48,7 @@ fn emit_string_eq<'ctx>(
     })?;
     let strcmp = declare_strcmp_extern(ctx);
     let diff = ctx
-        .builder
-        .build_call(strcmp, &[lhs.into(), rhs.into()], "strcmp")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call strcmp for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "strcmp returned no value for `{}`",
-                function.symbol,
-            ))
-        })?
+        .call_basic(strcmp, &[lhs.into(), rhs.into()], "strcmp")?
         .into_int_value();
     let cmp = ctx
         .builder
@@ -74,16 +58,8 @@ fn emit_string_eq<'ctx>(
             ctx.context.i32_type().const_zero(),
             "streq",
         )
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_return(Some(&cmp))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
 }
 
 fn emit_int_eq<'ctx>(
@@ -99,16 +75,8 @@ fn emit_int_eq<'ctx>(
     let cmp = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, lhs, rhs, "eq")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_return(Some(&cmp))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
 }
 
 fn nth_int<'ctx>(
@@ -148,16 +116,8 @@ fn emit_float_eq<'ctx>(
     let cmp = ctx
         .builder
         .build_float_compare(FloatPredicate::OEQ, lhs, rhs, "feq")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_float_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_return(Some(&cmp))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
 }
 
 fn nth_float<'ctx>(

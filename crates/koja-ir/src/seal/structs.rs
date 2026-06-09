@@ -153,6 +153,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::Clone { .. }
             | IRInstruction::Concat { .. }
             | IRInstruction::Const { .. }
+            | IRInstruction::DeepCopy { .. }
             | IRInstruction::DropLocal { .. }
             | IRInstruction::DropValue { .. }
             | IRInstruction::EnumConstruct { .. }

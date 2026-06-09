@@ -9,11 +9,11 @@ use inkwell::values::{BasicValueEnum, PointerValue};
 use koja_ir::{IRSymbol, IRType, StructFieldInit};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::types::ir_basic_type;
 
 use super::indirect::{emit_box_value, emit_unbox_value};
-use super::{ValueMap, inkwell_err, lookup};
+use super::{ValueMap, lookup};
 
 /// Materialize a struct literal: hoist a scratch alloca to the
 /// entry block, store each field through a `getelementptr`, then
@@ -39,16 +39,11 @@ pub(super) fn emit_struct_init<'ctx>(
             _ => raw_value,
         };
         let field_ptr = build_field_gep(ctx, struct_type, alloca, field.index, ty)?;
-        ctx.builder.build_store(field_ptr, stored).map_err(|e| {
-            inkwell_err(
-                format_args!("build_store for `{ty}` field #{}", field.index),
-                e,
-            )
-        })?;
+        ctx.builder.build_store(field_ptr, stored).or_ice()?;
     }
     ctx.builder
         .build_load(struct_type, alloca, ty.mangled())
-        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` after StructInit"), e))
+        .or_ice()
 }
 
 /// Project a single field out of a struct-typed SSA value via a
@@ -70,29 +65,17 @@ pub(super) fn emit_field_get<'ctx>(
     let struct_type = ctx.layouts.struct_type(struct_symbol.mangled());
     let struct_value = base.into_struct_value();
     let alloca = ctx.build_entry_alloca(struct_type, "field_tmp");
-    ctx.builder
-        .build_store(alloca, struct_value)
-        .map_err(|e| inkwell_err("build_store for FieldGet", e))?;
+    ctx.builder.build_store(alloca, struct_value).or_ice()?;
     let label = format!("field_{field_index}");
     let field_ptr = ctx
         .builder
         .build_struct_gep(struct_type, alloca, field_index, &label)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for FieldGet field #{field_index}"),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let field_llvm_type = ir_basic_type(ctx, &declared_ty)?;
     let loaded = ctx
         .builder
         .build_load(field_llvm_type, field_ptr, &label)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_load for FieldGet field #{field_index}"),
-                e,
-            )
-        })?;
+        .or_ice()?;
     if let IRType::Indirect(inner) = &declared_ty {
         return emit_unbox_value(
             ctx,
@@ -133,28 +116,16 @@ pub(super) fn emit_field_set<'ctx>(
     let struct_type = ctx.layouts.struct_type(struct_symbol.mangled());
     let struct_value = base.into_struct_value();
     let alloca = ctx.build_entry_alloca(struct_type, "field_set_tmp");
-    ctx.builder
-        .build_store(alloca, struct_value)
-        .map_err(|e| inkwell_err("build_store for FieldSet base", e))?;
+    ctx.builder.build_store(alloca, struct_value).or_ice()?;
     let label = format!("field_set_{field_index}");
     let field_ptr = ctx
         .builder
         .build_struct_gep(struct_type, alloca, field_index, &label)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for FieldSet field #{field_index}"),
-                e,
-            )
-        })?;
-    ctx.builder.build_store(field_ptr, stored).map_err(|e| {
-        inkwell_err(
-            format_args!("build_store for FieldSet field #{field_index}"),
-            e,
-        )
-    })?;
+        .or_ice()?;
+    ctx.builder.build_store(field_ptr, stored).or_ice()?;
     ctx.builder
         .build_load(struct_type, alloca, struct_symbol.mangled())
-        .map_err(|e| inkwell_err("build_load for FieldSet result", e))
+        .or_ice()
 }
 
 fn build_field_gep<'ctx>(
@@ -167,10 +138,5 @@ fn build_field_gep<'ctx>(
     let label = format!("{symbol}_field_{field_index}");
     ctx.builder
         .build_struct_gep(struct_type, base_ptr, field_index, &label)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for `{symbol}` field #{field_index}"),
-                e,
-            )
-        })
+        .or_ice()
 }

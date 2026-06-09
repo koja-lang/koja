@@ -340,6 +340,11 @@ lang_test_dir!(lang_protocols, "protocols");
 lang_test_dir!(lang_collections, "collections");
 lang_test_dir!(lang_ownership, "ownership");
 lang_test_dir!(lang_io, "io");
+// Memory-reclaim regressions: process payload lifecycles (spawn
+// config/state, delivered + undelivered messages, stale replies,
+// signal-only teardown) and the match-subject release, asserted via
+// `koja_rt_live_blocks` deltas.
+lang_test_dir!(lang_memory, "memory");
 
 // Failure tests
 lang_test_dir!(lang_compile_fail, "compile_fail", compile_fail);

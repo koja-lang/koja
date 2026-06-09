@@ -41,13 +41,13 @@ use koja_ir::{
 };
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::{declare_memcmp_extern, declare_memcpy_extern};
 use crate::runtime::declare_malloc_extern;
 
 use super::constants::emit_string_literal_payload;
 use super::heap_layout::{block_alloc_size, init_heap_block};
-use super::{ValueMap, inkwell_err, lookup};
+use super::{ValueMap, lookup};
 
 /// Lower an `IRInstruction::BinaryMatch`. Returns the `i1` success
 /// bit; binding segments stamp their extracted values into the
@@ -68,7 +68,7 @@ pub(super) fn emit_binary_match<'ctx>(
         success = ctx
             .builder
             .build_and(success, segment_ok, "bin_pat_and")
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch segment AND"), e))?;
+            .or_ice()?;
     }
     Ok(success)
 }
@@ -90,12 +90,12 @@ fn load_subject_bit_length<'ctx>(
                 &[i64_ty.const_int((-8i64) as u64, true)],
                 "bin_pat_len_ptr",
             )
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch len GEP"), e))?
+            .or_ice()?
     };
     let loaded = ctx
         .builder
         .build_load(i64_ty, header, "bin_pat_bit_len")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch len load"), e))?;
+        .or_ice()?;
     Ok(loaded.into_int_value())
 }
 
@@ -114,7 +114,7 @@ fn shift_right_by_three<'ctx>(
             false,
             "bin_pat_byte_len",
         )
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch byte-len shift"), e))
+        .or_ice()
 }
 
 /// `byte_length == fixed_bits / 8` (exact match) when the pattern
@@ -141,7 +141,7 @@ fn length_check<'ctx>(
             i64_ty.const_int(required_bytes, false),
             "bin_pat_len_ok",
         )
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch length check"), e))
+        .or_ice()
 }
 
 /// Dispatch on the per-segment variant. Returns an `i1` that the
@@ -233,15 +233,15 @@ fn emit_literal_int<'ctx>(
     let masked_ext = ctx
         .builder
         .build_and(extracted, mask, "lit_ext_mask")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch lit mask"), e))?;
+        .or_ice()?;
     let const_value = i64_ty.const_int(value as u64, false);
     let masked_lit = ctx
         .builder
         .build_and(const_value, mask, "lit_mask")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch lit literal mask"), e))?;
+        .or_ice()?;
     ctx.builder
         .build_int_compare(IntPredicate::EQ, masked_ext, masked_lit, "lit_eq")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch lit compare"), e))
+        .or_ice()
 }
 
 /// Compare a run of bytes at `bit_offset / 8` against an emitted
@@ -268,13 +268,12 @@ fn emit_literal_bytes<'ctx>(
                 &[i64_ty.const_int(byte_offset, false)],
                 "str_pat_dst",
             )
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch str-pat GEP"), e))?
+            .or_ice()?
     };
     let lit_ptr = emit_string_literal_payload(ctx, bytes, "binpat_lit");
     let memcmp = declare_memcmp_extern(ctx);
     let cmp_result = ctx
-        .builder
-        .build_call(
+        .call_basic(
             memcmp,
             &[
                 dest.into(),
@@ -282,11 +281,7 @@ fn emit_literal_bytes<'ctx>(
                 i64_ty.const_int(bytes.len() as u64, false).into(),
             ],
             "str_pat_cmp",
-        )
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch memcmp call"), e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("memcmp returned void".to_string()))?
+        )?
         .into_int_value();
     ctx.builder
         .build_int_compare(
@@ -295,7 +290,7 @@ fn emit_literal_bytes<'ctx>(
             i32_ty.const_int(0, false),
             "str_pat_eq",
         )
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch memcmp compare"), e))
+        .or_ice()
 }
 
 /// Extract a sized integer at `bit_offset`, sign- or zero-extend
@@ -326,10 +321,7 @@ fn emit_bind_int<'ctx>(
     let extended = extend_for_sign(ctx, extracted, sign, width)?;
     let narrowed = narrow_to_ir_type(ctx, extended, ty)?;
     let slot = ctx.local_slot(local);
-    ctx.builder
-        .build_store(slot, narrowed)
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch bind store for `{local}`"), e))
+    ctx.builder.build_store(slot, narrowed).or_ice().map(|_| ())
 }
 
 /// Allocate a fresh heap block sized to `8 + ceil(remaining_bits / 8)`
@@ -370,27 +362,22 @@ fn emit_greedy_tail<'ctx>(
     let remaining_bytes = ctx
         .builder
         .build_int_sub(byte_length, prefix_bytes_const, "tail_bytes")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch tail-bytes sub"), e))?;
+        .or_ice()?;
     let remaining_bits = ctx
         .builder
         .build_int_sub(bit_length, prefix_bits_const, "tail_bits")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch tail-bits sub"), e))?;
+        .or_ice()?;
 
     let alloc_size = block_alloc_size(ctx, remaining_bytes, false, "tail_alloc_size")?;
     let malloc = declare_malloc_extern(ctx);
     let base = ctx
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "tail_alloc")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch tail malloc"), e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
+        .call_basic(malloc, &[alloc_size.into()], "tail_alloc")?
         .into_pointer_value();
     let tail_payload = init_heap_block(ctx, base, remaining_bits, "tail")?;
     let src = unsafe {
         ctx.builder
             .build_in_bounds_gep(i8_ty, payload, &[prefix_bytes_const], "tail_src")
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch tail-src GEP"), e))?
+            .or_ice()?
     };
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
@@ -399,13 +386,13 @@ fn emit_greedy_tail<'ctx>(
             &[tail_payload.into(), src.into(), remaining_bytes.into()],
             "tail_cpy",
         )
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch tail memcpy"), e))?;
+        .or_ice()?;
     let _ = ty;
     let slot = ctx.local_slot(local);
     ctx.builder
         .build_store(slot, tail_payload)
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch tail store to `{local}`"), e))
 }
 
 /// Read `num_bytes` from `payload + byte_offset` and assemble them
@@ -431,17 +418,17 @@ fn extract_int<'ctx>(
                     &[i64_ty.const_int(byte_offset + i, false)],
                     "seg_byte_ptr",
                 )
-                .map_err(|e| inkwell_err(format_args!("BinaryMatch extract GEP"), e))?
+                .or_ice()?
         };
         let byte_val = ctx
             .builder
             .build_load(i8_ty, ptr, "seg_byte")
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch extract load"), e))?
+            .or_ice()?
             .into_int_value();
         let extended = ctx
             .builder
             .build_int_z_extend(byte_val, i64_ty, "seg_ext")
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch extract z-extend"), e))?;
+            .or_ice()?;
         let shift_amount = if is_little {
             i * 8
         } else {
@@ -450,14 +437,11 @@ fn extract_int<'ctx>(
         let shifted = if shift_amount > 0 {
             ctx.builder
                 .build_left_shift(extended, i64_ty.const_int(shift_amount, false), "seg_shl")
-                .map_err(|e| inkwell_err(format_args!("BinaryMatch extract shl"), e))?
+                .or_ice()?
         } else {
             extended
         };
-        result = ctx
-            .builder
-            .build_or(result, shifted, "seg_or")
-            .map_err(|e| inkwell_err(format_args!("BinaryMatch extract or"), e))?;
+        result = ctx.builder.build_or(result, shifted, "seg_or").or_ice()?;
     }
     Ok(result)
 }
@@ -480,10 +464,10 @@ fn extend_for_sign<'ctx>(
     let shl = ctx
         .builder
         .build_left_shift(extracted, shift, "sign_shl")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch sign-extend shl"), e))?;
+        .or_ice()?;
     ctx.builder
         .build_right_shift(shl, shift, true, "sign_ashr")
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch sign-extend ashr"), e))
+        .or_ice()
 }
 
 /// Truncate the running `i64` extraction to the LLVM type backing
@@ -511,8 +495,8 @@ fn narrow_to_ir_type<'ctx>(
     }
     ctx.builder
         .build_int_truncate(extended, target, "bind_trunc")
+        .or_ice()
         .map(Into::into)
-        .map_err(|e| inkwell_err(format_args!("BinaryMatch bind truncate"), e))
 }
 
 /// `(1 << width) - 1` as an `i64` constant. Saturates to all-ones

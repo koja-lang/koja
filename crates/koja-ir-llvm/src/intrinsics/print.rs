@@ -11,8 +11,7 @@ use inkwell::values::FunctionValue;
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::{PRINT_STRING_SYMBOL, declare_runtime_printer};
 
 pub(super) fn emit_global_print<'ctx>(
@@ -37,9 +36,6 @@ pub(super) fn emit_global_print<'ctx>(
     });
     ctx.builder
         .build_call(printer, &[payload.into()], "")
-        .map_err(|e| inkwell_err(format_args!("build_call for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }

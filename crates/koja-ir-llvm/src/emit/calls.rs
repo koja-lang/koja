@@ -6,9 +6,9 @@ use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
 use koja_ir::{IRSymbol, ValueId};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 
-use super::{ValueMap, inkwell_err, lookup};
+use super::{ValueMap, lookup};
 
 /// Call the function registered on `ctx.module` under the callee's
 /// mangled symbol. Returns `None` for `Unit`-returning callees (LLVM
@@ -33,6 +33,6 @@ pub(super) fn emit_call<'ctx>(
     let call_site = ctx
         .builder
         .build_call(function, &arg_values, "call")
-        .map_err(|e| inkwell_err(format_args!("build_call for `{}`", callee.mangled()), e))?;
+        .or_ice()?;
     Ok(call_site.try_as_basic_value().basic())
 }

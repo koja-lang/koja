@@ -16,9 +16,8 @@ use inkwell::{FloatPredicate, IntPredicate};
 use koja_ir::{IRBinOp, IRUnaryOp};
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
-use crate::runtime::{STRCMP_SYMBOL, declare_strcmp_extern};
+use crate::error::{IceExt, LlvmError};
+use crate::runtime::declare_strcmp_extern;
 
 pub(super) fn emit_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -77,7 +76,7 @@ fn emit_int_binary_op<'ctx>(
         IRBinOp::Or => ctx.builder.build_or(lhs, rhs, "or"),
         IRBinOp::Sub => ctx.builder.build_int_sub(lhs, rhs, "sub"),
     }
-    .map_err(|e| inkwell_err(format_args!("emit for {op:?}"), e))?;
+    .or_ice()?;
     Ok(result.into())
 }
 
@@ -92,33 +91,32 @@ fn emit_float_binary_op<'ctx>(
     lhs: FloatValue<'ctx>,
     rhs: FloatValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let to_err = |e| inkwell_err(format_args!("emit for {op:?}"), e);
     match op {
         IRBinOp::Add => ctx
             .builder
             .build_float_add(lhs, rhs, "fadd")
-            .map(Into::into)
-            .map_err(to_err),
+            .or_ice()
+            .map(Into::into),
         IRBinOp::Div => ctx
             .builder
             .build_float_div(lhs, rhs, "fdiv")
-            .map(Into::into)
-            .map_err(to_err),
+            .or_ice()
+            .map(Into::into),
         IRBinOp::Mod => ctx
             .builder
             .build_float_rem(lhs, rhs, "frem")
-            .map(Into::into)
-            .map_err(to_err),
+            .or_ice()
+            .map(Into::into),
         IRBinOp::Mul => ctx
             .builder
             .build_float_mul(lhs, rhs, "fmul")
-            .map(Into::into)
-            .map_err(to_err),
+            .or_ice()
+            .map(Into::into),
         IRBinOp::Sub => ctx
             .builder
             .build_float_sub(lhs, rhs, "fsub")
-            .map(Into::into)
-            .map_err(to_err),
+            .or_ice()
+            .map(Into::into),
         IRBinOp::Eq
         | IRBinOp::Gt
         | IRBinOp::GtEq
@@ -127,8 +125,8 @@ fn emit_float_binary_op<'ctx>(
         | IRBinOp::NotEq => ctx
             .builder
             .build_float_compare(float_predicate(op), lhs, rhs, "fcmp")
-            .map(Into::into)
-            .map_err(to_err),
+            .or_ice()
+            .map(Into::into),
         IRBinOp::And | IRBinOp::Or => Err(LlvmError::Codegen(format!(
             "LLVM emit: `{op:?}` is Bool-only — float operands should never reach this \
              path (typecheck violation)",
@@ -175,7 +173,7 @@ fn emit_int_unary_op<'ctx>(
         IRUnaryOp::Neg => ctx.builder.build_int_neg(operand, "neg"),
         IRUnaryOp::Not => ctx.builder.build_not(operand, "not"),
     }
-    .map_err(|e| inkwell_err(format_args!("emit for {op:?}"), e))?;
+    .or_ice()?;
     Ok(result.into())
 }
 
@@ -199,25 +197,14 @@ fn emit_string_binary_op<'ctx>(
         }
     };
     let strcmp = declare_strcmp_extern(ctx);
-    let diff_call = ctx
-        .builder
-        .build_call(strcmp, &[lhs.into(), rhs.into()], "strcmp")
-        .map_err(|e| inkwell_err(format_args!("build_call for `{STRCMP_SYMBOL}`"), e))?;
-    let diff = diff_call
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "LLVM emit: `{STRCMP_SYMBOL}` returned no basic value — \
-                 inkwell builder regression",
-            ))
-        })?
+    let diff = ctx
+        .call_basic(strcmp, &[lhs.into(), rhs.into()], "strcmp")?
         .into_int_value();
     let zero = ctx.context.i32_type().const_zero();
     let result = ctx
         .builder
         .build_int_compare(predicate, diff, zero, "streq")
-        .map_err(|e| inkwell_err(format_args!("emit for {op:?} on String"), e))?;
+        .or_ice()?;
     Ok(result.into())
 }
 
@@ -232,8 +219,8 @@ fn emit_float_unary_op<'ctx>(
         IRUnaryOp::Neg => ctx
             .builder
             .build_float_neg(operand, "fneg")
-            .map(Into::into)
-            .map_err(|e| inkwell_err("emit for fneg", e)),
+            .or_ice()
+            .map(Into::into),
         IRUnaryOp::Not => Err(LlvmError::Codegen(
             "LLVM emit: `not` is Bool-only — float operand should never reach this path \
              (typecheck violation)"

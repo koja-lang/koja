@@ -31,8 +31,7 @@ use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, Sock
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::{
     declare_free_extern, declare_last_error_extern, declare_malloc_extern,
@@ -94,41 +93,30 @@ fn emit_resolve<'ctx>(
     })?;
 
     let resolve_fn = declare_socket_resolve_extern(ctx);
-    let result_ptr = call_returning_pointer(
-        ctx,
-        function,
-        resolve_fn,
-        &[hostname.into()],
-        "resolve_buf",
-        "koja_socket_resolve",
-    )?;
+    let result_ptr = ctx
+        .call_basic(resolve_fn, &[hostname.into()], "resolve_buf")?
+        .into_pointer_value();
 
-    let (ok_bb, err_bb) = branch_on_null(ctx, function, llvm_function, result_ptr)?;
+    let (ok_bb, err_bb) = branch_on_null(ctx, llvm_function, result_ptr)?;
 
     ctx.builder.position_at_end(err_bb);
-    let err = build_err(ctx, function, result_symbol)?;
-    ret(ctx, function, err)?;
+    let err = build_err(ctx, result_symbol)?;
+    ret(ctx, err)?;
 
     ctx.builder.position_at_end(ok_bb);
-    let count = build_load_int(ctx, function, i64_ty, result_ptr, "count")?;
+    let count = build_load_int(ctx, i64_ty, result_ptr, "count")?;
     let alloc_size = ctx
         .builder
         .build_int_mul(count, i64_ty.const_int(ip_size, false), "alloc_sz")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     let malloc = declare_malloc_extern(ctx);
-    let list_buf = call_returning_pointer(
-        ctx,
-        function,
-        malloc,
-        &[alloc_size.into()],
-        "list_buf",
-        "malloc",
-    )?;
+    let list_buf = ctx
+        .call_basic(malloc, &[alloc_size.into()], "list_buf")?
+        .into_pointer_value();
 
     let payload_start = build_gep_offset(
         ctx,
-        function,
         i8_ty,
         result_ptr,
         i64_ty.const_int(RESOLVE_HEADER_BYTES, false),
@@ -141,21 +129,16 @@ fn emit_resolve<'ctx>(
             &[list_buf.into(), payload_start.into(), alloc_size.into()],
             "cpy",
         )
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call memcpy for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
 
     let free = declare_free_extern(ctx);
     ctx.builder
         .build_call(free, &[result_ptr.into()], "free_buf")
-        .map_err(|e| inkwell_err(format_args!("build_call free for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
-    let list_val = build_list_struct(ctx, function, list_buf, count, count)?;
+    let list_val = build_list_struct(ctx, list_buf, count, count)?;
     let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[list_val.into()])?;
-    ret(ctx, function, ok)
+    ret(ctx, ok)
 }
 
 fn emit_recv_from<'ctx>(
@@ -184,25 +167,12 @@ fn emit_recv_from<'ctx>(
     let fd_struct = ctx
         .builder
         .build_extract_value(self_struct, 0, "fd_struct")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_extract_value Fd for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_struct_value();
     let fd = ctx
         .builder
         .build_extract_value(fd_struct, 0, "fd")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!(
-                    "build_extract_value Fd.descriptor for `{}`",
-                    function.symbol
-                ),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_int_value();
     let count_val = llvm_function.get_nth_param(1).ok_or_else(|| {
         LlvmError::Codegen(format!(
@@ -212,34 +182,23 @@ fn emit_recv_from<'ctx>(
     })?;
 
     let recv_fn = declare_socket_recv_from_extern(ctx);
-    let result_ptr = call_returning_pointer(
-        ctx,
-        function,
-        recv_fn,
-        &[fd.into(), count_val.into()],
-        "recv_buf",
-        "koja_socket_recv_from",
-    )?;
+    let result_ptr = ctx
+        .call_basic(recv_fn, &[fd.into(), count_val.into()], "recv_buf")?
+        .into_pointer_value();
 
-    let (ok_bb, err_bb) = branch_on_null(ctx, function, llvm_function, result_ptr)?;
+    let (ok_bb, err_bb) = branch_on_null(ctx, llvm_function, result_ptr)?;
 
     ctx.builder.position_at_end(err_bb);
-    let err = build_err(ctx, function, result_symbol)?;
-    ret(ctx, function, err)?;
+    let err = build_err(ctx, result_symbol)?;
+    ret(ctx, err)?;
 
     ctx.builder.position_at_end(ok_bb);
     let data_ptr = ctx
         .builder
         .build_load(ptr_ty, result_ptr, "data_ptr")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_load data_ptr for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let ip_field_ptr = build_gep_offset(
         ctx,
-        function,
         i8_ty,
         result_ptr,
         i64_ty.const_int(RECV_FROM_IP_OFFSET, false),
@@ -248,15 +207,9 @@ fn emit_recv_from<'ctx>(
     let ip_bin_ptr = ctx
         .builder
         .build_load(ptr_ty, ip_field_ptr, "ip_bin")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_load ip_bin for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let port_field_ptr = build_gep_offset(
         ctx,
-        function,
         i8_ty,
         result_ptr,
         i64_ty.const_int(RECV_FROM_PORT_OFFSET, false),
@@ -265,17 +218,16 @@ fn emit_recv_from<'ctx>(
     let recv_port = ctx
         .builder
         .build_load(i64_ty, port_field_ptr, "port")
-        .map_err(|e| inkwell_err(format_args!("build_load port for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     let free = declare_free_extern(ctx);
     ctx.builder
         .build_call(free, &[result_ptr.into()], "free_buf")
-        .map_err(|e| inkwell_err(format_args!("build_call free for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     let ip_struct = ctx.layouts.struct_type(ip_symbol.mangled());
     let ip_val = build_insert(
         ctx,
-        function,
         ip_struct.get_undef().into(),
         ip_bin_ptr,
         0,
@@ -286,38 +238,29 @@ fn emit_recv_from<'ctx>(
     let sa_struct = ctx.layouts.struct_type(sa_symbol.mangled());
     let sa_val = build_insert(
         ctx,
-        function,
         sa_struct.get_undef().into(),
         ip_val.into(),
         0,
         "sa_with_ip",
     )?
     .into_struct_value();
-    let sa_val = build_insert(ctx, function, sa_val.into(), recv_port, 1, "sa_with_port")?
-        .into_struct_value();
+    let sa_val =
+        build_insert(ctx, sa_val.into(), recv_port, 1, "sa_with_port")?.into_struct_value();
 
     let pair_struct = ctx.layouts.struct_type(pair_symbol.mangled());
     let pair_val = build_insert(
         ctx,
-        function,
         pair_struct.get_undef().into(),
         data_ptr,
         0,
         "pair_with_data",
     )?
     .into_struct_value();
-    let pair_val = build_insert(
-        ctx,
-        function,
-        pair_val.into(),
-        sa_val.into(),
-        1,
-        "pair_with_addr",
-    )?
-    .into_struct_value();
+    let pair_val =
+        build_insert(ctx, pair_val.into(), sa_val.into(), 1, "pair_with_addr")?.into_struct_value();
 
     let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[pair_val.into()])?;
-    ret(ctx, function, ok)
+    ret(ctx, ok)
 }
 
 // ---------------------------------------------------------------------------
@@ -331,27 +274,10 @@ fn emit_recv_from<'ctx>(
 /// any further marshaling.
 fn build_err<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     result_symbol: &IRSymbol,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let last_error = declare_last_error_extern(ctx);
-    let err_msg = ctx
-        .builder
-        .build_call(last_error, &[], "err_msg")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call koja_last_error for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "koja_last_error returned no value for `{}`",
-                function.symbol,
-            ))
-        })?;
+    let err_msg = ctx.call_basic(last_error, &[], "err_msg")?;
     build_enum_value(ctx, result_symbol, RESULT_ERR_TAG, &[err_msg])
 }
 
@@ -361,7 +287,6 @@ fn build_err<'ctx>(
 /// branch unpacks the heap buffer.
 fn branch_on_null<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     ptr: PointerValue<'ctx>,
 ) -> Result<(BasicBlock<'ctx>, BasicBlock<'ctx>), LlvmError> {
@@ -370,40 +295,20 @@ fn branch_on_null<'ctx>(
     let ptr_int = ctx
         .builder
         .build_ptr_to_int(ptr, i64_ty, "ptr_int")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_ptr_to_int for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let null_int = ctx
         .builder
         .build_ptr_to_int(ptr_ty.const_null(), i64_ty, "null_int")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_ptr_to_int for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let is_null = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, ptr_int, null_int, "is_null")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
     let err_bb = ctx.context.append_basic_block(llvm_function, "err");
     ctx.builder
         .build_conditional_branch(is_null, err_bb, ok_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_conditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     Ok((ok_bb, err_bb))
 }
 
@@ -412,31 +317,22 @@ fn branch_on_null<'ctx>(
 /// to its element count — there's no growth headroom to mark.
 fn build_list_struct<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     buf: PointerValue<'ctx>,
     len: IntValue<'ctx>,
     cap: IntValue<'ctx>,
 ) -> Result<StructValue<'ctx>, LlvmError> {
     let list_ty = list_value_type(ctx);
-    let with_buf = build_insert(
-        ctx,
-        function,
-        list_ty.get_undef().into(),
-        buf.into(),
-        0,
-        "with_buf",
-    )?
-    .into_struct_value();
-    let with_len = build_insert(ctx, function, with_buf.into(), len.into(), 1, "with_len")?
+    let with_buf = build_insert(ctx, list_ty.get_undef().into(), buf.into(), 0, "with_buf")?
         .into_struct_value();
-    let with_cap = build_insert(ctx, function, with_len.into(), cap.into(), 2, "with_cap")?
-        .into_struct_value();
+    let with_len =
+        build_insert(ctx, with_buf.into(), len.into(), 1, "with_len")?.into_struct_value();
+    let with_cap =
+        build_insert(ctx, with_len.into(), cap.into(), 2, "with_cap")?.into_struct_value();
     Ok(with_cap)
 }
 
 fn build_insert<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     aggregate: BasicValueEnum<'ctx>,
     value: BasicValueEnum<'ctx>,
     index: u32,
@@ -445,18 +341,12 @@ fn build_insert<'ctx>(
     let aggregate = aggregate.into_struct_value();
     ctx.builder
         .build_insert_value(aggregate, value, index, name)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_insert_value {name} for `{}`", function.symbol),
-                e,
-            )
-        })
+        .or_ice()
         .map(|v| v.into_struct_value().into())
 }
 
 fn build_gep_offset<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     elem_ty: inkwell::types::IntType<'ctx>,
     base: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
@@ -465,69 +355,24 @@ fn build_gep_offset<'ctx>(
     unsafe {
         ctx.builder
             .build_gep(elem_ty, base, &[offset], name)
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("build_gep {name} for `{}`", function.symbol),
-                    e,
-                )
-            })
+            .or_ice()
     }
 }
 
 fn build_load_int<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     ty: inkwell::types::IntType<'ctx>,
     ptr: PointerValue<'ctx>,
     name: &str,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     ctx.builder
         .build_load(ty, ptr, name)
+        .or_ice()
         .map(|v| v.into_int_value())
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_load {name} for `{}`", function.symbol),
-                e,
-            )
-        })
 }
 
-fn call_returning_pointer<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    callee: FunctionValue<'ctx>,
-    args: &[inkwell::values::BasicMetadataValueEnum<'ctx>],
-    name: &str,
-    symbol: &str,
-) -> Result<PointerValue<'ctx>, LlvmError> {
-    ctx.builder
-        .build_call(callee, args, name)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call {symbol} for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "{symbol} returned no value for `{}`",
-                function.symbol,
-            ))
-        })
-        .map(|v| v.into_pointer_value())
-}
-
-fn ret<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    value: BasicValueEnum<'ctx>,
-) -> Result<(), LlvmError> {
-    ctx.builder
-        .build_return(Some(&value))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+fn ret<'ctx>(ctx: &EmitContext<'ctx>, value: BasicValueEnum<'ctx>) -> Result<(), LlvmError> {
+    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
 
 // ---------------------------------------------------------------------------

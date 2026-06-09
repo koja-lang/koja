@@ -18,8 +18,7 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 use koja_ir::{DebugImpl, IRFunction, IntType};
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::{
     FORMAT_BOOL_SYMBOL, FORMAT_F32_SYMBOL, FORMAT_F64_SYMBOL, FORMAT_I64_SYMBOL, FORMAT_U64_SYMBOL,
     declare_runtime_format,
@@ -47,13 +46,8 @@ pub(super) fn emit_format<'ctx>(
     };
     ctx.builder
         .build_return(Some(&payload))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("Debug.format build_return on `{}`", function.symbol),
-                e,
-            )
-        })
 }
 
 /// `Bool` widens through `koja_format_bool(i64)`. The shared
@@ -79,14 +73,9 @@ fn format_via_i64<'ctx>(
     let widened = ctx
         .builder
         .build_int_z_extend(int_value, i64_ty, "fmt.zext")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("Debug.format zext on `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let helper = declare_runtime_format(ctx, symbol, i64_ty.into());
-    call_format_helper(ctx, function, helper, widened.into(), symbol)
+    ctx.call_basic(helper, &[widened.into()], "fmt.call")
 }
 
 fn format_via_f32<'ctx>(
@@ -105,7 +94,7 @@ fn format_via_f32<'ctx>(
     };
     let f32_ty = ctx.context.f32_type();
     let helper = declare_runtime_format(ctx, FORMAT_F32_SYMBOL, f32_ty.into());
-    call_format_helper(ctx, function, helper, float_value.into(), FORMAT_F32_SYMBOL)
+    ctx.call_basic(helper, &[float_value.into()], "fmt.call")
 }
 
 fn format_via_f64<'ctx>(
@@ -124,7 +113,7 @@ fn format_via_f64<'ctx>(
     };
     let f64_ty = ctx.context.f64_type();
     let helper = declare_runtime_format(ctx, FORMAT_F64_SYMBOL, f64_ty.into());
-    call_format_helper(ctx, function, helper, float_value.into(), FORMAT_F64_SYMBOL)
+    ctx.call_basic(helper, &[float_value.into()], "fmt.call")
 }
 
 /// Sign- or zero-extend the integer receiver to the matching
@@ -152,21 +141,11 @@ fn format_via_int<'ctx>(
     let widened = if ty.is_signed() {
         ctx.builder
             .build_int_s_extend(int_value, i64_ty, "fmt.sext")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("Debug.format sext on `{}`", function.symbol),
-                    e,
-                )
-            })?
+            .or_ice()?
     } else {
         ctx.builder
             .build_int_z_extend(int_value, i64_ty, "fmt.zext")
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("Debug.format zext on `{}`", function.symbol),
-                    e,
-                )
-            })?
+            .or_ice()?
     };
     let symbol = if ty.is_signed() {
         FORMAT_I64_SYMBOL
@@ -174,29 +153,5 @@ fn format_via_int<'ctx>(
         FORMAT_U64_SYMBOL
     };
     let helper = declare_runtime_format(ctx, symbol, i64_ty.into());
-    call_format_helper(ctx, function, helper, widened.into(), symbol)
-}
-
-fn call_format_helper<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    helper: FunctionValue<'ctx>,
-    arg: inkwell::values::BasicMetadataValueEnum<'ctx>,
-    symbol: &str,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let call_site = ctx
-        .builder
-        .build_call(helper, &[arg], "fmt.call")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("Debug.format build_call {symbol} on `{}`", function.symbol),
-                e,
-            )
-        })?;
-    call_site.try_as_basic_value().basic().ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "{symbol} returned no value on `{}`",
-            function.symbol,
-        ))
-    })
+    ctx.call_basic(helper, &[widened.into()], "fmt.call")
 }

@@ -19,8 +19,7 @@ use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ParseTarget};
 use crate::ctx::EmitContext;
 use crate::emit::constants::emit_string_literal_payload;
 use crate::emit::enums::build_enum_value;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_float_parse_extern, declare_int_parse_extern};
 
 /// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
@@ -77,23 +76,7 @@ pub(super) fn emit_parse<'ctx>(
 
     let i64_ty = ctx.context.i64_type();
     let ok_int = ctx
-        .builder
-        .build_call(helper, &[input_ptr.into(), out_ty.into()], "parsed_ok")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call {} for `{}`", label(target), function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "{} returned no value for `{}`",
-                label(target),
-                function.symbol,
-            ))
-        })?
+        .call_basic(helper, &[input_ptr.into(), out_ty.into()], "parsed_ok")?
         .into_int_value();
     let succeeded = ctx
         .builder
@@ -103,40 +86,28 @@ pub(super) fn emit_parse<'ctx>(
             i64_ty.const_int(0, false),
             "succeeded",
         )
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
 
     let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
     let err_bb = ctx.context.append_basic_block(llvm_function, "err");
     ctx.builder
         .build_conditional_branch(succeeded, ok_bb, err_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_conditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
 
     emit_ok_branch(
         ctx,
-        function,
         ok_bb,
         ok_load_ty,
         out_ty.into_pointer_value(),
         result_symbol,
     )?;
-    emit_err_branch(ctx, function, err_bb, err_message, result_symbol)?;
+    emit_err_branch(ctx, err_bb, err_message, result_symbol)?;
 
     Ok(())
 }
 
 fn emit_ok_branch<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     block: BasicBlock<'ctx>,
     load_ty: inkwell::types::BasicTypeEnum<'ctx>,
     out_ptr: PointerValue<'ctx>,
@@ -146,22 +117,13 @@ fn emit_ok_branch<'ctx>(
     let parsed = ctx
         .builder
         .build_load(load_ty, out_ptr, "parsed_val")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_load parsed for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[parsed])?;
-    ctx.builder
-        .build_return(Some(&ok))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&ok)).or_ice().map(|_| ())
 }
 
 fn emit_err_branch<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     block: BasicBlock<'ctx>,
     message: &[u8],
     result_symbol: &IRSymbol,
@@ -169,10 +131,7 @@ fn emit_err_branch<'ctx>(
     ctx.builder.position_at_end(block);
     let err_msg = emit_string_literal_payload(ctx, message, "parse_err");
     let err = build_enum_value(ctx, result_symbol, RESULT_ERR_TAG, &[err_msg.into()])?;
-    ctx.builder
-        .build_return(Some(&err))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&err)).or_ice().map(|_| ())
 }
 
 fn expect_enum_symbol<'ty>(

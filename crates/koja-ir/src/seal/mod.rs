@@ -180,7 +180,9 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
             operands.extend(args.iter().copied());
             operands
         }
-        IRInstruction::Clone { source, .. } => vec![*source],
+        IRInstruction::Clone { source, .. } | IRInstruction::DeepCopy { source, .. } => {
+            vec![*source]
+        }
         IRInstruction::Concat { lhs, rhs, .. } => vec![*lhs, *rhs],
         IRInstruction::Const { .. } => vec![],
         IRInstruction::EnumConstruct { payload, .. } => match payload {

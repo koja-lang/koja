@@ -35,7 +35,7 @@ pub(super) fn emit_set<'ctx>(
         SetMethod::HasQ => hashtable::emit_has_q(ctx, function, llvm_function, &layout),
         SetMethod::Insert => hashtable::emit_set_insert(ctx, function, llvm_function, &layout),
         SetMethod::Length => hashtable::emit_length(ctx, function, llvm_function),
-        SetMethod::New => hashtable::emit_new(ctx, function, element_size),
+        SetMethod::New => hashtable::emit_new(ctx, element_size),
         SetMethod::Remove => hashtable::emit_remove(ctx, function, llvm_function, &layout),
     }
 }

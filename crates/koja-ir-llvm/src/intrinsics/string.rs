@@ -15,8 +15,7 @@ use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, StringMethod};
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::load_bit_length;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::heap_payload;
 use crate::runtime::{
@@ -54,11 +53,11 @@ fn emit_byte_length<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let payload = self_payload(function, llvm_function)?;
-    let byte_count = load_byte_count(ctx, function, payload)?;
+    let byte_count = load_byte_count(ctx, payload)?;
     ctx.builder
         .build_return(Some(&byte_count))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
 /// `String.to_binary(self) -> Binary` — a zero-cost reinterpret.
@@ -74,10 +73,7 @@ fn emit_to_binary<'ctx>(
 ) -> Result<(), LlvmError> {
     let payload = self_payload(function, llvm_function)?;
     let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
-    ctx.builder
-        .build_return(Some(&shared))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&shared)).or_ice().map(|_| ())
 }
 
 fn emit_length<'ctx>(
@@ -87,25 +83,8 @@ fn emit_length<'ctx>(
 ) -> Result<(), LlvmError> {
     let payload = self_payload(function, llvm_function)?;
     let helper = declare_string_length_extern(ctx);
-    let call = ctx
-        .builder
-        .build_call(helper, &[payload.into()], "len")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call koja_string_length for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    let value = call.try_as_basic_value().basic().ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "koja_string_length returned no value for `{}`",
-            function.symbol,
-        ))
-    })?;
-    ctx.builder
-        .build_return(Some(&value))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    let value = ctx.call_basic(helper, &[payload.into()], "len")?;
+    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
 
 fn emit_slice<'ctx>(
@@ -132,45 +111,18 @@ fn emit_slice<'ctx>(
     let start = ctx
         .builder
         .build_extract_value(range_struct, 0, "start")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_extract_value for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let stop = ctx
         .builder
         .build_extract_value(range_struct, 1, "stop")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_extract_value for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let helper = declare_string_slice_extern(ctx);
-    let call = ctx
-        .builder
-        .build_call(
-            helper,
-            &[payload.into(), start.into(), stop.into()],
-            "sliced",
-        )
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call koja_string_slice for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    let value = call.try_as_basic_value().basic().ok_or_else(|| {
-        LlvmError::Codegen(format!(
-            "koja_string_slice returned no value for `{}`",
-            function.symbol,
-        ))
-    })?;
-    ctx.builder
-        .build_return(Some(&value))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    let value = ctx.call_basic(
+        helper,
+        &[payload.into(), start.into(), stop.into()],
+        "sliced",
+    )?;
+    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
 
 fn emit_get<'ctx>(
@@ -186,24 +138,8 @@ fn emit_get<'ctx>(
         ))
     })?;
     let helper = declare_string_get_extern(ctx);
-    let call = ctx
-        .builder
-        .build_call(helper, &[payload.into(), index.into()], "ch")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call koja_string_get for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    let raw_ptr = call
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "koja_string_get returned no value for `{}`",
-                function.symbol,
-            ))
-        })?
+    let raw_ptr = ctx
+        .call_basic(helper, &[payload.into(), index.into()], "ch")?
         .into_pointer_value();
 
     let option_symbol = expect_enum_symbol(&function.return_type, function)?;
@@ -211,36 +147,21 @@ fn emit_get<'ctx>(
     let is_null = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, raw_ptr, ptr_ty.const_null(), "is_null")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
 
     let some_bb = ctx.context.append_basic_block(llvm_function, "some");
     let none_bb = ctx.context.append_basic_block(llvm_function, "none");
     ctx.builder
         .build_conditional_branch(is_null, none_bb, some_bb)
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_conditional_branch for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(some_bb);
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[raw_ptr.into()])?;
-    ctx.builder
-        .build_return(Some(&some))
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))?;
+    ctx.builder.build_return(Some(&some)).or_ice()?;
 
     ctx.builder.position_at_end(none_bb);
     let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
-    ctx.builder
-        .build_return(Some(&none))
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }
 
 fn emit_to_cstring<'ctx>(
@@ -251,56 +172,36 @@ fn emit_to_cstring<'ctx>(
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
     let payload = self_payload(function, llvm_function)?;
-    let byte_len = load_byte_count(ctx, function, payload)?;
+    let byte_len = load_byte_count(ctx, payload)?;
 
     let alloc_size = ctx
         .builder
         .build_int_add(byte_len, i64_ty.const_int(1, false), "alloc_size")
-        .map_err(|e| inkwell_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let malloc = declare_malloc_extern(ctx);
     let buf = ctx
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "c_buf")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call malloc for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "malloc returned no value for `{}`",
-                function.symbol,
-            ))
-        })?
+        .call_basic(malloc, &[alloc_size.into()], "c_buf")?
         .into_pointer_value();
 
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
         .build_call(memcpy, &[buf.into(), payload.into(), byte_len.into()], "")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call memcpy for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let nul_ptr = unsafe {
         ctx.builder
             .build_in_bounds_gep(i8_ty, buf, &[byte_len], "nul")
-            .map_err(|e| inkwell_err(format_args!("build_gep for `{}`", function.symbol), e))?
+            .or_ice()?
     };
     ctx.builder
         .build_store(nul_ptr, i8_ty.const_zero())
-        .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     let cstring_ty = ir_basic_type(ctx, &function.return_type)?.into_struct_type();
-    let cstring = build_cstring(ctx, function, cstring_ty, buf, byte_len)?;
+    let cstring = build_cstring(ctx, cstring_ty, buf, byte_len)?;
     ctx.builder
         .build_return(Some(&cstring))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }
 
 fn self_payload<'ctx>(
@@ -324,19 +225,13 @@ fn self_payload<'ctx>(
 
 fn load_byte_count<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     payload: PointerValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let i64_ty = ctx.context.i64_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
     ctx.builder
         .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_right_shift for `{}`", function.symbol),
-                e,
-            )
-        })
+        .or_ice()
 }
 
 /// Extract the IR symbol of an enum type from `ty`. Mirrors the
@@ -359,40 +254,22 @@ fn expect_enum_symbol<'ty>(
 
 fn build_cstring<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     cstring_ty: StructType<'ctx>,
     ptr: PointerValue<'ctx>,
     len: IntValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
-    let alloca = ctx
-        .builder
-        .build_alloca(cstring_ty, "cs_tmp")
-        .map_err(|e| inkwell_err(format_args!("build_alloca for `{}`", function.symbol), e))?;
+    let alloca = ctx.builder.build_alloca(cstring_ty, "cs_tmp").or_ice()?;
     let ptr_field = ctx
         .builder
         .build_struct_gep(cstring_ty, alloca, 0, "cs_ptr")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_store(ptr_field, ptr)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
+        .or_ice()?;
+    ctx.builder.build_store(ptr_field, ptr).or_ice()?;
     let len_field = ctx
         .builder
         .build_struct_gep(cstring_ty, alloca, 1, "cs_len")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder
-        .build_store(len_field, len)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{}`", function.symbol), e))?;
+        .or_ice()?;
+    ctx.builder.build_store(len_field, len).or_ice()?;
     ctx.builder
         .build_load(cstring_ty, alloca, "cs_val")
-        .map_err(|e| inkwell_err(format_args!("build_load for `{}`", function.symbol), e))
+        .or_ice()
 }

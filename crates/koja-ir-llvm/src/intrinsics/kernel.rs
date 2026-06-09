@@ -12,8 +12,7 @@ use inkwell::values::FunctionValue;
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::declare_panic_extern;
 
 pub(super) fn emit_panic<'ctx>(
@@ -33,16 +32,6 @@ pub(super) fn emit_panic<'ctx>(
     let panic = declare_panic_extern(ctx);
     ctx.builder
         .build_call(panic, &[message.into()], "")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call panic for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    ctx.builder.build_unreachable().map(|_| ()).map_err(|e| {
-        inkwell_err(
-            format_args!("build_unreachable for `{}`", function.symbol),
-            e,
-        )
-    })
+        .or_ice()?;
+    ctx.builder.build_unreachable().or_ice().map(|_| ())
 }

@@ -7,10 +7,8 @@ use inkwell::values::BasicValueEnum;
 use koja_ir::IRType;
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::types::ir_basic_type;
-
-use super::inkwell_err;
 
 /// Materialize a union value: alloca the outer struct, write the
 /// tag at field 0, write the typed payload at field 1, and load
@@ -34,29 +32,20 @@ pub(super) fn emit_union_wrap<'ctx>(
     let tag_ptr = ctx
         .builder
         .build_struct_gep(outer, alloca, 0, &format!("{mangled}_tag_ptr"))
-        .map_err(|e| inkwell_err(format_args!("build_struct_gep for `{mangled}` tag"), e))?;
+        .or_ice()?;
     let tag_value = ctx
         .context
         .i8_type()
         .const_int(u64::from(member_index), false);
-    ctx.builder
-        .build_store(tag_ptr, tag_value)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{mangled}` tag"), e))?;
+    ctx.builder.build_store(tag_ptr, tag_value).or_ice()?;
     let payload_ptr = ctx
         .builder
         .build_struct_gep(outer, alloca, 1, &format!("{mangled}_payload_ptr"))
-        .map_err(|e| inkwell_err(format_args!("build_struct_gep for `{mangled}` payload"), e))?;
-    ctx.builder
-        .build_store(payload_ptr, payload)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{mangled}` payload"), e))?;
+        .or_ice()?;
+    ctx.builder.build_store(payload_ptr, payload).or_ice()?;
     ctx.builder
         .build_load(outer, alloca, mangled.mangled())
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_load for `{mangled}` after UnionWrap"),
-                e,
-            )
-        })
+        .or_ice()
 }
 
 /// Spill `value` to a fresh outer-typed alloca and load the tag
@@ -74,21 +63,14 @@ pub(super) fn emit_union_tag_get<'ctx>(
     };
     let (outer, _) = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_tag_src"));
-    ctx.builder
-        .build_store(alloca, value)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{mangled}` UnionTagGet"), e))?;
+    ctx.builder.build_store(alloca, value).or_ice()?;
     let tag_ptr = ctx
         .builder
         .build_struct_gep(outer, alloca, 0, &format!("{mangled}_tag_ptr"))
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for `{mangled}` UnionTagGet"),
-                e,
-            )
-        })?;
+        .or_ice()?;
     ctx.builder
         .build_load(ctx.context.i8_type(), tag_ptr, &format!("{mangled}_tag"))
-        .map_err(|e| inkwell_err(format_args!("build_load for `{mangled}` UnionTagGet"), e))
+        .or_ice()
 }
 
 /// Spill `value` to a fresh outer-typed alloca, GEP into the
@@ -109,28 +91,13 @@ pub(super) fn emit_union_payload_get<'ctx>(
     };
     let (outer, _) = ctx.layouts.union_outer(mangled.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{mangled}_payload_src"));
-    ctx.builder.build_store(alloca, value).map_err(|e| {
-        inkwell_err(
-            format_args!("build_store for `{mangled}` UnionPayloadGet"),
-            e,
-        )
-    })?;
+    ctx.builder.build_store(alloca, value).or_ice()?;
     let payload_ptr = ctx
         .builder
         .build_struct_gep(outer, alloca, 1, &format!("{mangled}_payload_ptr"))
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for `{mangled}` UnionPayloadGet"),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let member_llvm_type = ir_basic_type(ctx, member_type)?;
     ctx.builder
         .build_load(member_llvm_type, payload_ptr, &format!("{mangled}_payload"))
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_load for `{mangled}` UnionPayloadGet"),
-                e,
-            )
-        })
+        .or_ice()
 }

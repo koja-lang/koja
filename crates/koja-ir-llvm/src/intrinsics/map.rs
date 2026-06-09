@@ -40,7 +40,7 @@ pub(super) fn emit_map<'ctx>(
         MapMethod::Get => hashtable::emit_map_get(ctx, function, llvm_function, &layout),
         MapMethod::HasQ => hashtable::emit_has_q(ctx, function, llvm_function, &layout),
         MapMethod::Length => hashtable::emit_length(ctx, function, llvm_function),
-        MapMethod::New => hashtable::emit_new(ctx, function, entry_size),
+        MapMethod::New => hashtable::emit_new(ctx, entry_size),
         MapMethod::Put => hashtable::emit_map_put(ctx, function, llvm_function, &layout),
         MapMethod::Remove => hashtable::emit_remove(ctx, function, llvm_function, &layout),
     }

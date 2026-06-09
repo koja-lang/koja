@@ -1,0 +1,45 @@
+# Regression: a reply that arrives after its call timed out must be
+# discarded by token correlation, not delivered to the next call. The
+# first call uses a 1ms timeout against a deliberately slow handler;
+# whether or not it times out, the second call must receive its own
+# reply ("reply 2"), never the stale "reply 1".
+
+struct Slow
+  n: Int
+end
+
+impl Process<Int, Int, String> for Slow
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Slow{n: 0})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<String>>) -> Step<Self>
+    i = 0
+
+    loop
+      i += 1
+
+      if i >= 200000
+        break
+      end
+    end
+
+    ReplyTo.reply(from, "reply " <> msg.format())
+    Step.Continue(self)
+  end
+end
+
+r = spawn Slow.start(0)
+_ = r.call(1, 1)
+
+match r.call(2, 10000)
+  Result.Ok(reply) ->
+    if reply == "reply 2"
+      "stale reply: ok".print()
+    else
+      "stale reply: WRONG CORRELATION".print()
+      reply.print()
+    end
+
+  Result.Err(_) -> "stale reply: call failed".print()
+end

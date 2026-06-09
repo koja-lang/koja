@@ -36,7 +36,12 @@ pub(super) fn seal_closure_decls(pkg: &IRPackage) {
             FunctionKind::Closure { env_layout } | FunctionKind::DropClosureGlue { env_layout } => {
                 seal_closure_function(function, env_layout)
             }
+            // `CopyClosureGlue` is env-keyed too, but its body is
+            // backend-synthesized (empty blocks), so there is no IR
+            // `LoadCapture` to validate.
             FunctionKind::CloneGlue
+            | FunctionKind::CopyClosureGlue { .. }
+            | FunctionKind::DeepCopyGlue
             | FunctionKind::DropGlue
             | FunctionKind::Extern(_)
             | FunctionKind::Intrinsic(_)
@@ -217,6 +222,8 @@ fn kind_label(kind: &FunctionKind) -> &'static str {
     match kind {
         FunctionKind::CloneGlue => "CloneGlue",
         FunctionKind::Closure { .. } => "Closure",
+        FunctionKind::CopyClosureGlue { .. } => "CopyClosureGlue",
+        FunctionKind::DeepCopyGlue => "DeepCopyGlue",
         FunctionKind::DropClosureGlue { .. } => "DropClosureGlue",
         FunctionKind::DropGlue => "DropGlue",
         FunctionKind::Extern(_) => "Extern",

@@ -1,6 +1,9 @@
 //! Public error type produced by the LLVM backend.
 
 use std::fmt;
+use std::panic::Location;
+
+use inkwell::builder::BuilderError;
 
 /// What can go wrong during [`crate::compile_program`]. Each variant
 /// is a short message; we don't try to match `koja_ast::Diagnostic`
@@ -27,3 +30,20 @@ impl fmt::Display for LlvmError {
 }
 
 impl std::error::Error for LlvmError {}
+
+/// Lift an inkwell [`BuilderError`] into [`LlvmError::Codegen`]. A
+/// builder failure is always an internal compiler error (mispositioned
+/// builder, type mismatch we constructed), so the useful context is
+/// *where* — `#[track_caller]` stamps the message with the emission
+/// site's `file:line` instead of hand-written prose that goes stale.
+pub(crate) trait IceExt<T> {
+    fn or_ice(self) -> Result<T, LlvmError>;
+}
+
+impl<T> IceExt<T> for Result<T, BuilderError> {
+    #[track_caller]
+    fn or_ice(self) -> Result<T, LlvmError> {
+        let at = Location::caller();
+        self.map_err(|e| LlvmError::Codegen(format!("inkwell rejected build at {at}: {e}")))
+    }
+}

@@ -25,6 +25,11 @@ use super::package::resolved_type_to_ir_type;
 /// jump to `merge_block` when flow stays open. Closed flow (early
 /// `return`) leaves the existing terminator in place; the merge
 /// block tolerates one fewer incoming edge.
+///
+/// Returns the arm's open tail block (where the merge branch landed)
+/// so callers can append end-of-arm cleanup — e.g. `match` releasing
+/// its consumed subject temp — after the tail value has been
+/// acquired. `None` when the arm closed flow with an early `return`.
 pub(super) fn lower_arm_into(
     body: &[Statement],
     ctx: &mut FnLowerCtx,
@@ -33,7 +38,7 @@ pub(super) fn lower_arm_into(
     result_ty: &IRType,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
-) -> Result<(), ()> {
+) -> Result<Option<IRBlockId>, ()> {
     match lower_body(body, ctx, arm_block, registry, output)? {
         FlowResult::Open { block, value } => {
             let arg = match value {
@@ -44,10 +49,10 @@ pub(super) fn lower_arm_into(
                 block,
                 IRTerminator::Branch(BranchTarget::with_args(merge_block, vec![arg])),
             );
+            Ok(Some(block))
         }
-        FlowResult::Closed => {}
+        FlowResult::Closed => Ok(None),
     }
-    Ok(())
 }
 
 /// Lower an expression-shaped arm (ternary today; could grow more

@@ -27,11 +27,11 @@ use inkwell::values::{BasicValueEnum, IntValue, PointerValue};
 use koja_ir::{BinaryEndian, LoweredBinarySegment, ResolvedBinaryLayout, ValueId};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_malloc_extern, declare_pack_bits_extern};
 
 use super::heap_layout::{HEADER_BYTES, init_heap_block};
-use super::{ValueMap, inkwell_err, lookup};
+use super::{ValueMap, lookup};
 
 /// Lower an `IRInstruction::BinaryConstruct`. Allocates a fresh
 /// heap block sized to `layout.total_bits` (rounded up to bytes),
@@ -50,12 +50,7 @@ pub(super) fn emit_binary_construct<'ctx>(
     let malloc = declare_malloc_extern(ctx);
     let alloc_size = i64_ty.const_int(HEADER_BYTES + total_bytes, false);
     let base = ctx
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "bin_alloc")
-        .map_err(|e| inkwell_err(format_args!("BinaryConstruct malloc"), e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("malloc returned void".to_string()))?
+        .call_basic(malloc, &[alloc_size.into()], "bin_alloc")?
         .into_pointer_value();
 
     let payload = init_heap_block(ctx, base, i64_ty.const_int(layout.total_bits, false), "bin")?;
@@ -74,7 +69,7 @@ pub(super) fn emit_binary_construct<'ctx>(
                 i8_ty.const_int(0, false),
                 i64_ty.const_int(total_bytes, false),
             )
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct payload memset"), e))?;
+            .or_ice()?;
     }
 
     for segment in segments {
@@ -140,11 +135,11 @@ fn emit_segment<'ctx>(
                         &[i64_ty.const_int(bit_offset / 8, false)],
                         "str_seg_dest",
                     )
-                    .map_err(|e| inkwell_err(format_args!("BinaryConstruct str GEP"), e))?
+                    .or_ice()?
             };
             ctx.builder
                 .build_memcpy(dest, 1, str_ptr, 1, i64_ty.const_int(*byte_length, false))
-                .map_err(|e| inkwell_err(format_args!("BinaryConstruct str memcpy"), e))?;
+                .or_ice()?;
             Ok(())
         }
     }
@@ -178,14 +173,14 @@ fn emit_byte_packed_int<'ctx>(
                     false,
                     "seg_shr",
                 )
-                .map_err(|e| inkwell_err(format_args!("BinaryConstruct byte shr"), e))?
+                .or_ice()?
         } else {
             val_i64
         };
         let byte = ctx
             .builder
             .build_int_truncate(shifted, i8_ty, "seg_byte")
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct byte trunc"), e))?;
+            .or_ice()?;
         let dest = unsafe {
             ctx.builder
                 .build_in_bounds_gep(
@@ -194,11 +189,9 @@ fn emit_byte_packed_int<'ctx>(
                     &[i64_ty.const_int(byte_offset + i, false)],
                     "seg_byte_ptr",
                 )
-                .map_err(|e| inkwell_err(format_args!("BinaryConstruct byte GEP"), e))?
+                .or_ice()?
         };
-        ctx.builder
-            .build_store(dest, byte)
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct byte store"), e))?;
+        ctx.builder.build_store(dest, byte).or_ice()?;
     }
     Ok(())
 }
@@ -231,7 +224,7 @@ fn pack_bits_segment<'ctx>(
             ],
             "pack_bits_call",
         )
-        .map_err(|e| inkwell_err(format_args!("__koja_pack_bits call"), e))?;
+        .or_ice()?;
     Ok(())
 }
 
@@ -252,11 +245,11 @@ fn lookup_int_widened<'ctx>(
         std::cmp::Ordering::Less => ctx
             .builder
             .build_int_z_extend(raw, i64_ty, "seg_widen")
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct seg widen"), e))?,
+            .or_ice()?,
         std::cmp::Ordering::Greater => ctx
             .builder
             .build_int_truncate(raw, i64_ty, "seg_trunc")
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct seg trunc"), e))?,
+            .or_ice()?,
         std::cmp::Ordering::Equal => raw,
     };
     // Use the predicate constant so the unused-import lint stays
@@ -284,7 +277,7 @@ fn float_value_as_i64<'ctx>(
             } else {
                 ctx.builder
                     .build_float_trunc(fv, ctx.context.f32_type(), "f32_trunc")
-                    .map_err(|e| inkwell_err(format_args!("BinaryConstruct f32 trunc"), e))?
+                    .or_ice()?
             }
         } else {
             return Err(LlvmError::Codegen(
@@ -294,12 +287,12 @@ fn float_value_as_i64<'ctx>(
         let i32_bits = ctx
             .builder
             .build_bit_cast(f32_val, ctx.context.i32_type(), "f32_bits")
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct f32 bitcast"), e))?
+            .or_ice()?
             .into_int_value();
         let widened = ctx
             .builder
             .build_int_z_extend(i32_bits, i64_ty, "f32_to_i64")
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct f32 zext"), e))?;
+            .or_ice()?;
         return Ok(widened);
     }
     if width == 64 {
@@ -310,7 +303,7 @@ fn float_value_as_i64<'ctx>(
             } else {
                 ctx.builder
                     .build_float_ext(fv, ctx.context.f64_type(), "f64_ext")
-                    .map_err(|e| inkwell_err(format_args!("BinaryConstruct f64 ext"), e))?
+                    .or_ice()?
             }
         } else {
             return Err(LlvmError::Codegen(
@@ -320,7 +313,7 @@ fn float_value_as_i64<'ctx>(
         let i64_bits = ctx
             .builder
             .build_bit_cast(f64_val, i64_ty, "f64_bits")
-            .map_err(|e| inkwell_err(format_args!("BinaryConstruct f64 bitcast"), e))?
+            .or_ice()?
             .into_int_value();
         return Ok(i64_bits);
     }

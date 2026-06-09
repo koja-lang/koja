@@ -46,9 +46,8 @@ use koja_ir::{
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::is_heap_leaf;
-use crate::emit::inkwell_err;
 use crate::emit::process::serialize_to_stack;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::release_in_slot;
 use crate::runtime::{
     declare_rt_call_receive_extern, declare_rt_call_token_extern,
@@ -101,12 +100,7 @@ fn emit_self_ref<'ctx>(
 
     let self_fn = declare_rt_self_extern(ctx);
     let pid = ctx
-        .builder
-        .build_call(self_fn, &[], "current_pid")
-        .map_err(|e| inkwell_err("build_call koja_rt_self", e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("koja_rt_self did not produce a value".to_string()))?
+        .call_basic(self_fn, &[], "current_pid")?
         .into_int_value();
 
     let ref_struct = match &function.return_type {
@@ -122,12 +116,12 @@ fn emit_self_ref<'ctx>(
     ref_value = ctx
         .builder
         .build_insert_value(ref_value, pid, 0, "ref_pid")
-        .map_err(|e| inkwell_err("build_insert_value ref_pid", e))?
+        .or_ice()?
         .into_struct_value();
     ctx.builder
         .build_return(Some(&ref_value))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err("build_return self_ref", e))
 }
 
 /// `Ref.cast(self, msg: M)` — wrap `msg` in a `Pair<M, Option<
@@ -149,7 +143,7 @@ fn emit_cast<'ctx>(
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) =
         build_pair_envelope_alloca(ctx, "cast_envelope", msg_llvm, msg_value, none_payload)?;
-    let drop_glue = payload_drop_glue(ctx, &function.symbol, msg_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, msg_ir_type)?;
 
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
@@ -163,11 +157,8 @@ fn emit_cast<'ctx>(
             ],
             "",
         )
-        .map_err(|e| inkwell_err("build_call koja_rt_send (cast)", e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_return cast", e))
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 /// `Ref.send_after(self, msg: M, delay_ms: Int)` — same `Pair<M,
@@ -194,7 +185,7 @@ fn emit_send_after<'ctx>(
         msg_value,
         none_payload,
     )?;
-    let drop_glue = payload_drop_glue(ctx, &function.symbol, msg_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, msg_ir_type)?;
 
     let delay = delay_value.into_int_value();
     let send_after_fn = declare_rt_send_after_extern(ctx);
@@ -210,11 +201,8 @@ fn emit_send_after<'ctx>(
             ],
             "",
         )
-        .map_err(|e| inkwell_err("build_call koja_rt_send_after", e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_return send_after", e))
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 /// `Ref.call(self, msg: M, timeout: Int) -> Result<R, CallError>`
@@ -260,29 +248,15 @@ fn emit_call<'ctx>(
     let call_error_symbol = global_primitive_symbol("CallError");
 
     let self_fn = declare_rt_self_extern(ctx);
-    let caller_pid = ctx
-        .builder
-        .build_call(self_fn, &[], "caller_pid")
-        .map_err(|e| inkwell_err("build_call koja_rt_self (call)", e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("koja_rt_self did not produce a value".to_string()))?
-        .into_int_value();
+    let caller_pid = ctx.call_basic(self_fn, &[], "caller_pid")?.into_int_value();
     let token_fn = declare_rt_call_token_extern(ctx);
     let token = ctx
-        .builder
-        .build_call(token_fn, &[], "call_token")
-        .map_err(|e| inkwell_err("build_call koja_rt_call_token", e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen("koja_rt_call_token did not produce a value".to_string())
-        })?
+        .call_basic(token_fn, &[], "call_token")?
         .into_int_value();
     let some_payload = option_some_payload(ctx, caller_pid, token)?;
     let (envelope_ptr, envelope_size) =
         build_pair_envelope_alloca(ctx, "call_envelope", msg_llvm, msg_value, some_payload)?;
-    let drop_glue = payload_drop_glue(ctx, &function.symbol, msg_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, msg_ir_type)?;
     let send_fn = declare_rt_send_extern(ctx);
     ctx.builder
         .build_call(
@@ -295,7 +269,7 @@ fn emit_call<'ctx>(
             ],
             "",
         )
-        .map_err(|e| inkwell_err("build_call koja_rt_send (call)", e))?;
+        .or_ice()?;
 
     let reply_slot = ctx.build_entry_alloca(reply_llvm, "reply_payload");
     let reply_cap = ctx
@@ -304,8 +278,7 @@ fn emit_call<'ctx>(
         .const_int(ctx.layouts.target_data.get_abi_size(&reply_llvm), false);
     let receive_fn = declare_rt_call_receive_extern(ctx);
     let reply_status = ctx
-        .builder
-        .build_call(
+        .call_basic(
             receive_fn,
             &[
                 token.into(),
@@ -314,13 +287,7 @@ fn emit_call<'ctx>(
                 timeout.into(),
             ],
             "reply_status",
-        )
-        .map_err(|e| inkwell_err("build_call koja_rt_call_receive", e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen("koja_rt_call_receive did not produce a value".to_string())
-        })?
+        )?
         .into_int_value();
 
     let timeout_check_bb = ctx
@@ -346,31 +313,24 @@ fn emit_call<'ctx>(
             timeout_status,
             "call_timed_out",
         )
-        .map_err(|e| inkwell_err("build_int_compare call_timed_out", e))?;
+        .or_ice()?;
     ctx.builder
         .build_conditional_branch(timed_out, timeout_check_bb, got_reply_bb)
-        .map_err(|e| inkwell_err("build_conditional_branch call_timed_out", e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(timeout_check_bb);
     let alive_fn = declare_rt_is_process_alive_extern(ctx);
     let alive_i64 = ctx
-        .builder
-        .build_call(alive_fn, &[target_pid.into()], "target_alive_i64")
-        .map_err(|e| inkwell_err("build_call koja_rt_is_process_alive (call)", e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen("koja_rt_is_process_alive did not produce a value".to_string())
-        })?
+        .call_basic(alive_fn, &[target_pid.into()], "target_alive_i64")?
         .into_int_value();
     let zero_i64 = ctx.context.i64_type().const_int(0, false);
     let target_alive = ctx
         .builder
         .build_int_compare(IntPredicate::NE, alive_i64, zero_i64, "target_alive")
-        .map_err(|e| inkwell_err("build_int_compare target_alive", e))?;
+        .or_ice()?;
     ctx.builder
         .build_conditional_branch(target_alive, build_timeout_bb, build_down_bb)
-        .map_err(|e| inkwell_err("build_conditional_branch target_alive", e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(build_timeout_bb);
     let timeout_result = build_call_error_result(
@@ -379,9 +339,7 @@ fn emit_call<'ctx>(
         &call_error_symbol,
         CALL_ERROR_TIMEOUT_TAG,
     )?;
-    ctx.builder
-        .build_unconditional_branch(merge_bb)
-        .map_err(|e| inkwell_err("build_unconditional_branch call_timeout merge", e))?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
     let timeout_block = ctx.builder.get_insert_block().expect(
         "EmitContext::emit_call lost the build_timeout insertion block before the merge phi",
     );
@@ -393,9 +351,7 @@ fn emit_call<'ctx>(
         &call_error_symbol,
         CALL_ERROR_PROCESS_DOWN_TAG,
     )?;
-    ctx.builder
-        .build_unconditional_branch(merge_bb)
-        .map_err(|e| inkwell_err("build_unconditional_branch call_down merge", e))?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
     let down_block = ctx
         .builder
         .get_insert_block()
@@ -405,16 +361,14 @@ fn emit_call<'ctx>(
     let reply_value = ctx
         .builder
         .build_load(reply_llvm, reply_slot, "reply_value")
-        .map_err(|e| inkwell_err("build_load reply_value", e))?;
+        .or_ice()?;
     let ok_result = build_enum_value(
         ctx,
         &result_symbol,
         IRVariantTag(RESULT_OK_TAG),
         &[reply_value],
     )?;
-    ctx.builder
-        .build_unconditional_branch(merge_bb)
-        .map_err(|e| inkwell_err("build_unconditional_branch call_ok merge", e))?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
     let ok_block = ctx
         .builder
         .get_insert_block()
@@ -425,7 +379,7 @@ fn emit_call<'ctx>(
     let result_phi = ctx
         .builder
         .build_phi(result_outer, "call_result")
-        .map_err(|e| inkwell_err("build_phi call_result", e))?;
+        .or_ice()?;
     result_phi.add_incoming(&[
         (&timeout_result, timeout_block),
         (&down_result, down_block),
@@ -433,8 +387,8 @@ fn emit_call<'ctx>(
     ]);
     ctx.builder
         .build_return(Some(&result_phi.as_basic_value()))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err("build_return call result", e))
 }
 
 /// `Ref.signal(self, event: Lifecycle)` — pull the lifecycle
@@ -456,26 +410,23 @@ fn emit_signal<'ctx>(
     let event_alloca = ctx.build_entry_alloca(event_llvm, "event_buf");
     ctx.builder
         .build_store(event_alloca, event_value)
-        .map_err(|e| inkwell_err("build_store signal event", e))?;
+        .or_ice()?;
     let i8_ty = ctx.context.i8_type();
     let variant_byte = ctx
         .builder
         .build_load(i8_ty, event_alloca, "variant_byte")
-        .map_err(|e| inkwell_err("build_load variant_byte", e))?
+        .or_ice()?
         .into_int_value();
     let variant_i64 = ctx
         .builder
         .build_int_z_extend(variant_byte, ctx.context.i64_type(), "variant_i64")
-        .map_err(|e| inkwell_err("build_int_z_extend variant", e))?;
+        .or_ice()?;
 
     let signal_fn = declare_rt_send_lifecycle_extern(ctx);
     ctx.builder
         .build_call(signal_fn, &[pid.into(), variant_i64.into()], "")
-        .map_err(|e| inkwell_err("build_call koja_rt_send_lifecycle", e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_return signal", e))
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 /// `Ref.kill(self)` — drop the target process via `koja_rt_kill`.
@@ -491,11 +442,8 @@ fn emit_kill<'ctx>(
     let kill_fn = declare_rt_kill_extern(ctx);
     ctx.builder
         .build_call(kill_fn, &[pid.into()], "")
-        .map_err(|e| inkwell_err("build_call koja_rt_kill", e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_return kill", e))
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 /// `Ref.alive?(self) -> Bool` — compare
@@ -512,24 +460,17 @@ fn emit_alive<'ctx>(
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let alive_fn = declare_rt_is_process_alive_extern(ctx);
     let alive_i64 = ctx
-        .builder
-        .build_call(alive_fn, &[pid.into()], "alive_i64")
-        .map_err(|e| inkwell_err("build_call koja_rt_is_process_alive", e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen("koja_rt_is_process_alive did not produce a value".to_string())
-        })?
+        .call_basic(alive_fn, &[pid.into()], "alive_i64")?
         .into_int_value();
     let zero = ctx.context.i64_type().const_int(0, false);
     let alive_bit = ctx
         .builder
         .build_int_compare(IntPredicate::NE, alive_i64, zero, "is_alive")
-        .map_err(|e| inkwell_err("build_int_compare is_alive", e))?;
+        .or_ice()?;
     ctx.builder
         .build_return(Some(&alive_bit))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err("build_return alive?", e))
 }
 
 // ----- ReplyTo method emitters --------------------------------------------
@@ -553,7 +494,7 @@ fn emit_reply_send<'ctx>(
     let (reply_value, reply_ir_type) = nth_param(function, llvm_function, 1)?;
     let reply_llvm = value_basic_type(ctx, reply_ir_type)?;
     let (reply_ptr, reply_len) = serialize_to_stack(ctx, "reply_msg", reply_llvm, reply_value)?;
-    let drop_glue = payload_drop_glue(ctx, &function.symbol, reply_ir_type)?;
+    let drop_glue = payload_drop_glue(ctx, reply_ir_type)?;
 
     let reply_fn = declare_rt_reply_extern(ctx);
     ctx.builder
@@ -568,11 +509,8 @@ fn emit_reply_send<'ctx>(
             ],
             "",
         )
-        .map_err(|e| inkwell_err("build_call koja_rt_reply", e))?;
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_return reply send", e))
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 // ----- envelope construction ----------------------------------------------
@@ -637,15 +575,15 @@ fn option_some_payload<'ctx>(
             0,
             "opt_tag",
         )
-        .map_err(|e| inkwell_err("build_insert_value option some tag", e))?;
+        .or_ice()?;
     let with_pid = ctx
         .builder
         .build_insert_value(with_tag, reply_pid, 1, "opt_pid")
-        .map_err(|e| inkwell_err("build_insert_value option some pid", e))?;
+        .or_ice()?;
     Ok(ctx
         .builder
         .build_insert_value(with_pid, token, 2, "opt_token")
-        .map_err(|e| inkwell_err("build_insert_value option some token", e))?
+        .or_ice()?
         .into_array_value())
 }
 
@@ -668,16 +606,14 @@ fn build_pair_envelope_alloca<'ctx>(
     let with_msg = ctx
         .builder
         .build_insert_value(undef, msg_value, 0, "pair_msg")
-        .map_err(|e| inkwell_err("build_insert_value pair msg", e))?
+        .or_ice()?
         .into_struct_value();
     let envelope = ctx
         .builder
         .build_insert_value(with_msg, option_payload, 1, "pair_option")
-        .map_err(|e| inkwell_err("build_insert_value pair option", e))?
+        .or_ice()?
         .into_struct_value();
-    ctx.builder
-        .build_store(alloca, envelope)
-        .map_err(|e| inkwell_err("build_store pair envelope", e))?;
+    ctx.builder.build_store(alloca, envelope).or_ice()?;
     let abi_size = ctx
         .layouts
         .target_data
@@ -698,11 +634,9 @@ fn build_pair_envelope_alloca<'ctx>(
 /// shim bridges the two: it loads `payload` through the pointer and
 /// routes into `drop_T` via [`release_in_slot`]. Content-addressed by
 /// [`envelope_drop_glue_symbol`], so every send site for the same
-/// message / reply / config type shares one shim. `site` labels emit
-/// errors with the function being emitted.
+/// message / reply / config type shares one shim.
 pub(crate) fn payload_drop_glue<'ctx>(
     ctx: &EmitContext<'ctx>,
-    site: &IRSymbol,
     payload: &IRType,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -712,7 +646,7 @@ pub(crate) fn payload_drop_glue<'ctx>(
     let symbol = envelope_drop_glue_symbol(payload);
     let shim = match ctx.module.get_function(symbol.mangled()) {
         Some(existing) => existing,
-        None => build_payload_drop_shim(ctx, site, payload, symbol.mangled())?,
+        None => build_payload_drop_shim(ctx, payload, symbol.mangled())?,
     };
     Ok(shim.as_global_value().as_pointer_value().into())
 }
@@ -731,7 +665,6 @@ fn payload_owns_heap(ctx: &EmitContext<'_>, payload: &IRType) -> bool {
 /// middle of a send emitter's body.
 fn build_payload_drop_shim<'ctx>(
     ctx: &EmitContext<'ctx>,
-    site: &IRSymbol,
     payload: &IRType,
     symbol: &str,
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
@@ -749,10 +682,8 @@ fn build_payload_drop_shim<'ctx>(
             ))
         })?
         .into_pointer_value();
-    release_in_slot(ctx, site, payload, payload_ptr)?;
-    ctx.builder
-        .build_return(None)
-        .map_err(|e| inkwell_err("build_return envelope drop shim", e))?;
+    release_in_slot(ctx, payload, payload_ptr)?;
+    ctx.builder.build_return(None).or_ice()?;
     if let Some(saved) = saved {
         ctx.builder.position_at_end(saved);
     }
@@ -844,8 +775,8 @@ fn self_field<'ctx>(
     let self_struct = self_value.into_struct_value();
     ctx.builder
         .build_extract_value(self_struct, index, name)
+        .or_ice()
         .map(|v| v.into_int_value())
-        .map_err(|e| inkwell_err(format_args!("build_extract_value {name}"), e))
 }
 
 /// Read the LLVM value + IR type for the `index`-th parameter,

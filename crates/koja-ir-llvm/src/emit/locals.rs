@@ -8,12 +8,12 @@ use inkwell::values::BasicValueEnum;
 use koja_ir::{IRLocalId, IRType, ValueId};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::runtime::declare_rc_dec_extern;
 use crate::types::value_basic_type;
 
 use super::heap_layout::block_base;
-use super::{ValueMap, closures, inkwell_err, lookup};
+use super::{ValueMap, closures, lookup};
 
 /// Materialize a `LocalDecl` as an entry-block `alloca`, stashed on
 /// the [`EmitContext`] keyed by [`IRLocalId`] for later `load` /
@@ -45,8 +45,8 @@ pub(super) fn emit_local_decl<'ctx>(
     };
     ctx.builder
         .build_store(slot, llvm_ty.const_zero())
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("zero-init store for `{local}`"), e))
 }
 
 /// Lower a `LocalRead` to an LLVM `load`. Pointer comes from the
@@ -61,7 +61,7 @@ pub(super) fn emit_local_read<'ctx>(
     let llvm_ty = value_basic_type(ctx, ty)?;
     ctx.builder
         .build_load(llvm_ty, slot, &local.to_string())
-        .map_err(|e| inkwell_err(format_args!("build_load for `{local}`"), e))
+        .or_ice()
 }
 
 /// Lower a `LocalWrite` to an LLVM `store` into the slot table's
@@ -72,10 +72,7 @@ pub(super) fn emit_local_write<'ctx>(
     value: BasicValueEnum<'ctx>,
 ) -> Result<(), LlvmError> {
     let slot = ctx.local_slot(local);
-    ctx.builder
-        .build_store(slot, value)
-        .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_store for `{local}`"), e))
+    ctx.builder.build_store(slot, value).or_ice().map(|_| ())
 }
 
 /// `String`, `Binary`, and `Bits` all share the single
@@ -159,6 +156,6 @@ fn emit_rc_dec<'ctx>(
     let rc_dec = declare_rc_dec_extern(ctx);
     ctx.builder
         .build_call(rc_dec, &[base.into()], &format!("{label}.rc_dec"))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("rc_dec call for `{label}`"), e))
 }

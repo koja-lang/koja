@@ -11,8 +11,7 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::declare_malloc_extern;
 
@@ -37,22 +36,12 @@ pub(super) fn emit_to_string<'ctx>(
             let ptr = ctx
                 .builder
                 .build_extract_value(s, 0, "cs_ptr")
-                .map_err(|e| {
-                    inkwell_err(
-                        format_args!("build_extract_value for `{}`", function.symbol),
-                        e,
-                    )
-                })?
+                .or_ice()?
                 .into_pointer_value();
             let len = ctx
                 .builder
                 .build_extract_value(s, 1, "cs_len")
-                .map_err(|e| {
-                    inkwell_err(
-                        format_args!("build_extract_value for `{}`", function.symbol),
-                        e,
-                    )
-                })?
+                .or_ice()?
                 .into_int_value();
             (ptr, len)
         }
@@ -67,28 +56,13 @@ pub(super) fn emit_to_string<'ctx>(
     let total = block_alloc_size(ctx, byte_len, true, "total")?;
     let malloc = declare_malloc_extern(ctx);
     let base_ptr: PointerValue<'ctx> = ctx
-        .builder
-        .build_call(malloc, &[total.into()], "base_ptr")
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call malloc for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "malloc returned no value for `{}`",
-                function.symbol
-            ))
-        })?
+        .call_basic(malloc, &[total.into()], "base_ptr")?
         .into_pointer_value();
 
     let bit_len: IntValue<'ctx> = ctx
         .builder
         .build_int_mul(byte_len, i64_ty.const_int(8, false), "bit_len")
-        .map_err(|e| inkwell_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let payload_ptr = init_heap_block(ctx, base_ptr, bit_len, "cstring_str")?;
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
@@ -97,22 +71,17 @@ pub(super) fn emit_to_string<'ctx>(
             &[payload_ptr.into(), c_ptr.into(), byte_len.into()],
             "",
         )
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_call memcpy for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let nul_ptr = unsafe {
         ctx.builder
             .build_in_bounds_gep(ctx.context.i8_type(), payload_ptr, &[byte_len], "nul_ptr")
-            .map_err(|e| inkwell_err(format_args!("build_gep nul for `{}`", function.symbol), e))?
+            .or_ice()?
     };
     ctx.builder
         .build_store(nul_ptr, ctx.context.i8_type().const_zero())
-        .map_err(|e| inkwell_err(format_args!("build_store nul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     ctx.builder
         .build_return(Some(&payload_ptr))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_return for `{}`", function.symbol), e))
 }

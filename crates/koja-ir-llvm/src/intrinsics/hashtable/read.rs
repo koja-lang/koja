@@ -11,15 +11,15 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::{acquire_value, release_in_slot};
 use crate::types::ir_basic_type;
 
 use super::util::{
     KeyHashOps, TableSnapshot, advance_slot, build_table_struct, call_eq, call_hash,
-    clone_table_buffers, codegen_err, entry_pointer, expect_enum_symbol, extract_int,
-    extract_pointer, extract_table_fields, nth_hashtable, nth_param, resolve_key_hash_ops,
-    ret_basic, ret_struct, value_slot,
+    clone_table_buffers, entry_pointer, expect_enum_symbol, extract_int, extract_pointer,
+    extract_table_fields, nth_hashtable, nth_param, resolve_key_hash_ops, ret_basic, ret_struct,
+    value_slot,
 };
 use super::{
     HashtableLayout, OPTION_NONE_TAG, OPTION_SOME_TAG, STATE_EMPTY, STATE_OCCUPIED, STATE_TOMBSTONE,
@@ -67,15 +67,15 @@ fn emit_read_only_probe<'ctx>(
         ))
     })?;
 
-    let hash_val = call_hash(ctx, function, key_ops.hash_fn, key_val)?;
+    let hash_val = call_hash(ctx, key_ops.hash_fn, key_val)?;
     let mask = ctx
         .builder
         .build_int_sub(table.capacity, i64_ty.const_int(1, false), "mask")
-        .map_err(|e| codegen_err(format_args!("build_int_sub for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let start_slot = ctx
         .builder
         .build_and(hash_val, mask, "start_slot")
-        .map_err(|e| codegen_err(format_args!("build_and for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     let probe_bb = ctx.context.append_basic_block(llvm_function, "probe");
     let check_bb = ctx.context.append_basic_block(llvm_function, "check");
@@ -84,26 +84,21 @@ fn emit_read_only_probe<'ctx>(
     let not_found_bb = ctx.context.append_basic_block(llvm_function, "not_found");
     let advance_bb = ctx.context.append_basic_block(llvm_function, "advance");
 
-    ctx.builder
-        .build_unconditional_branch(probe_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+    ctx.builder.build_unconditional_branch(probe_bb).or_ice()?;
     ctx.builder.position_at_end(probe_bb);
-    let pidx_phi = ctx
-        .builder
-        .build_phi(i64_ty, "pidx")
-        .map_err(|e| codegen_err(format_args!("build_phi for `{}`", function.symbol), e))?;
+    let pidx_phi = ctx.builder.build_phi(i64_ty, "pidx").or_ice()?;
     pidx_phi.add_incoming(&[(&start_slot, entry_block)]);
     let pidx = pidx_phi.as_basic_value().into_int_value();
 
     let s_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, table.states_ptr, &[pidx], "s_ptr")
-            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
+            .or_ice()?
     };
     let s_val = ctx
         .builder
         .build_load(i8_ty, s_ptr, "s_val")
-        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?
+        .or_ice()?
         .into_int_value();
     let is_empty = ctx
         .builder
@@ -113,15 +108,10 @@ fn emit_read_only_probe<'ctx>(
             i8_ty.const_int(STATE_EMPTY, false),
             "is_empty",
         )
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     ctx.builder
         .build_conditional_branch(is_empty, not_found_bb, check_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(check_bb);
     let is_occ = ctx
@@ -132,33 +122,26 @@ fn emit_read_only_probe<'ctx>(
             i8_ty.const_int(STATE_OCCUPIED, false),
             "is_occ",
         )
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     ctx.builder
         .build_conditional_branch(is_occ, cmp_bb, advance_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(cmp_bb);
-    let e_ptr = entry_pointer(ctx, function, table.entries_ptr, pidx, layout.entry_size)?;
+    let e_ptr = entry_pointer(ctx, table.entries_ptr, pidx, layout.entry_size)?;
     let existing_key = ctx
         .builder
         .build_load(key_ops.key_basic_ty, e_ptr, "existing_key")
-        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?;
-    let keys_equal = call_eq(ctx, function, key_ops.eq_fn, key_val, existing_key)?;
+        .or_ice()?;
+    let keys_equal = call_eq(ctx, key_ops.eq_fn, key_val, existing_key)?;
     ctx.builder
         .build_conditional_branch(keys_equal, found_bb, advance_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(advance_bb);
-    let wrapped = advance_slot(ctx, function, pidx, mask)?;
+    let wrapped = advance_slot(ctx, pidx, mask)?;
     pidx_phi.add_incoming(&[(&wrapped, advance_bb)]);
-    ctx.builder
-        .build_unconditional_branch(probe_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+    ctx.builder.build_unconditional_branch(probe_bb).or_ice()?;
 
     Ok(ReadOnlyProbe {
         advance_bb,
@@ -193,9 +176,9 @@ pub(crate) fn emit_has_q<'ctx>(
     let _ = (probe.e_ptr, probe.pidx, probe.s_ptr, probe.pidx_phi);
 
     ctx.builder.position_at_end(probe.found_bb);
-    ret_basic(ctx, function, i1_ty.const_int(1, false).into())?;
+    ret_basic(ctx, i1_ty.const_int(1, false).into())?;
     ctx.builder.position_at_end(probe.not_found_bb);
-    ret_basic(ctx, function, i1_ty.const_zero().into())
+    ret_basic(ctx, i1_ty.const_zero().into())
 }
 
 pub(crate) fn emit_remove<'ctx>(
@@ -213,12 +196,12 @@ pub(crate) fn emit_remove<'ctx>(
     // table is never mutated in place through a shared binding.
     let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
     let original = TableSnapshot {
-        entries_ptr: extract_pointer(ctx, function, self_val, 0, "entries")?,
-        states_ptr: extract_pointer(ctx, function, self_val, 1, "states")?,
-        length: extract_int(ctx, function, self_val, 2, "len")?,
-        capacity: extract_int(ctx, function, self_val, 3, "cap")?,
+        entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
+        states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
+        length: extract_int(ctx, self_val, 2, "len")?,
+        capacity: extract_int(ctx, self_val, 3, "cap")?,
     };
-    let table = clone_table_buffers(ctx, function, llvm_function, layout, &original)?;
+    let table = clone_table_buffers(ctx, llvm_function, layout, &original)?;
     let key_val = nth_param(function, llvm_function, 1, "key")?;
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
     let probe = emit_read_only_probe(
@@ -236,27 +219,26 @@ pub(crate) fn emit_remove<'ctx>(
     // The clone acquired this bucket's key (and value); tombstoning
     // drops it from the table, so release that reference now —
     // otherwise the slot's payload leaks once the table is reclaimed.
-    release_in_slot(ctx, &function.symbol, layout.key_ty, probe.e_ptr)?;
+    release_in_slot(ctx, layout.key_ty, probe.e_ptr)?;
     if let Some(value_ty) = layout.value_ty {
-        let value_ptr = value_slot(ctx, function, probe.e_ptr, layout.key_size)?;
-        release_in_slot(ctx, &function.symbol, value_ty, value_ptr)?;
+        let value_ptr = value_slot(ctx, probe.e_ptr, layout.key_size)?;
+        release_in_slot(ctx, value_ty, value_ptr)?;
     }
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_TOMBSTONE, false))
-        .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let new_len = ctx
         .builder
         .build_int_sub(table.length, i64_ty.const_int(1, false), "new_len")
-        .map_err(|e| codegen_err(format_args!("build_int_sub for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let removed = build_table_struct(
         ctx,
-        function,
         table.entries_ptr,
         table.states_ptr,
         new_len,
         table.capacity,
     )?;
-    ret_struct(ctx, function, removed)?;
+    ret_struct(ctx, removed)?;
 
     // Not found: nothing is removed, but `self` is borrowed and dropped
     // by the caller, so returning `self_val` would alias its buffers and
@@ -265,13 +247,12 @@ pub(crate) fn emit_remove<'ctx>(
     ctx.builder.position_at_end(probe.not_found_bb);
     let unchanged = build_table_struct(
         ctx,
-        function,
         table.entries_ptr,
         table.states_ptr,
         table.length,
         table.capacity,
     )?;
-    ret_struct(ctx, function, unchanged)
+    ret_struct(ctx, unchanged)
 }
 
 pub(crate) fn emit_map_get<'ctx>(
@@ -314,27 +295,21 @@ pub(crate) fn emit_map_get<'ctx>(
                 &[i64_ty.const_int(layout.key_size, false)],
                 "val_ptr",
             )
-            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
+            .or_ice()?
     };
     let val = ctx
         .builder
         .build_load(value_basic_ty, val_ptr, "val")
-        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?;
+        .or_ice()?;
     // Hand-out: the returned `Some` owns an independent reference, so
     // acquire the value (heap-leaf `rc++` / composite deep clone).
     // Otherwise the receiver's table and the returned value share one
     // reference and both drop it — a double free once glue is active.
-    let owned = acquire_value(ctx, &function.symbol, value_ty, val)?;
+    let owned = acquire_value(ctx, value_ty, val)?;
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[owned])?;
-    ctx.builder
-        .build_return(Some(&some))
-        .map(|_| ())
-        .map_err(|e| codegen_err(format_args!("build_return for `{}`", function.symbol), e))?;
+    ctx.builder.build_return(Some(&some)).or_ice().map(|_| ())?;
 
     ctx.builder.position_at_end(probe.not_found_bb);
     let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
-    ctx.builder
-        .build_return(Some(&none))
-        .map(|_| ())
-        .map_err(|e| codegen_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }

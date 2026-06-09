@@ -25,10 +25,19 @@ site (undelivered payloads reclaim their nested heap), the
 close-while-blocked reactor wake, the owned-temporary / construction
 drop discipline in IR lowering (callers release heap temps they pass to
 a clone-on-entry callee; construction results are `owned` and moved, not
-cloned), and a global panic hook plus ThreadSanitizer with transition
-guards. Each converted a class of "correct by careful review" into
-"correct by construction" or "caught by CI." The entries below are what
-remains.
+cloned), deep-copy at every process boundary (`IRInstruction::DeepCopy`
++ `deep_copy_T` glue; payloads never alias sender heap, so intra-process
+rc stays non-atomic), a unified `OwnedPayload` RAII owner across
+envelopes / timers / spawn configs, the two-queue mailbox with a tokened
+one-shot reply slot (stale replies are discarded by correlation, not
+delivered to the next call), kill-tombstone guards at every park site
+(`block_on` / `io_block` / the trampoline's own death mark skip the
+transition when a cross-worker kill already marked the process `Dead`),
+and a global panic hook plus ThreadSanitizer with transition guards.
+Each converted a class of "correct by careful review" into "correct by
+construction" or "caught by CI." The `tests/lang/memory/` fixtures pin
+the payload-reclaim behavior with `koja_rt_live_blocks` steady-state
+checks. The entries below are what remains.
 
 ---
 
@@ -51,7 +60,10 @@ What's missing is *exhaustive* coverage. The TSan harness only exercises
 spawn/send/receive — not `kill`, timers, or I/O readiness — and TSan
 cannot follow the hand-written asm stack swap itself
 (`koja_context_switch` faults its shadow stack), only the Rust state
-around it.
+around it. The gap is not hypothetical: the kill-vs-park interleaving
+(cross-worker `kill` marks a mid-run process `Dead`; its next
+`block_on` tried `Dead -> Blocked` and tripped the transition guard)
+shipped until the `tests/lang/memory/` kill fixtures caught it.
 
 **Fix.** `loom` for exhaustive interleaving tests of the switch/handoff,
 covering the paths the TSan soak doesn't.

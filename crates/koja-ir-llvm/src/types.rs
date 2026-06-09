@@ -234,16 +234,21 @@ pub(crate) fn closure_body_signature<'ctx>(
 }
 
 /// Number of leading header fields on every (non-null) closure env
-/// block: `[i64 rc][ptr drop_fn]`. The rc word mirrors the heap-leaf
-/// `[i64 rc][i64 bit_length]` header so `koja_rc_inc` shares the same
-/// base-pointer ABI; the second word holds the address of the
-/// closure's `FunctionKind::DropClosureGlue` capture-release glue (or
-/// null when no capture is heap-managed). Capture `i` therefore lives
-/// at struct field `CLOSURE_ENV_HEADER_FIELDS + i`.
-pub(crate) const CLOSURE_ENV_HEADER_FIELDS: u32 = 2;
+/// block: `[i64 rc][ptr drop_fn][ptr copy_fn]`. The rc word mirrors
+/// the heap-leaf `[i64 rc][i64 bit_length]` header so `koja_rc_inc`
+/// shares the same base-pointer ABI; the second word holds the
+/// address of the closure's `FunctionKind::DropClosureGlue`
+/// capture-release glue (or null when no capture is heap-managed);
+/// the third holds its `FunctionKind::CopyClosureGlue` env deep-copy
+/// glue, invoked by `koja_closure_deep_copy` when the closure crosses
+/// a process boundary (null only for hand-built IR that never sends
+/// the closure). Capture `i` therefore lives at struct field
+/// `CLOSURE_ENV_HEADER_FIELDS + i`. Mirrored runtime-side by
+/// `koja-runtime`'s `LENGTH_OFFSET` / `COPY_FN_OFFSET`.
+pub(crate) const CLOSURE_ENV_HEADER_FIELDS: u32 = 3;
 
 /// LLVM struct type for the env block of a closure with the given
-/// `env_layout`: the `[i64 rc][ptr drop_fn]` header (see
+/// `env_layout`: the `[i64 rc][ptr drop_fn][ptr copy_fn]` header (see
 /// [`CLOSURE_ENV_HEADER_FIELDS`]) followed by one field per capture.
 /// Anonymous (literal) struct so each capture-arity / type
 /// combination shares one LLVM type per emit module without a
@@ -254,10 +259,12 @@ pub(crate) fn env_struct_type<'ctx>(
     ctx: &EmitContext<'ctx>,
     env_layout: &[IRType],
 ) -> Result<StructType<'ctx>, LlvmError> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let mut fields: Vec<BasicTypeEnum<'ctx>> =
         Vec::with_capacity(env_layout.len() + CLOSURE_ENV_HEADER_FIELDS as usize);
     fields.push(ctx.context.i64_type().into());
-    fields.push(ctx.context.ptr_type(AddressSpace::default()).into());
+    fields.push(ptr_ty.into());
+    fields.push(ptr_ty.into());
     for ty in env_layout {
         fields.push(ir_basic_type(ctx, ty)?);
     }

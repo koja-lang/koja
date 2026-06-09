@@ -42,8 +42,8 @@ use koja_ir::{
 };
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::element::release_in_slot;
 use crate::intrinsics::process::payload_drop_glue;
 use crate::main_wrapper::EXIT_CODE_SYMBOL;
 use crate::runtime::{
@@ -101,18 +101,19 @@ pub(crate) fn emit_spawn_wrapper_body<'ctx>(
     // discarded because the scheduler manages the spawned process's
     // lifecycle through receive loops and shutdown signals.
     ctx.builder.position_at_end(ok_bb);
-    let state_val = load_ok_state(ctx, &ctx_wrapper, ok_complete, ok_payload, result_alloca)?;
+    let (state_val, state_ptr) =
+        load_ok_state(ctx, &ctx_wrapper, ok_complete, ok_payload, result_alloca)?;
     ctx.builder
         .build_call(ctx_wrapper.run_fn, &[state_val.into()], "")
-        .map_err(|e| inkwell_err("build_call run", e))?;
-    ctx.builder
-        .build_return(None)
-        .map_err(|e| inkwell_err("build_return wrapper ok", e))?;
+        .or_ice()?;
+    // `start`'s return is owned by the wrapper and `run` only borrows
+    // it (param promotion clones into its own slot), so release it here
+    // or its nested heap leaks on every spawn.
+    release_in_slot(ctx, state, state_ptr)?;
+    ctx.builder.build_return(None).or_ice()?;
 
     ctx.builder.position_at_end(err_bb);
-    ctx.builder
-        .build_return(None)
-        .map_err(|e| inkwell_err("build_return wrapper err", e))?;
+    ctx.builder.build_return(None).or_ice()?;
 
     Ok(())
 }
@@ -160,18 +161,13 @@ pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
     // Ok path: extract state, call run, then route run's StopReason
     // return through StopReason.code() into __koja_exit_code.
     ctx.builder.position_at_end(ok_bb);
-    let state_val = load_ok_state(ctx, &ctx_wrapper, ok_complete, ok_payload, result_alloca)?;
-    let run_call = ctx
-        .builder
-        .build_call(ctx_wrapper.run_fn, &[state_val.into()], "stop_reason")
-        .map_err(|e| inkwell_err("build_call run", e))?;
-    let stop_reason = run_call.try_as_basic_value().basic().ok_or_else(|| {
-        LlvmError::Codegen("run() did not produce a StopReason value".to_string())
-    })?;
+    let (state_val, state_ptr) =
+        load_ok_state(ctx, &ctx_wrapper, ok_complete, ok_payload, result_alloca)?;
+    let stop_reason = ctx.call_basic(ctx_wrapper.run_fn, &[state_val.into()], "stop_reason")?;
+    // See `emit_spawn_wrapper_body`: the wrapper owns `start`'s return.
+    release_in_slot(ctx, state, state_ptr)?;
     store_exit_code(ctx, code_fn, stop_reason)?;
-    ctx.builder
-        .build_return(None)
-        .map_err(|e| inkwell_err("build_return entry wrapper ok", e))?;
+    ctx.builder.build_return(None).or_ice()?;
 
     // Err path: extract the StopReason payload from Result.Err, hand
     // it to StopReason.code(), store the exit code.
@@ -184,9 +180,7 @@ pub(crate) fn emit_process_entry_wrapper_body<'ctx>(
         code_fn,
     )?;
     store_exit_code(ctx, code_fn, stop_reason_val)?;
-    ctx.builder
-        .build_return(None)
-        .map_err(|e| inkwell_err("build_return entry wrapper err", e))?;
+    ctx.builder.build_return(None).or_ice()?;
 
     Ok(())
 }
@@ -269,7 +263,7 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
         let typed_config = ctx
             .builder
             .build_load(config_llvm_type, raw_ptr, "loaded_config")
-            .map_err(|e| inkwell_err("build_load loaded_config", e))?;
+            .or_ice()?;
 
         let state_llvm_type = ir_basic_type(ctx, state)?;
 
@@ -284,14 +278,8 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
     }
 
     fn emit_start_dispatch(&self, ctx: &EmitContext<'ctx>) -> Result<StartBranch<'ctx>, LlvmError> {
-        let start_call = ctx
-            .builder
-            .build_call(self.start_fn, &[self.typed_config.into()], "start_result")
-            .map_err(|e| inkwell_err("build_call start", e))?;
-        let result_value = start_call
-            .try_as_basic_value()
-            .basic()
-            .ok_or_else(|| LlvmError::Codegen("start() did not produce a value".to_string()))?;
+        let result_value =
+            ctx.call_basic(self.start_fn, &[self.typed_config.into()], "start_result")?;
 
         let result_outer = result_value.into_struct_value().get_type();
         let result_outer_name = result_outer
@@ -308,13 +296,10 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
         let (ok_complete, ok_payload) = ctx
             .layouts
             .enum_variant_types(&result_outer_name, IRVariantTag(0));
-        let result_alloca = ctx
-            .builder
-            .build_alloca(result_outer, "result")
-            .map_err(|e| inkwell_err("build_alloca result", e))?;
+        let result_alloca = ctx.builder.build_alloca(result_outer, "result").or_ice()?;
         ctx.builder
             .build_store(result_alloca, result_value)
-            .map_err(|e| inkwell_err("build_store result", e))?;
+            .or_ice()?;
 
         let ok_bb = ctx
             .context
@@ -328,10 +313,10 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
         let is_ok = ctx
             .builder
             .build_int_compare(IntPredicate::EQ, tag, i8_ty.const_int(0, false), "is_ok")
-            .map_err(|e| inkwell_err("build_int_compare is_ok", e))?;
+            .or_ice()?;
         ctx.builder
             .build_conditional_branch(is_ok, ok_bb, err_bb)
-            .map_err(|e| inkwell_err("build_conditional_branch wrapper", e))?;
+            .or_ice()?;
 
         Ok(StartBranch {
             ok_bb,
@@ -344,13 +329,16 @@ impl<'ctx> WrapperBodyCtx<'ctx> {
     }
 }
 
+/// Load the `Ok(state)` payload out of the spilled `start` result,
+/// returning both the loaded value (for the `run` call) and its slot
+/// pointer (so the wrapper can release the state it owns afterwards).
 fn load_ok_state<'ctx>(
     ctx: &EmitContext<'ctx>,
     wrapper: &WrapperBodyCtx<'ctx>,
     ok_complete: StructType<'ctx>,
     ok_payload: Option<StructType<'ctx>>,
     result_alloca: PointerValue<'ctx>,
-) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+) -> Result<(BasicValueEnum<'ctx>, PointerValue<'ctx>), LlvmError> {
     let ok_payload_struct = ok_payload.ok_or_else(|| {
         LlvmError::Codegen(format!(
             "LLVM emit: wrapper `{}` start return type's `Ok` variant declares no payload \
@@ -361,14 +349,16 @@ fn load_ok_state<'ctx>(
     let payload_struct_ptr = ctx
         .builder
         .build_struct_gep(ok_complete, result_alloca, 2, "ok_payload_struct")
-        .map_err(|e| inkwell_err("build_struct_gep ok_payload_struct", e))?;
+        .or_ice()?;
     let state_ptr = ctx
         .builder
         .build_struct_gep(ok_payload_struct, payload_struct_ptr, 0, "ok_state_field")
-        .map_err(|e| inkwell_err("build_struct_gep ok_state_field", e))?;
-    ctx.builder
+        .or_ice()?;
+    let state_val = ctx
+        .builder
         .build_load(wrapper.state_llvm_type, state_ptr, "state")
-        .map_err(|e| inkwell_err("build_load state", e))
+        .or_ice()?;
+    Ok((state_val, state_ptr))
 }
 
 fn load_err_stop_reason<'ctx>(
@@ -403,7 +393,7 @@ fn load_err_stop_reason<'ctx>(
     let payload_struct_ptr = ctx
         .builder
         .build_struct_gep(err_complete, result_alloca, 2, "err_payload_struct")
-        .map_err(|e| inkwell_err("build_struct_gep err_payload_struct", e))?;
+        .or_ice()?;
     let stop_reason_ptr = ctx
         .builder
         .build_struct_gep(
@@ -412,10 +402,10 @@ fn load_err_stop_reason<'ctx>(
             0,
             "err_stop_reason_field",
         )
-        .map_err(|e| inkwell_err("build_struct_gep err_stop_reason_field", e))?;
+        .or_ice()?;
     ctx.builder
         .build_load(stop_reason_llvm_type, stop_reason_ptr, "stop_reason")
-        .map_err(|e| inkwell_err("build_load stop_reason", e))
+        .or_ice()
 }
 
 fn store_exit_code<'ctx>(
@@ -423,19 +413,13 @@ fn store_exit_code<'ctx>(
     code_fn: FunctionValue<'ctx>,
     stop_reason: BasicValueEnum<'ctx>,
 ) -> Result<(), LlvmError> {
-    let code_call = ctx
-        .builder
-        .build_call(code_fn, &[stop_reason.into()], "exit_code_i64")
-        .map_err(|e| inkwell_err("build_call StopReason.code", e))?;
-    let code_i64 = code_call
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("StopReason.code did not produce a value".to_string()))?
+    let code_i64 = ctx
+        .call_basic(code_fn, &[stop_reason.into()], "exit_code_i64")?
         .into_int_value();
     let code_i32 = ctx
         .builder
         .build_int_truncate(code_i64, ctx.context.i32_type(), "exit_code_i32")
-        .map_err(|e| inkwell_err("build_int_truncate exit_code", e))?;
+        .or_ice()?;
     let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
         LlvmError::Codegen(format!(
             "LLVM emit: `{EXIT_CODE_SYMBOL}` global not declared before wrapper body emit",
@@ -443,8 +427,8 @@ fn store_exit_code<'ctx>(
     })?;
     ctx.builder
         .build_store(exit_global.as_pointer_value(), code_i32)
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err("build_store __koja_exit_code", e))
 }
 
 /// Read the `i8` variant tag (always at field 0 of every variant's
@@ -460,11 +444,11 @@ fn read_variant_tag<'ctx>(
     let tag_ptr = ctx
         .builder
         .build_struct_gep(variant_complete, slot, 0, "tag_ptr")
-        .map_err(|e| inkwell_err("build_struct_gep tag", e))?;
+        .or_ice()?;
     ctx.builder
         .build_load(ctx.context.i8_type(), tag_ptr, "tag")
+        .or_ice()
         .map(|v| v.into_int_value())
-        .map_err(|e| inkwell_err("build_load tag", e))
 }
 
 // ----- IRInstruction::Spawn ------------------------------------------------
@@ -490,7 +474,7 @@ pub(super) fn emit_spawn<'ctx>(
 
     let (config_ptr, config_size) =
         serialize_to_stack(ctx, "spawn_config", config_llvm_type, config_value)?;
-    let drop_glue = payload_drop_glue(ctx, wrapper, config_type)?;
+    let drop_glue = payload_drop_glue(ctx, config_type)?;
 
     let wrapper_fn = ctx.declared_function(wrapper).ok_or_else(|| {
         LlvmError::Codegen(format!(
@@ -500,9 +484,8 @@ pub(super) fn emit_spawn<'ctx>(
     let wrapper_ptr = wrapper_fn.as_global_value().as_pointer_value();
 
     let spawn_fn = declare_rt_spawn_extern(ctx);
-    let pid_call = ctx
-        .builder
-        .build_call(
+    let pid = ctx
+        .call_basic(
             spawn_fn,
             &[
                 wrapper_ptr.into(),
@@ -511,12 +494,7 @@ pub(super) fn emit_spawn<'ctx>(
                 drop_glue.into(),
             ],
             "spawn_pid",
-        )
-        .map_err(|e| inkwell_err("build_call koja_rt_spawn", e))?;
-    let pid = pid_call
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen("koja_rt_spawn did not produce a value".to_string()))?
+        )?
         .into_int_value();
 
     let ref_struct = ctx.layouts.struct_type(ref_type.mangled());
@@ -524,7 +502,7 @@ pub(super) fn emit_spawn<'ctx>(
     ref_value = ctx
         .builder
         .build_insert_value(ref_value, pid, 0, "ref_pid")
-        .map_err(|e| inkwell_err("build_insert_value ref_pid", e))?
+        .or_ice()?
         .into_struct_value();
 
     values.insert(dest, ref_value.into());
@@ -613,7 +591,7 @@ fn build_receive_call<'ctx>(
                 &[payload_slot.into(), payload_cap.into(), timeout.into()],
                 "receive_tag",
             )
-            .map_err(|e| inkwell_err("build_call koja_rt_receive_timeout", e))?
+            .or_ice()?
     } else {
         let receive_fn = declare_rt_receive_extern(ctx);
         ctx.builder
@@ -622,7 +600,7 @@ fn build_receive_call<'ctx>(
                 &[payload_slot.into(), payload_cap.into()],
                 "receive_tag",
             )
-            .map_err(|e| inkwell_err("build_call koja_rt_receive", e))?
+            .or_ice()?
     };
     Ok(tag_call
         .try_as_basic_value()
@@ -645,12 +623,12 @@ fn timeout_tag_branch<'ctx>(
     let is_none = ctx
         .builder
         .build_int_compare(IntPredicate::EQ, tag_value, none_tag, "receive_is_none")
-        .map_err(|e| inkwell_err("build_int_compare receive_is_none", e))?;
+        .or_ice()?;
     let after_bb = ctx.block_for(after.body);
     let continue_bb = ctx.context.append_basic_block(function, "receive_dispatch");
     ctx.builder
         .build_conditional_branch(is_none, after_bb, continue_bb)
-        .map_err(|e| inkwell_err("build_conditional_branch receive_is_none", e))?;
+        .or_ice()?;
     Ok(continue_bb)
 }
 
@@ -682,7 +660,7 @@ fn dispatch_arms<'ctx>(
                 i64_ty.const_int(wire_byte as u64, false),
                 &format!("is_arm_{index}"),
             )
-            .map_err(|e| inkwell_err("build_int_compare arm tag", e))?;
+            .or_ice()?;
         let arm_prelude_bb = ctx
             .context
             .append_basic_block(function, &format!("arm_{index}_prelude"));
@@ -691,21 +669,16 @@ fn dispatch_arms<'ctx>(
             .append_basic_block(function, &format!("arm_{index}_test"));
         ctx.builder
             .build_conditional_branch(is_match, arm_prelude_bb, next_bb)
-            .map_err(|e| inkwell_err("build_conditional_branch arm dispatch", e))?;
+            .or_ice()?;
 
         ctx.builder.position_at_end(arm_prelude_bb);
         deserialize_payload_into_local(ctx, payload_slot, arm)?;
         let body_bb = ctx.block_for(arm.body);
-        ctx.builder
-            .build_unconditional_branch(body_bb)
-            .map_err(|e| inkwell_err("build_unconditional_branch arm body", e))?;
+        ctx.builder.build_unconditional_branch(body_bb).or_ice()?;
 
         ctx.builder.position_at_end(next_bb);
     }
-    ctx.builder
-        .build_unreachable()
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_unreachable receive fallthrough", e))
+    ctx.builder.build_unreachable().or_ice().map(|_| ())
 }
 
 /// Load the typed payload the runtime copied into `payload_slot` (at
@@ -726,12 +699,9 @@ fn deserialize_payload_into_local<'ctx>(
     let payload = ctx
         .builder
         .build_load(payload_llvm_type, payload_slot, label)
-        .map_err(|e| inkwell_err("build_load receive payload", e))?;
+        .or_ice()?;
     let slot = ctx.local_slot(arm.payload_local);
-    ctx.builder
-        .build_store(slot, payload)
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_store receive payload local", e))?;
+    ctx.builder.build_store(slot, payload).or_ice()?;
     Ok(())
 }
 
@@ -751,9 +721,7 @@ pub(crate) fn serialize_to_stack<'ctx>(
     value: BasicValueEnum<'ctx>,
 ) -> Result<(PointerValue<'ctx>, IntValue<'ctx>), LlvmError> {
     let alloca = ctx.build_entry_alloca(llvm_type, label);
-    ctx.builder
-        .build_store(alloca, value)
-        .map_err(|e| inkwell_err(format_args!("build_store {label}"), e))?;
+    ctx.builder.build_store(alloca, value).or_ice()?;
     let abi_size = ctx.layouts.target_data.get_abi_size(&llvm_type);
     let size = ctx.context.i64_type().const_int(abi_size, false);
     Ok((alloca, size))

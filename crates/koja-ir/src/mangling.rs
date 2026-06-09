@@ -156,6 +156,13 @@ pub fn clone_glue_symbol(ty: &IRType) -> IRSymbol {
     glue_base(ty).derived(".$clone$")
 }
 
+/// Symbol of the synthesized deep-copy glue for `ty`
+/// (`<type>.$deep_copy$`). Process-boundary analog of
+/// [`clone_glue_symbol`]; same rooting and collision-free guarantee.
+pub fn deep_copy_glue_symbol(ty: &IRType) -> IRSymbol {
+    glue_base(ty).derived(".$deep_copy$")
+}
+
 /// Symbol of the synthesized drop glue for `ty` (`<type>.$drop$`).
 /// Drop analog of [`clone_glue_symbol`]; same rooting and
 /// collision-free guarantee.
@@ -185,6 +192,17 @@ pub fn envelope_drop_glue_symbol(ty: &IRType) -> IRSymbol {
 /// single helper so they agree by construction.
 pub fn closure_drop_env_symbol(body: &IRSymbol) -> IRSymbol {
     body.derived(".$drop_env$")
+}
+
+/// Symbol of the synthesized env deep-copy glue for a closure body
+/// (`<body>.$copy_env$`). Copy analog of [`closure_drop_env_symbol`];
+/// same rooting and collision-free guarantee. Minted by
+/// `crate::lower::closures` (which registers the
+/// `FunctionKind::CopyClosureGlue` shell) and resolved by the LLVM
+/// backend at `MakeClosure` (which stamps its address into the env
+/// header's `copy_fn` word).
+pub fn closure_copy_env_symbol(body: &IRSymbol) -> IRSymbol {
+    body.derived(".$copy_env$")
 }
 
 /// The symbol the per-type glue hangs off. Named types (struct /

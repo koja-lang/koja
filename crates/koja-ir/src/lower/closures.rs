@@ -30,7 +30,7 @@ use crate::function::{
     FunctionKind, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol, IRTerminator,
 };
 use crate::local::IRLocalId;
-use crate::mangling::closure_drop_env_symbol;
+use crate::mangling::{closure_copy_env_symbol, closure_drop_env_symbol};
 use crate::types::{IRType, ValueId};
 
 use super::body::{finalize_open_flow, lower_body};
@@ -69,9 +69,7 @@ pub(super) fn lower_block_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
-    if let Some(drop_env) = synthesize_drop_env(&symbol, &captures_with_types) {
-        output.synthesized_functions.push(drop_env);
-    }
+    synthesize_env_glue(&symbol, &captures_with_types, output);
 
     emit_make_closure(
         symbol,
@@ -114,9 +112,7 @@ pub(super) fn lower_short_closure(
         output,
     )?;
     output.synthesized_functions.push(synthesized);
-    if let Some(drop_env) = synthesize_drop_env(&symbol, &captures_with_types) {
-        output.synthesized_functions.push(drop_env);
-    }
+    synthesize_env_glue(&symbol, &captures_with_types, output);
 
     emit_make_closure(
         symbol,
@@ -127,6 +123,18 @@ pub(super) fn lower_short_closure(
         registry,
         output,
     )
+}
+
+/// Register the synthesized glue siblings (`$drop_env$` /
+/// `$copy_env$`) a capturing closure's env block needs. Shared by the
+/// block- and short-closure lowerings.
+fn synthesize_env_glue(symbol: &IRSymbol, captures: &[CaptureInfo], output: &mut LowerOutput) {
+    if let Some(drop_env) = synthesize_drop_env(symbol, captures) {
+        output.synthesized_functions.push(drop_env);
+    }
+    if let Some(copy_env) = synthesize_copy_env(symbol, captures) {
+        output.synthesized_functions.push(copy_env);
+    }
 }
 
 /// Build the `<body>.$drop_env$` capture-release glue
@@ -179,6 +187,32 @@ fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Opti
         params: Vec::new(),
         return_type: IRType::Unit,
         symbol: closure_drop_env_symbol(body_symbol),
+    })
+}
+
+/// Register the `<body>.$copy_env$` env deep-copy glue shell
+/// ([`FunctionKind::CopyClosureGlue`]) for a closure that captures.
+/// Every capturing closure gets one — any closure value may flow
+/// into a process-boundary send, and even an all-`Copy` env must be
+/// re-allocated to avoid cross-process rc traffic on the block.
+/// Returns `None` for captureless closures (null env, nothing to
+/// copy).
+///
+/// The body returns a raw env pointer, which has no IR type, so
+/// `blocks` stays empty and the LLVM backend synthesizes it from
+/// `env_layout` at emit time. `elaborate` reads the layout to
+/// register `deep_copy_T` for composite captures.
+fn synthesize_copy_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Option<IRFunction> {
+    if captures.is_empty() {
+        return None;
+    }
+    let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
+    Some(IRFunction {
+        blocks: Vec::new(),
+        kind: FunctionKind::CopyClosureGlue { env_layout },
+        params: Vec::new(),
+        return_type: IRType::Unit,
+        symbol: closure_copy_env_symbol(body_symbol),
     })
 }
 

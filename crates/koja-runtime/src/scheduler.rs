@@ -347,6 +347,15 @@ fn yield_to_scheduler() {
 /// mailbox it waits on and an optional wake deadline. Call with the
 /// scheduler lock held, then release it and [`yield_to_scheduler`].
 fn block_on(guard: &mut ProcessTable, pid: i64, target: WaitTarget, deadline: Option<Instant>) {
+    // A kill can land while this process is mid-run on another worker
+    // (`* -> Dead` is a legal cross-worker edge). Don't park over the
+    // tombstone: leave the state `Dead` so the caller's imminent
+    // `yield_to_scheduler` switches out for good — `after_switch`
+    // reclaims the slot and the frame never resumes.
+    match guard.get(pid) {
+        Some(process) if process.state != ProcessState::Dead => {}
+        _ => return,
+    }
     guard.transition(pid, ProcessState::Blocked);
     if let Some(process) = guard.get_mut(pid) {
         process.deadline = deadline;
@@ -397,7 +406,15 @@ unsafe extern "C" fn process_trampoline() {
 
     {
         let mut guard = SCHED.lock().unwrap();
-        guard.transition(pid, ProcessState::Dead);
+        // A kill may have landed while the body was mid-run; the state
+        // is then already `Dead` and re-marking it would be an illegal
+        // self-edge.
+        match guard.get(pid) {
+            Some(process) if process.state != ProcessState::Dead => {
+                guard.transition(pid, ProcessState::Dead);
+            }
+            _ => {}
+        }
     }
 
     WORK_AVAILABLE.notify_all();

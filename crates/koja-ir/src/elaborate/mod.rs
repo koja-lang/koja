@@ -1,9 +1,10 @@
 //! The `elaborate` IR sub-pass (post-merge, post-monomorphize): the
-//! last refinement before seal. It synthesizes per-type *clone* and
-//! *drop* glue for every heap-managed **composite** type the program
-//! acquires or releases, and registers it on the package set so the
-//! backend can emit — and `call` — the glue without lazy backfill
-//! (northstar: codegen never invokes a planner).
+//! last refinement before seal. It synthesizes per-type *clone*,
+//! *drop*, and *deep-copy* glue for every heap-managed **composite**
+//! type the program acquires, releases, or copies across a process
+//! boundary, and registers it on the package set so the backend can
+//! emit — and `call` — the glue without lazy backfill (northstar:
+//! codegen never invokes a planner).
 //!
 //! ## What counts as composite glue
 //!
@@ -13,11 +14,20 @@
 //! release, for any `is_heap_managed` type. Two buckets bottom out
 //! differently in the backend:
 //!
-//! - **Heap leaves** (`String` / `Binary` / `Bits`): inline `rc++` /
-//!   `rc--`. No glue function — handled directly at the instruction.
+//! - **Heap leaves** (`String` / `Binary` / `Bits`) and **closures**
+//!   (`Function`): inline `rc++` / `rc--` (the closure env's
+//!   per-capture teardown hides behind its header's `drop_fn`). No
+//!   glue function — handled directly at the instruction.
 //! - **Composites** (`List` / `Map` / `Set`, heap-owning structs /
 //!   enums / unions): a `call` to the synthesized `<T>.$clone$` /
 //!   `<T>.$drop$`. This pass registers those functions.
+//!
+//! The deep-copy family ([`IRInstruction::DeepCopy`] /
+//! `<T>.$deep_copy$`, emitted at process-boundary sends) mirrors the
+//! clone family bucket-for-bucket; its discovery additionally seeds
+//! from every [`FunctionKind::CopyClosureGlue`] env layout, whose
+//! backend-synthesized body calls `deep_copy_T` per composite
+//! capture.
 //!
 //! The boxed-recursive [`IRType::Indirect`] is *transparent* — purely
 //! the storage shape the cycle pass stamps on a recursive field, never
@@ -66,7 +76,7 @@ use crate::function::{
 };
 use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod};
 use crate::local::IRLocalId;
-use crate::mangling::{clone_glue_symbol, drop_glue_symbol};
+use crate::mangling::{clone_glue_symbol, deep_copy_glue_symbol, drop_glue_symbol};
 use crate::package::IRPackage;
 use crate::struct_decl::IRStructDecl;
 use crate::types::IRType;
@@ -77,8 +87,9 @@ use crate::types::IRType;
 /// `Call`.
 pub(crate) fn elaborate(packages: &mut [IRPackage]) {
     let needed = discover_glue_types(packages, &[]);
-    register_all(packages, &needed);
-    rewrite_all(packages, &needed);
+    let deep_needed = discover_deep_copy_types(packages, &[]);
+    register_all(packages, &needed, &deep_needed);
+    rewrite_all(packages, &needed, &deep_needed);
 }
 
 /// Run the elaborate sub-pass for a script: same three steps as
@@ -87,21 +98,33 @@ pub(crate) fn elaborate(packages: &mut [IRPackage]) {
 /// function) and the rewrite covers it too.
 pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBlock]) {
     let needed = discover_glue_types(packages, body);
-    register_all(packages, &needed);
-    rewrite_all(packages, &needed);
-    rewrite::rewrite_blocks_standalone(body, &needed);
+    let deep_needed = discover_deep_copy_types(packages, body);
+    register_all(packages, &needed, &deep_needed);
+    rewrite_all(packages, &needed, &deep_needed);
+    rewrite::rewrite_blocks_standalone(body, &needed, &deep_needed);
 }
 
-fn register_all(packages: &mut [IRPackage], needed: &BTreeSet<IRType>) {
+fn register_all(
+    packages: &mut [IRPackage],
+    needed: &BTreeSet<IRType>,
+    deep_needed: &BTreeSet<IRType>,
+) {
     for ty in needed {
         register_glue(packages, ty);
     }
+    for ty in deep_needed {
+        register_deep_copy_glue(packages, ty);
+    }
 }
 
-fn rewrite_all(packages: &mut [IRPackage], needed: &BTreeSet<IRType>) {
+fn rewrite_all(
+    packages: &mut [IRPackage],
+    needed: &BTreeSet<IRType>,
+    deep_needed: &BTreeSet<IRType>,
+) {
     for pkg in packages.iter_mut() {
         for function in pkg.functions.values_mut() {
-            rewrite::rewrite_function(function, needed);
+            rewrite::rewrite_function(function, needed, deep_needed);
         }
     }
 }
@@ -155,12 +178,14 @@ fn needs_drop_seen(ty: &IRType, packages: &[IRPackage], visited: &mut BTreeSet<I
         IRType::Union { members, .. } => members
             .iter()
             .any(|member| needs_drop_seen(member, packages, visited)),
-        // Closures own a heap env, but their glue needs the
-        // per-instance capture layout the structural type doesn't
-        // carry — handled on the existing closure-specific path until
-        // the closure-glue slice.
-        IRType::Function { .. }
-        | IRType::Bool
+        // A closure owns its heap env block. Acquisition / release is
+        // always inline (`rc++` / `koja_closure_rc_dec` on the env
+        // base — the per-instance capture teardown lives behind the
+        // env header's `drop_fn`, not behind per-type glue), so it
+        // counts as needing drop without ever getting glue of its
+        // own; see [`is_inline_managed`].
+        IRType::Function { .. } => true,
+        IRType::Bool
         | IRType::CPtr(_)
         | IRType::Float32
         | IRType::Float64
@@ -192,14 +217,23 @@ fn variant_needs_drop(
     }
 }
 
-/// A heap-managed composite — needs drop *and* is not a leaf. Leaves
-/// are released inline by the backend, so they get no glue function.
+/// A heap-managed composite — needs drop *and* is not handled inline
+/// by the backend. Only these get per-type glue functions.
 fn needs_glue(ty: &IRType, packages: &[IRPackage]) -> bool {
-    !is_leaf(ty) && needs_drop(ty, packages)
+    !is_inline_managed(ty) && needs_drop(ty, packages)
 }
 
 fn is_leaf(ty: &IRType) -> bool {
     matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
+}
+
+/// Heap-managed types the backends acquire / release / copy inline
+/// rather than through per-type glue: the leaves (`rc++` / `rc--` /
+/// `koja_heap_deep_copy` on the block base) and closures (`rc++` /
+/// `koja_closure_rc_dec` / `koja_closure_deep_copy` on the env base,
+/// with per-capture work behind the env header's glue pointers).
+fn is_inline_managed(ty: &IRType) -> bool {
+    is_leaf(ty) || matches!(ty, IRType::Function { .. })
 }
 
 /// Peel a transparent [`IRType::Indirect`] box to its inner type. A
@@ -255,6 +289,49 @@ fn discover_glue_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BTreeSe
         }
     }
 
+    close_over_constituents(work, packages)
+}
+
+/// Walk every [`IRInstruction::DeepCopy`] to seed the set of
+/// composite types that need deep-copy glue, plus every
+/// [`FunctionKind::CopyClosureGlue`] env layout (the backend-
+/// synthesized `$copy_env$` body calls `deep_copy_T` for each
+/// composite capture), then transitively close like
+/// [`discover_glue_types`].
+fn discover_deep_copy_types(packages: &[IRPackage], body: &[IRBasicBlock]) -> BTreeSet<IRType> {
+    let mut work: Vec<IRType> = Vec::new();
+    let function_blocks = packages
+        .iter()
+        .flat_map(|pkg| pkg.functions.values())
+        .flat_map(|function| function.blocks.iter());
+    for block in function_blocks.chain(body.iter()) {
+        for instruction in &block.instructions {
+            if let IRInstruction::DeepCopy { ty, .. } = instruction
+                && needs_glue(ty, packages)
+            {
+                work.push(ty.clone());
+            }
+        }
+    }
+
+    for function in packages.iter().flat_map(|pkg| pkg.functions.values()) {
+        if let FunctionKind::CopyClosureGlue { env_layout } = &function.kind {
+            for capture in env_layout {
+                let capture = unbox(capture);
+                if needs_glue(capture, packages) {
+                    work.push(capture.clone());
+                }
+            }
+        }
+    }
+
+    close_over_constituents(work, packages)
+}
+
+/// Transitively close a seed worklist over each composite's
+/// heap-managed constituents (whose glue its body calls), keeping
+/// only the types that actually carry glue.
+fn close_over_constituents(mut work: Vec<IRType>, packages: &[IRPackage]) -> BTreeSet<IRType> {
     let mut needed: BTreeSet<IRType> = BTreeSet::new();
     while let Some(ty) = work.pop() {
         if !needs_glue(&ty, packages) || !needed.insert(ty.clone()) {
@@ -355,7 +432,7 @@ fn glue_registered(packages: &[IRPackage], symbol: &IRSymbol) -> bool {
 fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
     let (clone_blocks, drop_blocks) = if is_aggregate(ty) {
         (
-            synthesis::clone_body(ty, packages),
+            synthesis::copy_body(ty, packages, synthesis::CopyMode::Clone),
             synthesis::drop_body(ty, packages),
         )
     } else {
@@ -379,6 +456,28 @@ fn register_glue(packages: &mut [IRPackage], ty: &IRType) {
             ty.clone(),
             IRType::Unit,
             drop_blocks,
+        ),
+    );
+}
+
+/// Register the deep-copy glue shell for `ty` (idempotent, like
+/// [`register_glue`]). Same two body shapes as the clone half:
+/// aggregate bodies are synthesized here, collection bodies stay
+/// empty for the backend to synthesize.
+fn register_deep_copy_glue(packages: &mut [IRPackage], ty: &IRType) {
+    let blocks = if is_aggregate(ty) {
+        synthesis::copy_body(ty, packages, synthesis::CopyMode::DeepCopy)
+    } else {
+        Vec::new()
+    };
+    insert_glue(
+        packages,
+        glue_shell(
+            deep_copy_glue_symbol(ty),
+            FunctionKind::DeepCopyGlue,
+            ty.clone(),
+            ty.clone(),
+            blocks,
         ),
     );
 }

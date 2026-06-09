@@ -27,8 +27,7 @@ use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
 use crate::emit::heap_layout::{block_alloc_size, block_base, init_heap_block, load_bit_length};
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::{declare_malloc_extern, declare_rc_inc_extern};
 
@@ -49,7 +48,7 @@ pub(super) fn share_heap_payload<'ctx>(
     let rc_inc = declare_rc_inc_extern(ctx);
     ctx.builder
         .build_call(rc_inc, &[base.into()], &format!("{label}_share_inc"))
-        .map_err(|e| inkwell_err(format_args!("share rc_inc for `{label}`"), e))?;
+        .or_ice()?;
     Ok(src_payload)
 }
 
@@ -81,12 +80,7 @@ pub(crate) fn copy_heap_payload<'ctx>(
 
     let malloc = declare_malloc_extern(ctx);
     let dst_base = ctx
-        .builder
-        .build_call(malloc, &[alloc_size.into()], "copy_buf")
-        .map_err(|e| inkwell_err(format_args!("copy malloc for `{label}`"), e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| LlvmError::Codegen(format!("malloc returned no value for `{label}`")))?
+        .call_basic(malloc, &[alloc_size.into()], "copy_buf")?
         .into_pointer_value();
     let dst_payload = init_heap_block(ctx, dst_base, bit_length, "copy_dst")?;
 
@@ -97,17 +91,15 @@ pub(crate) fn copy_heap_payload<'ctx>(
             &[dst_payload.into(), src_payload.into(), byte_count.into()],
             "",
         )
-        .map_err(|e| inkwell_err(format_args!("copy memcpy for `{label}`"), e))?;
+        .or_ice()?;
 
     if with_nul {
         let nul = unsafe {
             ctx.builder
                 .build_in_bounds_gep(i8_ty, dst_payload, &[byte_count], "nul")
-                .map_err(|e| inkwell_err(format_args!("copy NUL GEP for `{label}`"), e))?
+                .or_ice()?
         };
-        ctx.builder
-            .build_store(nul, i8_ty.const_zero())
-            .map_err(|e| inkwell_err(format_args!("copy NUL store for `{label}`"), e))?;
+        ctx.builder.build_store(nul, i8_ty.const_zero()).or_ice()?;
     }
 
     Ok(dst_payload)
@@ -115,7 +107,7 @@ pub(crate) fn copy_heap_payload<'ctx>(
 
 fn byte_count_from_bits<'ctx>(
     ctx: &EmitContext<'ctx>,
-    label: &str,
+    _label: &str,
     bit_length: IntValue<'ctx>,
     ceil: bool,
     three: IntValue<'ctx>,
@@ -125,14 +117,14 @@ fn byte_count_from_bits<'ctx>(
         let bits_plus7 = ctx
             .builder
             .build_int_add(bit_length, i64_ty.const_int(7, false), "bits_plus7")
-            .map_err(|e| inkwell_err(format_args!("copy bits+7 for `{label}`"), e))?;
+            .or_ice()?;
         ctx.builder
             .build_right_shift(bits_plus7, three, false, "byte_count")
-            .map_err(|e| inkwell_err(format_args!("copy byte_count for `{label}`"), e))
+            .or_ice()
     } else {
         ctx.builder
             .build_right_shift(bit_length, three, false, "byte_count")
-            .map_err(|e| inkwell_err(format_args!("copy byte_count for `{label}`"), e))
+            .or_ice()
     }
 }
 

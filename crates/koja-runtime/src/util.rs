@@ -18,15 +18,22 @@ pub const BLOCK_HEADER_SIZE: usize = 16;
 /// bit_length` word. The rc word sits a further `LENGTH_OFFSET` before
 /// that (i.e. at the block base, `BLOCK_HEADER_SIZE` before payload).
 ///
-/// A closure env block reuses the same 16-byte header shape with a
-/// different second word: `[i64 rc][ptr drop_fn]`, where `drop_fn`
-/// (`LENGTH_OFFSET` bytes past the base) is the address of the
-/// closure's capture-release glue (or null when no capture is
-/// heap-managed). Captures follow the header. The base pointer is the
-/// env pointer itself, so [`koja_rc_inc`] / [`koja_closure_rc_dec`]
-/// operate on the env directly. Mirrored codegen-side by
-/// `koja-ir-llvm`'s `CLOSURE_ENV_HEADER_FIELDS`.
+/// A closure env block carries a 24-byte header instead: `[i64
+/// rc][ptr drop_fn][ptr copy_fn]`. `drop_fn` (`LENGTH_OFFSET` bytes
+/// past the base) is the address of the closure's capture-release
+/// glue (or null when no capture is heap-managed); `copy_fn`
+/// ([`COPY_FN_OFFSET`] bytes past the base) is the address of its
+/// env deep-copy glue (or null when the closure was built outside
+/// lowering and can never cross a process boundary). Captures follow
+/// the header. The base pointer is the env pointer itself, so
+/// [`koja_rc_inc`] / [`koja_closure_rc_dec`] operate on the env
+/// directly. Mirrored codegen-side by `koja-ir-llvm`'s
+/// `CLOSURE_ENV_HEADER_FIELDS`.
 pub const LENGTH_OFFSET: usize = 8;
+/// Distance in bytes from a closure env base to its `ptr copy_fn`
+/// header word (see the closure env header note on
+/// [`LENGTH_OFFSET`]).
+pub const COPY_FN_OFFSET: usize = 16;
 /// Number of bits in a byte, used for bit-length / byte-length conversions.
 pub const BITS_PER_BYTE: usize = 8;
 
@@ -140,6 +147,69 @@ pub unsafe extern "C" fn koja_closure_rc_dec(env: *mut u8) {
             glue(env);
         }
         memory::free(env);
+    }
+}
+
+/// Deep-copy an rc-managed leaf heap block (`String` / `Binary` /
+/// `Bits`), returning a fresh payload pointer with `rc = 1` and the
+/// same `bit_length`. Immortal blocks (`rc < 0`) are shared as-is —
+/// rodata payloads are never mutated or freed, so a copy would only
+/// waste memory. Null returns null.
+///
+/// The copy always reserves one byte past the payload and writes a
+/// NUL there, matching [`alloc_koja_string`]'s layout so string
+/// copies keep their C-string borrowability (a harmless extra byte
+/// for `Binary` / `Bits`).
+///
+/// # Safety
+/// `payload` must be null or point at the body of a live heap leaf
+/// block (the byte right after its `[i64 rc][i64 bit_length]` header).
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_heap_deep_copy(payload: *mut u8) -> *mut u8 {
+    if payload.is_null() {
+        return payload;
+    }
+    unsafe {
+        let base = payload.sub(BLOCK_HEADER_SIZE);
+        if *base.cast::<i64>() < 0 {
+            return payload;
+        }
+        let bit_length = read_bit_length(payload);
+        let byte_length = (bit_length as usize).div_ceil(BITS_PER_BYTE);
+        let copy_base = memory::alloc(BLOCK_HEADER_SIZE + byte_length + 1);
+        let copy = write_block_header(copy_base, bit_length);
+        ptr::copy_nonoverlapping(payload, copy, byte_length);
+        *copy.add(byte_length) = 0;
+        copy
+    }
+}
+
+/// Deep-copy a closure env block through the `copy_fn` glue stamped
+/// in its header (see the closure env header note on
+/// [`LENGTH_OFFSET`]), returning a fresh env with `rc = 1` and every
+/// heap-managed capture recursively copied. Null (a captureless
+/// closure) returns null. A non-null env whose `copy_fn` is null
+/// cannot cross a process boundary — that is a compiler invariant
+/// violation, so the runtime aborts rather than alias the env.
+///
+/// # Safety
+/// `env` must be null or the base of a live closure env block whose
+/// `copy_fn` word is either null or a valid
+/// `extern "C" fn(*mut u8) -> *mut u8`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_closure_deep_copy(env: *mut u8) -> *mut u8 {
+    if env.is_null() {
+        return env;
+    }
+    unsafe {
+        let copy_fn = *env.add(COPY_FN_OFFSET).cast::<*const u8>();
+        assert!(
+            !copy_fn.is_null(),
+            "koja runtime: closure env crossing a process boundary carries no copy glue — \
+             compiler invariant violation",
+        );
+        let glue = std::mem::transmute::<*const u8, extern "C" fn(*mut u8) -> *mut u8>(copy_fn);
+        glue(env)
     }
 }
 

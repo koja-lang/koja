@@ -41,6 +41,7 @@ use crate::types::{IRType, ValueId};
 use super::arms::lower_arm_into;
 use super::ctx::{FnLowerCtx, LowerOutput, SlotStateSnapshot};
 use super::expr::lower_expr;
+use super::ownership::drop_discarded_temp;
 use super::patterns::{
     BindOp, ChainMode, PatternCheck, PatternInputs, PayloadBind, TestStep, lower_pattern_check,
 };
@@ -149,7 +150,7 @@ pub(super) fn lower_match(
                 },
             );
         }
-        lower_arm_into(
+        let arm_tail = lower_arm_into(
             &arm.body,
             ctx,
             body_block,
@@ -158,6 +159,16 @@ pub(super) fn lower_match(
             registry,
             output,
         )?;
+        // The match consumes its subject: when the subject is an owned
+        // heap temp (`match self.handle(...)`), exactly one arm body
+        // executes, so each arm's tail releases it — after the tail
+        // value has been acquired, since payload binds borrow the
+        // subject's storage. An early-`return` arm leaves the temp to
+        // leak (no tail block to host the drop); slot-tracked subjects
+        // are borrowed reads and no-op here.
+        if let Some(tail) = arm_tail {
+            drop_discarded_temp(ctx, tail, subject_value);
+        }
         arm_post_states.push(ctx.snapshot_slot_states());
         if let Some(next) = next_arm {
             current_test = next;

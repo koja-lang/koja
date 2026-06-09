@@ -5,7 +5,7 @@
 //! - Instruction wrappers ([`call_malloc`], [`call_hash`], [`call_eq`],
 //!   [`advance_slot`], [`entry_pointer`], [`build_table_struct`],
 //!   [`build_empty_table`]) that bundle the inkwell builder calls +
-//!   `codegen_err` plumbing into a single line at the call site.
+//!   error plumbing into a single line at the call site.
 //! - Symbol / type resolution ([`resolve_hash_eq`],
 //!   [`expect_enum_symbol`]) for crossing from sealed IR
 //!   ([`IRType`] / [`IRSymbol`]) to monomorphized inkwell
@@ -21,8 +21,7 @@ use koja_ir::mangling::{global_primitive_symbol, mangled_method_name};
 use koja_ir::{IRFunction, IRSymbol, IRType};
 
 use crate::ctx::EmitContext;
-use crate::emit::inkwell_err;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::element::acquire_in_slot;
 use crate::runtime::{declare_malloc_extern, declare_memset_extern};
@@ -84,7 +83,6 @@ pub(super) fn resolve_key_hash_ops<'ctx>(
 
 pub(super) fn build_empty_table<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     entry_size: u64,
 ) -> Result<StructValue<'ctx>, LlvmError> {
     let i32_ty = ctx.context.i32_type();
@@ -97,10 +95,10 @@ pub(super) fn build_empty_table<'ctx>(
             i64_ty.const_int(entry_size, false),
             "entries_bytes",
         )
-        .map_err(|e| codegen_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let malloc = declare_malloc_extern(ctx);
-    let entries_ptr = call_malloc(ctx, function, malloc, entries_bytes, "entries")?;
-    let states_ptr = call_malloc(ctx, function, malloc, capacity, "states")?;
+    let entries_ptr = call_malloc(ctx, malloc, entries_bytes, "entries")?;
+    let states_ptr = call_malloc(ctx, malloc, capacity, "states")?;
     let memset = declare_memset_extern(ctx);
     ctx.builder
         .build_call(
@@ -112,25 +110,12 @@ pub(super) fn build_empty_table<'ctx>(
             ],
             "",
         )
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_call memset for `{}`", function.symbol),
-                e,
-            )
-        })?;
-    build_table_struct(
-        ctx,
-        function,
-        entries_ptr,
-        states_ptr,
-        i64_ty.const_zero(),
-        capacity,
-    )
+        .or_ice()?;
+    build_table_struct(ctx, entries_ptr, states_ptr, i64_ty.const_zero(), capacity)
 }
 
 pub(super) fn build_table_struct<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     entries_ptr: PointerValue<'ctx>,
     states_ptr: PointerValue<'ctx>,
     length: IntValue<'ctx>,
@@ -140,70 +125,36 @@ pub(super) fn build_table_struct<'ctx>(
     let s = ctx
         .builder
         .build_insert_value(table_ty.get_undef(), entries_ptr, 0, "with_entries")
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_insert_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_struct_value();
     let s = ctx
         .builder
         .build_insert_value(s, states_ptr, 1, "with_states")
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_insert_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_struct_value();
     let s = ctx
         .builder
         .build_insert_value(s, length, 2, "with_len")
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_insert_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_struct_value();
     let s = ctx
         .builder
         .build_insert_value(s, capacity, 3, "with_cap")
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_insert_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_struct_value();
     Ok(s)
 }
 
+#[track_caller]
 pub(super) fn call_malloc<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     malloc: FunctionValue<'ctx>,
     bytes: IntValue<'ctx>,
     name: &str,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
-    ctx.builder
-        .build_call(malloc, &[bytes.into()], name)
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_call malloc for `{}`", function.symbol),
-                e,
-            )
-        })?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!(
-                "malloc returned no value for `{}`",
-                function.symbol
-            ))
-        })
-        .map(|v| v.into_pointer_value())
+    Ok(ctx
+        .call_basic(malloc, &[bytes.into()], name)?
+        .into_pointer_value())
 }
 
 /// Copy-on-write clone of a table's buffers into fresh allocations.
@@ -216,7 +167,6 @@ pub(super) fn call_malloc<'ctx>(
 /// by drop glue.
 pub(super) fn clone_table_buffers<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
     src: &TableSnapshot<'ctx>,
@@ -229,10 +179,10 @@ pub(super) fn clone_table_buffers<'ctx>(
             i64_ty.const_int(layout.entry_size, false),
             "entries_bytes",
         )
-        .map_err(|e| codegen_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let malloc = declare_malloc_extern(ctx);
-    let dst_entries = call_malloc(ctx, function, malloc, entries_bytes, "cow_entries")?;
-    let dst_states = call_malloc(ctx, function, malloc, src.capacity, "cow_states")?;
+    let dst_entries = call_malloc(ctx, malloc, entries_bytes, "cow_entries")?;
+    let dst_states = call_malloc(ctx, malloc, src.capacity, "cow_states")?;
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
         .build_call(
@@ -244,12 +194,7 @@ pub(super) fn clone_table_buffers<'ctx>(
             ],
             "",
         )
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_call memcpy for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     ctx.builder
         .build_call(
             memcpy,
@@ -260,19 +205,14 @@ pub(super) fn clone_table_buffers<'ctx>(
             ],
             "",
         )
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_call memcpy for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let dst = TableSnapshot {
         entries_ptr: dst_entries,
         states_ptr: dst_states,
         length: src.length,
         capacity: src.capacity,
     };
-    acquire_occupied_entries(ctx, function, llvm_function, layout, &dst)?;
+    acquire_occupied_entries(ctx, llvm_function, layout, &dst)?;
     Ok(dst)
 }
 
@@ -281,7 +221,6 @@ pub(super) fn clone_table_buffers<'ctx>(
 /// walk when both key and value own no heap.
 fn acquire_occupied_entries<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
     layout: &HashtableLayout<'_>,
     table: &TableSnapshot<'ctx>,
@@ -293,12 +232,11 @@ fn acquire_occupied_entries<'ctx>(
         table.capacity,
         "cow",
         |ctx, slot| {
-            let entry_ptr =
-                entry_pointer(ctx, function, table.entries_ptr, slot, layout.entry_size)?;
-            acquire_in_slot(ctx, &function.symbol, layout.key_ty, entry_ptr)?;
+            let entry_ptr = entry_pointer(ctx, table.entries_ptr, slot, layout.entry_size)?;
+            acquire_in_slot(ctx, layout.key_ty, entry_ptr)?;
             if let Some(value_ty) = layout.value_ty {
-                let value_ptr = value_slot(ctx, function, entry_ptr, layout.key_size)?;
-                acquire_in_slot(ctx, &function.symbol, value_ty, value_ptr)?;
+                let value_ptr = value_slot(ctx, entry_ptr, layout.key_size)?;
+                acquire_in_slot(ctx, value_ty, value_ptr)?;
             }
             Ok(())
         },
@@ -307,9 +245,9 @@ fn acquire_occupied_entries<'ctx>(
 
 /// Pointer to the value half of a `Map` bucket — `key_size` bytes past
 /// the entry base (the key sits at offset 0).
+#[track_caller]
 pub(super) fn value_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     entry_ptr: PointerValue<'ctx>,
     key_size: u64,
 ) -> Result<PointerValue<'ctx>, LlvmError> {
@@ -318,7 +256,7 @@ pub(super) fn value_slot<'ctx>(
     unsafe {
         ctx.builder
             .build_gep(i8_ty, entry_ptr, &[offset], "val_ptr")
-            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))
+            .or_ice()
     }
 }
 
@@ -341,7 +279,7 @@ pub(crate) fn occupied_loop<'ctx>(
     let counter = ctx.build_entry_alloca(i64_ty, &format!("{label}.i"));
     ctx.builder
         .build_store(counter, i64_ty.const_zero())
-        .map_err(|e| codegen_err(format_args!("{label} loop counter init"), e))?;
+        .or_ice()?;
     let head = ctx
         .context
         .append_basic_block(llvm_function, &format!("{label}.head"));
@@ -358,33 +296,31 @@ pub(crate) fn occupied_loop<'ctx>(
         .context
         .append_basic_block(llvm_function, &format!("{label}.exit"));
 
-    ctx.builder
-        .build_unconditional_branch(head)
-        .map_err(|e| codegen_err(format_args!("{label} loop entry branch"), e))?;
+    ctx.builder.build_unconditional_branch(head).or_ice()?;
     ctx.builder.position_at_end(head);
     let index = ctx
         .builder
         .build_load(i64_ty, counter, &format!("{label}.idx"))
-        .map_err(|e| codegen_err(format_args!("{label} loop index load"), e))?
+        .or_ice()?
         .into_int_value();
     let in_range = ctx
         .builder
         .build_int_compare(IntPredicate::ULT, index, capacity, &format!("{label}.cmp"))
-        .map_err(|e| codegen_err(format_args!("{label} loop guard"), e))?;
+        .or_ice()?;
     ctx.builder
         .build_conditional_branch(in_range, check, exit)
-        .map_err(|e| codegen_err(format_args!("{label} loop branch"), e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(check);
     let state_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, states, &[index], &format!("{label}.state_ptr"))
-            .map_err(|e| codegen_err(format_args!("{label} state GEP"), e))?
+            .or_ice()?
     };
     let state = ctx
         .builder
         .build_load(i8_ty, state_ptr, &format!("{label}.state"))
-        .map_err(|e| codegen_err(format_args!("{label} state load"), e))?
+        .or_ice()?
         .into_int_value();
     let is_occupied = ctx
         .builder
@@ -394,71 +330,52 @@ pub(crate) fn occupied_loop<'ctx>(
             i8_ty.const_int(STATE_OCCUPIED, false),
             &format!("{label}.is_occupied"),
         )
-        .map_err(|e| codegen_err(format_args!("{label} occupancy compare"), e))?;
+        .or_ice()?;
     ctx.builder
         .build_conditional_branch(is_occupied, occupied, next)
-        .map_err(|e| codegen_err(format_args!("{label} occupancy branch"), e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(occupied);
     body(ctx, index)?;
-    ctx.builder
-        .build_unconditional_branch(next)
-        .map_err(|e| codegen_err(format_args!("{label} occupied-to-next branch"), e))?;
+    ctx.builder.build_unconditional_branch(next).or_ice()?;
 
     ctx.builder.position_at_end(next);
     let incremented = ctx
         .builder
         .build_int_add(index, i64_ty.const_int(1, false), &format!("{label}.inc"))
-        .map_err(|e| codegen_err(format_args!("{label} loop increment"), e))?;
-    ctx.builder
-        .build_store(counter, incremented)
-        .map_err(|e| codegen_err(format_args!("{label} loop counter store"), e))?;
-    ctx.builder
-        .build_unconditional_branch(head)
-        .map_err(|e| codegen_err(format_args!("{label} loop back-edge"), e))?;
+        .or_ice()?;
+    ctx.builder.build_store(counter, incremented).or_ice()?;
+    ctx.builder.build_unconditional_branch(head).or_ice()?;
 
     ctx.builder.position_at_end(exit);
     Ok(())
 }
 
+#[track_caller]
 pub(super) fn call_hash<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     hash_fn: FunctionValue<'ctx>,
     key: BasicValueEnum<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    ctx.builder
-        .build_call(hash_fn, &[key.into()], "key_hash")
-        .map_err(|e| codegen_err(format_args!("build_call hash for `{}`", function.symbol), e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!("hash returned no value for `{}`", function.symbol))
-        })
-        .map(|v| v.into_int_value())
+    Ok(ctx
+        .call_basic(hash_fn, &[key.into()], "key_hash")?
+        .into_int_value())
 }
 
+#[track_caller]
 pub(super) fn call_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     eq_fn: FunctionValue<'ctx>,
     lhs: BasicValueEnum<'ctx>,
     rhs: BasicValueEnum<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
-    ctx.builder
-        .build_call(eq_fn, &[lhs.into(), rhs.into()], "keys_eq")
-        .map_err(|e| codegen_err(format_args!("build_call eq for `{}`", function.symbol), e))?
-        .try_as_basic_value()
-        .basic()
-        .ok_or_else(|| {
-            LlvmError::Codegen(format!("eq returned no value for `{}`", function.symbol))
-        })
-        .map(|v| v.into_int_value())
+    Ok(ctx
+        .call_basic(eq_fn, &[lhs.into(), rhs.into()], "keys_eq")?
+        .into_int_value())
 }
 
 pub(super) fn advance_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     slot: IntValue<'ctx>,
     mask: IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
@@ -466,15 +383,12 @@ pub(super) fn advance_slot<'ctx>(
     let next = ctx
         .builder
         .build_int_add(slot, i64_ty.const_int(1, false), "next_slot")
-        .map_err(|e| codegen_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_and(next, mask, "wrapped_slot")
-        .map_err(|e| codegen_err(format_args!("build_and for `{}`", function.symbol), e))
+        .or_ice()?;
+    ctx.builder.build_and(next, mask, "wrapped_slot").or_ice()
 }
 
 pub(super) fn entry_pointer<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     entries_ptr: PointerValue<'ctx>,
     slot: IntValue<'ctx>,
     entry_size: u64,
@@ -484,11 +398,11 @@ pub(super) fn entry_pointer<'ctx>(
     let byte_offset = ctx
         .builder
         .build_int_mul(slot, i64_ty.const_int(entry_size, false), "byte_off")
-        .map_err(|e| codegen_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     unsafe {
         ctx.builder
             .build_gep(i8_ty, entries_ptr, &[byte_offset], "entry_ptr")
-            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))
+            .or_ice()
     }
 }
 
@@ -499,16 +413,16 @@ pub(super) fn extract_table_fields<'ctx>(
 ) -> Result<TableSnapshot<'ctx>, LlvmError> {
     let self_val = nth_hashtable(function, llvm_function, 0, "self")?;
     Ok(TableSnapshot {
-        entries_ptr: extract_pointer(ctx, function, self_val, 0, "entries")?,
-        states_ptr: extract_pointer(ctx, function, self_val, 1, "states")?,
-        length: extract_int(ctx, function, self_val, 2, "len")?,
-        capacity: extract_int(ctx, function, self_val, 3, "cap")?,
+        entries_ptr: extract_pointer(ctx, self_val, 0, "entries")?,
+        states_ptr: extract_pointer(ctx, self_val, 1, "states")?,
+        length: extract_int(ctx, self_val, 2, "len")?,
+        capacity: extract_int(ctx, self_val, 3, "cap")?,
     })
 }
 
+#[track_caller]
 pub(super) fn extract_int<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     table: StructValue<'ctx>,
     index: u32,
     name: &str,
@@ -516,18 +430,13 @@ pub(super) fn extract_int<'ctx>(
     Ok(ctx
         .builder
         .build_extract_value(table, index, name)
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_extract_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_int_value())
 }
 
+#[track_caller]
 pub(super) fn extract_pointer<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     table: StructValue<'ctx>,
     index: u32,
     name: &str,
@@ -535,12 +444,7 @@ pub(super) fn extract_pointer<'ctx>(
     Ok(ctx
         .builder
         .build_extract_value(table, index, name)
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_extract_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_pointer_value())
 }
 
@@ -573,30 +477,20 @@ pub(super) fn nth_hashtable<'ctx>(
     }
 }
 
+#[track_caller]
 pub(super) fn ret_struct<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     value: StructValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    ctx.builder
-        .build_return(Some(&value))
-        .map(|_| ())
-        .map_err(|e| codegen_err(format_args!("build_return for `{}`", function.symbol), e))
+    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
 
+#[track_caller]
 pub(super) fn ret_basic<'ctx>(
     ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
     value: BasicValueEnum<'ctx>,
 ) -> Result<(), LlvmError> {
-    ctx.builder
-        .build_return(Some(&value))
-        .map(|_| ())
-        .map_err(|e| codegen_err(format_args!("build_return for `{}`", function.symbol), e))
-}
-
-pub(super) fn codegen_err<E: std::fmt::Display>(args: std::fmt::Arguments<'_>, e: E) -> LlvmError {
-    inkwell_err(args, e)
+    ctx.builder.build_return(Some(&value)).or_ice().map(|_| ())
 }
 
 /// Resolve the Hash + Equality intrinsics for `key_ty` via the

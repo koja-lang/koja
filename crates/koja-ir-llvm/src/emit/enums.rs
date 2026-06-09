@@ -16,11 +16,11 @@ use inkwell::values::{BasicValueEnum, PointerValue};
 use koja_ir::{EnumPayloadInit, IRSymbol, IRType, IRVariantPayload, IRVariantTag, StructFieldInit};
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::types::ir_basic_type;
 
 use super::indirect::{emit_box_value, emit_unbox_value};
-use super::{ValueMap, inkwell_err, lookup};
+use super::{ValueMap, lookup};
 
 /// Materialize an enum-variant literal: resolve `payload` operands
 /// against `values`, then delegate to [`build_enum_value`] for the
@@ -84,9 +84,7 @@ pub(crate) fn build_enum_value<'ctx>(
             boxed_values.len(),
         ),
     }
-    ctx.builder
-        .build_load(outer, alloca, ty.mangled())
-        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` after EnumConstruct"), e))
+    ctx.builder.build_load(outer, alloca, ty.mangled()).or_ice()
 }
 
 fn resolve_struct_payload<'ctx>(
@@ -142,19 +140,17 @@ pub(super) fn emit_enum_tag_get<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let outer = ctx.enum_outer_type(ty.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_tag_src"));
-    ctx.builder
-        .build_store(alloca, value)
-        .map_err(|e| inkwell_err(format_args!("build_store for `{ty}` EnumTagGet"), e))?;
+    ctx.builder.build_store(alloca, value).or_ice()?;
     let (complete, _) = ctx
         .layouts
         .enum_variant_types(ty.mangled(), IRVariantTag(0));
     let tag_ptr = ctx
         .builder
         .build_struct_gep(complete, alloca, 0, &format!("{ty}_tag_ptr"))
-        .map_err(|e| inkwell_err(format_args!("build_struct_gep for `{ty}` EnumTagGet"), e))?;
+        .or_ice()?;
     ctx.builder
         .build_load(ctx.context.i8_type(), tag_ptr, &format!("{ty}_tag"))
-        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` EnumTagGet"), e))
+        .or_ice()
 }
 
 /// Spill `value` to a fresh outer-typed alloca, GEP through the
@@ -173,12 +169,7 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let outer = ctx.enum_outer_type(ty.mangled());
     let alloca = ctx.build_entry_alloca(outer, &format!("{ty}_payload_src"));
-    ctx.builder.build_store(alloca, value).map_err(|e| {
-        inkwell_err(
-            format_args!("build_store for `{ty}` EnumPayloadFieldGet"),
-            e,
-        )
-    })?;
+    ctx.builder.build_store(alloca, value).or_ice()?;
     let _ = field_type;
     let declared_payload = ctx.layouts.enum_variant_payload(ty, tag);
     let declared_ty = declared_slot_type(&declared_payload, payload_index).unwrap_or_else(|| {
@@ -203,18 +194,13 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
             payload_index,
             &format!("{ty}_payload_{payload_index}_ptr"),
         )
-        .map_err(|e| {
-            inkwell_err(
-                format_args!("build_struct_gep for `{ty}` EnumPayloadFieldGet"),
-                e,
-            )
-        })?;
+        .or_ice()?;
     let field_llvm_type = ir_basic_type(ctx, &declared_ty)?;
     let label = format!("{ty}_payload_{payload_index}");
     let loaded = ctx
         .builder
         .build_load(field_llvm_type, field_ptr, &label)
-        .map_err(|e| inkwell_err(format_args!("build_load for `{ty}` EnumPayloadFieldGet"), e))?;
+        .or_ice()?;
     if let IRType::Indirect(inner) = &declared_ty {
         return emit_unbox_value(
             ctx,
@@ -276,12 +262,12 @@ fn write_variant_tag<'ctx>(
     let tag_ptr = ctx
         .builder
         .build_struct_gep(complete, alloca, 0, &format!("{ty}_tag"))
-        .map_err(|e| inkwell_err(format_args!("build_struct_gep for `{ty}` tag"), e))?;
+        .or_ice()?;
     let tag_value = ctx.context.i8_type().const_int(u64::from(tag.0), false);
     ctx.builder
         .build_store(tag_ptr, tag_value)
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err(format_args!("build_store for `{ty}` tag"), e))
 }
 
 fn build_payload_gep<'ctx>(
@@ -292,7 +278,7 @@ fn build_payload_gep<'ctx>(
 ) -> Result<PointerValue<'ctx>, LlvmError> {
     ctx.builder
         .build_struct_gep(complete, alloca, 2, &format!("{ty}_payload"))
-        .map_err(|e| inkwell_err(format_args!("build_struct_gep for `{ty}` payload"), e))
+        .or_ice()
 }
 
 fn write_payload_fields<'ctx>(
@@ -311,18 +297,8 @@ fn write_payload_fields<'ctx>(
                 index as u32,
                 &format!("{ty}_payload_{index}"),
             )
-            .map_err(|e| {
-                inkwell_err(
-                    format_args!("build_struct_gep for `{ty}` payload field #{index}"),
-                    e,
-                )
-            })?;
-        ctx.builder.build_store(field_ptr, *value).map_err(|e| {
-            inkwell_err(
-                format_args!("build_store for `{ty}` payload field #{index}"),
-                e,
-            )
-        })?;
+            .or_ice()?;
+        ctx.builder.build_store(field_ptr, *value).or_ice()?;
     }
     Ok(())
 }

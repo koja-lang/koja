@@ -13,8 +13,8 @@ use super::binary_construct::emit_binary_construct;
 use super::binary_match;
 use super::process::{emit_receive, emit_spawn};
 use super::{
-    ValueMap, calls, clone, closures, concat, constants, enums, locals, lookup, ops, structs,
-    unions,
+    ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, locals, lookup, ops,
+    structs, unions,
 };
 
 pub(crate) fn emit_instruction<'ctx>(
@@ -70,6 +70,9 @@ pub(crate) fn emit_instruction<'ctx>(
         }
         IRInstruction::Clone { dest, source, ty } => {
             clone::emit_clone(ctx, *dest, *source, ty, values)
+        }
+        IRInstruction::DeepCopy { dest, source, ty } => {
+            deep_copy::emit_deep_copy(ctx, *dest, *source, ty, values)
         }
         IRInstruction::Concat {
             dest,

@@ -23,8 +23,8 @@ use koja_ir::{
 
 use crate::ctx::{ClosureFrame, EmitContext, TcoFrame};
 use crate::emit::process::{emit_process_entry_wrapper_body, emit_spawn_wrapper_body};
-use crate::emit::{self, BlockMap, ValueMap, inkwell_err};
-use crate::error::LlvmError;
+use crate::emit::{self, BlockMap, ValueMap};
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics;
 use crate::types::{closure_body_signature, env_struct_type, ir_basic_type, value_basic_type};
 
@@ -57,14 +57,15 @@ pub(crate) fn declare_function<'ctx>(
 ) -> Result<FunctionValue<'ctx>, LlvmError> {
     let signature = function_signature(ctx, function)?;
     let llvm_name = match &function.kind {
-        FunctionKind::Closure { .. } | FunctionKind::DropClosureGlue { .. } => {
-            function.symbol.mangled().to_string()
-        }
+        FunctionKind::Closure { .. }
+        | FunctionKind::CopyClosureGlue { .. }
+        | FunctionKind::DropClosureGlue { .. } => function.symbol.mangled().to_string(),
         FunctionKind::Extern(attrs) => attrs
             .link_name
             .clone()
             .unwrap_or_else(|| function.symbol.last_segment().to_string()),
         FunctionKind::CloneGlue
+        | FunctionKind::DeepCopyGlue
         | FunctionKind::DropGlue
         | FunctionKind::Intrinsic(_)
         | FunctionKind::ProcessEntryWrapper { .. }
@@ -91,6 +92,14 @@ fn function_signature<'ctx>(
     ) {
         let user_params: Vec<IRType> = function.params.iter().map(|p| p.ty.clone()).collect();
         return closure_body_signature(ctx, &user_params, &function.return_type);
+    }
+    if matches!(function.kind, FunctionKind::CopyClosureGlue { .. }) {
+        // Env deep-copy glue is called by the runtime through the env
+        // header's `copy_fn` pointer with an `i8* (i8*)` ABI: env base
+        // in, fresh env base out. The IR shell carries no params (the
+        // env pointer has no IR type).
+        let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+        return Ok(ptr_ty.fn_type(&[ptr_ty.into()], false));
     }
     if matches!(
         function.kind,
@@ -136,7 +145,18 @@ pub(crate) fn define_function<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let env_layout = match &function.kind {
-        FunctionKind::CloneGlue | FunctionKind::DropGlue => {
+        FunctionKind::CopyClosureGlue { env_layout } => {
+            // Env deep-copy glue has no IR body at all (it returns a
+            // raw env pointer); synthesize the whole `i8* (i8*)` body
+            // from the capture layout.
+            return emit::closures::emit_copy_closure_glue_body(
+                ctx,
+                function,
+                llvm_function,
+                env_layout,
+            );
+        }
+        FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue | FunctionKind::DropGlue => {
             if function.blocks.is_empty() {
                 // Collection / `Indirect` glue: a runtime-shaped
                 // deep-copy / element-walk synthesized from the operand
@@ -322,7 +342,7 @@ fn emit_entry_with_tco_split<'ctx>(
     let frame = ctx.tco_frame().expect("TCO frame must be staged");
     ctx.builder
         .build_unconditional_branch(frame.loop_block)
-        .map_err(|e| inkwell_err("TCO entry branch to tco_loop", e))?;
+        .or_ice()?;
     ctx.builder.position_at_end(frame.loop_block);
     for instruction in &block.instructions[promotion_len..] {
         emit::emit_instruction_external(ctx, instruction, values)?;

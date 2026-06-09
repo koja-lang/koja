@@ -1,0 +1,72 @@
+# Regression: heap messages still queued in a process's mailbox when
+# it is killed are reclaimed through the envelope drop glue. A killed
+# process can abandon the frame it was executing, so the threshold
+# tolerates small jitter — the bug this guards against leaked every
+# undelivered payload (hundreds of blocks here).
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct Sink
+  seen: Int
+end
+
+impl Process<Int, String, Int> for Sink
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Sink{seen: 0})
+  end
+
+  fn handle(self, msg: String, from: Option<ReplyTo<Int>>) -> Step<Self>
+    ReplyTo.reply(from, msg.length())
+    Step.Continue(Sink{seen: self.seen + 1})
+  end
+end
+
+fn kill_with_backlog()
+  r = spawn Sink.start(0)
+  j = 0
+
+  loop
+    r.cast("payload " <> "number")
+    j += 1
+
+    if j >= 10
+      break
+    end
+  end
+
+  r.kill()
+
+  loop
+    if r.alive?()
+      ()
+    else
+      break
+    end
+  end
+end
+
+kill_with_backlog()
+start = Rt.koja_rt_live_blocks()
+
+i = 0
+
+loop
+  kill_with_backlog()
+  i += 1
+
+  if i >= 50
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+
+if finish - start < 60
+  "kill backlog: ok".print()
+else
+  "kill backlog: LEAK".print()
+  (finish - start).print()
+end

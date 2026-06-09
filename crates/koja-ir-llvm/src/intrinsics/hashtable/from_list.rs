@@ -11,14 +11,14 @@ use inkwell::values::{BasicValueEnum, FunctionValue};
 use koja_ir::IRFunction;
 
 use crate::ctx::EmitContext;
-use crate::error::LlvmError;
+use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::acquire_value;
 use crate::types::{hashtable_value_type, ir_basic_type, list_value_type};
 
 use super::insert::emit_insert_probe;
 use super::resize::emit_resize_if_needed;
 use super::util::{
-    TableSnapshot, build_empty_table, build_table_struct, codegen_err, entry_pointer, extract_int,
+    TableSnapshot, build_empty_table, build_table_struct, entry_pointer, extract_int,
     extract_pointer, nth_param, resolve_key_hash_ops, ret_struct,
 };
 use super::{HashtableLayout, STATE_OCCUPIED};
@@ -48,22 +48,12 @@ pub(crate) fn emit_set_from_list<'ctx>(
     let list_ptr = ctx
         .builder
         .build_extract_value(list_val, 0, "list_ptr")
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_extract_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_pointer_value();
     let list_len = ctx
         .builder
         .build_extract_value(list_val, 1, "list_len")
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_extract_value for `{}`", function.symbol),
-                e,
-            )
-        })?
+        .or_ice()?
         .into_int_value();
 
     // Mint an empty set, then loop and insert each element. We
@@ -71,41 +61,29 @@ pub(crate) fn emit_set_from_list<'ctx>(
     // helper rather than the user-facing `Set.new` symbol because
     // the declared-function table may not have either yet at the
     // time `from_list` defines its body.
-    let init_set = build_empty_table(ctx, function, layout.entry_size)?;
+    let init_set = build_empty_table(ctx, layout.entry_size)?;
     let set_alloca = ctx
         .builder
         .build_alloca(hashtable_value_type(ctx), "set_acc")
-        .map_err(|e| codegen_err(format_args!("build_alloca for `{}`", function.symbol), e))?;
-    ctx.builder
-        .build_store(set_alloca, init_set)
-        .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
+        .or_ice()?;
+    ctx.builder.build_store(set_alloca, init_set).or_ice()?;
 
     let loop_bb = ctx.context.append_basic_block(llvm_function, "loop");
     let body_bb = ctx.context.append_basic_block(llvm_function, "body");
     let done_bb = ctx.context.append_basic_block(llvm_function, "done");
-    ctx.builder
-        .build_unconditional_branch(loop_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+    ctx.builder.build_unconditional_branch(loop_bb).or_ice()?;
 
     ctx.builder.position_at_end(loop_bb);
-    let i_phi = ctx
-        .builder
-        .build_phi(i64_ty, "i")
-        .map_err(|e| codegen_err(format_args!("build_phi for `{}`", function.symbol), e))?;
+    let i_phi = ctx.builder.build_phi(i64_ty, "i").or_ice()?;
     i_phi.add_incoming(&[(&i64_ty.const_zero(), entry_block)]);
     let i_val = i_phi.as_basic_value().into_int_value();
     let done = ctx
         .builder
         .build_int_compare(IntPredicate::UGE, i_val, list_len, "done")
-        .map_err(|e| {
-            codegen_err(
-                format_args!("build_int_compare for `{}`", function.symbol),
-                e,
-            )
-        })?;
+        .or_ice()?;
     ctx.builder
         .build_conditional_branch(done, done_bb, body_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+        .or_ice()?;
 
     ctx.builder.position_at_end(body_bb);
     let byte_offset = ctx
@@ -115,41 +93,37 @@ pub(crate) fn emit_set_from_list<'ctx>(
             i64_ty.const_int(layout.entry_size, false),
             "byte_off",
         )
-        .map_err(|e| codegen_err(format_args!("build_int_mul for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let elem_ptr = unsafe {
         ctx.builder
             .build_gep(i8_ty, list_ptr, &[byte_offset], "elem_ptr")
-            .map_err(|e| codegen_err(format_args!("build_gep for `{}`", function.symbol), e))?
+            .or_ice()?
     };
     let elem_val = ctx
         .builder
         .build_load(elem_basic_ty, elem_ptr, "elem_val")
-        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let current = ctx
         .builder
         .build_load(hashtable_value_type(ctx), set_alloca, "cur_set")
-        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let updated = call_set_insert_inline(ctx, function, llvm_function, layout, current, elem_val)?;
-    ctx.builder
-        .build_store(set_alloca, updated)
-        .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
+    ctx.builder.build_store(set_alloca, updated).or_ice()?;
     let next_i = ctx
         .builder
         .build_int_add(i_val, i64_ty.const_int(1, false), "next_i")
-        .map_err(|e| codegen_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let body_tail = ctx.builder.get_insert_block().unwrap();
     i_phi.add_incoming(&[(&next_i, body_tail)]);
-    ctx.builder
-        .build_unconditional_branch(loop_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+    ctx.builder.build_unconditional_branch(loop_bb).or_ice()?;
 
     ctx.builder.position_at_end(done_bb);
     let final_set = ctx
         .builder
         .build_load(hashtable_value_type(ctx), set_alloca, "final_set")
-        .map_err(|e| codegen_err(format_args!("build_load for `{}`", function.symbol), e))?
+        .or_ice()?
         .into_struct_value();
-    ret_struct(ctx, function, final_set)
+    ret_struct(ctx, final_set)
 }
 
 /// Inline the `Set.insert` body at a call site. v1 emitted a
@@ -173,14 +147,14 @@ fn call_set_insert_inline<'ctx>(
     // is the natural fit.
     let current_struct = current.into_struct_value();
     let table = TableSnapshot {
-        entries_ptr: extract_pointer(ctx, function, current_struct, 0, "entries")?,
-        states_ptr: extract_pointer(ctx, function, current_struct, 1, "states")?,
-        length: extract_int(ctx, function, current_struct, 2, "len")?,
-        capacity: extract_int(ctx, function, current_struct, 3, "cap")?,
+        entries_ptr: extract_pointer(ctx, current_struct, 0, "entries")?,
+        states_ptr: extract_pointer(ctx, current_struct, 1, "states")?,
+        length: extract_int(ctx, current_struct, 2, "len")?,
+        capacity: extract_int(ctx, current_struct, 3, "cap")?,
     };
     let key_ops = resolve_key_hash_ops(ctx, function, layout.key_ty)?;
 
-    let post = emit_resize_if_needed(ctx, function, llvm_function, layout, &table, &key_ops)?;
+    let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
     let probe = emit_insert_probe(ctx, function, llvm_function, layout, &post, item, &key_ops)?;
     // After `emit_insert_probe` returns, the builder is parked on
     // the (already-terminated) `advance` block — appending any
@@ -194,7 +168,6 @@ fn call_set_insert_inline<'ctx>(
     ctx.builder.position_at_end(probe.update_bb);
     let dup_result = build_table_struct(
         ctx,
-        function,
         post.entries_ptr,
         post.states_ptr,
         post.length,
@@ -206,34 +179,23 @@ fn call_set_insert_inline<'ctx>(
             function.symbol,
         ))
     })?;
-    ctx.builder
-        .build_unconditional_branch(merge_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
 
     ctx.builder.position_at_end(probe.insert_bb);
-    let ins_ptr = entry_pointer(
-        ctx,
-        function,
-        post.entries_ptr,
-        probe.pidx,
-        layout.entry_size,
-    )?;
+    let ins_ptr = entry_pointer(ctx, post.entries_ptr, probe.pidx, layout.entry_size)?;
     // Acquire the element so the set owns an independent reference;
     // the source list it was read from keeps its own.
-    let insert_item = acquire_value(ctx, &function.symbol, layout.key_ty, item)?;
-    ctx.builder
-        .build_store(ins_ptr, insert_item)
-        .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
+    let insert_item = acquire_value(ctx, layout.key_ty, item)?;
+    ctx.builder.build_store(ins_ptr, insert_item).or_ice()?;
     ctx.builder
         .build_store(probe.s_ptr, i8_ty.const_int(STATE_OCCUPIED, false))
-        .map_err(|e| codegen_err(format_args!("build_store for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let new_len = ctx
         .builder
         .build_int_add(post.length, i64_ty.const_int(1, false), "new_len")
-        .map_err(|e| codegen_err(format_args!("build_int_add for `{}`", function.symbol), e))?;
+        .or_ice()?;
     let inserted_result = build_table_struct(
         ctx,
-        function,
         post.entries_ptr,
         post.states_ptr,
         new_len,
@@ -245,15 +207,13 @@ fn call_set_insert_inline<'ctx>(
             function.symbol,
         ))
     })?;
-    ctx.builder
-        .build_unconditional_branch(merge_bb)
-        .map_err(|e| codegen_err(format_args!("build_branch for `{}`", function.symbol), e))?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
 
     ctx.builder.position_at_end(merge_bb);
     let phi = ctx
         .builder
         .build_phi(hashtable_value_type(ctx), "set_insert_val")
-        .map_err(|e| codegen_err(format_args!("build_phi for `{}`", function.symbol), e))?;
+        .or_ice()?;
     phi.add_incoming(&[(&dup_result, update_tail), (&inserted_result, insert_tail)]);
     Ok(phi.as_basic_value())
 }

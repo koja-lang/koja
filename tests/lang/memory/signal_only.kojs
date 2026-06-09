@@ -1,0 +1,43 @@
+# Regression: shutting down a process that never received a business
+# message must not crash. The receive arm's payload slot for the heap
+# message type (String here) is still zero-initialized when the
+# Lifecycle envelope dispatches; the drop discipline must treat the
+# untouched slot as empty rather than releasing garbage.
+
+struct Sink
+  seen: Int
+end
+
+impl Process<Int, String, Int> for Sink
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Sink{seen: 0})
+  end
+
+  fn handle(self, msg: String, from: Option<ReplyTo<Int>>) -> Step<Self>
+    ReplyTo.reply(from, msg.length())
+    Step.Continue(Sink{seen: self.seen + 1})
+  end
+end
+
+i = 0
+
+loop
+  r = spawn Sink.start(0)
+  r.signal(Lifecycle.Shutdown)
+
+  loop
+    if r.alive?()
+      ()
+    else
+      break
+    end
+  end
+
+  i += 1
+
+  if i >= 50
+    break
+  end
+end
+
+"signal teardown: ok".print()

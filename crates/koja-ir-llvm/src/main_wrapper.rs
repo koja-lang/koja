@@ -42,8 +42,8 @@ use inkwell::module::Linkage;
 use koja_ir::{IRBasicBlock, IRBlockId, IRFunction, IRTerminator, IRType};
 
 use crate::ctx::EmitContext;
-use crate::emit::{self, ValueMap, inkwell_err};
-use crate::error::LlvmError;
+use crate::emit::{self, ValueMap};
+use crate::error::{IceExt, LlvmError};
 use crate::function::declare_blocks;
 use crate::intrinsics::process::payload_drop_glue;
 use crate::runtime::{
@@ -211,7 +211,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     let config_alloca = ctx
         .builder
         .build_alloca(config_llvm_type, "entry_config")
-        .map_err(|e| inkwell_err("build_alloca entry_config", e))?;
+        .or_ice()?;
     if argv_shaped {
         let argc = main_fn.get_nth_param(0).ok_or_else(|| {
             LlvmError::Codegen("process entry main missing argc parameter".to_string())
@@ -226,11 +226,11 @@ pub(crate) fn emit_process_entry_main<'ctx>(
                 &[argc.into(), argv.into(), config_alloca.into()],
                 "",
             )
-            .map_err(|e| inkwell_err("call koja_rt_build_argv", e))?;
+            .or_ice()?;
     } else {
         ctx.builder
             .build_store(config_alloca, config_llvm_type.const_zero())
-            .map_err(|e| inkwell_err("zero-init entry config", e))?;
+            .or_ice()?;
     }
 
     let wrapper_fn = ctx.declared_function(&entry.symbol).ok_or_else(|| {
@@ -244,7 +244,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
         ctx.layouts.target_data.get_abi_size(&config_llvm_type),
         false,
     );
-    let drop_glue = payload_drop_glue(ctx, &entry.symbol, config_type)?;
+    let drop_glue = payload_drop_glue(ctx, config_type)?;
     let spawn_fn = declare_rt_spawn_extern(ctx);
     ctx.builder
         .build_call(
@@ -257,11 +257,9 @@ pub(crate) fn emit_process_entry_main<'ctx>(
             ],
             "",
         )
-        .map_err(|e| inkwell_err("call koja_rt_spawn (process entry main)", e))?;
+        .or_ice()?;
     let main_done = declare_rt_main_done_extern(ctx);
-    ctx.builder
-        .build_call(main_done, &[], "")
-        .map_err(|e| inkwell_err("call koja_rt_main_done (process entry main)", e))?;
+    ctx.builder.build_call(main_done, &[], "").or_ice()?;
 
     let exit_global = ctx.module.get_global(EXIT_CODE_SYMBOL).ok_or_else(|| {
         LlvmError::Codegen(format!(
@@ -271,12 +269,12 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     let exit_value = ctx
         .builder
         .build_load(i32_ty, exit_global.as_pointer_value(), "exit_code")
-        .map_err(|e| inkwell_err("load __koja_exit_code", e))?
+        .or_ice()?
         .into_int_value();
     ctx.builder
         .build_return(Some(&exit_value))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err("build_return process entry main", e))
 }
 
 /// Define `i64 main()` as a minimal trampoline that hands the
@@ -319,15 +317,13 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
             ],
             "",
         )
-        .map_err(|e| inkwell_err("call koja_rt_spawn (main trampoline)", e))?;
+        .or_ice()?;
     let main_done = declare_rt_main_done_extern(ctx);
-    ctx.builder
-        .build_call(main_done, &[], "")
-        .map_err(|e| inkwell_err("call koja_rt_main_done (main trampoline)", e))?;
+    ctx.builder.build_call(main_done, &[], "").or_ice()?;
     ctx.builder
         .build_return(Some(&zero_i64))
+        .or_ice()
         .map(|_| ())
-        .map_err(|e| inkwell_err("build_return main trampoline", e))
 }
 
 /// Cap the trailing block of `__koja_user_main` with `ret void`.
@@ -346,10 +342,7 @@ fn emit_user_main_return<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError>
     {
         return Ok(());
     }
-    ctx.builder
-        .build_return(None)
-        .map(|_| ())
-        .map_err(|e| inkwell_err("build_return for user_main", e))
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 /// The [`IRBlockId`] of the unique *reachable* block ending in
