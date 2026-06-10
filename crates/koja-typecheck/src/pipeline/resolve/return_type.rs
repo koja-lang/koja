@@ -12,11 +12,10 @@
 //! expected `X`, found `Y`") on both pipelines.
 
 use koja_ast::ast::{Diagnostic, Function, Statement};
-use koja_ast::coercion::{Coercion, LiteralCoercion};
 
 use crate::registry::FunctionSignature;
 
-use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
+use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::ResolverEnv;
 use super::types::{display_resolution, is_primitive};
 
@@ -82,18 +81,12 @@ pub(super) fn check_return_type(
     if is_primitive(&actual, env.registry, "Never") {
         return;
     }
-    match check_compatible(trailing, &actual, declared, env.registry) {
-        Compatible::Strict => {}
-        Compatible::Coerced(width) => {
-            *coercion_target_mut(trailing) = Some(LiteralCoercion::NumericLiteralWidth(width));
-        }
-        Compatible::UnionWiden { target } => {
-            *coercion_annotation_mut(trailing) = Some(Coercion::UnionWiden(target));
-        }
-        Compatible::OutOfRange {
+    match check_compatible_stamping(trailing, &actual, declared, env.registry) {
+        None => {}
+        Some(Mismatch::OutOfRange {
             rendered_value,
             width,
-        } => {
+        }) => {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "return value `{rendered_value}` does not fit `{}`'s declared \
@@ -105,7 +98,7 @@ pub(super) fn check_return_type(
                 trailing.span,
             ));
         }
-        Compatible::Incompatible => {
+        Some(Mismatch::Incompatible) => {
             diagnostics.push(Diagnostic::error(
                 format!(
                     "return type mismatch on `{}`: expected `{}`, found `{}`",

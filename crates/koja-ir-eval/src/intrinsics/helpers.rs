@@ -3,9 +3,10 @@
 //! `result_value` / `size_of_primitive` from drifting across
 //! sibling modules.
 
-use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag};
+use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag};
 
 use crate::error::RuntimeError;
+use crate::interpreter::CallResolver;
 use crate::value::{EnumPayload, Value};
 
 /// `Option<T>::Some` carries the only tuple-payload variant; v1
@@ -56,6 +57,64 @@ pub(super) fn result_value(symbol: IRSymbol, value: Result<Value, Value>) -> Val
             tag: ERR_TAG,
         },
     }
+}
+
+/// Build a `NumericConversionError.<variant>` value for a numeric
+/// intrinsic returning `Result<T, NumericConversionError>`. The
+/// error enum's symbol comes from the `Result` decl's `Err` payload
+/// and the variant tag is resolved by name, so neither the stdlib's
+/// mangling scheme nor `numeric.koja`'s declaration order is baked
+/// in here. Shared by the checked-narrowing and parse intrinsics.
+pub(super) fn conversion_error_value<R: CallResolver>(
+    result_symbol: &IRSymbol,
+    resolver: &R,
+    variant_name: &str,
+) -> Result<Value, RuntimeError> {
+    let result_decl =
+        resolver
+            .enum_decl(result_symbol.mangled())
+            .ok_or_else(|| RuntimeError::TypeMismatch {
+                detail: format!("enum decl `{result_symbol}` not found in program"),
+            })?;
+    let err_variant = result_decl
+        .variants
+        .iter()
+        .find(|v| v.tag == ERR_TAG)
+        .ok_or_else(|| RuntimeError::TypeMismatch {
+            detail: format!("enum `{result_symbol}` has no Err variant"),
+        })?;
+    let IRVariantPayload::Tuple(types) = &err_variant.payload else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!("`{result_symbol}`'s Err variant payload is not a tuple"),
+        });
+    };
+    let [IRType::Enum(error_symbol)] = types.as_slice() else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "`{result_symbol}`'s Err payload should be a single enum \
+                 (NumericConversionError), got `{types:?}`",
+            ),
+        });
+    };
+    let error_decl =
+        resolver
+            .enum_decl(error_symbol.mangled())
+            .ok_or_else(|| RuntimeError::TypeMismatch {
+                detail: format!("enum decl `{error_symbol}` not found in program"),
+            })?;
+    let variant = error_decl
+        .variants
+        .iter()
+        .find(|v| v.name == variant_name)
+        .ok_or_else(|| RuntimeError::TypeMismatch {
+            detail: format!("enum `{error_symbol}` has no variant named `{variant_name}`"),
+        })?;
+    Ok(Value::Enum {
+        name: variant_name.into(),
+        payload: EnumPayload::Unit,
+        symbol: error_symbol.clone(),
+        tag: variant.tag,
+    })
 }
 
 /// Read the receiver enum's [`IRSymbol`] off `function.return_type`,

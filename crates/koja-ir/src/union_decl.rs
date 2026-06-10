@@ -337,6 +337,10 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
                 walk_type(&arm.payload_type, out);
             }
         }
+        IRInstruction::NumericWiden { from, to, .. } => {
+            walk_type(from, out);
+            walk_type(to, out);
+        }
         IRInstruction::Spawn { config_type, .. } => walk_type(config_type, out),
         IRInstruction::UnionWrap {
             member_type, ty, ..

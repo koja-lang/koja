@@ -679,6 +679,19 @@ pub enum IRInstruction {
         dest: ValueId,
         result_type: IRType,
     },
+    /// `dest = widen(value)` — losslessly extend a sized numeric
+    /// `value` (typed `from`) into its hub type `to`: sign-extend
+    /// signed integer sources, zero-extend unsigned sources, `fpext`
+    /// a `Float32` into `Float64`. Lowered from the typecheck-stamped
+    /// [`koja_ast::coercion::Coercion::NumericWiden`] at every
+    /// sized-numeric → hub flow site (assignments, struct fields,
+    /// args, returns, enum payloads, consts).
+    NumericWiden {
+        dest: ValueId,
+        from: IRType,
+        to: IRType,
+        value: ValueId,
+    },
     /// `dest = <ty>.wrap(value)` — box `value` (typed `member_type`,
     /// statically a member of `ty`) into a tagged union value of
     /// type `ty`. `member_index` is the 0-based offset of
@@ -788,6 +801,7 @@ impl IRInstruction {
             | IRInstruction::LoadConst { dest, .. }
             | IRInstruction::LocalRead { dest, .. }
             | IRInstruction::MakeClosure { dest, .. }
+            | IRInstruction::NumericWiden { dest, .. }
             | IRInstruction::Receive { dest, .. }
             | IRInstruction::Spawn { dest, .. }
             | IRInstruction::StructInit { dest, .. }

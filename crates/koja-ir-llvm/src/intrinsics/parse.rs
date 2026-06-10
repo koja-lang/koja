@@ -1,32 +1,38 @@
-//! `Int.parse(input: String) -> Result<Int, String>` and
-//! `Float.parse(input: String) -> Result<Float, String>`.
+//! `Int.parse(input: String) -> Result<Int, NumericConversionError>`
+//! and `Float.parse(input: String) -> Result<Float, NumericConversionError>`.
 //!
 //! Both delegate to runtime helpers (`koja_int_parse` /
 //! `koja_float_parse`) that take an Koja string payload pointer and
-//! an out-pointer for the parsed scalar, returning `1` on success
-//! and `0` on failure. The intrinsic body allocates an entry-block
-//! out slot, calls the helper, branches on the return code, and
-//! wraps the parsed value into `Result.Ok(_)` or a literal
-//! `"invalid integer"` / `"invalid float"` message into
-//! `Result.Err(String)`.
+//! an out-pointer for the parsed scalar, returning a
+//! `koja-runtime` `parse_text` code: ok, invalid format, or out of
+//! range (a well-formed number that doesn't fit the target — an
+//! overflowing integer, or a float magnitude that rounds to
+//! infinity). The intrinsic body allocates an entry-block out slot,
+//! calls the helper, switches on the code, and wraps the parsed
+//! value into `Result.Ok(_)` or the matching
+//! `NumericConversionError` variant into `Result.Err(_)` via
+//! [`super::numeric::build_conversion_error`].
 
-use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
 use inkwell::types::BasicType;
 use inkwell::values::{BasicValueEnum, FunctionValue, PointerValue};
 use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantTag, ParseTarget};
 
 use crate::ctx::EmitContext;
-use crate::emit::constants::emit_string_literal_payload;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
+use crate::intrinsics::numeric::build_conversion_error;
 use crate::runtime::{declare_float_parse_extern, declare_int_parse_extern};
 
 /// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
 /// in `koja/lib/global/src/kernel.koja`.
 const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
-/// `enum Result<T, E>` variant tag for `Err(E)`.
-const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
+/// Return codes of the runtime parse helpers. ABI contract: MUST
+/// equal `koja-runtime`'s `parse_text::{PARSE_OK, PARSE_OUT_OF_RANGE}`
+/// (invalid format is the switch's default arm). See
+/// `koja/design/ABI.md` § Numeric parse helpers.
+const PARSE_OK: u64 = 1;
+const PARSE_OUT_OF_RANGE: u64 = 2;
 
 pub(super) fn emit_parse<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -46,11 +52,10 @@ pub(super) fn emit_parse<'ctx>(
         ))
     })?;
 
-    let (helper, out_ty, ok_load_ty, err_message): (
+    let (helper, out_ty, ok_load_ty): (
         FunctionValue<'ctx>,
         BasicValueEnum<'ctx>,
         inkwell::types::BasicTypeEnum<'ctx>,
-        &[u8],
     ) = match target {
         ParseTarget::Int => {
             let i64_ty = ctx.context.i64_type();
@@ -59,7 +64,6 @@ pub(super) fn emit_parse<'ctx>(
                 declare_int_parse_extern(ctx),
                 alloca,
                 i64_ty.as_basic_type_enum(),
-                b"invalid integer",
             )
         }
         ParseTarget::Float => {
@@ -69,29 +73,29 @@ pub(super) fn emit_parse<'ctx>(
                 declare_float_parse_extern(ctx),
                 alloca,
                 f64_ty.as_basic_type_enum(),
-                b"invalid float",
             )
         }
     };
 
     let i64_ty = ctx.context.i64_type();
-    let ok_int = ctx
-        .call_basic(helper, &[input_ptr.into(), out_ty.into()], "parsed_ok")?
+    let code = ctx
+        .call_basic(helper, &[input_ptr.into(), out_ty.into()], "parse_code")?
         .into_int_value();
-    let succeeded = ctx
-        .builder
-        .build_int_compare(
-            IntPredicate::NE,
-            ok_int,
-            i64_ty.const_int(0, false),
-            "succeeded",
-        )
-        .or_ice()?;
 
     let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
-    let err_bb = ctx.context.append_basic_block(llvm_function, "err");
+    let out_of_range_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "out_of_range");
+    let invalid_bb = ctx.context.append_basic_block(llvm_function, "invalid");
     ctx.builder
-        .build_conditional_branch(succeeded, ok_bb, err_bb)
+        .build_switch(
+            code,
+            invalid_bb,
+            &[
+                (i64_ty.const_int(PARSE_OK, false), ok_bb),
+                (i64_ty.const_int(PARSE_OUT_OF_RANGE, false), out_of_range_bb),
+            ],
+        )
         .or_ice()?;
 
     emit_ok_branch(
@@ -101,7 +105,8 @@ pub(super) fn emit_parse<'ctx>(
         out_ty.into_pointer_value(),
         result_symbol,
     )?;
-    emit_err_branch(ctx, err_bb, err_message, result_symbol)?;
+    emit_err_branch(ctx, out_of_range_bb, "OutOfRange", result_symbol)?;
+    emit_err_branch(ctx, invalid_bb, "InvalidFormat", result_symbol)?;
 
     Ok(())
 }
@@ -125,12 +130,11 @@ fn emit_ok_branch<'ctx>(
 fn emit_err_branch<'ctx>(
     ctx: &EmitContext<'ctx>,
     block: BasicBlock<'ctx>,
-    message: &[u8],
+    variant: &str,
     result_symbol: &IRSymbol,
 ) -> Result<(), LlvmError> {
     ctx.builder.position_at_end(block);
-    let err_msg = emit_string_literal_payload(ctx, message, "parse_err");
-    let err = build_enum_value(ctx, result_symbol, RESULT_ERR_TAG, &[err_msg.into()])?;
+    let err = build_conversion_error(ctx, result_symbol, variant)?;
     ctx.builder.build_return(Some(&err)).or_ice().map(|_| ())
 }
 

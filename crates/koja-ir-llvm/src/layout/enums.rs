@@ -101,9 +101,8 @@ pub(crate) fn define_enum_completes_and_outer<'ctx>(
     define_outer_body(ctx, decl, max_complete_size, max_complete_align);
     ctx.layouts
         .register_enum_layout(decl.symbol.clone(), EnumLayout { variants });
-    let payloads = decl.variants.iter().map(|v| v.payload.clone()).collect();
     ctx.layouts
-        .register_enum_variant_payloads(decl.symbol.clone(), payloads);
+        .register_enum_variants(decl.symbol.clone(), decl.variants.clone());
     Ok(())
 }
 

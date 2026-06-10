@@ -173,4 +173,90 @@ struct IntTest
 
     Result.Ok(true)
   end
+
+  @test "numeric widening into Int slots"
+  fn test_widening -> Result<Bool, String>
+    i32: Int32 = -42
+    widened: Int = i32
+
+    unless widened == -42
+      return Result.Err("Int32 sign extension")
+    end
+
+    byte: UInt8 = 255
+    wide_byte: Int = byte
+
+    unless wide_byte == 255
+      return Result.Err("UInt8 zero extension")
+    end
+
+    u16: UInt16 = 65535
+    wide_u16: Int = u16
+
+    unless wide_u16 == 65535
+      return Result.Err("UInt16 zero extension")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "checked narrowing round-trips"
+  fn test_narrowing -> Result<Bool, String>
+    match 127.to_int8()
+      Result.Ok(v) ->
+        wide: Int = v
+
+        unless wide == 127
+          return Result.Err("to_int8 round-trip")
+        end
+
+      Result.Err(e) ->
+        return Result.Err("to_int8 in range")
+    end
+
+    match 128.to_int8()
+      Result.Ok(v) -> return Result.Err("to_int8 out of range")
+      Result.Err(e) -> ()
+    end
+
+    match (-129).to_int8()
+      Result.Ok(v) -> return Result.Err("to_int8 below range")
+      Result.Err(e) -> ()
+    end
+
+    match (-1234).to_int32()
+      Result.Ok(v) ->
+        wide: Int = v
+
+        unless wide == -1234
+          return Result.Err("to_int32 round-trip")
+        end
+
+      Result.Err(e) ->
+        return Result.Err("to_int32 in range")
+    end
+
+    match (-1).to_uint64()
+      Result.Ok(v) -> return Result.Err("to_uint64 negative")
+      Result.Err(e) -> ()
+    end
+
+    match 10.to_uint64()
+      Result.Ok(v) ->
+        match v.to_int()
+          Result.Ok(i) ->
+            unless i == 10
+              return Result.Err("UInt64 to_int round-trip")
+            end
+
+          Result.Err(e) ->
+            return Result.Err("UInt64 to_int in range")
+        end
+
+      Result.Err(e) ->
+        return Result.Err("to_uint64 in range")
+    end
+
+    Result.Ok(true)
+  end
 end

@@ -6,6 +6,7 @@ use std::ptr;
 use std::slice;
 use std::str;
 
+use crate::parse_text::{ParseOutcome, parse_float_text, parse_int_text};
 use crate::util::{BITS_PER_BYTE, alloc_koja_string, read_bit_length};
 
 /// Decodes a NUL-terminated C string pointer into a string. Every Koja
@@ -22,19 +23,20 @@ unsafe fn cstr_str<'a>(ptr: *const u8) -> Cow<'a, str> {
 }
 
 /// Attempts to parse a NUL-terminated string as a 64-bit float.
+/// Returns a [`crate::parse_text`] code (`PARSE_OK` writes the
+/// value through `out`); see [`parse_float_text`] for the
+/// classification rules.
 ///
 /// # Safety
 /// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_float_parse(ptr: *const u8, out: *mut f64) -> i64 {
     let s = unsafe { cstr_str(ptr) };
-    match s.trim().parse::<f64>() {
-        Ok(v) => {
-            unsafe { *out = v };
-            1
-        }
-        Err(_) => 0,
+    let outcome = parse_float_text(s.trim());
+    if let ParseOutcome::Ok(v) = outcome {
+        unsafe { *out = v };
     }
+    outcome.code()
 }
 
 /// Formats a Binary or Bits value as a literal-style string: `<<127, 0, 0, 1>>`.
@@ -73,19 +75,20 @@ pub unsafe extern "C" fn koja_format_binary(ptr: *const u8, is_bits: i64) -> *co
 }
 
 /// Attempts to parse a NUL-terminated string as a 64-bit signed integer.
+/// Returns a [`crate::parse_text`] code (`PARSE_OK` writes the
+/// value through `out`); see [`parse_int_text`] for the
+/// classification rules.
 ///
 /// # Safety
 /// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
     let s = unsafe { cstr_str(ptr) };
-    match s.trim().parse::<i64>() {
-        Ok(v) => {
-            unsafe { *out = v };
-            1
-        }
-        Err(_) => 0,
+    let outcome = parse_int_text(s.trim());
+    if let ParseOutcome::Ok(v) = outcome {
+        unsafe { *out = v };
     }
+    outcome.code()
 }
 
 /// Returns a codepoint at `index`, or null if out of bounds.

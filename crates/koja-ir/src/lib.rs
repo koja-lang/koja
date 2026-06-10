@@ -63,8 +63,8 @@ pub use function::{
 };
 pub use intrinsic_id::{
     BinaryMethod, BitOp, BitsMethod, CPtrMethod, CStringMethod, DebugImpl, EqualityImpl, FloatType,
-    HashImpl, IRIntrinsicId, IntType, KernelMethod, ListMethod, MapMethod, ParseTarget, RefMethod,
-    ReplyToMethod, SetMethod, SocketMethod, StringMethod,
+    HashImpl, IRIntrinsicId, IntNarrowTarget, IntType, KernelMethod, ListMethod, MapMethod,
+    NumericConvert, ParseTarget, RefMethod, ReplyToMethod, SetMethod, SocketMethod, StringMethod,
 };
 pub use local::IRLocalId;
 pub use package::IRPackage;

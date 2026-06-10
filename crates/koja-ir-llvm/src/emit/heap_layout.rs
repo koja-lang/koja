@@ -29,8 +29,10 @@
 //! `staticlib`, so the ABI constants are mirrored there
 //! (`koja-runtime`'s `util::{BLOCK_HEADER_SIZE, LENGTH_OFFSET}` and the
 //! `rc < 0` immortal test). The two are an API contract kept in sync by
-//! convention, not a shared dependency. `koja-ir`'s `types.rs` doc
-//! comments are the authoritative human spec.
+//! convention, not a shared dependency. `koja/design/ABI.md` § Heap
+//! leaf blocks is the contract catalog; `koja-ir`'s `types.rs` doc
+//! comments are the authoritative human spec for which types are
+//! heap-backed.
 
 use inkwell::values::{IntValue, PointerValue};
 use koja_ir::IRType;

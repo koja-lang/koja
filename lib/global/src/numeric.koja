@@ -1,0 +1,246 @@
+@doc """
+Error type for checked numeric conversions: narrowing like
+`Int.to_int32` and `UInt64.to_int`, and parsing via `Int.parse` and
+`Float.parse`.
+"""
+enum NumericConversionError
+  InvalidFormat
+  OutOfRange
+end
+
+impl Equality for Int
+  @doc """
+  Returns `true` if both 64-bit integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: Int) -> Bool
+end
+
+impl Equality for Float
+  @doc """
+  IEEE 754 ordered equality for 64-bit floats: `+0.0 == -0.0` is
+  `true`, and `NaN == NaN` is `false`.
+  """
+  @intrinsic
+  fn eq(self, other: Float) -> Bool
+end
+
+impl Equality for Float32
+  @doc """
+  IEEE 754 ordered equality for 32-bit floats: `+0.0 == -0.0` is
+  `true`, and `NaN == NaN` is `false`.
+  """
+  @intrinsic
+  fn eq(self, other: Float32) -> Bool
+end
+
+impl Equality for Int8
+  @doc """
+  Returns `true` if both 8-bit integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: Int8) -> Bool
+end
+
+impl Equality for Int16
+  @doc """
+  Returns `true` if both 16-bit integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: Int16) -> Bool
+end
+
+impl Equality for Int32
+  @doc """
+  Returns `true` if both 32-bit integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: Int32) -> Bool
+end
+
+impl Equality for UInt8
+  @doc """
+  Returns `true` if both 8-bit unsigned integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: UInt8) -> Bool
+end
+
+impl Equality for UInt16
+  @doc """
+  Returns `true` if both 16-bit unsigned integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: UInt16) -> Bool
+end
+
+impl Equality for UInt32
+  @doc """
+  Returns `true` if both 32-bit unsigned integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: UInt32) -> Bool
+end
+
+impl Equality for UInt64
+  @doc """
+  Returns `true` if both 64-bit unsigned integers are equal.
+  """
+  @intrinsic
+  fn eq(self, other: UInt64) -> Bool
+end
+
+impl Hash for Int
+  @doc """
+  Returns a hash of this 64-bit integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+impl Hash for Int8
+  @doc """
+  Returns a hash of this 8-bit integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+impl Hash for Int16
+  @doc """
+  Returns a hash of this 16-bit integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+impl Hash for Int32
+  @doc """
+  Returns a hash of this 32-bit integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+impl Hash for UInt8
+  @doc """
+  Returns a hash of this 8-bit unsigned integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+impl Hash for UInt16
+  @doc """
+  Returns a hash of this 16-bit unsigned integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+impl Hash for UInt32
+  @doc """
+  Returns a hash of this 32-bit unsigned integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+impl Hash for UInt64
+  @doc """
+  Returns a hash of this 64-bit unsigned integer using SplitMix64.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
+extend Int
+  @doc """
+  Parses a string as a 64-bit signed integer. Returns `Result.Ok(value)` on
+  success, `Result.Err(NumericConversionError.InvalidFormat)` if the string
+  is not a valid integer, or `Result.Err(NumericConversionError.OutOfRange)`
+  for a well-formed integer that does not fit in 64 bits.
+  """
+  @intrinsic
+  fn parse(input: String) -> Result<Int, NumericConversionError>
+
+  @doc """
+  Narrows to an 8-bit signed integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  """
+  @intrinsic
+  fn to_int8(self) -> Result<Int8, NumericConversionError>
+
+  @doc """
+  Narrows to a 16-bit signed integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  """
+  @intrinsic
+  fn to_int16(self) -> Result<Int16, NumericConversionError>
+
+  @doc """
+  Narrows to a 32-bit signed integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  """
+  @intrinsic
+  fn to_int32(self) -> Result<Int32, NumericConversionError>
+
+  @doc """
+  Narrows to an 8-bit unsigned integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  """
+  @intrinsic
+  fn to_uint8(self) -> Result<UInt8, NumericConversionError>
+
+  @doc """
+  Narrows to a 16-bit unsigned integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  """
+  @intrinsic
+  fn to_uint16(self) -> Result<UInt16, NumericConversionError>
+
+  @doc """
+  Narrows to a 32-bit unsigned integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value does not fit.
+  """
+  @intrinsic
+  fn to_uint32(self) -> Result<UInt32, NumericConversionError>
+
+  @doc """
+  Converts to a 64-bit unsigned integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value is negative.
+  """
+  @intrinsic
+  fn to_uint64(self) -> Result<UInt64, NumericConversionError>
+end
+
+extend Float
+  @doc """
+  Parses a string as a 64-bit floating-point number. Returns
+  `Result.Ok(value)` on success,
+  `Result.Err(NumericConversionError.InvalidFormat)` if the string is not a
+  valid float, or `Result.Err(NumericConversionError.OutOfRange)` for a
+  well-formed magnitude too large for a 64-bit float (e.g. `"1e999"`). Only
+  finite values parse — there is no literal syntax for infinities or NaN.
+  """
+  @intrinsic
+  fn parse(input: String) -> Result<Float, NumericConversionError>
+
+  @doc """
+  Converts to a 32-bit float, rounding to the nearest representable
+  value. Total — out-of-range magnitudes become infinities.
+  """
+  @intrinsic
+  fn to_float32(self) -> Float32
+end
+
+extend UInt64
+  @doc """
+  Converts to a 64-bit signed integer. Returns
+  `Result.Err(NumericConversionError.OutOfRange)` if the value exceeds
+  `Int`'s maximum. `UInt64` is the one sized integer that cannot
+  widen implicitly into `Int`; this is the explicit bridge.
+  """
+  @intrinsic
+  fn to_int(self) -> Result<Int, NumericConversionError>
+end

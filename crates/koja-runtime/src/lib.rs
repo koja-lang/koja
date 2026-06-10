@@ -13,6 +13,7 @@ mod intrinsics;
 mod mailbox;
 mod memory;
 mod panic;
+pub mod parse_text;
 mod process_table;
 mod reactor;
 mod sched_trace;

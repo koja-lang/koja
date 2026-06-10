@@ -28,6 +28,7 @@ mod helpers;
 mod kernel;
 mod list;
 mod map;
+mod numeric;
 mod parse;
 mod print;
 mod process;
@@ -63,7 +64,10 @@ pub(crate) fn dispatch<R: CallResolver>(
         IRIntrinsicId::Kernel(KernelMethod::Panic) => kernel::panic(args),
         IRIntrinsicId::List(method) => list::dispatch(method, function, args, resolver),
         IRIntrinsicId::Map(method) => map::dispatch(method, function, args),
-        IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args),
+        IRIntrinsicId::NumericConvert(convert) => {
+            numeric::dispatch(convert, function, args, resolver)
+        }
+        IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args, resolver),
         IRIntrinsicId::Print => print::global_print(args),
         IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function),
         IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, function),

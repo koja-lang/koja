@@ -92,6 +92,10 @@ fn main() {
     let autoimport_modules: &[&str] = &[
         // kernel first — defines Option/Result/Pair referenced downstream
         "Global.kernel",
+        // numeric right after kernel: Equality/Hash impls for the
+        // numeric primitives plus parse / checked conversions, all
+        // referencing kernel's protocol decls and Result.
+        "Global.numeric",
         "Global.cptr",
         "Global.cstring",
         "Global.bitwise",

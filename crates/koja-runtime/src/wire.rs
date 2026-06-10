@@ -20,8 +20,10 @@
 //! `koja-ir-llvm` and `ReceiveTag::wire_byte` in `koja-ir` — mirror
 //! these values by spec, not via a shared type (a shared crate would
 //! solidify a Rust-level coupling that self-hosting is meant to
-//! remove). A mismatch needs no dedicated test: the `lang_process_*` /
-//! `lang_io` suites read garbage the moment the offsets disagree.
+//! remove — see `koja/design/ABI.md` for the policy and the full
+//! contract catalog). A mismatch needs no dedicated test: the
+//! `lang_process_*` / `lang_io` suites read garbage the moment the
+//! offsets disagree.
 //!
 //! Tags are routing classes, not payload shapes: they decide which part
 //! of the receiver's mailbox an envelope lands in (see

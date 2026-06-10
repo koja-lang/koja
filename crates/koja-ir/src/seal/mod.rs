@@ -218,6 +218,7 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         IRInstruction::DropValue { value, .. } => vec![*value],
         IRInstruction::LocalWrite { value, .. } => vec![*value],
         IRInstruction::MakeClosure { captures, .. } => captures.clone(),
+        IRInstruction::NumericWiden { value, .. } => vec![*value],
         // `Receive` consumes only the optional `after` timeout
         // value; arm payloads bind into pre-declared local slots
         // that the surrounding function-level walk validates.

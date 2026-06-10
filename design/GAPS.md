@@ -97,6 +97,73 @@ analysis isn't lost.
 
 ---
 
+## Arithmetic fault semantics undefined (ArithmeticError)
+
+Investigated 2026-06-10. The fault behavior of `+ - * / %` and unary
+`-` was never pinned down, and the two backends improvised
+differently:
+
+| Fault                             | Eval                                            | LLVM                                                                 |
+| --------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |
+| Int `/` `%` by zero               | `RuntimeError::DivisionByZero`                  | raw `sdiv`/`srem` -- **UB** (SIGFPE on x86, silent garbage on ARM64) |
+| `i64::MIN / -1`                   | overflow error via `checked_div`                | raw `sdiv` -- **UB**                                                 |
+| Int overflow (`+ - *`, unary `-`) | `RuntimeError::IntegerOverflow` via `checked_*` | wraps (no `nsw`/`nuw`)                                               |
+| Float ops producing `inf`/`NaN`   | allowed (IEEE)                                  | allowed (IEEE)                                                       |
+
+The doc comment on `IRBinOp` in `koja-ir/src/types.rs` declares
+two's-complement wrap the intended contract, with aligning eval "a
+follow-up" -- that contract is now in question (see direction below).
+
+The float row contradicts the finite-only stance adopted for
+`Float.parse` (2026-06-10, `NumericConversionError`): `1.0 / 0.0`
+quietly produces `inf` at runtime, `Debug.format` prints it as `inf`,
+and `Float.parse` then refuses to read that text back. Finite text
+in, non-finite values out -- a format/parse round-trip asymmetry.
+
+Related bug found during the same recon: `Float32 + Float32`
+mis-routes to the int-arith path in `koja-ir-eval/src/ops.rs`
+(`apply_binary_op` only checks for `Value::Float64`) and dies with a
+runtime type mismatch, even though typecheck accepts same-width
+`Float32` arithmetic and the LLVM backend emits it correctly.
+
+**Proposed direction** -- an `ArithmeticError` trap, the Erlang
+`badarith` analogue:
+
+- Int div/mod by zero (and `i64::MIN / -1`) traps on both backends.
+  This much is mandatory regardless of the rest: the LLVM behavior
+  today is UB, not a semantic choice.
+- A float op whose result is non-finite (`inf` from overflow or
+  `x / 0.0`, `NaN` from `0.0 / 0.0` or `x % 0.0`) traps, restoring
+  the finite-only invariant end to end. With that invariant, `NaN`
+  can never reach comparisons, so the ordered-predicate semantics
+  stay as-is.
+- The trap mechanism must be a panic: binops return bare values, so
+  there is no `Result` to thread an error through. Note panics
+  currently abort the whole OS process (`__koja_panic` ->
+  `process::abort()`); per-process isolation with
+  `ExitReason.Crashed` supervision is its own unimplemented gap, and
+  `ArithmeticError` inherits whatever that lands on.
+- LLVM-side shape: a shared guard helper in `emit/ops.rs` -- compare
+  (or `llvm.*.with.overflow`), `build_conditional_branch` to a panic
+  block calling `__koja_panic` with a constant message, mirroring the
+  `intrinsics/numeric.rs` range-check pattern.
+
+**Open questions:**
+
+1. Int overflow: trap (eval's current behavior, one overflow-flag
+   branch per native int op) vs keep wrapping (the `types.rs`
+   contract, align eval to wrap). Deliberately unresolved.
+2. `Float.to_float32` documents "total -- out-of-range magnitudes
+   become infinities", a backdoor minting non-finite `Float32`.
+   Candidate fix: checked
+   `Result<Float32, NumericConversionError.OutOfRange>` like the
+   other narrowing methods.
+3. Whether a float literal that overflows `f64` (`1e999` in source)
+   should be a compile-time `OutOfRange` diagnostic to match the
+   parse behavior.
+
+---
+
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries

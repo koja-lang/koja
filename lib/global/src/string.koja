@@ -357,16 +357,16 @@ extend String
   fn to_binary(self) -> Binary
 
   @doc """
-  Parses the string as a 64-bit floating-point number.
+  Parses the string as a 64-bit floating-point number. See `Float.parse`.
   """
-  fn to_float(self) -> Result<Float, String>
+  fn to_float(self) -> Result<Float, NumericConversionError>
     Float.parse(self)
   end
 
   @doc """
-  Parses the string as a 64-bit signed integer.
+  Parses the string as a 64-bit signed integer. See `Int.parse`.
   """
-  fn to_int(self) -> Result<Int, String>
+  fn to_int(self) -> Result<Int, NumericConversionError>
     Int.parse(self)
   end
 

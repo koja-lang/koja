@@ -11,16 +11,13 @@
 //! lookup picks up the impl method.
 
 use koja_ast::ast::{Arg, Diagnostic, Expr};
-use koja_ast::coercion::{Coercion, LiteralCoercion};
 use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, ResolvedProtocolMethod};
 
-use super::super::coercion::{
-    Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut,
-};
+use super::super::coercion::{Mismatch, check_compatible_stamping};
 use super::super::ctx::Resolver;
 use super::super::types::display_resolution;
 
@@ -258,19 +255,12 @@ fn validate_bounded_args(
             continue;
         }
         let expected_ty = substitute(&expected.ty, self_subst);
-        match check_compatible(&arg.value, &actual, &expected_ty, resolver.registry) {
-            Compatible::Strict => {}
-            Compatible::Coerced(width) => {
-                *coercion_target_mut(&mut arg.value) =
-                    Some(LiteralCoercion::NumericLiteralWidth(width));
-            }
-            Compatible::UnionWiden { target } => {
-                *coercion_annotation_mut(&mut arg.value) = Some(Coercion::UnionWiden(target));
-            }
-            Compatible::OutOfRange {
+        match check_compatible_stamping(&mut arg.value, &actual, &expected_ty, resolver.registry) {
+            None => {}
+            Some(Mismatch::OutOfRange {
                 rendered_value,
                 width,
-            } => {
+            }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument `{}` to `{method}` expects `{}`: value \
@@ -283,7 +273,7 @@ fn validate_bounded_args(
                     arg.span,
                 ));
             }
-            Compatible::Incompatible => {
+            Some(Mismatch::Incompatible) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument `{}` to `{method}` expects `{}`, got `{}`",

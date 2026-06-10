@@ -1,0 +1,38 @@
+# Hub-only numeric widening: sized integers flow into Int slots and
+# Float32 flows into Float slots without explicit conversion. The
+# negative Int32 case pins sign extension (a C error code widened
+# into Int must stay negative).
+
+fn describe(code: Int) -> String
+  if code < 0
+    "error #{code}"
+  else
+    "ok #{code}"
+  end
+end
+
+fn total(a: Int, b: Int) -> Int
+  a + b
+end
+
+status: Int32 = -42
+describe(status).print()
+
+byte: UInt8 = 255
+count: UInt16 = 1000
+total(byte, count).print()
+
+ratio: Float32 = 1.5
+wide: Float = ratio
+wide.print()
+
+# Explicit narrowing is checked and round-trips through widening.
+match 100.to_int8()
+  Result.Ok(v) -> total(v, 1).print()
+  Result.Err(e) -> "unreachable".print()
+end
+
+match 300.to_int8()
+  Result.Ok(v) -> "unreachable".print()
+  Result.Err(e) -> "narrow rejected".print()
+end

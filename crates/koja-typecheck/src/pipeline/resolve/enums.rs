@@ -18,7 +18,6 @@
 //! stable.
 
 use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr};
-use koja_ast::coercion::{Coercion, LiteralCoercion};
 use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParamIndex};
 use koja_ast::span::Span;
 
@@ -27,7 +26,7 @@ use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
+use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
 use super::expr::resolve_expr;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -363,18 +362,12 @@ fn validate_tuple_payload(
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(expr, &actual, declared, resolver.registry) {
-            Compatible::Strict => {}
-            Compatible::Coerced(width) => {
-                *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
-            }
-            Compatible::UnionWiden { target } => {
-                *coercion_annotation_mut(expr) = Some(Coercion::UnionWiden(target));
-            }
-            Compatible::OutOfRange {
+        match check_compatible_stamping(expr, &actual, declared, resolver.registry) {
+            None => {}
+            Some(Mismatch::OutOfRange {
                 rendered_value,
                 width,
-            } => {
+            }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument {} of `{variant_label}` expects `{}`: value \
@@ -387,7 +380,7 @@ fn validate_tuple_payload(
                     expr.span,
                 ));
             }
-            Compatible::Incompatible => {
+            Some(Mismatch::Incompatible) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument {} of `{variant_label}` expects `{}`, got `{}`",

@@ -58,8 +58,9 @@ pub(super) fn lower_expr(
 
 /// Apply `expr.coercion` (if any) to a freshly lowered value. Each
 /// [`Coercion`] variant pairs 1:1 with an `IRInstruction::*`
-/// emission per the northstar coercion contract; today the only
-/// variant is [`Coercion::UnionWiden`] → [`IRInstruction::UnionWrap`].
+/// emission per the northstar coercion contract:
+/// [`Coercion::NumericWiden`] → [`IRInstruction::NumericWiden`] and
+/// [`Coercion::UnionWiden`] → [`IRInstruction::UnionWrap`].
 fn apply_value_coercion(
     expr: &Expr,
     value: ValueId,
@@ -72,6 +73,21 @@ fn apply_value_coercion(
         return (value, block);
     };
     match coercion {
+        Coercion::NumericWiden(target) => {
+            let target_ir = resolved_type_to_ir_type(target, registry, &mut output.instantiations);
+            let from = ctx.type_of(value).clone();
+            let dest = ctx.fresh_value(target_ir.clone());
+            ctx.cfg.append(
+                block,
+                IRInstruction::NumericWiden {
+                    dest,
+                    from,
+                    to: target_ir,
+                    value,
+                },
+            );
+            (dest, block)
+        }
         Coercion::UnionWiden(target) => {
             let target_ir = resolved_type_to_ir_type(target, registry, &mut output.instantiations);
             let IRType::Union { members, .. } = &target_ir else {

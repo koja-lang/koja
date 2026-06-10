@@ -13,11 +13,12 @@
 
 use inkwell::values::{BasicValueEnum, FloatValue, IntValue, PointerValue};
 use inkwell::{FloatPredicate, IntPredicate};
-use koja_ir::{IRBinOp, IRUnaryOp};
+use koja_ir::{IRBinOp, IRType, IRUnaryOp};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::runtime::declare_strcmp_extern;
+use crate::types::ir_int_type;
 
 pub(super) fn emit_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -144,6 +145,43 @@ fn float_predicate(op: IRBinOp) -> FloatPredicate {
         IRBinOp::NotEq => FloatPredicate::ONE,
         other => unreachable!("float_predicate called with non-comparison op {other:?}"),
     }
+}
+
+/// Lossless hub widening: sign-extend signed integer sources,
+/// zero-extend unsigned, `fpext` a `Float32` into `f64`. The
+/// source / target pairing is typecheck-guaranteed (sized numeric →
+/// `Int64` / `Float64` only), so any other `from` shape is an ICE.
+pub(super) fn emit_numeric_widen<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    from: &IRType,
+    to: &IRType,
+    value: BasicValueEnum<'ctx>,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    if matches!(from, IRType::Float32) {
+        let widened = ctx
+            .builder
+            .build_float_ext(value.into_float_value(), ctx.context.f64_type(), "fwiden")
+            .or_ice()?;
+        return Ok(widened.into());
+    }
+    let target_ty = ir_int_type(ctx.context, to)?;
+    let int_value = value.into_int_value();
+    let widened = match from {
+        IRType::Int8 | IRType::Int16 | IRType::Int32 => ctx
+            .builder
+            .build_int_s_extend(int_value, target_ty, "swiden"),
+        IRType::UInt8 | IRType::UInt16 | IRType::UInt32 => ctx
+            .builder
+            .build_int_z_extend(int_value, target_ty, "zwiden"),
+        other => {
+            return Err(LlvmError::Codegen(format!(
+                "LLVM emit: NumericWiden source must be a widenable sized numeric, \
+                 got `{other:?}` (typecheck violation)",
+            )));
+        }
+    }
+    .or_ice()?;
+    Ok(widened.into())
 }
 
 /// Unary op dispatcher: `Neg` on float operands routes to

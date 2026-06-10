@@ -23,7 +23,7 @@ use inkwell::targets::{
     CodeModel, InitializationConfig, RelocMode, Target, TargetData, TargetMachine,
 };
 use inkwell::types::StructType;
-use koja_ir::{IRSymbol, IRType, IRVariantPayload, IRVariantTag};
+use koja_ir::{IREnumVariant, IRSymbol, IRType, IRVariantPayload, IRVariantTag};
 
 pub(crate) mod enum_order;
 pub(crate) mod enums;
@@ -72,13 +72,14 @@ pub(crate) struct TypeLayouts<'ctx> {
     /// the role `enum_layouts` plays for enum-shaped data.
     struct_fields: RefCell<BTreeMap<IRSymbol, Vec<IRType>>>,
     enum_layouts: RefCell<BTreeMap<IRSymbol, EnumLayout<'ctx>>>,
-    /// IR-level per-variant payload shapes for every declared enum,
-    /// indexed by the same symbol as `enum_layouts`. Retained
+    /// IR-level variants (name + payload + tag) for every declared
+    /// enum, indexed by the same symbol as `enum_layouts`. Retained
     /// post-layout so intrinsic emitters can resolve "the `Ok`
-    /// variant's first field of `Result_$R.E$` is `R`" without
-    /// reaching back into the program-level [`koja_ir::IREnumDecl`]
-    /// registry. Mirrors `struct_fields` for struct-shaped data.
-    enum_variant_payloads: RefCell<BTreeMap<IRSymbol, Vec<IRVariantPayload>>>,
+    /// variant's first field of `Result_$R.E$` is `R`" — or look a
+    /// tag up by variant name — without reaching back into the
+    /// program-level [`koja_ir::IREnumDecl`] registry. Mirrors
+    /// `struct_fields` for struct-shaped data.
+    enum_variants: RefCell<BTreeMap<IRSymbol, Vec<IREnumVariant>>>,
     union_layouts: RefCell<BTreeMap<IRSymbol, UnionLayout<'ctx>>>,
 }
 
@@ -89,7 +90,7 @@ impl<'ctx> TypeLayouts<'ctx> {
             struct_types: RefCell::new(BTreeMap::new()),
             struct_fields: RefCell::new(BTreeMap::new()),
             enum_layouts: RefCell::new(BTreeMap::new()),
-            enum_variant_payloads: RefCell::new(BTreeMap::new()),
+            enum_variants: RefCell::new(BTreeMap::new()),
             union_layouts: RefCell::new(BTreeMap::new()),
         }
     }
@@ -159,15 +160,11 @@ impl<'ctx> TypeLayouts<'ctx> {
         }
     }
 
-    pub(crate) fn register_enum_variant_payloads(
-        &self,
-        symbol: IRSymbol,
-        payloads: Vec<IRVariantPayload>,
-    ) {
-        let mut map = self.enum_variant_payloads.borrow_mut();
-        if map.insert(symbol.clone(), payloads).is_some() {
+    pub(crate) fn register_enum_variants(&self, symbol: IRSymbol, variants: Vec<IREnumVariant>) {
+        let mut map = self.enum_variants.borrow_mut();
+        if map.insert(symbol.clone(), variants).is_some() {
             panic!(
-                "LLVM emit: enum variant payloads for `{symbol}` registered twice — \
+                "LLVM emit: enum variants for `{symbol}` registered twice — \
                  lower / merge invariant violation",
             );
         }
@@ -181,21 +178,45 @@ impl<'ctx> TypeLayouts<'ctx> {
         enum_symbol: &IRSymbol,
         tag: IRVariantTag,
     ) -> IRVariantPayload {
-        let map = self.enum_variant_payloads.borrow();
-        let payloads = map.get(enum_symbol).unwrap_or_else(|| {
+        let map = self.enum_variants.borrow();
+        let variants = map.get(enum_symbol).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: enum variant payloads for `{enum_symbol}` not registered — \
+                "LLVM emit: enum variants for `{enum_symbol}` not registered — \
                  pre-emit ordering violation",
             )
         });
-        payloads
-            .get(usize::from(tag.0))
-            .cloned()
+        variants
+            .iter()
+            .find(|v| v.tag == tag)
+            .map(|v| v.payload.clone())
             .unwrap_or_else(|| {
                 panic!(
                     "LLVM emit: enum `{enum_symbol}` has no variant at tag {tag} — \
                      IR seal invariant violation",
                 )
+            })
+    }
+
+    /// Tag of `enum_symbol`'s variant named `name`. Lets intrinsic
+    /// emitters target stdlib enum variants (e.g.
+    /// `NumericConversionError.OutOfRange`) without hardcoding tags
+    /// that silently break when the declaration order changes.
+    /// Panics on unregistered symbol / unknown variant — both
+    /// indicate a pre-emit ordering or stdlib invariant violation.
+    pub(crate) fn enum_variant_tag(&self, enum_symbol: &IRSymbol, name: &str) -> IRVariantTag {
+        let map = self.enum_variants.borrow();
+        let variants = map.get(enum_symbol).unwrap_or_else(|| {
+            panic!(
+                "LLVM emit: enum variants for `{enum_symbol}` not registered — \
+                 pre-emit ordering violation",
+            )
+        });
+        variants
+            .iter()
+            .find(|v| v.name == name)
+            .map(|v| v.tag)
+            .unwrap_or_else(|| {
+                panic!("LLVM emit: enum `{enum_symbol}` has no variant named `{name}`")
             })
     }
 

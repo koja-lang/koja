@@ -920,6 +920,19 @@ fn execute_instruction<R: CallResolver>(
             );
             Ok(())
         }
+        // Sized integers are already canonical `Value::Int(i64)`
+        // (sign/zero-extended at materialization), so the integer
+        // widen is a pass-through; only `Float32 -> Float64`
+        // changes representation.
+        IRInstruction::NumericWiden { dest, value, .. } => {
+            let source = lookup(&frame.values, *value)?;
+            let widened = match source {
+                Value::Float32(v) => Value::Float64(f64::from(v)),
+                other => other,
+            };
+            frame.values.insert(*dest, widened);
+            Ok(())
+        }
         IRInstruction::Spawn { wrapper, .. } => Err(RuntimeError::Unsupported {
             detail: format!(
                 "`spawn` (wrapper `{wrapper}`) is not supported under the interpreter; \

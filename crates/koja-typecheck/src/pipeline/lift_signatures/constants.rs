@@ -13,14 +13,11 @@
 use koja_ast::ast::{
     Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, StringPart, UnaryOp,
 };
-use koja_ast::coercion::{Coercion, LiteralCoercion};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
-use crate::pipeline::resolve::coercion::{
-    Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut,
-};
+use crate::pipeline::resolve::coercion::{Mismatch, check_compatible_stamping};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -130,18 +127,12 @@ fn resolve_constant_value(
         && ty.is_resolved()
         && expected.is_resolved()
     {
-        match check_compatible(expr, &ty, expected, scope.registry) {
-            Compatible::Strict => {}
-            Compatible::Coerced(width) => {
-                *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
-            }
-            Compatible::UnionWiden { target } => {
-                *coercion_annotation_mut(expr) = Some(Coercion::UnionWiden(target));
-            }
-            Compatible::OutOfRange {
+        match check_compatible_stamping(expr, &ty, expected, scope.registry) {
+            None => {}
+            Some(Mismatch::OutOfRange {
                 rendered_value,
                 width,
-            } => {
+            }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "constant value `{rendered_value}` does not fit in `{}` \
@@ -152,7 +143,7 @@ fn resolve_constant_value(
                     expr.span,
                 ));
             }
-            Compatible::Incompatible => {
+            Some(Mismatch::Incompatible) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "constant value type `{}` does not match annotation `{}`",

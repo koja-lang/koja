@@ -13,13 +13,15 @@
 //! **Value-conversion** ([`Coercion`], stamped on `Expr::coercion`).
 //! A value of type `T` flowing into a slot of type `U ≠ T` where
 //! the conversion needs runtime work — `UnionWiden` boxes a member
-//! into a tagged union, future variants will cover fn-as-closure,
-//! `Display` in interpolation, list/map `from_list`, generic phi
-//! widening. Per `COMPILER-NORTHSTAR.md`'s coercion contract, every
-//! `Coercion::*` variant pairs 1:1 with an `IRInstruction::*`
-//! variant that the lowerer emits at the exact site (today
-//! `Coercion::UnionWiden` ↔ `IRInstruction::UnionWrap`). Adding a
-//! new `Coercion` variant requires adding the paired
+//! into a tagged union, `NumericWiden` extends a sized numeric
+//! into its hub type (`Int` / `Float`); future variants will cover
+//! fn-as-closure, `Display` in interpolation, list/map `from_list`,
+//! generic phi widening. Per `COMPILER-NORTHSTAR.md`'s coercion
+//! contract, every `Coercion::*` variant pairs 1:1 with an
+//! `IRInstruction::*` variant that the lowerer emits at the exact
+//! site (`Coercion::UnionWiden` ↔ `IRInstruction::UnionWrap`,
+//! `Coercion::NumericWiden` ↔ `IRInstruction::NumericWiden`).
+//! Adding a new `Coercion` variant requires adding the paired
 //! `IRInstruction` and lowerer emitter in the same change.
 
 use crate::identifier::ResolvedType;
@@ -104,6 +106,17 @@ impl LiteralCoercion {
 /// contract (annotation vs literal-fit width).
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum Coercion {
+    /// A sized numeric value flowing into its hub-type slot: any of
+    /// `Int8` / `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32`
+    /// into `Int`, or `Float32` into `Float`. Hub-only and lossless
+    /// by construction — sideways widening (`Int8 -> Int16`) and
+    /// `UInt64 -> Int` are rejected at typecheck. The carried
+    /// `ResolvedType` is the target as declared at the slot. The
+    /// source width and signedness come from the annotated
+    /// expression's own resolution. Lowers to
+    /// `IRInstruction::NumericWiden` (sign-extend signed sources,
+    /// zero-extend unsigned, `fpext` for `Float32`).
+    NumericWiden(ResolvedType),
     /// Member `M` flowing into union slot `M | ...`. The carried
     /// `ResolvedType` is the *target union as declared at the slot*,
     /// preserved verbatim so an alias-named target keeps its name

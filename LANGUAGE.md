@@ -10,7 +10,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Variables and Constants](#variables-and-constants) -- Assignment, Type Annotations, Compound Assignment, Constants
 - [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters
 - [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
-- [Types](#types) -- Primitives, Unit, Strings, Structs, Enums, Union Types, Generics
+- [Types](#types) -- Primitives, Numeric Widening, Unit, Strings, Structs, Enums, Union Types, Generics
 - [Pattern Matching](#pattern-matching) -- `match`, OR Patterns, `cond`
 - [Closures and Function Types](#closures-and-function-types) -- Block Closures, Short Closures, Capture Semantics, Function Types
 - [Value Semantics](#value-semantics) -- Rules, Copy Cost, Field Access
@@ -81,7 +81,7 @@ Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 0xFF_FF     # underscores in hex
 ```
 
-Numeric literals coerce to any same-category type annotation. Integer literals coerce to any integer type (`x: UInt8 = 4`). Float literals coerce to any float type (`f: Float32 = 3.14`). Cross-category coercion (int to float or vice versa) is an error.
+Numeric literals coerce to any same-category type annotation. Integer literals coerce to any integer type (`x: UInt8 = 4`). Float literals coerce to any float type (`f: Float32 = 3.14`). Cross-category coercion (int to float or vice versa) is an error. Non-literal sized values widen implicitly into `Int` / `Float` -- see [Numeric Widening](#numeric-widening).
 
 ### Line Continuation
 
@@ -301,6 +301,7 @@ Nested ternaries are disallowed.
 | `Int8`    | 8-bit signed integer                      |
 | `Int16`   | 16-bit signed integer                     |
 | `Int32`   | 32-bit signed integer                     |
+| `Int64`   | 64-bit signed integer (same as `Int`)     |
 | `UInt8`   | 8-bit unsigned integer                    |
 | `UInt16`  | 16-bit unsigned integer                   |
 | `UInt32`  | 32-bit unsigned integer                   |
@@ -314,6 +315,38 @@ Nested ternaries are disallowed.
 | `()`      | Unit type (empty value)                   |
 
 All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit; `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
+
+### Numeric Widening
+
+Sized numeric values widen implicitly into their hub type, and only into their hub type. `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, and `UInt32` widen to `Int` (signed sources sign-extend, unsigned sources zero-extend); `Float32` widens to `Float`. The conversion is always lossless.
+
+```koja
+fn count(n: Int) -> Int
+  n
+end
+
+small: Int32 = -7
+count(small)        # Int32 widens to Int; value stays -7
+```
+
+Widening applies wherever a value flows into a typed slot: call arguments, struct fields, enum payloads, return values, annotated bindings, and constant initializers. It does **not** apply to:
+
+- **Binary operators** -- operands must be the same width. `Int32 + Int` is an error; widen explicitly first.
+- **Sideways conversions** -- `Int8` does not widen to `Int16`, `UInt8` does not widen to `UInt16`. Each source type has exactly one implicit target.
+- **`UInt64`** -- it does not fit in `Int`. Use the checked `to_int` method.
+- **Generic inference** -- `T` binds to the actual type; `identity(small)` infers `T = Int32`, not `Int`.
+- **Narrowing or cross-category conversion** -- `Int` never implicitly becomes `Int32`, and ints never become floats.
+
+The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each returning `Result<TargetType, NumericConversionError>` -- `Result.Err(NumericConversionError.OutOfRange)` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` is total (rounds to the nearest representable value):
+
+```koja
+match 300.to_int8()
+  Result.Ok(v) -> v.print()
+  Result.Err(e) -> "does not fit".print()   # 300 > Int8.max
+end
+```
+
+Sized-to-sized conversions route through `Int`: widen up implicitly, then narrow down explicitly.
 
 ### Unit Expression
 
@@ -1434,8 +1467,8 @@ Functions:
 - `split(self, separator: String) -> List<String>` -- splits on each occurrence of `separator`. An empty separator splits into individual characters.
 - `starts_with?(self, prefix: String) -> Bool` -- returns `true` if the string starts with `prefix`.
 - `to_binary(self) -> Binary` -- zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
-- `to_float(self) -> Result<Float, String>` -- parses the string as a 64-bit float.
-- `to_int(self) -> Result<Int, String>` -- parses the string as a 64-bit signed integer.
+- `to_float(self) -> Result<Float, NumericConversionError>` -- parses the string as a 64-bit float (see [Parsing](#parsing)).
+- `to_int(self) -> Result<Int, NumericConversionError>` -- parses the string as a 64-bit signed integer (see [Parsing](#parsing)).
 - `trim(self) -> String` -- returns a copy with leading and trailing whitespace removed.
 - `trim_end(self) -> String` -- returns a copy with trailing whitespace removed.
 - `trim_start(self) -> String` -- returns a copy with leading whitespace removed.
@@ -1571,8 +1604,10 @@ IO.puts("Hello, #{name}!")
 
 Static functions on `Int` and `Float` for parsing strings:
 
-- `Int.parse(input: String) -> Result<Int, String>` -- parses a string as a 64-bit signed integer.
-- `Float.parse(input: String) -> Result<Float, String>` -- parses a string as a 64-bit float.
+- `Int.parse(input: String) -> Result<Int, NumericConversionError>` -- parses a string as a 64-bit signed integer.
+- `Float.parse(input: String) -> Result<Float, NumericConversionError>` -- parses a string as a 64-bit float.
+
+Failures distinguish malformed text from values that don't fit: `NumericConversionError.InvalidFormat` for text that isn't a number, `NumericConversionError.OutOfRange` for a well-formed number outside the target's range (an integer overflowing 64 bits, or a float magnitude like `1e999` that would round to infinity). Only finite floats parse -- there is no literal syntax for infinities or NaN. This is the same error enum the checked narrowing methods use (see [Numeric Widening](#numeric-widening)).
 
 ```koja
 x = Int.parse("42").unwrap()
@@ -1581,8 +1616,10 @@ x.print()  # 42
 y = Float.parse("3.14").unwrap()
 y.print()  # 3.14
 
-err = Int.parse("nope")
-err.err?().print()  # true
+match Int.parse("99999999999999999999")
+  Result.Ok(_) -> ()
+  Result.Err(e) -> e.print()  # OutOfRange
+end
 ```
 
 ### `Enumeration<T>` Protocol
@@ -1717,6 +1754,8 @@ result.print()
 ```
 
 Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
+
+Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest: a C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
 
 ### Symbol Naming
 

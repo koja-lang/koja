@@ -1,24 +1,28 @@
-//! `Int.parse(input: String) -> Result<Int, String>` and
-//! `Float.parse(input: String) -> Result<Float, String>`.
+//! `Int.parse(input: String) -> Result<Int, NumericConversionError>`
+//! and `Float.parse(input: String) -> Result<Float, NumericConversionError>`.
 //!
-//! Eval mirrors what the LLVM backend would emit if the runtime
-//! parse helpers landed: trim leading / trailing whitespace, hand
-//! the rest to Rust's `str::parse::<i64>()` / `::<f64>()`, and
-//! materialize the resulting `Result` directly. The Result enum's
-//! symbol comes from `function.return_type`; `Ok` / `Err` variants
-//! follow v1's tag convention (`Ok = 0`, `Err = 1`) the same way
-//! `Option` does in `list.rs` / `string.rs`.
+//! Both trim leading / trailing whitespace and hand the rest to
+//! [`koja_runtime::parse_text`] — the same classification the LLVM
+//! backend's runtime helpers use, so the two backends can't drift
+//! on what counts as `InvalidFormat` vs `OutOfRange` (a well-formed
+//! number that doesn't fit: an overflowing integer, or a float
+//! magnitude that rounds to infinity). The Result enum's symbol
+//! comes from `function.return_type`; the error variant tag is
+//! resolved by name via `helpers::conversion_error_value`.
 
 use koja_ir::{IRFunction, ParseTarget};
+use koja_runtime::parse_text::{ParseOutcome, parse_float_text, parse_int_text};
 
 use crate::error::RuntimeError;
+use crate::interpreter::CallResolver;
 use crate::intrinsics::helpers;
 use crate::value::Value;
 
-pub(super) fn dispatch(
+pub(super) fn dispatch<R: CallResolver>(
     target: ParseTarget,
     function: &IRFunction,
     args: &[Value],
+    resolver: &R,
 ) -> Result<Value, RuntimeError> {
     let bytes = match args {
         [Value::String(bytes)] => bytes.as_slice(),
@@ -29,39 +33,30 @@ pub(super) fn dispatch(
         }
     };
     let result_symbol = helpers::enum_return_symbol(function, &format!("{target:?}.parse"))?;
-    let parsed = match std::str::from_utf8(bytes) {
+    let outcome = match std::str::from_utf8(bytes) {
         Ok(s) => {
             let trimmed = s.trim();
             match target {
-                ParseTarget::Int => parse_int(trimmed),
-                ParseTarget::Float => parse_float(trimmed),
+                ParseTarget::Int => parse_int_text(trimmed).map(Value::Int),
+                ParseTarget::Float => parse_float_text(trimmed).map(Value::Float64),
             }
         }
-        Err(err) => Err(Value::String(
-            format!(
-                "{target:?}.parse: input is not valid UTF-8 (invalid at byte {}): {err}",
-                err.valid_up_to(),
-            )
-            .into_bytes(),
-        )),
+        // A Koja `String` is valid UTF-8 by construction; treat a
+        // malformed payload as unparseable rather than erroring.
+        Err(_) => ParseOutcome::InvalidFormat,
+    };
+    let parsed = match outcome {
+        ParseOutcome::Ok(v) => Ok(v),
+        ParseOutcome::InvalidFormat => Err(helpers::conversion_error_value(
+            &result_symbol,
+            resolver,
+            "InvalidFormat",
+        )?),
+        ParseOutcome::OutOfRange => Err(helpers::conversion_error_value(
+            &result_symbol,
+            resolver,
+            "OutOfRange",
+        )?),
     };
     Ok(helpers::result_value(result_symbol, parsed))
-}
-
-fn parse_int(text: &str) -> Result<Value, Value> {
-    match text.parse::<i64>() {
-        Ok(v) => Ok(Value::Int(v)),
-        Err(err) => Err(Value::String(
-            format!("Int.parse: `{text}` is not a valid Int ({err})").into_bytes(),
-        )),
-    }
-}
-
-fn parse_float(text: &str) -> Result<Value, Value> {
-    match text.parse::<f64>() {
-        Ok(v) => Ok(Value::Float64(v)),
-        Err(err) => Err(Value::String(
-            format!("Float.parse: `{text}` is not a valid Float ({err})").into_bytes(),
-        )),
-    }
 }

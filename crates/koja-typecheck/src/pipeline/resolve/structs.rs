@@ -8,7 +8,6 @@
 //! type predicates.
 
 use koja_ast::ast::{Diagnostic, Expr, FieldInit};
-use koja_ast::coercion::{Coercion, LiteralCoercion};
 use koja_ast::identifier::{
     GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -17,7 +16,7 @@ use koja_ast::span::Span;
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
 use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
 
-use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
+use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -318,23 +317,21 @@ pub(super) fn validate_named_fields(
         }
         seen[index as usize] = true;
 
-        let actual = &field.value.resolution;
+        let actual = field.value.resolution.clone();
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&field.value, actual, &declared_field.ty, resolver.registry) {
-            Compatible::Strict => {}
-            Compatible::Coerced(width) => {
-                *coercion_target_mut(&mut field.value) =
-                    Some(LiteralCoercion::NumericLiteralWidth(width));
-            }
-            Compatible::UnionWiden { target } => {
-                *coercion_annotation_mut(&mut field.value) = Some(Coercion::UnionWiden(target));
-            }
-            Compatible::OutOfRange {
+        match check_compatible_stamping(
+            &mut field.value,
+            &actual,
+            &declared_field.ty,
+            resolver.registry,
+        ) {
+            None => {}
+            Some(Mismatch::OutOfRange {
                 rendered_value,
                 width,
-            } => {
+            }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "field `{}` of `{owner_label}` expects `{}`: value \
@@ -347,13 +344,13 @@ pub(super) fn validate_named_fields(
                     field.span,
                 ));
             }
-            Compatible::Incompatible => {
+            Some(Mismatch::Incompatible) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "field `{}` of `{owner_label}` expects `{}`, got `{}`",
                         field.name,
                         display_resolution(&declared_field.ty, resolver.registry),
-                        display_resolution(actual, resolver.registry),
+                        display_resolution(&actual, resolver.registry),
                     ),
                     field.span,
                 ));

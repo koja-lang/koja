@@ -31,6 +31,7 @@ pub(crate) mod heap_payload;
 mod kernel;
 mod list;
 mod map;
+mod numeric;
 mod parse;
 mod print;
 pub(crate) mod process;
@@ -68,6 +69,9 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         }
         IRIntrinsicId::List(method) => list::emit_list(ctx, function, llvm_function, method),
         IRIntrinsicId::Map(method) => map::emit_map(ctx, function, llvm_function, method),
+        IRIntrinsicId::NumericConvert(convert) => {
+            numeric::emit_numeric_convert(ctx, function, llvm_function, convert)
+        }
         IRIntrinsicId::Parse(target) => parse::emit_parse(ctx, function, llvm_function, target),
         IRIntrinsicId::Print => print::emit_global_print(ctx, function, llvm_function),
         IRIntrinsicId::Ref(method) => process::emit_ref(ctx, function, llvm_function, method),

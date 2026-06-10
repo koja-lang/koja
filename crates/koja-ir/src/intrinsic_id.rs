@@ -45,6 +45,11 @@ pub enum IRIntrinsicId {
     Kernel(KernelMethod),
     List(ListMethod),
     Map(MapMethod),
+    /// Explicit conversions out of the hub types — the inverse of
+    /// implicit hub widening. `Int.to_<width>` and `UInt64.to_int`
+    /// are checked (`Result<T, NumericConversionError>`); `Float.to_float32`
+    /// is total (rounds to nearest).
+    NumericConvert(NumericConvert),
     Parse(ParseTarget),
     /// Transitional. The script-mode test fixture's `@intrinsic fn
     /// print(s: String)`. Goes away when the `Debug` protocol
@@ -281,6 +286,30 @@ pub enum BitOp {
     Bxor,
 }
 
+/// One explicit numeric conversion method. `IntNarrow` covers the
+/// seven `Int.to_*` methods (target width carried here, not read
+/// back out of the return type); `UInt64ToInt` is the one sized
+/// type with no implicit path to the hub; `FloatToFloat32` is the
+/// float counterpart.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NumericConvert {
+    FloatToFloat32,
+    IntNarrow(IntNarrowTarget),
+    UInt64ToInt,
+}
+
+/// Target width for a checked `Int.to_<width>` narrowing.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum IntNarrowTarget {
+    Int8,
+    Int16,
+    Int32,
+    UInt8,
+    UInt16,
+    UInt32,
+    UInt64,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParseTarget {
     Float,
@@ -319,6 +348,14 @@ impl IRIntrinsicId {
         if receiver == "CString" {
             return CStringMethod::from_source(method).map(Self::CString);
         }
+        if receiver == "Float" && method == "to_float32" {
+            return Some(Self::NumericConvert(NumericConvert::FloatToFloat32));
+        }
+        if receiver == "Int"
+            && let Some(target) = IntNarrowTarget::from_source(method)
+        {
+            return Some(Self::NumericConvert(NumericConvert::IntNarrow(target)));
+        }
         if receiver == "Kernel" && method == "panic" {
             return Some(Self::Kernel(KernelMethod::Panic));
         }
@@ -344,6 +381,9 @@ impl IRIntrinsicId {
             && let Some(m) = StringMethod::from_source(method)
         {
             return Some(Self::String(m));
+        }
+        if receiver == "UInt64" && method == "to_int" {
+            return Some(Self::NumericConvert(NumericConvert::UInt64ToInt));
         }
         if method == "eq" {
             return EqualityImpl::from_receiver(receiver).map(Self::Equality);
@@ -752,6 +792,44 @@ impl SocketMethod {
     }
 }
 
+impl NumericConvert {
+    /// The `Receiver.method` rendering used by [`Display`].
+    fn path(self) -> String {
+        match self {
+            Self::FloatToFloat32 => "Float.to_float32".to_string(),
+            Self::IntNarrow(target) => format!("Int.to_{}", target.suffix()),
+            Self::UInt64ToInt => "UInt64.to_int".to_string(),
+        }
+    }
+}
+
+impl IntNarrowTarget {
+    fn from_source(method: &str) -> Option<Self> {
+        Some(match method {
+            "to_int8" => Self::Int8,
+            "to_int16" => Self::Int16,
+            "to_int32" => Self::Int32,
+            "to_uint8" => Self::UInt8,
+            "to_uint16" => Self::UInt16,
+            "to_uint32" => Self::UInt32,
+            "to_uint64" => Self::UInt64,
+            _ => return None,
+        })
+    }
+
+    fn suffix(self) -> &'static str {
+        match self {
+            Self::Int8 => "int8",
+            Self::Int16 => "int16",
+            Self::Int32 => "int32",
+            Self::UInt8 => "uint8",
+            Self::UInt16 => "uint16",
+            Self::UInt32 => "uint32",
+            Self::UInt64 => "uint64",
+        }
+    }
+}
+
 impl ParseTarget {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
@@ -808,6 +886,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Kernel(m) => write!(f, "Kernel.{}", m.segment()),
             Self::List(m) => write!(f, "List.{}", m.segment()),
             Self::Map(m) => write!(f, "Map.{}", m.segment()),
+            Self::NumericConvert(convert) => f.write_str(&convert.path()),
             Self::Parse(target) => write!(f, "{}.parse", target.segment()),
             Self::Print => f.write_str("print"),
             Self::Ref(m) => write!(f, "Ref.{}", m.segment()),

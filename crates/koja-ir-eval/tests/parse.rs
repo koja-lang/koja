@@ -1,10 +1,12 @@
-//! Eval coverage for `Int.parse(input: String) -> Result<Int, String>`
-//! and `Float.parse(input: String) -> Result<Float, String>` (the
-//! pure-Rust shims surfaced through `koja-ir-eval`'s
+//! Eval coverage for
+//! `Int.parse(input: String) -> Result<Int, NumericConversionError>`
+//! and `Float.parse(input: String) -> Result<Float, NumericConversionError>`
+//! (the pure-Rust shims surfaced through `koja-ir-eval`'s
 //! `intrinsics/parse.rs`). The Result enum is materialized directly
 //! off `function.return_type`; `Ok(value)` lands as a tuple-payload
-//! enum variant, `Err(message)` carries a `Value::String` byte
-//! payload over the same enum.
+//! enum variant, `Err(_)` carries a `NumericConversionError` value
+//! over the same enum — `InvalidFormat` for malformed text,
+//! `OutOfRange` for well-formed numbers that don't fit.
 
 use koja_ast::util::dedent;
 use koja_ir_eval::{EnumPayload, Value};
@@ -30,21 +32,33 @@ fn int_parse_returns_ok_for_valid_int() {
 }
 
 #[test]
-fn int_parse_returns_err_for_non_numeric_input() {
-    // Same shape, but exercise the Err arm — pin the variant via the
-    // boolean fall-through so we don't have to inspect Value::String
-    // contents (the exact error message is part of the contract
-    // between eval and Rust's `parse::<i64>`).
+fn int_parse_rejects_non_numeric_input_as_invalid_format() {
     let outcome = evaluate_script(&dedent(
         r#"
         match Int.parse("not-an-int")
-          Ok(_) -> true
-          Err(_) -> false
+          Ok(_) -> 0
+          Err(NumericConversionError.InvalidFormat) -> 1
+          Err(_) -> 2
         end
         "#,
     ))
-    .expect("Int.parse(\"not-an-int\") should evaluate to Err(...)");
-    assert_eq!(outcome, Value::Bool(false));
+    .expect("Int.parse(\"not-an-int\") should evaluate to Err(InvalidFormat)");
+    assert_eq!(outcome, Value::Int(1));
+}
+
+#[test]
+fn int_parse_rejects_overflow_as_out_of_range() {
+    let outcome = evaluate_script(&dedent(
+        r#"
+        match Int.parse("99999999999999999999")
+          Ok(_) -> 0
+          Err(NumericConversionError.OutOfRange) -> 1
+          Err(_) -> 2
+        end
+        "#,
+    ))
+    .expect("overflowing Int.parse should evaluate to Err(OutOfRange)");
+    assert_eq!(outcome, Value::Int(1));
 }
 
 #[test]
@@ -78,25 +92,58 @@ fn float_parse_returns_ok_for_valid_float() {
 }
 
 #[test]
-fn float_parse_returns_err_for_non_numeric_input() {
+fn float_parse_rejects_non_numeric_input_as_invalid_format() {
     let outcome = evaluate_script(&dedent(
         r#"
         match Float.parse("abc")
-          Ok(_) -> true
-          Err(_) -> false
+          Ok(_) -> 0
+          Err(NumericConversionError.InvalidFormat) -> 1
+          Err(_) -> 2
         end
         "#,
     ))
-    .expect("Float.parse(\"abc\") should evaluate to Err(...)");
-    assert_eq!(outcome, Value::Bool(false));
+    .expect("Float.parse(\"abc\") should evaluate to Err(InvalidFormat)");
+    assert_eq!(outcome, Value::Int(1));
 }
 
 #[test]
-fn int_parse_err_payload_carries_a_string_message() {
-    // Pin the Err arm's tuple-payload shape: a single `Value::String`
-    // describing the failure. The message is implementation-defined;
-    // we only assert it's non-empty so a future tweak to the wording
-    // doesn't break this test.
+fn float_parse_rejects_overflow_as_out_of_range() {
+    // `1e999` is well-formed but rounds to infinity — only finite
+    // values parse.
+    let outcome = evaluate_script(&dedent(
+        r#"
+        match Float.parse("1e999")
+          Ok(_) -> 0
+          Err(NumericConversionError.OutOfRange) -> 1
+          Err(_) -> 2
+        end
+        "#,
+    ))
+    .expect("overflowing Float.parse should evaluate to Err(OutOfRange)");
+    assert_eq!(outcome, Value::Int(1));
+}
+
+#[test]
+fn float_parse_rejects_infinity_tokens_as_invalid_format() {
+    // Rust's f64 parser accepts `inf` / `infinity` / `nan`, but Koja
+    // has no literal syntax for them — they're malformed input here.
+    let outcome = evaluate_script(&dedent(
+        r#"
+        match Float.parse("inf")
+          Ok(_) -> 0
+          Err(NumericConversionError.InvalidFormat) -> 1
+          Err(_) -> 2
+        end
+        "#,
+    ))
+    .expect("Float.parse(\"inf\") should evaluate to Err(InvalidFormat)");
+    assert_eq!(outcome, Value::Int(1));
+}
+
+#[test]
+fn int_parse_err_payload_carries_the_conversion_error_enum() {
+    // Pin the Err arm's tuple-payload shape: a single unit-variant
+    // `NumericConversionError` value, not a string message.
     let outcome = evaluate_script(&dedent(r#"Int.parse("nope")"#))
         .expect("Int.parse(\"nope\") should evaluate even when it's Err");
     let Value::Enum { name, payload, .. } = outcome else {
@@ -106,11 +153,19 @@ fn int_parse_err_payload_carries_a_string_message() {
     let EnumPayload::Tuple(fields) = payload else {
         panic!("expected Err to carry a tuple payload, got {payload:?}");
     };
-    let [Value::String(bytes)] = fields.as_slice() else {
-        panic!("expected Err payload to be a single Value::String; got {fields:?}");
+    let [
+        Value::Enum {
+            name: error_name,
+            payload: error_payload,
+            ..
+        },
+    ] = fields.as_slice()
+    else {
+        panic!("expected Err payload to be a single enum value; got {fields:?}");
     };
+    assert_eq!(error_name, "InvalidFormat");
     assert!(
-        !bytes.is_empty(),
-        "Err payload should describe the failure, got empty message",
+        matches!(error_payload, EnumPayload::Unit),
+        "InvalidFormat should be a unit variant, got {error_payload:?}",
     );
 }

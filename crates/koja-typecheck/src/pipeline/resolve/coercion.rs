@@ -14,6 +14,14 @@
 //! [`Compatible::Strict`] before the literal-fit path runs); only
 //! the narrower / unsigned widths exercise this module.
 //!
+//! Non-literal sized numeric *values* get the inverse treatment:
+//! hub-only implicit widening ([`widens_to_hub`]). Any of `Int8` /
+//! `Int16` / `Int32` / `UInt8` / `UInt16` / `UInt32` flows into an
+//! `Int` slot and `Float32` flows into a `Float` slot, stamping
+//! `expr.coercion = Coercion::NumericWiden` so IR lowering emits
+//! the extension. Sideways widening between sized types is
+//! rejected by design.
+//!
 //! Negated integer literals (`-128`) are recognized via a
 //! `UnaryOp::Neg(Literal::Int)` shape and folded to a single
 //! `i128` value at typecheck so the same fit-check covers both
@@ -29,13 +37,15 @@ use super::types::{is_primitive, peel_alias, types_equivalent};
 use crate::registry::GlobalRegistry;
 
 /// Outcome of comparing an actual expression's resolved type
-/// against an expected type with literal-fit coercion considered.
-/// The four arms map 1:1 to caller behavior at each check site:
-/// `Strict` proceeds; `Coerced` stamps `expr.literal_coercion` via
+/// against an expected type with coercion considered. The arms map
+/// 1:1 to caller behavior at each check site: `Strict` proceeds;
+/// `Coerced` stamps `expr.literal_coercion` via
 /// [`coercion_target_mut`] (so IR-lower picks up the width);
-/// `OutOfRange` emits a precise narrow-int diagnostic;
-/// `Incompatible` falls through to the existing type-mismatch
-/// diagnostic.
+/// `NumericWiden` / `UnionWiden` stamp `expr.coercion` via
+/// [`coercion_annotation_mut`]; `OutOfRange` emits a precise
+/// narrow-int diagnostic; `Incompatible` falls through to the
+/// existing type-mismatch diagnostic. Check sites share the arm
+/// handling through [`check_compatible_stamping`].
 #[derive(Debug)]
 pub(crate) enum Compatible {
     /// `types_equivalent` already accepts the pair — no coercion
@@ -45,6 +55,14 @@ pub(crate) enum Compatible {
     /// the expected type's range. Caller stamps the AST node via
     /// [`coercion_target_mut`] and proceeds.
     Coerced(NumericLiteralWidth),
+    /// The actual expression is a sized numeric value flowing into
+    /// its hub type — any of `Int8` / `Int16` / `Int32` / `UInt8` /
+    /// `UInt16` / `UInt32` into `Int`, or `Float32` into `Float`.
+    /// Caller stamps `expr.coercion =
+    /// Some(Coercion::NumericWiden(target))` so IR lowering emits a
+    /// `NumericWiden`. `target` is the expected type as declared at
+    /// the slot, preserved verbatim for diagnostics.
+    NumericWiden { target: ResolvedType },
     /// The actual expression's type is one member of the expected
     /// union. Caller stamps `expr.coercion =
     /// Some(Coercion::UnionWiden(target))` so IR lowering emits a
@@ -63,6 +81,56 @@ pub(crate) enum Compatible {
     /// Types are incompatible regardless of literal context.
     /// Caller emits the existing type-mismatch diagnostic.
     Incompatible,
+}
+
+/// The rejecting subset of [`Compatible`], returned by
+/// [`check_compatible_stamping`] so each check site renders its own
+/// site-specific diagnostic while the accepting arms (and their
+/// AST stamping) stay shared.
+pub(crate) enum Mismatch {
+    /// Numeric literal whose value does not fit the expected range.
+    OutOfRange {
+        rendered_value: String,
+        width: NumericLiteralWidth,
+    },
+    /// Types are incompatible regardless of literal context.
+    Incompatible,
+}
+
+/// Run [`check_compatible`] for `expr` (whose resolved type is
+/// `actual_ty`) flowing into `expected_ty`, stamping the matching
+/// coercion slot on the expression for every accepting arm.
+/// Returns `None` when the flow is accepted, or the [`Mismatch`]
+/// for the caller to diagnose.
+pub(crate) fn check_compatible_stamping(
+    expr: &mut Expr,
+    actual_ty: &ResolvedType,
+    expected_ty: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> Option<Mismatch> {
+    match check_compatible(expr, actual_ty, expected_ty, registry) {
+        Compatible::Strict => None,
+        Compatible::Coerced(width) => {
+            *coercion_target_mut(expr) = Some(LiteralCoercion::NumericLiteralWidth(width));
+            None
+        }
+        Compatible::NumericWiden { target } => {
+            *coercion_annotation_mut(expr) = Some(Coercion::NumericWiden(target));
+            None
+        }
+        Compatible::UnionWiden { target } => {
+            *coercion_annotation_mut(expr) = Some(Coercion::UnionWiden(target));
+            None
+        }
+        Compatible::OutOfRange {
+            rendered_value,
+            width,
+        } => Some(Mismatch::OutOfRange {
+            rendered_value,
+            width,
+        }),
+        Compatible::Incompatible => Some(Mismatch::Incompatible),
+    }
 }
 
 /// Mutable handle to the AST node that owns the coercion annotation
@@ -226,6 +294,11 @@ pub(crate) fn check_compatible(
     if types_equivalent(actual_ty, expected_ty, registry) {
         return Compatible::Strict;
     }
+    if widens_to_hub(actual_ty, expected_ty, registry) {
+        return Compatible::NumericWiden {
+            target: expected_ty.clone(),
+        };
+    }
     if let ResolvedType::Union(members) = peel_alias(expected_ty, registry)
         && members
             .iter()
@@ -263,6 +336,32 @@ pub(crate) fn check_compatible(
         };
     }
     Compatible::Incompatible
+}
+
+/// Hub-only lossless numeric widening: a sized integer value flows
+/// into an `Int` slot (`Int8` / `Int16` / `Int32` sign-extend;
+/// `UInt8` / `UInt16` / `UInt32` zero-extend), and `Float32` flows
+/// into a `Float` slot. Sideways widening (`Int8 -> Int16`) and
+/// `UInt64 -> Int` (doesn't fit) are deliberately excluded — every
+/// source type has exactly one implicit target, so a future
+/// overload-resolution rule only ever needs "exact match beats
+/// widened match."
+fn widens_to_hub(
+    actual_ty: &ResolvedType,
+    expected_ty: &ResolvedType,
+    registry: &GlobalRegistry,
+) -> bool {
+    const INT_SOURCES: &[&str] = &["Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32"];
+    let expected = peel_alias(expected_ty, registry);
+    if is_primitive(&expected, registry, "Int") || is_primitive(&expected, registry, "Int64") {
+        return INT_SOURCES
+            .iter()
+            .any(|name| is_primitive(actual_ty, registry, name));
+    }
+    if is_primitive(&expected, registry, "Float") || is_primitive(&expected, registry, "Float64") {
+        return is_primitive(actual_ty, registry, "Float32");
+    }
+    false
 }
 
 /// Parse a numeric literal's source text — decimal, hex (`0xFF`),

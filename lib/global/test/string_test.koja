@@ -171,13 +171,15 @@ struct StringTest
     end
 
     match Int.parse("not_a_number")
-      Result.Ok(_) ->
-        return Result.Err("expected parse failure")
+      Result.Ok(_) -> return Result.Err("expected parse failure")
+      Result.Err(NumericConversionError.InvalidFormat) -> ()
+      Result.Err(_) -> return Result.Err("wrong error kind")
+    end
 
-      Result.Err(msg) ->
-        unless msg == "invalid integer"
-          return Result.Err("wrong error message")
-        end
+    match Int.parse("99999999999999999999")
+      Result.Ok(_) -> return Result.Err("expected overflow failure")
+      Result.Err(NumericConversionError.OutOfRange) -> ()
+      Result.Err(_) -> return Result.Err("overflow should be OutOfRange")
     end
 
     Result.Ok(true)
@@ -196,13 +198,21 @@ struct StringTest
     end
 
     match Float.parse("bad")
-      Result.Ok(_) ->
-        return Result.Err("expected parse failure")
+      Result.Ok(_) -> return Result.Err("expected parse failure")
+      Result.Err(NumericConversionError.InvalidFormat) -> ()
+      Result.Err(_) -> return Result.Err("wrong error kind")
+    end
 
-      Result.Err(msg) ->
-        unless msg == "invalid float"
-          return Result.Err("wrong error message")
-        end
+    match Float.parse("1e999")
+      Result.Ok(_) -> return Result.Err("expected overflow failure")
+      Result.Err(NumericConversionError.OutOfRange) -> ()
+      Result.Err(_) -> return Result.Err("overflow should be OutOfRange")
+    end
+
+    match Float.parse("inf")
+      Result.Ok(_) -> return Result.Err("inf should not parse")
+      Result.Err(NumericConversionError.InvalidFormat) -> ()
+      Result.Err(_) -> return Result.Err("inf should be InvalidFormat")
     end
 
     Result.Ok(true)
@@ -554,13 +564,9 @@ struct StringTest
     end
 
     match "bad".to_int()
-      Result.Ok(_) ->
-        return Result.Err("to_int bad expected err")
-
-      Result.Err(msg) ->
-        unless msg == "invalid integer"
-          return Result.Err("to_int bad message")
-        end
+      Result.Ok(_) -> return Result.Err("to_int bad expected err")
+      Result.Err(NumericConversionError.InvalidFormat) -> ()
+      Result.Err(_) -> return Result.Err("to_int bad kind")
     end
 
     match "3.14".to_float()
@@ -574,13 +580,9 @@ struct StringTest
     end
 
     match "bad".to_float()
-      Result.Ok(_) ->
-        return Result.Err("to_float bad expected err")
-
-      Result.Err(msg) ->
-        unless msg == "invalid float"
-          return Result.Err("to_float bad message")
-        end
+      Result.Ok(_) -> return Result.Err("to_float bad expected err")
+      Result.Err(NumericConversionError.InvalidFormat) -> ()
+      Result.Err(_) -> return Result.Err("to_float bad kind")
     end
 
     Result.Ok(true)

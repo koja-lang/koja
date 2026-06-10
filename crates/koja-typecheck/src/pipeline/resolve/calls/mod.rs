@@ -24,7 +24,6 @@ mod bounded;
 mod methods;
 
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, Literal};
-use koja_ast::coercion::{Coercion, LiteralCoercion};
 use koja_ast::identifier::{
     AnonymousKind, GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType,
 };
@@ -43,7 +42,7 @@ use crate::registry::{
     FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam, VisibilityScope,
 };
 
-use super::coercion::{Compatible, check_compatible, coercion_annotation_mut, coercion_target_mut};
+use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
@@ -869,19 +868,12 @@ fn validate_arg_signature(
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, &actual, &param.ty, resolver.registry) {
-            Compatible::Strict => {}
-            Compatible::Coerced(width) => {
-                *coercion_target_mut(&mut arg.value) =
-                    Some(LiteralCoercion::NumericLiteralWidth(width));
-            }
-            Compatible::UnionWiden { target } => {
-                *coercion_annotation_mut(&mut arg.value) = Some(Coercion::UnionWiden(target));
-            }
-            Compatible::OutOfRange {
+        match check_compatible_stamping(&mut arg.value, &actual, &param.ty, resolver.registry) {
+            None => {}
+            Some(Mismatch::OutOfRange {
                 rendered_value,
                 width,
-            } => {
+            }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument `{}` to `{callee}` expects `{}`: value \
@@ -894,7 +886,7 @@ fn validate_arg_signature(
                     arg.span,
                 ));
             }
-            Compatible::Incompatible => {
+            Some(Mismatch::Incompatible) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument `{}` to `{callee}` expects `{}`, got `{}`",
@@ -1001,19 +993,12 @@ fn validate_local_call_signature(
         if !actual.is_resolved() {
             continue;
         }
-        match check_compatible(&arg.value, &actual, &param.ty, resolver.registry) {
-            Compatible::Strict => {}
-            Compatible::Coerced(width) => {
-                *coercion_target_mut(&mut arg.value) =
-                    Some(LiteralCoercion::NumericLiteralWidth(width));
-            }
-            Compatible::UnionWiden { target } => {
-                *coercion_annotation_mut(&mut arg.value) = Some(Coercion::UnionWiden(target));
-            }
-            Compatible::OutOfRange {
+        match check_compatible_stamping(&mut arg.value, &actual, &param.ty, resolver.registry) {
+            None => {}
+            Some(Mismatch::OutOfRange {
                 rendered_value,
                 width,
-            } => {
+            }) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument `{}` to `{callee_label}` expects `{}`: value \
@@ -1026,7 +1011,7 @@ fn validate_local_call_signature(
                     arg.span,
                 ));
             }
-            Compatible::Incompatible => {
+            Some(Mismatch::Incompatible) => {
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "argument `{}` to `{callee_label}` expects `{}`, got `{}`",

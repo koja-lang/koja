@@ -213,6 +213,17 @@ pub(crate) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
+        IRInstruction::NumericWiden {
+            dest,
+            from,
+            to,
+            value,
+        } => {
+            let source = lookup(values, *value)?;
+            let result = ops::emit_numeric_widen(ctx, from, to, source)?;
+            values.insert(*dest, result);
+            Ok(())
+        }
         IRInstruction::Spawn {
             config,
             config_type,
