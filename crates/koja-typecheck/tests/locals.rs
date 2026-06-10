@@ -20,7 +20,7 @@
 //! [`LValue::local_id`]: koja_ast::ast::LValue::local_id
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{AssignTarget, CompoundOp, ExprKind, Item, Statement};
+use koja_ast::ast::{CompoundOp, ExprKind, Item, Statement};
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::util::dedent;
 use koja_typecheck::CheckedProgram;
@@ -77,10 +77,7 @@ fn local_decl_stamps_lvalue_and_uses_inferred_type() {
             body[0]
         );
     };
-    let AssignTarget::LValue(lvalue) = target else {
-        panic!("expected LValue target, got {target:?}");
-    };
-    let decl_id = lvalue
+    let decl_id = target
         .local_id
         .expect("decl should stamp local_id on LValue");
     assert_eq!(value.resolution, global_leaf(&checked, "Int"));
@@ -129,10 +126,7 @@ fn local_reassignment_keeps_same_local_id_and_type() {
         let Statement::Assignment { target, .. } = stmt else {
             panic!("expected Assignment, got {stmt:?}");
         };
-        let AssignTarget::LValue(lvalue) = target else {
-            panic!("expected LValue target, got {target:?}");
-        };
-        lvalue.local_id.expect("Assignment should stamp local_id")
+        target.local_id.expect("Assignment should stamp local_id")
     };
     assert_eq!(
         stamped_id(&body[0]),
@@ -187,10 +181,7 @@ fn param_reassignment_keeps_param_local_id() {
     let Statement::Assignment { target, .. } = &body[0] else {
         panic!("expected first stmt to be Assignment");
     };
-    let AssignTarget::LValue(lvalue) = target else {
-        panic!("expected LValue");
-    };
-    let assign_id = lvalue.local_id.expect("Assignment should stamp local_id");
+    let assign_id = target.local_id.expect("Assignment should stamp local_id");
 
     let Statement::Expr(trailing) = &body[1] else {
         panic!("expected trailing Expr");
@@ -282,10 +273,7 @@ fn assert_compound_op(
             body[0]
         );
     };
-    let AssignTarget::LValue(decl_lvalue) = target else {
-        panic!("expected LValue decl target, got {target:?}");
-    };
-    let decl_id = decl_lvalue
+    let decl_id = target
         .local_id
         .expect("decl should stamp local_id on LValue");
 

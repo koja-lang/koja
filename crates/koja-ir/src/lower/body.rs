@@ -13,7 +13,7 @@
 //! diagnostic propagates back to `lower_program` /
 //! `lower_script` via the shared `diagnostics` accumulator.
 
-use koja_ast::ast::{AssignTarget, CompoundOp, Expr, LValue, Statement};
+use koja_ast::ast::{CompoundOp, Expr, LValue, Statement};
 use koja_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
 use koja_typecheck::{GlobalKind, GlobalRegistry, StructDefinition, Substitution, substitute};
@@ -224,14 +224,13 @@ fn lower_break_statement(
 ///
 /// [`LocalId`]: koja_ast::identifier::LocalId
 fn lower_assignment(
-    target: &AssignTarget,
+    lvalue: &LValue,
     value: &Expr,
     ctx: &mut FnLowerCtx,
     block: IRBlockId,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Result<FlowResult, ()> {
-    let lvalue = expect_lvalue(target);
     if lvalue.segments.len() >= 2 {
         return lower_field_assignment(lvalue, value, ctx, block, registry, output);
     }
@@ -697,20 +696,6 @@ fn compound_to_ir(op: CompoundOp) -> IRBinOp {
         CompoundOp::Mul => IRBinOp::Mul,
         CompoundOp::Sub => IRBinOp::Sub,
     }
-}
-
-/// Pull the [`LValue`] off a sealed [`AssignTarget`]. Typecheck
-/// rejects pattern destructuring, so by the time lowering runs the
-/// target is always [`AssignTarget::LValue`] — anything else is an
-/// upstream invariant break.
-fn expect_lvalue(target: &AssignTarget) -> &LValue {
-    let AssignTarget::LValue(lvalue) = target else {
-        panic!(
-            "IR lower: assignment target must be an LValue after typecheck seal \
-             (got {target:?})",
-        );
-    };
-    lvalue
 }
 
 /// Read the head [`LocalId`] off a sealed [`LValue`]. Typecheck-

@@ -137,21 +137,17 @@ impl LocalIndex {
                 type_annotation: _,
                 ..
             } => {
-                if let AssignTarget::LValue(lv) = target
-                    && let Some(id) = lv.local_id
-                    && lv.segments.len() == 1
+                if let Some(id) = target.local_id
+                    && target.segments.len() == 1
                 {
                     self.insert(
                         id,
                         LocalInfo {
-                            name: lv.segments[0].clone(),
-                            span: lv.span,
+                            name: target.segments[0].clone(),
+                            span: target.span,
                             ty: Some(value.resolution.clone()),
                         },
                     );
-                }
-                if let AssignTarget::Pattern(pat) = target {
-                    self.walk_pattern(pat);
                 }
                 self.walk_expr(value);
             }

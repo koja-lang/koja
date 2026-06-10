@@ -529,15 +529,6 @@ pub enum TypeExpr {
 
 // Statements
 
-/// The left-hand side of an assignment.
-#[derive(Debug, Clone)]
-pub enum AssignTarget {
-    /// A simple or dotted lvalue: `x`, `point.x`.
-    LValue(LValue),
-    /// A destructuring pattern: `[a, b] = expr`.
-    Pattern(Pattern),
-}
-
 /// Compound assignment operators: `+=`, `-=`, `*=`, `/=`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CompoundOp {
@@ -575,9 +566,10 @@ pub struct LValue {
 pub enum Statement {
     /// A bare expression evaluated for its side effects.
     Expr(Expr),
-    /// A variable or pattern assignment: `x = expr`, `x: Type = expr`.
+    /// A variable or field assignment: `x = expr`, `x: Type = expr`,
+    /// `point.x = expr`.
     Assignment {
-        target: AssignTarget,
+        target: LValue,
         type_annotation: Option<TypeExpr>,
         value: Expr,
         span: Span,
@@ -627,8 +619,6 @@ pub enum BinOp {
 /// A parameter in a closure expression.
 #[derive(Debug, Clone)]
 pub enum ClosureParam {
-    /// A destructuring parameter: `(a, b)`.
-    Destructured { names: Vec<String>, span: Span },
     /// A named parameter with optional type: `x`, `x: Int`.
     /// `local_id` is `None` after parse; resolve stamps it so IR lower
     /// can reach the same id without re-walking.

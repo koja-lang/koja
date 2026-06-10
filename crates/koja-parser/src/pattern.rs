@@ -79,29 +79,8 @@ impl Parser {
                     value: Literal::Bool(false),
                 }
             }
-            TokenKind::StringStart => {
-                let start = self.current_span();
-                self.advance(); // StringStart
-                let mut text = String::new();
-                loop {
-                    match self.peek().clone() {
-                        TokenKind::StringFragment(s) => {
-                            text.push_str(&s);
-                            self.advance();
-                        }
-                        TokenKind::StringEnd => {
-                            self.advance();
-                            break;
-                        }
-                        _ => break,
-                    }
-                }
-                Pattern::Literal {
-                    literal_coercion: None,
-                    span: self.span_from(start),
-                    value: Literal::String(text),
-                }
-            }
+            TokenKind::StringStart => self.parse_string_pattern(false),
+            TokenKind::MultilineStringStart => self.parse_string_pattern(true),
             TokenKind::TypeIdent(_) => self.parse_type_pattern(),
             TokenKind::LParen => self.parse_tuple_pattern(),
             TokenKind::LBracket => self.parse_list_pattern(),
@@ -145,6 +124,35 @@ impl Parser {
                 self.advance();
                 Pattern::Wildcard { span }
             }
+        }
+    }
+
+    /// Parse a quoted or triple-quoted string literal in pattern
+    /// position. Reuses [`Self::parse_string_expr`] so multiline
+    /// dedenting matches expression-position literals exactly;
+    /// interpolation has no meaning in a pattern and is diagnosed.
+    fn parse_string_pattern(&mut self, multiline: bool) -> Pattern {
+        let start = self.current_span();
+        let expr = self.parse_string_expr(multiline);
+        let ExprKind::String { parts, .. } = expr.kind else {
+            unreachable!("parse_string_expr always yields ExprKind::String");
+        };
+        let mut text = String::new();
+        for part in parts {
+            match part {
+                StringPart::Literal { value, .. } => text.push_str(&value),
+                StringPart::Interpolation { span, .. } => {
+                    self.error(
+                        "string patterns cannot contain `#{...}` interpolation".to_string(),
+                        span,
+                    );
+                }
+            }
+        }
+        Pattern::Literal {
+            literal_coercion: None,
+            span: self.span_from(start),
+            value: Literal::String(text),
         }
     }
 

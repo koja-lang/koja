@@ -64,19 +64,13 @@ impl Parser {
                     type_expr,
                 }
             }
-            TokenKind::LParen => {
-                self.advance(); // (
-                let names = self.comma_separated(&TokenKind::RParen, Self::expect_ident);
-                self.expect(&TokenKind::RParen);
-                ClosureParam::Destructured {
-                    names,
-                    span: self.span_from(start),
-                }
-            }
             _ => {
                 let span = self.current_span();
-                self.error(
+                self.error_with_hint(
                     format!("expected closure parameter, found {:?}", self.peek()),
+                    "closure parameters are named (`x` or `x: Int`) or `_`; \
+                     destructuring is not supported"
+                        .into(),
                     span,
                 );
                 self.advance();

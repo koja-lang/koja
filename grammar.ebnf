@@ -171,8 +171,7 @@ statement = expr
 lvalue = IDENT , { "." , IDENT } ;
 
 assignment = IDENT , ":" , type_expr , "=" , expr
-           | lvalue , "=" , expr
-           | pattern , "=" , expr ;
+           | lvalue , "=" , expr ;
 
 return_stmt = "return" , [ expr ] ;
 
@@ -258,14 +257,12 @@ closure = "fn" , "(" , [ closure_params ] , ")" , [ "->" , type_expr ] ,
 closure_params = closure_param , { "," , closure_param } ;
 
 closure_param = IDENT , [ ":" , type_expr ]
-              | "(" , IDENT , { "," , IDENT } , ")"     (* destructured *)
               | "_" ;
 
 (* Short arrow closure: (args -> expr) -- delimited by enclosing parens *)
 short_closure = closure_param_short , "->" , expr ;
 
 closure_param_short = IDENT , [ ":" , type_expr ]
-                    | "(" , IDENT , { "," , IDENT } , ")"
                     | "_" ;
 
 (* Function references are bare identifiers -- no sigil needed.
@@ -300,6 +297,7 @@ match_body = statement
 
 cond_expr = "cond" ,
             { cond_arm } ,
+            "else" , "->" , match_body ,
             "end" ;
 
 cond_arm = expr , "->" , match_body ;
@@ -452,6 +450,8 @@ compound_assign = lvalue , ( "+=" | "-=" | "*=" | "/=" ) , expr ;
 
 annotation = "@" , IDENT , [ annotation_value ] ;
 
+(* Single-line and multiline string values collapse into one string
+   payload in the AST; the distinction is purely lexical. *)
 annotation_value = string_lit
                  | multiline_string_lit
                  | "false" ;
@@ -482,7 +482,9 @@ comment = "#" , { any_char_except_newline } ;
 (* 17. Other top-level declarations                                           *)
 (* ========================================================================== *)
 
-constant_decl = { annotation } , "const" , IDENT , [ ":" , type_expr ] , "=" , expr ;
+(* Constant names accept both IDENT and TYPE_IDENT: the convention is
+   SCREAMING_CASE (`MAX_SIZE`, `STDOUT`), which lexes as TYPE_IDENT. *)
+constant_decl = { annotation } , "const" , ( IDENT | TYPE_IDENT ) , [ ":" , type_expr ] , "=" , expr ;
 
 
 (* ========================================================================== *)

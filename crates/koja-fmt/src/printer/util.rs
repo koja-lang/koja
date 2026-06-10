@@ -418,11 +418,6 @@ pub(super) fn closure_param_to_doc(cp: &ClosureParam) -> Doc {
             }
             concat(parts)
         }
-        ClosureParam::Destructured { names, .. } => concat(vec![
-            text("("),
-            intersperse(names.iter().map(|n| text(n.clone())).collect(), text(", ")),
-            text(")"),
-        ]),
         ClosureParam::Wildcard { .. } => text("_"),
     }
 }

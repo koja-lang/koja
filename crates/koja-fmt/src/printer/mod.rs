@@ -612,10 +612,7 @@ impl<'a> Printer<'a> {
                 value,
                 ..
             } => {
-                let target_doc = match target {
-                    AssignTarget::LValue(lv) => text(lv.segments.join(".")),
-                    AssignTarget::Pattern(pat) => pattern_to_doc(pat),
-                };
+                let target_doc = text(target.segments.join("."));
                 let lhs = if let Some(te) = type_annotation {
                     concat(vec![target_doc, text(": "), type_expr_to_doc(te)])
                 } else {

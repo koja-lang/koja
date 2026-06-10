@@ -20,7 +20,6 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
 - [C FFI](#c-ffi) -- `@extern "C"`, `CPtr<T>`, `CString`
 - [Annotations](#annotations) -- `@doc`
-- [Planned Features](#planned-features) -- Arena Blocks, Struct Destructuring, `command`
 - [Tooling](#tooling) -- CLI Commands, LSP, Formatter
 
 ---
@@ -1004,13 +1003,19 @@ end
 
 `handle_signal` has a default implementation that stops on `Shutdown`/`Interrupt` and continues on `Reload`. Override it for graceful drain or hot config reload.
 
-`run` has a default implementation that enters a receive loop, dispatching each incoming message to `handle` and stopping when `Step.Done` is returned:
+`run` has a default implementation that enters a receive loop, dispatching business messages to `handle` and lifecycle events to `handle_signal`, and stopping when either returns `Step.Done`:
 
 ```koja
 fn run(self) -> StopReason
   receive
     pair: Pair<M, Option<ReplyTo<R>>> ->
       match self.handle(pair.first, pair.second)
+        Step.Continue(next) -> next.run()
+        Step.Done(reason) -> reason
+      end
+
+    event: Lifecycle ->
+      match self.handle_signal(event)
         Step.Continue(next) -> next.run()
         Step.Done(reason) -> reason
       end
@@ -1107,6 +1112,14 @@ Operations on a process handle:
 - `signal(event: Lifecycle)` -- sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
 - `kill()` -- immediately terminates the process. No signal is sent.
 - `alive?() -> Bool` -- returns `true` if the process is still running.
+- `send_after(msg: M, delay_ms: Int)` -- schedules `msg` for delivery after `delay_ms` milliseconds. The message is copied immediately; delivery happens asynchronously when the timer fires. Useful for periodic ticks and timeouts inside a process loop.
+
+`Ref.self_ref()` returns a typed handle to the current process. It must be called from within a running process (inside `start`, `handle`, or `handle_signal`); the type parameters are inferred from the binding's annotation:
+
+```koja
+me: Ref<TickMsg, String> = Ref.self_ref()
+me.send_after(TickMsg.Tick, 1000)
+```
 
 ```koja
 ref.cast(CounterMsg.Increment)
@@ -1116,11 +1129,12 @@ ref.signal(Lifecycle.Shutdown)
 
 ### `ReplyTo<R>` and `reply`
 
-When a process receives a `call`, the handler gets a `ReplyTo<R>` channel to send the response back. The type `R` is enforced at compile time.
+When a process receives a `call`, the handler gets a `ReplyTo<R>` channel to send the response back. The type `R` is enforced at compile time. The channel carries the caller's process id plus a correlation token minted per call, so stale replies from earlier timed-out calls are discarded instead of delivered to the next call.
 
 ```koja
 struct ReplyTo<R>
   id: Int
+  token: Int
 end
 ```
 
@@ -1148,6 +1162,17 @@ The underlying keywords that power the process model. `spawn` creates a new ligh
 receive
   pair: Pair<M, Option<ReplyTo<R>>> ->
     # handle the message
+end
+```
+
+An optional `after` clause bounds the wait: if no message arrives within the timeout (in milliseconds), the `after` body runs instead. The timeout is any `Int` expression:
+
+```koja
+receive
+  pair: Pair<M, Option<ReplyTo<R>>> ->
+    # handle the message
+after 5000
+  # no message within 5 seconds
 end
 ```
 
@@ -1610,7 +1635,7 @@ protocol Debug
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver stays live and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver stays live and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, `Binary`, `Bits`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
 
 `Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
@@ -1817,37 +1842,6 @@ end
 ```
 
 An optional string after `@test` provides a description printed during the test run. Tests abort on first failure.
-
----
-
-## Planned Features
-
-The following features are designed but not yet compiled to native code. They are parsed and/or type-checked but await codegen implementation.
-
-### `arena` Blocks
-
-Bump-allocated regions with bulk-free semantics. Designed but not implemented -- `arena` is not a reserved keyword today, and the surface syntax will be reintroduced when the runtime allocator work lands. See the "Future: Arena blocks (post-v1)" section in `design/ROADMAP.md`:
-
-```koja
-result = arena
-  # all allocations in here are bulk-freed at block exit
-  # only values explicitly copied out of the block escape
-end
-```
-
-### Struct Destructuring
-
-Irrefutable struct destructuring on assignment:
-
-```koja
-Config{name, port} = load_config()
-```
-
-Compile-time verified exhaustive. Enum destructuring uses `match`.
-
-### `command` Construct
-
-Language-native typed pipelines for backend business logic with step-ordered type safety and exhaustive data flow checking.
 
 ---
 

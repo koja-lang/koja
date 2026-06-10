@@ -28,9 +28,7 @@
 //! - Only statement-position fors are rewritten; expression-
 //!   position fors fall through to resolve's feature-gap diagnostic.
 
-use koja_ast::ast::{
-    Arg, AssignTarget, BinOp, Expr, ExprKind, LValue, Literal, MatchArm, Pattern, Statement,
-};
+use koja_ast::ast::{Arg, BinOp, Expr, ExprKind, LValue, Literal, MatchArm, Pattern, Statement};
 use koja_ast::identifier::Resolution;
 use koja_ast::span::Span;
 
@@ -318,12 +316,12 @@ fn append_increment(mut body: Vec<Statement>, idx_name: &str, span: Span) -> Vec
 
 fn assign_local(name: &str, value: Expr, span: Span) -> Statement {
     Statement::Assignment {
-        target: AssignTarget::LValue(LValue {
+        target: LValue {
             head_resolved_type: None,
             local_id: None,
             segments: vec![name.to_string()],
             span,
-        }),
+        },
         type_annotation: None,
         value,
         span,

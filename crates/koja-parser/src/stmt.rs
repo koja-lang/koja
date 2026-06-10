@@ -68,12 +68,12 @@ impl Parser {
                 };
 
                 Statement::Assignment {
-                    target: AssignTarget::LValue(LValue {
+                    target: LValue {
                         head_resolved_type: None,
                         local_id: None,
                         segments: vec![name],
                         span: start_span,
-                    }),
+                    },
                     type_annotation: Some(type_annotation),
                     value,
                     span,
@@ -84,23 +84,19 @@ impl Parser {
                 let value = self.parse_expr();
                 let span = self.span_from(start_span);
 
-                let target = if let Some(lvalue) = try_expr_to_lvalue(&expr) {
-                    AssignTarget::LValue(lvalue)
-                } else if let Some(pattern) = self.try_expr_to_pattern(&expr) {
-                    AssignTarget::Pattern(pattern)
-                } else {
+                let target = try_expr_to_lvalue(&expr).unwrap_or_else(|| {
                     self.error_with_hint(
                         "invalid assignment target".to_string(),
                         "only variables and fields can be assigned to".into(),
                         start_span,
                     );
-                    AssignTarget::LValue(LValue {
+                    LValue {
                         head_resolved_type: None,
                         local_id: None,
                         segments: vec![ERROR_IDENT.to_string()],
                         span: start_span,
-                    })
-                };
+                    }
+                });
 
                 Statement::Assignment {
                     target,
@@ -139,20 +135,6 @@ impl Parser {
                 }
             }
             _ => Statement::Expr(expr),
-        }
-    }
-
-    fn try_expr_to_pattern(&mut self, expr: &Expr) -> Option<Pattern> {
-        match &expr.kind {
-            ExprKind::Ident { name, .. } if name == "_" => {
-                Some(Pattern::Wildcard { span: expr.span })
-            }
-            ExprKind::Ident { name, .. } => Some(Pattern::Binding {
-                local_id: None,
-                name: name.clone(),
-                span: expr.span,
-            }),
-            _ => None,
         }
     }
 }

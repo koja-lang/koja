@@ -1,0 +1,46 @@
+# Locals introduced *inside* a closure body — match-arm bindings,
+# for-loop patterns, assignments nested in if blocks — are body
+# locals, not captures of the enclosing function.
+
+fn run_it(body: fn () -> Int) -> Int
+  body()
+end
+
+# match-arm payload binding inside a closure
+run_it(fn () -> Int
+  o = Option.Some(3)
+  match o
+    Option.Some(n) -> n
+    Option.None -> 0
+  end
+end).print()
+
+# assignment nested in an if block inside a closure
+run_it(fn () -> Int
+  if true
+    y = 2
+    y
+  else
+    0
+  end
+end).print()
+
+# for-loop binding inside a closure
+run_it(fn () -> Int
+  total = 0
+  for item in [1, 2, 3]
+    total += item
+  end
+  total
+end).print()
+
+# arm binding shadow-named like an outer local still captures the
+# *outer* one in the guard subject and binds its own in the arm
+outer = 40
+run_it(fn () -> Int
+  o = Option.Some(2)
+  match o
+    Option.Some(n) -> n + outer
+    Option.None -> 0
+  end
+end).print()

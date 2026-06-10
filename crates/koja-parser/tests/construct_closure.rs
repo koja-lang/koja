@@ -8,7 +8,7 @@ use koja_ast::util::dedent;
 
 mod common;
 
-use common::parse_clean;
+use common::{assert_hint_contains, assert_message_contains, parse_clean, parse_failing};
 
 fn first_closure_expr(source: &str) -> Expr {
     let file = parse_clean(source);
@@ -109,8 +109,11 @@ fn closure_with_inferred_params() {
     }
 }
 
+/// Destructured params were removed from the grammar; re-introduce
+/// if anonymous tuples ever land. Until then `(a, b)` in param
+/// position diagnoses with a pointer at named params.
 #[test]
-fn closure_with_destructured_param() {
+fn closure_with_destructured_param_is_diagnosed() {
     let src = dedent(
         "
         fn run
@@ -120,19 +123,9 @@ fn closure_with_destructured_param() {
         end
         ",
     );
-    let expr = first_closure_expr(&src);
-    match expr.kind {
-        ExprKind::Closure { params, .. } => {
-            assert_eq!(params.len(), 1);
-            match &params[0] {
-                ClosureParam::Destructured { names, .. } => {
-                    assert_eq!(names, &vec!["a".to_string(), "b".to_string()]);
-                }
-                other => panic!("expected Destructured, got {other:?}"),
-            }
-        }
-        other => panic!("expected Closure, got {other:?}"),
-    }
+    let result = parse_failing(&src);
+    assert_message_contains(&result, "expected closure parameter");
+    assert_hint_contains(&result, "destructuring is not supported");
 }
 
 #[test]

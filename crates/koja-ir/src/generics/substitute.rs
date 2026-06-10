@@ -12,8 +12,7 @@
 //! [`crate::lower::package::lower_function_inner`] needs.
 
 use koja_ast::ast::{
-    AssignTarget, EnumConstructionData, Expr, ExprKind, FieldPattern, Function, Pattern, Statement,
-    StringPart,
+    EnumConstructionData, Expr, ExprKind, FieldPattern, Function, Pattern, Statement, StringPart,
 };
 use koja_ast::identifier::{GlobalRegistryId, ResolvedType};
 use koja_typecheck::{FunctionSignature, ResolvedParam};
@@ -74,10 +73,8 @@ pub(super) fn substitute_signature(
 
 fn substitute_in_statement(stmt: &mut Statement, args: &[ResolvedType], owner: GlobalRegistryId) {
     match stmt {
-        Statement::Assignment { target, value, .. } => {
-            if let AssignTarget::LValue(_) = target {
-                // LValues carry no ResolvedType slots today.
-            }
+        Statement::Assignment { value, .. } => {
+            // The LValue target carries no ResolvedType slots today.
             substitute_in_expr(value, args, owner);
         }
         Statement::Break { .. } => {}

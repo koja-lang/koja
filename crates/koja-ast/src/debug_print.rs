@@ -15,10 +15,10 @@
 use std::fmt::Write as _;
 
 use crate::ast::{
-    AliasDecl, AnnotationValue, Arg, AssignTarget, BinOp, BinarySegment, ClosureParam, CompoundOp,
-    CondArm, Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr,
-    ExprKind, ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item,
-    LValue, Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
+    AliasDecl, AnnotationValue, Arg, BinOp, BinarySegment, ClosureParam, CompoundOp, CondArm,
+    Constant, EnumConstructionData, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind,
+    ExtendBlock, FieldInit, FieldPattern, File, Function, ImplBlock, ImplMember, Item, LValue,
+    Literal, MatchArm, Param, Pattern, ProtocolDecl, ProtocolMethod, Statement, StringPart,
     StructDecl, StructField, TypeAlias, TypeExpr, TypeParam, UnaryOp, Visibility,
 };
 use crate::identifier::{AnonymousKind, Resolution, ResolvedType};
@@ -361,7 +361,7 @@ impl<'a> Printer<'a> {
                 value,
                 span,
             } => self.nested("Assignment", *span, |p| {
-                p.assign_target(target);
+                p.line(&format!("target: {}", format_lvalue(target)));
                 if let Some(ty) = type_annotation {
                     p.line(&format!("type: {}", type_expr_inline(ty)));
                 }
@@ -385,17 +385,6 @@ impl<'a> Printer<'a> {
                 None => self.header("Return", *span),
             },
             Statement::Break { span } => self.header("Break", *span),
-        }
-    }
-
-    fn assign_target(&mut self, target: &AssignTarget) {
-        match target {
-            AssignTarget::LValue(lv) => {
-                self.line(&format!("target: {}", format_lvalue(lv)));
-            }
-            AssignTarget::Pattern(pat) => {
-                self.section("target", |p| p.pattern(pat));
-            }
         }
     }
 
@@ -734,9 +723,6 @@ impl<'a> Printer<'a> {
                     let _ = write!(header, ": {}", type_expr_inline(ty));
                 }
                 self.header(&header, *span);
-            }
-            ClosureParam::Destructured { names, span } => {
-                self.header(&format!("Destructured ({})", names.join(", ")), *span);
             }
             ClosureParam::Wildcard { span, .. } => self.header("Wildcard", *span),
         }

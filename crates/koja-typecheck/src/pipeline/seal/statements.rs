@@ -1,10 +1,10 @@
 //! Statement-shape seal checks: assignment / compound-assign
 //! target shapes plus per-statement recursion into expressions.
-//! The resolver narrows assignment targets to [`koja_ast::ast::LValue`]s
+//! Past resolve, every assignment target is an [`koja_ast::ast::LValue`]
 //! with at least one segment and a stamped head `LocalId`; reaching
 //! seal with anything else is an upstream bug.
 
-use koja_ast::ast::{AssignTarget, LValue, Statement};
+use koja_ast::ast::{LValue, Statement};
 use koja_ast::span::Span;
 
 use super::expressions::seal_expr;
@@ -18,7 +18,7 @@ pub(super) fn seal_statement(stmt: &Statement) {
             value,
             ..
         } => {
-            seal_assign_target(target, *span);
+            seal_lvalue_shape(target, "assignment", *span);
             seal_expr(value);
         }
         Statement::Break { .. } | Statement::Return { value: None, .. } => {}
@@ -28,7 +28,7 @@ pub(super) fn seal_statement(stmt: &Statement) {
             span,
             ..
         } => {
-            seal_compound_target(target, *span);
+            seal_lvalue_shape(target, "compound-assign", *span);
             seal_expr(value);
         }
         Statement::Expr(expr) => seal_expr(expr),
@@ -38,33 +38,10 @@ pub(super) fn seal_statement(stmt: &Statement) {
     }
 }
 
-/// Assignment targets must be [`AssignTarget::LValue`]s with at
-/// least one segment and a stamped head `LocalId`. Multi-segment
-/// targets (`p.x = …`) are a happy path past resolve — the head id
-/// keys the IR's `LocalRead` / `LocalWrite`; the IR lower walks the
-/// remaining segments itself. Pattern destructuring still bottoms
-/// out on the resolver's feature-gap diagnostic and never reaches
-/// seal.
-fn seal_assign_target(target: &AssignTarget, statement_span: Span) {
-    match target {
-        AssignTarget::LValue(lvalue) => seal_lvalue_shape(lvalue, "assignment", statement_span),
-        AssignTarget::Pattern(_) => seal_panic(
-            "assignment target is a destructuring pattern; resolver rejects this shape",
-            statement_span,
-        ),
-    }
-}
-
-/// Compound-assign targets are bare `LValue`s (the parser only
-/// admits an `LValue` on the lhs of `+=` / `-=` / `*=` / `/=`). Past
-/// resolve, a compound-assign target must carry at least one segment
-/// *and* a stamped head `local_id`.
-fn seal_compound_target(target: &LValue, statement_span: Span) {
-    seal_lvalue_shape(target, "compound-assign", statement_span);
-}
-
-/// Shared seal for the two `LValue`-shaped assignment targets.
-/// Single-segment and multi-segment are both happy paths; only
+/// Shared seal for assignment and compound-assign targets.
+/// Single-segment and multi-segment (`p.x = …`) are both happy
+/// paths — the head id keys the IR's `LocalRead` / `LocalWrite` and
+/// the IR lower walks the remaining segments itself. Only
 /// empty-segments and a missing head `local_id` indicate an
 /// upstream invariant break.
 fn seal_lvalue_shape(lvalue: &LValue, role: &str, statement_span: Span) {

@@ -41,7 +41,7 @@
 //! [`LValue`]: koja_ast::ast::LValue
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local
 
-use koja_ast::ast::{AssignTarget, CompoundOp, Diagnostic, Expr, LValue, TypeExpr};
+use koja_ast::ast::{CompoundOp, Diagnostic, Expr, LValue, TypeExpr};
 use koja_ast::identifier::{Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::labels::compound_op_label;
 use koja_ast::span::Span;
@@ -61,25 +61,13 @@ use koja_ast::coercion::Coercion;
 /// updates the resolver's scope accordingly. Multi-segment field
 /// writes route through [`resolve_field_assignment`].
 pub(super) fn resolve_assignment(
-    target: &mut AssignTarget,
+    lvalue: &mut LValue,
     type_annotation: Option<&TypeExpr>,
     value: &mut Expr,
     span: Span,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let lvalue = match target {
-        AssignTarget::LValue(lvalue) => lvalue,
-        AssignTarget::Pattern(_) => {
-            diagnostics.push(Diagnostic::error(
-                "typecheck does not yet support pattern destructuring assignment \
-                 (`[a, b] = ...`)",
-                span,
-            ));
-            return;
-        }
-    };
-
     if lvalue.segments.len() >= 2 {
         if let Some(annotation) = type_annotation {
             diagnostics.push(Diagnostic::error(

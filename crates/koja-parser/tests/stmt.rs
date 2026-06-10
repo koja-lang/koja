@@ -1,8 +1,7 @@
 //! Coverage for statement parsing: assignment / typed assignment /
-//! compound assignment / `return` / `break` / destructuring
-//! assignment.
+//! compound assignment / `return` / `break`.
 
-use koja_ast::ast::{AssignTarget, CompoundOp, Item, Statement, TypeExpr};
+use koja_ast::ast::{CompoundOp, Item, Statement, TypeExpr};
 use koja_ast::util::dedent;
 
 mod common;
@@ -36,11 +35,7 @@ fn plain_assignment() {
             ..
         } => {
             assert!(type_annotation.is_none());
-            let lv = match target {
-                AssignTarget::LValue(lv) => lv,
-                other => panic!("expected LValue target, got {other:?}"),
-            };
-            assert_eq!(lv.segments, vec!["x"]);
+            assert_eq!(target.segments, vec!["x"]);
         }
         other => panic!("expected Assignment, got {other:?}"),
     }
@@ -80,10 +75,9 @@ fn dotted_lvalue_assignment() {
     );
     let body = function_body(&src);
     match &body[0] {
-        Statement::Assignment {
-            target: AssignTarget::LValue(lv),
-            ..
-        } => assert_eq!(lv.segments, vec!["point", "x"]),
+        Statement::Assignment { target, .. } => {
+            assert_eq!(target.segments, vec!["point", "x"]);
+        }
         other => panic!("expected dotted Assignment, got {other:?}"),
     }
 }

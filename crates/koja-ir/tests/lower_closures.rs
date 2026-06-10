@@ -183,6 +183,63 @@ fn unused_outer_local_is_not_captured() {
 }
 
 #[test]
+fn match_arm_binding_inside_closure_is_not_captured() {
+    // `n` is bound by the arm pattern *inside* the closure — it must
+    // lower as a body local, not a capture of the enclosing function
+    // (which never declared the slot; misclassifying ICEs at seal).
+    let source = "
+        f = fn () -> Int
+          o = Option.Some(3)
+          match o
+            Option.Some(n) -> n
+            Option.None -> 0
+          end
+        end
+        0
+        ";
+
+    let script = lower(&dedent(source));
+    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let FunctionKind::Closure { env_layout } = &body.kind else {
+        unreachable!("body kind already checked in the no-capture test")
+    };
+    assert!(
+        env_layout.is_empty(),
+        "arm bindings are body locals, not captures: {env_layout:?}",
+    );
+    assert!(load_captures_in(body).is_empty());
+}
+
+#[test]
+fn nested_block_assignment_inside_closure_is_not_captured() {
+    // `y` is first assigned inside an `if` arm within the closure.
+    // The capture walker must see nested assignments, not just the
+    // body's top-level statements.
+    let source = "
+        f = fn () -> Int
+          if true
+            y = 2
+            y
+          else
+            0
+          end
+        end
+        0
+        ";
+
+    let script = lower(&dedent(source));
+    let body = require_synthesized(&script, "TestApp.__script_body__closure0");
+    let FunctionKind::Closure { env_layout } = &body.kind else {
+        unreachable!("body kind already checked in the no-capture test")
+    };
+    assert!(
+        env_layout.is_empty(),
+        "nested-block locals are body locals, not captures: {env_layout:?}",
+    );
+    assert!(load_captures_in(body).is_empty());
+}
+
+#[test]
 fn heap_capture_copies_into_env_via_local_read() {
     // The closure captures heap-typed `s`. Under value semantics the
     // capture copies into the env via a `LocalRead` of the outer slot

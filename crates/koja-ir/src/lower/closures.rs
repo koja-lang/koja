@@ -20,8 +20,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use koja_ast::ast::{
-    AssignTarget, BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, MatchArm,
-    Pattern, Statement, StringPart,
+    BinarySegment, ClosureParam, EnumConstructionData, Expr, ExprKind, LValue, MatchArm, Pattern,
+    Statement, StringPart,
 };
 use koja_ast::identifier::{AnonymousKind, LocalId, Resolution, ResolvedType};
 use koja_typecheck::{FunctionSignature, GlobalRegistry};
@@ -51,8 +51,7 @@ pub(super) fn lower_block_closure(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let fn_params = expect_function_params(closure_resolution);
     let fn_ret = expect_function_return(closure_resolution);
-    let own_set = own_set_for(params, body);
-    let captures = collect_captures(BodyShape::Block(body), &own_set);
+    let captures = collect_captures(BodyShape::Block(body), param_ids(params));
     let captures_with_types = resolve_capture_types(&captures, registry, output);
 
     let symbol = ctx.closures_mut().mint_symbol();
@@ -94,8 +93,7 @@ pub(super) fn lower_short_closure(
 ) -> Result<(ValueId, IRBlockId), ()> {
     let fn_params = expect_function_params(closure_resolution);
     let fn_ret = expect_function_return(closure_resolution);
-    let own_set = own_set_for(params, &[]);
-    let captures = collect_captures(BodyShape::Short(body), &own_set);
+    let captures = collect_captures(BodyShape::Short(body), param_ids(params));
     let captures_with_types = resolve_capture_types(&captures, registry, output);
 
     let symbol = ctx.closures_mut().mint_symbol();
@@ -250,41 +248,27 @@ fn expect_function_return(resolution: &ResolvedType) -> &ResolvedType {
 
 /// Build the closure's "own" [`LocalId`] set: stamped param ids
 /// plus any single-segment assignment targets in the body.
-fn own_set_for(params: &[ClosureParam], body: &[Statement]) -> HashSet<LocalId> {
-    let mut set = HashSet::new();
-    for param in params {
-        if let ClosureParam::Name {
-            local_id: Some(id), ..
-        } = param
-        {
-            set.insert(*id);
-        }
-    }
-    for stmt in body {
-        if let Statement::Assignment {
-            target: AssignTarget::LValue(lvalue),
-            ..
-        } = stmt
-            && lvalue.segments.len() == 1
-            && let Some(id) = lvalue.local_id
-        {
-            set.insert(id);
-        }
-    }
-    set
+fn param_ids(params: &[ClosureParam]) -> HashSet<LocalId> {
+    params
+        .iter()
+        .filter_map(|param| match param {
+            ClosureParam::Name {
+                local_id: Some(id), ..
+            } => Some(*id),
+            _ => None,
+        })
+        .collect()
 }
 
 /// Walk `body` collecting every [`LocalId`] referenced through
-/// `Resolution::Local` (or `Self_::local_id`) that isn't in
-/// `own_set`. Returns dedup'd ids in encounter order. Nested
-/// closures contribute via a per-scope frame; their own params /
+/// `Resolution::Local` (or `Self_::local_id`) that the closure
+/// doesn't bind itself (params, assignments, pattern bindings).
+/// Returns dedup'd ids in encounter order. Nested closures
+/// contribute via a per-scope frame; their own params /
 /// body-locals shadow ours during their subwalk.
-fn collect_captures(
-    body: BodyShape<'_>,
-    own_set: &HashSet<LocalId>,
-) -> Vec<(LocalId, ResolvedType)> {
+fn collect_captures(body: BodyShape<'_>, params: HashSet<LocalId>) -> Vec<(LocalId, ResolvedType)> {
     let mut walker = CaptureWalker {
-        scopes: vec![own_set.clone()],
+        scopes: vec![params],
         seen: BTreeSet::new(),
         order: Vec::new(),
         types: BTreeMap::new(),
@@ -332,8 +316,8 @@ impl CaptureWalker {
     fn visit_statement(&mut self, stmt: &Statement) {
         match stmt {
             Statement::Assignment { target, value, .. } => {
-                self.visit_assign_target(target);
                 self.visit_expr(value);
+                self.note_assignment_local(target);
             }
             Statement::Break { .. } => {}
             Statement::CompoundAssign { value, .. } => self.visit_expr(value),
@@ -346,10 +330,19 @@ impl CaptureWalker {
         }
     }
 
-    fn visit_assign_target(&mut self, target: &AssignTarget) {
-        match target {
-            AssignTarget::LValue(_) => {}
-            AssignTarget::Pattern(pattern) => self.visit_pattern(pattern),
+    /// An assignment's target local belongs to the current frame:
+    /// later reads of that id are body locals, not captures.
+    /// Recording as-encountered (rather than pre-scanning the body)
+    /// also covers assignments nested inside `if` / `match` / loop
+    /// blocks. [`LocalId`]s are unique per enclosing function, so a
+    /// flat frame per closure can't conflate shadowed names.
+    fn note_assignment_local(&mut self, target: &LValue) {
+        if target.segments.len() != 1 {
+            return;
+        }
+        if let Some(id) = target.local_id {
+            let frame = self.scopes.last_mut().expect("walker always has a frame");
+            frame.insert(id);
         }
     }
 
@@ -396,9 +389,15 @@ impl CaptureWalker {
                 }
             },
             ExprKind::FieldAccess { receiver, .. } => self.visit_expr(receiver),
-            ExprKind::For { iterable, body, .. } => {
+            ExprKind::For {
+                pattern,
+                iterable,
+                body,
+            } => {
                 self.visit_expr(iterable);
+                self.scopes.push(pattern_binding_ids(pattern));
                 self.visit_statements(body);
+                self.scopes.pop();
             }
             ExprKind::Group { expr: inner } => self.visit_expr(inner),
             ExprKind::Ident { resolution, .. } => {
@@ -502,35 +501,82 @@ impl CaptureWalker {
     }
 
     fn enter_closure(&mut self, params: &[ClosureParam], body: &[Statement]) {
-        let frame = own_set_for(params, body);
-        self.scopes.push(frame);
+        self.scopes.push(param_ids(params));
         self.visit_statements(body);
         self.scopes.pop();
     }
 
     fn enter_short_closure(&mut self, params: &[ClosureParam], body: &Expr) {
-        let frame = own_set_for(params, &[]);
-        self.scopes.push(frame);
+        self.scopes.push(param_ids(params));
         self.visit_expr(body);
         self.scopes.pop();
     }
 
+    /// An arm's pattern bindings (`Shape.Circle(n)`, `event: Lifecycle`)
+    /// are locals of the arm's scope, not references to the outer
+    /// function — push them as a frame so guard / body reads of the
+    /// bound names aren't misclassified as captures.
     fn visit_match_arm(&mut self, arm: &MatchArm) {
-        self.visit_pattern(&arm.pattern);
+        self.scopes.push(pattern_binding_ids(&arm.pattern));
         if let Some(guard) = arm.guard.as_ref() {
             self.visit_expr(guard);
         }
         self.visit_statements(&arm.body);
-    }
-
-    fn visit_pattern(&mut self, _pattern: &Pattern) {
-        // Patterns don't reference outer locals through expressions
-        // we lower today; nested expression slots (`Bind { default }`)
-        // would extend this when they land.
+        self.scopes.pop();
     }
 
     fn visit_binary_segment(&mut self, segment: &BinarySegment) {
         self.visit_expr(&segment.value);
+    }
+}
+
+/// Collect every [`LocalId`] a pattern binds: `Binding` and
+/// `TypedBinding` slots, recursing through enum / struct / list /
+/// constructor payloads and OR branches. Binary-pattern segment
+/// bindings carry their ids on the segment's `Ident` expression
+/// resolution.
+fn pattern_binding_ids(pattern: &Pattern) -> HashSet<LocalId> {
+    let mut ids = HashSet::new();
+    collect_pattern_binding_ids(pattern, &mut ids);
+    ids
+}
+
+fn collect_pattern_binding_ids(pattern: &Pattern, ids: &mut HashSet<LocalId>) {
+    match pattern {
+        Pattern::Binding { local_id, .. } | Pattern::TypedBinding { local_id, .. } => {
+            if let Some(id) = local_id {
+                ids.insert(*id);
+            }
+        }
+        Pattern::Binary { segments, .. } => {
+            for segment in segments {
+                if let ExprKind::Ident {
+                    resolution: Resolution::Local(id),
+                    ..
+                } = &segment.value.kind
+                {
+                    ids.insert(*id);
+                }
+            }
+        }
+        Pattern::Constructor { elements, .. }
+        | Pattern::EnumTuple { elements, .. }
+        | Pattern::List { elements, .. } => {
+            for element in elements {
+                collect_pattern_binding_ids(element, ids);
+            }
+        }
+        Pattern::EnumStruct { fields, .. } | Pattern::Struct { fields, .. } => {
+            for field in fields {
+                collect_pattern_binding_ids(&field.pattern, ids);
+            }
+        }
+        Pattern::Or { patterns, .. } => {
+            for branch in patterns {
+                collect_pattern_binding_ids(branch, ids);
+            }
+        }
+        Pattern::EnumUnit { .. } | Pattern::Literal { .. } | Pattern::Wildcard { .. } => {}
     }
 }
 
@@ -642,10 +688,6 @@ fn closure_param_local_id(param: &ClosureParam, index: usize) -> LocalId {
         | ClosureParam::Wildcard { local_id: None, .. } => panic!(
             "IR lower: closure param #{index} carries no LocalId — \
              typecheck resolve invariant violation",
-        ),
-        ClosureParam::Destructured { .. } => panic!(
-            "IR lower: closure param #{index} ({:?}) is not yet supported in lowering",
-            param,
         ),
     }
 }

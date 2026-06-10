@@ -186,13 +186,6 @@ fn resolve_closure_param(
             }
         },
         ClosureParam::Wildcard { .. } => expected.cloned().unwrap_or_else(ResolvedType::unresolved),
-        ClosureParam::Destructured { span, .. } => {
-            diagnostics.push(Diagnostic::error(
-                "typecheck does not yet support destructured closure parameters".to_string(),
-                *span,
-            ));
-            ResolvedType::unresolved()
-        }
     }
 }
 
@@ -213,10 +206,6 @@ fn declare_closure_params(
             ClosureParam::Wildcard { local_id, .. } => {
                 let id = resolver.scope.declare_anonymous(param_ty.clone());
                 *local_id = Some(id);
-            }
-            ClosureParam::Destructured { .. } => {
-                // Diagnostic was already emitted in resolve_closure_param;
-                // leave local_id unstamped — IR lower stays gated on this.
             }
         }
     }

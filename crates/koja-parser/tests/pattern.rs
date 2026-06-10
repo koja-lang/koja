@@ -5,12 +5,12 @@
 //! and asserts the resulting AST variant; combined this pins which
 //! syntactic shape maps to which pattern node.
 
-use koja_ast::ast::{Expr, ExprKind, Item, Pattern, Statement};
+use koja_ast::ast::{Expr, ExprKind, Item, Literal, Pattern, Statement};
 use koja_ast::util::dedent;
 
 mod common;
 
-use common::parse_clean;
+use common::{assert_message_contains, parse_clean, parse_failing};
 
 fn first_match(source: &str) -> Vec<koja_ast::ast::MatchArm> {
     let file = parse_clean(source);
@@ -98,6 +98,52 @@ fn literal_string_pattern() {
     );
     let arms = first_match(&src);
     assert!(matches!(arms[0].pattern, Pattern::Literal { .. }));
+}
+
+/// Multiline string patterns share `parse_string_expr`'s dedent
+/// semantics (closing-quote column is the indent oracle, leading /
+/// trailing newlines stripped), so a pattern and an identical
+/// expression always agree on the matched text.
+#[test]
+fn literal_multiline_string_pattern() {
+    let src = dedent(
+        r#"
+        fn run
+          match x
+            """
+            hello
+            world
+            """ -> 1
+            _ -> 0
+          end
+        end
+        "#,
+    );
+    let arms = first_match(&src);
+    let Pattern::Literal {
+        value: Literal::String(text),
+        ..
+    } = &arms[0].pattern
+    else {
+        panic!("expected string literal pattern, got {:?}", arms[0].pattern);
+    };
+    assert_eq!(text, "hello\nworld");
+}
+
+#[test]
+fn string_pattern_with_interpolation_is_diagnosed() {
+    let src = dedent(
+        "
+        fn run
+          match x
+            \"a#{y}b\" -> 1
+            _ -> 0
+          end
+        end
+        ",
+    );
+    let result = parse_failing(&src);
+    assert_message_contains(&result, "string patterns cannot contain");
 }
 
 #[test]
