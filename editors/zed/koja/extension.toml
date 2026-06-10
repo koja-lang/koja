@@ -5,13 +5,10 @@ version = "0.1.0"
 authors = ["Henry Popp <hello@hpopp.dev>"]
 schema_version = 1
 
-# The grammar lives in a sibling repository. During development we
-# point at the local checkout; once `tree-sitter-koja` is published
-# this should switch to a public `https://...` URL with the same
-# pinned commit.
+# Pinned to the tree-sitter-koja v0.1.0 release.
 [grammars.koja]
-repository = "file:///Users/hpopp/Work/koja-lang/tree-sitter-koja"
-commit = "f529b999e4e7c6675604ea8e1c5ecbb4c9f7a844"
+repository = "https://github.com/koja-lang/tree-sitter-koja"
+commit = "55e68d7bbe846a8fae10bce45f95f2fc61c5e034"
 
 [language_servers.koja-lsp]
 name = "Koja LSP"
