@@ -28,7 +28,7 @@ use std::path::PathBuf;
 
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
-use koja_ir::{IRProgram, ProjectEntry, lower_program};
+use koja_ir::{IRProgram, lower_program};
 use koja_ir_llvm::emit_llvm_ir;
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
@@ -118,17 +118,36 @@ const PROCESS_STUB: &str = "
     end
     ";
 
+/// Synthetic Process state appended by [`lower`] so fixtures that
+/// only exercise spawn/receive emission still give `lower_program`
+/// a valid entry. Spells out `run` because [`PROCESS_STUB`]'s
+/// protocol has no default bodies.
+const TEST_ENTRY_SNIPPET: &str = "
+    struct TestEntry
+    end
+
+    impl Process<(), (), ()> for TestEntry
+      fn start(config: ()) -> Result<Self, StopReason>
+        Result.Ok(TestEntry{})
+      end
+
+      fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+        Step.Continue(self)
+      end
+
+      fn run(self) -> StopReason
+        StopReason.Normal
+      end
+    end
+    ";
+
 fn lower(source: &str) -> IRProgram {
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_with_entry(source, ProjectEntry::Function(entry))
+    let with_entry = format!("{}\n{}", dedent(source), dedent(TEST_ENTRY_SNIPPET));
+    lower_process_entry(&with_entry, "TestEntry")
 }
 
 fn lower_process_entry(source: &str, state: &str) -> IRProgram {
     let state_id = Identifier::new(PACKAGE, vec![state.to_string()]);
-    lower_with_entry(source, ProjectEntry::Process { state: state_id })
-}
-
-fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
     let mut sources = koja_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: "Global".to_string(),
@@ -153,7 +172,7 @@ fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
                 .join("\n"),
         )
     });
-    lower_program(&checked, entry).expect("lowering should succeed")
+    lower_program(&checked, &state_id).expect("lowering should succeed")
 }
 
 fn emit(source: &str) -> String {

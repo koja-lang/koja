@@ -1,0 +1,20 @@
+alias Greeter.Greeter
+
+struct App
+end
+
+impl Process<(), (), ()> for App
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    g = Greeter.new("World")
+    g.greet().print()
+    StopReason.Normal
+  end
+end

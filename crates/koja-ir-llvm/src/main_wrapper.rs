@@ -1,25 +1,24 @@
-//! Synthesize the host `main` entry point. Two shapes, picked per
-//! [`koja_ir::FunctionKind`] of the IR program's entry:
+//! Synthesize the host `main` entry point. Two shapes, one per
+//! compile path:
 //!
-//! - **Function entry** ([`emit_as_main`]) — legacy v1 `fn main`
-//!   shape. Stamps `void __koja_user_main(i8*)` carrying the user
-//!   body plus an `i64 main()` trampoline that registers the
-//!   thunk as PID 1 and boots the scheduler. Always returns 0.
-//! - **Process entry** ([`emit_process_entry_main`]) — PascalCase
-//!   `Process<C, M, R>` shape. The IR program's entry function is
-//!   a `ProcessEntryWrapper` already defined like any helper; this
-//!   module only synthesizes the host `main` trampoline that
-//!   builds the `C` argument, hands the wrapper to
-//!   `koja_rt_spawn`, runs the scheduler via `koja_rt_main_done`,
-//!   and returns whatever the wrapper stored into
-//!   [`EXIT_CODE_SYMBOL`].
+//! - **Script** ([`emit_script_main`]) — `.kojs` shape. Stamps
+//!   `void __koja_user_main(i8*)` carrying the script body plus an
+//!   `i64 main()` trampoline that registers the thunk as PID 1 and
+//!   boots the scheduler. Always returns 0.
+//! - **Program** ([`emit_process_entry_main`]) — project shape.
+//!   The IR program's entry function is a `ProcessEntryWrapper`
+//!   already defined like any helper; this module only synthesizes
+//!   the host `main` trampoline that builds the `C` argument,
+//!   hands the wrapper to `koja_rt_spawn`, runs the scheduler via
+//!   `koja_rt_main_done`, and returns whatever the wrapper stored
+//!   into [`EXIT_CODE_SYMBOL`].
 //!
 //! The host `main`'s signature varies between shapes:
-//! - Function entry stays at `i64 main()`.
-//! - Process entry uses `i32 main(i32, i8**)` iff the entry state's
-//!   config type is `List<String>` (so the trampoline can build a
-//!   `List<String>` from argc/argv); otherwise it stays at
-//!   `i32 main()` and zero-fills the config alloca.
+//! - Scripts stay at `i64 main()`.
+//! - Program entries use `i32 main(i32, i8**)` iff the entry
+//!   state's config type is `List<String>` (so the trampoline can
+//!   build a `List<String>` from argc/argv); otherwise they stay
+//!   at `i32 main()` and zero-fill the config alloca.
 //!
 //! Running the user body inside a spawned process (PID 1) is what
 //! lets `koja_rt_self()`, `Ref.call`, `Ref.cast`, and the rest of
@@ -49,15 +48,15 @@ use crate::intrinsics::process::payload_drop_glue;
 use crate::runtime::{
     declare_rt_build_argv_extern, declare_rt_main_done_extern, declare_rt_spawn_extern,
 };
-use crate::types::ir_basic_type;
+use crate::types::value_basic_type;
 
 const APP_NAME_SYMBOL: &str = "__koja_app_name";
 const ENTRY_SYMBOL: &str = "main";
 /// Module-level `i32` global the [`FunctionKind::ProcessEntryWrapper`]
 /// body writes the entry process's exit code into; the synthesized
 /// `main` trampoline returns its value after the scheduler joins.
-/// Function-shaped entries never touch this global (they always
-/// return 0 from `main`).
+/// Scripts never touch this global (they always return 0 from
+/// `main`).
 pub(crate) const EXIT_CODE_SYMBOL: &str = "__koja_exit_code";
 /// Thunk that carries the user body. Single `i8*` parameter
 /// (ignored) so it matches `koja_rt_spawn`'s `ProcessFn` typedef.
@@ -78,9 +77,8 @@ pub(crate) fn emit_app_name_global(ctx: &EmitContext<'_>, app_name: &str) {
 }
 
 /// Emit the mutable `__koja_exit_code` (i32, init 0) global the
-/// process-entry wrapper writes into. The Function-entry shape never
-/// touches it; the Process-entry trampoline returns its value after
-/// the scheduler joins.
+/// process-entry wrapper writes into; the `main` trampoline
+/// returns its value after the scheduler joins.
 pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
     if ctx.module.get_global(EXIT_CODE_SYMBOL).is_some() {
         return;
@@ -90,21 +88,21 @@ pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
     global.set_initializer(&i32_ty.const_zero());
 }
 
-/// Emit `blocks` as a spawn-driven main pair:
+/// Emit the script body's `blocks` as a spawn-driven main pair:
 ///
-/// 1. `void __koja_user_main(i8*)` carrying the user body.
+/// 1. `void __koja_user_main(i8*)` carrying the script body.
 /// 2. `i64 main()` trampoline that calls
 ///    `koja_rt_spawn(__koja_user_main, null, 0)` to register the
 ///    body as PID 1, then `koja_rt_main_done()` to boot the
 ///    scheduler (which runs until PID 1 dies), then `ret i64 0`.
 ///
 /// The trailing block of `__koja_user_main` is always capped with
-/// `ret void` — the user body's trailing value is computed (for
+/// `ret void` — the script body's trailing value is computed (for
 /// its side effects) and discarded. Empty bodies are illegal
 /// (sealed IR guarantees at least one block), and the final IR
 /// block must end in `Return`. The seal pass admits other
 /// terminators for non-trailing blocks.
-pub(crate) fn emit_as_main<'ctx>(
+pub(crate) fn emit_script_main<'ctx>(
     ctx: &EmitContext<'ctx>,
     blocks: &[IRBasicBlock],
 ) -> Result<(), LlvmError> {
@@ -112,7 +110,7 @@ pub(crate) fn emit_as_main<'ctx>(
     define_main_trampoline(ctx)
 }
 
-/// Define `void __koja_user_main(i8*)` carrying the user body.
+/// Define `void __koja_user_main(i8*)` carrying the script body.
 /// The single pointer parameter is ignored — present only to match
 /// `koja_rt_spawn`'s `ProcessFn` signature so the trampoline can
 /// hand the function pointer over directly.
@@ -207,7 +205,9 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     let entry_bb = ctx.context.append_basic_block(main_fn, "entry");
     ctx.builder.position_at_end(entry_bb);
 
-    let config_llvm_type = ir_basic_type(ctx, config_type)?;
+    // `value_basic_type` so a `Process<(), _, _>` entry's Unit config
+    // allocates as the inert `i8` placeholder.
+    let config_llvm_type = value_basic_type(ctx, config_type)?;
     let config_alloca = ctx
         .builder
         .build_alloca(config_llvm_type, "entry_config")
@@ -327,10 +327,9 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
 }
 
 /// Cap the trailing block of `__koja_user_main` with `ret void`.
-/// The user body's `Return` terminator's value (if any) has
+/// The script body's `Return` terminator's value (if any) has
 /// already been emitted by [`emit::emit_instructions`]; we discard
-/// it because scripts and programs always exit 0 on normal
-/// completion.
+/// it because scripts always exit 0 on normal completion.
 ///
 /// Skips the cap when the host block is already terminated —
 /// `IRInstruction::Receive` ends the block with its dispatcher

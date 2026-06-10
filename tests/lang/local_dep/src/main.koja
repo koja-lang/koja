@@ -1,6 +1,0 @@
-alias Greeter.Greeter
-
-fn main
-  g = Greeter.new("World")
-  g.greet().print()
-end

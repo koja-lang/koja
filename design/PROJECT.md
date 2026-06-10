@@ -478,9 +478,10 @@ specifically, in the context of:
 - The dual-backend story (interpreter for inner loop, LLVM for ship).
 - The `.est` / `.eir` sealed-artifact format that makes incremental
   compilation work across packages.
-- The cookbook-not-packages distribution model from `PACKAGE.md` —
-  `koja.toml` deps remain for sharing code between your own projects;
-  the cookbook is for community reference implementations.
+- The cookbook-not-packages distribution model from
+  `archive/20260610-PACKAGE.md` (since archived — the roadmap now
+  commits to a conventional package manager with git deps + a
+  lockfile in Phase 7; `koja.toml` deps share code between projects).
 
 ---
 

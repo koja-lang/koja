@@ -47,8 +47,8 @@ fn default_test() -> Vec<String> {
 
 impl ProjectConfig {
     /// Returns the entry value as a Process type name when it starts with an
-    /// uppercase letter (PascalCase). Lowercase entries are module names and
-    /// use the existing `fn main` codegen path.
+    /// uppercase letter (PascalCase) — the only valid entry shape. The driver
+    /// rejects lowercase entries with a pointer at `.kojs` scripts.
     pub fn entry_type_name(&self) -> Option<&str> {
         self.entry
             .as_deref()

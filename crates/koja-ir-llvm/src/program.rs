@@ -1,8 +1,9 @@
 //! Compile a sealed [`IRProgram`] into the borrowed [`EmitContext`]'s
 //! module: pre-emit every package's struct + enum types, emit the
-//! runtime-name global, declare every non-entry helper, synthesize
-//! the entry as `main` (the spawn-driven trampoline in
-//! [`crate::main_wrapper`]), then define each helper's body.
+//! runtime-name and exit-code globals, declare + define every
+//! function (including the `ProcessEntryWrapper`), then synthesize
+//! the host `main` trampoline ([`emit_process_entry_main`]) that
+//! spawns the entry wrapper and returns the stored exit code.
 //!
 //! Struct + enum types are pre-emitted in two phases (declare
 //! opaque, then set body) across every package so a struct- or
@@ -43,7 +44,7 @@
 //! reading an opaque inner (`align 1`, `size 0`) and collapsing
 //! the outer chunk count to a single byte — wire-format wrong.
 
-use koja_ir::{FunctionKind, IRProgram};
+use koja_ir::IRProgram;
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
@@ -54,9 +55,7 @@ use crate::layout::enums::{
 };
 use crate::layout::structs::{declare_struct_type, define_struct_body};
 use crate::layout::unions::{declare_union_type, define_union_body};
-use crate::main_wrapper::{
-    emit_app_name_global, emit_as_main, emit_exit_code_global, emit_process_entry_main,
-};
+use crate::main_wrapper::{emit_app_name_global, emit_exit_code_global, emit_process_entry_main};
 
 pub(crate) fn compile_program(
     ctx: &EmitContext<'_>,
@@ -95,33 +94,22 @@ pub(crate) fn compile_program(
     }
     emit_app_name_global(ctx, app_name);
     let entry = program.entry_function();
-    let process_entry = matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. });
-    if process_entry {
-        emit_exit_code_global(ctx);
-    }
+    emit_exit_code_global(ctx);
     let mut declared = Vec::with_capacity(program.packages.iter().map(|p| p.functions.len()).sum());
     for package in &program.packages {
         for function in package.functions.values() {
-            // Function-shaped entries skip the helper declare path — the
-            // body becomes `__koja_user_main` via `emit_as_main`. Process-
-            // shaped entries declare and define like any other helper
-            // (their kind is `ProcessEntryWrapper`); the host `main`
-            // trampoline is synthesized separately by
+            // The entry wrapper declares and defines like any other
+            // helper (its kind is `ProcessEntryWrapper`); the host
+            // `main` trampoline is synthesized separately by
             // `emit_process_entry_main`.
-            if !process_entry && program.is_entry(function) {
-                continue;
-            }
             declared.push((function, declare_function(ctx, function)?));
         }
     }
-    if !process_entry {
-        emit_as_main(ctx, &entry.blocks)?;
-    }
     for (function, llvm_function) in &declared {
-        define_function(ctx, function, *llvm_function)?;
+        define_function(ctx, function, *llvm_function).map_err(|e| {
+            LlvmError::Codegen(format!("while defining `{}`: {e:?}", function.symbol))
+        })?;
     }
-    if process_entry {
-        emit_process_entry_main(ctx, entry)?;
-    }
+    emit_process_entry_main(ctx, entry)?;
     Ok(())
 }

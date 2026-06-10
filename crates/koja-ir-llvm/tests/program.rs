@@ -2,19 +2,16 @@
 //! ([`compile_program`] / [`emit_llvm_ir`]). Pairs with
 //! `src/program.rs` in source.
 //!
-//! Each test drives the full pipeline on a tiny `fn main`
-//! fixture and asserts substrings of the produced module text. No
-//! linking, no subprocess — driver e2e tests cover that path.
+//! Each test drives the full pipeline on a tiny fixture (helpers
+//! plus a `fn main` driver, all emitted as plain package functions)
+//! and asserts substrings of the produced module text. No linking,
+//! no subprocess — driver e2e tests cover that path.
 //!
-//! Every emitted module pins the spawn-driven main shape: a
-//! `define void @__koja_user_main(ptr)` carrying the user body
-//! (always returns `ret void`; the trailing expression's value is
-//! computed for side effects and discarded), and a `define i64
-//! @main()` trampoline that hands `__koja_user_main` to the
-//! runtime as PID 1 via `koja_rt_spawn`, blocks on
-//! `koja_rt_main_done`, and returns `0`. Scripts and programs
-//! always exit `0` on normal completion; user code calls
-//! `IO.puts` / `.print()` explicitly for output.
+//! Every emitted module pins the Process-entry trampoline shape via
+//! [`assert_program_shape`]: the synthetic test entry's
+//! `__entry_wrapper`, an `i32 @main()` trampoline that spawns it,
+//! blocks on `koja_rt_main_done`, and returns the
+//! `@__koja_exit_code` global's value.
 //!
 //! Substring (not full-text) assertions because inkwell may adjust
 //! attribute ordering between LLVM patch versions.
@@ -28,7 +25,7 @@ use koja_ir_llvm::emit_llvm_ir;
 mod common;
 
 use common::{
-    APP_NAME, assert_contains, assert_main_shape, extract_function_body,
+    APP_NAME, assert_contains, assert_program_shape, extract_function_body,
     lower_program_source as lower,
 };
 
@@ -54,7 +51,7 @@ fn binary_concat_helper_emits_inline_malloc_and_memcpy() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
     assert_contains(&ir_text, "@llvm.memcpy.p0.p0.i64");
     // The runtime concat-bits extern must NOT be declared for a
@@ -85,7 +82,7 @@ fn binary_literal_emits_malloc_and_byte_packing() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     assert_contains(&ir_text, "declare ptr @koja_alloc(i64)");
     assert_contains(&ir_text, "@llvm.memset.p0.i64");
     // Pure byte-aligned segments must NOT pull in the runtime
@@ -115,7 +112,7 @@ fn sub_byte_binary_literal_routes_through_pack_bits() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     assert_contains(
         &ir_text,
         "declare void @__koja_pack_bits(ptr, i64, i8, i64)",
@@ -142,7 +139,7 @@ fn bits_concat_helper_routes_through_runtime() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     assert_contains(&ir_text, "declare ptr @__koja_concat_bits(ptr, ptr)");
     assert_contains(&ir_text, "call ptr @__koja_concat_bits(");
 }
@@ -150,15 +147,13 @@ fn bits_concat_helper_routes_through_runtime() {
 // ---------------------------------------------------------------------------
 // `fn main` body: literals, arithmetic, boolean, comparison
 //
-// With auto-print removed, these tests pin that the body compiles
-// cleanly into `__koja_user_main` and that the surrounding spawn
-// trampoline holds the expected shape. The trailing value is
-// discarded (no `__koja_print_*` calls), so there's no value-
-// side substring to anchor on.
+// These tests pin that the body compiles cleanly as a plain
+// `TestApp.main` helper and that the surrounding Process-entry
+// trampoline holds the expected shape.
 // ---------------------------------------------------------------------------
 
 #[test]
-fn fn_main_two_plus_two_emits_user_main_ret_void() {
+fn fn_main_two_plus_two_emits_plain_helper() {
     let source = "
         fn main -> Int
           2 + 2
@@ -168,11 +163,11 @@ fn fn_main_two_plus_two_emits_user_main_ret_void() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
-    let user_body = extract_function_body(&ir_text, "__koja_user_main");
+    assert_program_shape(&ir_text);
+    let main_body = extract_function_body(&ir_text, "TestApp.main");
     assert!(
-        user_body.contains("ret void"),
-        "expected `__koja_user_main` to end with `ret void`, got:\n{user_body}",
+        main_body.contains("ret i64"),
+        "expected `TestApp.main` to return an i64, got:\n{main_body}",
     );
 }
 
@@ -187,7 +182,7 @@ fn large_int_literal_compiles_cleanly() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
 }
 
 #[test]
@@ -201,7 +196,7 @@ fn neg_unary_compiles_cleanly() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
 }
 
 #[test]
@@ -215,7 +210,7 @@ fn logical_and_compiles_cleanly() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
 }
 
 #[test]
@@ -229,7 +224,7 @@ fn logical_or_compiles_cleanly() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
 }
 
 #[test]
@@ -243,7 +238,7 @@ fn not_unary_compiles_cleanly() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
 }
 
 #[test]
@@ -257,7 +252,7 @@ fn int_lt_compiles_cleanly() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
 }
 
 #[test]
@@ -271,7 +266,7 @@ fn int_eq_compiles_cleanly() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
 }
 
 #[test]
@@ -294,7 +289,7 @@ fn int32_arithmetic_lowers_to_i32_add() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     let body = extract_function_body(&ir_text, "TestApp.add32");
     assert!(
         body.contains("add i32"),
@@ -334,14 +329,14 @@ fn zero_arg_call_emits_helper_define_and_call() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @TestApp.answer()");
     // Helper's body folds to `ret i64 42`.
     assert_contains(&ir_text, "ret i64 42");
-    let user_body = extract_function_body(&ir_text, "__koja_user_main");
+    let main_body = extract_function_body(&ir_text, "TestApp.main");
     assert!(
-        user_body.contains("call i64 @TestApp.answer()"),
-        "expected `__koja_user_main` to call `TestApp.answer`:\n{user_body}",
+        main_body.contains("call i64 @TestApp.answer()"),
+        "expected `TestApp.main` to call `TestApp.answer`:\n{main_body}",
     );
 }
 
@@ -364,12 +359,12 @@ fn one_arg_call_threads_int_through_helper_signature() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @TestApp.id(i64");
-    let user_body = extract_function_body(&ir_text, "__koja_user_main");
+    let main_body = extract_function_body(&ir_text, "TestApp.main");
     assert!(
-        user_body.contains("call i64 @TestApp.id(i64 7)"),
-        "expected `__koja_user_main` to call `TestApp.id` with `i64 7`:\n{user_body}",
+        main_body.contains("call i64 @TestApp.id(i64 7)"),
+        "expected `TestApp.main` to call `TestApp.id` with `i64 7`:\n{main_body}",
     );
 }
 
@@ -388,11 +383,11 @@ fn multi_arg_call_threads_each_int_in_declared_order() {
     let program = lower(&dedent(source));
     let ir_text = emit_llvm_ir(&program, APP_NAME).expect("emit_llvm_ir should succeed");
 
-    assert_main_shape(&ir_text);
+    assert_program_shape(&ir_text);
     assert_contains(&ir_text, "define i64 @TestApp.pair(i64");
-    let user_body = extract_function_body(&ir_text, "__koja_user_main");
+    let main_body = extract_function_body(&ir_text, "TestApp.main");
     assert!(
-        user_body.contains("call i64 @TestApp.pair(i64 2, i64 3)"),
-        "expected `__koja_user_main` to call `TestApp.pair`:\n{user_body}",
+        main_body.contains("call i64 @TestApp.pair(i64 2, i64 3)"),
+        "expected `TestApp.main` to call `TestApp.pair`:\n{main_body}",
     );
 }

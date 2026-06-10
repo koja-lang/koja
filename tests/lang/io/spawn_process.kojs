@@ -41,10 +41,8 @@ impl Process<WorkerConfig, WorkerMsg, String> for Worker
   end
 end
 
-fn main
-  w = spawn Worker.start(WorkerConfig{label: "w1"})
-  w.cast(WorkerMsg.Greet("Koja"))
-  w.cast(WorkerMsg.Add(10, 32))
-  # Last message uses call to ensure the worker finishes before main exits.
-  w.call(WorkerMsg.Stop, 5000)
-end
+w = spawn Worker.start(WorkerConfig{label: "w1"})
+w.cast(WorkerMsg.Greet("Koja"))
+w.cast(WorkerMsg.Add(10, 32))
+# Last message uses call to ensure the worker finishes before the script exits.
+w.call(WorkerMsg.Stop, 5000)

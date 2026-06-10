@@ -12,8 +12,10 @@
 //! - [`typecheck`] / [`typecheck_in`] — `parse_program → check_program`
 //!   shorthands, parameterized by `ParseMode` (and optionally
 //!   package name for tests that want to target `Global` directly).
-//! - [`evaluate_program`] — `ParseMode::File` + `lower_program` +
-//!   `Interpreter::run_program` against a `fn main` entry.
+//! - [`evaluate_program`] — `ParseMode::File` + `lower_program`
+//!   (with a synthetic Process entry appended so the entry staging
+//!   succeeds) + `Interpreter::run_function` against the fixture's
+//!   `fn main`, returning its runtime [`Value`].
 //! - [`evaluate_script`] / [`evaluate_script_in`] — `ParseMode::Script`
 //!   + `lower_script` + `Interpreter::run_script`. The trailing
 //!     expression's runtime [`Value`] becomes the script's return,
@@ -28,12 +30,34 @@
 use std::path::PathBuf;
 
 use koja_ast::identifier::Identifier;
-use koja_ir::{ProjectEntry, lower_program, lower_script};
+use koja_ir::{lower_program, lower_script};
 use koja_ir_eval::{Interpreter, RuntimeError, Value};
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::{CheckedProgram, check_program};
 
 pub const PACKAGE: &str = "TestApp";
+
+/// Name of the synthetic Process state appended to program fixtures.
+pub const TEST_ENTRY_NAME: &str = "TestEntry";
+
+/// Minimal `Process` impl appended to every program-shaped fixture
+/// so `lower_program` has a valid entry. The state is never spawned
+/// or executed by these tests — it only satisfies the entry staging;
+/// [`evaluate_program`] runs the fixture's `fn main` directly.
+const TEST_ENTRY_SNIPPET: &str = "
+struct TestEntry
+end
+
+impl Process<(), (), ()> for TestEntry
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(TestEntry{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+end
+";
 
 pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     typecheck_in(PACKAGE, source, mode)
@@ -51,11 +75,11 @@ pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProg
 }
 
 pub fn evaluate_program(source: &str) -> Result<Value, RuntimeError> {
-    let checked = typecheck(source, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    let program =
-        lower_program(&checked, ProjectEntry::Function(entry)).expect("lowering should succeed");
-    Interpreter::run_program(program)
+    let with_entry = format!("{source}\n{TEST_ENTRY_SNIPPET}");
+    let checked = typecheck(&with_entry, ParseMode::File);
+    let entry = Identifier::new(PACKAGE, vec![TEST_ENTRY_NAME.to_string()]);
+    let program = lower_program(&checked, &entry).expect("lowering should succeed");
+    Interpreter::run_function(&program, &format!("{PACKAGE}.main"))
 }
 
 pub fn evaluate_script(source: &str) -> Result<Value, RuntimeError> {

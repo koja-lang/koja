@@ -244,7 +244,8 @@ When `run_process` returns, the eval scheduler:
    the eval-side `EXIT_CODE` global, and signals the main thread
    to wake.
 
-`Interpreter::run_program` for `ProjectEntry::Process { state }`:
+`Interpreter::run_program` (the entry is always a Process state —
+`fn main` entries no longer exist):
 
 1. Spawns the entry as PID 1 with config materialized from
    `argv` (or zero-init for non-`List<String>` configs).
@@ -357,9 +358,8 @@ Greppable / assertable invariants:
   `rg "use koja_ir_llvm" koja/crates/koja-ir-eval/`.
 - Eval scheduler thread names match `koja-pid-{N}` (debugger
   visibility; sanity check during shell sessions).
-- `Interpreter::run_program` accepts both `ProjectEntry::Function`
-  and `ProjectEntry::Process { state }` — no `unimplemented!()`
-  on the Process arm.
+- `Interpreter::run_program` runs the Process entry wrapper — no
+  `unimplemented!()` on the Process path.
 - `lib/global/src/process.koja`'s test suite passes under both
   backends. Today the `process` package's test directory is
   skipped in eval mode; that exclusion is removed.
@@ -368,9 +368,9 @@ Greppable / assertable invariants:
 
 - `koja/design/COMPILER-NORTHSTAR.md` — pipeline shape; eval is
   a backend on the same sealed `IRProgram` as LLVM.
-- `koja/design/FNMAIN.md` — process model, lifecycle semantics,
-  `StopReason` / `ExitStatus` / supervisor design that this doc
-  defers to.
+- `koja/design/archive/20260609-FNMAIN.md` — process model,
+  lifecycle semantics, `StopReason` / `ExitStatus` / supervisor
+  design that this doc defers to.
 - `koja/crates/koja-runtime/src/scheduler.rs` — the LLVM-side
   reference implementation. When in doubt about observable
   semantics, the runtime is the spec.

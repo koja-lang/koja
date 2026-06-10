@@ -1,0 +1,23 @@
+struct App
+end
+
+impl Process<(), (), ()> for App
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    p = Point.new(3, 4)
+    q = p.translate(1, -1)
+    q.x.print()
+    q.y.print()
+
+    s = Shape{origin: Point.new(10, 20), label: "box"}
+    s.describe().print()
+    StopReason.Normal
+  end
+end

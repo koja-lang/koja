@@ -1,0 +1,17 @@
+struct App
+end
+
+impl Process<(), (), ()> for App
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    "unreachable".print()
+    StopReason.Normal
+  end
+end

@@ -11,7 +11,8 @@
 //! - returns `Err(LowerError)` carrying one of two user-actionable
 //!   failure modes: feature-gap diagnostics accumulated while walking
 //!   the sealed AST, or an entry-point lookup miss when the caller
-//!   asked for a function that no package registered.
+//!   named a state type that no package registered (or that lacks a
+//!   `Process` conformance).
 //!
 //! `seal_program` runs as the last sub-pass of `lower_program`; seal
 //! violations panic per northstar (compiler bugs, not user errors).
@@ -38,40 +39,15 @@ use crate::types::IRType;
 use crate::union_decl::{IRUnionDecl, discover_unions};
 use crate::{lower, merge, seal};
 
-/// Caller-supplied entry shape for [`lower_program`]. Two flavors:
-///
-/// - [`ProjectEntry::Function`] — the user named a `fn main`-style
-///   entry function. Resolved straight through:
-///   `entry_point = IRSymbol::from_identifier(&ident)`. Transitional
-///   path that survives only as long as v1 lives; once v1 is gone
-///   the `Function` variant is deleted and PascalCase Process
-///   entries become the sole project shape.
-/// - [`ProjectEntry::Process`] — the user named a PascalCase state
-///   type that implements `Process<C, M, R>`. `lower_program`
-///   resolves its `C` (config type) off the typecheck registry,
-///   synthesizes one [`FunctionKind::ProcessEntryWrapper`] thunk
-///   for that state, points `entry_point` at the wrapper symbol,
-///   and enqueues `state.start` / `state.run` `Instantiation`s so
-///   the monomorphizer picks up generic-state cells.
-#[derive(Debug, Clone)]
-pub enum ProjectEntry {
-    Function(Identifier),
-    Process { state: Identifier },
-}
-
 /// Sealed output of [`lower_program`]'s success path. Backends consume
 /// this directly; they build their own indices over the sealed
 /// vocabulary and never need to revisit the `CheckedProgram` it came
 /// from.
 ///
 /// `entry_point` is the stable [`IRSymbol`] backends lift into a host
-/// `main`. Two shapes route through it:
-///
-/// - [`ProjectEntry::Function`] caller: the symbol is the user's
-///   `fn main` directly; backends inline its body.
-/// - [`ProjectEntry::Process`] caller: the symbol is the synthesized
-///   `<state>.__entry_wrapper` whose [`FunctionKind::ProcessEntryWrapper`]
-///   tells backends to emit a spawn-driven trampoline.
+/// `main`: the synthesized `<state>.__entry_wrapper` whose
+/// [`FunctionKind::ProcessEntryWrapper`] tells backends to emit a
+/// spawn-driven trampoline.
 ///
 /// `link_libraries` is the deduped, sorted list of bare library names
 /// (`m`, `crypto`) collected from every `@extern "C"` function's
@@ -173,12 +149,11 @@ impl IRProgram {
 ///    a partial IR — its invariants assume a complete program, and
 ///    violating them panics (northstar: seal failures are compiler
 ///    bugs, not user errors).
-/// 3. For [`ProjectEntry::Process`] callers: resolve the state's
-///    `Process<C, M, R>` impl, enqueue `start`/`run` instantiations,
-///    and synthesize the [`FunctionKind::ProcessEntryWrapper`]
-///    thunk under `<state>.__entry_wrapper`. The wrapper is routed
-///    into the state's owning package via the post-instantiate
-///    drain.
+/// 3. Resolve the entry state's `Process<C, M, R>` impl, enqueue
+///    `start`/`run` instantiations, and synthesize the
+///    [`FunctionKind::ProcessEntryWrapper`] thunk under
+///    `<state>.__entry_wrapper`. The wrapper is routed into the
+///    state's owning package via the post-instantiate drain.
 /// 4. `generics::instantiate` — dedupe the instantiation list and
 ///    monomorphize each one off the typecheck registry into the
 ///    [`IRPackage`] that owns the template. The instantiation set is
@@ -191,7 +166,7 @@ impl IRProgram {
 /// 7. `seal` — assert sealed-IRProgram invariants. Panics on violation.
 pub fn lower_program(
     checked: &CheckedProgram,
-    entry: ProjectEntry,
+    entry_state: &Identifier,
 ) -> Result<IRProgram, LowerError> {
     let mut output = LowerOutput::default();
     let mut packages = Vec::with_capacity(checked.packages.len() + 1);
@@ -204,12 +179,8 @@ pub fn lower_program(
         return Err(LowerError::Diagnostics(output.diagnostics));
     }
 
-    let (entry_identifier, entry_symbol) = match &entry {
-        ProjectEntry::Function(ident) => (ident.clone(), IRSymbol::from_identifier(ident)),
-        ProjectEntry::Process { state } => {
-            stage_process_entry(state, checked, &mut packages, &mut output)?
-        }
-    };
+    let (entry_identifier, entry_symbol) =
+        stage_process_entry(entry_state, checked, &mut packages, &mut output)?;
 
     let initial = std::mem::take(&mut output.instantiations);
     generics::instantiate(
@@ -241,11 +212,11 @@ pub fn lower_program(
     Ok(program)
 }
 
-/// Synthesize the [`FunctionKind::ProcessEntryWrapper`] for a
-/// [`ProjectEntry::Process`] caller and enqueue `start` / `run`
-/// instantiations. Returns the entry's user-facing identifier (the
-/// state) plus the wrapper's mangled [`IRSymbol`] — `lower_program`
-/// stamps the latter onto [`IRProgram::entry_point`].
+/// Synthesize the [`FunctionKind::ProcessEntryWrapper`] for the
+/// entry state and enqueue `start` / `run` instantiations. Returns
+/// the entry's user-facing identifier (the state) plus the wrapper's
+/// mangled [`IRSymbol`] — `lower_program` stamps the latter onto
+/// [`IRProgram::entry_point`].
 ///
 /// The wrapper drops directly into the state's owning [`IRPackage`]
 /// (no `synthesized_functions` round-trip needed for the non-generic

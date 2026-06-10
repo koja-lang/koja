@@ -166,7 +166,7 @@ end
 
 Functions without a return type return `()`. Parameters require explicit types. Return type annotation is required if the function returns a value.
 
-Standalone functions are only supported for `fn main` — the program entry point. All other functions must be declared inside `impl` blocks on a struct or enum. See [Impl Functions](#impl-functions) and [Static Functions](#static-functions).
+A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml` — there is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Most functions are declared inside `impl` blocks on a struct or enum; see [Impl Functions](#impl-functions) and [Static Functions](#static-functions).
 
 ### Private Functions
 
@@ -925,9 +925,23 @@ fn add(a: Int, b: Int) -> Int
   a + b
 end
 
-# src/main.koja
-fn main
-  Helper.add(3, 4).print()
+# src/app.koja
+struct App
+end
+
+impl Process<(), (), ()> for App
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    Helper.add(3, 4).print()
+    StopReason.Normal
+  end
 end
 ```
 
@@ -1867,14 +1881,14 @@ An optional string after `@test` provides a description printed during the test 
 my_app/
   koja.toml
   src/
-    main.koja
+    app.koja
 ```
 
 The `koja.toml` file defines the project configuration:
 
 ```toml
 [project]
-entry = "main"
+entry = "App"
 name = "my_app"
 version = "0.1.0"
 ```
@@ -1883,7 +1897,7 @@ Fields:
 
 - `name` -- project name (used as the binary output name).
 - `version` -- semantic version string.
-- `entry` -- the module containing `fn main` (default `"main"`).
+- `entry` -- the type implementing `Process` that the program starts (required for `build`/`run`).
 - `src` -- source directories (default `["src"]`).
 - `test` -- test directories (default `["test"]`).
 

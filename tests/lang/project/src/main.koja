@@ -1,5 +1,0 @@
-fn main
-  result = Helper.add(10, 20)
-  result.print()
-  Helper.greet("world").print()
-end

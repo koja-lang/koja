@@ -1,14 +1,15 @@
 //! Coverage for the package- and function-shaped lowering entry
 //! points (`src/lower/package.rs`):
 //!
-//! - happy-path lowering of a `fn main` (project mode) and a bare
-//!   trailing-expression script body, asserting the produced
+//! - happy-path lowering of a package function (project mode) and a
+//!   bare trailing-expression script body, asserting the produced
 //!   instruction sequence on the resulting [`IRProgram`] /
 //!   [`IRScript`];
 //! - cross-package call wiring through script mode's
 //!   [`IRScript::function`] index;
-//! - the [`LowerError::EntryPointNotFound`] failure mode for a
-//!   missing `fn main`;
+//! - the [`LowerError::EntryPointNotFound`] failure mode for an
+//!   entry state that no package registers (or that lacks a
+//!   `Process` conformance);
 //! - the per-function fail-fast contract: extern-fn-without-body
 //!   surfaces a feature-gap diagnostic, and a single bad function
 //!   in a multi-fn package produces exactly one diagnostic for the
@@ -17,16 +18,16 @@
 use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
 use koja_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRTerminator, IRType, LowerError,
-    ProjectEntry, ValueId, lower_program,
+    ConstValue, FunctionKind, IRBasicBlock, IRBinOp, IRFunction, IRInstruction, IRTerminator,
+    IRType, LowerError, ValueId, lower_program,
 };
 use koja_parser::ParseMode;
 
 mod common;
 
 use common::{
-    PACKAGE, expect_diagnostics, lower_program_err as lower_err, lower_program_source as lower,
-    lower_script_source as lower_as_script, typecheck,
+    PACKAGE, TEST_ENTRY_NAME, expect_diagnostics, lower_program_err as lower_err,
+    lower_program_source as lower, lower_script_source as lower_as_script, typecheck,
 };
 
 #[test]
@@ -39,21 +40,18 @@ fn fn_main_two_plus_two_lowers_to_const_const_add_return() {
 
     let program = lower(&dedent(source));
 
-    assert_eq!(program.entry_point.mangled(), format!("{PACKAGE}.main"));
-    // The user-facing `TestApp` package has just `main`; the
-    // auto-import seeds `Global` packages alongside it
-    // (today `Global.bitwise` + `Global.time`), so we assert on
-    // the user package's shape only and let the stdlib packages
-    // ride along.
-    let pkg = program
-        .packages
-        .iter()
-        .find(|pkg| pkg.package == PACKAGE)
-        .expect("test package missing from lowered IR");
-    assert_eq!(pkg.functions.len(), 1);
+    // The entry point is the synthetic test-entry state's wrapper;
+    // `fn main` lowers as a plain package helper alongside it.
+    assert_eq!(
+        program.entry_point.mangled(),
+        format!("{PACKAGE}.{TEST_ENTRY_NAME}.__entry_wrapper"),
+    );
+    assert!(matches!(
+        program.entry_function().kind,
+        FunctionKind::ProcessEntryWrapper { .. },
+    ));
 
-    let main: &IRFunction = program.entry_function();
-    assert_eq!(main.symbol, program.entry_point);
+    let main: &IRFunction = common::function(&program, "main");
     assert_eq!(main.blocks.len(), 1, "fns lower to one basic block");
 
     let block: &IRBasicBlock = &main.blocks[0];
@@ -176,7 +174,7 @@ fn script_with_helper_fn_lowers_call_through_packages() {
 }
 
 #[test]
-fn lower_program_reports_missing_entry_point() {
+fn lower_program_reports_missing_entry_state() {
     let source = "
         fn other
           1
@@ -184,11 +182,29 @@ fn lower_program_reports_missing_entry_point() {
         ";
 
     let checked = typecheck(&dedent(source), ParseMode::File);
-    let missing = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    let err = lower_program(&checked, ProjectEntry::Function(missing.clone()))
-        .expect_err("missing entry point should be reported");
+    let missing = Identifier::new(PACKAGE, vec!["App".to_string()]);
+    let err =
+        lower_program(&checked, &missing).expect_err("missing entry state should be reported");
     match err {
         LowerError::EntryPointNotFound { identifier } => assert_eq!(identifier, missing),
+        other => panic!("expected EntryPointNotFound, got {other:?}"),
+    }
+}
+
+#[test]
+fn lower_program_reports_entry_state_without_process_impl() {
+    let source = "
+        struct App
+          value: Int
+        end
+        ";
+
+    let checked = typecheck(&dedent(source), ParseMode::File);
+    let state = Identifier::new(PACKAGE, vec!["App".to_string()]);
+    let err = lower_program(&checked, &state)
+        .expect_err("entry state without a Process impl should be reported");
+    match err {
+        LowerError::EntryPointNotFound { identifier } => assert_eq!(identifier, state),
         other => panic!("expected EntryPointNotFound, got {other:?}"),
     }
 }
@@ -244,7 +260,7 @@ fn partial_failure_reports_only_the_failing_function_diagnostic() {
         ";
 
     let program = dedent(source);
-    let messages = expect_diagnostics(lower_err(&program, "main"));
+    let messages = expect_diagnostics(lower_err(&program));
     assert_eq!(
         messages.len(),
         1,

@@ -33,11 +33,9 @@
 //! `cmd_shell` has no file dimension and bypasses the resolver
 //! entirely; REPL fragments are always script-mode. Project mode
 //! routes through [`koja_ir::lower_program`] +
-//! [`koja_ir_llvm::compile_program`]. PascalCase entries
-//! (`entry = "App"`) name a `Process<C, M, R>` state type and
-//! lower as [`ProjectEntry::Process`]; lowercase entries
-//! (`entry = "main"`) name a `fn main` and lower as
-//! [`ProjectEntry::Function`].
+//! [`koja_ir_llvm::compile_program`]. The manifest's `entry`
+//! field names a PascalCase `Process<C, M, R>` state type; the
+//! lowering synthesizes its entry wrapper.
 //!
 //! ## Backend selection
 //!
@@ -72,7 +70,7 @@ use std::time::{Duration, Instant};
 
 use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::Identifier;
-use koja_ir::{IRProgram, IRScript, ProjectEntry, lower_program, lower_script};
+use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
 use koja_ir_eval::Interpreter;
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
 use koja_test::{HARNESS_ENTRY, TestCase, TestOptions, discover_tests, generate_harness};
@@ -171,24 +169,23 @@ fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
     }
 }
 
-/// Bail when the user asks `cmd_run` to run a standalone `.koja`
-/// file under the interpreter. The interpreter is script-mode-only
-/// (`run_script_interpreted` shells out to `Interpreter::run_script`,
-/// which doesn't yet drive a `fn main` body); LLVM compiles the
-/// file as a single-file program.
-fn bail_program_interpreter(path: &Path) -> ! {
+/// Bail when the user asks `cmd_build` / `cmd_run` to execute a
+/// standalone `.koja` file. `.koja` files are project modules —
+/// program entry points are `Process` types named by a manifest's
+/// `entry` field, so a bare file has no entry-point story. Scripts
+/// (`.kojs`) cover the zero-ceremony case.
+fn bail_program_execution(path: &Path) -> ! {
     eprintln!(
-        "error: `{}` is a `.koja` program; the interpreter backend only runs `.kojs` scripts. \
-         Use --backend=llvm or rename to `.kojs`.",
+        "error: `{}` is a `.koja` project module and cannot be run directly. \
+         Use a `.kojs` script for standalone programs, or create a `koja.toml` \
+         with a `Process` entry type.",
         path.display()
     );
     process::exit(1);
 }
 
 /// Bail when the user asks for project-mode execution under the
-/// interpreter. Same rationale as [`bail_program_interpreter`]:
-/// the interpreter's entry path doesn't drive a `fn main` body
-/// today.
+/// interpreter; project binaries are LLVM-only today.
 fn bail_project_interpreter() -> ! {
     eprintln!("error: project mode currently requires --backend=llvm");
     process::exit(1);
@@ -273,9 +270,7 @@ pub fn cmd_build(
             build_and_keep(&path, output, release, emit_llvm)
         }
         (SourceShape::Program(_), Backend::Interpreter) => bail_interpreter_no_binary(),
-        (SourceShape::Program(path), Backend::Llvm) => {
-            build_single_file_and_keep(&path, output, release, emit_llvm)
-        }
+        (SourceShape::Program(path), Backend::Llvm) => bail_program_execution(&path),
         (SourceShape::Project { .. }, Backend::Interpreter) => bail_interpreter_no_binary(),
         (SourceShape::Project { config, root }, Backend::Llvm) => {
             build_project_and_keep(&config, &root, output, release, emit_llvm)
@@ -301,10 +296,8 @@ pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<
     match (mode, backend) {
         (SourceShape::Script(path), Backend::Interpreter) => run_script_interpreted(&path),
         (SourceShape::Script(path), Backend::Llvm) => run_script_compiled(&path, release, &args),
-        (SourceShape::Program(path), Backend::Interpreter) => bail_program_interpreter(&path),
-        (SourceShape::Program(path), Backend::Llvm) => {
-            run_single_file_compiled(&path, release, &args)
-        }
+        (SourceShape::Program(path), Backend::Interpreter)
+        | (SourceShape::Program(path), Backend::Llvm) => bail_program_execution(&path),
         (SourceShape::Project { .. }, Backend::Interpreter) => bail_project_interpreter(),
         (SourceShape::Project { config, root }, Backend::Llvm) => {
             run_project_compiled(&config, &root, release, &args)
@@ -313,8 +306,8 @@ pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<
 }
 
 /// `koja test` — discover `@test`-annotated functions in the
-/// current project, synthesize a `fn main` harness, lower the
-/// whole thing through the pipeline, link via LLVM, and
+/// current project, synthesize a Process-shaped harness type,
+/// lower the whole thing through the pipeline, link via LLVM, and
 /// exec the resulting binary so its exit code surfaces test
 /// success/failure.
 ///
@@ -658,88 +651,6 @@ fn run_check(
     check_program(parsed).map_err(format_check_failure)
 }
 
-/// `koja build` for a standalone `.koja` file. Parses,
-/// checks, and lowers the file as its own one-file project (package
-/// from the file stem, entry fixed to `main`), compiles via
-/// `compile_program`, and links to a binary at `output` (defaulting
-/// to the file stem). Mirrors v1's `koja build path/to/file.koja`
-/// shape so users moving from v1 don't have to wrap every file in
-/// an `koja.toml`.
-fn build_single_file_and_keep(path: &Path, output: Option<String>, release: bool, emit_llvm: bool) {
-    let program = build_single_file_program(path);
-    let stem = single_file_package(path);
-    if emit_llvm {
-        print_program_ir(&program, &stem);
-        return;
-    }
-    let output = resolve_output_name(output, path);
-    emit_and_link_program(&program, &stem, &output, &[], release);
-    println!("compiled: {output}");
-}
-
-/// `koja run` for a standalone `.koja` file: build into a
-/// temp binary, exec with `args`, forward the exit code, and
-/// remove the binary.
-fn run_single_file_compiled(path: &Path, release: bool, args: &[String]) -> ! {
-    let program = build_single_file_program(path);
-    let stem = single_file_package(path);
-    let output = std::env::temp_dir()
-        .join(format!("koja-run-{}-{stem}", process::id()))
-        .to_string_lossy()
-        .to_string();
-    emit_and_link_program(&program, &stem, &output, &[], release);
-
-    let status = process::Command::new(&output).args(args).status();
-    let _ = fs::remove_file(&output);
-
-    match status {
-        Ok(status) => process::exit(status.code().unwrap_or(1)),
-        Err(err) => {
-            eprintln!("error: failed to exec `{output}`: {err}");
-            process::exit(1);
-        }
-    }
-}
-
-/// Drive a single-file `.koja` source through the full
-/// pipeline (parse → check → `lower_program`). The package name
-/// comes from the file stem; the entry function is fixed to
-/// `main`. Bails with a formatted error on any pipeline failure.
-fn build_single_file_program(path: &Path) -> IRProgram {
-    let source = read_source_or_exit(path);
-    let package = single_file_package(path);
-    let parsed = parse_program(
-        bundle_with_autoimport(SourceFile {
-            package: package.clone(),
-            path: path.to_path_buf(),
-            source,
-        }),
-        ParseMode::File,
-    );
-    let checked = match check_program(parsed) {
-        Ok(checked) => checked,
-        Err(failure) => {
-            eprintln!("error: {}", format_check_failure(failure));
-            process::exit(1);
-        }
-    };
-    let entry = Identifier::new(package, vec!["main".to_string()]);
-    match lower_program(&checked, ProjectEntry::Function(entry)) {
-        Ok(program) => program,
-        Err(err) => {
-            eprintln!("error: {err}");
-            process::exit(1);
-        }
-    }
-}
-
-/// Derive the package name for a single-file `.koja` build. Falls
-/// back to `App` when the path has no usable stem (matches
-/// [`derive_package`]).
-fn single_file_package(path: &Path) -> String {
-    derive_package(path)
-}
-
 /// `koja check` for a project: walk every `src` directory,
 /// resolve declared dependencies, parse + typecheck the whole set,
 /// and print `<project>: OK` (or per-file ASTs when `emit_ast`
@@ -791,7 +702,7 @@ fn build_project_and_keep(
 }
 
 /// `koja test` for a project: walk `src` + `test`, parse, discover
-/// `@test` functions, splice a synthetic `fn main` harness into the
+/// `@test` functions, splice the synthetic Process harness into the
 /// parsed program, lower with the harness as entry, link, exec the
 /// binary, and forward its exit code. The temp binary is removed
 /// after the run so repeated invocations don't accumulate artifacts
@@ -821,7 +732,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
         }
     };
     let entry = Identifier::new(config.name.clone(), vec![HARNESS_ENTRY.to_string()]);
-    let program = match lower_program(&checked, ProjectEntry::Function(entry)) {
+    let program = match lower_program(&checked, &entry) {
         Ok(program) => program,
         Err(err) => {
             eprintln!("error: {err}");
@@ -997,7 +908,7 @@ fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
         }
     };
     let entry = resolve_project_entry(config);
-    match lower_program(&checked, entry) {
+    match lower_program(&checked, &entry) {
         Ok(program) => program,
         Err(err) => {
             eprintln!("error: {err}");
@@ -1006,23 +917,25 @@ fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
     }
 }
 
-/// Resolve the project's entry as a [`ProjectEntry`]. PascalCase
-/// entries name a `Process<C, M, R>` state type
-/// ([`ProjectEntry::Process`]); lowercase entries name a `fn main`
-/// function ([`ProjectEntry::Function`]). The `Function` variant is
-/// transitional and dies with v1 — every project will eventually
-/// route through `Process`.
-fn resolve_project_entry(config: &ProjectConfig) -> ProjectEntry {
+/// Resolve the project's entry identifier. The manifest's `entry`
+/// field names a PascalCase type implementing `Process<C, M, R>`;
+/// `lower_program` synthesizes the entry wrapper for it. Lowercase
+/// (function-shaped) entries are rejected here — `fn main` is no
+/// longer an entry point.
+fn resolve_project_entry(config: &ProjectConfig) -> Identifier {
     let entry = config.entry.as_deref().unwrap_or_else(|| {
         eprintln!("error: koja.toml has no `entry` field; required for build/run");
         process::exit(1);
     });
-    let identifier = Identifier::new(config.name.clone(), vec![entry.to_string()]);
-    if config.entry_type_name().is_some() {
-        ProjectEntry::Process { state: identifier }
-    } else {
-        ProjectEntry::Function(identifier)
+    if config.entry_type_name().is_none() {
+        eprintln!(
+            "error: koja.toml `entry = \"{entry}\"` must name a type implementing \
+             `Process` (PascalCase). `fn main` entries are no longer supported; \
+             use a `.kojs` script for entry-free programs."
+        );
+        process::exit(1);
     }
+    Identifier::new(config.name.clone(), vec![entry.to_string()])
 }
 
 /// Walk the project's `src` directories (and recursively, every
@@ -1057,8 +970,10 @@ fn collect_project_sources(config: &ProjectConfig, root: &Path) -> Result<Vec<So
 }
 
 /// Walk `[dependencies]`, load each dep's manifest, register its
-/// package name, and push the dep's `src` files (excluding the
-/// dep's own entry to avoid `fn main` collisions). Mirrors v1's
+/// package name, and push the dep's `src` files. A dep's entry
+/// type (if any) rides along like any other decl — entries are
+/// package-qualified `Process` types, so there's nothing to
+/// collide with. Mirrors v1's
 /// [`crate::resolve::resolve_dependencies`] without the
 /// stdlib-collision short-circuit (the driver drives the curated stdlib
 /// through `bundle_with_autoimport` instead of the embedded
@@ -1098,14 +1013,6 @@ fn collect_project_dependencies(
             files,
             seen_paths,
         )?;
-        if let Some(entry) = dep_config.entry.as_deref() {
-            let entry_paths: Vec<PathBuf> = dep_config
-                .src
-                .iter()
-                .map(|s| dep_root.join(s).join(format!("{entry}.koja")))
-                .collect();
-            files.retain(|f| !entry_paths.iter().any(|p| p == &f.path));
-        }
     }
     Ok(())
 }

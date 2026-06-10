@@ -39,9 +39,7 @@ impl Process<ParentConfig, MsgA | MsgB, String> for Parent
   end
 end
 
-fn main
-  p = spawn Parent.start(ParentConfig{})
-  p.call(MsgA.Ping("hello"), 5000)
-  p.call(MsgB.Pong(42), 5000)
-  p.call(MsgA.Ping("done"), 5000)
-end
+p = spawn Parent.start(ParentConfig{})
+p.call(MsgA.Ping("hello"), 5000)
+p.call(MsgB.Pong(42), 5000)
+p.call(MsgA.Ping("done"), 5000)

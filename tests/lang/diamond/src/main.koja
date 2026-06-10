@@ -1,5 +1,0 @@
-fn main
-  p = Point{x: 3, y: 4}
-  p.distance().print()
-  Point.origin().x.print()
-end

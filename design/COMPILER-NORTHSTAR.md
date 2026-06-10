@@ -234,7 +234,7 @@ koja-ir:
 ```rust
 pub fn lower_program(
     checked: &CheckedProgram,
-    entry: ProjectEntry,
+    entry_state: &Identifier,
 ) -> Result<IRProgram, LowerError>;
 
 pub(crate) fn lower_package(
@@ -626,28 +626,23 @@ handles the registry uses.
 
 ### Entry points
 
-```rust
-pub enum ProjectEntry {
-    Function(Identifier),
-    Process { state: Identifier },
-}
-```
-
-`ProjectEntry::Function` covers both `fn main` (the legacy-support
-window) and script entry — `.kojs` files lower to a synthesized
-top-level function with the same shape, so the original `EntryPoint`
-plan's separate `Eval` variant was folded into `Function` once
-scripts started lowering this way. `ProjectEntry::Process` carries
-the state struct's `Identifier`; the runtime spawns it as the entry
-process.
+Every compiled program's entry is a type implementing `Process`.
+`lower_program` takes the entry state's `Identifier` and synthesizes
+a `FunctionKind::ProcessEntryWrapper` that constructs and spawns the
+state; `seal_program` asserts the entry resolves to that wrapper.
+There is no `fn main` entry shape — the former `ProjectEntry` enum
+(`Function` vs `Process`) was collapsed when `fn main` was removed
+(2026-06-09). Scripts (`.kojs`) are the separate `IRScript` path:
+top-level statements lower to a synthesized entry function executed
+by the script trampoline.
 
 The entry point is a property of `IRProgram`, not of any
 `IRPackage`. Library packages built standalone produce an
 `IRPackage` and stop; only executable builds construct an
 `IRProgram`.
 
-There is no dedicated `MainEntry` `FunctionKind`. The user's `fn main`
-(or script entry) is a normal `FunctionKind::Regular`; its body is
+There is no dedicated `MainEntry` `FunctionKind`. A script's entry
+function is a normal `FunctionKind::Regular`; its body is
 reachable to the closure pass like any other function. The
 `FunctionKind` enum reserves variants for the IR-internal shapes
 that need different lowering (closures, externs, intrinsics,
@@ -771,7 +766,7 @@ Discussion that produced this doc:
 Existing related docs:
 
 - `../LANGUAGE.md` — language specification.
-- `PACKAGE.md` — package model.
+- `archive/20260610-PACKAGE.md` — cookbook distribution model (archived; the roadmap has since committed to a conventional package manager).
 - `TYPES.md` — type system.
 
 Predecessor docs (archived; preserved for historical context, not

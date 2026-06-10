@@ -23,7 +23,7 @@ use koja_ast::identifier::Identifier;
 use koja_ast::util::dedent;
 use koja_ir::{
     FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRProgram, IRTerminator,
-    IRType, ProjectEntry, ReceiveTag, ValueId, lower_program,
+    IRType, ReceiveTag, ValueId, lower_program,
 };
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::check_program;
@@ -82,17 +82,36 @@ const PROCESS_STUB: &str = "
     end
     ";
 
+/// Synthetic Process state appended by [`lower`] so fixtures that
+/// only exercise spawn/receive lowering still give `lower_program`
+/// a valid entry. Spells out `run` because [`PROCESS_STUB`]'s
+/// protocol has no default bodies.
+const TEST_ENTRY_SNIPPET: &str = "
+    struct TestEntry
+    end
+
+    impl Process<(), (), ()> for TestEntry
+      fn start(config: ()) -> Result<Self, StopReason>
+        Result.Ok(TestEntry{})
+      end
+
+      fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+        Step.Continue(self)
+      end
+
+      fn run(self) -> StopReason
+        StopReason.Normal
+      end
+    end
+    ";
+
 fn lower(source: &str) -> IRProgram {
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_with_entry(source, ProjectEntry::Function(entry))
+    let with_entry = format!("{}\n{}", dedent(source), dedent(TEST_ENTRY_SNIPPET));
+    lower_process_entry(&with_entry, "TestEntry")
 }
 
 fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
     let state = Identifier::new(PACKAGE, vec![state_name.to_string()]);
-    lower_with_entry(source, ProjectEntry::Process { state })
-}
-
-fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
     let mut sources = koja_stdlib::autoimport_sources();
     sources.push(SourceFile {
         package: "Global".to_string(),
@@ -117,7 +136,7 @@ fn lower_with_entry(source: &str, entry: ProjectEntry) -> IRProgram {
                 .join("\n"),
         )
     });
-    lower_program(&checked, entry).expect("lowering should succeed")
+    lower_program(&checked, &state).expect("lowering should succeed")
 }
 
 fn function<'a>(program: &'a IRProgram, name: &str) -> &'a IRFunction {

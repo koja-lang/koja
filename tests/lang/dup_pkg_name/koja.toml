@@ -1,7 +1,7 @@
 [project]
 name = "Greeter"
 version = "0.1.0"
-entry = "main"
+entry = "App"
 
 [dependencies]
 Greeter = { path = "libs/greeter" }

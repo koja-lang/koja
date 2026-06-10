@@ -15,6 +15,10 @@
 //!   `lower_intrinsics.rs`).
 //! - [`lower_program_source`] / [`lower_script_source`] /
 //!   [`lower_script_source_in`] — happy-path lowering shorthands.
+//!   Program-shaped fixtures get the synthetic [`TEST_ENTRY_NAME`]
+//!   Process state appended so `lower_program` always has a valid
+//!   Process entry; fixture functions (`fn main` and friends) lower
+//!   as plain package helpers alongside it.
 //! - [`lower_program_err`] — drive `lower_program` to its error arm
 //!   and unwrap the [`LowerError`].
 //! - [`expect_diagnostics`] — flatten a [`LowerError::Diagnostics`]
@@ -32,13 +36,42 @@
 use std::path::PathBuf;
 
 use koja_ast::identifier::Identifier;
-use koja_ir::{
-    IRFunction, IRProgram, IRScript, LowerError, ProjectEntry, lower_program, lower_script,
-};
+use koja_ir::{IRFunction, IRProgram, IRScript, LowerError, lower_program, lower_script};
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
 
 pub const PACKAGE: &str = "TestApp";
+
+/// Name of the synthetic Process state appended to program fixtures.
+pub const TEST_ENTRY_NAME: &str = "TestEntry";
+
+/// Minimal `Process` impl appended to every program-shaped fixture
+/// so `lower_program` has a valid entry. The state is never spawned
+/// or executed by these tests — it only satisfies the entry staging.
+const TEST_ENTRY_SNIPPET: &str = "
+struct TestEntry
+end
+
+impl Process<(), (), ()> for TestEntry
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(TestEntry{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+end
+";
+
+/// Append the synthetic entry snippet to a program fixture.
+pub fn with_test_entry(source: &str) -> String {
+    format!("{source}\n{TEST_ENTRY_SNIPPET}")
+}
+
+/// The synthetic entry's identifier (`TestApp.TestEntry`).
+pub fn test_entry_identifier() -> Identifier {
+    Identifier::new(PACKAGE, vec![TEST_ENTRY_NAME.to_string()])
+}
 
 pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     typecheck_in(PACKAGE, source, mode)
@@ -74,9 +107,8 @@ fn parse_and_check(
 }
 
 pub fn lower_program_source(source: &str) -> IRProgram {
-    let checked = typecheck(source, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, ProjectEntry::Function(entry)).expect("lowering should succeed")
+    let checked = typecheck(&with_test_entry(source), ParseMode::File);
+    lower_program(&checked, &test_entry_identifier()).expect("lowering should succeed")
 }
 
 pub fn lower_script_source(source: &str) -> IRScript {
@@ -88,10 +120,9 @@ pub fn lower_script_source_in(package: &str, source: &str) -> IRScript {
     lower_script(&checked).expect("script lowering should succeed")
 }
 
-pub fn lower_program_err(source: &str, entry: &str) -> LowerError {
-    let checked = typecheck(source, ParseMode::File);
-    let entry_id = Identifier::new(PACKAGE, vec![entry.to_string()]);
-    lower_program(&checked, ProjectEntry::Function(entry_id))
+pub fn lower_program_err(source: &str) -> LowerError {
+    let checked = typecheck(&with_test_entry(source), ParseMode::File);
+    lower_program(&checked, &test_entry_identifier())
         .expect_err("lowering should surface diagnostics")
 }
 

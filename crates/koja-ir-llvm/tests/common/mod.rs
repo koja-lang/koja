@@ -15,11 +15,18 @@
 //!   `intrinsics.rs`).
 //! - [`lower_program_source`] / [`lower_script_source`] /
 //!   [`lower_script_source_in`] — happy-path lowering shorthands.
+//!   Program-shaped fixtures get the synthetic [`TEST_ENTRY_NAME`]
+//!   Process state appended so `lower_program` always has a valid
+//!   Process entry; fixture functions (`fn main` and friends) emit
+//!   as plain package helpers alongside it.
 //! - [`assert_contains`] — substring assertion with a panic message
 //!   that includes the full IR text on miss.
-//! - [`assert_main_shape`] — pin the wrapper invariants every emitted
-//!   module must satisfy: `define i64 @main()`, `ret i64 0`, and the
-//!   `@__koja_app_name` global.
+//! - [`assert_main_shape`] — pin the script-mode wrapper invariants:
+//!   `define i64 @main()`, `ret i64 0`, and the `@__koja_app_name`
+//!   global.
+//! - [`assert_program_shape`] — pin the program-mode (Process entry)
+//!   trampoline invariants: `define i32 @main()`, the exit-code
+//!   global, and the scheduler boot calls.
 
 // Each `tests/*.rs` file is its own Cargo test binary that only
 // pulls a subset of the helpers below, so `dead_code` would fire on
@@ -30,12 +37,33 @@
 use std::path::PathBuf;
 
 use koja_ast::identifier::Identifier;
-use koja_ir::{IRProgram, IRScript, ProjectEntry, lower_program, lower_script};
+use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
 use koja_parser::{ParseMode, SourceFile, parse_program};
 use koja_typecheck::{CheckedProgram, check_program};
 
 pub const PACKAGE: &str = "TestApp";
 pub const APP_NAME: &str = "emit_test";
+
+/// Name of the synthetic Process state appended to program fixtures.
+pub const TEST_ENTRY_NAME: &str = "TestEntry";
+
+/// Minimal `Process` impl appended to every program-shaped fixture
+/// so `lower_program` has a valid entry. The state is never spawned
+/// or executed by these tests — it only satisfies the entry staging.
+const TEST_ENTRY_SNIPPET: &str = "
+struct TestEntry
+end
+
+impl Process<(), (), ()> for TestEntry
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(TestEntry{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+end
+";
 
 pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     typecheck_in(PACKAGE, source, mode)
@@ -53,9 +81,10 @@ pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProg
 }
 
 pub fn lower_program_source(source: &str) -> IRProgram {
-    let checked = typecheck(source, ParseMode::File);
-    let entry = Identifier::new(PACKAGE, vec!["main".to_string()]);
-    lower_program(&checked, ProjectEntry::Function(entry)).expect("lowering should succeed")
+    let with_entry = format!("{source}\n{TEST_ENTRY_SNIPPET}");
+    let checked = typecheck(&with_entry, ParseMode::File);
+    let entry = Identifier::new(PACKAGE, vec![TEST_ENTRY_NAME.to_string()]);
+    lower_program(&checked, &entry).expect("lowering should succeed")
 }
 
 pub fn lower_script_source(source: &str) -> IRScript {
@@ -74,12 +103,13 @@ pub fn assert_contains(ir_text: &str, needle: &str) {
     );
 }
 
-/// Pin the wrapper invariants every emitted module must satisfy:
+/// Pin the script-mode wrapper invariants every emitted module must
+/// satisfy:
 ///
-/// - `define void @__koja_user_main(ptr)` carrying the user body
+/// - `define void @__koja_user_main(ptr)` carrying the script body
 ///   (always returns `ret void`; the trailing expression's value is
 ///   computed for side effects and discarded);
-/// - `define i64 @main()` trampoline that hands the user body to
+/// - `define i64 @main()` trampoline that hands the script body to
 ///   the runtime as PID 1 via `koja_rt_spawn`, blocks on
 ///   `koja_rt_main_done`, and returns `ret i64 0`;
 /// - `@__koja_app_name` global that `koja-runtime`'s panic handler
@@ -90,6 +120,27 @@ pub fn assert_main_shape(ir_text: &str) {
     assert_contains(ir_text, "call i64 @koja_rt_spawn(");
     assert_contains(ir_text, "call void @koja_rt_main_done()");
     assert_contains(ir_text, "ret i64 0");
+    assert_contains(ir_text, "@__koja_app_name");
+}
+
+/// Pin the program-mode (Process entry) trampoline invariants every
+/// emitted module must satisfy:
+///
+/// - `define i32 @main()` trampoline that spawns the synthetic
+///   entry wrapper, blocks on `koja_rt_main_done`, and returns the
+///   `@__koja_exit_code` global's value;
+/// - the entry wrapper define for [`TEST_ENTRY_NAME`];
+/// - `@__koja_app_name` global that `koja-runtime`'s panic handler
+///   links against.
+pub fn assert_program_shape(ir_text: &str) {
+    assert_contains(ir_text, "define i32 @main()");
+    assert_contains(ir_text, "call i64 @koja_rt_spawn(");
+    assert_contains(ir_text, "call void @koja_rt_main_done()");
+    assert_contains(ir_text, "@__koja_exit_code");
+    assert_contains(
+        ir_text,
+        &format!("define void @{PACKAGE}.{TEST_ENTRY_NAME}.__entry_wrapper(ptr"),
+    );
     assert_contains(ir_text, "@__koja_app_name");
 }
 

@@ -4,12 +4,11 @@
 //! [`discover_tests`] to enumerate every `@test`-annotated function
 //! belonging to the current project. [`generate_harness`] then
 //! produces an Koja source string for a synthetic
-//! `fn __koja_test_entry` that invokes each test, tracks pass/fail
-//! counts, and exits non-zero when anything fails. The driver
+//! [`HARNESS_ENTRY`] type implementing `Process<(), (), ()>` whose
+//! `run` invokes each test, tracks pass/fail counts, and stops with
+//! `StopReason.Shutdown` (exit 1) when anything fails. The driver
 //! splices that harness into the parsed program and lowers with
-//! [`HARNESS_ENTRY`] as the project entry, so the user's own
-//! `fn main` (if any) coexists as dead code in the test binary
-//! without colliding on the `main` name.
+//! [`HARNESS_ENTRY`] as the project's Process entry.
 //!
 //! Kept backend-agnostic on purpose: this crate only depends on
 //! the AST + parser surface so both the pipeline and (any
@@ -20,11 +19,11 @@ use std::path::Path;
 use koja_ast::ast::{AnnotationValue, Item};
 use koja_parser::ParsedProgram;
 
-/// Name of the synthesized test-harness entry function. Reserved
-/// for the test runner; the driver passes this as the project
-/// entry when lowering test builds, so it must match the function
-/// name emitted by [`generate_harness`].
-pub const HARNESS_ENTRY: &str = "__koja_test_entry";
+/// Name of the synthesized test-harness entry type. Reserved for
+/// the test runner; the driver passes this as the project's
+/// Process entry when lowering test builds, so it must match the
+/// struct name emitted by [`generate_harness`].
+pub const HARNESS_ENTRY: &str = "KojaTestHarness";
 
 /// Output knobs for the synthesized harness.
 ///
@@ -128,13 +127,16 @@ fn trace_result_line(
     }
 }
 
-/// Generate the Koja source for the test harness file.
+/// Generate the Koja source for the test harness file: a
+/// [`HARNESS_ENTRY`] struct implementing `Process<(), (), ()>`
+/// whose `run` executes the tests.
 ///
 /// Each `@test` function must return `Result<Bool, String>`. The
 /// harness calls each test as `StructName.fn_name()`, matches on the
 /// result to track pass/fail counts, and continues running all tests
-/// even when some fail. A final non-zero exit (via `Kernel.exit(1)`)
-/// is triggered when any test failed.
+/// even when some fail. `run` stops with `StopReason.Shutdown`
+/// (exit 1) when any test failed, `StopReason.Normal` (exit 0)
+/// otherwise.
 ///
 /// Default output is a row of pass/fail dots followed by a summary.
 /// [`TestOptions::trace`] swaps this for one group header per struct
@@ -235,17 +237,32 @@ pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
     body.push_str(&format!(
         "    IO.puts(\"{red}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
     ));
-    body.push_str("    Kernel.exit(1)\n");
     body.push_str("  else\n");
     body.push_str(&format!(
         "    IO.puts(\"{green}#{{passed}} successful tests. #{{failed}} failures.{reset}\")\n"
     ));
     body.push_str("  end\n");
+    body.push_str("  cond\n");
+    body.push_str("    failed > 0 -> StopReason.Shutdown\n");
+    body.push_str("    else -> StopReason.Normal\n");
+    body.push_str("  end\n");
 
     let mut source = String::new();
-    source.push_str(&format!("fn {HARNESS_ENTRY}\n"));
+    source.push_str(&format!("struct {HARNESS_ENTRY}\nend\n\n"));
+    source.push_str(&format!("impl Process<(), (), ()> for {HARNESS_ENTRY}\n"));
+    source.push_str(&format!(
+        "  fn start(config: ()) -> Result<Self, StopReason>\n    \
+           Result.Ok({HARNESS_ENTRY}{{}})\n  \
+         end\n\n"
+    ));
+    source.push_str(
+        "  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>\n    \
+           Step.Continue(self)\n  \
+         end\n\n",
+    );
+    source.push_str("  fn run(self) -> StopReason\n");
     source.push_str(&body);
-    source.push_str("end\n");
+    source.push_str("  end\nend\n");
 
     source
 }

@@ -41,6 +41,11 @@ cargo build
 
 ## Language Overview
 
+The snippets below are `.kojs` scripts — statements run from the top
+of the file. Compiled programs (`koja.toml` projects) instead start
+from a type implementing `Process`; see
+[LANGUAGE.md](LANGUAGE.md#modules).
+
 ### Functions
 
 ```koja
@@ -48,9 +53,7 @@ fn add(a: Int32, b: Int32) -> Int32
   a + b
 end
 
-fn main
-  add(2, 3).print()
-end
+add(2, 3).print()
 ```
 
 ### Structs and Functions
@@ -67,10 +70,8 @@ extend Point
   end
 end
 
-fn main
-  p = Point{x: 3, y: 4}
-  p.distance_squared().print()
-end
+p = Point{x: 3, y: 4}
+p.distance_squared().print()
 ```
 
 ### Enums and Pattern Matching
@@ -96,10 +97,8 @@ fn identity<T>(x: T) -> T
   x
 end
 
-fn main
-  identity(42).print()
-  identity("hello").print()
-end
+identity(42).print()
+identity("hello").print()
 ```
 
 ### Values
@@ -118,11 +117,9 @@ fn describe(c: Config) -> String
   c.name
 end
 
-fn main
-  c = Config{name: "test"}
-  describe(c).print()   # c is passed by value
-  c.name.print()        # and still usable here
-end
+c = Config{name: "test"}
+describe(c).print()   # c is passed by value
+c.name.print()        # and still usable here
 ```
 
 ### Protocols
@@ -146,21 +143,17 @@ fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
   f(x)
 end
 
-fn main
-  double = fn (n: Int32) -> Int32 n * 2 end
-  apply(5, double).print()
-end
+double = fn (n: Int32) -> Int32 n * 2 end
+apply(5, double).print()
 ```
 
 ### Collections and Iteration
 
 ```koja
-fn main
-  list: List<Int32> = List.new().append(1).append(2).append(3)
+list: List<Int32> = List.new().append(1).append(2).append(3)
 
-  for item in list
-    item.print()
-  end
+for item in list
+  item.print()
 end
 ```
 
@@ -175,12 +168,10 @@ fn classify(n: Int32) -> String
   end
 end
 
-fn main
-  x = 5
-  y = x > 2 ? "big" : "small"
-  y.print()
-  classify(200).print()
-end
+x = 5
+y = x > 2 ? "big" : "small"
+y.print()
+classify(200).print()
 ```
 
 ## Contributing
@@ -190,7 +181,7 @@ end
 Build and run the test suite.
 
 ```sh
-cargo build && ./target/debug/koja run tests/test_build.koja
+cargo build && ./target/debug/koja run tests/test_build.kojs
 ```
 
 ### Formatting

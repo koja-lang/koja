@@ -27,12 +27,11 @@ language item (`mod foo;`).
 
 - `tests/lang_suite.rs` -- Integration tests that compile and run `.koja`/`.kojs`
   fixtures from `tests/lang/`. Flat single-file goldens are `.kojs` scripts
-  (top-level statements, no `fn main`); a handful of message-passing/actor tests
-  (`io/*`, `functions/call_roundtrip`, `types/cast_loop`) stay as `.koja` +
-  `fn main` since spawning/orchestrating actors is program-shaped, and they also
-  pin the lone-file `SourceShape::Program` path. `koja.toml` project fixtures
-  remain `.koja`. The collector (`collect_test_files`) accepts both extensions;
-  every fixture runs via `koja run --backend=llvm`.
+  (top-level statements); `koja.toml` project fixtures are `.koja` with a
+  Process-implementing entry type named by `entry` in the manifest. Standalone
+  `.koja` files are no longer runnable (`koja run`/`build` reject them with a
+  hint). The collector (`collect_test_files`) accepts both extensions; every
+  fixture runs via `koja run --backend=llvm`.
 
 ## Build notes
 

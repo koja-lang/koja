@@ -19,7 +19,7 @@ use crate::layout::enums::{
 };
 use crate::layout::structs::{declare_struct_type, define_struct_body};
 use crate::layout::unions::{declare_union_type, define_union_body};
-use crate::main_wrapper::{emit_app_name_global, emit_as_main};
+use crate::main_wrapper::{emit_app_name_global, emit_script_main};
 
 pub(crate) fn compile_script(
     ctx: &EmitContext<'_>,
@@ -63,7 +63,7 @@ pub(crate) fn compile_script(
             declared.push((function, declare_function(ctx, function)?));
         }
     }
-    emit_as_main(ctx, &script.blocks)?;
+    emit_script_main(ctx, &script.blocks)?;
     for (function, llvm_function) in declared {
         define_function(ctx, function, llvm_function).map_err(|e| {
             LlvmError::Codegen(format!("while defining `{}`: {e:?}", function.symbol))

@@ -550,6 +550,28 @@ mod tests {
         }
     }
 
+    /// Install a minimal Process-entry scaffold satisfying the
+    /// program-level seal checks: a `ProcessEntryWrapper` entry whose
+    /// state has registered `start` / `run` stubs. Returns the
+    /// wrapper symbol to stamp on `IRProgram::entry_point`.
+    fn install_entry_scaffold(pkg: &mut IRPackage) -> IRSymbol {
+        let state = sym("Test.EntryState");
+        for method in ["start", "run"] {
+            let stub = seed_function(
+                crate::mangling::mangled_method_name(&state, &[], method, &[]),
+                Vec::new(),
+            );
+            pkg.functions.insert(stub.symbol.clone(), stub);
+        }
+        let mut wrapper = seed_function(state.derived(".__entry_wrapper"), Vec::new());
+        wrapper.kind = FunctionKind::ProcessEntryWrapper {
+            state: IRType::Struct(state),
+        };
+        let wrapper_symbol = wrapper.symbol.clone();
+        pkg.functions.insert(wrapper_symbol.clone(), wrapper);
+        wrapper_symbol
+    }
+
     /// Wrap one already-built block into a `Regular` seed function so
     /// `elaborate` discovers the `Clone` / `Drop` sites it carries and
     /// `seal_program` validates it alongside the synthesized glue.
@@ -641,8 +663,9 @@ mod tests {
         let mut pkg = empty_package("Test");
         pkg.structs.insert(point.clone(), decl);
         pkg.functions.insert(seed.symbol.clone(), seed);
+        let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
-            entry_point: sym("Test.seed"),
+            entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
         };
@@ -716,8 +739,9 @@ mod tests {
         let mut pkg = empty_package("Test");
         pkg.enums.insert(option.clone(), decl);
         pkg.functions.insert(seed.symbol.clone(), seed);
+        let entry_point = install_entry_scaffold(&mut pkg);
         let mut program = IRProgram {
-            entry_point: sym("Test.seed"),
+            entry_point,
             link_libraries: Vec::new(),
             packages: vec![pkg],
         };

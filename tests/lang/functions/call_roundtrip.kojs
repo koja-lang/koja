@@ -29,12 +29,10 @@ impl Process<CalcConfig, CalcMsg, Int> for Calc
   end
 end
 
-fn main
-  calc = spawn Calc.start(CalcConfig{})
-  result = calc.call(CalcMsg.Add(10, 32), 5000)
+calc = spawn Calc.start(CalcConfig{})
+result = calc.call(CalcMsg.Add(10, 32), 5000)
 
-  match result
-    Result.Ok(n) -> "result: #{n}".print()
-    Result.Err(_) -> "call failed!".print()
-  end
+match result
+  Result.Ok(n) -> "result: #{n}".print()
+  Result.Err(_) -> "call failed!".print()
 end

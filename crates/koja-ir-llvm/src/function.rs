@@ -5,8 +5,8 @@
 //! `IRSymbol -> FunctionValue` index on [`EmitContext`] (populated
 //! at declare time) before either body has been walked.
 //!
-//! The entry function (`main`) follows a different shape — see
-//! [`crate::main_wrapper::emit_as_main`] for the auto-print
+//! The script body (`main`) follows a different shape — see
+//! [`crate::main_wrapper::emit_script_main`] for the auto-print
 //! scaffolding.
 
 use std::collections::BTreeMap;

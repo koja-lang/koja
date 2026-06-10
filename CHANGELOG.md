@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- **Breaking**: `fn main` is no longer a program entry point. Every compiled program's entry is a type implementing `Process<C, M, R>`, named by `entry` in `koja.toml` (PascalCase, e.g. `entry = "App"`); the program exits with the code mapped from the entry's `StopReason` via `ExitStatus`. Standalone `.koja` files can no longer be built or run — use a `.kojs` script for entry-free programs, or a `koja.toml` project for compiled binaries (`koja check file.koja` still works). `koja new` now scaffolds `src/app.koja` with a minimal `Process` entry type, and the `koja test` harness runs as a `Process` entry as well.
 - **Breaking**: The `Clone` protocol and `.clone()` method are removed. Under value semantics every binding, parameter, return, and field is already an independent value (backed by reference-counted copy-on-write), so explicit cloning is unnecessary — replace `x.clone()` with `x`. This drops the `Clone` protocol definition, its stdlib impls (`List`/`Map`/`Set`/`CPtr`/primitives), the auto-derived `impl Clone for T` synthesizer, and `Clone` from the universal protocol set.
 
 ### Fixed

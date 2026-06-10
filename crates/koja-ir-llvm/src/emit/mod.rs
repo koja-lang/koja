@@ -3,7 +3,7 @@
 //! convenient "instructions then terminator" path used by every
 //! non-`main` walker) and the [`emit_instructions`] +
 //! [`emit_terminator_default`] split (used by
-//! [`crate::main_wrapper::emit_as_main`] so it can intercept the
+//! [`crate::main_wrapper::emit_script_main`] so it can intercept the
 //! terminator and inject the auto-print call before the natural
 //! `ret`).
 //!

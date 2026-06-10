@@ -22,12 +22,12 @@
 
 (* Two entry points, one shared grammar. `.koja` files (compilation units in
    an `koja.toml` project) enter via `program` and contain only declarations
-   -- the runtime entry point is the function (or Process type) named by
-   the project's `entry = "..."` in `koja.toml`. `.kojs` files (koja script)
+   -- the runtime entry point is the Process-implementing type named by the
+   project's `entry = "..."` in `koja.toml`. `.kojs` files (koja script)
    enter via `script`, where bare statements are accepted at the top level;
-   the driver hoists those statements into an implicit `fn main` before the
-   rest of the pipeline. Every production below is shared between the two
-   modes. *)
+   the driver hoists those statements into an implicit entry function before
+   the rest of the pipeline. Every production below is shared between the
+   two modes. *)
 
 program = { top_level_decl } ;                              (* .koja *)
 script  = { top_level_decl | statement } ;                  (* .kojs *)

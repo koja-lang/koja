@@ -1,6 +1,6 @@
 # Koja Language Roadmap
 
-Solo developer + AI assistance. Bootstrap in Rust, self-host in Koja.
+Solo developer + AI assistance. Bootstrap in Rust; self-host in Koja post-1.0.
 
 ---
 
@@ -73,7 +73,7 @@ Both backends share the same feature surface by design -- they consume the same 
 - Compound assignment (`+=`, `-=`, `*=`, `/=`) on variables and struct fields (e.g., `self.pos += 1`)
 - String interpolation
 - Protocols (`protocol` keyword, `impl Protocol for Type` conformance)
-- Closures (block form, with variable capture -- copy for primitives, move for structs/enums)
+- Closures (block form, with variable capture -- captured variables are independent values, same rule as parameters)
 - Function type syntax (`fn(T) -> U`) for closure-accepting parameters
 - `print` builtin (dispatches through `Debug.format()` for all types)
 - `panic` builtin (prints to stderr, aborts)
@@ -113,7 +113,7 @@ See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 - **Language design** -- syntax decisions, memory model, async model, module system, all finalized through iterative design sessions
 - **EBNF grammar** -- `grammar.ebnf`, ~460 lines covering all syntax constructs
 - **Example codebase** -- 17 `.koja` files porting `auth-manager` (a real Rust microservice) into Koja pseudocode, validating the language feels right
-- **Memory strategy** -- documented in `archive/20260323-MEMORY.md` (stack, ownership+move, explicit arena)
+- **Memory model** -- current model in [MEMORY-MODEL.md](MEMORY-MODEL.md) (value semantics, reference-counted copy-on-write, deterministic scope-exit reclamation); the original stack/ownership+move/arena strategy is preserved in `archive/20260323-MEMORY.md`
 - **Concurrency model** -- documented in `archive/20260313-CONCURRENCY.md` and `archive/20260323-CONCURRENCY.md` (processes, native runtime, supervision)
 - **Project config format** -- `koja.toml` (TOML-based, replacing `project.koja`)
 - **Module system redesign** -- documented in `archive/20260403-IMPORT.md` (files as transparent, types as namespaces, no intra-project imports, qualified package access, `import` keyword removed)
@@ -131,7 +131,7 @@ See [GAPS.md](GAPS.md) for known compiler limitations and workarounds.
 
 ### Build history
 
-Phase 1 (bootstrap compiler) and Phase 2 (core language) are complete. Phase 3 (language surface + runtime maturity) is complete. Phase 4 (stdlib + ecosystem; runtime + reliability) is complete. The full build history with detailed implementation notes is preserved in [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md), [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md), and [archive/20260518-ROADMAP.md](archive/20260518-ROADMAP.md). Phase 5 is in progress; it introduces a new top-level `kojac/` subproject (sibling to `crates/`, `lib/`, `tests/`, `examples/`) housing the Koja-written self-host pipeline, starting with the parser.
+Phase 1 (bootstrap compiler) and Phase 2 (core language) are complete. Phase 3 (language surface + runtime maturity) is complete. Phase 4 (stdlib + ecosystem; runtime + reliability) is complete. The full build history with detailed implementation notes is preserved in [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md), [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md), and [archive/20260518-ROADMAP.md](archive/20260518-ROADMAP.md). Phase 5 is in progress. (The top-level `kojac/` subproject seeded for the self-host remains in the tree; the self-host itself is deferred to post-1.0.)
 
 ---
 
@@ -191,48 +191,35 @@ Phase 4 made Koja useful for real programs (Track A) and concurrency production-
 
 ### `fn main` as `Process<C, M, R>` -- done
 
-Dual entry mode landed: `entry = "App"` (PascalCase) spawns a `Process` impl; `entry = "main"` (lowercase) retains `fn main`. Both coexist. Exit-code mapping (`Normal -> 0`, `Shutdown -> 1`) and argv passing (when `C = List<String>`) wired through. The `koja new` scaffolding flip and full `fn main` retirement are tracked in Phase 7.
+`fn main` is fully retired: every compiled program's entry is a `Process` impl named by `entry = "App"` (PascalCase) in `koja.toml`. Exit-code mapping (`Normal -> 0`, `Shutdown -> 1`) and argv passing (when `C = List<String>`) wired through. `koja new` scaffolds a `Process` entry, standalone `.koja` build/run is removed (`.kojs` covers scripts), and the `koja test` harness runs as a `Process` entry.
 
 For detailed sub-milestone breakdowns and the Phase 4 in-progress narrative, see [archive/20260518-ROADMAP.md](archive/20260518-ROADMAP.md).
 
 ---
 
-## Phase 5: Parser self-host, runtime completion, interactive workflow
+## Phase 5: Runtime completion + interactive workflow
 
-The first contained self-host milestone (parser via a new top-level `kojac/` subproject), the runtime completion that supervises crashes and drains gracefully, and the interactive REPL that turns `koja shell` into a real development surface. Convergence: `demo_api` becomes supervised, parsed by `kojac`, and interactively developable.
+The runtime completion that supervises crashes and drains gracefully, and the interactive REPL that turns `koja shell` into a real development surface. Convergence: `demo_api` becomes supervised and interactively developable.
+
+The parser self-host (formerly Track A of this phase) is deferred to post-1.0: it's a maintainer-facing milestone, not a user-facing one, and pre-spec-freeze it would double the cost of every language change (Rust pipeline + `kojac` parity). The Phase 7 validation projects take over its language-stress-test role. Details in [Post-1.0](#post-10).
 
 ```mermaid
 flowchart LR
-  TrackA["Track A: kojac parser self-host"] --> Conv["Convergence: supervised demo_api, parsed by kojac, developed in koja shell -S ."]
-  TrackB["Track B: Runtime + Supervision"] --> Conv
-  TrackC["Track C: koja shell -S ."] --> Conv
+  TrackA["Track A: Runtime + Supervision"] --> Conv["Convergence: supervised demo_api, developed in koja shell -S ."]
+  TrackB["Track B: koja shell -S ."] --> Conv
 ```
 
-### Track A: Self-host the parser via `kojac/`
+### Track A: Runtime completion + supervision
 
-A new top-level `kojac/` subproject in the monorepo, alongside `crates/`, `lib/`, `tests/`, `examples/`. First-class subproject -- Koja source code that compiles to a standalone binary the Rust pipeline can delegate to. Eventually graduates to the canonical compiler when feature-complete and relocates to its own repo at that cutover.
+Four sub-milestones, the first of which is a design spike. **Constraint added** in light of the Phase 6 WASM commitment: the scheduler protocol (A1) must be expressible by a single-threaded cooperative backend -- not just by the multi-threaded native one.
 
-Sub-deliverables:
-
-- **AST serialization format** -- stable and versioned from day one (`format_version: 1` field; support N-1 across transitions). Default representation textual (S-expression-like, debuggable via `cat`, mirrors LLVM `.ll` precedent); a binary representation can land later if perf data argues for it. Schema captured in a new design doc (`AST-FORMAT.md`) when Track A execution begins.
-- **Rust side: `--emit-ast` and `--parser=<path>` flags** -- `--emit-ast` writes the Rust parser's AST to a file (used for parity diffing and as the contract for `kojac`). `--parser=<path>` shells out to a parser binary (default behavior remains the in-process Rust parser; `--parser=kojac` opts in to the self-host).
-- **`kojac/` skeleton** -- top-level project (`kojac/koja.toml`, `kojac/src/`, `kojac/test/`). Imports the Phase 3 lexer port as the seed; adds the parser implementation alongside.
-- **Parser port** -- port the recursive-descent parser from `crates/koja-parser/src/` to `kojac/src/parser.koja`. Expected to be the largest stress test of Koja so far; surface language gaps as a side effect and fix them.
-- **Build integration** -- `just build-kojac` recipe builds `kojac` via the current `koja` binary; output is a binary in `kojac/build/`. CI builds both the Rust pipeline and `kojac`.
-- **Parser parity sweep** -- `just test-selfhost` recipe. For every `.koja` file in `lib/`, `tests/lang/`, `examples/`, parses via both, diffs the serialized ASTs. Zero diff = parity.
-- **Done when**: `just test-selfhost` passes for the full tree; `koja build --parser=kojac demo_api/` produces a byte-identical binary to `koja build demo_api/`. Default flip (making `--parser=kojac` mandatory) is a separate later decision.
-
-### Track B: Runtime completion + supervision
-
-Four sub-milestones, the first of which is a design spike. **Constraint added** in light of the Phase 6 WASM commitment: the scheduler protocol (B1) must be expressible by a single-threaded cooperative backend -- not just by the multi-threaded native one.
-
-#### B0: Supervisor monitor strategy -- design spike
+#### A0: Supervisor monitor strategy -- design spike
 
 - Revisit `archive/20260323-CONCURRENCY.md`.
 - Surface specific open questions: deadlock-free monitor delivery, batched vs streaming `ExitSignal`, registry interactions, transient vs permanent restart semantics, root-crash propagation.
-- Write a fresh design doc under `koja/design/` capturing decisions before B2 code lands.
+- Write a fresh design doc under `koja/design/` capturing decisions before A2 code lands.
 
-#### B1: Scheduler hardening
+#### A1: Scheduler hardening
 
 - **Scheduler protocol** -- define the runtime as a formal interface; native scheduler is first impl; **the protocol must accommodate a single-threaded cooperative WASM-target backend** (Phase 6 prerequisite). I/O reactor, preemption, and process state transitions all need pluggable shapes.
 - Work-stealing per-thread run queues for the native backend (replacing the round-robin Mutex pool).
@@ -241,27 +228,26 @@ Four sub-milestones, the first of which is a design spike. **Constraint added** 
 - Preemption + priority: compiler-inserted yield checks at function preambles and loop back-edges; `Low` / `Normal` / `High` priority levels controlling scheduling budget. **Yield-check overhead is doubly important** since WASM has no native preemption -- coop yields are the only defense against starvation there.
 - **Done when**: 10K concurrent processes run with priority-aware scheduling; a low-priority process visibly yields to a high-priority one under load; SIGTERM with a 5s grace period drains cleanly.
 
-#### B2: Supervision (depends on B0 + supervision prerequisites)
+#### A2: Supervision (depends on A0 + supervision prerequisites)
 
 - `Pid` type -- type-erased process ID, distinct from `Ref<M, R>`.
-- `copy` keyword -- third parameter modifier alongside borrow / `move`; auto-clones at the call boundary; primary use: `child_spec` capturing `copy config` in a restart closure.
 - `ExitSignal` struct + `Process.monitor(ref)`.
-- `ChildSpec` + `child_spec` default impl on `Process`.
+- `ChildSpec` + `child_spec` default impl on `Process`. (Restart closures need no language support under value semantics: a closure captures `config` as an independent value and stays re-callable -- the formerly-prerequisite `copy` keyword is obsolete.)
 - `Supervisor` stdlib process with `OneForOne` / `OneForAll` / `RestForOne` strategies; max-restarts-exceeded crashes the supervisor.
 - Application startup convention -- entry process builds child specs via `Type.child_spec(config)`, passes to `Supervisor`, spawns it.
 - Root supervisor crash → OS process exit.
 - **Done when**: a supervised process tree restarts crashed children correctly under each strategy.
 
-#### B3: Process discovery + shared data
+#### A3: Process discovery + shared data
 
 - `Process.register(ref, "name")` / `Process.whereis<M, R>("name") -> Option<Ref<M, R>>` -- runtime-level global name registry.
 - `Registry` stdlib process -- typed, dynamic, scoped; auto-removes dead entries via `ExitSignal`.
-- `shared_map` (final name TBD -- sub-decision in this phase) -- concurrent hash map: `put` moves values in, `get` borrows them out, `delete` drops them.
+- `shared_map` (final name TBD -- sub-decision in this phase) -- concurrent hash map with ETS-style copy-in/copy-out semantics: `put` copies the value into the table, `get` copies it out, `delete` drops the table's copy. Per-process refcounts are not atomic, so values never share heap across processes -- reuse the message-transport copy machinery rather than growing a second boundary-copy path. Its value over a `Process`-backed map is performance (no mailbox round-trip, concurrent reads), not semantics. Open optimization question (deferrable): atomic-refcount sharing for deeply-immutable values.
 - **Done when**: processes register by name and look up via `Option<Ref<M, R>>`; multiple processes safely share state through `shared_map`.
 
-### Track C: Interactive workflow (`koja shell -S .`)
+### Track B: Interactive workflow (`koja shell -S .`)
 
-Goal: `koja shell` graduates from scratch evaluator to project development surface. Stays on the in-process Rust parser during Phase 5 to protect REPL latency; routing through `kojac` is a later decision.
+Goal: `koja shell` graduates from scratch evaluator to project development surface.
 
 - `koja shell -S .` loads a project (`koja.toml`, deps, all package sources) into the interpreter's session state.
 - Call any user-defined function (including across modules) from the REPL.
@@ -272,24 +258,20 @@ Goal: `koja shell` graduates from scratch evaluator to project development surfa
 
 ### Phase 5 hygiene (not a track)
 
-LLVM codegen bugs in [GAPS.md](GAPS.md) (string-concat-into-struct-return memory corruption, cross-process union messages, etc.) get fixed opportunistically as they're encountered during Phase 5 execution. Not gating; ideally `GAPS.md` clears most backend rows by end of phase. No dedicated track -- these are routine quality work, not milestones.
+The LLVM codegen-bug rows that originally motivated this section have cleared: the string-concat-into-struct-return corruption was fixed, and the ownership-shaped double-frees dissolved outright with the value-semantics + RC migration (see the bug triage log in [GAPS.md](GAPS.md)). What remains in `GAPS.md` is design-shaped, not bug-shaped: generic unit-variant inference, the `Enumeration<T>` → `Iterator<T>` protocol redesign (pre-1.0; gated by the Phase 7 language surface review), and deferred nested types. New bugs discovered during Phase 5 execution still get fixed opportunistically -- routine quality work, not milestones.
 
 ### Convergence point
 
-`demo_api` evolves into a single artifact that exercises all three tracks:
+`demo_api` evolves into a single artifact that exercises both tracks:
 
-- **Supervised** -- root `Supervisor` owns the `Server` process; crashes restart cleanly (B2).
-- **Production-shutdown** -- SIGTERM drains in-flight requests within a configurable grace period (B1).
-- **Self-host-parseable** -- builds byte-identically via `koja build --parser=kojac demo_api/` (Track A).
-- **Interactively developable** -- the whole project can be loaded and iterated on inside `koja shell -S .` (Track C).
+- **Supervised** -- root `Supervisor` owns the `Server` process; crashes restart cleanly (A2).
+- **Production-shutdown** -- SIGTERM drains in-flight requests within a configurable grace period (A1).
+- **Interactively developable** -- the whole project can be loaded and iterated on inside `koja shell -S .` (Track B).
 
 ### Risks
 
-- **Language gaps during parser port** -- `kojac/src/parser.koja` is the first non-trivial Koja program. Expect to discover language shortcomings; treat each as an opportunity to harden pre-1.0 rather than as scope creep.
-- **AST format evolution** -- textual S-expression is cheap to start but easy to make brittle; the explicit `format_version` field plus a fresh design doc are the discipline.
-- **Subprocess latency for interactive surfaces** -- protected by keeping `koja shell` and `koja-lsp` on the in-process Rust parser during Phase 5.
-- **Scheduler protocol WASM-compatibility constraint** (B1) -- adds real design work; better surfaced now than discovered mid-Phase-6.
-- **Supervisor design spike could expand scope** -- the spike must produce a doc with explicit non-goals or B2 will sprawl.
+- **Scheduler protocol WASM-compatibility constraint** (A1) -- adds real design work; better surfaced now than discovered mid-Phase-6.
+- **Supervisor design spike could expand scope** -- the spike must produce a doc with explicit non-goals or A2 will sprawl.
 - **Preemption yield-check overhead** -- must stay under 1-2%; doubly important since WASM relies on it as the only preemption mechanism.
 - **`shared_map` naming** -- needs to land before stdlib lock in Phase 7.
 
@@ -301,7 +283,7 @@ Items debated for inclusion in Phase 5 and intentionally punted, annotated with 
 
 - Documentation & discovery polish (doctests, doc search, prose pages, `koja query`, `koja guide`)
 - LSP finishing pass (inlay hints, multi-module diagnostics)
-- `koja new` scaffolding flip + retire `fn main`
+- ~~`koja new` scaffolding flip + retire `fn main`~~ -- **Done.**
 - `HTTP.Server` wrapper
 - `Net` TLS, git deps + lockfile, C FFI Phase 3, `Mmap`
 - First-party package seeding (argon2, structured logging, etc.)
@@ -317,8 +299,8 @@ Items debated for inclusion in Phase 5 and intentionally punted, annotated with 
 
 **Post-1.0:**
 
-- Continued `kojac` self-host (typecheck port, IR port, backend port, eventually retire Rust pipeline)
-- Interpreter port to Koja (considered as Phase 5 Track A; pivoted to parser-first because tighter blast radius)
+- `kojac` self-host, parser first (was Phase 5 Track A; deferred — see the Post-1.0 section for the full plan), then typecheck, IR, and backend ports
+- Interpreter port to Koja
 - LLVM backend port to Koja (requires C FFI Phase 3, additive once 1.0 ships)
 - Browser WASM if Phase 6 ships WASI-only
 - Additional targets (Windows, FreeBSD, embedded ARM, RISC-V, etc.)
@@ -339,12 +321,12 @@ flowchart LR
 ### Track A: WASM target
 
 - **WASM flavor decision** -- first sub-deliverable of the phase. WASI (server-side, POSIX-shaped via wasmtime / wasmer / Cloudflare Workers / Fastly) vs browser (DOM/JS interop, async via Promises) vs both. Default lean: WASI first as the easier and more strategically valuable path; browser as a separate effort or post-1.0.
-- **Runtime split** -- `koja-runtime-core` (target-agnostic scheduler skeleton, conforming to the Phase 5 B1 scheduler protocol) plus per-target adapters (`koja-runtime-posix`, `koja-runtime-wasi`, eventually `koja-runtime-browser`).
+- **Runtime split** -- `koja-runtime-core` (target-agnostic scheduler skeleton, conforming to the Phase 5 A1 scheduler protocol) plus per-target adapters (`koja-runtime-posix`, `koja-runtime-wasi`, eventually `koja-runtime-browser`).
 - **WASM codegen** -- `--target=wasm32-wasi` via LLVM (the easy part).
 - **I/O reactor for WASI** -- `poll_oneoff`-shaped reactor implementing the same scheduler-protocol contract as the POSIX kqueue/epoll reactor.
 - **FFI under WASM** -- `@extern "C"` resolves to WASM imports rather than linker symbols; same user-facing syntax, different resolution model.
 - **Crypto sub-decision** -- BoringSSL doesn't compile to WASM. Options: ship a WASM-compatible crypto package (RustCrypto's WASM-capable crates, or `wasi-crypto`), or ship `Crypto` as POSIX-only with explicit "unsupported on WASM" diagnostics. Sub-decision to make early in the phase.
-- **Single-threaded coop scheduling validated** -- `Process<C, M, R>` semantics work under cooperative-only scheduling. Preemption (Phase 5 B1) is the only defense against CPU-bound starvation.
+- **Single-threaded coop scheduling validated** -- `Process<C, M, R>` semantics work under cooperative-only scheduling. Preemption (Phase 5 A1) is the only defense against CPU-bound starvation.
 - **Done when**: `koja build --target=wasm32-wasi demo_api/` produces a `.wasm` that `wasmtime demo_api.wasm` runs correctly (responses returned, lifecycle handled where applicable).
 
 ### Track B: Cross-compile distribution
@@ -374,9 +356,9 @@ The polish, validation, and language-surface review that gates a published 1.0. 
 ### Sub-deliverables
 
 - **Documentation polish** -- doctests (code blocks in `@doc` strings compile + run as tests), client-side fuzzy search in `koja doc` output, prose pages from `docs/*.md`, clickable type cross-references in signatures.
-- **CLI query/guide system** -- `koja query type <Type>` / `koja query module <pkg>` / `koja query protocol <Protocol>`; `koja guide <topic>` (prose guides on ownership, concurrency, FFI, protocols, testing, etc.).
+- **CLI query/guide system** -- `koja query type <Type>` / `koja query module <pkg>` / `koja query protocol <Protocol>`; `koja guide <topic>` (prose guides on value semantics, concurrency, FFI, protocols, testing, etc.).
 - **LSP finishing pass** -- inlay hints for inferred types, multi-module cross-file diagnostics.
-- **Ergonomic cleanup** -- `koja new` scaffolding generates a `Process` entry (not `fn main`); retire `fn main` as an entry mode; `HTTP.Server` wrapper landing in stdlib.
+- **Ergonomic cleanup** -- ~~`koja new` scaffolding generates a `Process` entry (not `fn main`); retire `fn main` as an entry mode~~ (**done**); `HTTP.Server` wrapper landing in stdlib.
 - **Stdlib completion** -- `Net` TLS (`upgrade_tls`, `TLSConfig`), git deps + lockfile in the package manager, C FFI Phase 3 (`@compat "C"` structs + callbacks), `Mmap`.
 - **First-party reference packages** -- at minimum `argon2` (validates C FFI Phase 3 + crypto pattern) and structured `logging` (validates the package manager workflow end-to-end on external code).
 - **Compiler diagnostic quality pass** -- dedicated milestone for "error messages are a feature." Review every diagnostic site, improve span precision, add hints, polish phrasing.
@@ -438,8 +420,8 @@ Syntax undecided -- candidates include `~"""`, `'''`, or something else entirely
 
 Items intentionally deferred past 1.0. The language spec locks at 1.0; post-1.0 changes are additive only. Anything truly breaking is a clean 2.0 with migration tooling -- one decisive move, not death by a thousand editions.
 
-- **Continued `kojac` self-host** -- typecheck port, IR port, backend port; eventually retire the Rust pipeline. Phase 5 ships the parser; later phases pick up the next layer at their own pace.
-- **Interpreter port to Koja** (`koja-ir-eval` → `kojac`) -- considered as Phase 5 Track A; pivoted to parser-first because tighter blast radius. Becomes a natural successor once the parser port stabilizes.
+- **`kojac` self-host, parser first** -- originally Phase 5 Track A, deferred wholesale: self-hosting is a maintainer-facing milestone (users never see which language the parser is written in), and doing it before spec freeze means every language change lands twice (Rust pipeline + `kojac` parity). With the spec locked at 1.0, the port targets a stable contract. The plan as designed carries forward: a versioned textual AST serialization format (`format_version: 1`, schema in a new `AST-FORMAT.md`); `--emit-ast` / `--parser=<path>` flags on the Rust side; the parser port to `kojac/src/parser.koja` (seeded from the Phase 3 lexer port — the `kojac/` subproject already exists in the tree); `just build-kojac` build integration; and a `just test-selfhost` parity sweep diffing serialized ASTs across `lib/`, `tests/lang/`, `examples/`. Done when the sweep passes and `koja build --parser=kojac demo_api/` is byte-identical to the default build. Then typecheck port, IR port, backend port; eventually retire the Rust pipeline, one layer at a time.
+- **Interpreter port to Koja** (`koja-ir-eval` → `kojac`) -- a natural successor once the parser port stabilizes.
 - **LLVM backend port to Koja** (`koja-ir-llvm` → `kojac`) -- requires C FFI Phase 3 (which lands in Phase 7). Additive once 1.0 ships.
 - **Browser WASM** -- if Phase 6 ships WASI-only, browser is a post-1.0 effort. Substantially different runtime (DOM/JS interop, async via Promises, no module system inside the WASM module).
 - **Additional targets** -- Windows, FreeBSD, embedded ARM, RISC-V Linux, others not in the 1.0 tier-1 list. Each follows the Phase 6 pattern: cross-compile runtime archive + linker spec entry + CI matrix slot + bundled sysroot (optional).
@@ -451,13 +433,13 @@ Items intentionally deferred past 1.0. The language spec locks at 1.0; post-1.0 
 
 Active design discussions about the type system, code organization, and functional programming patterns. These inform future work but are not committed changes.
 
-### Ownership design decisions (decided, implemented)
+### Value semantics (decided, implemented)
 
-- **`move self`**: `self` follows the same rules as any other parameter -- borrows by default (read-only), `move self` for ownership transfer. Mutating impl functions take `move self` and return the modified value: `list = list.append(42).append(37)`. No special "method" semantics -- impl functions with `self` are just functions with dot-call syntax.
-- **Signature-only `move`**: `move` only appears in the function/closure signature, never at the call site. The compiler infers moves from the callee's signature. Consistent with "no magic" -- the function's type signature is the contract, and the compiler fully enforces use-after-move.
-- **Functions = closures**: identical ownership rules. `fn (T) -> U` borrows T (default), `fn (move T) -> U` takes ownership. `map`/`then` use `fn (move T) -> U` since the closure receives the unwrapped owned value.
-- **Closure captures**: closures capture variables from the enclosing scope. Copy types (primitives) are duplicated; non-copy types (structs, enums) are moved, making the original unusable. Captured closures use a `{fn_ptr, env_ptr}` fat pointer ABI with heap-allocated environment structs that are automatically freed when the closure goes out of scope.
-- **`ref T` removed**: removed from the toolchain. Redundant with borrow-by-default params, unsafe in return position without lifetime tracking. Can be re-added if a concrete use case emerges.
+- **Koja moved from affine ownership to value semantics** (June 2026). Every binding, parameter, return, and field is an independent value: assignment and argument passing copy, and a value stays usable for as long as it is in scope. Copies are cheap -- heap-backed values (`String`, `Binary`, `Bits`, collections, structs, enums, closures) are reference-counted and shared until mutated (copy-on-write), then reclaimed deterministically at scope exit. No GC. Full model in [MEMORY-MODEL.md](MEMORY-MODEL.md); the prior affine design is preserved in archive.
+- **Removed with the migration**: the `move` keyword, borrow-by-default parameter passing, use-after-move diagnostics, the `fn(move T) -> U` function-type syntax, and the `Clone` protocol (`.clone()` is meaningless when every binding is already an independent value).
+- **Unchanged**: mutating impl functions still take `self` and return the modified value (`list = list.append(42).append(37)`); dot-call chaining is the same. No special "method" semantics -- impl functions with `self` are just functions with dot-call syntax.
+- **Closure captures**: closures capture variables as independent values -- same rule as parameters, no copy-vs-move split. The `{fn_ptr, env_ptr}` fat-pointer ABI with heap-allocated, refcounted environment structs is unchanged.
+- **`ref T` stays removed**: originally dropped as redundant with borrow-by-default; under value semantics there's even less reason for it -- copies are cheap and sharing is automatic.
 
 ### Short closures
 
@@ -514,18 +496,18 @@ Exploration of treating modules as `TypeKind::Module` in the unified registry. N
 - **Decided**: `map`, `then`, `or` as the chaining API for `Option` and `Result`. `map` transforms the inner value (closure returns plain value). `then` chains fallible operations (closure returns `Option`/`Result`). `or` provides a lazy fallback. Approachable naming -- plain English, no `and_then`/`flat_map`/`unwrap_or`.
 - `or` is implicitly lazy (compiler evaluates the argument only if needed, like `||`). No separate `or_else`.
 - Compiler guidance when `map` is used where `then` is needed (or vice versa).
-- **Decided**: no pipe operator (`|>`). Dot-call chaining with `move self` functions covers the same use case. The `Command` stdlib type (see [TYPES.md](TYPES.md)) will handle complex sequential data flow with stronger guarantees.
+- **Decided**: no pipe operator (`|>`). Dot-call chaining with self-returning functions covers the same use case. The `Command` stdlib type (see [TYPES.md](TYPES.md)) will handle complex sequential data flow with stronger guarantees.
 - `map`/`then` ship in the stdlib using block closures or short closures. Context-driven param inference allows `opt.map(x -> x + 1)` without type annotations at inline call sites.
 
 ### Stdlib design (implemented + planned)
 
 - **Done**: `lib/global/src/kernel.koja` for core types (`Option<T>`, `Result<T, E>`, `Pair<A, B>`), auto-imported into every module. `lib/global/src/process.koja` for process lifecycle types. Both embedded in the compiler via `include_str!`, parsed at startup.
-- **Planned**: two-tier stdlib with auto-imported core types and qualified standard packages (`Net`, `HTTP`, `JSON`). See [STDLIB.md](STDLIB.md) for the package hierarchy design.
+- **Done**: two-tier stdlib with auto-imported core types and qualified standard packages (`Net`, `HTTP`, `JSON`, `Crypto`) shipped in Phase 4. The package hierarchy design is archived in [archive/20260610-STDLIB.md](archive/20260610-STDLIB.md); the user-facing rules live in LANGUAGE.md's stdlib visibility section.
 - Monomorphization ensures zero binary bloat for unused stdlib types. Only instantiations that are actually called get compiled.
 
 ### `Debug` protocol and `print` (decided, implemented)
 
-- **Done**: `Debug` protocol in `lib/global/src/debug.koja` with `format(self) -> String` (required) and `inspect(move self) -> Self` (default impl, tap-style debugging). Named `Debug` rather than `Display` to reflect developer-facing output (not user-facing presentation).
+- **Done**: `Debug` protocol in `lib/global/src/debug.koja` with `format(self) -> String` (required) and `inspect(self) -> Self` (default impl, tap-style debugging). Named `Debug` rather than `Display` to reflect developer-facing output (not user-facing presentation).
 - **Auto-derived**: all structs and enums get a compiler-synthesized `format` implementation. Enums print as `VariantName` (unit) or `VariantName(value)` (tuple payload). Structs print as `TypeName{field: value, ...}`. Primitives use codegen intrinsics. Users can override with their own `impl Debug for MyType`.
 - **`print` and interpolation**: `print(value)` and `"#{value}"` dispatch through `Debug.format()` instead of hardcoded printf format specifiers. Any type can be printed or interpolated.
 - **`Global.IO`**: `IO.puts`, `IO.warn`, `IO.write` accept `String` only -- callers use interpolation or `.format()` for non-string types. `IO.gets` reads a line from stdin.
@@ -568,13 +550,12 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase    | Milestone                                                                                                                                                                                                                                                                |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 5A       | Parser self-host: top-level `kojac/` subproject, AST serialization format (versioned), `--emit-ast` + `--parser=<path>` flags, parser port, `just test-selfhost` parity sweep                                                                                            |
-| 5B       | Runtime completion + supervision: scheduler protocol (with WASM-compat constraint), work-stealing, SIGTERM grace, timer wheel, preemption + priority, supervision tree, `Process.register`/`whereis`, `Registry`, `shared_map`                                           |
-| 5C       | Interactive workflow: `koja shell -S .` project mode, inline `h` docs, tab completion, process inspection                                                                                                                                                                |
+| 5A       | Runtime completion + supervision: scheduler protocol (with WASM-compat constraint), work-stealing, SIGTERM grace, timer wheel, preemption + priority, supervision tree, `Process.register`/`whereis`, `Registry`, `shared_map`                                           |
+| 5B       | Interactive workflow: `koja shell -S .` project mode, inline `h` docs, tab completion, process inspection                                                                                                                                                                |
 | 6A       | WASM target (flavor TBD, likely WASI first), runtime split into core + per-target adapters, WASI I/O reactor, FFI resolution to WASM imports, crypto-on-WASM sub-decision                                                                                                |
 | 6B       | Cross-compile distribution: per-target embedded static deps, `--target=<triple>` plumbing, CI matrix, GitHub Releases automation, optional Zig-style bundled sysroots, tier list                                                                                         |
 | 7        | 1.0 candidacy + spec lock: documentation polish, CLI query/guide, LSP finishing, ergonomic cleanup, stdlib completion, first-party reference packages, diagnostic quality pass, validation projects, language surface review, spec freeze, signed multi-platform release |
-| Post-1.0 | Continued `kojac` self-host (typecheck → IR → backend), interpreter port to Koja, LLVM backend port to Koja, browser WASM, additional targets, 2.0 / additive evolution                                                                                                  |
+| Post-1.0 | `kojac` self-host (parser → typecheck → IR → backend), interpreter port to Koja, LLVM backend port to Koja, browser WASM, additional targets, 2.0 / additive evolution                                                                                                   |
 
 ---
 
@@ -586,6 +567,6 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 - **AI writes, humans read.** The language is concise and readable because that's good design -- Ruby over Java, signal density over ceremony. Every line should carry meaning without boilerplate. AI-friendliness is a natural consequence of those values, not the driver.
 - **No magic.** Explicit is better than implicit. If a feature requires the reader to know something they can't see on screen, it's wrong for Koja.
 - **No macros.** Bake common patterns into the language as native constructs instead. Macros create invisible control flow, fragment the language per-codebase, and are hostile to AI tooling. Every Koja codebase should read the same way.
-- **Approachable by default.** A beginner should be able to write their first program without knowing about ownership, processes, or type annotations. Advanced features reveal themselves as you grow -- you learn `move` when you hit a performance problem, processes when you need concurrency, supervision when you build a stateful service. The language has a Ruby-shaped learning curve backed by Rust-grade safety.
+- **Approachable by default.** A beginner should be able to write their first program without knowing about the memory model, processes, or type annotations. Advanced features reveal themselves as you grow -- you learn how copy-on-write works when you hit a performance question, processes when you need concurrency, supervision when you build a stateful service. The language has a Ruby-shaped learning curve backed by Rust-grade safety.
 - **Built to last.** Every design decision passes the decades test -- will this still make sense in 20 years? Features tied to today's trends are packages, not language constructs. The stdlib only contains primitives that are as fundamental as integers and files.
 - **Stable after 1.0.** The language spec locks at 1.0. Post-1.0 changes are additive only -- new features, never removals or breaking changes. No edition system. If something truly needs to break (hopefully a decade+ out), it's a clean 2.0 with migration tooling -- one decisive move, not death by a thousand editions.

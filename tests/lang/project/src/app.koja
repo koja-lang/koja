@@ -1,0 +1,19 @@
+struct App
+end
+
+impl Process<(), (), ()> for App
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    result = Helper.add(10, 20)
+    result.print()
+    Helper.greet("world").print()
+    StopReason.Normal
+  end
+end

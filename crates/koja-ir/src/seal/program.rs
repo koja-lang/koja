@@ -15,10 +15,16 @@ use super::seal_panic;
 use super::structs::{package_instructions, seal_struct_ops};
 
 pub(crate) fn seal_program(program: &IRProgram) {
-    if program.function(program.entry_point.mangled()).is_none() {
+    let Some(entry) = program.function(program.entry_point.mangled()) else {
         seal_panic(&format!(
             "entry point `{}` not registered in any package",
             program.entry_point
+        ));
+    };
+    if !matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }) {
+        seal_panic(&format!(
+            "entry point `{}` is not a `ProcessEntryWrapper` (got `{:?}`)",
+            program.entry_point, entry.kind,
         ));
     }
     for pkg in &program.packages {

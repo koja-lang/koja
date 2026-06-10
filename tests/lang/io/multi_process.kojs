@@ -83,10 +83,8 @@ impl Process<Coordinator, CoordMsg, String> for Coordinator
   end
 end
 
-fn main
-  c = spawn Coordinator.start(Coordinator{label: "coord"})
-  c.call(CoordMsg.RunTest, 5000)
-  "coordinator: test done".print()
-  c.call(CoordMsg.Done, 5000)
-  "main: all done".print()
-end
+c = spawn Coordinator.start(Coordinator{label: "coord"})
+c.call(CoordMsg.RunTest, 5000)
+"coordinator: test done".print()
+c.call(CoordMsg.Done, 5000)
+"main: all done".print()

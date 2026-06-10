@@ -22,20 +22,34 @@ use crate::value::{EnumPayload, Value};
 pub struct Interpreter;
 
 impl Interpreter {
-    /// Execute the project-mode entry function and return its result.
-    /// For [`FunctionKind::ProcessEntryWrapper`] entries the
-    /// interpreter executes the IR-synthesized `<state>.__entry_body`
-    /// the wrapper's IR `Call` names — the full `start` → `run` →
-    /// `StopReason.code` dispatch lives there — and reports the
-    /// resulting exit code as a [`Value::Int`]. The interpreter has
-    /// no host argv, so a `List<String>` config resolves to an empty
-    /// list.
+    /// Execute the project-mode entry and return its result. The
+    /// entry is always a [`FunctionKind::ProcessEntryWrapper`] (seal
+    /// guarantees it); the interpreter executes the IR-synthesized
+    /// `<state>.__entry_body` the wrapper's IR `Call` names — the
+    /// full `start` → `run` → `StopReason.code` dispatch lives there
+    /// — and reports the resulting exit code as a [`Value::Int`].
+    /// The interpreter has no host argv, so a `List<String>` config
+    /// resolves to an empty list.
     pub fn run_program(program: IRProgram) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
-        if matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }) {
-            return run_process_entry(&program, entry);
-        }
-        execute_function(entry, Vec::new(), &program)
+        assert!(
+            matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }),
+            "interpreter: program entry `{}` is not a `ProcessEntryWrapper` (seal violation)",
+            entry.symbol,
+        );
+        run_process_entry(&program, entry)
+    }
+
+    /// Execute a named function from `program` with no arguments and
+    /// return its value. Test-facing seam: integration tests lower a
+    /// fixture with a synthetic Process entry, then call a fixture
+    /// function (e.g. `TestApp.main`) directly and assert on its
+    /// runtime [`Value`].
+    pub fn run_function(program: &IRProgram, mangled: &str) -> Result<Value, RuntimeError> {
+        let function = program
+            .function(mangled)
+            .unwrap_or_else(|| panic!("interpreter: function `{mangled}` not found in IRProgram"));
+        execute_function(function, Vec::new(), program)
     }
 
     /// Execute the script-mode implicit body and return its trailing

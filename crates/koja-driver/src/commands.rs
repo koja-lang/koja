@@ -518,11 +518,11 @@ fn collect_koja_files_recursive(dir: &Path) -> Vec<PathBuf> {
 
 /// `koja new <name>` -- scaffolds a new Koja project.
 ///
-/// Creates a directory with `koja.toml`, `.gitignore`, `src/main.koja`
-/// (a small `greet` helper plus `fn main`), and `test/main_test.koja`
-/// (a placeholder `@test` exercising `greet`). `koja build` and
-/// `koja test` both succeed against the scaffold from the first
-/// command.
+/// Creates a directory with `koja.toml` (`entry = "App"`),
+/// `.gitignore`, `src/app.koja` (a minimal `Process` entry type plus
+/// a `greet` helper), and `test/app_test.koja` (a placeholder
+/// `@test` exercising `greet`). `koja build` and `koja test` both
+/// succeed against the scaffold from the first command.
 pub fn cmd_new(name: String) {
     if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
         eprintln!("error: project name must contain only ASCII letters, digits, and underscores");
@@ -550,7 +550,7 @@ pub fn cmd_new(name: String) {
     let toml_content = dedent(&format!(
         "
         [project]
-        entry = \"main\"
+        entry = \"App\"
         name = \"{name}\"
         version = \"0.1.0\"
         "
@@ -571,25 +571,39 @@ pub fn cmd_new(name: String) {
         process::exit(1);
     });
 
-    let main_content = dedent(
+    let app_content = dedent(
         "
         fn greet(name: String) -> String
           \"Hello, #{name}!\"
         end
 
-        fn main
-          IO.puts(greet(\"Koja\"))
+        struct App
+        end
+
+        impl Process<(), (), ()> for App
+          fn start(config: ()) -> Result<Self, StopReason>
+            Result.Ok(App{})
+          end
+
+          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+            Step.Continue(self)
+          end
+
+          fn run(self) -> StopReason
+            IO.puts(greet(\"Koja\"))
+            StopReason.Normal
+          end
         end
         ",
     );
-    fs::write(src_dir.join("main.koja"), main_content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write src/main.koja: {e}");
+    fs::write(src_dir.join("app.koja"), app_content).unwrap_or_else(|e| {
+        eprintln!("error: cannot write src/app.koja: {e}");
         process::exit(1);
     });
 
-    let main_test_content = dedent(
+    let app_test_content = dedent(
         "
-        struct MainTest
+        struct AppTest
           @test \"greet builds a greeting message\"
           fn test_greet -> Result<Bool, String>
             actual = greet(\"Koja\")
@@ -604,8 +618,8 @@ pub fn cmd_new(name: String) {
         end
         ",
     );
-    fs::write(test_dir.join("main_test.koja"), main_test_content).unwrap_or_else(|e| {
-        eprintln!("error: cannot write test/main_test.koja: {e}");
+    fs::write(test_dir.join("app_test.koja"), app_test_content).unwrap_or_else(|e| {
+        eprintln!("error: cannot write test/app_test.koja: {e}");
         process::exit(1);
     });
 
