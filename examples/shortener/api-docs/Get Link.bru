@@ -1,0 +1,38 @@
+meta {
+  name: Get Link
+  type: http
+  seq: 4
+}
+
+get {
+  url: {{baseUrl}}/links/{{code}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+  res.body.code: eq {{code}}
+}
+
+docs {
+  # Get Link Metadata
+
+  Returns the metadata for a single link by its `code` (including the
+  current `hits` count). This does **not** count as a visit; only
+  `GET /:code` increments hits.
+
+  **Response 200**
+
+      {
+        "code": "abc123",
+        "url": "https://example.com/a/very/long/url/to/shorten",
+        "created_at": "2026-06-07T20:00:00Z",
+        "hits": 0,
+        "short_path": "/abc123"
+      }
+
+  **Errors**
+
+  - `404 Not Found` if no link has that code.
+}

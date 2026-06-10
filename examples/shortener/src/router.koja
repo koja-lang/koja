@@ -1,0 +1,307 @@
+alias HTTP.Headers
+alias HTTP.Method
+alias HTTP.Request
+alias HTTP.Response
+alias HTTP.Status
+alias JSON.Encoder
+alias JSON.Value
+
+const LINKS_PREFIX: String = "/links/"
+
+@doc """
+Maps an HTTP request to a response, threading the `Postgres`
+connection through (each query yields an updated connection) and
+returning it alongside the response so the caller can rebind.
+
+Routes:
+- `GET    /`            service info
+- `GET    /links`       list every link
+- `POST   /links`       create a link from a JSON `{"url": ...}` body
+- `GET    /links/:code` link metadata
+- `PUT    /links/:code` repoint a link at a new URL
+- `DELETE /links/:code` delete a link
+- `GET    /:code`       302-redirect to the target, counting the hit
+"""
+struct Router
+  fn route(req: Request, conn: Postgres) -> Pair<Response, Postgres>
+    match req.method
+      Method.Delete ->
+        Router.handle_delete(req.path, conn)
+
+      Method.Get ->
+        Router.handle_get(req.path, conn)
+
+      Method.Post ->
+        Router.handle_post(req, conn)
+
+      Method.Put ->
+        Router.handle_put(req, conn)
+
+      _ ->
+        Router.respond(
+          conn,
+          Router.error(
+            Status.method_not_allowed(),
+            "#{req.method.to_string()} is not supported",
+          ),
+        )
+    end
+  end
+
+  @doc """
+  Builds a JSON error response with the given status and message.
+  """
+  fn error(status: Status, message: String) -> Response
+    Router.json_response(
+      status,
+      Value.object(
+        [
+          Value.entry("error", Value.string(status.reason)),
+           Value.entry("message", Value.string(message)),
+           Value.entry("status", Value.int(status.code))
+        ],
+      ),
+    )
+  end
+
+  priv fn handle_get(path: String, conn: Postgres) -> Pair<Response, Postgres>
+    if path == "/"
+      return Router.respond(conn, Router.info())
+    end
+
+    if path == "/links"
+      return Router.list_all(conn)
+    end
+
+    match Router.code_after(path, LINKS_PREFIX)
+      Option.Some(code) ->
+        Router.metadata(conn, code)
+
+      Option.None ->
+        match Router.code_after(path, "/")
+          Option.Some(code) ->
+            Router.redirect(conn, code)
+
+          Option.None ->
+            Router.respond(
+              conn,
+              Router.error(Status.not_found(), "no route for #{path}"),
+            )
+        end
+    end
+  end
+
+  priv fn handle_post(req: Request, conn: Postgres) -> Pair<Response, Postgres>
+    unless req.path == "/links"
+      return Router.respond(
+        conn,
+        Router.error(Status.not_found(), "no route for POST #{req.path}"),
+      )
+    end
+
+    match JsonUtil.parse_url(req.body)
+      Result.Err(message) ->
+        Router.respond(conn, Router.error(Status.bad_request(), message))
+
+      Result.Ok(url) ->
+        outcome = LinkStore.create(conn, url)
+
+        match outcome.second
+          Result.Ok(link) ->
+            Router.respond(
+              outcome.first,
+              Router.json_response(
+                Status.created(),
+                JsonUtil.link_to_value(link),
+              ),
+            )
+
+          Result.Err(e) ->
+            Router.respond(outcome.first, Router.db_error(e))
+        end
+    end
+  end
+
+  priv fn handle_put(req: Request, conn: Postgres) -> Pair<Response, Postgres>
+    code =
+      match Router.code_after(req.path, LINKS_PREFIX)
+        Option.Some(c) -> c
+        Option.None ->
+          return Router.respond(
+            conn,
+            Router.error(Status.not_found(), "no route for PUT #{req.path}"),
+          )
+      end
+
+    match JsonUtil.parse_url(req.body)
+      Result.Err(message) ->
+        Router.respond(conn, Router.error(Status.bad_request(), message))
+
+      Result.Ok(url) ->
+        outcome = LinkStore.update(conn, code, url)
+        Router.link_or_404(outcome, code)
+    end
+  end
+
+  priv fn handle_delete(path: String, conn: Postgres)
+    -> Pair<Response, Postgres>
+    code =
+      match Router.code_after(path, LINKS_PREFIX)
+        Option.Some(c) -> c
+        Option.None ->
+          return Router.respond(
+            conn,
+            Router.error(Status.not_found(), "no route for DELETE #{path}"),
+          )
+      end
+
+    outcome = LinkStore.remove(conn, code)
+
+    match outcome.second
+      Result.Err(e) ->
+        Router.respond(outcome.first, Router.db_error(e))
+
+      Result.Ok(deleted) ->
+        deleted
+          ? Router.respond(outcome.first, Router.no_content())
+          : Router.respond(outcome.first, Router.not_found(code))
+    end
+  end
+
+  priv fn list_all(conn: Postgres) -> Pair<Response, Postgres>
+    outcome = LinkStore.all(conn)
+
+    match outcome.second
+      Result.Ok(links) ->
+        Router.respond(
+          outcome.first,
+          Router.json_response(Status.ok(), JsonUtil.links_to_value(links)),
+        )
+
+      Result.Err(e) ->
+        Router.respond(outcome.first, Router.db_error(e))
+    end
+  end
+
+  priv fn metadata(conn: Postgres, code: String) -> Pair<Response, Postgres>
+    Router.link_or_404(LinkStore.find(conn, code), code)
+  end
+
+  priv fn redirect(conn: Postgres, code: String) -> Pair<Response, Postgres>
+    outcome = LinkStore.visit(conn, code)
+
+    match outcome.second
+      Result.Err(e) ->
+        Router.respond(outcome.first, Router.db_error(e))
+
+      Result.Ok(target) ->
+        match target
+          Option.Some(url) ->
+            Router.respond(outcome.first, Router.redirect_response(url))
+
+          Option.None ->
+            Router.respond(outcome.first, Router.not_found(code))
+        end
+    end
+  end
+
+  priv fn link_or_404(
+    outcome: Pair<Postgres, Result<Option<Link>, String>>,
+    code: String,
+  ) -> Pair<Response, Postgres>
+
+    match outcome.second
+      Result.Err(e) ->
+        Router.respond(outcome.first, Router.db_error(e))
+
+      Result.Ok(maybe) ->
+        match maybe
+          Option.Some(link) ->
+            Router.respond(
+              outcome.first,
+              Router.json_response(Status.ok(), JsonUtil.link_to_value(link)),
+            )
+
+          Option.None ->
+            Router.respond(outcome.first, Router.not_found(code))
+        end
+    end
+  end
+
+  priv fn respond(conn: Postgres, response: Response)
+    -> Pair<Response, Postgres>
+    Pair{first: response, second: conn}
+  end
+
+  priv fn info -> Response
+    Router.json_response(
+      Status.ok(),
+      Value.object(
+        [
+          Value.entry("name", Value.string("koja-shortener")),
+           Value.entry(
+            "routes",
+            Value.array(
+              [
+                Value.string("GET /links"), Value.string("POST /links"),
+                 Value.string("GET /links/:code"),
+                 Value.string("PUT /links/:code"),
+                 Value.string("DELETE /links/:code"), Value.string("GET /:code")
+              ],
+            ),
+          )
+        ],
+      ),
+    )
+  end
+
+  priv fn not_found(code: String) -> Response
+    Router.error(Status.not_found(), "no link with code #{code}")
+  end
+
+  priv fn db_error(message: String) -> Response
+    Router.error(Status.internal_server_error(), message)
+  end
+
+  priv fn json_response(status: Status, body: Value) -> Response
+    text = Encoder.encode_pretty(body)
+    headers = Headers.new()
+      .set("Content-Type", "application/json")
+      .set("Content-Length", "#{text.byte_length()}")
+    Response{body: text, headers: headers, status: status, version: "HTTP/1.1"}
+  end
+
+  priv fn redirect_response(target: String) -> Response
+    headers = Headers.new().set("Location", target).set("Content-Length", "0")
+    Response{
+      body: "",
+      headers: headers,
+      status: Status.new(302, "Found"),
+      version: "HTTP/1.1",
+    }
+  end
+
+  priv fn no_content -> Response
+    headers = Headers.new().set("Content-Length", "0")
+    Response{
+      body: "",
+      headers: headers,
+      status: Status.no_content(),
+      version: "HTTP/1.1",
+    }
+  end
+
+  priv fn code_after(path: String, prefix: String) -> Option<String>
+    unless path.starts_with?(prefix)
+      return Option.None
+    end
+
+    code = path.slice(Range{start: prefix.length(), stop: path.length() - 1})
+
+    if code.empty?() or code.contains?("/")
+      return Option.None
+    end
+
+    Option.Some(code)
+  end
+end

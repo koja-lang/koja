@@ -1,0 +1,36 @@
+meta {
+  name: Redirect
+  type: http
+  seq: 6
+}
+
+get {
+  url: {{baseUrl}}/{{code}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 302
+}
+
+docs {
+  # Redirect
+
+  Follows a short code to its target with a `302 Found` and a `Location`
+  header pointing at the original URL. Each call increments the link's
+  `hits` counter.
+
+  Tip: Bruno follows redirects automatically by default, so you may land
+  on the target page. To observe the raw `302` and the `Location` header,
+  turn off **Follow Redirects** in this request's *Settings* tab.
+
+  **Response 302**
+
+      Location: https://example.com/the/new/target
+      Content-Length: 0
+
+  **Errors**
+
+  - `404 Not Found` if no link has that code.
+}

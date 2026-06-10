@@ -169,7 +169,7 @@ For detailed sub-milestone breakdowns (A1a-A1e, A2a-A2c, A3a-A3b, A4, B1-B3), se
 
 ## Phase 4: Stdlib + Ecosystem / Runtime + Reliability -- done
 
-Phase 4 made Koja useful for real programs (Track A) and concurrency production-grade (Track B). Both tracks landed; the convergence point (an HTTP service composed from stdlib primitives running on the production scheduler) is hit by `examples/demo_api`.
+Phase 4 made Koja useful for real programs (Track A) and concurrency production-grade (Track B). Both tracks landed; the convergence point (an HTTP service composed from stdlib primitives running on the production scheduler) was hit by `examples/demo_api` (since replaced by `examples/shortener`, a Postgres-backed URL-shortener CRUD service that exercises the same surface plus a from-scratch wire-protocol client).
 
 ### Track A: Stdlib + Ecosystem -- done
 
@@ -199,13 +199,13 @@ For detailed sub-milestone breakdowns and the Phase 4 in-progress narrative, see
 
 ## Phase 5: Runtime completion + interactive workflow
 
-The runtime completion that supervises crashes and drains gracefully, and the interactive REPL that turns `koja shell` into a real development surface. Convergence: `demo_api` becomes supervised and interactively developable.
+The runtime completion that supervises crashes and drains gracefully, and the interactive REPL that turns `koja shell` into a real development surface. Convergence: `examples/shortener` (the Postgres-backed CRUD service) becomes supervised and interactively developable.
 
 The parser self-host (formerly Track A of this phase) is deferred to post-1.0: it's a maintainer-facing milestone, not a user-facing one, and pre-spec-freeze it would double the cost of every language change (Rust pipeline + `kojac` parity). The Phase 7 validation projects take over its language-stress-test role. Details in [Post-1.0](#post-10).
 
 ```mermaid
 flowchart LR
-  TrackA["Track A: Runtime + Supervision"] --> Conv["Convergence: supervised demo_api, developed in koja shell -S ."]
+  TrackA["Track A: Runtime + Supervision"] --> Conv["Convergence: supervised shortener, developed in koja shell -S ."]
   TrackB["Track B: koja shell -S ."] --> Conv
 ```
 
@@ -254,7 +254,7 @@ Goal: `koja shell` graduates from scratch evaluator to project development surfa
 - `h module.function` / `h Type` pulls inline docs from `@doc` annotations.
 - Tab completion for module names, functions, types, and variables in scope (reuse the `koja-lsp` completion plumbing where it generalizes).
 - Process inspection: list spawned processes (pid, state, mailbox depth), dump a mailbox, step a single message.
-- **Done when**: `demo_api` can be developed end-to-end inside `koja shell -S .` -- start the server, exercise it from a sibling REPL session, inspect running process state, edit code, restart.
+- **Done when**: `shortener` can be developed end-to-end inside `koja shell -S .` -- start the server, exercise it from a sibling REPL session, inspect running process state, edit code, restart.
 
 ### Phase 5 hygiene (not a track)
 
@@ -262,7 +262,7 @@ The LLVM codegen-bug rows that originally motivated this section have cleared: t
 
 ### Convergence point
 
-`demo_api` evolves into a single artifact that exercises both tracks:
+`shortener` evolves into a single artifact that exercises both tracks:
 
 - **Supervised** -- root `Supervisor` owns the `Server` process; crashes restart cleanly (A2).
 - **Production-shutdown** -- SIGTERM drains in-flight requests within a configurable grace period (A1).
@@ -310,11 +310,11 @@ Items debated for inclusion in Phase 5 and intentionally punted, annotated with 
 
 ## Phase 6: WASM target + cross-compile distribution
 
-WASM-before-1.0 commitment plus the cross-compile infrastructure that makes "Koja runs anywhere" real. Two tracks, single convergence: from any tier-1 host, `koja build --target=<any-tier-1-target>` cross-compiles correctly; specifically `koja build --target=wasm32-wasi demo_api/` produces a `.wasm` that runs under `wasmtime`.
+WASM-before-1.0 commitment plus the cross-compile infrastructure that makes "Koja runs anywhere" real. Two tracks, single convergence: from any tier-1 host, `koja build --target=<any-tier-1-target>` cross-compiles correctly; specifically `koja build --target=wasm32-wasi shortener/` produces a `.wasm` that runs under `wasmtime`.
 
 ```mermaid
 flowchart LR
-  WasmTrack["Track A: WASM as a target"] --> P6Conv["Convergence: demo_api.wasm runs under wasmtime; cross-compile to all tier-1 targets works"]
+  WasmTrack["Track A: WASM as a target"] --> P6Conv["Convergence: shortener.wasm runs under wasmtime; cross-compile to all tier-1 targets works"]
   CrossTrack["Track B: Cross-compile distribution"] --> P6Conv
 ```
 
@@ -327,7 +327,7 @@ flowchart LR
 - **FFI under WASM** -- `@extern "C"` resolves to WASM imports rather than linker symbols; same user-facing syntax, different resolution model.
 - **Crypto sub-decision** -- BoringSSL doesn't compile to WASM. Options: ship a WASM-compatible crypto package (RustCrypto's WASM-capable crates, or `wasi-crypto`), or ship `Crypto` as POSIX-only with explicit "unsupported on WASM" diagnostics. Sub-decision to make early in the phase.
 - **Single-threaded coop scheduling validated** -- `Process<C, M, R>` semantics work under cooperative-only scheduling. Preemption (Phase 5 A1) is the only defense against CPU-bound starvation.
-- **Done when**: `koja build --target=wasm32-wasi demo_api/` produces a `.wasm` that `wasmtime demo_api.wasm` runs correctly (responses returned, lifecycle handled where applicable).
+- **Done when**: `koja build --target=wasm32-wasi shortener/` produces a `.wasm` that `wasmtime shortener.wasm` runs correctly (responses returned, lifecycle handled where applicable).
 
 ### Track B: Cross-compile distribution
 
@@ -337,7 +337,7 @@ flowchart LR
 - **GitHub Releases automation** -- tagged release pushes per-host tarballs (`koja-v1.x.y-<host>-<arch>.tar.gz`); `brew tap`, `asdf plugin`, `mise install` formulas point at releases.
 - **Optional: Zig-style bundled libc headers/sysroots** -- for fully hermetic `koja build --target=X` with zero additional setup on any host. Significant UX win, costs ~20-30 MB to the toolchain download. Default lean: include, since "Built to last" + "Approachable by default" both endorse.
 - **Tier list** -- tier-1 (CI-tested, embedded sysroot, just works), tier-2 (best-effort, works with caveats), tier-3 (experimental, BYO sysroot). Document explicitly.
-- **Done when**: from a single host, `koja build --target=<any-tier-1-target>` cross-compiles correctly; `brew install koja` followed by `koja build --target=wasm32-wasi demo_api/` works with no further setup.
+- **Done when**: from a single host, `koja build --target=<any-tier-1-target>` cross-compiles correctly; `brew install koja` followed by `koja build --target=wasm32-wasi shortener/` works with no further setup.
 
 ### Risks
 
@@ -345,7 +345,7 @@ flowchart LR
 - **Browser WASM is fundamentally a different runtime** -- if scope drifts to "both flavors," phase doubles in size. Recommended posture: WASI first, browser deferred to post-1.0 unless explicit pre-1.0 commitment forces otherwise.
 - **`libcrypto` on WASM** -- BoringSSL won't compile. Crypto-on-WASM sub-decision is real work and may force a stdlib API change (graceful "not supported" vs alternative implementation).
 - **Cross-compile linker availability** -- bundling LLD plus per-target sysroots adds ~20-30 MB to the distribution. Mitigatable by lazy-download per target, but adds a "first run downloads a sysroot" UX wrinkle.
-- **Process model under coop-only** -- validates that `Process<C, M, R>` works with no preemption escape. If a real program (like `demo_api`) starves the runtime, that's a language-design issue surfaced just before 1.0.
+- **Process model under coop-only** -- validates that `Process<C, M, R>` works with no preemption escape. If a real program (like `shortener`) starves the runtime, that's a language-design issue surfaced just before 1.0.
 
 ---
 
@@ -420,7 +420,7 @@ Syntax undecided -- candidates include `~"""`, `'''`, or something else entirely
 
 Items intentionally deferred past 1.0. The language spec locks at 1.0; post-1.0 changes are additive only. Anything truly breaking is a clean 2.0 with migration tooling -- one decisive move, not death by a thousand editions.
 
-- **`kojac` self-host, parser first** -- originally Phase 5 Track A, deferred wholesale: self-hosting is a maintainer-facing milestone (users never see which language the parser is written in), and doing it before spec freeze means every language change lands twice (Rust pipeline + `kojac` parity). With the spec locked at 1.0, the port targets a stable contract. The plan as designed carries forward: a versioned textual AST serialization format (`format_version: 1`, schema in a new `AST-FORMAT.md`); `--emit-ast` / `--parser=<path>` flags on the Rust side; the parser port to `kojac/src/parser.koja` (seeded from the Phase 3 lexer port — the `kojac/` subproject already exists in the tree); `just build-kojac` build integration; and a `just test-selfhost` parity sweep diffing serialized ASTs across `lib/`, `tests/lang/`, `examples/`. Done when the sweep passes and `koja build --parser=kojac demo_api/` is byte-identical to the default build. Then typecheck port, IR port, backend port; eventually retire the Rust pipeline, one layer at a time.
+- **`kojac` self-host, parser first** -- originally Phase 5 Track A, deferred wholesale: self-hosting is a maintainer-facing milestone (users never see which language the parser is written in), and doing it before spec freeze means every language change lands twice (Rust pipeline + `kojac` parity). With the spec locked at 1.0, the port targets a stable contract. The plan as designed carries forward: a versioned textual AST serialization format (`format_version: 1`, schema in a new `AST-FORMAT.md`); `--emit-ast` / `--parser=<path>` flags on the Rust side; the parser port to `kojac/src/parser.koja` (seeded from the Phase 3 lexer port — the `kojac/` subproject already exists in the tree); `just build-kojac` build integration; and a `just test-selfhost` parity sweep diffing serialized ASTs across `lib/`, `tests/lang/`, `examples/`. Done when the sweep passes and `koja build --parser=kojac shortener/` is byte-identical to the default build. Then typecheck port, IR port, backend port; eventually retire the Rust pipeline, one layer at a time.
 - **Interpreter port to Koja** (`koja-ir-eval` → `kojac`) -- a natural successor once the parser port stabilizes.
 - **LLVM backend port to Koja** (`koja-ir-llvm` → `kojac`) -- requires C FFI Phase 3 (which lands in Phase 7). Additive once 1.0 ships.
 - **Browser WASM** -- if Phase 6 ships WASI-only, browser is a post-1.0 effort. Substantially different runtime (DOM/JS interop, async via Promises, no module system inside the WASM module).

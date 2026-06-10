@@ -1,0 +1,33 @@
+meta {
+  name: List Links
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/links
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  # List Links
+
+  Returns every link in the store as a JSON array. Empty store returns `[]`.
+
+  **Response 200**
+
+      [
+        {
+          "code": "abc123",
+          "url": "https://example.com",
+          "created_at": "2026-06-07T20:00:00Z",
+          "hits": 4,
+          "short_path": "/abc123"
+        }
+      ]
+}

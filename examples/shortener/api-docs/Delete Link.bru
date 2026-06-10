@@ -1,0 +1,29 @@
+meta {
+  name: Delete Link
+  type: http
+  seq: 7
+}
+
+delete {
+  url: {{baseUrl}}/links/{{code}}
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 204
+}
+
+docs {
+  # Delete Link
+
+  Removes the link with the given `code`. Returns an empty `204 No Content`
+  on success. Deleting is idempotent from the client's view, but a code
+  that was never created returns `404`.
+
+  **Response 204** — no body.
+
+  **Errors**
+
+  - `404 Not Found` if no link has that code.
+}

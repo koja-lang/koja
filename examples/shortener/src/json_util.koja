@@ -1,0 +1,83 @@
+alias JSON.Decoder
+alias JSON.Value
+
+@doc """
+JSON glue between the `Link` model and the wire: serializing links to
+`JSON.Value` trees and pulling the `url` field out of request bodies.
+"""
+struct JsonUtil
+  @doc """
+  Renders a single link as a JSON object.
+  """
+  fn link_to_value(link: Link) -> Value
+    Value.object(
+      [
+        Value.entry("code", Value.string(link.code)),
+         Value.entry("url", Value.string(link.url)),
+         Value.entry("created_at", Value.string(link.created_at)),
+         Value.entry("hits", Value.int(link.hits)),
+         Value.entry("short_path", Value.string("/" <> link.code))
+      ],
+    )
+  end
+
+  @doc """
+  Renders a list of links as a JSON array.
+  """
+  fn links_to_value(links: List<Link>) -> Value
+    Value.array(JsonUtil.collect(links, 0, List.new()))
+  end
+
+  @doc """
+  Extracts a non-empty `url` string from a JSON request body, or
+  returns a human-readable error describing what was wrong.
+  """
+  fn parse_url(body: String) -> Result<String, String>
+    decoded =
+      match Decoder.decode(body)
+        Result.Ok(value) -> value
+        Result.Err(_) -> return Result.Err("body is not valid JSON")
+      end
+
+    match JsonUtil.field(decoded, "url")
+      Option.None ->
+        Result.Err("missing \"url\" field")
+
+      Option.Some(Value.String(url)) ->
+        url.empty?() ? Result.Err("\"url\" must not be empty") : Result.Ok(url)
+
+      Option.Some(_) ->
+        Result.Err("\"url\" must be a string")
+    end
+  end
+
+  priv fn collect(links: List<Link>, index: Int, acc: List<Value>)
+    -> List<Value>
+    if index >= links.length()
+      return acc
+    end
+
+    link = links.get(index).unwrap()
+    JsonUtil.collect(links, index + 1, acc.append(JsonUtil.link_to_value(link)))
+  end
+
+  priv fn field(value: Value, key: String) -> Option<Value>
+    match value
+      Value.Object(entries) -> JsonUtil.scan(entries, key, 0)
+      _ -> Option.None
+    end
+  end
+
+  priv fn scan(entries: List<Pair<String, Value>>, key: String, index: Int)
+    -> Option<Value>
+
+    if index >= entries.length()
+      return Option.None
+    end
+
+    entry = entries.get(index).unwrap()
+    entry.first == key
+      ? Option.Some(entry.second)
+      : JsonUtil.scan(entries, key, index + 1)
+  end
+end

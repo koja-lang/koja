@@ -1,0 +1,36 @@
+meta {
+  name: Service Info
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/
+  body: none
+  auth: none
+}
+
+assert {
+  res.status: eq 200
+}
+
+docs {
+  # Service Info
+
+  Returns the service name and the list of available routes. Useful as
+  a liveness check that the server is up and reachable.
+
+  **Response 200**
+
+      {
+        "name": "koja-shortener",
+        "routes": [
+          "GET /links",
+          "POST /links",
+          "GET /links/:code",
+          "PUT /links/:code",
+          "DELETE /links/:code",
+          "GET /:code"
+        ]
+      }
+}

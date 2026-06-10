@@ -1,0 +1,49 @@
+@doc """
+Runtime configuration, resolved from the environment with sensible
+defaults. The Postgres settings mirror `docker-compose.yml`.
+
+The entry process receives a zero-initialized config from the runtime
+(non-argv `Process` configs aren't populated), so `load` reads the
+environment directly rather than trusting the passed-in value.
+"""
+struct Config
+  db_host: String
+  db_name: String
+  db_port: Int
+  db_user: String
+  port: Int
+
+  @doc """
+  Builds a `Config` from the environment, falling back to defaults
+  suitable for local development against the bundled compose stack.
+  """
+  fn load -> Config
+    Config{
+      db_host: Config.env_or("DB_HOST", "127.0.0.1"),
+      db_name: Config.env_or("DB_NAME", "shortener"),
+      db_port: Config.env_int("DB_PORT", 5433),
+      db_user: Config.env_or("DB_USER", "postgres"),
+      port: Config.env_int("PORT", 8080),
+    }
+  end
+
+  priv fn env_or(key: String, fallback: String) -> String
+    match System.get_env(key)
+      Option.Some(value) -> value.empty?() ? fallback : value
+      Option.None -> fallback
+    end
+  end
+
+  priv fn env_int(key: String, fallback: Int) -> Int
+    match System.get_env(key)
+      Option.None ->
+        fallback
+
+      Option.Some(value) ->
+        match value.to_int()
+          Result.Ok(n) -> n
+          Result.Err(_) -> fallback
+        end
+    end
+  end
+end

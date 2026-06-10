@@ -1,0 +1,141 @@
+alias HTTP.Parser
+alias HTTP.Status
+alias Net.TCPListener
+alias Net.TCPSocket
+
+const TICK_MS: Int = 10
+
+@doc """
+The URL-shortener entry process. `start` loads config from the
+environment, opens a Postgres connection, and binds the listener. The
+`run` tick loop drains pending connections non-blockingly, then waits
+briefly for OS lifecycle signals so Ctrl-C / SIGTERM shut down cleanly.
+
+The Postgres connection lives in process state and is threaded through
+every request (Koja values are independent, so each query returns an
+updated connection); `handle_connection` rebinds the process to the
+connection the router hands back.
+"""
+struct App
+  db: Postgres
+  listener: TCPListener
+end
+
+impl Process<List<String>, (), String> for App
+  fn start(config: List<String>) -> Result<Self, StopReason>
+    settings = Config.load()
+
+    conn =
+      match Postgres.connect(
+        settings.db_host,
+        settings.db_port,
+        settings.db_user,
+        settings.db_name,
+      )
+        Result.Ok(c) ->
+          c
+
+        Result.Err(e) ->
+          IO.puts("database connection failed: #{e}")
+          return Result.Err(StopReason.Shutdown)
+      end
+
+    match TCPListener.bind(settings.port)
+      Result.Err(e) ->
+        IO.puts("bind failed: #{e}")
+        Result.Err(StopReason.Shutdown)
+
+      Result.Ok(listener) ->
+        IO.puts("koja-shortener listening on http://127.0.0.1:#{settings.port}")
+        IO.puts("  POST /links {\"url\": \"...\"}  -> create")
+        IO.puts("  GET  /:code                  -> redirect")
+        IO.puts("  (press Ctrl-C to stop)")
+        Result.Ok(App{db: conn, listener: listener})
+    end
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn handle_signal(self, signal: Lifecycle) -> Step<Self>
+    match signal
+      Lifecycle.Interrupt ->
+        IO.puts("")
+        IO.puts("received SIGINT, shutting down...")
+        Step.Done(StopReason.Normal)
+
+      Lifecycle.Reload ->
+        Step.Continue(self)
+
+      Lifecycle.Shutdown ->
+        IO.puts("received SIGTERM, shutting down...")
+        Step.Done(StopReason.Shutdown)
+    end
+  end
+
+  fn run(self) -> StopReason
+    self.tick()
+  end
+end
+
+extend App
+  priv fn tick(self) -> StopReason
+    app = self.drain()
+
+    receive
+      event: Lifecycle ->
+        match app.handle_signal(event)
+          Step.Done(reason) -> reason
+          Step.Continue(next) -> next.tick()
+        end
+    after TICK_MS
+      app.tick()
+    end
+  end
+
+  priv fn drain(self) -> App
+    match self.listener.try_accept()
+      Option.Some(client) -> self.handle_connection(client).drain()
+      Option.None -> self
+    end
+  end
+
+  priv fn handle_connection(self, client: TCPSocket) -> App
+    raw =
+      match client.read(8192)
+        Result.Ok(s) -> s
+        Result.Err(_) -> ""
+      end
+
+    if raw.empty?()
+      App.close(client)
+      return self
+    end
+
+    outcome =
+      match Parser.parse_request(raw)
+        Result.Ok(req) ->
+          Router.route(req, self.db)
+
+        Result.Err(_) ->
+          Pair{
+            first: Router.error(Status.bad_request(), "malformed request"),
+            second: self.db,
+          }
+      end
+
+    match client.write(outcome.first.serialize())
+      _ -> ()
+    end
+
+    App.close(client)
+    App{db: outcome.second, listener: self.listener}
+  end
+
+  priv fn close(client: TCPSocket)
+    match client.close()
+      _ -> ()
+    end
+  end
+end

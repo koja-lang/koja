@@ -1,0 +1,9 @@
+{
+  "version": "1",
+  "name": "koja-shortener",
+  "type": "collection",
+  "ignore": [
+    "node_modules",
+    ".git"
+  ]
+}

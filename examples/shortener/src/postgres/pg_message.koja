@@ -1,0 +1,200 @@
+@doc """
+Postgres v3 wire-protocol message encoding and decoding.
+
+Encoding builds frames with binary literals and `<>` concatenation;
+decoding strips the 5-byte header and walks the body with the cursor
+helpers in `PgIO`. Only the message types the driver needs are
+modeled; everything else decodes to `BackendMessage.Other`.
+"""
+enum BackendMessage
+  AuthenticationOk
+  AuthenticationOther(Int)
+  BackendKeyData
+  CommandComplete(String)
+  DataRow(List<Option<String>>)
+  ErrorResponse(String)
+  Other
+  ParameterStatus
+  ReadyForQuery
+  RowDescription(List<String>)
+end
+
+const PROTOCOL_VERSION: Int = 196608
+const NULL_VALUE: Int = 4294967295
+
+struct PgMessage
+  @doc """
+  Builds a StartupMessage announcing the user and database. It carries
+  no leading type byte, only a length prefix.
+  """
+  fn encode_startup(user: String, database: String) -> Binary
+    params = PgMessage.cstring("user") <> PgMessage.cstring(user) <>
+    PgMessage.cstring("database") <>
+    PgMessage.cstring(database) <>
+    <<0::8>>
+
+    body = <<PROTOCOL_VERSION::32>> <> params
+    <<(body.byte_size() + 4)::32>> <> body
+  end
+
+  @doc """
+  Builds a simple Query (`Q`) message wrapping the given SQL text.
+  """
+  fn encode_query(sql: String) -> Binary
+    payload = PgMessage.cstring(sql)
+    <<0x51::8>> <> <<(payload.byte_size() + 4)::32>> <> payload
+  end
+
+  @doc """
+  Decodes one framed backend message (header included) into a
+  `BackendMessage`.
+  """
+  fn decode(message: Binary) -> BackendMessage
+    match message
+      <<tag::8, _len::32, body: Binary>> -> PgMessage.dispatch(tag, body)
+      _ -> BackendMessage.Other
+    end
+  end
+
+  priv fn dispatch(tag: Int, body: Binary) -> BackendMessage
+    match tag
+      67 -> PgMessage.decode_command_complete(body)
+      68 -> PgMessage.decode_data_row(body)
+      69 -> PgMessage.decode_error(body)
+      75 -> BackendMessage.BackendKeyData
+      82 -> PgMessage.decode_auth(body)
+      83 -> BackendMessage.ParameterStatus
+      84 -> PgMessage.decode_row_description(body)
+      90 -> BackendMessage.ReadyForQuery
+      _ -> BackendMessage.Other
+    end
+  end
+
+  priv fn decode_auth(body: Binary) -> BackendMessage
+    match PgIO.take_u32(body)
+      Option.Some(pair) ->
+        pair.first == 0
+          ? BackendMessage.AuthenticationOk
+          : BackendMessage.AuthenticationOther(pair.first)
+
+      Option.None ->
+        BackendMessage.Other
+    end
+  end
+
+  priv fn decode_command_complete(body: Binary) -> BackendMessage
+    match PgIO.take_cstring(body)
+      Option.Some(pair) -> BackendMessage.CommandComplete(pair.first)
+      Option.None -> BackendMessage.CommandComplete("")
+    end
+  end
+
+  priv fn decode_error(body: Binary) -> BackendMessage
+    BackendMessage.ErrorResponse(PgMessage.scan_error(body))
+  end
+
+  priv fn scan_error(body: Binary) -> String
+    match body
+      <<0::8, _rest: Binary>> ->
+        "error"
+
+      <<field::8, rest: Binary>> ->
+        match PgIO.take_cstring(rest)
+          Option.Some(pair) ->
+            field == 77 ? pair.first : PgMessage.scan_error(pair.second)
+
+          Option.None ->
+            "error"
+        end
+
+      _ ->
+        "error"
+    end
+  end
+
+  priv fn decode_row_description(body: Binary) -> BackendMessage
+    fields: List<String> = List.new()
+
+    match PgIO.take_u16(body)
+      Option.Some(pair) ->
+        BackendMessage.RowDescription(PgMessage.read_fields(
+          pair.second,
+          pair.first,
+          fields,
+        ))
+
+      Option.None ->
+        BackendMessage.RowDescription(fields)
+    end
+  end
+
+  priv fn read_fields(body: Binary, remaining: Int, acc: List<String>)
+    -> List<String>
+
+    if remaining <= 0
+      return acc
+    end
+
+    match PgIO.take_cstring(body)
+      Option.Some(pair) ->
+        tail = PgIO.split_at(pair.second, 18).second
+        PgMessage.read_fields(tail, remaining - 1, acc.append(pair.first))
+
+      Option.None ->
+        acc
+    end
+  end
+
+  priv fn decode_data_row(body: Binary) -> BackendMessage
+    columns: List<Option<String>> = List.new()
+
+    match PgIO.take_u16(body)
+      Option.Some(pair) ->
+        BackendMessage.DataRow(PgMessage.read_columns(
+          pair.second,
+          pair.first,
+          columns,
+        ))
+
+      Option.None ->
+        BackendMessage.DataRow(columns)
+    end
+  end
+
+  priv fn read_columns(body: Binary, remaining: Int, acc: List<Option<String>>)
+    -> List<Option<String>>
+
+    if remaining <= 0
+      return acc
+    end
+
+    match PgIO.take_u32(body)
+      Option.Some(pair) ->
+        if pair.first == NULL_VALUE
+          null: Option<String> = Option.None
+          return PgMessage.read_columns(
+            pair.second,
+            remaining - 1,
+            acc.append(null),
+          )
+        end
+
+        split = PgIO.split_at(pair.second, pair.first)
+
+        value: Option<String> =
+          match split.first.to_string()
+            Result.Ok(s) -> Option.Some(s)
+            Result.Err(_) -> Option.None
+          end
+
+        PgMessage.read_columns(split.second, remaining - 1, acc.append(value))
+
+      Option.None ->
+        acc
+    end
+  end
+
+  priv fn cstring(s: String) -> Binary
+    s.to_binary() <> <<0::8>>
+  end
+end

@@ -1,0 +1,234 @@
+@doc """
+A shortened link: its short `code`, the target `url`, when it was
+created, and how many times it has been visited.
+"""
+struct Link
+  code: String
+  created_at: String
+  hits: Int
+  url: String
+end
+
+const CODE_LENGTH: Int = 7
+const MAX_ATTEMPTS: Int = 5
+const CODE_ALPHABET: String = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+@doc """
+Data-access layer over the `links` table. Every operation threads the
+`Postgres` connection through (Koja values are independent, so a query
+returns an updated connection) and returns it alongside the outcome;
+callers rebind to the returned connection.
+
+The simple-query protocol has no parameter binding, so user-supplied
+text is escaped with `lit` (single quotes doubled) before
+interpolation. All reads project the same column order
+(`code, url, created_at, hits`) so row mapping is uniform.
+"""
+struct LinkStore
+  @doc """
+  Inserts a new link for `url` under a freshly generated unique code,
+  retrying on the (unlikely) event of a code collision.
+  """
+  fn create(conn: Postgres, url: String) -> Pair<Postgres, Result<Link, String>>
+    LinkStore.create_attempt(conn, url, 0)
+  end
+
+  @doc """
+  Returns every link, newest first.
+  """
+  fn all(conn: Postgres) -> Pair<Postgres, Result<List<Link>, String>>
+    outcome = conn.simple_query(
+      LinkStore.select_columns() <> " FROM links ORDER BY created_at DESC",
+    )
+    rows: List<Link> = List.new()
+
+    match outcome.second
+      Result.Err(e) ->
+        Pair{first: outcome.first, second: Result.Err(e)}
+
+      Result.Ok(qr) ->
+        Pair{
+          first: outcome.first,
+          second: Result.Ok(LinkStore.map_rows(qr.rows, 0, rows)),
+        }
+    end
+  end
+
+  @doc """
+  Looks up a single link by code.
+  """
+  fn find(conn: Postgres, code: String)
+    -> Pair<Postgres, Result<Option<Link>, String>>
+
+    LinkStore.query_one(
+      conn,
+      LinkStore.select_columns() <> " FROM links WHERE code = " <>
+      LinkStore.lit(code),
+    )
+  end
+
+  @doc """
+  Repoints an existing link at a new `url`, returning the updated link
+  or `None` when no link has that code.
+  """
+  fn update(conn: Postgres, code: String, url: String)
+    -> Pair<Postgres, Result<Option<Link>, String>>
+
+    LinkStore.query_one(
+      conn,
+      "UPDATE links SET url = " <> LinkStore.lit(url) <> " WHERE code = " <>
+      LinkStore.lit(code) <>
+      " RETURNING code, url, created_at::text, hits",
+    )
+  end
+
+  @doc """
+  Deletes a link, returning `true` when a row was removed.
+  """
+  fn remove(conn: Postgres, code: String)
+    -> Pair<Postgres, Result<Bool, String>>
+    outcome = conn.simple_query(
+      "DELETE FROM links WHERE code = " <> LinkStore.lit(code),
+    )
+
+    match outcome.second
+      Result.Err(e) ->
+        Pair{first: outcome.first, second: Result.Err(e)}
+
+      Result.Ok(qr) ->
+        Pair{first: outcome.first, second: Result.Ok(qr.tag != "DELETE 0")}
+    end
+  end
+
+  @doc """
+  Records a visit (incrementing `hits`) and returns the target URL, or
+  `None` when the code is unknown. Used by the redirect path.
+  """
+  fn visit(conn: Postgres, code: String)
+    -> Pair<Postgres, Result<Option<String>, String>>
+
+    outcome = conn.simple_query(
+      "UPDATE links SET hits = hits + 1 WHERE code = " <> LinkStore.lit(code) <>
+      " RETURNING url",
+    )
+
+    match outcome.second
+      Result.Err(e) ->
+        Pair{first: outcome.first, second: Result.Err(e)}
+
+      Result.Ok(qr) ->
+        target: Option<String> =
+          match qr.rows.get(0)
+            Option.Some(row) -> Option.Some(LinkStore.col(row, 0))
+            Option.None -> Option.None
+          end
+
+        Pair{first: outcome.first, second: Result.Ok(target)}
+    end
+  end
+
+  priv fn create_attempt(conn: Postgres, url: String, attempt: Int)
+    -> Pair<Postgres, Result<Link, String>>
+
+    if attempt >= MAX_ATTEMPTS
+      return Pair{
+        first: conn,
+        second: Result.Err("could not generate a unique code"),
+      }
+    end
+
+    code = LinkStore.generate_code(CODE_LENGTH, "")
+    outcome = conn.simple_query(
+      "INSERT INTO links (code, url) VALUES (" <> LinkStore.lit(code) <> ", " <>
+      LinkStore.lit(url) <>
+      ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
+    )
+
+    match outcome.second
+      Result.Err(e) ->
+        Pair{first: outcome.first, second: Result.Err(e)}
+
+      Result.Ok(qr) ->
+        match LinkStore.first_link(qr)
+          Option.Some(link) ->
+            Pair{first: outcome.first, second: Result.Ok(link)}
+          Option.None ->
+            LinkStore.create_attempt(outcome.first, url, attempt + 1)
+        end
+    end
+  end
+
+  priv fn query_one(conn: Postgres, sql: String)
+    -> Pair<Postgres, Result<Option<Link>, String>>
+
+    outcome = conn.simple_query(sql)
+
+    result: Result<Option<Link>, String> =
+      match outcome.second
+        Result.Ok(qr) -> Result.Ok(LinkStore.first_link(qr))
+        Result.Err(e) -> Result.Err(e)
+      end
+
+    Pair{first: outcome.first, second: result}
+  end
+
+  priv fn map_rows(
+    rows: List<List<Option<String>>>,
+    index: Int,
+    acc: List<Link>,
+  ) -> List<Link>
+
+    if index >= rows.length()
+      return acc
+    end
+
+    row = rows.get(index).unwrap()
+    LinkStore.map_rows(rows, index + 1, acc.append(LinkStore.row_to_link(row)))
+  end
+
+  priv fn first_link(qr: QueryResult) -> Option<Link>
+    match qr.rows.get(0)
+      Option.Some(row) -> Option.Some(LinkStore.row_to_link(row))
+      Option.None -> Option.None
+    end
+  end
+
+  priv fn row_to_link(row: List<Option<String>>) -> Link
+    hits =
+      match LinkStore.col(row, 3).to_int()
+        Result.Ok(n) -> n
+        Result.Err(_) -> 0
+      end
+
+    Link{
+      code: LinkStore.col(row, 0),
+      created_at: LinkStore.col(row, 2),
+      hits: hits,
+      url: LinkStore.col(row, 1),
+    }
+  end
+
+  priv fn col(row: List<Option<String>>, index: Int) -> String
+    match row.get(index)
+      Option.Some(cell) -> cell.or("")
+      Option.None -> ""
+    end
+  end
+
+  priv fn select_columns -> String
+    "SELECT code, url, created_at::text, hits"
+  end
+
+  priv fn lit(value: String) -> String
+    "'" <> value.replace("'", "''") <> "'"
+  end
+
+  priv fn generate_code(remaining: Int, acc: String) -> String
+    if remaining <= 0
+      return acc
+    end
+
+    char = CODE_ALPHABET.get(Random.int(0, CODE_ALPHABET.length() - 1)).or("0")
+    LinkStore.generate_code(remaining - 1, acc <> char)
+  end
+end

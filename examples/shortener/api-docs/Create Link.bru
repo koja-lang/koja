@@ -1,0 +1,61 @@
+meta {
+  name: Create Link
+  type: http
+  seq: 3
+}
+
+post {
+  url: {{baseUrl}}/links
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "url": "https://example.com/a/very/long/url/to/shorten"
+  }
+}
+
+vars:post-response {
+  code: res.body.code
+}
+
+assert {
+  res.status: eq 201
+  res.body.url: eq https://example.com/a/very/long/url/to/shorten
+  res.body.hits: eq 0
+}
+
+docs {
+  # Create Link
+
+  Creates a short link for the JSON `url`. The server assigns the `code`
+  and returns the full link object.
+
+  On success this request stores the returned `code` into the `{{code}}`
+  variable (see the *Vars* tab), so the **Get / Update / Delete /
+  Redirect** requests below act on the link you just created.
+
+  **Request body**
+
+      { "url": "https://example.com/..." }
+
+  **Response 201**
+
+      {
+        "code": "abc123",
+        "url": "https://example.com/a/very/long/url/to/shorten",
+        "created_at": "2026-06-07T20:00:00Z",
+        "hits": 0,
+        "short_path": "/abc123"
+      }
+
+  **Errors**
+
+  - `400 Bad Request` if the body is not valid JSON, the `url` field is
+    missing, not a string, or empty.
+}

@@ -1,0 +1,44 @@
+meta {
+  name: Update Link
+  type: http
+  seq: 5
+}
+
+put {
+  url: {{baseUrl}}/links/{{code}}
+  body: json
+  auth: none
+}
+
+headers {
+  Content-Type: application/json
+}
+
+body:json {
+  {
+    "url": "https://example.com/the/new/target"
+  }
+}
+
+assert {
+  res.status: eq 200
+  res.body.url: eq https://example.com/the/new/target
+}
+
+docs {
+  # Update Link
+
+  Repoints an existing link at a new `url`, preserving its `code` and
+  `hits`. Body shape matches **Create Link**.
+
+  **Request body**
+
+      { "url": "https://example.com/the/new/target" }
+
+  **Response 200** — the updated link object.
+
+  **Errors**
+
+  - `400 Bad Request` for an invalid body / missing / empty `url`.
+  - `404 Not Found` if no link has that code.
+}

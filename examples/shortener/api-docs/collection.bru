@@ -1,0 +1,49 @@
+docs {
+  # koja-shortener API
+
+  A tiny URL shortener written in Koja. Create short links, look up
+  their metadata, repoint or delete them, and follow a code to its
+  target with a 302 redirect (each redirect counts as a hit).
+
+  ## Getting started
+
+  1. Start the backing Postgres: `docker compose up` from the project root.
+  2. Run the service: `koja run` (listens on `PORT`, default `8080`).
+  3. Select the **Local** environment in Bruno (sets `baseUrl` and `code`).
+
+  Run the requests top to bottom: **Create Link** captures the generated
+  `code` into the `{{code}}` variable, so **Get / Update / Delete /
+  Redirect** all operate on the link you just made.
+
+  ## Routes
+
+  | Method | Path           | Purpose                              |
+  |--------|----------------|--------------------------------------|
+  | GET    | `/`            | Service info + route list            |
+  | GET    | `/links`       | List every link                      |
+  | POST   | `/links`       | Create a link from `{"url": ...}`    |
+  | GET    | `/links/:code` | Link metadata                        |
+  | PUT    | `/links/:code` | Repoint a link at a new URL          |
+  | DELETE | `/links/:code` | Delete a link                        |
+  | GET    | `/:code`       | 302-redirect to the target (counts a hit) |
+
+  ## Shapes
+
+  A link is returned as:
+
+      {
+        "code": "abc123",
+        "url": "https://example.com",
+        "created_at": "2026-06-07T20:00:00Z",
+        "hits": 0,
+        "short_path": "/abc123"
+      }
+
+  Errors come back as JSON with the matching HTTP status:
+
+      {
+        "error": "Not Found",
+        "message": "no link with code abc123",
+        "status": 404
+      }
+}
