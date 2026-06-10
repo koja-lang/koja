@@ -29,7 +29,7 @@ This is the primary supported configuration.
 
 ```sh
 brew install llvm@18
-git clone https://github.com/hpopp/koja-lang && cd koja-lang/koja
+git clone https://github.com/koja-lang/koja && cd koja
 
 export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
@@ -66,7 +66,7 @@ sudo apt install -y \
 Pin `llvm-sys` to the apt-installed LLVM and build:
 
 ```sh
-git clone https://github.com/hpopp/koja-lang && cd koja-lang/koja
+git clone https://github.com/koja-lang/koja && cd koja
 
 export LLVM_SYS_181_PREFIX="$(llvm-config-18 --prefix)"
 
@@ -83,7 +83,7 @@ Use this path if your Rust toolchain also comes from Homebrew. The build flow mi
 
 ```sh
 brew install llvm@18
-git clone https://github.com/hpopp/koja-lang && cd koja-lang/koja
+git clone https://github.com/koja-lang/koja && cd koja
 
 export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"

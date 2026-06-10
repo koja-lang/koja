@@ -17,9 +17,9 @@ import {
   ServerOptions,
 } from "vscode-languageclient/node";
 import { execFileSync } from "child_process";
-import { writeFileSync, unlinkSync } from "fs";
+import { existsSync, writeFileSync, unlinkSync } from "fs";
 import { tmpdir } from "os";
-import { join } from "path";
+import { dirname, join } from "path";
 
 let client: LanguageClient | undefined;
 
@@ -75,8 +75,37 @@ function runKojaCommand(subcommand: string) {
       window.terminals.find((t) => t.name === "Koja") ||
       window.createTerminal("Koja");
     terminal.show();
-    terminal.sendText(`${binary} ${subcommand} "${filePath}"`);
+
+    // `.kojs` scripts run directly. `.koja` files are compilation units
+    // of a project, so run the project (nearest `koja.toml`) instead.
+    if (filePath.endsWith(".kojs")) {
+      terminal.sendText(`${binary} ${subcommand} "${filePath}"`);
+      return;
+    }
+
+    const projectDir = findProjectRoot(filePath);
+    if (projectDir) {
+      terminal.sendText(`cd "${projectDir}" && ${binary} ${subcommand}`);
+    } else {
+      window.showErrorMessage(
+        "No koja.toml found. `.koja` files run as part of a project; use a `.kojs` script for standalone files.",
+      );
+    }
   });
+}
+
+function findProjectRoot(filePath: string): string | undefined {
+  let dir = dirname(filePath);
+  for (;;) {
+    if (existsSync(join(dir, "koja.toml"))) {
+      return dir;
+    }
+    const parent = dirname(dir);
+    if (parent === dir) {
+      return undefined;
+    }
+    dir = parent;
+  }
 }
 
 export function activate(context: ExtensionContext) {

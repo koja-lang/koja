@@ -11,7 +11,7 @@ CompilerSet makeprg=koja\ check\ --no-color\ %
 
 " Koja diagnostic output (from koja-driver/src/diagnostics.rs):
 "
-"   error: use of moved value `p1`
+"   error: type mismatch: expected `Int`, found `String`
 "    --> path/to/file.koja:5:12
 "     |
 "   5 | some source line
