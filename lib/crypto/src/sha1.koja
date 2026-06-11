@@ -1,8 +1,12 @@
-@doc "SHA-1 cryptographic hash (20-byte / 160-bit digest)."
+@doc """
+SHA-1 cryptographic hash (20-byte / 160-bit digest).
+"""
 struct SHA1
   ctx: CPtr<UInt8>
 
-  @doc "Computes the SHA-1 digest of `data` in a single call."
+  @doc """
+  Computes the SHA-1 digest of `data` in a single call.
+  """
   fn digest(data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(20)
     sha1_raw(data.ptr(), data.byte_size(), out)
@@ -11,7 +15,9 @@ struct SHA1
     result
   end
 
-  @doc "Finalizes the hash and returns the 20-byte digest. Consumes the context."
+  @doc """
+  Finalizes the hash and returns the 20-byte digest. Consumes the context.
+  """
   fn finalize(self) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(20)
     null: CPtr<UInt8> = CPtr.null()
@@ -22,7 +28,9 @@ struct SHA1
     result
   end
 
-  @doc "Creates a new streaming SHA-1 context."
+  @doc """
+  Creates a new streaming SHA-1 context.
+  """
   fn new -> Self
     ctx = evp_md_ctx_new()
     null: CPtr<UInt8> = CPtr.null()
@@ -30,7 +38,9 @@ struct SHA1
     SHA1{ctx: ctx}
   end
 
-  @doc "Feeds data into the hash context."
+  @doc """
+  Feeds data into the hash context.
+  """
   fn update(self, data: Binary) -> Self
     evp_digest_update(self.ctx, data.ptr(), data.byte_size())
     self

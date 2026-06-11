@@ -3,9 +3,15 @@ A TCP connection for reading and writing byte streams. Use `connect` to
 establish a client connection by hostname, or `connect_addr` to connect
 to a specific `SocketAddress`. Server-side `TCPSocket` values are returned
 by `TCPListener.accept`.
+
+Connections can be secured with TLS: `connect_tls` establishes a verified
+client connection, `upgrade_tls` / `accept_tls` perform handshakes on an
+existing connection, and `read`/`write`/`close` transparently use the TLS
+session when one is active.
 """
 struct TCPSocket
   socket: Socket
+  tls: Option<TLSSession>
 
   @doc """
   Connects to a remote host by resolving the hostname via DNS and
@@ -13,54 +19,130 @@ struct TCPSocket
   Returns the connected socket or an error if resolution or
   connection fails.
   """
-  fn connect(host: String, port: Int) -> Result<TCPSocket, String>
+  fn connect(host: String, port: Int) -> Result<TCPSocket, SocketError>
     addrs =
       match Socket.resolve(host)
         Result.Ok(a) -> a
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(_) -> return Result.Err(SocketError.last())
       end
 
     if addrs.empty?()
-      return Result.Err("no addresses found for " <> host)
+      return Result.Err(SocketError.NameNotFound)
     end
 
     addr = addrs.get(0).unwrap()
-
-    sock =
-      match Socket.create(SocketKind.Stream)
-        Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    match sock.connect(SocketAddress{ip: addr, port: port})
-      Result.Ok(connected) -> Result.Ok(TCPSocket{socket: connected})
-      Result.Err(e) -> Result.Err(e)
-    end
+    TCPSocket.connect_addr(SocketAddress{ip: addr, port: port})
   end
 
   @doc """
   Connects to a specific `SocketAddress` without DNS resolution.
   Returns the connected socket or an error if the connection fails.
   """
-  fn connect_addr(addr: SocketAddress) -> Result<TCPSocket, String>
+  fn connect_addr(addr: SocketAddress) -> Result<TCPSocket, SocketError>
     sock =
       match Socket.create(SocketKind.Stream)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(_) -> return Result.Err(SocketError.last())
       end
 
     match sock.connect(addr)
-      Result.Ok(connected) -> Result.Ok(TCPSocket{socket: connected})
-      Result.Err(e) -> Result.Err(e)
+      Result.Ok(connected) ->
+        Result.Ok(TCPSocket{socket: connected, tls: Option.None})
+
+      Result.Err(_) ->
+        Result.Err(SocketError.last())
     end
+  end
+
+  @doc """
+  Connects to a remote host and secures the connection with a verified
+  TLS handshake (certificate chain and hostname are both checked).
+  Equivalent to `connect` followed by `upgrade_tls` with the default
+  client configuration.
+  """
+  fn connect_tls(host: String, port: Int)
+    -> Result<TCPSocket, SocketError | TLSError>
+
+    TCPSocket.connect_tls_with(host, port, TLSConfig.client())
+  end
+
+  @doc """
+  Connects to a remote host and secures the connection with a TLS
+  handshake using the given configuration. Use `TLSConfig.insecure()`
+  to skip certificate verification (testing only).
+  """
+  fn connect_tls_with(host: String, port: Int, config: TLSConfig)
+    -> Result<TCPSocket, SocketError | TLSError>
+
+    match TCPSocket.connect(host, port)
+      Result.Ok(socket) ->
+        socket.upgrade_tls(host, config)
+
+      Result.Err(e) ->
+        failure: SocketError | TLSError = e
+        Result.Err(failure)
+    end
+  end
+
+  @doc """
+  Performs a client-side TLS handshake on an established connection.
+  `hostname` is sent for SNI and checked against the server certificate
+  when verification is enabled. Returns the upgraded socket.
+  """
+  fn upgrade_tls(self, hostname: String, config: TLSConfig)
+    -> Result<TCPSocket, SocketError | TLSError>
+
+    match TLSSession.connect(self.socket.fd, hostname, config)
+      Result.Ok(session) ->
+        Result.Ok(TCPSocket{socket: self.socket, tls: Option.Some(session)})
+
+      Result.Err(e) ->
+        Result.Err(e)
+    end
+  end
+
+  @doc """
+  Performs a server-side TLS handshake on an accepted connection using
+  the certificate and key from `config`. Returns the upgraded socket.
+  """
+  fn accept_tls(self, config: TLSConfig)
+    -> Result<TCPSocket, SocketError | TLSError>
+
+    match TLSSession.accept(self.socket.fd, config)
+      Result.Ok(session) ->
+        Result.Ok(TCPSocket{socket: self.socket, tls: Option.Some(session)})
+
+      Result.Err(e) ->
+        Result.Err(e)
+    end
+  end
+
+  @doc """
+  Returns true if the connection has an active TLS session.
+  """
+  fn tls?(self) -> Bool
+    self.tls.some?()
   end
 
   @doc """
   Reads up to `count` bytes from the connection. Returns the data
   as a string or an error if the read fails.
   """
-  fn read(self, count: Int) -> Result<String, String>
-    self.socket.fd.read(count)
+  fn read(self, count: Int) -> Result<String, SocketError | TLSError>
+    bytes =
+      match self.read_binary(count)
+        Result.Ok(b) -> b
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match bytes.to_string()
+      Result.Ok(text) ->
+        Result.Ok(text)
+
+      Result.Err(_) ->
+        invalid: SocketError | TLSError = SocketError.InvalidUTF8
+        Result.Err(invalid)
+    end
   end
 
   @doc """
@@ -68,8 +150,21 @@ struct TCPSocket
   binary protocols where the data is not UTF-8 text. Returns the bytes
   or an error if the read fails.
   """
-  fn read_binary(self, count: Int) -> Result<Binary, String>
-    self.socket.fd.read_binary(count)
+  fn read_binary(self, count: Int) -> Result<Binary, SocketError | TLSError>
+    match self.tls
+      Option.Some(session) ->
+        session.read_binary(self.socket.fd, count)
+
+      Option.None ->
+        match self.socket.fd.read_binary(count)
+          Result.Ok(bytes) ->
+            Result.Ok(bytes)
+
+          Result.Err(_) ->
+            failure: SocketError | TLSError = SocketError.last()
+            Result.Err(failure)
+        end
+    end
   end
 
   @doc """
@@ -77,15 +172,37 @@ struct TCPSocket
   UTF-8) or a `Binary` for raw wire protocols. Returns the number of
   bytes written or an error if the write fails.
   """
-  fn write(self, data: Binary | String) -> Result<Int, String>
-    self.socket.fd.write(data)
+  fn write(self, data: Binary | String) -> Result<Int, SocketError | TLSError>
+    match self.tls
+      Option.Some(session) ->
+        session.write(self.socket.fd, data)
+
+      Option.None ->
+        match self.socket.fd.write(data)
+          Result.Ok(written) ->
+            Result.Ok(written)
+
+          Result.Err(_) ->
+            failure: SocketError | TLSError = SocketError.last()
+            Result.Err(failure)
+        end
+    end
   end
 
   @doc """
-  Closes the TCP connection.
+  Closes the TCP connection, shutting down the TLS session first when
+  one is active.
   """
-  fn close(self) -> Result<String, String>
-    self.socket.close()
+  fn close(self) -> Result<Bool, SocketError>
+    match self.tls
+      Option.Some(session) -> session.shutdown()
+      Option.None -> ()
+    end
+
+    match self.socket.close()
+      Result.Ok(_) -> Result.Ok(true)
+      Result.Err(_) -> Result.Err(SocketError.last())
+    end
   end
 end
 
@@ -103,7 +220,7 @@ struct TCPListener
   `SO_REUSEADDR`, and starts listening with a backlog of 128.
   Returns the listener or an error if any step fails.
   """
-  fn bind(port: Int) -> Result<TCPListener, String>
+  fn bind(port: Int) -> Result<TCPListener, SocketError>
     TCPListener.bind_addr(SocketAddress{ip: IPAddress.any(), port: port})
   end
 
@@ -112,28 +229,28 @@ struct TCPListener
   starts listening with a backlog of 128. Returns the listener or
   an error if any step fails.
   """
-  fn bind_addr(addr: SocketAddress) -> Result<TCPListener, String>
+  fn bind_addr(addr: SocketAddress) -> Result<TCPListener, SocketError>
     sock =
       match Socket.create(SocketKind.Stream)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(_) -> return Result.Err(SocketError.last())
       end
 
     sock =
       match sock.set_reuse_addr()
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(_) -> return Result.Err(SocketError.last())
       end
 
     sock =
       match sock.bind(addr)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(_) -> return Result.Err(SocketError.last())
       end
 
     match sock.listen(128)
       Result.Ok(sock) -> Result.Ok(TCPListener{socket: sock})
-      Result.Err(e) -> Result.Err(e)
+      Result.Err(_) -> Result.Err(SocketError.last())
     end
   end
 
@@ -142,10 +259,13 @@ struct TCPListener
   Returns a `TCPSocket` for the new connection or an error if the
   accept fails.
   """
-  fn accept(self) -> Result<TCPSocket, String>
+  fn accept(self) -> Result<TCPSocket, SocketError>
     match self.socket.accept()
-      Result.Ok(fd) -> Result.Ok(TCPSocket{socket: Socket{fd: fd}})
-      Result.Err(e) -> Result.Err(e)
+      Result.Ok(fd) ->
+        Result.Ok(TCPSocket{socket: Socket{fd: fd}, tls: Option.None})
+
+      Result.Err(_) ->
+        Result.Err(SocketError.last())
     end
   end
 
@@ -157,7 +277,10 @@ struct TCPListener
     raw = self.socket.try_accept_raw()
 
     if raw >= 0
-      Option.Some(TCPSocket{socket: Socket{fd: Fd{descriptor: raw}}})
+      Option.Some(TCPSocket{
+        socket: Socket{fd: Fd{descriptor: raw}},
+        tls: Option.None,
+      })
     else
       Option.None
     end
@@ -173,8 +296,11 @@ struct TCPListener
   @doc """
   Closes the listener and stops accepting new connections.
   """
-  fn close(self) -> Result<String, String>
-    self.socket.close()
+  fn close(self) -> Result<Bool, SocketError>
+    match self.socket.close()
+      Result.Ok(_) -> Result.Ok(true)
+      Result.Err(_) -> Result.Err(SocketError.last())
+    end
   end
 end
 
@@ -184,7 +310,7 @@ Events delivered to a process that spawns a `TCPServer`.
 enum TCPEvent
   Connected(TCPSocket)
   Closed(Fd)
-  Error(String)
+  Error(SocketError)
 end
 
 @doc """
@@ -224,7 +350,7 @@ impl Process<TCPServerConfig, TCPServerMsg | IOReady, String> for TCPServer
         Result.Ok(TCPServer{listener: listener, owner: config.owner})
 
       Result.Err(e) ->
-        config.owner.cast(TCPEvent.Error("bind failed: " <> e))
+        config.owner.cast(TCPEvent.Error(e))
         Result.Err(StopReason.Shutdown)
     end
   end
@@ -272,7 +398,7 @@ extend TCPServer
         self.drain_accepts()
 
       IOReady.Error(_) ->
-        self.owner.cast(TCPEvent.Error("listener error"))
+        self.owner.cast(TCPEvent.Error(SocketError.last()))
         Step.Done(StopReason.Shutdown)
 
       _ ->

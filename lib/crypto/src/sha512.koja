@@ -1,8 +1,12 @@
-@doc "SHA-512 cryptographic hash (64-byte / 512-bit digest)."
+@doc """
+SHA-512 cryptographic hash (64-byte / 512-bit digest).
+"""
 struct SHA512
   ctx: CPtr<UInt8>
 
-  @doc "Computes the SHA-512 digest of `data` in a single call."
+  @doc """
+  Computes the SHA-512 digest of `data` in a single call.
+  """
   fn digest(data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(64)
     sha512_raw(data.ptr(), data.byte_size(), out)
@@ -11,7 +15,9 @@ struct SHA512
     result
   end
 
-  @doc "Finalizes the hash and returns the 64-byte digest. Consumes the context."
+  @doc """
+  Finalizes the hash and returns the 64-byte digest. Consumes the context.
+  """
   fn finalize(self) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(64)
     null: CPtr<UInt8> = CPtr.null()
@@ -22,7 +28,9 @@ struct SHA512
     result
   end
 
-  @doc "Creates a new streaming SHA-512 context."
+  @doc """
+  Creates a new streaming SHA-512 context.
+  """
   fn new -> Self
     ctx = evp_md_ctx_new()
     null: CPtr<UInt8> = CPtr.null()
@@ -30,7 +38,9 @@ struct SHA512
     SHA512{ctx: ctx}
   end
 
-  @doc "Feeds data into the hash context."
+  @doc """
+  Feeds data into the hash context.
+  """
   fn update(self, data: Binary) -> Self
     evp_digest_update(self.ctx, data.ptr(), data.byte_size())
     self

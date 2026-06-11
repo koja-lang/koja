@@ -2,7 +2,9 @@
 HMAC message authentication codes.
 """
 struct HMAC
-  @doc "Computes HMAC-SHA-1."
+  @doc """
+  Computes HMAC-SHA-1.
+  """
   fn sha1(key: Binary, data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(20)
     null: CPtr<UInt8> = CPtr.null()
@@ -20,7 +22,9 @@ struct HMAC
     result
   end
 
-  @doc "Computes HMAC-SHA-256."
+  @doc """
+  Computes HMAC-SHA-256.
+  """
   fn sha256(key: Binary, data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(32)
     null: CPtr<UInt8> = CPtr.null()
@@ -38,7 +42,9 @@ struct HMAC
     result
   end
 
-  @doc "Computes HMAC-SHA-384."
+  @doc """
+  Computes HMAC-SHA-384.
+  """
   fn sha384(key: Binary, data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(48)
     null: CPtr<UInt8> = CPtr.null()
@@ -56,7 +62,9 @@ struct HMAC
     result
   end
 
-  @doc "Computes HMAC-SHA-512."
+  @doc """
+  Computes HMAC-SHA-512.
+  """
   fn sha512(key: Binary, data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(64)
     null: CPtr<UInt8> = CPtr.null()

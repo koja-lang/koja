@@ -1,4 +1,6 @@
+alias Net.SocketError
 alias Net.TCPSocket
+alias Net.TLSError
 
 @doc """
 Socket framing and binary cursor helpers for the Postgres driver.
@@ -124,7 +126,7 @@ struct PgIO
     chunk =
       match socket.read_binary(8192)
         Result.Ok(c) -> c
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(e) -> return Result.Err(PgIO.net_message(e))
       end
 
     if chunk.byte_size() == 0
@@ -146,9 +148,16 @@ struct PgIO
     written =
       match socket.write(remaining)
         Result.Ok(n) -> n
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(e) -> return Result.Err(PgIO.net_message(e))
       end
 
     PgIO.write_from(socket, data, offset + written)
+  end
+
+  priv fn net_message(e: SocketError | TLSError) -> String
+    match e
+      socket_error: SocketError -> socket_error.message()
+      tls_error: TLSError -> tls_error.message()
+    end
   end
 end

@@ -18,7 +18,7 @@ use crate::ffi::{
 use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
 use crate::util::{
-    BITS_PER_BYTE, BLOCK_HEADER_SIZE, alloc_binary, read_bit_length, set_last_error,
+    BITS_PER_BYTE, BLOCK_HEADER_SIZE, LastError, alloc_binary, read_bit_length, set_last_error,
     write_block_header,
 };
 
@@ -218,7 +218,7 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
         )
     };
     if ret != 0 {
-        set_last_error(io::Error::other("getaddrinfo failed"));
+        set_last_error(LastError::name_not_found("getaddrinfo failed"));
         return ptr::null_mut();
     }
 
@@ -237,7 +237,7 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
     unsafe { libc_freeaddrinfo(result) };
 
     if addrs.is_empty() {
-        set_last_error(io::Error::other("no addresses found"));
+        set_last_error(LastError::name_not_found("no addresses found"));
         return ptr::null_mut();
     }
 

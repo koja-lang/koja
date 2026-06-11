@@ -11,7 +11,7 @@ struct UDPSocket
   to let the OS assign an ephemeral port. Returns the bound socket
   or an error if the bind fails.
   """
-  fn bind(port: Int) -> Result<UDPSocket, String>
+  fn bind(port: Int) -> Result<UDPSocket, SocketError>
     UDPSocket.bind_addr(SocketAddress{ip: IPAddress.any(), port: port})
   end
 
@@ -19,16 +19,16 @@ struct UDPSocket
   Binds to a specific `SocketAddress`. Returns the bound socket or
   an error if the bind fails.
   """
-  fn bind_addr(addr: SocketAddress) -> Result<UDPSocket, String>
+  fn bind_addr(addr: SocketAddress) -> Result<UDPSocket, SocketError>
     sock =
       match Socket.create(SocketKind.Datagram)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err(e)
+        Result.Err(_) -> return Result.Err(SocketError.last())
       end
 
     match sock.bind(addr)
       Result.Ok(bound) -> Result.Ok(UDPSocket{socket: bound})
-      Result.Err(e) -> Result.Err(e)
+      Result.Err(_) -> Result.Err(SocketError.last())
     end
   end
 
@@ -36,22 +36,34 @@ struct UDPSocket
   Sends data to the given address. Returns the number of bytes
   sent or an error if the send fails.
   """
-  fn send_to(self, data: String, addr: SocketAddress) -> Result<Int, String>
-    self.socket.send_to(data, addr)
+  fn send_to(self, data: String, addr: SocketAddress)
+    -> Result<Int, SocketError>
+    match self.socket.send_to(data, addr)
+      Result.Ok(sent) -> Result.Ok(sent)
+      Result.Err(_) -> Result.Err(SocketError.last())
+    end
   end
 
   @doc """
   Receives up to `count` bytes. Returns a pair of the received data
   and the sender's address, or an error if the receive fails.
   """
-  fn recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>
-    self.socket.recv_from(count)
+  fn recv_from(self, count: Int)
+    -> Result<Pair<String, SocketAddress>, SocketError>
+
+    match self.socket.recv_from(count)
+      Result.Ok(received) -> Result.Ok(received)
+      Result.Err(_) -> Result.Err(SocketError.last())
+    end
   end
 
   @doc """
   Closes the UDP socket.
   """
-  fn close(self) -> Result<String, String>
-    self.socket.close()
+  fn close(self) -> Result<Bool, SocketError>
+    match self.socket.close()
+      Result.Ok(_) -> Result.Ok(true)
+      Result.Err(_) -> Result.Err(SocketError.last())
+    end
   end
 end

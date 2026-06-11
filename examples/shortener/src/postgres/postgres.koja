@@ -23,7 +23,7 @@ struct Postgres
     socket =
       match TCPSocket.connect(host, port)
         Result.Ok(s) -> s
-        Result.Err(e) -> return Result.Err("connect failed: " <> e)
+        Result.Err(e) -> return Result.Err("connect failed: " <> e.message())
       end
 
     match PgIO.write_all(socket, PgMessage.encode_startup(user, database))
@@ -68,8 +68,11 @@ struct Postgres
   @doc """
   Closes the underlying socket.
   """
-  fn close(self) -> Result<String, String>
-    self.socket.close()
+  fn close(self) -> Result<Bool, String>
+    match self.socket.close()
+      Result.Ok(_) -> Result.Ok(true)
+      Result.Err(e) -> Result.Err(e.message())
+    end
   end
 
   priv fn await_ready(socket: TCPSocket, buffer: Binary)

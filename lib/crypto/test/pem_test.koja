@@ -1,0 +1,89 @@
+# `parse` validates PEM labels without decoding contents, so these
+# fixtures use placeholder base64 bodies.
+const FAKE_CERT: String = "-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n"
+const FAKE_EC_KEY: String = "-----BEGIN EC PRIVATE KEY-----\nMIGk\n-----END EC PRIVATE KEY-----\n"
+const FAKE_ENCRYPTED_KEY: String = "-----BEGIN ENCRYPTED PRIVATE KEY-----\nMIIF\n-----END ENCRYPTED PRIVATE KEY-----\n"
+const FAKE_PKCS8_KEY: String = "-----BEGIN PRIVATE KEY-----\nMIGH\n-----END PRIVATE KEY-----\n"
+const FAKE_RSA_KEY: String = "-----BEGIN RSA PRIVATE KEY-----\nMIIE\n-----END RSA PRIVATE KEY-----\n"
+
+struct CertificateTest
+  @test "Certificate.parse accepts a CERTIFICATE block"
+  fn test_accepts_certificate -> Result<Bool, String>
+    match Certificate.parse(FAKE_CERT)
+      Result.Ok(cert) ->
+        cert.pem == FAKE_CERT
+          ? Result.Ok(true)
+          : Result.Err("expected pem text to be preserved")
+
+      Result.Err(e) ->
+        Result.Err("expected Ok, got: " <> e.message())
+    end
+  end
+
+  @test "Certificate.parse points out a swapped private key"
+  fn test_rejects_private_key -> Result<Bool, String>
+    match Certificate.parse(FAKE_PKCS8_KEY)
+      Result.Err(PEMError.CertificateIsPrivateKey) -> Result.Ok(true)
+      Result.Err(e) -> Result.Err("unexpected error: " <> e.message())
+      Result.Ok(_) -> Result.Err("expected private key input to be rejected")
+    end
+  end
+
+  @test "Certificate.parse rejects non-PEM text"
+  fn test_rejects_garbage -> Result<Bool, String>
+    match Certificate.parse("not a certificate")
+      Result.Err(PEMError.NoCertificateBlock) -> Result.Ok(true)
+      Result.Err(e) -> Result.Err("unexpected error: " <> e.message())
+      Result.Ok(_) -> Result.Err("expected garbage input to be rejected")
+    end
+  end
+end
+
+struct PrivateKeyTest
+  @test "PrivateKey.parse accepts PKCS#8, RSA, and EC blocks"
+  fn test_accepts_key_labels -> Result<Bool, String>
+    match PrivateKey.parse(FAKE_PKCS8_KEY)
+      Result.Err(e) -> return Result.Err("PKCS#8 rejected: " <> e.message())
+      Result.Ok(_) -> ()
+    end
+
+    match PrivateKey.parse(FAKE_RSA_KEY)
+      Result.Err(e) -> return Result.Err("RSA rejected: " <> e.message())
+      Result.Ok(_) -> ()
+    end
+
+    match PrivateKey.parse(FAKE_EC_KEY)
+      Result.Err(e) -> return Result.Err("EC rejected: " <> e.message())
+      Result.Ok(_) -> ()
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "PrivateKey.parse rejects passphrase-protected keys"
+  fn test_rejects_encrypted_key -> Result<Bool, String>
+    match PrivateKey.parse(FAKE_ENCRYPTED_KEY)
+      Result.Err(PEMError.EncryptedKeyUnsupported) -> Result.Ok(true)
+      Result.Err(e) -> Result.Err("unexpected error: " <> e.message())
+      Result.Ok(_) -> Result.Err("expected encrypted key to be rejected")
+    end
+  end
+
+  @test "PrivateKey.parse points out a swapped certificate"
+  fn test_rejects_certificate -> Result<Bool, String>
+    match PrivateKey.parse(FAKE_CERT)
+      Result.Err(PEMError.PrivateKeyIsCertificate) -> Result.Ok(true)
+      Result.Err(e) -> Result.Err("unexpected error: " <> e.message())
+      Result.Ok(_) -> Result.Err("expected certificate input to be rejected")
+    end
+  end
+
+  @test "PrivateKey.parse rejects non-PEM text"
+  fn test_rejects_garbage -> Result<Bool, String>
+    match PrivateKey.parse("not a key")
+      Result.Err(PEMError.NoPrivateKeyBlock) -> Result.Ok(true)
+      Result.Err(e) -> Result.Err("unexpected error: " <> e.message())
+      Result.Ok(_) -> Result.Err("expected garbage input to be rejected")
+    end
+  end
+end

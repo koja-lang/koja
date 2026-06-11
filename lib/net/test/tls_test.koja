@@ -1,0 +1,293 @@
+alias Crypto.Certificate
+alias Crypto.PrivateKey
+
+# Self-signed test certificate (CN=localhost, 100-year expiry).
+# `koja test` always runs from the package root, so the relative
+# fixture paths are stable. Configs take parsed in-memory values,
+# so tests read the fixtures first.
+const TLS_TEST_CERT_PATH: String = "test/fixtures/localhost_cert.pem"
+const TLS_TEST_KEY_PATH: String = "test/fixtures/localhost_key.pem"
+
+struct TLSTest
+  @test "TLS loopback handshake and echo roundtrip"
+  fn test_tls_echo_roundtrip -> Result<Bool, String>
+    server_config =
+      match server_test_config()
+        Result.Ok(c) -> c
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    run_echo_roundtrip(43117, server_config, TLSConfig.insecure())
+  end
+
+  @test "verifying client accepts a server trusted via custom CA PEM"
+  fn test_tls_verify_custom_ca -> Result<Bool, String>
+    server_config =
+      match server_test_config()
+        Result.Ok(c) -> c
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    ca =
+      match read_test_certificate()
+        Result.Ok(c) -> c
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    client_config = TLSConfig.client().with_ca(ca)
+    run_echo_roundtrip(43119, server_config, client_config)
+  end
+
+  @test "verifying client rejects a self-signed server certificate"
+  fn test_tls_verify_rejects_self_signed -> Result<Bool, String>
+    server_config =
+      match server_test_config()
+        Result.Ok(c) -> c
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    addr = SocketAddress{ip: IPAddress.loopback(), port: 43118}
+
+    listener =
+      match TCPListener.bind_addr(addr)
+        Result.Ok(l) -> l
+        Result.Err(e) -> return Result.Err("bind: " <> e.message())
+      end
+
+    server =
+      Task.async(
+        fn () -> Result<String, String>
+          serve_tls_attempt(listener, server_config)
+        end,
+      )
+
+    plain =
+      match TCPSocket.connect_addr(addr)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err("connect: " <> e.message())
+      end
+
+    upgraded = plain.upgrade_tls("localhost", TLSConfig.client())
+
+    match plain.close()
+      _ -> ()
+    end
+
+    match Task.await(server)
+      _ -> ()
+    end
+
+    match listener.close()
+      _ -> ()
+    end
+
+    match upgraded
+      Result.Ok(_) ->
+        Result.Err("handshake should have failed certificate verification")
+
+      Result.Err(e) ->
+        match e
+          tls_error: TLSError ->
+            match tls_error
+              TLSError.VerificationFailed(_) ->
+                Result.Ok(true)
+
+              _ ->
+                Result.Err("expected verification failure, got: " <>
+                tls_error.message())
+            end
+
+          socket_error: SocketError ->
+            Result.Err("expected verification failure, got: " <>
+            socket_error.message())
+        end
+    end
+  end
+
+  priv fn run_echo_roundtrip(
+    port: Int,
+    server_config: TLSConfig,
+    client_config: TLSConfig,
+  ) -> Result<Bool, String>
+
+    addr = SocketAddress{ip: IPAddress.loopback(), port: port}
+
+    listener =
+      match TCPListener.bind_addr(addr)
+        Result.Ok(l) -> l
+        Result.Err(e) -> return Result.Err("bind: " <> e.message())
+      end
+
+    server =
+      Task.async(
+        fn () -> Result<String, String>
+          serve_tls_echo(listener, server_config)
+        end,
+      )
+
+    plain =
+      match TCPSocket.connect_addr(addr)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err("connect: " <> e.message())
+      end
+
+    if plain.tls?()
+      return Result.Err("expected tls? to be false before upgrade")
+    end
+
+    client =
+      match plain.upgrade_tls("localhost", client_config)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err("upgrade_tls: " <> net_message(e))
+      end
+
+    unless client.tls?()
+      return Result.Err("expected tls? to be true after upgrade")
+    end
+
+    match client.write("hello over tls")
+      Result.Err(e) -> return Result.Err("client write: " <> net_message(e))
+      Result.Ok(_) -> ()
+    end
+
+    echoed =
+      match client.read(1024)
+        Result.Ok(d) -> d
+        Result.Err(e) -> return Result.Err("client read: " <> net_message(e))
+      end
+
+    match client.close()
+      _ -> ()
+    end
+
+    server_seen =
+      match Task.await(server)
+        Result.Ok(outcome) ->
+          match outcome
+            Result.Ok(d) -> d
+            Result.Err(e) -> return Result.Err("server: " <> e)
+          end
+
+        Result.Err(_) ->
+          return Result.Err("server task did not finish")
+      end
+
+    match listener.close()
+      _ -> ()
+    end
+
+    unless echoed == "hello over tls"
+      return Result.Err("expected echo, got #{echoed}")
+    end
+
+    unless server_seen == "hello over tls"
+      return Result.Err("server saw #{server_seen}")
+    end
+
+    Result.Ok(true)
+  end
+
+  priv fn serve_tls_attempt(listener: TCPListener, config: TLSConfig)
+    -> Result<String, String>
+
+    raw =
+      match listener.accept()
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err("accept: " <> e.message())
+      end
+
+    outcome =
+      match raw.accept_tls(config)
+        Result.Ok(secured) ->
+          match secured.close()
+            _ -> ()
+          end
+
+          "handshake ok"
+
+        Result.Err(e) ->
+          match raw.close()
+            _ -> ()
+          end
+
+          "handshake failed: " <> net_message(e)
+      end
+
+    Result.Ok(outcome)
+  end
+
+  priv fn serve_tls_echo(listener: TCPListener, config: TLSConfig)
+    -> Result<String, String>
+
+    raw =
+      match listener.accept()
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err("accept: " <> e.message())
+      end
+
+    secured =
+      match raw.accept_tls(config)
+        Result.Ok(s) -> s
+        Result.Err(e) -> return Result.Err("accept_tls: " <> net_message(e))
+      end
+
+    data =
+      match secured.read(1024)
+        Result.Ok(d) -> d
+        Result.Err(e) -> return Result.Err("server read: " <> net_message(e))
+      end
+
+    match secured.write(data)
+      Result.Err(e) -> return Result.Err("server write: " <> net_message(e))
+      Result.Ok(_) -> ()
+    end
+
+    match secured.close()
+      _ -> ()
+    end
+
+    Result.Ok(data)
+  end
+
+  priv fn net_message(e: SocketError | TLSError) -> String
+    match e
+      socket_error: SocketError -> socket_error.message()
+      tls_error: TLSError -> tls_error.message()
+    end
+  end
+
+  priv fn read_test_certificate -> Result<Certificate, String>
+    text =
+      match File.read(TLS_TEST_CERT_PATH)
+        Result.Ok(pem) -> pem
+        Result.Err(e) -> return Result.Err("read cert fixture: " <> e)
+      end
+
+    match Certificate.parse(text)
+      Result.Ok(c) -> Result.Ok(c)
+      Result.Err(e) -> Result.Err("parse cert fixture: " <> e.message())
+    end
+  end
+
+  priv fn server_test_config -> Result<TLSConfig, String>
+    cert =
+      match read_test_certificate()
+        Result.Ok(c) -> c
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    key_text =
+      match File.read(TLS_TEST_KEY_PATH)
+        Result.Ok(pem) -> pem
+        Result.Err(e) -> return Result.Err("read key fixture: " <> e)
+      end
+
+    key =
+      match PrivateKey.parse(key_text)
+        Result.Ok(k) -> k
+        Result.Err(e) -> return Result.Err("parse key fixture: " <> e.message())
+      end
+
+    Result.Ok(TLSConfig.server(cert, key))
+  end
+end

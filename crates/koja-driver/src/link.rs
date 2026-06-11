@@ -109,6 +109,15 @@ pub(crate) fn link(
     for lib in link_libraries {
         args.push(format!("-l{lib}"));
     }
+    // BoringSSL's libssl is C++ (libcrypto is plain C), so pull in
+    // the C++ runtime whenever it is linked. Must come after -lssl
+    // so GNU ld resolves the archive's references.
+    if link_libraries.iter().any(|lib| lib == "ssl") {
+        #[cfg(target_os = "macos")]
+        args.push("-lc++".to_string());
+        #[cfg(not(target_os = "macos"))]
+        args.push("-lstdc++".to_string());
+    }
 
     let mut cmd = process::Command::new("cc");
     cmd.args(&args);

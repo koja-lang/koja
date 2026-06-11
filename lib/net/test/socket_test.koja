@@ -1,4 +1,5 @@
 alias Net.Socket
+alias Net.SocketError
 alias Net.SocketKind
 alias Net.SocketAddress
 alias Net.IPAddress
@@ -108,8 +109,8 @@ struct SocketTest
   @test "TCPListener.bind to port 0"
   fn test_tcp_listener_bind -> Result<Bool, String>
     match TCPListener.bind(0)
-      Result.Err(msg) ->
-        Result.Err("tcp listener bind failed: #{msg}")
+      Result.Err(e) ->
+        Result.Err("tcp listener bind failed: " <> e.message())
 
       Result.Ok(listener) ->
         _ = listener.close()
@@ -126,16 +127,19 @@ struct SocketTest
         _ = conn.close()
         Result.Err("expected tcp connection refused")
 
-      Result.Err(_) ->
+      Result.Err(SocketError.ConnectionRefused) ->
         Result.Ok(true)
+
+      Result.Err(e) ->
+        Result.Err("expected ConnectionRefused, got: " <> e.message())
     end
   end
 
   @test "UDPSocket.bind to port 0"
   fn test_udp_bind -> Result<Bool, String>
     match UDPSocket.bind(0)
-      Result.Err(msg) ->
-        Result.Err("udp bind failed: #{msg}")
+      Result.Err(e) ->
+        Result.Err("udp bind failed: " <> e.message())
 
       Result.Ok(sock) ->
         _ = sock.close()
@@ -146,8 +150,8 @@ struct SocketTest
   @test "UDPSocket.bind_addr with loopback"
   fn test_udp_bind_addr -> Result<Bool, String>
     match UDPSocket.bind_addr(SocketAddress{ip: IPAddress.loopback(), port: 0})
-      Result.Err(msg) ->
-        Result.Err("udp bind_addr failed: #{msg}")
+      Result.Err(e) ->
+        Result.Err("udp bind_addr failed: " <> e.message())
 
       Result.Ok(sock) ->
         _ = sock.close()
@@ -160,8 +164,8 @@ struct SocketTest
     match TCPListener.bind_addr(
       SocketAddress{ip: IPAddress.loopback(), port: 0},
     )
-      Result.Err(msg) ->
-        Result.Err("tcp listener bind_addr failed: #{msg}")
+      Result.Err(e) ->
+        Result.Err("tcp listener bind_addr failed: " <> e.message())
 
       Result.Ok(listener) ->
         _ = listener.close()

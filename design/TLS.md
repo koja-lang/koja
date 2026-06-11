@@ -4,6 +4,22 @@ Design for adding TLS (client and server) to the `net` package.
 BoringSSL's `libssl.a` provides the implementation; Koja's C FFI
 provides the bindings. No new compiler intrinsics are required.
 
+> **Status: implemented** (`lib/net/src/tls.koja`). The landed API
+> differs from sections 4–5 below in four ways: the raw `SSL`/`SSL_CTX`
+> pointer pair is wrapped in a `TLSSession` struct (no `Pair<CPtr,
+> CPtr>` returns), `TCPSocket` carries `tls: Option<TLSSession>`
+> instead of two null-sentinel pointer fields, credentials are
+> memory-only — `TLSConfig` holds an `Option<TLSIdentity>` (a
+> `Crypto.Certificate` / `Crypto.PrivateKey` pair, parsed from PEM
+> text with label validation) and a `TrustStore` enum (`System` or
+> `Custom(cert)`) rather than file paths; callers read files
+> themselves — and errors are typed rather than `String`: TLS
+> operations return `Result<_, SocketError | TLSError>` with
+> `TLSError.VerificationFailed(VerificationError)` carrying the
+> verification cause. Certificate
+> verification is on by default for clients (`TLSConfig.client()`);
+> opt out with `TLSConfig.insecure()`.
+
 ---
 
 ## Architecture overview
@@ -366,8 +382,16 @@ socket =
 
 `@extern "C"` functions **must** use explicit fixed-width types. `Int`
 is not allowed, even though `Int` and `Int64` are the same underlying
-type. Use `Int64` for all C `int`, `long`, and `size_t` parameters
-(this matches the crypto package convention).
+type. Match the C width exactly:
+
+- **Returns of C `int` must be declared `Int32`.** The callee only
+  writes the low 32 bits of the return register; declaring `Int64`
+  reads garbage in the upper bits (release BoringSSL happens to leave
+  them clean, the debug build does not — this caused a real SIGBUS).
+  Bind the result to an `Int` local to widen it before comparisons.
+- Returns of C `long` / `size_t` are `Int64`.
+- C `int` *parameters* may be declared `Int64`: the callee reads only
+  the low 32 bits, so small non-negative values pass through intact.
 
 ### `@link` syntax
 
@@ -388,13 +412,12 @@ in the same `cond`. Use the guard-then-block pattern shown above.
 `const` declarations cannot appear inside struct or impl blocks. Place
 them at the file's top level.
 
-### `Fd.descriptor` is `Int`, not `Int64`
+### `Fd.descriptor` is `Int32`
 
-`Fd.descriptor` is typed `Int`. Changing it to `Int64` would be a
-large refactor across the codebase. Since `Int` and `Int64` are the
-same type, passing `self.descriptor` to an `@extern "C"` function
-expecting `Int64` works without conversion. This is a known wart;
-future work may unify `Int`/`Int64` in FFI contexts.
+`Fd.descriptor` is typed `Int32`, matching the C `int` fd convention
+used across the runtime externs. Declare fd parameters in TLS FFI
+bindings as `Int32` (e.g. `SSL_set_fd`) and pass `self.descriptor`
+directly.
 
 ### Hostname for `CString`
 

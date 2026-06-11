@@ -1,0 +1,97 @@
+@doc """
+Why `Certificate.parse` or `PrivateKey.parse` rejected its input.
+"""
+enum PEMError
+  CertificateIsPrivateKey
+  EncryptedKeyUnsupported
+  NoCertificateBlock
+  NoPrivateKeyBlock
+  PrivateKeyIsCertificate
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      PEMError.CertificateIsPrivateKey ->
+        "no CERTIFICATE block found (the input looks like a private key)"
+
+      PEMError.EncryptedKeyUnsupported ->
+        "passphrase-protected keys are not supported; provide an unencrypted PKCS#8 key"
+
+      PEMError.NoCertificateBlock ->
+        "no CERTIFICATE block found in PEM text"
+
+      PEMError.NoPrivateKeyBlock ->
+        "no private key block found in PEM text"
+
+      PEMError.PrivateKeyIsCertificate ->
+        "no private key block found (the input looks like a certificate)"
+    end
+  end
+end
+
+@doc """
+One or more X.509 certificates as PEM text: a single leaf, a leaf
+followed by its chain, or a CA bundle. Construct with `parse`, which
+validates the PEM labels without decoding the certificate contents.
+"""
+struct Certificate
+  pem: String
+
+  @doc """
+  Validates that the text contains at least one `CERTIFICATE` PEM
+  block. Private keys and other non-certificate input are rejected
+  with a matching `PEMError` variant.
+  """
+  fn parse(text: String) -> Result<Certificate, PEMError>
+    if text.contains?("-----BEGIN CERTIFICATE-----")
+      return Result.Ok(Certificate{pem: text})
+    end
+
+    if private_key_block?(text)
+      return Result.Err(PEMError.CertificateIsPrivateKey)
+    end
+
+    Result.Err(PEMError.NoCertificateBlock)
+  end
+end
+
+@doc """
+A private key as PEM text: PKCS#8 (`PRIVATE KEY`) or the legacy
+`RSA PRIVATE KEY` / `EC PRIVATE KEY` forms.
+
+Construct with `parse`, which validates the PEM labels without decoding
+the key contents.
+"""
+struct PrivateKey
+  pem: String
+
+  @doc """
+  Validates that the text contains a supported private key PEM
+  block. Passphrase-protected (`ENCRYPTED PRIVATE KEY`) input is
+  rejected, as are certificates and other non-key input, each with
+  a matching `PEMError` variant.
+  """
+  fn parse(text: String) -> Result<PrivateKey, PEMError>
+    if text.contains?("-----BEGIN ENCRYPTED PRIVATE KEY-----")
+      return Result.Err(PEMError.EncryptedKeyUnsupported)
+    end
+
+    if private_key_block?(text)
+      return Result.Ok(PrivateKey{pem: text})
+    end
+
+    if text.contains?("-----BEGIN CERTIFICATE-----")
+      return Result.Err(PEMError.PrivateKeyIsCertificate)
+    end
+
+    Result.Err(PEMError.NoPrivateKeyBlock)
+  end
+end
+
+priv fn private_key_block?(text: String) -> Bool
+  text.contains?("-----BEGIN PRIVATE KEY-----") or
+  text.contains?("-----BEGIN RSA PRIVATE KEY-----") or
+  text.contains?("-----BEGIN EC PRIVATE KEY-----")
+end

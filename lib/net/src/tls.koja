@@ -1,0 +1,744 @@
+alias Crypto.Certificate
+alias Crypto.PrivateKey
+
+const SSL_ERROR_SYSCALL: Int64 = 5
+const SSL_ERROR_WANT_READ: Int64 = 2
+const SSL_ERROR_WANT_WRITE: Int64 = 3
+const SSL_ERROR_ZERO_RETURN: Int64 = 6
+const SSL_VERIFY_PEER: Int64 = 1
+const X509_V_OK: Int64 = 0
+
+@doc """
+Why peer certificate verification failed: the actionable causes as
+named variants, with `Other` carrying the raw `X509_V_ERR_*` code
+for the long tail.
+"""
+enum VerificationError
+  Expired
+  HostnameMismatch
+  NotYetValid
+  Other(Int)
+  SelfSigned
+  UntrustedRoot
+
+  @doc """
+  Maps an `X509_V_ERR_*` code from `SSL_get_verify_result`.
+  Mostly internal; prefer matching returned errors.
+  """
+  fn from_code(code: Int) -> VerificationError
+    match code
+      2 -> VerificationError.UntrustedRoot
+      9 -> VerificationError.NotYetValid
+      10 -> VerificationError.Expired
+      18 -> VerificationError.SelfSigned
+      19 -> VerificationError.SelfSigned
+      20 -> VerificationError.UntrustedRoot
+      27 -> VerificationError.UntrustedRoot
+      62 -> VerificationError.HostnameMismatch
+      _ -> VerificationError.Other(code)
+    end
+  end
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      VerificationError.Expired ->
+        "certificate has expired"
+
+        # Static string owned by BoringSSL: wrap and copy, never free.
+
+      VerificationError.HostnameMismatch ->
+        "certificate does not match the requested hostname"
+
+      VerificationError.NotYetValid ->
+        "certificate is not yet valid"
+
+      VerificationError.Other(code) ->
+        x509_verify_cert_error_string(code).to_cstring().to_string()
+
+      VerificationError.SelfSigned ->
+        "certificate is self-signed"
+
+      VerificationError.UntrustedRoot ->
+        "certificate chain does not lead to a trusted root"
+    end
+  end
+
+  @extern "C" @link "ssl:X509_verify_cert_error_string"
+  priv fn x509_verify_cert_error_string(code: Int64) -> CPtr<UInt8>
+end
+
+@doc """
+Why a TLS operation failed. Socket-level failures during TLS
+operations surface as `SocketError` through union return types
+(`SocketError | TLSError`), not as `TLSError` variants.
+"""
+enum TLSError
+  CertificateInvalid
+  IdentityRequired
+  Internal
+  PeerClosed
+  PrivateKeyInvalid
+  ProtocolFailed
+  TrustStoreInvalid
+  VerificationFailed(VerificationError)
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      TLSError.CertificateInvalid ->
+        "certificate PEM was rejected"
+
+      TLSError.IdentityRequired ->
+        "server TLS config requires an identity (certificate and key)"
+
+      TLSError.Internal ->
+        "TLS library initialization failed"
+
+      TLSError.PeerClosed ->
+        "peer closed the connection"
+
+      TLSError.PrivateKeyInvalid ->
+        "private key PEM was rejected"
+
+      TLSError.ProtocolFailed ->
+        "TLS protocol failure"
+
+      TLSError.TrustStoreInvalid ->
+        "CA bundle was rejected"
+
+      TLSError.VerificationFailed(e) ->
+        "certificate verification failed: " <> e.message()
+    end
+  end
+end
+
+@doc """
+The certificate authorities used to verify peer certificates:
+either the operating system's default trust store, or a custom
+CA bundle.
+"""
+enum TrustStore
+  Custom(Certificate)
+  System
+end
+
+@doc """
+A certificate and private key pair (e.g. parsed from files or from
+environment variables). The certificate should contain the leaf
+first, followed by any chain certificates.
+"""
+struct TLSIdentity
+  cert: Certificate
+  key: PrivateKey
+end
+
+@doc """
+Configuration for establishing a TLS session.
+
+Use `client()` for a verifying client (the default and recommended
+mode), `insecure()` to skip certificate verification (testing only),
+or `server(cert, key)` for the server side of a handshake.
+
+Credentials are in-memory `Crypto.Certificate` / `Crypto.PrivateKey`
+values; to use files, read and parse them first (e.g.
+`Certificate.parse(File.read(path)?)?`).
+
+`with_ca` replaces the system trust store with a custom CA bundle
+for verification.
+"""
+struct TLSConfig
+  identity: Option<TLSIdentity>
+  trust: TrustStore
+  verify: Bool
+
+  @doc """
+  Client configuration with certificate verification enabled.
+  """
+  fn client -> TLSConfig
+    TLSConfig{identity: Option.None, trust: TrustStore.System, verify: true}
+  end
+
+  @doc """
+  Client configuration that skips certificate verification.
+  Vulnerable to man-in-the-middle attacks; use only for testing.
+  """
+  fn insecure -> TLSConfig
+    TLSConfig{identity: Option.None, trust: TrustStore.System, verify: false}
+  end
+
+  @doc """
+  Server configuration using the given certificate (leaf first,
+  followed by any chain certificates) and private key.
+  """
+  fn server(cert: Certificate, key: PrivateKey) -> TLSConfig
+    TLSConfig{
+      identity: Option.Some(TLSIdentity{cert: cert, key: key}),
+      trust: TrustStore.System,
+      verify: false,
+    }
+  end
+
+  @doc """
+  Returns a copy of the configuration that trusts the given CA
+  bundle instead of the system trust store.
+  """
+  fn with_ca(self, ca: Certificate) -> TLSConfig
+    TLSConfig{
+      identity: self.identity,
+      trust: TrustStore.Custom(ca),
+      verify: self.verify,
+    }
+  end
+end
+
+@doc """
+An established TLS session over a connected socket file descriptor,
+wrapping BoringSSL `SSL` and `SSL_CTX` handles. Create with `connect`
+(client side) or `accept` (server side); release with `shutdown` --
+there are no destructors, so cleanup is explicit (like `CString.free`).
+
+A session must be owned and used by a single process: the underlying
+`SSL` object is not safe for concurrent use.
+"""
+struct TLSSession
+  ctx: CPtr<UInt8>
+  ssl: CPtr<UInt8>
+
+  @doc """
+  Performs a server-side TLS handshake over the connected `fd` using
+  the certificate and key from `config`. Suspends the process while
+  the socket is not ready. Returns the established session.
+  """
+  fn accept(fd: Fd, config: TLSConfig)
+    -> Result<TLSSession, SocketError | TLSError>
+
+    identity =
+      match config.identity
+        Option.Some(i) -> i
+        Option.None -> return handshake_tls_failure(TLSError.IdentityRequired)
+      end
+
+    ctx = ssl_ctx_new(tls_method())
+
+    if ctx.null?()
+      return handshake_tls_failure(TLSError.Internal)
+    end
+
+    match load_identity(ctx, identity)
+      Result.Err(e) ->
+        ssl_ctx_free(ctx)
+        return handshake_tls_failure(e)
+
+      Result.Ok(_) ->
+        ()
+    end
+
+    ssl = ssl_new(ctx)
+
+    if ssl.null?()
+      ssl_ctx_free(ctx)
+      return handshake_tls_failure(TLSError.Internal)
+    end
+
+    ssl_set_fd(ssl, fd.descriptor)
+    handshake_loop(ssl, ctx, fd, false)
+  end
+
+  @doc """
+  Performs a client-side TLS handshake over the connected `fd`.
+  Sends `hostname` for SNI and, when `config.verify` is set, checks
+  the server certificate chain against it. Suspends the process while
+  the socket is not ready. Returns the established session.
+  """
+  fn connect(fd: Fd, hostname: String, config: TLSConfig)
+    -> Result<TLSSession, SocketError | TLSError>
+
+    ctx = ssl_ctx_new(tls_method())
+
+    if ctx.null?()
+      return handshake_tls_failure(TLSError.Internal)
+    end
+
+    match configure_verification(ctx, config)
+      Result.Err(e) ->
+        ssl_ctx_free(ctx)
+        return handshake_tls_failure(e)
+
+      Result.Ok(_) ->
+        ()
+    end
+
+    ssl = ssl_new(ctx)
+
+    if ssl.null?()
+      ssl_ctx_free(ctx)
+      return handshake_tls_failure(TLSError.Internal)
+    end
+
+    ssl_set_fd(ssl, fd.descriptor)
+
+    host_cs = hostname.to_cstring()
+    ssl_set_tlsext_host_name(ssl, host_cs.ptr)
+
+    if config.verify
+      ssl_set1_host(ssl, host_cs.ptr)
+    end
+
+    host_cs.free()
+    handshake_loop(ssl, ctx, fd, true)
+  end
+
+  @doc """
+  Reads up to `count` bytes of decrypted data as raw bytes. Returns
+  an empty `Binary` on a clean end of stream. Suspends the process
+  while the socket is not ready.
+  """
+  fn read_binary(self, fd: Fd, count: Int)
+    -> Result<Binary, SocketError | TLSError>
+
+    buf: CPtr<UInt8> = CPtr.alloc(count)
+    result = read_loop(self.ssl, fd, buf, count)
+    buf.free()
+    result
+  end
+
+  @doc """
+  Shuts down the TLS session (best-effort) and frees the underlying
+  BoringSSL handles. The session must not be used afterwards.
+  """
+  fn shutdown(self)
+    ssl_shutdown(self.ssl)
+    ssl_free(self.ssl)
+    ssl_ctx_free(self.ctx)
+  end
+
+  @doc """
+  Encrypts and writes data to the connection. Accepts either a
+  `String` (encoded as UTF-8) or a `Binary`. Returns the number of
+  bytes written. Suspends the process while the socket is not ready.
+  """
+  fn write(self, fd: Fd, data: Binary | String)
+    -> Result<Int, SocketError | TLSError>
+
+    bytes =
+      match data
+        b: Binary -> b
+        s: String -> s.to_binary()
+      end
+
+    write_loop(self.ssl, fd, bytes)
+  end
+
+  priv fn add_chain_certs(ctx: CPtr<UInt8>, bio: CPtr<UInt8>)
+    -> Result<Bool, TLSError>
+
+    no_arg: CPtr<UInt8> = CPtr.null()
+    cert = pem_read_bio_x509(bio, no_arg, no_arg, no_arg)
+
+    if cert.null?()
+      # End of bundle; reading past the last block queues a PEM error.
+      err_clear_error()
+      return Result.Ok(true)
+    end
+
+    added: Int = ssl_ctx_add1_chain_cert(ctx, cert)
+    x509_free(cert)
+
+    added == 1
+      ? add_chain_certs(ctx, bio)
+      : Result.Err(TLSError.CertificateInvalid)
+  end
+
+  priv fn add_store_certs(store: CPtr<UInt8>, bio: CPtr<UInt8>, loaded: Int)
+    -> Result<Bool, TLSError>
+
+    no_arg: CPtr<UInt8> = CPtr.null()
+    cert = pem_read_bio_x509(bio, no_arg, no_arg, no_arg)
+
+    if cert.null?()
+      # End of bundle; reading past the last block queues a PEM error.
+      err_clear_error()
+
+      if loaded > 0
+        return Result.Ok(true)
+      end
+
+      return Result.Err(TLSError.TrustStoreInvalid)
+    end
+
+    added: Int = x509_store_add_cert(store, cert)
+    x509_free(cert)
+
+    added == 1
+      ? add_store_certs(store, bio, loaded + 1)
+      : Result.Err(TLSError.TrustStoreInvalid)
+  end
+
+  priv fn configure_verification(ctx: CPtr<UInt8>, config: TLSConfig)
+    -> Result<Bool, TLSError>
+
+    unless config.verify
+      return Result.Ok(true)
+    end
+
+    no_callback: CPtr<UInt8> = CPtr.null()
+    ssl_ctx_set_verify(ctx, SSL_VERIFY_PEER, no_callback)
+
+    match config.trust
+      TrustStore.Custom(ca) -> load_ca_pem(ctx, ca.pem)
+      TrustStore.System -> load_system_trust(ctx)
+    end
+  end
+
+  priv fn handshake_failure(ssl: CPtr<UInt8>, err: Int)
+    -> SocketError | TLSError
+    # Maps a failed handshake to its cause: certificate verification
+    # first, then the SSL error itself.
+
+    verify = ssl_get_verify_result(ssl)
+
+    if verify != X509_V_OK
+      failed: SocketError | TLSError = TLSError.VerificationFailed(VerificationError.from_code(
+        verify,
+      ))
+      return failed
+    end
+
+    io_failure(err)
+  end
+
+  priv fn handshake_loop(
+    ssl: CPtr<UInt8>,
+    ctx: CPtr<UInt8>,
+    fd: Fd,
+    client: Bool,
+  ) -> Result<TLSSession, SocketError | TLSError>
+
+    ret: Int = client ? ssl_connect(ssl) : ssl_accept(ssl)
+
+    if ret == 1
+      return Result.Ok(TLSSession{ctx: ctx, ssl: ssl})
+    end
+
+    err: Int = ssl_get_error(ssl, ret)
+
+    if err != SSL_ERROR_WANT_READ
+      if err != SSL_ERROR_WANT_WRITE
+        failure = handshake_failure(ssl, err)
+        ssl_free(ssl)
+        ssl_ctx_free(ctx)
+        return Result.Err(failure)
+      end
+    end
+
+    fd.block(err == SSL_ERROR_WANT_READ)
+    handshake_loop(ssl, ctx, fd, client)
+  end
+
+  priv fn handshake_tls_failure(e: TLSError)
+    -> Result<TLSSession, SocketError | TLSError>
+
+    # Widens a `TLSError` for handshake entry points returning
+    # `Result<TLSSession, SocketError | TLSError>`.
+
+    failure: SocketError | TLSError = e
+    Result.Err(failure)
+  end
+
+  priv fn io_failure(err: Int) -> SocketError | TLSError
+    # Maps an `SSL_get_error` code from a failed read/write/handshake.
+
+    if err == SSL_ERROR_ZERO_RETURN
+      closed: SocketError | TLSError = TLSError.PeerClosed
+      return closed
+    end
+
+    if err == SSL_ERROR_SYSCALL
+      return syscall_failure()
+    end
+
+    failed: SocketError | TLSError = TLSError.ProtocolFailed
+    failed
+  end
+
+  priv fn load_ca_file(ctx: CPtr<UInt8>, path: String) -> Result<Bool, TLSError>
+    path_cs = path.to_cstring()
+    no_dir: CPtr<UInt8> = CPtr.null()
+    loaded: Int = ssl_ctx_load_verify_locations(ctx, path_cs.ptr, no_dir)
+    path_cs.free()
+    loaded == 1 ? Result.Ok(true) : Result.Err(TLSError.TrustStoreInvalid)
+  end
+
+  priv fn load_ca_pem(ctx: CPtr<UInt8>, pem: String) -> Result<Bool, TLSError>
+    bytes = pem.to_binary()
+    bio = bio_new_mem_buf(bytes.ptr(), bytes.byte_size())
+
+    if bio.null?()
+      return Result.Err(TLSError.Internal)
+    end
+
+    store = ssl_ctx_get_cert_store(ctx)
+    result = add_store_certs(store, bio, 0)
+    bio_free(bio)
+    result
+  end
+
+  priv fn load_identity(ctx: CPtr<UInt8>, identity: TLSIdentity)
+    -> Result<Bool, TLSError>
+
+    match use_certificate_pem(ctx, identity.cert.pem)
+      Result.Err(e) -> return Result.Err(e)
+      Result.Ok(_) -> ()
+    end
+
+    use_private_key_pem(ctx, identity.key.pem)
+  end
+
+  priv fn load_system_trust(ctx: CPtr<UInt8>) -> Result<Bool, TLSError>
+    ssl_ctx_set_default_verify_paths(ctx)
+
+    if File.exists?("/etc/ssl/cert.pem")
+      return load_ca_file(ctx, "/etc/ssl/cert.pem")
+    end
+
+    if File.exists?("/etc/ssl/certs/ca-certificates.crt")
+      return load_ca_file(ctx, "/etc/ssl/certs/ca-certificates.crt")
+    end
+
+    Result.Ok(true)
+  end
+
+  priv fn read_loop(ssl: CPtr<UInt8>, fd: Fd, buf: CPtr<UInt8>, count: Int)
+    -> Result<Binary, SocketError | TLSError>
+
+    ret: Int = ssl_read(ssl, buf, count)
+
+    if ret > 0
+      return Result.Ok(buf.to_binary(ret))
+    end
+
+    if ret == 0
+      eof: Binary = <<>>
+      return Result.Ok(eof)
+    end
+
+    err: Int = ssl_get_error(ssl, ret)
+
+    if err != SSL_ERROR_WANT_READ
+      if err != SSL_ERROR_WANT_WRITE
+        return Result.Err(io_failure(err))
+      end
+    end
+
+    fd.block(err == SSL_ERROR_WANT_READ)
+    read_loop(ssl, fd, buf, count)
+  end
+
+  priv fn syscall_failure -> SocketError | TLSError
+    # Maps an `SSL_ERROR_SYSCALL` to the underlying socket cause, or
+    # `PeerClosed` when the peer dropped the connection without a
+    # close_notify (errno is untouched in that case).
+
+    cause = SocketError.from_errno()
+
+    match cause
+      SocketError.Unknown(code) when code == 0 ->
+        closed: SocketError | TLSError = TLSError.PeerClosed
+        closed
+
+      _ ->
+        widened: SocketError | TLSError = cause
+        widened
+    end
+  end
+
+  priv fn use_certificate_pem(ctx: CPtr<UInt8>, pem: String)
+    -> Result<Bool, TLSError>
+
+    bytes = pem.to_binary()
+    bio = bio_new_mem_buf(bytes.ptr(), bytes.byte_size())
+
+    if bio.null?()
+      return Result.Err(TLSError.Internal)
+    end
+
+    no_arg: CPtr<UInt8> = CPtr.null()
+    cert = pem_read_bio_x509(bio, no_arg, no_arg, no_arg)
+
+    if cert.null?()
+      bio_free(bio)
+      return Result.Err(TLSError.CertificateInvalid)
+    end
+
+    used: Int = ssl_ctx_use_certificate(ctx, cert)
+    x509_free(cert)
+
+    if used != 1
+      bio_free(bio)
+      return Result.Err(TLSError.CertificateInvalid)
+    end
+
+    # Any further certificates in the bundle form the chain.
+    result = add_chain_certs(ctx, bio)
+    bio_free(bio)
+    result
+  end
+
+  priv fn use_private_key_pem(ctx: CPtr<UInt8>, pem: String)
+    -> Result<Bool, TLSError>
+
+    bytes = pem.to_binary()
+    bio = bio_new_mem_buf(bytes.ptr(), bytes.byte_size())
+
+    if bio.null?()
+      return Result.Err(TLSError.Internal)
+    end
+
+    no_arg: CPtr<UInt8> = CPtr.null()
+    key = pem_read_bio_private_key(bio, no_arg, no_arg, no_arg)
+    bio_free(bio)
+
+    if key.null?()
+      return Result.Err(TLSError.PrivateKeyInvalid)
+    end
+
+    used: Int = ssl_ctx_use_private_key(ctx, key)
+    evp_pkey_free(key)
+
+    used == 1 ? Result.Ok(true) : Result.Err(TLSError.PrivateKeyInvalid)
+  end
+
+  priv fn write_loop(ssl: CPtr<UInt8>, fd: Fd, bytes: Binary)
+    -> Result<Int, SocketError | TLSError>
+
+    ret: Int = ssl_write(ssl, bytes.ptr(), bytes.byte_size())
+
+    if ret > 0
+      return Result.Ok(ret)
+    end
+
+    err: Int = ssl_get_error(ssl, ret)
+
+    if err != SSL_ERROR_WANT_READ
+      if err != SSL_ERROR_WANT_WRITE
+        return Result.Err(io_failure(err))
+      end
+    end
+
+    fd.block(err == SSL_ERROR_WANT_READ)
+    write_loop(ssl, fd, bytes)
+  end
+
+  @extern "C" @link "ssl:BIO_free"
+  priv fn bio_free(bio: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:BIO_new_mem_buf"
+  priv fn bio_new_mem_buf(buf: CPtr<UInt8>, len: Int64) -> CPtr<UInt8>
+
+  @extern "C" @link "ssl:ERR_clear_error"
+  priv fn err_clear_error
+
+  @extern "C" @link "ssl:EVP_PKEY_free"
+  priv fn evp_pkey_free(key: CPtr<UInt8>)
+
+  @extern "C" @link "ssl:PEM_read_bio_PrivateKey"
+  priv fn pem_read_bio_private_key(
+    bio: CPtr<UInt8>,
+    out: CPtr<UInt8>,
+    callback: CPtr<UInt8>,
+    userdata: CPtr<UInt8>,
+  ) -> CPtr<UInt8>
+
+  @extern "C" @link "ssl:PEM_read_bio_X509"
+  priv fn pem_read_bio_x509(
+    bio: CPtr<UInt8>,
+    out: CPtr<UInt8>,
+    callback: CPtr<UInt8>,
+    userdata: CPtr<UInt8>,
+  ) -> CPtr<UInt8>
+
+  @extern "C" @link "ssl:SSL_accept"
+  priv fn ssl_accept(ssl: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_connect"
+  priv fn ssl_connect(ssl: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_CTX_add1_chain_cert"
+  priv fn ssl_ctx_add1_chain_cert(ctx: CPtr<UInt8>, cert: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_CTX_free"
+  priv fn ssl_ctx_free(ctx: CPtr<UInt8>)
+
+  @extern "C" @link "ssl:SSL_CTX_get_cert_store"
+  priv fn ssl_ctx_get_cert_store(ctx: CPtr<UInt8>) -> CPtr<UInt8>
+
+  @extern "C" @link "ssl:SSL_CTX_load_verify_locations"
+  priv fn ssl_ctx_load_verify_locations(
+    ctx: CPtr<UInt8>,
+    file: CPtr<UInt8>,
+    dir: CPtr<UInt8>,
+  ) -> Int32
+
+  @extern "C" @link "ssl:SSL_CTX_new"
+  priv fn ssl_ctx_new(method: CPtr<UInt8>) -> CPtr<UInt8>
+
+  @extern "C" @link "ssl:SSL_CTX_set_default_verify_paths"
+  priv fn ssl_ctx_set_default_verify_paths(ctx: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_CTX_set_verify"
+  priv fn ssl_ctx_set_verify(
+    ctx: CPtr<UInt8>,
+    mode: Int64,
+    callback: CPtr<UInt8>,
+  )
+
+  @extern "C" @link "ssl:SSL_CTX_use_certificate"
+  priv fn ssl_ctx_use_certificate(ctx: CPtr<UInt8>, cert: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_CTX_use_PrivateKey"
+  priv fn ssl_ctx_use_private_key(ctx: CPtr<UInt8>, key: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_free"
+  priv fn ssl_free(ssl: CPtr<UInt8>)
+
+  @extern "C" @link "ssl:SSL_get_error"
+  priv fn ssl_get_error(ssl: CPtr<UInt8>, ret: Int64) -> Int32
+
+  @extern "C" @link "ssl:SSL_get_verify_result"
+  priv fn ssl_get_verify_result(ssl: CPtr<UInt8>) -> Int64
+
+  @extern "C" @link "ssl:SSL_new"
+  priv fn ssl_new(ctx: CPtr<UInt8>) -> CPtr<UInt8>
+
+  @extern "C" @link "ssl:SSL_read"
+  priv fn ssl_read(ssl: CPtr<UInt8>, buf: CPtr<UInt8>, num: Int64) -> Int32
+
+  @extern "C" @link "ssl:SSL_set1_host"
+  priv fn ssl_set1_host(ssl: CPtr<UInt8>, name: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_set_fd"
+  priv fn ssl_set_fd(ssl: CPtr<UInt8>, fd: Int32) -> Int32
+
+  @extern "C" @link "ssl:SSL_set_tlsext_host_name"
+  priv fn ssl_set_tlsext_host_name(ssl: CPtr<UInt8>, name: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_shutdown"
+  priv fn ssl_shutdown(ssl: CPtr<UInt8>) -> Int32
+
+  @extern "C" @link "ssl:SSL_write"
+  priv fn ssl_write(ssl: CPtr<UInt8>, buf: CPtr<UInt8>, num: Int64) -> Int32
+
+  @extern "C" @link "ssl:TLS_method"
+  priv fn tls_method -> CPtr<UInt8>
+
+  @extern "C" @link "ssl:X509_free"
+  priv fn x509_free(cert: CPtr<UInt8>)
+
+  @extern "C" @link "ssl:X509_STORE_add_cert"
+  priv fn x509_store_add_cert(store: CPtr<UInt8>, cert: CPtr<UInt8>) -> Int32
+end

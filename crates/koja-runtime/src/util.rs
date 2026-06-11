@@ -1,7 +1,7 @@
 //! Shared helpers used across multiple runtime modules.
 
 use std::cell::RefCell;
-use std::fmt;
+use std::io;
 use std::ptr;
 
 use crate::memory;
@@ -225,7 +225,88 @@ pub unsafe fn string_payload_bytes<'a>(payload: *const u8) -> &'a [u8] {
 }
 
 thread_local! {
-    static LAST_IO_ERROR: RefCell<Option<String>> = const { RefCell::new(None) };
+    static LAST_IO_ERROR: RefCell<Option<LastError>> = const { RefCell::new(None) };
+}
+
+/// The recorded outcome of the most recent failed I/O call: a display
+/// message plus a stable cause code (see [`error_kind_code`]).
+pub struct LastError {
+    code: i32,
+    message: String,
+}
+
+impl LastError {
+    /// DNS resolution failures, which reach the runtime as plain strings
+    /// rather than `io::Error` kinds.
+    pub fn name_not_found(message: &str) -> Self {
+        LastError {
+            code: ERROR_CODE_NAME_NOT_FOUND,
+            message: message.to_string(),
+        }
+    }
+}
+
+impl From<io::Error> for LastError {
+    fn from(e: io::Error) -> Self {
+        LastError {
+            code: cause_code(&e),
+            message: e.to_string(),
+        }
+    }
+}
+
+/// Stable cause code for an `io::Error`: the mapped `ErrorKind` code
+/// when known, otherwise the raw OS errno negated (so the Koja side can
+/// surface it as `Unknown(errno)` without conflating the two spaces).
+fn cause_code(e: &io::Error) -> i32 {
+    let mapped = error_kind_code(e.kind());
+    if mapped != 0 {
+        return mapped;
+    }
+    e.raw_os_error().map_or(0, |raw| -raw)
+}
+
+impl From<&str> for LastError {
+    fn from(message: &str) -> Self {
+        LastError {
+            code: 0,
+            message: message.to_string(),
+        }
+    }
+}
+
+impl From<std::str::Utf8Error> for LastError {
+    fn from(e: std::str::Utf8Error) -> Self {
+        LastError {
+            code: error_kind_code(io::ErrorKind::InvalidData),
+            message: e.to_string(),
+        }
+    }
+}
+
+/// Reserved code for DNS failures; not part of the `io::ErrorKind` mapping.
+pub const ERROR_CODE_NAME_NOT_FOUND: i32 = 13;
+
+/// Maps `io::ErrorKind` to the stable cause codes consumed by the Koja
+/// stdlib (`SocketError` in `lib/net/src/error.koja`). Keep both sides
+/// in sync; 0 means "unmapped" and the Koja side falls back to
+/// `Unknown(code)`.
+fn error_kind_code(kind: io::ErrorKind) -> i32 {
+    match kind {
+        io::ErrorKind::AddrInUse => 1,
+        io::ErrorKind::BrokenPipe => 2,
+        io::ErrorKind::ConnectionAborted => 3,
+        io::ErrorKind::ConnectionRefused => 4,
+        io::ErrorKind::ConnectionReset => 5,
+        io::ErrorKind::HostUnreachable => 6,
+        io::ErrorKind::InvalidData => 7,
+        io::ErrorKind::NetworkUnreachable => 8,
+        io::ErrorKind::NotConnected => 9,
+        io::ErrorKind::PermissionDenied => 10,
+        io::ErrorKind::TimedOut => 11,
+        io::ErrorKind::WouldBlock => 12,
+        _ => 0,
+    }
 }
 
 /// Allocates a Binary value with the given bytes (8-byte length header + data).
@@ -262,18 +343,34 @@ pub unsafe fn alloc_koja_string(bytes: &[u8]) -> *const u8 {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_last_error() -> *const u8 {
     LAST_IO_ERROR.with(|cell| {
-        let msg = cell.borrow();
-        match msg.as_deref() {
-            Some(s) => unsafe { alloc_koja_string(s.as_bytes()) },
+        let last = cell.borrow();
+        match last.as_ref() {
+            Some(e) => unsafe { alloc_koja_string(e.message.as_bytes()) },
             None => unsafe { alloc_koja_string(b"unknown error") },
         }
     })
 }
 
-/// Stores an error message in the thread-local `LAST_IO_ERROR` slot.
-pub fn set_last_error(e: impl fmt::Display) {
+/// Returns the stable cause code for the most recent failed I/O call
+/// (see [`error_kind_code`]), or 0 when no code was recorded.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_last_error_code() -> i32 {
+    LAST_IO_ERROR.with(|cell| cell.borrow().as_ref().map_or(0, |e| e.code))
+}
+
+/// Returns the stable cause code for the current C `errno`. Used after
+/// foreign libraries (e.g. BoringSSL) fail a syscall outside the
+/// runtime's own I/O paths, where `LAST_IO_ERROR` was never set.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_errno_code() -> i32 {
+    cause_code(&io::Error::last_os_error())
+}
+
+/// Stores the error of the most recent failed I/O call in the
+/// thread-local `LAST_IO_ERROR` slot.
+pub fn set_last_error(e: impl Into<LastError>) {
     LAST_IO_ERROR.with(|cell| {
-        *cell.borrow_mut() = Some(e.to_string());
+        *cell.borrow_mut() = Some(e.into());
     });
 }
 

@@ -1,4 +1,6 @@
+alias Net.SocketError
 alias Net.TCPSocket
+alias Net.TLSError
 alias JSON.StringBuilder
 
 @doc """
@@ -68,17 +70,29 @@ fn request(method: Method, url: String, headers: Headers, body: String)
       path = url_parts.second.second
 
       socket =
-        match TCPSocket.connect(host, port)
-          Result.Ok(s) -> s
-          Result.Err(e) -> return Result.Err(Error.ConnectionFailed(e))
+        if url.starts_with?("https://")
+          match TCPSocket.connect_tls(host, port)
+            Result.Ok(s) -> s
+            Result.Err(e) ->
+              return Result.Err(Error.ConnectionFailed(net_error_message(e)))
+          end
+        else
+          match TCPSocket.connect(host, port)
+            Result.Ok(s) -> s
+            Result.Err(e) ->
+              return Result.Err(Error.ConnectionFailed(e.message()))
+          end
         end
 
       raw = build_request(method, host, path, headers, body)
 
       match socket.write(raw)
         Result.Err(e) ->
-          return Result.Err(Error.ConnectionFailed("write failed: " <> e))
-        Result.Ok(_) -> ()
+          message = "write failed: " <> net_error_message(e)
+          return Result.Err(Error.ConnectionFailed(message))
+
+        Result.Ok(_) ->
+          ()
       end
 
       read_response(socket)
@@ -197,10 +211,17 @@ priv fn read_response(socket: TCPSocket) -> Result<Response, Error>
   end
 end
 
+priv fn net_error_message(e: SocketError | TLSError) -> String
+  match e
+    socket_error: SocketError -> socket_error.message()
+    tls_error: TLSError -> tls_error.message()
+  end
+end
+
 priv fn read_all(socket: TCPSocket, sb: StringBuilder) -> Result<String, Error>
   match socket.read(8192)
     Result.Err(e) ->
-      Result.Err(Error.ConnectionFailed("read failed: " <> e))
+      Result.Err(Error.ConnectionFailed("read failed: " <> net_error_message(e)))
 
     Result.Ok(chunk) ->
       if chunk.empty?()

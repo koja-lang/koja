@@ -1,0 +1,94 @@
+@doc """
+Why a socket operation failed. Variants name causes, not operations:
+the caller already knows which call failed, so these say why --
+`ConnectionRefused`, `TimedOut`, and so on. `Unknown` carries the raw
+OS errno for causes outside the mapped set.
+
+Produced by `TCPSocket`, `TCPListener`, and `UDPSocket`. TLS-secured
+operations can additionally fail with `TLSError`; their signatures
+return the union `SocketError | TLSError`.
+"""
+enum SocketError
+  AddressInUse
+  BrokenPipe
+  ConnectionAborted
+  ConnectionRefused
+  ConnectionReset
+  HostUnreachable
+  InvalidUTF8
+  NameNotFound
+  NetworkUnreachable
+  NotConnected
+  PermissionDenied
+  TimedOut
+  Unknown(Int)
+  WouldBlock
+
+  @doc """
+  Builds the error for the current C `errno`. For failures reported
+  by foreign libraries (e.g. BoringSSL) that bypass the runtime's
+  last-error slot. Mostly internal; prefer matching returned errors.
+  """
+  fn from_errno -> SocketError
+    SocketError.from_code(koja_errno_code())
+  end
+
+  @doc """
+  Builds the error for the most recent failed runtime I/O call.
+  Mostly internal; prefer matching returned errors.
+  """
+  fn last -> SocketError
+    SocketError.from_code(koja_last_error_code())
+  end
+
+  @doc """
+  Returns a human-readable description of the error.
+  """
+  fn message(self) -> String
+    match self
+      SocketError.AddressInUse -> "address already in use"
+      SocketError.BrokenPipe -> "broken pipe"
+      SocketError.ConnectionAborted -> "connection aborted"
+      SocketError.ConnectionRefused -> "connection refused"
+      SocketError.ConnectionReset -> "connection reset by peer"
+      SocketError.HostUnreachable -> "host unreachable"
+      SocketError.InvalidUTF8 -> "data is not valid UTF-8"
+      SocketError.NameNotFound -> "hostname could not be resolved"
+      SocketError.NetworkUnreachable -> "network unreachable"
+      SocketError.NotConnected -> "socket is not connected"
+      SocketError.PermissionDenied -> "permission denied"
+      SocketError.TimedOut -> "operation timed out"
+      SocketError.Unknown(errno) -> "socket error (errno #{errno})"
+      SocketError.WouldBlock -> "operation would block"
+    end
+  end
+
+  priv fn from_code(code: Int) -> SocketError
+    # Mirrors `error_kind_code` in `crates/koja-runtime/src/util.rs`;
+    # negative codes are raw OS errno values for unmapped causes.
+
+    match code
+      1 -> SocketError.AddressInUse
+      2 -> SocketError.BrokenPipe
+      3 -> SocketError.ConnectionAborted
+      4 -> SocketError.ConnectionRefused
+      5 -> SocketError.ConnectionReset
+      6 -> SocketError.HostUnreachable
+      7 -> SocketError.InvalidUTF8
+      8 -> SocketError.NetworkUnreachable
+      9 -> SocketError.NotConnected
+      10 -> SocketError.PermissionDenied
+      11 -> SocketError.TimedOut
+      12 -> SocketError.WouldBlock
+      13 -> SocketError.NameNotFound
+      c when c < 0 -> SocketError.Unknown(0 - c)
+      _ -> SocketError.Unknown(0)
+    end
+  end
+
+  @extern "C"
+  priv fn koja_errno_code -> Int32
+
+  @extern "C"
+  priv fn koja_last_error_code -> Int32
+end

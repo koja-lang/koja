@@ -42,7 +42,7 @@ impl Process<List<String>, (), String> for App
 
     match TCPListener.bind(settings.port)
       Result.Err(e) ->
-        IO.puts("bind failed: #{e}")
+        IO.puts("bind failed: " <> e.message())
         Result.Err(StopReason.Shutdown)
 
       Result.Ok(listener) ->
