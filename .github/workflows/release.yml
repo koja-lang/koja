@@ -50,9 +50,9 @@ jobs:
       matrix:
         include:
           - os: ubuntu-24.04
-            target: x86_64-unknown-linux-gnu
+            target: linux-x86_64
           - os: macos-15
-            target: aarch64-apple-darwin
+            target: darwin-arm64
     env:
       VERSION: ${{ needs.version.outputs.version }}
       TARGET: ${{ matrix.target }}
