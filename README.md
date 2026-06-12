@@ -1,6 +1,8 @@
 # Koja
 
-> A language for humans and AI.
+[![CI](https://github.com/koja-lang/koja/actions/workflows/ci.yml/badge.svg)](https://github.com/koja-lang/koja/actions/workflows/ci.yml)
+[![GitHub Release](https://img.shields.io/github/v/release/koja-lang/koja)](https://github.com/koja-lang/koja/releases)
+[![Last Updated](https://img.shields.io/github/last-commit/koja-lang/koja.svg)](https://github.com/koja-lang/koja/commits/main)
 
 Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with value semantics and an Erlang-style concurrency model.
 

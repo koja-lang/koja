@@ -374,29 +374,35 @@ fn allocate_process_stack() -> (ProcessStack, *mut u8) {
 
 /// Determines how many worker threads to run.
 ///
-/// On Linux, reads cgroup v2 CPU quota (`/sys/fs/cgroup/cpu.max`) so a
-/// container with `cpu: 2` on a 96-core host only spawns 2 workers.
-/// Falls back to [`std::thread::available_parallelism`] on macOS and
-/// bare-metal Linux.
+/// On Linux, prefers the cgroup CPU quota so a container with `cpu: 2`
+/// on a 96-core host only spawns 2 workers. Falls back to
+/// [`std::thread::available_parallelism`] on macOS and bare-metal
+/// Linux.
 fn worker_count() -> usize {
     #[cfg(target_os = "linux")]
-    {
-        if let Ok(contents) = std::fs::read_to_string("/sys/fs/cgroup/cpu.max") {
-            let parts: Vec<&str> = contents.trim().split_whitespace().collect();
-            if parts.len() == 2 && parts[0] != "max" {
-                if let (Ok(quota), Ok(period)) = (parts[0].parse::<u64>(), parts[1].parse::<u64>())
-                {
-                    if period > 0 {
-                        let cpus = (quota / period).max(1).min(256) as usize;
-                        return cpus;
-                    }
-                }
-            }
-        }
+    if let Some(cpus) = cgroup_cpu_quota() {
+        return cpus;
     }
     thread::available_parallelism()
         .map(|n| n.get())
         .unwrap_or(1)
+}
+
+/// Reads the cgroup v2 CPU quota from `/sys/fs/cgroup/cpu.max`
+/// (`"<quota> <period>"`, or `"max <period>"` when unlimited).
+#[cfg(target_os = "linux")]
+fn cgroup_cpu_quota() -> Option<usize> {
+    let contents = std::fs::read_to_string("/sys/fs/cgroup/cpu.max").ok()?;
+    let parts: Vec<&str> = contents.split_whitespace().collect();
+    if parts.len() != 2 || parts[0] == "max" {
+        return None;
+    }
+    let quota = parts[0].parse::<u64>().ok()?;
+    let period = parts[1].parse::<u64>().ok()?;
+    if period == 0 {
+        return None;
+    }
+    Some((quota / period).clamp(1, 256) as usize)
 }
 
 /// Core scheduling loop run by every worker thread.
