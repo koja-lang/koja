@@ -103,8 +103,10 @@ pub enum CStringMethod {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum BinaryMethod {
+    At,
     ByteSize,
     Ptr,
+    Slice,
     ToBits,
     ToString,
 }
@@ -611,8 +613,10 @@ impl CStringMethod {
 impl BinaryMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
+            "at" => Self::At,
             "byte_size" => Self::ByteSize,
             "ptr" => Self::Ptr,
+            "slice" => Self::Slice,
             "to_bits" => Self::ToBits,
             "to_string" => Self::ToString,
             _ => return None,
@@ -621,8 +625,10 @@ impl BinaryMethod {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::At => "at",
             Self::ByteSize => "byte_size",
             Self::Ptr => "ptr",
+            Self::Slice => "slice",
             Self::ToBits => "to_bits",
             Self::ToString => "to_string",
         }

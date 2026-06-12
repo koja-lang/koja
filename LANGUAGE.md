@@ -1005,6 +1005,12 @@ conn = TCPSocket.connect("example.com", 80)
 
 `alias Net.TCPSocket` makes `TCPSocket` available as a local name. `alias JSON.Encoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other modules.
 
+Aliases name types only. Package-level functions are called with qualified syntax directly -- no alias needed:
+
+```koja
+response = HTTP.get("https://example.com")
+```
+
 ### Standard library visibility
 
 The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, etc.) -- no alias needed. Domain-specific packages require qualified access:
@@ -1522,8 +1528,10 @@ Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns t
 
 #### Functions
 
+- `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1); prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
 - `byte_size(self) -> Int` -- returns the number of bytes.
 - `ptr(self) -> CPtr<UInt8>` -- returns a raw pointer to the underlying byte data. Useful for passing binary data to C FFI functions.
+- `slice(self, range: Range) -> Binary` -- copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
 - `to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
 - `to_string(self) -> Result<String, String>` -- attempts to interpret bytes as UTF-8. Returns `Result.Err` with a diagnostic if invalid.
 

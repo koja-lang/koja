@@ -1,0 +1,157 @@
+alias HTTP.Headers
+alias HTTP.Method
+alias JSON.Decoder
+alias JSON.Value
+
+const API_ROOT: String = "https://api.github.com"
+
+@doc """
+A GitHub user profile, decoded from `GET /users/{login}`. Optional
+profile fields decode as `""` when the user has not set them.
+"""
+struct User
+  bio: String
+  blog: String
+  company: String
+  created_at: String
+  followers: Int
+  following: Int
+  location: String
+  login: String
+  name: String
+  public_repos: Int
+
+  fn from_json(value: Value) -> User
+    User{
+      bio: Fields.text(value, "bio"),
+      blog: Fields.text(value, "blog"),
+      company: Fields.text(value, "company"),
+      created_at: Fields.text(value, "created_at"),
+      followers: Fields.number(value, "followers"),
+      following: Fields.number(value, "following"),
+      location: Fields.text(value, "location"),
+      login: Fields.text(value, "login"),
+      name: Fields.text(value, "name"),
+      public_repos: Fields.number(value, "public_repos"),
+    }
+  end
+end
+
+@doc """
+A repository summary, decoded from the repository objects returned
+by `GET /repos/{owner}/{repo}` and `GET /users/{login}/repos`.
+"""
+struct Repo
+  description: String
+  fork: Bool
+  forks: Int
+  full_name: String
+  language: String
+  stars: Int
+  updated_at: String
+
+  fn from_json(value: Value) -> Repo
+    Repo{
+      description: Fields.text(value, "description"),
+      fork: Fields.flag(value, "fork"),
+      forks: Fields.number(value, "forks_count"),
+      full_name: Fields.text(value, "full_name"),
+      language: Fields.text(value, "language"),
+      stars: Fields.number(value, "stargazers_count"),
+      updated_at: Fields.text(value, "updated_at"),
+    }
+  end
+end
+
+@doc """
+A minimal GitHub REST API client over the stdlib HTTPS stack:
+`HTTP.request` rides `TCPSocket.connect_tls`, which verifies the
+api.github.com certificate against the system trust store.
+
+Requests are unauthenticated by default (60 requests/hour); set
+`GITHUB_TOKEN` to send an `Authorization` header and raise the limit.
+"""
+struct GitHub
+  @doc """
+  Fetches a repository by its `owner/name` path.
+  """
+  fn repo(full_name: String) -> Result<Repo, String>
+    match GitHub.fetch("/repos/" <> full_name)
+      Result.Ok(value) -> Result.Ok(Repo.from_json(value))
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  @doc """
+  Fetches a user's repositories, most recently updated first.
+  """
+  fn repos(login: String) -> Result<List<Repo>, String>
+    value =
+      match GitHub.fetch("/users/" <> login <> "/repos?sort=updated&per_page=20")
+        Result.Ok(v) -> v
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match value
+      Value.Array(items) ->
+        Result.Ok(items.map(fn (item: Value) -> Repo
+          Repo.from_json(item)
+        end))
+
+      _ ->
+        Result.Err("expected a JSON array of repositories")
+    end
+  end
+
+  @doc """
+  Fetches a user profile by login.
+  """
+  fn user(login: String) -> Result<User, String>
+    match GitHub.fetch("/users/" <> login)
+      Result.Ok(value) -> Result.Ok(User.from_json(value))
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  priv fn decode(body: String) -> Result<Value, String>
+    match Decoder.decode(body)
+      Result.Ok(value) -> Result.Ok(value)
+      Result.Err(e) -> Result.Err("malformed JSON from GitHub: " <> e)
+    end
+  end
+
+  priv fn fetch(path: String) -> Result<Value, String>
+    response =
+      match HTTP.request(Method.Get, API_ROOT <> path, GitHub.headers(), "")
+        Result.Ok(r) -> r
+        Result.Err(e) -> return Result.Err(e.message())
+      end
+
+    match response.status.code
+      code when code >= 200 and code < 300 ->
+        GitHub.decode(response.body)
+
+      403 ->
+        Result.Err(
+          "rate limited or forbidden -- set GITHUB_TOKEN to authenticate",
+        )
+
+      404 ->
+        Result.Err("not found: " <> path)
+
+      code ->
+        Result.Err("GitHub returned HTTP #{code}")
+    end
+  end
+
+  priv fn headers -> Headers
+    base = Headers.new()
+      .set("Accept", "application/vnd.github+json")
+      .set("User-Agent", "koja-gh")
+
+    match System.get_env("GITHUB_TOKEN")
+      Option.Some(token) -> base.set("Authorization", "Bearer " <> token)
+      Option.None -> base
+    end
+  end
+end

@@ -1,0 +1,1 @@
+Crypto.private_key_block?("hello")

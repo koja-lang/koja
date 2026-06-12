@@ -4,9 +4,15 @@
 //! header at offset `-8`. Conversions between `Binary` and `Bits`
 //! are zero-cost when the lengths line up.
 //!
+//! - `Binary.at(self, index: Int) -> Option<Int>` — O(1) byte read:
+//!   bounds-check against the header, then GEP + load + zext. No
+//!   runtime call.
 //! - `Binary.byte_size(self) -> Int` — divides the header by 8.
 //! - `Binary.ptr(self) -> CPtr<UInt8>` — returns `self` (the payload
 //!   pointer is already byte-addressable).
+//! - `Binary.slice(self, range: Range) -> Binary` — copies the
+//!   inclusive byte range `[start, stop]` via the
+//!   `koja_binary_slice` runtime helper; endpoints clamp.
 //! - `Binary.to_bits(self) -> Bits` — zero-cost reinterpret.
 //! - `Binary.to_string(self) -> Result<String, String>` — validates
 //!   UTF-8 via the `koja_utf8_validate` runtime helper, then
@@ -30,13 +36,17 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::load_bit_length;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
-use crate::runtime::declare_utf8_validate_extern;
+use crate::runtime::{declare_binary_slice_extern, declare_utf8_validate_extern};
 
 /// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
 /// in `koja/lib/global/src/kernel.koja`.
 const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
 /// `enum Result<T, E>` variant tag for `Err(E)`.
 const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
+/// `enum Option<T>` variant tags — declaration order in
+/// `koja/lib/global/src/kernel.koja`.
+const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
+const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
 pub(super) fn emit_binary<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -48,8 +58,10 @@ pub(super) fn emit_binary<'ctx>(
     ctx.builder.position_at_end(entry);
 
     match method {
+        BinaryMethod::At => emit_at(ctx, function, llvm_function),
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
         BinaryMethod::Ptr => emit_self_passthrough(ctx, function, llvm_function),
+        BinaryMethod::Slice => emit_slice(ctx, function, llvm_function),
         BinaryMethod::ToBits => emit_to_bits(ctx, function, llvm_function),
         BinaryMethod::ToString => emit_to_string(ctx, function, llvm_function),
     }
@@ -81,6 +93,113 @@ fn emit_to_bits<'ctx>(
     let payload = heap_payload::pointer_param(function, llvm_function)?;
     let shared = heap_payload::share_heap_payload(ctx, function.symbol.mangled(), payload)?;
     ctx.builder.build_return(Some(&shared)).or_ice().map(|_| ())
+}
+
+/// `Binary.at(self, index) -> Option<Int>` — pure inline IR: load
+/// the byte count from the header, bounds-check the index, then
+/// GEP + load + zext the byte. Out-of-bounds returns `Option.None`.
+fn emit_at<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let option_symbol = expect_enum_symbol(&function.return_type, function)?;
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let index = llvm_function
+        .get_nth_param(1)
+        .ok_or_else(|| {
+            LlvmError::Codegen(format!(
+                "Binary.at missing `index` param on `{}`",
+                function.symbol,
+            ))
+        })?
+        .into_int_value();
+
+    let i64_ty = ctx.context.i64_type();
+    let i8_ty = ctx.context.i8_type();
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
+    let byte_count = ctx
+        .builder
+        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
+        .or_ice()?;
+    let nonnegative = ctx
+        .builder
+        .build_int_compare(IntPredicate::SGE, index, i64_ty.const_zero(), "nonnegative")
+        .or_ice()?;
+    let below_count = ctx
+        .builder
+        .build_int_compare(IntPredicate::SLT, index, byte_count, "below_count")
+        .or_ice()?;
+    let in_bounds = ctx
+        .builder
+        .build_and(nonnegative, below_count, "in_bounds")
+        .or_ice()?;
+
+    let some_bb = ctx.context.append_basic_block(llvm_function, "some");
+    let none_bb = ctx.context.append_basic_block(llvm_function, "none");
+    ctx.builder
+        .build_conditional_branch(in_bounds, some_bb, none_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(some_bb);
+    let byte_ptr = unsafe {
+        ctx.builder
+            .build_in_bounds_gep(i8_ty, payload, &[index], "byte_ptr")
+            .or_ice()?
+    };
+    let byte = ctx
+        .builder
+        .build_load(i8_ty, byte_ptr, "byte")
+        .or_ice()?
+        .into_int_value();
+    let widened = ctx
+        .builder
+        .build_int_z_extend(byte, i64_ty, "widened")
+        .or_ice()?;
+    let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[widened.into()])?;
+    ctx.builder.build_return(Some(&some)).or_ice()?;
+
+    ctx.builder.position_at_end(none_bb);
+    let none = build_enum_value(ctx, option_symbol, OPTION_NONE_TAG, &[])?;
+    ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
+}
+
+/// `Binary.slice(self, range) -> Binary` — unpack the `Range`
+/// struct's `start` / `stop` fields and delegate the clamped copy to
+/// the `koja_binary_slice` runtime helper.
+fn emit_slice<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let range = llvm_function.get_nth_param(1).ok_or_else(|| {
+        LlvmError::Codegen(format!(
+            "Binary.slice missing `range` param on `{}`",
+            function.symbol,
+        ))
+    })?;
+    let BasicValueEnum::StructValue(range_struct) = range else {
+        return Err(LlvmError::Codegen(format!(
+            "Binary.slice expected Range struct on `{}`, got `{range:?}`",
+            function.symbol,
+        )));
+    };
+    let start = ctx
+        .builder
+        .build_extract_value(range_struct, 0, "start")
+        .or_ice()?;
+    let stop = ctx
+        .builder
+        .build_extract_value(range_struct, 1, "stop")
+        .or_ice()?;
+    let helper = declare_binary_slice_extern(ctx);
+    let sliced = ctx.call_basic(
+        helper,
+        &[payload.into(), start.into(), stop.into()],
+        "sliced",
+    )?;
+    ctx.builder.build_return(Some(&sliced)).or_ice().map(|_| ())
 }
 
 /// `byte_size = bit_length / 8`. Reads the i64 header at

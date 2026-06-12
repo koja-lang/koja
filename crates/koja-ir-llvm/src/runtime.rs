@@ -27,6 +27,7 @@ pub(crate) const FREE_SYMBOL: &str = "koja_free";
 pub(crate) const INT_PARSE_SYMBOL: &str = "koja_int_parse";
 pub(crate) const LAST_ERROR_SYMBOL: &str = "koja_last_error";
 pub(crate) const MALLOC_SYMBOL: &str = "koja_alloc";
+pub(crate) const BINARY_SLICE_SYMBOL: &str = "koja_binary_slice";
 pub(crate) const MEMSET_SYMBOL: &str = "memset";
 pub(crate) const RC_DEC_SYMBOL: &str = "koja_rc_dec";
 pub(crate) const RC_INC_SYMBOL: &str = "koja_rc_inc";
@@ -434,6 +435,22 @@ pub(crate) fn declare_string_slice_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
     let signature = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
     ctx.module
         .add_function(STRING_SLICE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) the `koja_binary_slice` runtime helper.
+/// Signature: `i8* koja_binary_slice(i8* payload, i64 start, i64 stop)`.
+/// Returns a freshly-allocated `Binary` payload covering the inclusive
+/// byte range `[start, stop]`; out-of-bounds endpoints clamp to the
+/// binary boundaries.
+pub(crate) fn declare_binary_slice_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(BINARY_SLICE_SYMBOL) {
+        return existing;
+    }
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = ptr_ty.fn_type(&[ptr_ty.into(), i64_ty.into(), i64_ty.into()], false);
+    ctx.module
+        .add_function(BINARY_SLICE_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) the `__koja_panic` runtime helper.

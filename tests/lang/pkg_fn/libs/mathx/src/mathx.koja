@@ -1,0 +1,15 @@
+fn double(n: Int) -> Int
+  n * 2
+end
+
+fn pick<T>(a: T, b: T, first: Bool) -> T
+  first ? a : b
+end
+
+fn shout(text: String) -> String
+  text <> "!"
+end
+
+priv fn hidden -> Int
+  7
+end

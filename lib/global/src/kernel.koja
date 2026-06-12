@@ -230,6 +230,13 @@ end
 
 extend Binary
   @doc """
+  Returns the byte at `index` as an `Int` in `0..255`, or
+  `Option.None` when `index` is out of bounds. O(1).
+  """
+  @intrinsic
+  fn at(self, index: Int) -> Option<Int>
+
+  @doc """
   Returns the number of bytes in the binary.
   """
   @intrinsic
@@ -240,6 +247,13 @@ extend Binary
   """
   @intrinsic
   fn ptr(self) -> CPtr<UInt8>
+
+  @doc """
+  Returns a new binary spanning the inclusive byte range
+  `[range.start, range.stop]`. Endpoints clamp to the binary's bounds.
+  """
+  @intrinsic
+  fn slice(self, range: Range) -> Binary
 
   @doc """
   Converts a `Binary` to `Bits`. This is a zero-cost widening conversion:

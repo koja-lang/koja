@@ -1,0 +1,7 @@
+[project]
+name = "PkgFn"
+version = "0.1.0"
+entry = "App"
+
+[dependencies]
+Mathx = { path = "libs/mathx" }

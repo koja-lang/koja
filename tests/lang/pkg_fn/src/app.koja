@@ -1,0 +1,24 @@
+# Package-qualified calls to package-level functions in a dependency:
+# monomorphic, generic (type args inferred at the call site), nested,
+# and chained into a method on the returned value.
+struct App
+end
+
+impl Process<(), (), ()> for App
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    Mathx.double(21).print()
+    Mathx.double(Mathx.double(10)).print()
+    Mathx.pick("left", "right", true).print()
+    Mathx.pick(1, 2, false).print()
+    Mathx.shout("koja").print()
+    StopReason.Normal
+  end
+end

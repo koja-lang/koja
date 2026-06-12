@@ -46,7 +46,7 @@ use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
-use super::types::display_resolution;
+use super::types::{display_resolution, lookup_type};
 
 /// Co-traveling call-site context shared by [`resolve_call`] /
 /// [`resolve_method_call`] and the inner generic-inference helpers.
@@ -136,18 +136,53 @@ pub(super) fn resolve_call(
             return ResolvedType::unresolved();
         }
     };
-    let callee_label = entry.identifier.to_string();
-    let callee_identifier = entry.identifier.clone();
-    let callee_type_params = entry.type_params.clone();
+    let function = FunctionCallee {
+        id,
+        identifier: entry.identifier.clone(),
+        signature: sig,
+        type_params: entry.type_params.clone(),
+    };
 
     *ident_resolution = Resolution::Global(id);
+    resolve_function_call(function, args, site, resolver, diagnostics)
+}
 
-    if callee_type_params.is_empty() {
+/// A function callee whose registry entry has already been located
+/// and kind-checked. Owned clones so the registry borrow ends before
+/// the `&mut Resolver` work in [`resolve_function_call`].
+struct FunctionCallee {
+    id: GlobalRegistryId,
+    identifier: Identifier,
+    signature: FunctionSignature,
+    type_params: Vec<String>,
+}
+
+/// Shared tail for bare (`f(args)`) and package-qualified
+/// (`Pkg.f(args)`) function calls: argument resolution, arity and
+/// per-position type validation, and type-arg inference for generic
+/// callees. Returns the (substituted) return type.
+fn resolve_function_call(
+    function: FunctionCallee,
+    args: &mut [Arg],
+    site: CallSite<'_>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let call_span = site.span;
+    let FunctionCallee {
+        id,
+        identifier,
+        signature: sig,
+        type_params,
+    } = function;
+    let label = identifier.to_string();
+
+    if type_params.is_empty() {
         resolve_args(args, Some(&sig.params), resolver, diagnostics);
         validate_arg_signature(
             args,
             &sig.params,
-            &callee_identifier,
+            &identifier,
             call_span,
             resolver,
             diagnostics,
@@ -157,8 +192,8 @@ pub(super) fn resolve_call(
         resolve_non_closure_args(args, resolver, diagnostics);
         let callee = Callee {
             id,
-            label: &callee_label,
-            type_params: &callee_type_params,
+            label: &label,
+            type_params: &type_params,
         };
         let mut partial_subst = Substitution::single(callee.id, callee.type_params.len());
         let partial_pairs = sig
@@ -179,7 +214,7 @@ pub(super) fn resolve_call(
         validate_arg_signature(
             args,
             &substituted_params,
-            &callee_identifier,
+            &identifier,
             call_span,
             resolver,
             diagnostics,
@@ -188,15 +223,21 @@ pub(super) fn resolve_call(
     }
 }
 
-/// Either a normal method dispatch (return type only) or a
+/// Either a normal method dispatch (return type only), a
 /// field-as-callable fallback whose substituted fn-type +
-/// return type the caller uses to rewrite the AST.
+/// return type the caller uses to rewrite the AST, or a
+/// package-qualified function call (`Pkg.f(args)`) the caller
+/// rewrites to a plain `Call`.
 pub(super) enum MethodCallOutcome {
     FieldCall {
         callee_ty: ResolvedType,
         return_ty: ResolvedType,
     },
     Method(ResolvedType),
+    PackageCall {
+        fn_id: GlobalRegistryId,
+        return_ty: ResolvedType,
+    },
 }
 
 /// `resolve_method_call` wrapper that performs the AST rewrite when
@@ -241,7 +282,48 @@ pub(super) fn resolve_method_call_expr(
             return_ty
         }
         MethodCallOutcome::Method(ty) => ty,
+        MethodCallOutcome::PackageCall { fn_id, return_ty } => {
+            rewrite_method_call_to_package_call(expr, fn_id);
+            return_ty
+        }
     }
+}
+
+/// Stamp `expr.kind` as `Call { callee: Ident("Pkg.f", Global(fn_id)), args }`
+/// in place, preserving any inferred `type_args`, so IR lower's
+/// existing bare-call path handles a package-qualified call without
+/// further branching. The receiver `Ident` is discarded — it named a
+/// package, not a value.
+fn rewrite_method_call_to_package_call(expr: &mut Expr, fn_id: GlobalRegistryId) {
+    let span = expr.span;
+    let stub = ExprKind::Literal {
+        value: Literal::Unit,
+    };
+    let ExprKind::MethodCall {
+        args,
+        method,
+        receiver,
+        type_args,
+    } = std::mem::replace(&mut expr.kind, stub)
+    else {
+        unreachable!("rewrite_method_call_to_package_call called on non-MethodCall ExprKind");
+    };
+    let package = match &receiver.kind {
+        ExprKind::Ident { name, .. } => name.clone(),
+        _ => unreachable!("package call receiver is always a bare Ident"),
+    };
+    let callee = Expr::new(
+        ExprKind::Ident {
+            name: format!("{package}.{method}"),
+            resolution: Resolution::Global(fn_id),
+        },
+        span,
+    );
+    expr.kind = ExprKind::Call {
+        args,
+        callee: Box::new(callee),
+        type_args,
+    };
 }
 
 /// Stamp `expr.kind` as `Call { callee: FieldAccess(recv, method), args }`
@@ -293,6 +375,22 @@ pub(super) fn resolve_method_call(
         expected,
         span: call_span,
     } = site;
+
+    if let Some(outcome) = try_package_function_call(
+        receiver,
+        method,
+        args,
+        CallSite {
+            out_type_args: &mut *out_type_args,
+            expected,
+            span: call_span,
+        },
+        resolver,
+        diagnostics,
+    ) {
+        return outcome;
+    }
+
     let Some(method_receiver) = classify_receiver(receiver, resolver, diagnostics) else {
         resolve_args(args, None, resolver, diagnostics);
         return MethodCallOutcome::Method(ResolvedType::unresolved());
@@ -668,6 +766,68 @@ fn lookup_bare_callee<'a>(
         }
     }
     registry.lookup(&Identifier::new(package, vec![name.to_string()]))
+}
+
+/// Try to resolve `recv.method(args)` as a package-qualified
+/// function call (`Pkg.f(args)`, e.g. `HTTP.get(url)`). Applies only
+/// when the receiver is a bare identifier that names no local and no
+/// type in scope — locals and type receivers always win. Returns
+/// `None` to fall through to method dispatch when the head doesn't
+/// name a package with declarations, so existing diagnostics cover
+/// unknown receivers.
+fn try_package_function_call(
+    receiver: &Expr,
+    method: &str,
+    args: &mut [Arg],
+    site: CallSite<'_>,
+    resolver: &mut Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<MethodCallOutcome> {
+    let ExprKind::Ident { name, .. } = &receiver.kind else {
+        return None;
+    };
+    if resolver.scope.lookup(name).is_some() {
+        return None;
+    }
+    if lookup_type(std::slice::from_ref(name), resolver.resolution_scope()).is_some() {
+        return None;
+    }
+
+    let call_span = site.span;
+    let target = Identifier::new(name, vec![method.to_string()]);
+    let Some((id, entry)) = resolver.registry.lookup(&target) else {
+        if resolver.registry.iter_in_package(name).next().is_none() {
+            return None;
+        }
+        resolve_args(args, None, resolver, diagnostics);
+        diagnostics.push(Diagnostic::error(
+            format!("package `{name}` has no function `{method}`"),
+            call_span,
+        ));
+        return Some(MethodCallOutcome::Method(ResolvedType::unresolved()));
+    };
+    let signature = match &entry.kind {
+        GlobalKind::Function(Some(sig)) => sig.clone(),
+        GlobalKind::Function(None) => panic!(
+            "try_package_function_call: function `{}` has no lifted signature — \
+             lift_signatures must run before resolve",
+            entry.identifier,
+        ),
+        _ => return None,
+    };
+    let function = FunctionCallee {
+        id,
+        identifier: entry.identifier.clone(),
+        signature,
+        type_params: entry.type_params.clone(),
+    };
+    check_callee_visibility(entry, resolver, call_span, diagnostics);
+
+    let return_ty = resolve_function_call(function, args, site, resolver, diagnostics);
+    Some(MethodCallOutcome::PackageCall {
+        fn_id: id,
+        return_ty,
+    })
 }
 
 /// Enforce the callee's [`VisibilityScope`] at the call site.

@@ -1,0 +1,31 @@
+@doc """
+The entry process for a one-shot CLI: `start` captures argv, and the
+overridden `run` skips the receive loop entirely -- it dispatches the
+command, prints the result, and returns a `StopReason` whose
+`ExitStatus` becomes the process exit code (0 on success, 1 on error).
+"""
+struct App
+  args: List<String>
+end
+
+impl Process<List<String>, (), String> for App
+  fn start(config: List<String>) -> Result<Self, StopReason>
+    Result.Ok(App{args: config})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    match Cli.dispatch(self.args)
+      Result.Ok(output) ->
+        IO.puts(output)
+        StopReason.Normal
+
+      Result.Err(message) ->
+        IO.puts("error: " <> message)
+        StopReason.Shutdown
+    end
+  end
+end

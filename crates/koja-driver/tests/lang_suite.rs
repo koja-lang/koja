@@ -356,6 +356,7 @@ lang_test_dir!(lang_diamond, "diamond", project);
 lang_test_dir!(lang_cross_ref, "cross_ref", project);
 lang_test_dir!(lang_local_dep, "local_dep", project);
 lang_test_dir!(lang_alias_dep, "alias_dep", project);
+lang_test_dir!(lang_pkg_fn, "pkg_fn", project);
 
 /// Canary for the TypeIdentifier migration: two packages each define
 /// `struct Config`, used from a root package via aliases. Today the bare-name

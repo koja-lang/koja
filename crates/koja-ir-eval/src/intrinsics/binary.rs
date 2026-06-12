@@ -1,5 +1,7 @@
 //! `Binary.*` and `Bits.to_binary` family.
 //!
+//! - `Binary.at(self, index: Int) -> Option<Int>` — O(1) byte read;
+//!   out-of-bounds indices return `None`.
 //! - `Binary.byte_size(self) -> Int` — `bytes.len()`.
 //! - `Binary.ptr(self) -> CPtr<UInt8>` — copies the byte payload
 //!   into a fresh length-prefixed Koja-string buffer (the v1
@@ -12,6 +14,9 @@
 //!   because `Value::Binary` owns a `Vec<u8>` with no stable
 //!   address guarantee, but the *observable* C-side shape is
 //!   identical.
+//! - `Binary.slice(self, range: Range) -> Binary` — copies the
+//!   inclusive byte range `[start, stop]`; endpoints clamp to the
+//!   binary's bounds.
 //! - `Binary.to_bits(self) -> Bits` — zero-cost widening; reuses
 //!   the existing byte vec with `bit_length = bytes.len() * 8`.
 //! - `Binary.to_string(self) -> Result<String, String>` —
@@ -51,8 +56,10 @@ pub(super) fn binary(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
+        BinaryMethod::At => at(function, args),
         BinaryMethod::ByteSize => byte_size(args),
         BinaryMethod::Ptr => ptr_(args),
+        BinaryMethod::Slice => slice(args),
         BinaryMethod::ToBits => to_bits(args),
         BinaryMethod::ToString => to_string(function, args),
     }
@@ -66,6 +73,43 @@ pub(super) fn bits(
     match method {
         BitsMethod::ToBinary => bits_to_binary(function, args),
     }
+}
+
+fn at(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes), Value::Int(index)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "Binary.at expects (Binary, Int) arguments; got {} arg(s): {args:?}",
+                args.len(),
+            ),
+        });
+    };
+    let option_symbol = helpers::enum_return_symbol(function, "Binary.at")?;
+    let byte = usize::try_from(*index)
+        .ok()
+        .and_then(|i| bytes.get(i))
+        .map(|b| Value::Int(*b as i64));
+    Ok(helpers::option_value(option_symbol, byte))
+}
+
+fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes), Value::Struct { fields, .. }] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "Binary.slice expects (Binary, Range) arguments; got {} arg(s): {args:?}",
+                args.len(),
+            ),
+        });
+    };
+    let [Value::Int(start), Value::Int(stop)] = fields.as_slice() else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!("Binary.slice: Range must hold (Int, Int) fields, got {fields:?}"),
+        });
+    };
+    let len = bytes.len();
+    let start = ((*start).max(0) as usize).min(len);
+    let stop = ((*stop + 1).max(0) as usize).min(len).max(start);
+    Ok(Value::Binary(bytes[start..stop].to_vec()))
 }
 
 fn byte_size(args: &[Value]) -> Result<Value, RuntimeError> {

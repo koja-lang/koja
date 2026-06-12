@@ -1,0 +1,4 @@
+[project]
+entry = "App"
+name = "Gh"
+version = "0.1.0"

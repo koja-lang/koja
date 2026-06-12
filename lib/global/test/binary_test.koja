@@ -335,6 +335,58 @@ struct BinaryTest
     end
   end
 
+  @test "Binary.at reads bytes in O(1) and rejects out-of-bounds"
+  fn test_binary_at -> Result<Bool, String>
+    data = <<0x01, 0xFF, 0x7F>>
+
+    unless data.at(0) == Option.Some(1)
+      return Result.Err("at(0)")
+    end
+
+    unless data.at(1) == Option.Some(255)
+      return Result.Err("at(1)")
+    end
+
+    unless data.at(2) == Option.Some(127)
+      return Result.Err("at(2)")
+    end
+
+    match data.at(3)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("at(3) past end")
+    end
+
+    match data.at(0 - 1)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("at(-1)")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Binary.slice copies inclusive byte ranges and clamps"
+  fn test_binary_slice -> Result<Bool, String>
+    data = <<0xAA, 0xBB, 0xCC, 0xDD>>
+
+    match data.slice(Range{start: 1, stop: 2})
+      <<0xBB, 0xCC>> -> ()
+      _ -> return Result.Err("middle slice")
+    end
+
+    match data.slice(Range{start: 2, stop: 99})
+      <<0xCC, 0xDD>> -> ()
+      _ -> return Result.Err("clamped stop")
+    end
+
+    empty = data.slice(Range{start: 3, stop: 1})
+
+    unless empty.byte_size() == 0
+      return Result.Err("inverted range is empty")
+    end
+
+    Result.Ok(true)
+  end
+
   @test "String.to_binary UTF-8 bytes"
   fn test_string_to_binary -> Result<Bool, String>
     # --- binary_type_conversions.koja ---

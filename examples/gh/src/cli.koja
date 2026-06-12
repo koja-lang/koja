@@ -1,0 +1,189 @@
+@doc """
+Argument dispatch and plain-text rendering. `dispatch` maps argv to
+an API call and returns the text to print, so the whole surface is
+testable without a network: rendering is pure, and only `dispatch`
+touches `GitHub`.
+"""
+struct Cli
+  @doc """
+  Runs the command named by `args`. Returns the output to print, or
+  an error message for a bad invocation or a failed API call.
+  """
+  fn dispatch(args: List<String>) -> Result<String, String>
+    if args.empty?()
+      return Result.Ok(Cli.usage())
+    end
+
+    command = args.get(0).unwrap()
+
+    match command
+      "help" -> Result.Ok(Cli.usage())
+      "repo" -> Cli.run_repo(args)
+      "repos" -> Cli.run_repos(args)
+      "user" -> Cli.run_user(args)
+      _ -> Result.Err("unknown command: " <> command <> "\n\n" <> Cli.usage())
+    end
+  end
+
+  @doc """
+  Renders a repository detail view.
+  """
+  fn render_repo(repo: Repo) -> String
+    lines = [repo.full_name]
+    lines = Cli.push(lines, "stars", "#{repo.stars}")
+    lines = Cli.push(lines, "forks", "#{repo.forks}")
+    lines = Cli.push(lines, "language", repo.language)
+    lines = Cli.push(lines, "updated", Cli.date_of(repo.updated_at))
+
+    if repo.fork
+      lines = lines.append("  (fork)")
+    end
+
+    if not repo.description.empty?()
+      lines = lines.append("")
+      lines = lines.append(repo.description)
+    end
+
+    String.join(lines, "\n")
+  end
+
+  @doc """
+  Renders a list of repositories, one summary line each.
+  """
+  fn render_repos(login: String, repos: List<Repo>) -> String
+    if repos.empty?()
+      return "no public repositories for " <> login
+    end
+
+    lines = repos.map(fn (repo: Repo) -> String
+      Cli.repo_line(repo)
+    end)
+
+    String.join(lines, "\n")
+  end
+
+  @doc """
+  Renders a user profile view.
+  """
+  fn render_user(user: User) -> String
+    title = user.name.empty?()
+      ? "@" <> user.login
+      : user.name <> " (@" <> user.login <> ")"
+
+    lines = [title]
+    lines = Cli.push(lines, "company", user.company)
+    lines = Cli.push(lines, "location", user.location)
+    lines = Cli.push(lines, "blog", user.blog)
+    lines = Cli.push(lines, "joined", Cli.date_of(user.created_at))
+    lines = lines.append(
+      "  #{user.public_repos} public repos · " <>
+        "#{user.followers} followers · #{user.following} following",
+    )
+
+    if not user.bio.empty?()
+      lines = lines.append("")
+      lines = lines.append(user.bio)
+    end
+
+    String.join(lines, "\n")
+  end
+
+  @doc """
+  The help text.
+  """
+  fn usage -> String
+    String.join(
+      [
+        "gh -- a tiny GitHub client (Koja example)",
+        "",
+        "usage:",
+        "  gh user <login>        show a user profile",
+        "  gh repos <login>       list a user's repositories",
+        "  gh repo <owner/name>   show one repository",
+        "  gh help                show this message",
+        "",
+        "set GITHUB_TOKEN to authenticate (raises the rate limit)",
+      ],
+      "\n",
+    )
+  end
+
+  # Trims an ISO-8601 timestamp to its date part.
+  priv fn date_of(timestamp: String) -> String
+    timestamp.length() < 10
+      ? timestamp
+      : timestamp.slice(Range{start: 0, stop: 9})
+  end
+
+  priv fn push(lines: List<String>, label: String, value: String)
+    -> List<String>
+
+    value.empty?() ? lines : lines.append("  " <> label <> ": " <> value)
+  end
+
+  priv fn repo_line(repo: Repo) -> String
+    line = repo.full_name <> " -- #{repo.stars} stars"
+
+    if not repo.language.empty?()
+      line = line <> " (" <> repo.language <> ")"
+    end
+
+    if repo.fork
+      line = line <> " [fork]"
+    end
+
+    if not repo.description.empty?()
+      line = line <> "\n    " <> repo.description
+    end
+
+    line
+  end
+
+  priv fn require_arg(args: List<String>, name: String)
+    -> Result<String, String>
+
+    match args.get(1)
+      Option.Some(value) -> Result.Ok(value)
+      Option.None -> Result.Err("missing argument: " <> name)
+    end
+  end
+
+  priv fn run_repo(args: List<String>) -> Result<String, String>
+    full_name =
+      match Cli.require_arg(args, "<owner/name>")
+        Result.Ok(v) -> v
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match GitHub.repo(full_name)
+      Result.Ok(repo) -> Result.Ok(Cli.render_repo(repo))
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  priv fn run_repos(args: List<String>) -> Result<String, String>
+    login =
+      match Cli.require_arg(args, "<login>")
+        Result.Ok(v) -> v
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match GitHub.repos(login)
+      Result.Ok(repos) -> Result.Ok(Cli.render_repos(login, repos))
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+
+  priv fn run_user(args: List<String>) -> Result<String, String>
+    login =
+      match Cli.require_arg(args, "<login>")
+        Result.Ok(v) -> v
+        Result.Err(e) -> return Result.Err(e)
+      end
+
+    match GitHub.user(login)
+      Result.Ok(user) -> Result.Ok(Cli.render_user(user))
+      Result.Err(e) -> Result.Err(e)
+    end
+  end
+end

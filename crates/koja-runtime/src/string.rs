@@ -7,7 +7,7 @@ use std::slice;
 use std::str;
 
 use crate::parse_text::{ParseOutcome, parse_float_text, parse_int_text};
-use crate::util::{BITS_PER_BYTE, alloc_koja_string, read_bit_length};
+use crate::util::{BITS_PER_BYTE, alloc_binary, alloc_koja_string, read_bit_length};
 
 /// Decodes a NUL-terminated C string pointer into a string. Every Koja
 /// `String` is valid UTF-8 by construction, so the borrowed path is taken
@@ -145,6 +145,22 @@ pub unsafe extern "C" fn koja_string_slice(ptr: *const u8, start: i64, stop: i64
     };
     let slice = &s[byte_start..byte_end];
     unsafe { alloc_koja_string(slice.as_bytes()) }
+}
+
+/// Returns a new `Binary` spanning the inclusive byte range
+/// `[start, stop]`. Out-of-bounds endpoints clamp to the binary's
+/// boundaries.
+///
+/// # Safety
+/// `payload` must point to a valid Binary payload with its
+/// `[i64 rc][i64 bit_length]` header.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_binary_slice(payload: *const u8, start: i64, stop: i64) -> *mut u8 {
+    let len = (unsafe { read_bit_length(payload) } / BITS_PER_BYTE as i64) as usize;
+    let start = (start.max(0) as usize).min(len);
+    let stop = ((stop + 1).max(0) as usize).min(len).max(start);
+    let bytes = unsafe { slice::from_raw_parts(payload, len) };
+    alloc_binary(&bytes[start..stop])
 }
 
 /// Validates that `len` bytes starting at `ptr` are valid UTF-8.

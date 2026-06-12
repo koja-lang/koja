@@ -1,0 +1,63 @@
+alias JSON.Value
+
+@doc """
+Read-only field access over decoded `JSON.Value` trees. GitHub
+payloads use `null` for absent optional fields, so every accessor
+folds `Null` and missing keys into a zero value (`""`, `0`, `false`)
+instead of forcing callers to unwrap.
+"""
+struct Fields
+  @doc """
+  Looks up a key in a JSON object. Returns `None` when the value is
+  not an object or the key is absent.
+  """
+  fn get(value: Value, key: String) -> Option<Value>
+    match value
+      Value.Object(entries) -> Fields.scan(entries, key, 0)
+      _ -> Option.None
+    end
+  end
+
+  @doc """
+  Reads a boolean field; `false` when absent, null, or not a boolean.
+  """
+  fn flag(value: Value, key: String) -> Bool
+    match Fields.get(value, key)
+      Option.Some(Value.Bool(b)) -> b
+      _ -> false
+    end
+  end
+
+  @doc """
+  Reads an integer field; `0` when absent, null, or not a number.
+  """
+  fn number(value: Value, key: String) -> Int
+    match Fields.get(value, key)
+      Option.Some(Value.Int(n)) -> n
+      _ -> 0
+    end
+  end
+
+  @doc """
+  Reads a string field; `""` when absent, null, or not a string.
+  """
+  fn text(value: Value, key: String) -> String
+    match Fields.get(value, key)
+      Option.Some(Value.String(s)) -> s
+      _ -> ""
+    end
+  end
+
+  priv fn scan(entries: List<Pair<String, Value>>, key: String, index: Int)
+    -> Option<Value>
+
+    if index >= entries.length()
+      return Option.None
+    end
+
+    entry = entries.get(index).unwrap()
+    entry.first == key
+      ? Option.Some(entry.second)
+      : Fields.scan(entries, key, index + 1)
+  end
+end

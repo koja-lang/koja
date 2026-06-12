@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja test --trace` prints each test grouped by struct with its `path:line` and per-test timing (`name (file:line) ... ok (Nms)`) instead of progress dots. The name is written before the test runs, so a crashing test leaves its name as the last line of output — making the culprit obvious. With color enabled, each completed line is rewritten whole in green (pass) or red (fail); the uncolored pre-run name stays as the crash anchor. Trace runs also skip the per-binary timeout for long debugging sessions, and failure output now includes `path:line` in both modes.
 - `koja test` now enforces a 60-second per-binary timeout, so a hung test process fails fast instead of stalling the suite.
 - `Fd.read_binary(count)` and `TCPSocket.read_binary(count)` -- read up to `count` bytes as a `Binary` for binary wire protocols.
+- `Binary.at(index) -> Option<Int>` and `Binary.slice(range) -> Binary` -- O(1) byte access and inclusive-range byte slicing (endpoints clamp). These are the byte-oriented complement to `String.get` / `String.slice`, whose codepoint indexing is O(n) per call on UTF-8 text; scanners and parsers should step over `text.to_binary()` instead.
 
 ### Changed
 
@@ -31,6 +32,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `JSON.Decoder.decode` is now O(n): it scans the input's UTF-8 bytes via `Binary.at` instead of indexing codepoints with `String.get` (which walks from the start of the string on every call, making the old decoder quadratic). Decoding a 200 KB payload drops from ~8 s to milliseconds; unescaped string contents are cut out as single slices instead of being rebuilt character by character.
+- Package-level functions are now callable from other packages with qualified syntax (`HTTP.get(url)`, `HTTP.request(...)`), as the 0.11.0 changelog advertised — previously this failed with `unknown identifier`. Locals and type receivers take precedence, `priv fn` package functions are rejected with the existing visibility diagnostic, and a call to a missing function in a known package reports `package `X`has no function`y`` instead of an unknown-identifier error.
 - `koja format` now lays out `match`/`cond`/`receive` arms consistently: when any single-expression arm body is long enough to wrap at the page width, every sibling arm breaks onto its own indented line (with blank lines between arms) instead of leaving short siblings inline next to a wrapped one.
 - Passing a heap-owning local (e.g. a `String` built with `<>`, or a `List`) to a function or method that stores it no longer crashes or returns corrupt data under `--backend=llvm`.
 - Fixed a scheduler race that could intermittently crash message-heavy programs (e.g. request/reply between processes) with a segfault. A process that yielded while waiting for a message could be resumed by another worker thread from a stale stack pointer before its post-yield state was saved.
