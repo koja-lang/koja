@@ -1,0 +1,161 @@
+name: Release
+
+# Builds release tarballs on a v* tag push and attaches them to the
+# GitHub Release for that tag (created by hand in the GitHub UI — making
+# the release publishes the tag, which triggers this workflow). A
+# workflow_dispatch run is a dry run: it builds and uploads the artifacts
+# to the workflow run but touches no release.
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  version:
+    name: Version guard
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read workspace version and check tag
+        id: meta
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -n1)
+          if [ -z "$version" ]; then
+            echo "::error::could not read workspace.package.version from Cargo.toml"
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          if [ "$REF_TYPE" = "tag" ] && [ "$REF_NAME" != "v$version" ]; then
+            echo "::error::tag $REF_NAME does not match Cargo.toml version v$version"
+            exit 1
+          fi
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: version
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: macos-15
+            target: aarch64-apple-darwin
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TARGET: ${{ matrix.target }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          cache-key: release
+
+      # Homebrew LLVM pulls in zstd and libunwind. Left alone, ld picks
+      # their .dylib and the shipped binary depends on /opt/homebrew
+      # paths that don't exist on user machines. Deleting the dylibs
+      # makes ld fall back to the static .a archives; the audit step
+      # below enforces that it worked.
+      - name: Force static zstd/libunwind (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for formula in zstd libunwind; do
+            prefix="$(brew --prefix "$formula" 2>/dev/null)" || continue
+            sudo rm -f "$prefix"/lib/*.dylib
+          done
+          sudo rm -f "$(brew --prefix)"/lib/libzstd*.dylib "$(brew --prefix)"/lib/libunwind*.dylib
+
+      - name: Build release binaries
+        run: |
+          cargo build -p koja-runtime
+          cargo build --release -p koja-runtime
+          cargo build --release -p koja-driver -p koja-lsp
+
+      - name: Codesign (macOS)
+        if: runner.os == 'macOS'
+        run: codesign --force -s - target/release/koja target/release/koja-lsp
+
+      - name: Smoke test
+        run: |
+          output=$(./target/release/koja run examples/hello.kojs)
+          echo "$output"
+          [ "$output" = "hello, world!" ]
+
+      - name: Portability audit (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          for bin in koja koja-lsp; do
+            echo "=== otool -L $bin ==="
+            otool -L "target/release/$bin"
+            if otool -L "target/release/$bin" | grep -q "/opt/homebrew"; then
+              echo "::error::$bin dynamically links Homebrew libraries; the binary is not portable"
+              exit 1
+            fi
+          done
+
+      - name: Portability audit (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          for bin in koja koja-lsp; do
+            echo "=== ldd $bin ==="
+            ldd "target/release/$bin"
+            bad=$(ldd "target/release/$bin" | awk '$3 ~ /^\// && $3 !~ /^\/(usr\/)?lib/ {print $3}')
+            if [ -n "$bad" ]; then
+              echo "::error::$bin links libraries outside system paths:"
+              echo "$bad"
+              exit 1
+            fi
+          done
+          # Captured into the release notes as documented runtime requirements.
+          ldd target/release/koja | awk '/=>/ {print $1}' | sort -u > runtime-deps-linux.txt
+
+      - name: Package tarball
+        run: |
+          name="koja-v${VERSION}-${TARGET}"
+          mkdir "$name"
+          cp target/release/koja target/release/koja-lsp LICENSE README.md CHANGELOG.md "$name/"
+          tar -czf "$name.tar.gz" "$name"
+          shasum -a 256 "$name.tar.gz" > "$name.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: koja-${{ matrix.target }}
+          path: |
+            koja-v*.tar.gz
+            koja-v*.tar.gz.sha256
+            runtime-deps-linux.txt
+          if-no-files-found: error
+
+  # The release itself is created by hand in the GitHub UI; this job only
+  # attaches the built tarballs to it. If the tag was pushed without a
+  # release, `gh release upload` fails — create the release and re-run.
+  publish:
+    name: Attach artifacts to release
+    if: github.ref_type == 'tag'
+    needs: [version, build]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Upload artifacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          TAG: ${{ github.ref_name }}
+        run: gh release upload "$TAG" dist/koja-v*.tar.gz dist/koja-v*.tar.gz.sha256 --clobber

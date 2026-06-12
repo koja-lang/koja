@@ -12,11 +12,11 @@
 //   /        focus search (unless already typing in an input)
 //   Escape   blur + clear results
 //   ArrowUp/ArrowDown / Enter   navigate + open
-(function() {
-  var input = document.getElementById('doc-search');
+(function () {
+  var input = document.getElementById("doc-search");
   if (!input) return;
-  var rootPrefix = input.getAttribute('data-root-prefix') || '';
-  var resultsEl = document.getElementById('doc-search-results');
+  var rootPrefix = input.getAttribute("data-root-prefix") || "";
+  var resultsEl = document.getElementById("doc-search-results");
   if (!resultsEl) return;
 
   var index = null;
@@ -27,10 +27,18 @@
   function loadIndex() {
     if (index) return Promise.resolve(index);
     if (indexPromise) return indexPromise;
-    indexPromise = fetch(rootPrefix + 'search-index.json')
-      .then(function(r) { return r.ok ? r.json() : []; })
-      .then(function(data) { index = data || []; return index; })
-      .catch(function() { index = []; return index; });
+    indexPromise = fetch(rootPrefix + "search-index.json")
+      .then(function (r) {
+        return r.ok ? r.json() : [];
+      })
+      .then(function (data) {
+        index = data || [];
+        return index;
+      })
+      .catch(function () {
+        index = [];
+        return index;
+      });
     return indexPromise;
   }
 
@@ -49,7 +57,7 @@
     while (qi < q.length && hi < h.length) {
       if (q.charCodeAt(qi) === h.charCodeAt(hi)) {
         if (hi === prevMatch + 1) bonus -= 3;
-        if (hi === 0 || h.charAt(hi - 1) === '.') bonus -= 4;
+        if (hi === 0 || h.charAt(hi - 1) === ".") bonus -= 4;
         prevMatch = hi;
         qi++;
       }
@@ -61,29 +69,43 @@
 
   function render() {
     if (currentHits.length === 0) {
-      resultsEl.innerHTML = '';
-      resultsEl.classList.remove('open');
+      resultsEl.innerHTML = "";
+      resultsEl.classList.remove("open");
       return;
     }
-    var html = '';
+    var html = "";
     for (var i = 0; i < currentHits.length; i++) {
       var hit = currentHits[i];
-      var cls = 'search-result' + (i === selected ? ' selected' : '');
-      html += '<a class="' + cls + '" href="' + rootPrefix + escapeHtml(hit.url) + '">'
-        + '<span class="type-chip chip-' + escapeHtml(hit.kind) + '">' + escapeHtml(hit.kind) + '</span>'
-        + '<span class="search-result-name">' + escapeHtml(hit.pkg) + '.' + escapeHtml(hit.name) + '</span>'
-        + '</a>';
+      var cls = "search-result" + (i === selected ? " selected" : "");
+      html +=
+        '<a class="' +
+        cls +
+        '" href="' +
+        rootPrefix +
+        escapeHtml(hit.url) +
+        '">' +
+        '<span class="type-chip chip-' +
+        escapeHtml(hit.kind) +
+        '">' +
+        escapeHtml(hit.kind) +
+        "</span>" +
+        '<span class="search-result-name">' +
+        escapeHtml(hit.pkg) +
+        "." +
+        escapeHtml(hit.name) +
+        "</span>" +
+        "</a>";
     }
     resultsEl.innerHTML = html;
-    resultsEl.classList.add('open');
+    resultsEl.classList.add("open");
   }
 
   function escapeHtml(s) {
     return String(s)
-      .replace(/&/g, '&amp;')
-      .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;')
-      .replace(/"/g, '&quot;');
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
   }
 
   function search(query) {
@@ -93,40 +115,46 @@
       render();
       return;
     }
-    loadIndex().then(function(items) {
+    loadIndex().then(function (items) {
       var scored = [];
       for (var i = 0; i < items.length; i++) {
         var it = items[i];
-        var hay = it.pkg + '.' + it.name;
+        var hay = it.pkg + "." + it.name;
         var s = score(query, hay);
         if (s !== null) scored.push({ hit: it, score: s });
       }
-      scored.sort(function(a, b) { return a.score - b.score; });
-      currentHits = scored.slice(0, 20).map(function(s) { return s.hit; });
+      scored.sort(function (a, b) {
+        return a.score - b.score;
+      });
+      currentHits = scored.slice(0, 20).map(function (s) {
+        return s.hit;
+      });
       render();
     });
   }
 
-  input.addEventListener('input', function() { search(input.value); });
+  input.addEventListener("input", function () {
+    search(input.value);
+  });
 
-  input.addEventListener('keydown', function(e) {
-    if (e.key === 'ArrowDown') {
+  input.addEventListener("keydown", function (e) {
+    if (e.key === "ArrowDown") {
       e.preventDefault();
       if (currentHits.length === 0) return;
       selected = (selected + 1) % currentHits.length;
       render();
-    } else if (e.key === 'ArrowUp') {
+    } else if (e.key === "ArrowUp") {
       e.preventDefault();
       if (currentHits.length === 0) return;
       selected = (selected - 1 + currentHits.length) % currentHits.length;
       render();
-    } else if (e.key === 'Enter') {
+    } else if (e.key === "Enter") {
       if (selected >= 0 && selected < currentHits.length) {
         e.preventDefault();
         window.location.href = rootPrefix + currentHits[selected].url;
       }
-    } else if (e.key === 'Escape') {
-      input.value = '';
+    } else if (e.key === "Escape") {
+      input.value = "";
       input.blur();
       currentHits = [];
       selected = -1;
@@ -134,16 +162,16 @@
     }
   });
 
-  document.addEventListener('keydown', function(e) {
-    if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) return;
+  document.addEventListener("keydown", function (e) {
+    if (e.key !== "/" || e.ctrlKey || e.metaKey || e.altKey) return;
     var tag = document.activeElement && document.activeElement.tagName;
-    if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+    if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
     e.preventDefault();
     input.focus();
     input.select();
   });
 
-  document.addEventListener('click', function(e) {
+  document.addEventListener("click", function (e) {
     if (!resultsEl.contains(e.target) && e.target !== input) {
       currentHits = [];
       selected = -1;

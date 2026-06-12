@@ -11,15 +11,15 @@ search index, and the shared CSS / JS assets.
 - `extract.rs` -- Walks the AST, builds package-grouped doc
   structs from `@doc` annotations. `extract_items` takes the
   source's package + origin tier (`PackageKind::Project /
-  Dependency / Stdlib`) so the driver can mix project, dep,
+Dependency / Stdlib`) so the driver can mix project, dep,
   and stdlib sources into one project.
 - `render.rs` -- Askama templates for the root index, per-
   package index, and per-item pages. Each render call receives
   the sidebar context (`packages`, `sidebar_items`,
   `current_package`, `active_item`, `root_prefix`).
 - `search.rs` -- Emits `search-index.json`: one entry per item
-  + one per method (deep-linked to `#fn-<name>`). Doubles as
-  the AI-friendly bundle.
+  - one per method (deep-linked to `#fn-<name>`). Doubles as
+    the AI-friendly bundle.
 - `style.rs` -- Embeds `templates/style.css` (CSS) and
   `assets/search.js` (the hand-rolled fuzzy search bundle).
 - `templates/` -- `index.html` (root roster), `package_index.html`,

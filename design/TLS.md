@@ -7,7 +7,7 @@ provides the bindings. No new compiler intrinsics are required.
 > **Status: implemented** (`lib/net/src/tls.koja`). The landed API
 > differs from sections 4–5 below in four ways: the raw `SSL`/`SSL_CTX`
 > pointer pair is wrapped in a `TLSSession` struct (no `Pair<CPtr,
-> CPtr>` returns), `TCPSocket` carries `tls: Option<TLSSession>`
+CPtr>` returns), `TCPSocket` carries `tls: Option<TLSSession>`
 > instead of two null-sentinel pointer fields, credentials are
 > memory-only — `TLSConfig` holds an `Option<TLSIdentity>` (a
 > `Crypto.Certificate` / `Crypto.PrivateKey` pair, parsed from PEM
@@ -390,7 +390,7 @@ type. Match the C width exactly:
   them clean, the debug build does not — this caused a real SIGBUS).
   Bind the result to an `Int` local to widen it before comparisons.
 - Returns of C `long` / `size_t` are `Int64`.
-- C `int` *parameters* may be declared `Int64`: the callee reads only
+- C `int` _parameters_ may be declared `Int64`: the callee reads only
   the low 32 bits, so small non-negative values pass through intact.
 
 ### `@link` syntax
@@ -455,7 +455,7 @@ After implementation, run:
 | `koja/crates/koja-driver/build.rs`        | Find `libssl.a`, set env var                                      |
 | `koja/crates/koja-driver/src/pipeline.rs` | Embed + write `libssl.a`                                          |
 | `koja/crates/koja-runtime/src/fs.rs`      | Add `koja_io_block` (4 lines)                                     |
-| `koja/lib/global/src/fd.koja`                | Add `Fd.block` + extern decl                                      |
+| `koja/lib/global/src/fd.koja`             | Add `Fd.block` + extern decl                                      |
 | `koja/lib/net/src/tls.koja`               | **New file**: TLSConfig, FFI bindings, TLS operations             |
 | `koja/lib/net/src/tcp.koja`               | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
 | `koja/lib/http/src/client.koja`           | Use `connect_tls` for https:// URLs                               |

@@ -80,7 +80,7 @@ end
 b = Box{raw: "literal"}   # drop glue → free(rodata) → SIGABRT
 ```
 
-The value's *provenance* (heap vs static) is invisible at the point of
+The value's _provenance_ (heap vs static) is invisible at the point of
 drop. The leaf-local whitelist sidesteps this by only ever dropping
 values whose provenance is statically known to be a fresh malloc; a
 composite field has no such guarantee. And literals are not the only
@@ -101,9 +101,10 @@ fn emit_to_binary(...) {
     build_return(Some(&payload))       // returns the SAME pointer
 }
 ```
+
 (`koja-ir-llvm/src/intrinsics/string.rs`)
 
-So `bin = data.to_binary()` produces a `Binary` whose buffer *is*
+So `bin = data.to_binary()` produces a `Binary` whose buffer _is_
 `data`'s buffer. Stamp that `Owned` and its `DropLocal` frees `data`'s
 buffer — which `data`'s real owner frees again. This is exactly how
 the widening broke `42.print()`:
@@ -139,7 +140,7 @@ A third, related gap motivates the same machinery:
 ### Blocker 3 — composite field-overwrite drop (the "struct field" case)
 
 `obj.field = obj.field.append(x)` (and any in-place mutation idiom,
-`LANGUAGE.md` §Mutating Fields) must free the *old* field value before
+`LANGUAGE.md` §Mutating Fields) must free the _old_ field value before
 storing the new one — but only when the RHS did not move the old value
 out (e.g. `append` takes `move self`, consuming the old buffer and
 returning a grown one that may reuse it). The field-overwrite path in
@@ -156,12 +157,12 @@ value, the compiler knows three facts at the drop site:
 
 1. **Provenance** — every payload reachable from an `Owned`, droppable
    value must be heap; only heap payloads may be freed. Rather than
-   track heap-vs-static at runtime, the compiler *maintains* this as an
+   track heap-vs-static at runtime, the compiler _maintains_ this as an
    invariant: an `Owned` binding is never initialized from an `Unowned`
    source (literal, `const`, borrow) without a clone. (Resolves
    Blocker 1.)
 2. **Ownership** — does this binding own the value, or borrow it?
-   Only owners drop. For a *call result*, this is the callee's
+   Only owners drop. For a _call result_, this is the callee's
    declared return mode: owned (fresh / moved-out) vs borrowed (a view
    of an argument). (Resolves Blocker 2.)
 3. **Liveness at the drop point** — has the value already been moved
@@ -185,7 +186,7 @@ permanent, program-wide cost (an allocation per literal occurrence, or
 a header bit plus a branch on every free and allocator) to solve a
 problem that only exists at one boundary. Both are rejected.
 
-That boundary is *ownership acquisition*: a static or borrowed payload
+That boundary is _ownership acquisition_: a static or borrowed payload
 can only reach `free` by being stored into an `Owned`, droppable
 position — a struct/enum field, a collection element, or a `move`
 parameter. Leaf bindings never trigger it (`s = "hi"` is `Unowned`,
@@ -204,10 +205,10 @@ bit or allocator cooperation. It lowers to the value-semantics rc glue
 leaf-heap acquisitions are an `rc_inc` on the shared immutable block,
 and composite clones recurse the same shape drop glue does, inverted.
 
-Heapifying literals would *not* let us skip this rule. `const` stays
+Heapifying literals would _not_ let us skip this rule. `const` stays
 static by design, and borrowed params are never heap-owned here, so
 both still flow `Unowned` into owned positions — "const stays static"
-plus "drop glue frees fields" together *force* clone-on-acquisition
+plus "drop glue frees fields" together _force_ clone-on-acquisition
 regardless. Eager literal heapification would therefore be pure cost
 with no drop-glue payoff, and a strict regression on today's
 zero-cost transient literals (`print("hi")`, literal match arms).
@@ -312,15 +313,15 @@ Materializing the glue as real `IRFunction`s — discovered and lowered
 before seal, like every other function — keeps the backend a pure
 translator and removes its current panic-on-composite fallback,
 satisfying the northstar's "no lazy backfill in codegen" rule. It is
-orthogonal to return mode (Axis A): Axis A decides *whether* a value is
-dropped, Axis B decides *how* to free a `T` once that decision is made.
+orthogonal to return mode (Axis A): Axis A decides _whether_ a value is
+dropped, Axis B decides _how_ to free a `T` once that decision is made.
 
 ### Field-overwrite (Blocker 3)
 
 Once the lattice tracks whether the RHS of `obj.f = obj.f.method(...)`
 consumed the old field (via the same move-out facts), the
 field-overwrite drop in `lower_field_assignment` can conditionally
-drop the old value: drop iff the old field was *not* moved out by the
+drop the old value: drop iff the old field was _not_ moved out by the
 RHS. This is a direct consumer of the move-tracking above and should
 land after it.
 
@@ -330,7 +331,7 @@ land after it.
    typecheck onto `FunctionSignature`; port the intrinsic audit into a
    typecheck catalog; carry the IR-layer mode on `IRType::Function` for
    indirect calls. Computed and carried, not consumed — `ownership_for_expr`
-   keeps the whitelist but now *can* trust call results (direct via the
+   keeps the whitelist but now _can_ trust call results (direct via the
    signature, indirect via the closure value's type). Unblocks Blocker 2.
 2. **Widen ownership + move-out sinks + OR-merge + clone-on-acquisition.**
    Stamp call results, constructors, and collection literals `Owned`

@@ -1032,14 +1032,14 @@ their data dependencies.
 This applies the same fractal pattern that D6 established for
 koja-ir to typecheck: each pipeline-level phase has internal
 multi-pass machinery converging on a sealed output; pipeline
-boundaries are between *sealed outputs*, not between *kinds of
-work*.
+boundaries are between _sealed outputs_, not between _kinds of
+work_.
 
 The crate name `koja-typecheck` stays (renaming is mechanical
 churn for limited gain), but the conceptual phase is **semantic
 analysis** (or "the frontend") since typecheck is now its primary
 but not sole responsibility. There's even a defensible argument
-that `@cfg` stripping *is* a form of type checking — the build
+that `@cfg` stripping _is_ a form of type checking — the build
 configuration acts like a type-level value that determines which
 code exists in the current build's "world." Wherever you draw
 the conceptual line, the work belongs in the semantic-analysis
@@ -1106,7 +1106,7 @@ When a new transformation is proposed, find its slot mechanically:
    → before resolve.
 4. Does it touch invariants the seal asserts?
    → it doesn't belong in typecheck; it belongs in koja-ir or
-     later.
+   later.
 
 This is mechanical. No architectural debate required.
 
@@ -1137,7 +1137,7 @@ This is mechanical. No architectural debate required.
   responsibility doesn't fit any existing phase's seal contract,
   the question is "which existing phase grows to accept it,"
   not "do we add a fifth top-level phase."
-- Synthesize-time work that *also* depends on check results
+- Synthesize-time work that _also_ depends on check results
   (i.e. transformations that need post-check info to generate new
   nodes that themselves need checking). Such work would create a
   cycle within typecheck. If a real use case demands this, the

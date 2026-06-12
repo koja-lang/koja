@@ -189,7 +189,7 @@ recursion.
 Closed by porting v1's `Type::Indirect` shape into the alpha pipeline:
 
 - `IRType::Indirect(Box<IRType>)` lattice variant (`koja-alpha-ir
-  /src/types.rs`), with mangling, seal, union-walk, and
+/src/types.rs`), with mangling, seal, union-walk, and
   `enum_order` updates so back-edges read as a `ptr` everywhere
   layout cares.
 - New `koja-alpha-ir/src/cycle.rs` pass runs after `discover_unions`
@@ -415,11 +415,11 @@ on its first declaration, then read it back as the field value.
 The struct constructor infers its own type parameter from the
 field type instead of from `None` directly.
 
-| Fixture                       | Annotation                       |
-| ----------------------------- | -------------------------------- |
-| `generics/nested_generics`    | `no_detail: Option<Int>`         |
-| `generics/recursive_generic`  | `no_next: Option<GNode<Int>>`    |
-| `generics/recursive_struct`   | `no_next: Option<Node>`          |
+| Fixture                      | Annotation                    |
+| ---------------------------- | ----------------------------- |
+| `generics/nested_generics`   | `no_detail: Option<Int>`      |
+| `generics/recursive_generic` | `no_next: Option<GNode<Int>>` |
+| `generics/recursive_struct`  | `no_next: Option<Node>`       |
 
 All three typecheck cleanly and now produce the expected stdouts
 under both alpha-interpreter and alpha LLVM. The recursive shape
@@ -486,13 +486,14 @@ without any env juggling. Single-file `.koja` / `.kojs` builds pass
 `&[]` and keep their existing behavior.
 
 `@link` still requires the user to build the static archive (`cc -c`
-+ `ar rcs` for now); the compiler doesn't ship a build-script
-phase. Run [`just build-ffi-fixture`](../justfile) before the
-validator script (or any manual `koja alpha run` inside
-`tests/lang/ffi/`) so `libffi_helper.a` is present when the linker
-goes looking. `cargo test ... lang_ffi` still cleans the archive
-up after itself, so the manual step is needed any time the script
-is the first thing to touch the fixture.
+
+- `ar rcs` for now); the compiler doesn't ship a build-script
+  phase. Run [`just build-ffi-fixture`](../justfile) before the
+  validator script (or any manual `koja alpha run` inside
+  `tests/lang/ffi/`) so `libffi_helper.a` is present when the linker
+  goes looking. `cargo test ... lang_ffi` still cleans the archive
+  up after itself, so the manual step is needed any time the script
+  is the first thing to touch the fixture.
 
 ---
 

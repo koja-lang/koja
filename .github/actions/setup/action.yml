@@ -1,0 +1,45 @@
+name: Setup toolchain
+description: >
+  Install the pinned Rust toolchain and LLVM 18, export the llvm-sys
+  environment, and restore the shared cargo cache.
+
+inputs:
+  components:
+    description: Comma-separated rustup components to install (e.g. "rustfmt, clippy")
+    default: ""
+  cache-key:
+    description: Shared key for the cargo cache, so jobs with the same key reuse one cache per OS
+    default: ci
+
+runs:
+  using: composite
+  steps:
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@master
+      with:
+        toolchain: "1.94.1"
+        components: ${{ inputs.components }}
+
+    - name: Install LLVM 18 (apt)
+      if: runner.os == 'Linux'
+      shell: bash
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y \
+          build-essential cmake pkg-config \
+          llvm-18-dev libpolly-18-dev clang-18 libclang-18-dev \
+          zlib1g-dev libzstd-dev libtinfo-dev libxml2-dev libffi-dev libz3-dev
+        echo "LLVM_SYS_181_PREFIX=$(llvm-config-18 --prefix)" >> "$GITHUB_ENV"
+
+    - name: Install LLVM 18 (brew)
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        brew install llvm@18
+        echo "LLVM_SYS_181_PREFIX=$(brew --prefix llvm@18)" >> "$GITHUB_ENV"
+        echo "LIBRARY_PATH=$(brew --prefix)/lib" >> "$GITHUB_ENV"
+
+    - name: Restore cargo cache
+      uses: Swatinem/rust-cache@v2
+      with:
+        shared-key: ${{ inputs.cache-key }}

@@ -99,7 +99,7 @@ StructField}` discriminator and `PatternCheck::CatchAll { binds }` so
   closes the chain without a `_` arm. Prerequisite plumbing: alpha
   `check_program` now gates short-circuit on `Severity::Error` only and
   the success-path `CheckedProgram` carries a `pub diagnostics:
-  Vec<Diagnostic>` field so warnings ride alongside the registered
+Vec<Diagnostic>` field so warnings ride alongside the registered
   packages (lowering crates ignore it; the driver / LSP surface it).
   IR lowering is unchanged: `lower/match_expr.rs` still truncates after
   the first unguarded catch-all, dead arms simply don't lower, and the
@@ -588,7 +588,7 @@ exhaustiveness errors, and `Bool` primitive structural exhaustiveness.
   `String` keep the catch-all rule (no finite domain).
 - **Plumbing.** `koja-alpha-typecheck::check_program` short-circuits on
   `Severity::Error` only and `CheckedProgram` carries a `pub
-  diagnostics: Vec<Diagnostic>` field, so warnings ride the success
+diagnostics: Vec<Diagnostic>` field, so warnings ride the success
   path alongside the registered packages. Lowering is unchanged: the
   existing `lower/match_expr.rs` truncation after the first unguarded
   catch-all still describes the runtime CFG; dead arms simply don't
@@ -628,10 +628,10 @@ to its qualified form so the rest of the match pipeline never sees
   [`lower/patterns.rs`](expo/crates/koja-alpha-ir/src/lower/patterns.rs)
   become statically unreachable for valid sources.
 - **Deferred shapes.** `Pattern::List` (blocked on alpha-IR list ops
-  + a stable `List<T>` layout contract) and `Pattern::TypedBinding`
-  (blocked on surface unions) keep firing feature-gap diagnostics;
-  pinned tests in `resolve_match.rs` ensure the gap diagnostic stays
-  in place until those prerequisites land.
+  - a stable `List<T>` layout contract) and `Pattern::TypedBinding`
+    (blocked on surface unions) keep firing feature-gap diagnostics;
+    pinned tests in `resolve_match.rs` ensure the gap diagnostic stays
+    in place until those prerequisites land.
 
 ### Phase 7 — Binary patterns (blocked on binary literals)
 
@@ -671,14 +671,14 @@ Per [build.mdc](../../.cursor/rules/build.mdc):
 
 ## Surface area summary
 
-| Phase | New IR                                                        | New typecheck                                                            | Stdlib unblocks                  | Status      |
-| ----- | ------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------- | ----------- |
-| 1     | (none, but seal moved to dominance)                           | `match` resolve, literal/wildcard/bind patterns                          | (none)                           | **Shipped** |
-| 2     | `EnumTagGet`, `EnumPayloadFieldGet`, terminator `Unreachable` | enum patterns + or, structural enum exhaustiveness, per-arm scope unwind | **all `Option`/`Result` stdlib** | **Shipped** |
-| 3     | (none)                                                        | guard typing                                                             | (none — spec parity)             | **Shipped** |
-| 4     | (none)                                                        | struct/enum-struct field patterns                                        | (none — surface polish)          | **Shipped** |
-| 5     | (none)                                                        | reachability warnings, hints, Bool exhaustiveness                        | (quality bar)                    | **Shipped** |
-| 6     | (none)                                                        | shorthand `Constructor` rewrite to `EnumTuple` / `EnumUnit`              | shorthand `Some(x)` / `None`     | **Shipped** |
+| Phase | New IR                                                        | New typecheck                                                            | Stdlib unblocks                  | Status                               |
+| ----- | ------------------------------------------------------------- | ------------------------------------------------------------------------ | -------------------------------- | ------------------------------------ |
+| 1     | (none, but seal moved to dominance)                           | `match` resolve, literal/wildcard/bind patterns                          | (none)                           | **Shipped**                          |
+| 2     | `EnumTagGet`, `EnumPayloadFieldGet`, terminator `Unreachable` | enum patterns + or, structural enum exhaustiveness, per-arm scope unwind | **all `Option`/`Result` stdlib** | **Shipped**                          |
+| 3     | (none)                                                        | guard typing                                                             | (none — spec parity)             | **Shipped**                          |
+| 4     | (none)                                                        | struct/enum-struct field patterns                                        | (none — surface polish)          | **Shipped**                          |
+| 5     | (none)                                                        | reachability warnings, hints, Bool exhaustiveness                        | (quality bar)                    | **Shipped**                          |
+| 6     | (none)                                                        | shorthand `Constructor` rewrite to `EnumTuple` / `EnumUnit`              | shorthand `Some(x)` / `None`     | **Shipped**                          |
 | 7     | binary submachine                                             | `check_binary_pattern`                                                   | (post-stdlib)                    | Pending (blocked on binary literals) |
 
 The work is real but the IR surface adds up to two new value

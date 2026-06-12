@@ -1,0 +1,105 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  prettier:
+    name: Prettier
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prettier check
+        run: npx prettier@latest --check .
+
+  lint:
+    name: Lint
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+        with:
+          components: rustfmt, clippy
+      - name: Check formatting
+        run: cargo fmt --check
+      - name: Clippy (zero warnings)
+        run: cargo clippy --workspace -- -D warnings
+
+  unit:
+    name: Unit tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build runtime (debug + release)
+        run: |
+          cargo build -p koja-runtime
+          cargo build --release -p koja-runtime
+      - name: Compiler tests
+        run: cargo test --workspace --exclude koja-driver
+
+  lang:
+    name: Lang suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build runtime (debug + release)
+        run: |
+          cargo build -p koja-runtime
+          cargo build --release -p koja-runtime
+      - name: Driver tests (lang suite + doc bundle)
+        run: cargo test -p koja-driver -- --test-threads=4
+
+  stdlib:
+    name: Stdlib tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Build runtime (debug + release)
+        run: |
+          cargo build -p koja-runtime
+          cargo build --release -p koja-runtime
+      - name: Build koja CLI
+        run: cargo build -p koja-driver
+      - name: Stdlib package tests
+        run: |
+          koja="$PWD/target/debug/koja"
+          failed=0
+          for pkg in lib/*/; do
+            if [ -d "${pkg}test" ]; then
+              echo "=== testing $(basename "$pkg") ==="
+              (cd "$pkg" && "$koja" test --trace) || failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            echo "stdlib tests failed"
+            exit 1
+          fi

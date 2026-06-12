@@ -1,0 +1,10 @@
+# Rust build output
+target/
+target-check/
+
+# Generated files
+editors/vscode/package-lock.json
+editors/zed/koja/grammars/
+
+# Tera templates — prettier's HTML parser mangles {% %} blocks
+crates/koja-doc/templates/
