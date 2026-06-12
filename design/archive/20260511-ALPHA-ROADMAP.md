@@ -160,16 +160,16 @@ LoadCapture}`, and `FunctionKind::Closure { env_layout }` for
   used as callees dispatch through `CallClosure` rather than the
   symbol-keyed `Call` form. LLVM ABI: closure values are
   `{fn_ptr, env_ptr}` fat pointers; closure bodies declare an
-  extra `i8*` env parameter at LLVM position 0; env blocks
-  heap-allocate via `malloc` and free at scope exit through
-  `DropLocal { ty: Function }`. Backend symmetry: eval and LLVM
+  extra `i8*`env parameter at LLVM position 0; env blocks
+  heap-allocate via`malloc`and free at scope exit through
+ `DropLocal { ty: Function }`. Backend symmetry: eval and LLVM
   produce identical results for higher-order calls, captureless
   closures, single/double/heap captures, and fn-as-value adapters.
-  Pinned by `crates/koja-alpha-typecheck/tests/resolve_closures.rs`,
+  Pinned by `crates/koja-alpha-typecheck/tests/resolve\*closures.rs`,
   `crates/koja-alpha-ir/tests/lower_closures.rs`,
   `crates/koja-alpha-ir-eval/tests/closures.rs`,
   `crates/koja-alpha-ir-llvm/tests/closures.rs`, and the
-  `\*\_closure*_`/`__higher_order__`/`__fn_as_value_\*`driver
+  `\*\_closure\*\*`/`**higher_order**`/`\__fn_as_value_\*`driver
 tests in`crates/koja-driver/tests/alpha_two_plus_two.rs`.
   **Out**: recursive drops of nested heap captures inside the
   env block (the env itself frees, but heap-typed captures inside
@@ -653,7 +653,7 @@ CallClosure, LoadCapture}`, `FunctionKind::Closure { env_layout }`.
   (`seal/closures.rs`). Move story is "closures never borrow" —
   heap captures move; closure values themselves are `Owned`.
   Pinned by `resolve_closures.rs`, `lower_closures.rs`,
-  `eval/closures.rs`, `llvm/closures.rs`, and the `\*\_closure*_`/`__higher_order__`/`__fn_as_value_\*` driver tests. **Out**:
+  `eval/closures.rs`, `llvm/closures.rs`, and the `\*\_closure*_`/`**higher_order**`/`\_\_fn_as_value_\*` driver tests. **Out**:
   recursive drops of nested heap captures inside the env (env
   frees at scope exit, but heap-typed captures inside it leak
   today — alpha trade-off for a simpler ABI).

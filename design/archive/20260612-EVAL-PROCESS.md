@@ -5,7 +5,7 @@
 > protocol interface before building further backends: the native
 > scheduler is the first implementation, the eval scheduler becomes
 > the second, and the protocol must be expressible by a
-> single-threaded *cooperative* backend (the Phase 6 WASM
+> single-threaded _cooperative_ backend (the Phase 6 WASM
 > prerequisite). That constraint invalidates this doc's central
 > thread-per-process design choice — a coop single-threaded eval
 > scheduler would double as the cheapest testbed for the WASM shape.

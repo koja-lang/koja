@@ -1002,9 +1002,9 @@ value_map`. **Outcome.** `compile_if`'s else branch and
     (wraps the multi-block `compile_binary_pattern` whole at the
     IR seam). `IRInstruction::dest()` returns `Option<IRValueId>`
     to accommodate the no-dest `PatternBindFromPtr`. AND/OR fusion
-    of i1 results reuses `IRInstruction::BinaryOp { op: BoolAnd
-| BoolOr }` with constant-folding shortcuts (`BoolAnd(true,
-x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
+    of i1 results reuses `IRInstruction::BinaryOp { op: BoolAnd | BoolOr }`
+    with constant-folding shortcuts (`BoolAnd(true, x) -> x`, etc.)
+    so arms whose `Bind` returns `ConstBool(true)`
     emit no spurious AND. New
     `Lowerer::lower_pattern_to_instructions` returns a
     `LoweredPattern { instructions, check_result }` -- a single
@@ -1047,15 +1047,15 @@ x) -> x`, etc.) so arms whose `Bind` returns `ConstBool(true)`
     the only codegen-side concession is per-arm variable scoping
     around LLVM-typed allocas.
 
-                The flat-stream shape preserved by this slice (a single
-                `Vec<IRInstruction>` per arm with `BoolAnd` fusion across all
-                sub-checks) carried over the legacy `emit_pattern`'s
-                payload-deref-before-tag-gate hazard verbatim. Wave 27 splits
-                the per-arm check into a CFG (`IRMatchArm.check_blocks:
-                Vec<IRBasicBlock>`) so constructor patterns gate via
-                `CondBranch(tag, payload_block, failure_target)` and payload
-                loads only run on the success edge. See the Wave 27 sidebar
-                entry in section 2 for the full follow-up.
+        The flat-stream shape preserved by this slice (a single
+        `Vec<IRInstruction>` per arm with `BoolAnd` fusion across all
+        sub-checks) carried over the legacy `emit_pattern`'s
+        payload-deref-before-tag-gate hazard verbatim. Wave 27 splits
+        the per-arm check into a CFG (`IRMatchArm.check_blocks:
+        Vec<IRBasicBlock>`) so constructor patterns gate via
+        `CondBranch(tag, payload_block, failure_target)` and payload
+        loads only run on the success edge. See the Wave 27 sidebar
+        entry in section 2 for the full follow-up.
 
 - **Slice 6 -- loops + tail-flag retirement (Done, Wave 25).**
   `while`, `loop`, and `for` lift onto the `Lowerer::lower_*` +

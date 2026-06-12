@@ -98,7 +98,7 @@ cp target/release/koja ~/.local/bin/koja
 ## Verifying the install
 
 ```sh
-koja run examples/hello.koja
+koja run examples/hello.kojs
 ```
 
 You should see `hello, world!` printed to stdout.

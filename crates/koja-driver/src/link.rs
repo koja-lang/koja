@@ -89,7 +89,6 @@ pub(crate) fn link(
 
     let mut args = vec![
         obj_path.to_string(),
-        "-lkoja_runtime".to_string(),
         "-L".to_string(),
         tmp_dir_str.to_string(),
         "-o".to_string(),
@@ -106,12 +105,22 @@ pub(crate) fn link(
     // Linux.
     #[cfg(target_os = "linux")]
     args.push("-no-pie".to_string());
+    // GNU ld resolves static archives in a single left-to-right
+    // pass, so inter-archive references break when the archives
+    // appear in the wrong order (`libssl.a` pulls EVP_HPKE_* /
+    // KYBER_* / spake2plus symbols from `libcrypto.a`). Group the
+    // archives so ld re-scans them until no new references resolve;
+    // macOS ld64 is order-independent and needs no grouping.
+    #[cfg(target_os = "linux")]
+    args.push("-Wl,--start-group".to_string());
+    args.push("-lkoja_runtime".to_string());
     for lib in link_libraries {
         args.push(format!("-l{lib}"));
     }
+    #[cfg(target_os = "linux")]
+    args.push("-Wl,--end-group".to_string());
     // BoringSSL's libssl is C++ (libcrypto is plain C), so pull in
-    // the C++ runtime whenever it is linked. Must come after -lssl
-    // so GNU ld resolves the archive's references.
+    // the C++ runtime whenever it is linked.
     if link_libraries.iter().any(|lib| lib == "ssl") {
         #[cfg(target_os = "macos")]
         args.push("-lc++".to_string());
