@@ -1,10 +1,8 @@
 name: Release
 
 # Builds release tarballs on a v* tag push and attaches them to the
-# GitHub Release for that tag (created by hand in the GitHub UI — making
-# the release publishes the tag, which triggers this workflow). A
-# workflow_dispatch run is a dry run: it builds and uploads the artifacts
-# to the workflow run but touches no release.
+# GitHub Release for that tag, which is created by hand in the GitHub UI
+# beforehand. workflow_dispatch is a dry run: artifacts only, no release.
 
 on:
   push:
@@ -64,19 +62,18 @@ jobs:
         with:
           cache-key: release
 
-      # Homebrew LLVM pulls in zstd and libunwind. Left alone, ld picks
-      # their .dylib and the shipped binary depends on /opt/homebrew
-      # paths that don't exist on user machines. Deleting the dylibs
-      # makes ld fall back to the static .a archives; the audit step
-      # below enforces that it worked.
+      # Deleting only the *unversioned* symlinks makes ld fall back to
+      # the static .a archives (so the shipped binary has no
+      # /opt/homebrew dylib deps) while llvm-config, which loads the
+      # versioned libzstd.1.dylib at runtime, keeps working.
       - name: Force static zstd/libunwind (macOS)
         if: runner.os == 'macOS'
         run: |
-          for formula in zstd libunwind; do
-            prefix="$(brew --prefix "$formula" 2>/dev/null)" || continue
-            sudo rm -f "$prefix"/lib/*.dylib
-          done
-          sudo rm -f "$(brew --prefix)"/lib/libzstd*.dylib "$(brew --prefix)"/lib/libunwind*.dylib
+          sudo rm -f \
+            "$(brew --prefix)/lib/libzstd.dylib" \
+            "$(brew --prefix)/lib/libunwind.dylib" \
+            "$(brew --prefix zstd)/lib/libzstd.dylib" \
+            "$(brew --prefix llvm@18)/lib/libunwind.dylib"
 
       - name: Build release binaries
         run: |
@@ -119,7 +116,6 @@ jobs:
               exit 1
             fi
           done
-          # Captured into the release notes as documented runtime requirements.
           ldd target/release/koja | awk '/=>/ {print $1}' | sort -u > runtime-deps-linux.txt
 
       - name: Package tarball
@@ -139,9 +135,6 @@ jobs:
             runtime-deps-linux.txt
           if-no-files-found: error
 
-  # The release itself is created by hand in the GitHub UI; this job only
-  # attaches the built tarballs to it. If the tag was pushed without a
-  # release, `gh release upload` fails — create the release and re-run.
   publish:
     name: Attach artifacts to release
     if: github.ref_type == 'tag'
