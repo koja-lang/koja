@@ -28,7 +28,7 @@
 //! |-----------|------------------------------------|--------------------------------------------|
 //! | `Script`  | parse Script + check               | full script pipeline                       |
 //! | `Program` | parse File + check (LSP-friendly)  | error: `.koja` needs project               |
-//! | `Project` | parse + check whole project        | full project pipeline (LLVM backend only)  |
+//! | `Project` | parse + check whole project        | full project pipeline (either backend for `run`; `build` is LLVM-only) |
 //!
 //! `cmd_shell` has no file dimension and bypasses the resolver
 //! entirely; REPL fragments are always script-mode. Project mode
@@ -43,12 +43,15 @@
 //! [`Backend`]):
 //!
 //! - `run` defaults to [`Backend::Interpreter`]: lower → run via
-//!   [`Interpreter::run_script`] → exit 0. The trailing
-//!   expression's value is discarded; user code calls
-//!   `IO.puts` / `value.print()` explicitly for output. Fast
-//!   feedback, no link step.
+//!   [`Interpreter::run_script`] (scripts, exit 0; the trailing
+//!   expression's value is discarded — user code calls
+//!   `IO.puts` / `value.print()` explicitly for output) or
+//!   [`Interpreter::run_program`] (projects; the Process entry's
+//!   exit code becomes the driver's exit status). Fast feedback,
+//!   no link step.
 //! - `run --backend=llvm`: lower → [`koja_ir_llvm::compile_script`]
-//!   → link → exec the temp binary → forward its exit code.
+//!   / [`koja_ir_llvm::compile_program`] → link → exec the binary
+//!   → forward its exit code.
 //! - `build` defaults to [`Backend::Llvm`]: lower → compile →
 //!   link → keep the binary at the output path.
 //! - `build --backend=interpreter`: errors. The interpreter has
@@ -71,7 +74,7 @@ use std::time::{Duration, Instant};
 use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::Identifier;
 use koja_ir::{IRProgram, IRScript, lower_program, lower_script};
-use koja_ir_eval::Interpreter;
+use koja_ir_eval::{Interpreter, RuntimeError, Value};
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_file, parse_program};
 use koja_test::{HARNESS_ENTRY, TestCase, TestOptions, discover_tests, generate_harness};
 use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registry};
@@ -184,13 +187,6 @@ fn bail_program_execution(path: &Path) -> ! {
     process::exit(1);
 }
 
-/// Bail when the user asks for project-mode execution under the
-/// interpreter; project binaries are LLVM-only today.
-fn bail_project_interpreter() -> ! {
-    eprintln!("error: project mode currently requires --backend=llvm");
-    process::exit(1);
-}
-
 /// Bail with a resolver error. Wraps the message in the standard
 /// `error: …` prefix so each command's call site reads as a single
 /// statement.
@@ -279,18 +275,19 @@ pub fn cmd_build(
 }
 
 /// `koja run [file] [--backend=interpreter|llvm] [-- args...]`
-/// — execute a `.kojs` script (or, eventually, a project) through
-/// the chosen backend.
+/// — execute a `.kojs` script or a project through the chosen
+/// backend.
 ///
-/// `--backend` defaults to [`Backend::Interpreter`]: parse Script
-/// → check → [`lower_script`] → [`Interpreter::run_script`] →
-/// print the trailing value (Unit suppressed). Exit 0 on success,
-/// 1 on any pipeline failure. [`Backend::Llvm`] takes the compiled
-/// path: parse Script → check → [`lower_script`] →
-/// [`koja_ir_llvm::compile_script`] → link → write the
-/// binary to a temp path → exec it (forwarding `args`) → forward
-/// its exit code → remove the temp binary. `cmd_run` leaves no
-/// artifacts behind on either backend.
+/// `--backend` defaults to [`Backend::Interpreter`]. Scripts:
+/// parse Script → check → [`lower_script`] →
+/// [`Interpreter::run_script`]; exit 0 on success, 1 on any
+/// pipeline failure. Projects: collect → parse → check →
+/// [`lower_program`] → [`Interpreter::run_program`] (with `args`
+/// as the argv-shaped config); the Process entry's exit code
+/// becomes the driver's exit status. [`Backend::Llvm`] takes the
+/// compiled path: lower → compile → link → exec the binary
+/// (forwarding `args`) → forward its exit code; script binaries
+/// are temp files removed after the run.
 pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<String>) {
     let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
     match (mode, backend) {
@@ -298,7 +295,9 @@ pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<
         (SourceShape::Script(path), Backend::Llvm) => run_script_compiled(&path, release, &args),
         (SourceShape::Program(path), Backend::Interpreter)
         | (SourceShape::Program(path), Backend::Llvm) => bail_program_execution(&path),
-        (SourceShape::Project { .. }, Backend::Interpreter) => bail_project_interpreter(),
+        (SourceShape::Project { config, root }, Backend::Interpreter) => {
+            run_project_interpreted(&config, &root, &args)
+        }
         (SourceShape::Project { config, root }, Backend::Llvm) => {
             run_project_compiled(&config, &root, release, &args)
         }
@@ -870,6 +869,34 @@ fn collect_test_project_sources(
     )?;
     collect_project_dependencies(config, root, &mut files, &mut seen_paths, &mut seen_pkgs)?;
     Ok(files)
+}
+
+/// `koja run` for a project under the interpreter: lower the full
+/// project and execute the Process entry in-process via
+/// [`Interpreter::run_program`] — no codegen, no link, no binary.
+/// The entry body's returned exit code becomes the driver's exit
+/// status. Process features the interpreter doesn't cover yet
+/// (spawn / receive scheduling) surface a runtime error plus a
+/// `--backend=llvm` hint. Diverges either way.
+fn run_project_interpreted(config: &ProjectConfig, root: &Path, args: &[String]) -> ! {
+    let program = build_project_program(config, root);
+    match Interpreter::run_program(&program, args) {
+        Ok(Value::Int(code)) => process::exit(code as i32),
+        Ok(other) => {
+            eprintln!("error: process entry returned non-integer exit value `{other}`");
+            process::exit(1);
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            if matches!(error, RuntimeError::Unsupported { .. }) {
+                eprintln!(
+                    "hint: this project uses process features the interpreter does not \
+                     support yet; run with --backend=llvm"
+                );
+            }
+            process::exit(1);
+        }
+    }
 }
 
 /// `koja run` for a project: build into a temp binary, exec

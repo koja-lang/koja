@@ -28,16 +28,19 @@ impl Interpreter {
     /// `<state>.__entry_body` the wrapper's IR `Call` names — the
     /// full `start` → `run` → `StopReason.code` dispatch lives there
     /// — and reports the resulting exit code as a [`Value::Int`].
-    /// The interpreter has no host argv, so a `List<String>` config
-    /// resolves to an empty list.
-    pub fn run_program(program: IRProgram) -> Result<Value, RuntimeError> {
+    /// `args` carries the user-facing program arguments (everything
+    /// after the program name): a `Process<List<String>, _, _>`
+    /// entry receives them as its config, mirroring the LLVM
+    /// trampoline's `koja_rt_build_argv` (which skips `argv[0]`);
+    /// other config types zero-init via [`default_value_for_type`].
+    pub fn run_program(program: &IRProgram, args: &[String]) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
         assert!(
             matches!(entry.kind, FunctionKind::ProcessEntryWrapper { .. }),
             "interpreter: program entry `{}` is not a `ProcessEntryWrapper` (seal violation)",
             entry.symbol,
         );
-        run_process_entry(&program, entry)
+        run_process_entry(program, entry, args)
     }
 
     /// Execute a named function from `program` with no arguments and
@@ -233,10 +236,15 @@ enum BlockOutcome {
 /// interpreter. The wrapper itself is a backend ABI shim; the full
 /// `start` → `run` → `StopReason.code` dispatch lives in the
 /// IR-synthesized `<state>.__entry_body` its IR `Call` names, which
-/// the interpreter executes directly with a default config. The
-/// returned value is the integer exit code (`Value::Int`) —
-/// analogous to what the LLVM shim stores into `__koja_exit_code`.
-fn run_process_entry(program: &IRProgram, entry: &IRFunction) -> Result<Value, RuntimeError> {
+/// the interpreter executes directly with the argv-derived (or
+/// default) config. The returned value is the integer exit code
+/// (`Value::Int`) — analogous to what the LLVM shim stores into
+/// `__koja_exit_code`.
+fn run_process_entry(
+    program: &IRProgram,
+    entry: &IRFunction,
+    args: &[String],
+) -> Result<Value, RuntimeError> {
     let config_type =
         entry
             .params
@@ -248,7 +256,11 @@ fn run_process_entry(program: &IRProgram, entry: &IRFunction) -> Result<Value, R
                     entry.symbol,
                 ),
             })?;
-    let config_value = default_value_for_type(config_type, program)?;
+    let config_value = if is_argv_shaped(config_type) {
+        argv_value(args)
+    } else {
+        default_value_for_type(config_type, program)?
+    };
 
     let body_symbol = entry
         .blocks
@@ -276,12 +288,35 @@ fn run_process_entry(program: &IRProgram, entry: &IRFunction) -> Result<Value, R
     execute_function(body_fn, vec![config_value], program)
 }
 
+/// Whether a process-entry config type is `List<String>` — the one
+/// shape that receives host argv instead of a zero-init default.
+/// Mirrors the LLVM trampoline's `argv_shaped` test in
+/// `koja_ir_llvm::main_wrapper::emit_process_entry_main`.
+fn is_argv_shaped(config_type: &IRType) -> bool {
+    matches!(
+        config_type,
+        IRType::List(element) if matches!(**element, IRType::String)
+    )
+}
+
+/// Materialize program arguments as the `List<String>` config value
+/// for an argv-shaped entry. `args` already excludes the program
+/// name, matching `koja_rt_build_argv`'s `argv[0]` skip.
+fn argv_value(args: &[String]) -> Value {
+    let strings = args
+        .iter()
+        .map(|arg| Value::String(arg.as_bytes().to_vec()))
+        .collect();
+    Value::List(std::rc::Rc::new(std::cell::RefCell::new(strings)))
+}
+
 /// Build a fresh interpreter [`Value`] suitable as the entry's config
-/// argument. Mirrors the LLVM trampoline's zero-init / argv-build
-/// shape: empty structs round-trip as `Value::Struct` with no
-/// fields, `List<T>` produces an empty list, and primitive scalars
-/// default to their zero element. Anything richer than that needs
-/// host argv plumbing the interpreter doesn't have.
+/// argument. Mirrors the LLVM trampoline's zero-init shape: empty
+/// structs round-trip as `Value::Struct` with no fields, `List<T>`
+/// produces an empty list, and primitive scalars default to their
+/// zero element. The argv-shaped `List<String>` config never reaches
+/// this helper — [`run_process_entry`] routes it through
+/// [`argv_value`] first.
 fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, RuntimeError> {
     match ty {
         IRType::Bool => Ok(Value::Bool(false)),

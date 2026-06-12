@@ -11,14 +11,15 @@
 //! project context); `.koja` files are project files. Omitting the
 //! file argument falls back to discovering an `koja.toml` in the
 //! current directory; project mode runs the full pipeline through
-//! [`koja_ir_llvm::compile_program`].
+//! [`koja_ir_llvm::compile_program`] (`build`, `run
+//! --backend=llvm`) or [`koja_ir_eval::Interpreter`] (`run`).
 //!
 //! Backend selection: `run` and `build` accept
 //! `--backend={interpreter,llvm}` (see [`pipeline::Backend`]).
-//! `run` defaults to `interpreter` (fast feedback, prints the
-//! trailing value, exits 0); `build` defaults to `llvm` (only
-//! backend that produces a binary). `build --backend=interpreter`
-//! errors. A future WASM backend slots in as a third variant.
+//! `run` defaults to `interpreter` (fast feedback, no link step);
+//! `build` defaults to `llvm` (only backend that produces a
+//! binary). `build --backend=interpreter` errors. A future WASM
+//! backend slots in as a third variant.
 
 mod commands;
 mod diagnostics;
