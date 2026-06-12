@@ -36,26 +36,58 @@ mod net;
 mod random;
 mod system;
 mod time;
+mod tls;
 
 /// Run the registered extern under C symbol `link_name` against
 /// `args`. Returns `None` when no handler is registered so the
 /// caller can surface [`RuntimeError::ExternNotSupported`].
 pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, RuntimeError>> {
     match link_name {
+        "BIO_free" => Some(tls::bio_free(args)),
+        "BIO_new_mem_buf" => Some(tls::bio_new_mem_buf(args)),
+        "ERR_clear_error" => Some(tls::err_clear_error(args)),
         "EVP_DigestFinal_ex" => Some(crypto::evp_digest_final_ex(args)),
         "EVP_DigestInit_ex" => Some(crypto::evp_digest_init_ex(args)),
         "EVP_DigestUpdate" => Some(crypto::evp_digest_update(args)),
         "EVP_MD_CTX_free" => Some(crypto::evp_md_ctx_free(args)),
         "EVP_MD_CTX_new" => Some(crypto::evp_md_ctx_new(args)),
+        "EVP_PKEY_free" => Some(tls::evp_pkey_free(args)),
         "EVP_sha1" => Some(crypto::evp_sha1(args)),
         "EVP_sha256" => Some(crypto::evp_sha256(args)),
         "EVP_sha384" => Some(crypto::evp_sha384(args)),
         "EVP_sha512" => Some(crypto::evp_sha512(args)),
         "HMAC" => Some(crypto::hmac(args)),
+        "PEM_read_bio_PrivateKey" => Some(tls::pem_read_bio_private_key(args)),
+        "PEM_read_bio_X509" => Some(tls::pem_read_bio_x509(args)),
         "SHA1" => Some(crypto::sha1(args)),
         "SHA256" => Some(crypto::sha256(args)),
         "SHA384" => Some(crypto::sha384(args)),
         "SHA512" => Some(crypto::sha512(args)),
+        "SSL_CTX_add1_chain_cert" => Some(tls::ssl_ctx_add1_chain_cert(args)),
+        "SSL_CTX_free" => Some(tls::ssl_ctx_free(args)),
+        "SSL_CTX_get_cert_store" => Some(tls::ssl_ctx_get_cert_store(args)),
+        "SSL_CTX_load_verify_locations" => Some(tls::ssl_ctx_load_verify_locations(args)),
+        "SSL_CTX_new" => Some(tls::ssl_ctx_new(args)),
+        "SSL_CTX_set_default_verify_paths" => Some(tls::ssl_ctx_set_default_verify_paths(args)),
+        "SSL_CTX_set_verify" => Some(tls::ssl_ctx_set_verify(args)),
+        "SSL_CTX_use_PrivateKey" => Some(tls::ssl_ctx_use_private_key(args)),
+        "SSL_CTX_use_certificate" => Some(tls::ssl_ctx_use_certificate(args)),
+        "SSL_accept" => Some(tls::ssl_accept(args)),
+        "SSL_connect" => Some(tls::ssl_connect(args)),
+        "SSL_free" => Some(tls::ssl_free(args)),
+        "SSL_get_error" => Some(tls::ssl_get_error(args)),
+        "SSL_get_verify_result" => Some(tls::ssl_get_verify_result(args)),
+        "SSL_new" => Some(tls::ssl_new(args)),
+        "SSL_read" => Some(tls::ssl_read(args)),
+        "SSL_set1_host" => Some(tls::ssl_set1_host(args)),
+        "SSL_set_fd" => Some(tls::ssl_set_fd(args)),
+        "SSL_set_tlsext_host_name" => Some(tls::ssl_set_tlsext_host_name(args)),
+        "SSL_shutdown" => Some(tls::ssl_shutdown(args)),
+        "SSL_write" => Some(tls::ssl_write(args)),
+        "TLS_method" => Some(tls::tls_method(args)),
+        "X509_STORE_add_cert" => Some(tls::x509_store_add_cert(args)),
+        "X509_free" => Some(tls::x509_free(args)),
+        "X509_verify_cert_error_string" => Some(tls::x509_verify_cert_error_string(args)),
         "koja_cwd" => Some(system::cwd(args)),
         "koja_errno_code" => Some(net::errno_code(args)),
         "koja_fd_close" => Some(fd::fd_close(args)),

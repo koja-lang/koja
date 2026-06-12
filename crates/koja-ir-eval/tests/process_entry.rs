@@ -8,6 +8,7 @@ mod common;
 
 use common::{PACKAGE, typecheck};
 use koja_ast::identifier::Identifier;
+use koja_ast::util::dedent;
 use koja_ir::lower_program;
 use koja_ir_eval::{Interpreter, Value};
 use koja_parser::ParseMode;
@@ -16,31 +17,31 @@ use koja_parser::ParseMode;
 /// code: 0 when the config is exactly `["alpha", "beta"]`, 1
 /// otherwise.
 const ARGV_ENTRY: &str = r#"
-struct ArgvEntry
-  args: List<String>
-end
-
-impl Process<List<String>, (), ()> for ArgvEntry
-  fn start(config: List<String>) -> Result<Self, StopReason>
-    Result.Ok(ArgvEntry{args: config})
-  end
-
-  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
-    Step.Continue(self)
-  end
-
-  fn run(self) -> StopReason
-    if self.args.get(0) == Option.Some("alpha") and self.args.get(1) == Option.Some("beta")
-      StopReason.Normal
-    else
-      StopReason.Shutdown
+    struct ArgvEntry
+      args: List<String>
     end
-  end
-end
-"#;
+
+    impl Process<List<String>, (), ()> for ArgvEntry
+      fn start(config: List<String>) -> Result<Self, StopReason>
+        Result.Ok(ArgvEntry{args: config})
+      end
+
+      fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+        Step.Continue(self)
+      end
+
+      fn run(self) -> StopReason
+        if self.args.get(0) == Option.Some("alpha") and self.args.get(1) == Option.Some("beta")
+          StopReason.Normal
+        else
+          StopReason.Shutdown
+        end
+      end
+    end
+    "#;
 
 fn run_argv_entry(args: &[&str]) -> Value {
-    let checked = typecheck(ARGV_ENTRY, ParseMode::File);
+    let checked = typecheck(&dedent(ARGV_ENTRY), ParseMode::File);
     let entry = Identifier::new(PACKAGE, vec!["ArgvEntry".to_string()]);
     let program = lower_program(&checked, &entry).expect("lowering should succeed");
     let args: Vec<String> = args.iter().map(|s| s.to_string()).collect();

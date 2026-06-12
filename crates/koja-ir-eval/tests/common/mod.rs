@@ -28,8 +28,11 @@
 #![allow(dead_code)]
 
 use std::path::PathBuf;
+use std::process;
+use std::sync::atomic::{AtomicU16, Ordering};
 
 use koja_ast::identifier::Identifier;
+use koja_ast::util::dedent;
 use koja_ir::{lower_program, lower_script};
 use koja_ir_eval::{Interpreter, RuntimeError, Value};
 use koja_parser::{ParseMode, SourceFile, parse_program};
@@ -45,19 +48,29 @@ pub const TEST_ENTRY_NAME: &str = "TestEntry";
 /// or executed by these tests — it only satisfies the entry staging;
 /// [`evaluate_program`] runs the fixture's `fn main` directly.
 const TEST_ENTRY_SNIPPET: &str = "
-struct TestEntry
-end
+    struct TestEntry
+    end
 
-impl Process<(), (), ()> for TestEntry
-  fn start(config: ()) -> Result<Self, StopReason>
-    Result.Ok(TestEntry{})
-  end
+    impl Process<(), (), ()> for TestEntry
+      fn start(config: ()) -> Result<Self, StopReason>
+        Result.Ok(TestEntry{})
+      end
 
-  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
-    Step.Continue(self)
-  end
-end
-";
+      fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
+        Step.Continue(self)
+      end
+    end
+    ";
+
+/// Sequential per-test port offset on top of a pid-derived base, so
+/// parallel test threads (and concurrent test processes) bind
+/// distinct loopback ports.
+static PORT_OFFSET: AtomicU16 = AtomicU16::new(0);
+
+pub fn fresh_port() -> u16 {
+    let base = 20000 + (process::id() % 20000) as u16;
+    base + PORT_OFFSET.fetch_add(1, Ordering::Relaxed)
+}
 
 pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
     typecheck_in(PACKAGE, source, mode)
@@ -71,8 +84,7 @@ pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProg
 }
 
 pub fn evaluate_program(source: &str) -> Result<Value, RuntimeError> {
-    let with_entry = format!("{source}\n{TEST_ENTRY_SNIPPET}");
-    run_main(typecheck(&with_entry, ParseMode::File))
+    run_main(typecheck(&source_with_entry(source), ParseMode::File))
 }
 
 /// [`evaluate_program`] variant that additionally bundles the
@@ -81,14 +93,15 @@ pub fn evaluate_program(source: &str) -> Result<Value, RuntimeError> {
 pub fn evaluate_qualified_program(source: &str) -> Result<Value, RuntimeError> {
     let mut sources = koja_stdlib::autoimport_sources();
     sources.extend(koja_stdlib::qualified_sources());
-    sources.push(test_source(
-        PACKAGE,
-        &format!("{source}\n{TEST_ENTRY_SNIPPET}"),
-    ));
+    sources.push(test_source(PACKAGE, &source_with_entry(source)));
     let parsed = parse_program(sources, ParseMode::File);
     let checked =
         check_program(parsed).unwrap_or_else(|failure| panic!("typecheck failed:\n{failure}"));
     run_main(checked)
+}
+
+fn source_with_entry(source: &str) -> String {
+    format!("{source}\n{}", dedent(TEST_ENTRY_SNIPPET))
 }
 
 fn test_source(package: &str, source: &str) -> SourceFile {
