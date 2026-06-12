@@ -6,22 +6,8 @@
 //!   the C ABI so eval observes the same instant the LLVM backend
 //!   would.
 
-use crate::error::RuntimeError;
-use crate::value::Value;
+use crate::externs::marshal::pass_through_externs;
 
-unsafe extern "C" {
-    fn koja_time_now_millis() -> i64;
-}
-
-pub(super) fn now_millis(args: &[Value]) -> Result<Value, RuntimeError> {
-    if !args.is_empty() {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "koja_time_now_millis expects 0 arguments; got {}",
-                args.len(),
-            ),
-        });
-    }
-    let millis = unsafe { koja_time_now_millis() };
-    Ok(Value::Int(millis))
+pass_through_externs! {
+    now_millis => fn koja_time_now_millis() -> Int64;
 }

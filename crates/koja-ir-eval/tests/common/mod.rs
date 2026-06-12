@@ -65,18 +65,41 @@ pub fn typecheck(source: &str, mode: ParseMode) -> CheckedProgram {
 
 pub fn typecheck_in(package: &str, source: &str, mode: ParseMode) -> CheckedProgram {
     let mut sources = koja_stdlib::autoimport_sources();
-    sources.push(SourceFile {
-        package: package.to_string(),
-        path: PathBuf::from("test.koja"),
-        source: source.to_string(),
-    });
+    sources.push(test_source(package, source));
     let parsed = parse_program(sources, mode);
     check_program(parsed).unwrap_or_else(|failure| panic!("typecheck failed:\n{failure}"))
 }
 
 pub fn evaluate_program(source: &str) -> Result<Value, RuntimeError> {
     let with_entry = format!("{source}\n{TEST_ENTRY_SNIPPET}");
-    let checked = typecheck(&with_entry, ParseMode::File);
+    run_main(typecheck(&with_entry, ParseMode::File))
+}
+
+/// [`evaluate_program`] variant that additionally bundles the
+/// qualified stdlib packages (`Net`, …) into the compilation unit,
+/// for fixtures that exercise `alias Net.*` surfaces.
+pub fn evaluate_qualified_program(source: &str) -> Result<Value, RuntimeError> {
+    let mut sources = koja_stdlib::autoimport_sources();
+    sources.extend(koja_stdlib::qualified_sources());
+    sources.push(test_source(
+        PACKAGE,
+        &format!("{source}\n{TEST_ENTRY_SNIPPET}"),
+    ));
+    let parsed = parse_program(sources, ParseMode::File);
+    let checked =
+        check_program(parsed).unwrap_or_else(|failure| panic!("typecheck failed:\n{failure}"));
+    run_main(checked)
+}
+
+fn test_source(package: &str, source: &str) -> SourceFile {
+    SourceFile {
+        package: package.to_string(),
+        path: PathBuf::from("test.koja"),
+        source: source.to_string(),
+    }
+}
+
+fn run_main(checked: CheckedProgram) -> Result<Value, RuntimeError> {
     let entry = Identifier::new(PACKAGE, vec![TEST_ENTRY_NAME.to_string()]);
     let program = lower_program(&checked, &entry).expect("lowering should succeed");
     Interpreter::run_function(&program, &format!("{PACKAGE}.main"))

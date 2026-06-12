@@ -117,6 +117,39 @@ pub(super) fn conversion_error_value<R: CallResolver>(
     })
 }
 
+/// The single `Ok` payload type of a `Result` enum decl. The IR
+/// seal pins `Result.Ok` to exactly one tuple field; shape
+/// violations surface as errors (not panics) because the intrinsic
+/// dispatch seam can't rely on seal.
+pub(super) fn single_ok_payload<R: CallResolver>(
+    result_symbol: &IRSymbol,
+    resolver: &R,
+    label: &str,
+) -> Result<IRType, RuntimeError> {
+    let decl =
+        resolver
+            .enum_decl(result_symbol.mangled())
+            .ok_or_else(|| RuntimeError::TypeMismatch {
+                detail: format!("{label}: enum decl `{result_symbol}` not found in program"),
+            })?;
+    let ok_variant = decl
+        .variants
+        .iter()
+        .find(|v| v.tag == OK_TAG)
+        .ok_or_else(|| RuntimeError::TypeMismatch {
+            detail: format!("{label}: enum `{result_symbol}` has no Ok variant"),
+        })?;
+    match &ok_variant.payload {
+        IRVariantPayload::Tuple(types) if types.len() == 1 => Ok(types[0].clone()),
+        other => Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "{label}: `{result_symbol}` Ok variant has unexpected payload `{other:?}` \
+                 (expected a single tuple field)",
+            ),
+        }),
+    }
+}
+
 /// Read the receiver enum's [`IRSymbol`] off `function.return_type`,
 /// erroring when the return shape isn't an enum (a typecheck /
 /// lower invariant violation that we surface rather than panic

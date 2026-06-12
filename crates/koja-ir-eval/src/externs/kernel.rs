@@ -6,6 +6,7 @@
 //!   `std::process::exit` the LLVM backend would.
 
 use crate::error::RuntimeError;
+use crate::externs::marshal::type_mismatch;
 use crate::value::Value;
 
 unsafe extern "C" {
@@ -14,12 +15,7 @@ unsafe extern "C" {
 
 pub(super) fn exit(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(code)] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "koja_kernel_exit expects a single Int64 argument; got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
+        return Err(type_mismatch("koja_kernel_exit", "(code: Int64)", args));
     };
     unsafe { koja_kernel_exit(*code) }
 }

@@ -25,6 +25,7 @@ use koja_runtime as _;
 // / `EVP_*` directly. No Rust-path uses; pure link metadata.
 use boring_sys as _;
 
+mod abi;
 mod error;
 mod externs;
 mod interpreter;

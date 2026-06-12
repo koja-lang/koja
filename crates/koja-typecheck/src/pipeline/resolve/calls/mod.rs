@@ -796,9 +796,7 @@ fn try_package_function_call(
     let call_span = site.span;
     let target = Identifier::new(name, vec![method.to_string()]);
     let Some((id, entry)) = resolver.registry.lookup(&target) else {
-        if resolver.registry.iter_in_package(name).next().is_none() {
-            return None;
-        }
+        resolver.registry.iter_in_package(name).next()?;
         resolve_args(args, None, resolver, diagnostics);
         diagnostics.push(Diagnostic::error(
             format!("package `{name}` has no function `{method}`"),

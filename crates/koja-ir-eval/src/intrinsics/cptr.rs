@@ -12,32 +12,21 @@
 //! `--backend=llvm`.
 //!
 //! `to_string` / `to_binary` are the receiver-typed methods on
-//! `CPtr<UInt8>`: `to_string` reads the rc-prefixed Koja string ABI
-//! (`[i64 rc][i64 bit_length][payload…]`, so `bit_length` at
-//! `ptr - LENGTH_OFFSET` and the block base at `ptr - BLOCK_HEADER_SIZE`)
-//! and frees the source block; `to_binary` byte-copies `len` bytes
-//! into a fresh `Value::Binary` (the caller retains ownership of
-//! the source pointer per the stdlib docstring).
+//! `CPtr<UInt8>`: `to_string` reads the rc-prefixed block ABI (see
+//! [`crate::abi`]) and frees the source block; `to_binary`
+//! byte-copies `len` bytes into a fresh `Value::Binary` (the caller
+//! retains ownership of the source pointer per the stdlib
+//! docstring).
 
 use std::ptr;
 use std::slice;
 
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
+use crate::abi;
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;
 use crate::value::Value;
-
-/// Distance in bytes from a Koja string/binary payload pointer back to
-/// its block base (the `i64 rc` word). The rc header is
-/// `[i64 rc][i64 bit_length]`, so the payload sits this far past the
-/// base. API contract: MUST equal [`koja_runtime::util::BLOCK_HEADER_SIZE`].
-const BLOCK_HEADER_SIZE: usize = 16;
-
-/// Distance in bytes from a payload pointer back to its `i64
-/// bit_length` word (the rc word sits a further `LENGTH_OFFSET` before
-/// that). API contract: MUST equal [`koja_runtime::util::LENGTH_OFFSET`].
-const LENGTH_OFFSET: usize = 8;
 
 unsafe extern "C" {
     fn malloc(size: usize) -> *mut u8;
@@ -184,7 +173,7 @@ fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
                 .to_string(),
         });
     }
-    let bit_length = unsafe { *(ptr.sub(LENGTH_OFFSET) as *const i64) };
+    let bit_length = abi::read_bit_length(*ptr);
     if bit_length < 0 {
         return Err(RuntimeError::Unsupported {
             detail: format!(
@@ -193,10 +182,7 @@ fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
             ),
         });
     }
-    let byte_length = (bit_length as usize) / 8;
-    let bytes = unsafe { slice::from_raw_parts(*ptr as *const u8, byte_length) }.to_vec();
-    unsafe { free(ptr.sub(BLOCK_HEADER_SIZE)) };
-    Ok(Value::String(bytes))
+    Ok(Value::String(abi::take_block_bytes(*ptr)))
 }
 
 fn pointee_size(return_type: &IRType, label: &str) -> Result<usize, RuntimeError> {

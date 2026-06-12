@@ -16,12 +16,13 @@
 //! both backends execute the same machine code for the body.
 //!
 //! Adding a new extern: drop / extend the sibling `<name>.rs` module
-//! matching the Koja source file, `unsafe extern "C"`-declare the C
-//! symbol, export `pub(super) fn <handler>`, then register
-//! `(c_symbol, handler)` in [`dispatch`]. Externs not in the table
-//! fall through with `None` so the caller can surface
-//! [`RuntimeError::ExternNotSupported`] with the the mangled
-//! symbol attached for the diagnostic.
+//! matching the Koja source file, list the symbol in a
+//! [`marshal::pass_through_externs!`] invocation (or hand-write the
+//! handler when it needs more than arg/return marshaling), then
+//! register `(c_symbol, handler)` in [`dispatch`]. Externs not in
+//! the table fall through with `None` so the caller can surface
+//! [`RuntimeError::ExternNotSupported`] with the mangled symbol
+//! attached for the diagnostic.
 
 use crate::error::RuntimeError;
 use crate::value::Value;
@@ -30,6 +31,8 @@ mod cptr;
 mod crypto;
 mod fd;
 mod kernel;
+mod marshal;
+mod net;
 mod random;
 mod system;
 mod time;
@@ -54,6 +57,7 @@ pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, 
         "SHA384" => Some(crypto::sha384(args)),
         "SHA512" => Some(crypto::sha512(args)),
         "koja_cwd" => Some(system::cwd(args)),
+        "koja_errno_code" => Some(net::errno_code(args)),
         "koja_fd_close" => Some(fd::fd_close(args)),
         "koja_fd_read" => Some(fd::fd_read(args)),
         "koja_fd_write" => Some(fd::fd_write(args)),
@@ -67,11 +71,21 @@ pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, 
         "koja_hostname" => Some(system::hostname(args)),
         "koja_io_block" => Some(fd::io_block(args)),
         "koja_kernel_exit" => Some(kernel::exit(args)),
+        "koja_last_error" => Some(net::last_error(args)),
+        "koja_last_error_code" => Some(net::last_error_code(args)),
         "koja_random_bytes" => Some(random::bytes(args)),
         "koja_random_int" => Some(random::int(args)),
         "koja_rt_unwatch_fd" => Some(fd::rt_unwatch_fd(args)),
         "koja_rt_watch_fd" => Some(fd::rt_watch_fd(args)),
         "koja_set_env" => Some(system::set_env(args)),
+        "koja_socket_accept" => Some(net::socket_accept(args)),
+        "koja_socket_bind" => Some(net::socket_bind(args)),
+        "koja_socket_connect" => Some(net::socket_connect(args)),
+        "koja_socket_create" => Some(net::socket_create(args)),
+        "koja_socket_listen" => Some(net::socket_listen(args)),
+        "koja_socket_send_to" => Some(net::socket_send_to(args)),
+        "koja_socket_setsockopt_reuse" => Some(net::socket_setsockopt_reuse(args)),
+        "koja_socket_try_accept" => Some(net::socket_try_accept(args)),
         "koja_time_now_millis" => Some(time::now_millis(args)),
         "strlen" => Some(cptr::strlen_(args)),
         _ => None,

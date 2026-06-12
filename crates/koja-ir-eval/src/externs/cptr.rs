@@ -7,6 +7,7 @@
 //!   would.
 
 use crate::error::RuntimeError;
+use crate::externs::marshal::type_mismatch;
 use crate::value::Value;
 
 unsafe extern "C" {
@@ -15,12 +16,7 @@ unsafe extern "C" {
 
 pub(super) fn strlen_(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr)] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "strlen expects a single CPtr<UInt8> argument; got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
+        return Err(type_mismatch("strlen", "(s: CPtr<UInt8>)", args));
     };
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
