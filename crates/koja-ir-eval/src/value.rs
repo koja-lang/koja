@@ -28,13 +28,20 @@ pub type SetEntries = Rc<RefCell<Vec<Value>>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    /// Owned heap bytes; `bit_length` is implicitly `bytes.len() * 8`.
-    Binary(Vec<u8>),
-    /// Owned heap bits. `bit_length` may be a non-multiple of 8 —
+    /// Shared heap bytes; `bit_length` is implicitly `bytes.len() * 8`.
+    /// `Rc`-backed (like the collections) so `Value::clone` is a
+    /// refcount bump, not a buffer copy — the interpreter clones
+    /// values on every local read and argument pass, and deep-copying
+    /// payloads made that O(len) per touch. Binaries are immutable in
+    /// eval (every operation builds a fresh buffer), so plain `Rc`
+    /// without `RefCell` suffices.
+    Binary(Rc<Vec<u8>>),
+    /// Shared heap bits. `bit_length` may be a non-multiple of 8 —
     /// payload occupies `ceil(bit_length / 8)` bytes; trailing bits
-    /// in the last byte are zero-padded.
+    /// in the last byte are zero-padded. `Rc`-backed for the same
+    /// reason as [`Value::Binary`].
     Bits {
-        bytes: Vec<u8>,
+        bytes: Rc<Vec<u8>>,
         bit_length: u64,
     },
     Bool(bool),
@@ -87,8 +94,11 @@ pub enum Value {
     /// raw bytes here too — matches v1's permissive treatment.
     /// Chains like `Random.bytes(n).to_string().to_binary()` rely
     /// on flowing arbitrary bytes through a `String` value without
-    /// the interpreter rejecting non-UTF-8 payloads.
-    String(Vec<u8>),
+    /// the interpreter rejecting non-UTF-8 payloads. `Rc`-backed for
+    /// the same reason as [`Value::Binary`]: strings are immutable
+    /// and cloned constantly, so sharing the buffer matches the
+    /// LLVM runtime's refcounted heap blocks.
+    String(Rc<Vec<u8>>),
     Struct {
         symbol: IRSymbol,
         fields: Vec<Value>,
@@ -120,6 +130,25 @@ pub enum EnumPayload {
 }
 
 impl Value {
+    /// Construct a [`Value::Binary`] from owned bytes.
+    pub fn binary(bytes: impl Into<Vec<u8>>) -> Value {
+        Value::Binary(Rc::new(bytes.into()))
+    }
+
+    /// Construct a [`Value::Bits`] from owned bytes and a bit length.
+    pub fn bits(bytes: impl Into<Vec<u8>>, bit_length: u64) -> Value {
+        Value::Bits {
+            bytes: Rc::new(bytes.into()),
+            bit_length,
+        }
+    }
+
+    /// Construct a [`Value::String`] from owned bytes (or anything
+    /// convertible — `String`, `Vec<u8>`, `&[u8]`, `&str`).
+    pub fn string(bytes: impl Into<Vec<u8>>) -> Value {
+        Value::String(Rc::new(bytes.into()))
+    }
+
     pub fn as_bool(&self) -> Option<bool> {
         match self {
             Value::Bool(b) => Some(*b),

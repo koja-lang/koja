@@ -24,7 +24,7 @@ pub(super) fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
     };
     let len = (*len).max(0) as usize;
     if len == 0 {
-        return Ok(Value::String(Vec::new()));
+        return Ok(Value::string(Vec::new()));
     }
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
@@ -33,5 +33,5 @@ pub(super) fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
         });
     }
     let bytes = unsafe { slice::from_raw_parts(*ptr as *const u8, len) }.to_vec();
-    Ok(Value::String(bytes))
+    Ok(Value::string(bytes))
 }

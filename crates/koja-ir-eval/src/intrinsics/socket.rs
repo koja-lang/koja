@@ -69,7 +69,7 @@ fn resolve<R: CallResolver>(
     let result_symbol = helpers::enum_return_symbol(function, "Socket.resolve")?;
     let ip_symbol = resolve_element_symbol(&result_symbol, resolver)?;
 
-    let c_hostname = CString::new(hostname.clone()).map_err(|_| RuntimeError::TypeMismatch {
+    let c_hostname = CString::new(hostname.as_slice()).map_err(|_| RuntimeError::TypeMismatch {
         detail: "Socket.resolve: hostname contains an interior NUL byte".to_string(),
     })?;
     let buffer = unsafe { koja_socket_resolve(c_hostname.as_ptr() as *const u8) };
@@ -87,7 +87,7 @@ fn resolve<R: CallResolver>(
         let payload = unsafe { *ip_pointers.add(i) };
         addresses.push(Value::Struct {
             symbol: ip_symbol.clone(),
-            fields: vec![Value::Binary(abi::take_block_bytes(payload))],
+            fields: vec![Value::binary(abi::take_block_bytes(payload))],
         });
     }
     abi::free_raw_buffer(buffer);
@@ -123,10 +123,10 @@ fn recv_from<R: CallResolver>(
     let data_payload = unsafe { *(buffer as *const *mut u8) };
     let ip_payload = unsafe { *(buffer.add(RECV_FROM_IP_OFFSET) as *const *mut u8) };
     let port = unsafe { *(buffer.add(RECV_FROM_PORT_OFFSET) as *const i64) };
-    let data = Value::String(abi::take_block_bytes(data_payload));
+    let data = Value::string(abi::take_block_bytes(data_payload));
     let ip = Value::Struct {
         symbol: ip_symbol,
-        fields: vec![Value::Binary(abi::take_block_bytes(ip_payload))],
+        fields: vec![Value::binary(abi::take_block_bytes(ip_payload))],
     };
     abi::free_raw_buffer(buffer);
 
@@ -146,7 +146,7 @@ fn recv_from<R: CallResolver>(
 /// koja_last_error())` shape.
 fn last_error_value() -> Value {
     let payload = unsafe { koja_last_error() };
-    Value::String(abi::take_block_bytes(payload))
+    Value::string(abi::take_block_bytes(payload))
 }
 
 /// Extract the raw fd from a `Socket{fd: Fd{descriptor}}` receiver.

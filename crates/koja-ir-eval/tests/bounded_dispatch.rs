@@ -52,7 +52,7 @@ fn bounded_dispatch_returns_concrete_impl_method_value() {
         end
         ",
     ));
-    assert_eq!(value, Value::String("Point".into()));
+    assert_eq!(value, Value::string("Point"));
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn bounded_dispatch_distinct_concrete_args_dispatch_to_distinct_impls() {
         end
         ",
     ));
-    assert_eq!(value, Value::String("Point".into()));
+    assert_eq!(value, Value::string("Point"));
 }
 
 #[test]
@@ -128,5 +128,5 @@ fn bounded_dispatch_through_generic_struct_receiver_runs_to_completion() {
         end
         ",
     ));
-    assert_eq!(value, Value::String("Bag".into()));
+    assert_eq!(value, Value::string("Bag"));
 }

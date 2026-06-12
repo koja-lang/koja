@@ -58,7 +58,7 @@ fn string_concat_appends_payloads() {
     // source.
     assert_eq!(
         evaluate_script("\"foo\" <> \"bar\"\n").unwrap(),
-        Value::String("foobar".into()),
+        Value::string("foobar"),
     );
 }
 

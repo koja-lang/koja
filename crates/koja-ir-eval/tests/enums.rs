@@ -115,10 +115,7 @@ fn tuple_variant_with_string_payload_carries_string_value() {
         panic!("expected Value::Enum, got {value:?}");
     };
     assert_eq!(tag.0, 1);
-    assert_eq!(
-        payload,
-        EnumPayload::Tuple(vec![Value::String("boom".into())]),
-    );
+    assert_eq!(payload, EnumPayload::Tuple(vec![Value::string("boom")]),);
 }
 
 #[test]

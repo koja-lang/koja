@@ -1,5 +1,36 @@
 # Eval Process Scheduler
 
+> **Archived 2026-06-12 — superseded by the Phase 5 A1 scheduler
+> protocol.** ROADMAP.md commits to defining the runtime as a formal
+> protocol interface before building further backends: the native
+> scheduler is the first implementation, the eval scheduler becomes
+> the second, and the protocol must be expressible by a
+> single-threaded *cooperative* backend (the Phase 6 WASM
+> prerequisite). That constraint invalidates this doc's central
+> thread-per-process design choice — a coop single-threaded eval
+> scheduler would double as the cheapest testbed for the WASM shape.
+> The unbuilt remainder of this doc (spawn, mailboxes, `Ref`
+> messaging, monitors/supervision, `koja shell` project mode) gets
+> re-planned under that protocol effort rather than implemented as
+> designed here.
+>
+> **What shipped before archival** (June 2026, the entry-process
+> slice): `koja run` (interpreter default) executes a project's
+> `Process` entry in-process — argv-shaped `List<String>` config,
+> blocking socket/TLS externs (eval-native, no reactor),
+> `IRInstruction::Receive` over OS-signal-delivered `Lifecycle`
+> events plus `after` timeouts, and `IRInstruction::BinaryMatch`.
+> Parity is pinned by the `*_interpreted` tests in
+> `koja-driver/tests/lang_suite.rs` and the `koja-ir-eval`
+> integration tests. Everything else surfaces
+> `RuntimeError::Unsupported` with a `--backend=llvm` hint.
+>
+> **Worth inheriting** when the scheduler-protocol doc is written:
+> the observable-parity test strategy (runtime-is-the-spec, Rust
+> tests pinning eval to LLVM behavior), the typed-`Value`-in-mailbox
+> rationale, the lifecycle-priority semantics, and the
+> mechanical-checks list at the bottom.
+
 Design for a real process scheduler inside `koja-ir-eval` so the
 interpreter implements `spawn` / `receive` / mailboxes / supervision
 the same way the LLVM-emitted runtime does. Closes the last
@@ -12,14 +43,14 @@ test that pins the eval-side behavior to it.
 
 ## Why
 
-Eval today is feature-complete for synchronous code. Anything
-touching `IRInstruction::Spawn`, `IRInstruction::Receive`, or
-`FunctionKind::SpawnWrapper` / `FunctionKind::ProcessEntryWrapper`
-returns `RuntimeError::Unsupported` and bails. That carve-out
-forces a sharp split:
+Eval today is feature-complete for synchronous code plus the
+entry-process slice above. Anything touching
+`IRInstruction::Spawn` or `FunctionKind::SpawnWrapper` returns
+`RuntimeError::Unsupported` and bails. That carve-out forces a
+sharp split:
 
 - LLVM mode: real Koja program, with processes.
-- Eval mode: synchronous subset only.
+- Eval mode: single entry process, no spawn.
 
 The split shows up in three concrete places we want to close:
 
@@ -44,16 +75,16 @@ exit-code semantics.
 
 ## Model
 
-| Axis | LLVM runtime | Eval scheduler |
-| ---- | ------------ | -------------- |
-| Concurrency primitive | Cooperative coroutines on N worker OS threads | One OS thread per Koja process |
-| Process body | Native function pointer dispatched via `koja_rt_spawn` | `IRFunction` interpreted on the thread |
-| Mailbox | `VecDeque<Vec<u8>>` of byte-serialized messages | `crossbeam::channel::Sender<Envelope>` carrying typed `Value` |
-| Yield point | `koja_rt_receive` swaps stacks back to the worker loop | `recv` blocks the OS thread |
-| Lifecycle priority | Front-of-queue insert via `koja_rt_send_lifecycle` | Two channels per process: lifecycle (priority) + business |
-| Reactor / I/O | `polling`-based reactor wakes blocked processes on fd readiness | Reactor unchanged — eval reuses `koja-runtime`'s reactor as-is |
-| PID space | `i64` minted by scheduler under `SCHED.lock()` | `i64` minted by eval scheduler under its own `Mutex` |
-| Termination | `Process` removed from `SCHED.processes`, mailbox freed | Thread joined, registry entry removed, channels dropped |
+| Axis                  | LLVM runtime                                                    | Eval scheduler                                                 |
+| --------------------- | --------------------------------------------------------------- | -------------------------------------------------------------- |
+| Concurrency primitive | Cooperative coroutines on N worker OS threads                   | One OS thread per Koja process                                 |
+| Process body          | Native function pointer dispatched via `koja_rt_spawn`          | `IRFunction` interpreted on the thread                         |
+| Mailbox               | `VecDeque<Vec<u8>>` of byte-serialized messages                 | `crossbeam::channel::Sender<Envelope>` carrying typed `Value`  |
+| Yield point           | `koja_rt_receive` swaps stacks back to the worker loop          | `recv` blocks the OS thread                                    |
+| Lifecycle priority    | Front-of-queue insert via `koja_rt_send_lifecycle`              | Two channels per process: lifecycle (priority) + business      |
+| Reactor / I/O         | `polling`-based reactor wakes blocked processes on fd readiness | Reactor unchanged — eval reuses `koja-runtime`'s reactor as-is |
+| PID space             | `i64` minted by scheduler under `SCHED.lock()`                  | `i64` minted by eval scheduler under its own `Mutex`           |
+| Termination           | `Process` removed from `SCHED.processes`, mailbox freed         | Thread joined, registry entry removed, channels dropped        |
 
 The mapping is structural. Every primitive in the LLVM column has
 a direct counterpart in the Eval column with the same observable
@@ -176,7 +207,7 @@ in eval:
    instead of going through the LLVM-shaped `void(*)(i8*)` thunk.
 3. Mint a PID, allocate channels, register in the scheduler.
 4. `thread::Builder::new().name(format!("koja-pid-{pid}"))
-   .spawn(move || run_process(pid, wrapper, config))`.
+.spawn(move || run_process(pid, wrapper, config))`.
 5. Return `Value::Struct(Ref { id: pid })` matching `ref_type`'s
    layout.
 
@@ -346,8 +377,8 @@ shell-experience polish.
 Greppable / assertable invariants:
 
 - `RuntimeError::ExternNotSupported`, `RuntimeError::Unsupported
-  { detail: ... spawn ... }`, `RuntimeError::Unsupported {
-  detail: ... receive ... }` no longer fire on any
+{ detail: ... spawn ... }`, `RuntimeError::Unsupported {
+detail: ... receive ... }` no longer fire on any
   process-using stdlib fixture. Grep `tests/lang/process_*` for
   `--backend=interpreter` skips and remove them.
 - `koja eval` of every `tests/lang/process_*/main.koja` produces

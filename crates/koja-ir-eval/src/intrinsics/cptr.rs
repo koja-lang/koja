@@ -149,7 +149,7 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
     };
     let len = (*len).max(0) as usize;
     if len == 0 {
-        return Ok(Value::Binary(Vec::new()));
+        return Ok(Value::binary(Vec::new()));
     }
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
@@ -158,7 +158,7 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
         });
     }
     let bytes = unsafe { slice::from_raw_parts(*ptr as *const u8, len) }.to_vec();
-    Ok(Value::Binary(bytes))
+    Ok(Value::binary(bytes))
 }
 
 fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -182,7 +182,7 @@ fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
             ),
         });
     }
-    Ok(Value::String(abi::take_block_bytes(*ptr)))
+    Ok(Value::string(abi::take_block_bytes(*ptr)))
 }
 
 fn pointee_size(return_type: &IRType, label: &str) -> Result<usize, RuntimeError> {

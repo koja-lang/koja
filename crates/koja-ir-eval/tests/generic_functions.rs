@@ -45,7 +45,7 @@ fn identity_function_returns_each_concrete_call_site_value() {
             id(\"hello\")
             "
         )),
-        Value::String("hello".into()),
+        Value::string("hello"),
     );
 }
 

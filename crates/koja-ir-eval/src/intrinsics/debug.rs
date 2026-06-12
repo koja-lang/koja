@@ -34,7 +34,7 @@ pub(super) fn dispatch(impl_: DebugImpl, args: &[Value]) -> Result<Value, Runtim
             });
         }
     };
-    Ok(Value::String(rendered.into_bytes()))
+    Ok(Value::string(rendered))
 }
 
 /// Signed widths render via `{}` (decimal, optional `-`); unsigned

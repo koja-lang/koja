@@ -1,0 +1,30 @@
+struct App
+end
+
+enum AppMsg
+  Ping
+end
+
+impl Process<App, AppMsg, String> for App
+  fn start(config: App) -> Result<Self, StopReason>
+    IO.puts("waiting")
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    receive
+      pair: Pair<AppMsg, Option<ReplyTo<String>>> ->
+        StopReason.Shutdown
+
+      event: Lifecycle ->
+        StopReason.Shutdown
+    after 50
+      IO.puts("timed out")
+      StopReason.Normal
+    end
+  end
+end

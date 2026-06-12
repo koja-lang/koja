@@ -18,6 +18,7 @@ mod process_table;
 mod reactor;
 mod sched_trace;
 mod scheduler;
+pub mod signals;
 mod socket;
 mod string;
 mod system;

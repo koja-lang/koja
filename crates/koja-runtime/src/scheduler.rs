@@ -24,73 +24,19 @@ use crate::wire::{
     OwnedPayload, TAG_BUSINESS, TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE, TAG_REPLY,
 };
 
-// ---------------------------------------------------------------------------
-// Signal handling state
-// ---------------------------------------------------------------------------
-
-static GOT_SIGTERM: AtomicBool = AtomicBool::new(false);
-static GOT_SIGINT: AtomicBool = AtomicBool::new(false);
-static GOT_SIGHUP: AtomicBool = AtomicBool::new(false);
-
-extern "C" fn handle_sigterm(_sig: libc::c_int) {
-    GOT_SIGTERM.store(true, Ordering::Relaxed);
-}
-
-extern "C" fn handle_sigint(_sig: libc::c_int) {
-    GOT_SIGINT.store(true, Ordering::Relaxed);
-}
-
-extern "C" fn handle_sighup(_sig: libc::c_int) {
-    GOT_SIGHUP.store(true, Ordering::Relaxed);
-}
-
-fn install_signals() {
-    unsafe {
-        let mut sa: libc::sigaction = mem::zeroed();
-        sa.sa_flags = 0;
-        libc::sigemptyset(&mut sa.sa_mask);
-
-        sa.sa_sigaction = handle_sigterm as *const () as usize;
-        libc::sigaction(libc::SIGTERM, &sa, ptr::null_mut());
-
-        sa.sa_sigaction = handle_sigint as *const () as usize;
-        libc::sigaction(libc::SIGINT, &sa, ptr::null_mut());
-
-        sa.sa_sigaction = handle_sighup as *const () as usize;
-        libc::sigaction(libc::SIGHUP, &sa, ptr::null_mut());
-
-        // Unblock these signals in case the parent process (e.g. cargo test
-        // linking LLVM) inherited a mask that blocks them.
-        let mut unblock: libc::sigset_t = mem::zeroed();
-        libc::sigemptyset(&mut unblock);
-        libc::sigaddset(&mut unblock, libc::SIGTERM);
-        libc::sigaddset(&mut unblock, libc::SIGINT);
-        libc::sigaddset(&mut unblock, libc::SIGHUP);
-        libc::sigprocmask(libc::SIG_UNBLOCK, &unblock, ptr::null_mut());
-    }
-}
-
-/// Checks atomic signal flags and injects lifecycle messages into the main
-/// process's system queue. Called from the worker loop. Lifecycle variant
-/// indices match the `Lifecycle` enum declaration order: Shutdown=0,
-/// Interrupt=1, Reload=2. Only takes the lock when a signal actually fired.
+/// Checks the shared signal flags ([`crate::signals`]) and injects
+/// lifecycle messages into the main process's system queue. Called
+/// from the worker loop. Only takes the lock when a signal actually
+/// fired.
 fn poll_signals() {
-    let term = GOT_SIGTERM.swap(false, Ordering::Relaxed);
-    let int = GOT_SIGINT.swap(false, Ordering::Relaxed);
-    let hup = GOT_SIGHUP.swap(false, Ordering::Relaxed);
-    if !(term || int || hup) {
+    let fired = crate::signals::drain();
+    if fired.is_empty() {
         return;
     }
 
     let main_pid = SCHED.lock().unwrap().main_pid();
-    if term {
-        send_lifecycle_to(main_pid, 0);
-    }
-    if int {
-        send_lifecycle_to(main_pid, 1);
-    }
-    if hup {
-        send_lifecycle_to(main_pid, 2);
+    for variant in fired {
+        send_lifecycle_to(main_pid, variant);
     }
 }
 
@@ -583,7 +529,7 @@ pub extern "C" fn koja_rt_main_done() {
         setvbuf(stdout_ptr, ptr::null_mut(), _IOLBF, 0);
     }
 
-    install_signals();
+    crate::signals::install();
     crate::reactor::init();
 
     let n = worker_count();

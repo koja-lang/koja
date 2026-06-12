@@ -381,7 +381,7 @@ recursive-drop effort.
 - **Bounded mailboxes / backpressure.** Unbounded `VecDeque` is
   unchanged here; flow control is a separate concern.
 - **Eval-backend mailbox.** Eval carries typed `Value` envelopes
-  (`EVAL-PROCESS.md`), not byte buffers, so most of this doc is
+  (`archive/20260612-EVAL-PROCESS.md`), not byte buffers, so most of this doc is
   LLVM-runtime-only. The one shared piece is the tag taxonomy: eval's
   `EvalEnvelope` variants must stay in lockstep with the wire tags in
   `koja-runtime/src/wire.rs`.
@@ -403,8 +403,9 @@ recursive-drop effort.
   `Business` traffic and that phase 5's slot-out change must also cover.
 - `koja/crates/koja-ir/src/function.rs` — `ReceiveTag` / `wire_byte`,
   the IR-side tag definition folded into the wire SSOT.
-- `koja/design/EVAL-PROCESS.md` — the eval scheduler's typed-`Value`
-  mailbox and `EvalEnvelope`; the tag taxonomy must stay aligned.
+- `koja/design/archive/20260612-EVAL-PROCESS.md` — the eval scheduler's
+  typed-`Value` mailbox and `EvalEnvelope`; the tag taxonomy must stay
+  aligned. (Archived: superseded by the Phase 5 A1 scheduler protocol.)
 - `koja/design/ROADMAP.md` — Phase 5 B1 scheduler hardening, which owns
   PID reuse and the pluggable scheduler protocol this doc stays clear
   of.

@@ -7,15 +7,26 @@
 //! the [`Value`] produced by the entry / body, or a [`RuntimeError`]
 //! for the recoverable failure modes.
 //!
+//! Process scope: program mode runs the single `Process` entry
+//! in-process — argv-shaped `List<String>` config, blocking
+//! socket/TLS externs (no reactor), and `receive` over
+//! OS-signal-delivered `Lifecycle` events plus `after` timeouts.
+//! `spawn` and cross-process messaging are not implemented; they
+//! surface [`RuntimeError::Unsupported`] with a `--backend=llvm`
+//! hint. A full eval scheduler arrives as the second
+//! implementation of the planned scheduler protocol (the native
+//! runtime is the first).
+//!
 //! Hard contract: zero dependency on the v1 `koja-ir` / `koja-ir-eval`
 //! path. Sealed `IRProgram` / `IRScript` from `koja-ir` are the
 //! only inputs.
 
-// Pull `koja-runtime`'s rlib into the link graph so the
+// Keep `koja-runtime`'s rlib in the link graph even if the direct
+// Rust-path uses (e.g. [`crate::signals`]) ever go away: the
 // `#[unsafe(no_mangle)] pub extern "C" fn`s referenced by
-// [`crate::externs`] resolve at link time. The crate has no Rust-
-// path uses on its own, so without this import cargo would skip
-// the rlib and the C symbols would come up undefined.
+// [`crate::externs`] resolve at link time, and without a `use`
+// cargo would skip the rlib and the C symbols would come up
+// undefined.
 use koja_runtime as _;
 
 // Pull `boring-sys` into the link graph so its `#[link(name =
@@ -31,6 +42,7 @@ mod externs;
 mod interpreter;
 mod intrinsics;
 mod ops;
+mod signals;
 mod value;
 
 pub use error::RuntimeError;

@@ -8,8 +8,7 @@
 //! process via the reactor on `EAGAIN` — machinery that doesn't
 //! exist under eval. On a blocking fd no syscall ever returns
 //! `EAGAIN`, so the runtime's `block_until_ready` loops complete on
-//! their first iteration and the reactor path is never taken. This
-//! is the model `design/EVAL-PROCESS.md` blesses for eval:
+//! their first iteration and the reactor path is never taken —
 //! fd-blocking ops just block the (single) interpreter thread.
 //!
 //! Concretely:

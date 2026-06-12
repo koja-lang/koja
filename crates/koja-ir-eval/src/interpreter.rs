@@ -5,18 +5,22 @@
 //! [`crate::ops`].
 
 use std::collections::BTreeMap;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use koja_ir::{
-    BinaryEndian, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
+    BinaryEndian, BinarySign, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
     IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId,
     IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
-    IRVariantTag, LoweredBinarySegment, ResolvedBinaryLayout, ValueId,
+    IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
+    ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId,
 };
 
 use crate::error::RuntimeError;
 use crate::externs;
 use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
+use crate::signals;
 use crate::value::{EnumPayload, Value};
 
 pub struct Interpreter;
@@ -40,6 +44,10 @@ impl Interpreter {
             "interpreter: program entry `{}` is not a `ProcessEntryWrapper` (seal violation)",
             entry.symbol,
         );
+        // Latch SIGTERM/SIGINT/SIGHUP so the entry's `receive` can
+        // observe them as `Lifecycle` messages — same handlers the
+        // LLVM runtime installs at boot.
+        signals::install();
         run_process_entry(program, entry, args)
     }
 
@@ -133,7 +141,7 @@ impl Interpreter {
                 })?;
         let result = execute_function(function, vec![value], script)?;
         match result {
-            Value::String(bytes) => Ok(Some(bytes)),
+            Value::String(bytes) => Ok(Some(bytes.to_vec())),
             other => Err(RuntimeError::TypeMismatch {
                 detail: format!(
                     "format_via_debug: `{}` returned non-String value `{other}` — \
@@ -305,7 +313,7 @@ fn is_argv_shaped(config_type: &IRType) -> bool {
 fn argv_value(args: &[String]) -> Value {
     let strings = args
         .iter()
-        .map(|arg| Value::String(arg.as_bytes().to_vec()))
+        .map(|arg| Value::string(arg.as_bytes()))
         .collect();
     Value::List(std::rc::Rc::new(std::cell::RefCell::new(strings)))
 }
@@ -333,7 +341,7 @@ fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, Run
         IRType::List(_) => Ok(Value::List(std::rc::Rc::new(std::cell::RefCell::new(
             Vec::new(),
         )))),
-        IRType::String => Ok(Value::String(Vec::new())),
+        IRType::String => Ok(Value::string(Vec::new())),
         IRType::Struct(symbol) => {
             let decl =
                 program
@@ -558,9 +566,18 @@ fn execute_blocks<R: CallResolver>(
         .first()
         .expect("sealed function has at least one basic block")
         .id;
-    loop {
+    'blocks: loop {
         let block = find_block(blocks, current);
         for instruction in &block.instructions {
+            // `Receive` transfers control to an arm (or after) body
+            // block instead of defining a value — lowering places it
+            // last in its block with an `Unreachable` terminator —
+            // so it dispatches here rather than in
+            // `execute_instruction`.
+            if let IRInstruction::Receive { after, arms, .. } = instruction {
+                current = execute_receive(arms, after.as_ref(), frame, resolver)?;
+                continue 'blocks;
+            }
             execute_instruction(instruction, frame, resolver)?;
         }
         match &block.terminator {
@@ -636,6 +653,103 @@ fn bind_block_params(
         values.insert(param_id, value);
     }
     Ok(())
+}
+
+/// How often a blocked `receive` rechecks the signal flags (and the
+/// `after` deadline). Bounds signal-delivery latency without
+/// busy-spinning the host thread.
+const RECEIVE_POLL_SLICE: Duration = Duration::from_millis(10);
+
+/// Execute an [`IRInstruction::Receive`] for the entry process,
+/// returning the basic block control transfers to.
+///
+/// The interpreter has no spawn, so the only message producer is
+/// the OS signal handler: lifecycle arms poll [`signals`], business
+/// arms can never fire, and the `after` timeout runs its body when
+/// the deadline passes with nothing pending. A pending signal beats
+/// an already-expired timeout, matching the runtime's
+/// message-before-timeout priority. With neither a lifecycle arm
+/// nor an `after` clause the receive could never unblock — that's
+/// the one shape that errors.
+fn execute_receive<R: CallResolver>(
+    arms: &[ReceiveArm],
+    after: Option<&ReceiveAfter>,
+    frame: &mut Frame,
+    resolver: &R,
+) -> Result<IRBlockId, RuntimeError> {
+    let lifecycle_arm = arms.iter().find(|arm| arm.tag == ReceiveTag::Lifecycle);
+    let deadline = after
+        .map(|clause| {
+            let value = lookup(&frame.values, clause.timeout)?;
+            let Value::Int(ms) = value else {
+                return Err(RuntimeError::TypeMismatch {
+                    detail: format!("receive `after` expects an Int timeout; got {value}"),
+                });
+            };
+            Ok(Instant::now() + Duration::from_millis(ms.max(0) as u64))
+        })
+        .transpose()?;
+
+    if lifecycle_arm.is_none() && deadline.is_none() {
+        return Err(RuntimeError::Unsupported {
+            detail: "`receive` with only business-message arms and no `after` timeout would \
+                     block forever under the interpreter: `spawn` is unsupported, so no \
+                     business message can ever arrive"
+                .to_string(),
+        });
+    }
+
+    loop {
+        if let Some(arm) = lifecycle_arm
+            && let Some(variant) = signals::next_lifecycle()
+        {
+            let payload = lifecycle_value(arm, variant, resolver);
+            frame.locals.insert(arm.payload_local, payload);
+            return Ok(arm.body);
+        }
+        let slice = match deadline {
+            Some(deadline) => {
+                let now = Instant::now();
+                if now >= deadline {
+                    let clause = after.expect("deadline implies an after clause");
+                    return Ok(clause.body);
+                }
+                (deadline - now).min(RECEIVE_POLL_SLICE)
+            }
+            None => RECEIVE_POLL_SLICE,
+        };
+        thread::sleep(slice);
+    }
+}
+
+/// Materialize the `Lifecycle` enum value for a drained signal.
+/// `variant` is the variant index in declaration order (Shutdown=0,
+/// Interrupt=1, Reload=2) — the same mapping
+/// `koja_runtime::signals::drain` documents.
+fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R) -> Value {
+    let IRType::Enum(symbol) = &arm.payload_type else {
+        panic!(
+            "interpreter: lifecycle receive arm payload type is not an enum \
+             (got `{:?}`) — seal invariant violation",
+            arm.payload_type,
+        );
+    };
+    let decl = resolver.enum_decl(symbol.mangled()).unwrap_or_else(|| {
+        panic!("interpreter: enum `{symbol}` missing from IR — seal invariant violation")
+    });
+    let variant_decl = decl.variants.get(variant as usize).unwrap_or_else(|| {
+        panic!(
+            "interpreter: lifecycle variant index {variant} out of range for `{symbol}` \
+             ({} variant(s) declared)",
+            decl.variants.len(),
+        )
+    });
+    Value::Enum {
+        name: variant_decl.name.clone(),
+        payload: EnumPayload::Unit,
+        symbol: symbol.clone(),
+        tag: IRVariantTag(variant as u8),
+    }
 }
 
 fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
@@ -847,19 +961,27 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, Value::Struct { fields, symbol });
             Ok(())
         }
-        // Slot identity comes from `LocalWrite`; `LocalDecl` is a
-        // no-op for the interpreter (the LLVM backend uses it to
-        // emit an entry-block alloca).
         IRInstruction::DropLocal { .. } => Ok(()),
         // Heap reclamation is handled by the host GC; the IR-level
         // value-keyed drop is a no-op for the interpreter (mirrors
         // [`IRInstruction::DropLocal`] above).
         IRInstruction::DropValue { .. } => Ok(()),
-        IRInstruction::LocalDecl { .. } => Ok(()),
+        // The LLVM backend zero-initializes the slot at the decl
+        // site so scope-exit drop glue can run on never-written
+        // slots (e.g. the payload local of a receive arm that did
+        // not fire). Mirror with a `Unit` placeholder — eval's drop
+        // glue short-circuits, so the placeholder is only ever
+        // observed by a glue-feeding `LocalRead`, never by user
+        // code (a user-level read-before-write cannot pass
+        // typecheck).
+        IRInstruction::LocalDecl { local, .. } => {
+            frame.locals.insert(*local, Value::Unit);
+            Ok(())
+        }
         IRInstruction::LocalRead { dest, local, .. } => {
             let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
                 panic!(
-                    "interpreter: `LocalRead` of `{local}` before its `LocalWrite` — \
+                    "interpreter: `LocalRead` of `{local}` before its `LocalDecl` — \
                      seal invariant violation",
                 )
             });
@@ -974,11 +1096,10 @@ fn execute_instruction<R: CallResolver>(
                  process scheduling lives in the LLVM runtime",
             ),
         }),
-        IRInstruction::Receive { .. } => Err(RuntimeError::Unsupported {
-            detail: "`receive` is not supported under the interpreter; mailbox dispatch \
-                 lives in the LLVM runtime"
-                .to_string(),
-        }),
+        IRInstruction::Receive { .. } => panic!(
+            "interpreter: `Receive` reached `execute_instruction` — `execute_blocks` \
+             intercepts it as a control transfer (lowering places it last in its block)",
+        ),
         IRInstruction::UnionWrap {
             dest,
             member_index,
@@ -1040,17 +1161,16 @@ fn execute_instruction<R: CallResolver>(
             frame.values.insert(*dest, *payload);
             Ok(())
         }
-        IRInstruction::BinaryMatch { .. } => {
-            // Binary pattern matching is implemented in the LLVM
-            // backend; the interpreter currently skips it
-            // because the only consumer (lib/global tests) runs
-            // through `--backend=llvm`. Lift to a fatal panic so a
-            // mis-routed eval run surfaces immediately rather than
-            // silently producing a wrong result.
-            panic!(
-                "interpreter: IRInstruction::BinaryMatch is only supported by the \
-                 LLVM backend — re-run with `--backend=llvm` or extend the interpreter",
-            );
+        IRInstruction::BinaryMatch {
+            dest,
+            layout,
+            segments,
+            subject,
+        } => {
+            let subject_value = lookup(&frame.values, *subject)?;
+            let matched = execute_binary_match(*layout, segments, &subject_value, frame)?;
+            frame.values.insert(*dest, Value::Bool(matched));
+            Ok(())
         }
     }
 }
@@ -1185,7 +1305,7 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
             let mut out = Vec::with_capacity(l.len() + r.len());
             out.extend_from_slice(l);
             out.extend_from_slice(r);
-            Ok(Value::String(out))
+            Ok(Value::string(out))
         }
         ConcatKind::Binary => {
             let (Value::Binary(l), Value::Binary(r)) = (left, right) else {
@@ -1196,7 +1316,7 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
             let mut out = Vec::with_capacity(l.len() + r.len());
             out.extend_from_slice(l);
             out.extend_from_slice(r);
-            Ok(Value::Binary(out))
+            Ok(Value::binary(out))
         }
         ConcatKind::Bits => {
             let (
@@ -1225,10 +1345,7 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
             }
             // Append rhs bits starting at bit offset `ll`.
             append_bits(&mut out, *ll, rb, *rl);
-            Ok(Value::Bits {
-                bytes: out,
-                bit_length: total,
-            })
+            Ok(Value::bits(out, total))
         }
     }
 }
@@ -1358,12 +1475,9 @@ fn construct_binary_literal(
     }
 
     if layout.byte_aligned {
-        Ok(Value::Binary(buffer))
+        Ok(Value::binary(buffer))
     } else {
-        Ok(Value::Bits {
-            bytes: buffer,
-            bit_length: layout.total_bits,
-        })
+        Ok(Value::bits(buffer, layout.total_bits))
     }
 }
 
@@ -1420,16 +1534,201 @@ fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
     }
 }
 
+/// Eval-side `BinaryMatch` driver, mirroring the LLVM emission
+/// described on [`IRInstruction::BinaryMatch`]: gate on the
+/// subject's runtime bit length (equality without a greedy tail,
+/// `>=` with one), then test every literal segment and — as a side
+/// effect — extract each `BindInt` / `GreedyTail` slice into its
+/// pre-declared local slot. Binds happen as segments are walked,
+/// matching the LLVM order; a later literal failure leaves earlier
+/// binds written, which is unobservable because the arm body only
+/// runs when the whole match succeeds.
+fn execute_binary_match(
+    layout: LoweredBinaryMatchLayout,
+    segments: &[LoweredBinaryPattern],
+    subject: &Value,
+    frame: &mut Frame,
+) -> Result<bool, RuntimeError> {
+    let (bytes, bit_length) = match subject {
+        Value::Binary(b) | Value::String(b) => (b.as_slice(), b.len() as u64 * 8),
+        Value::Bits { bytes, bit_length } => (bytes.as_slice(), *bit_length),
+        other => {
+            return Err(RuntimeError::TypeMismatch {
+                detail: format!("binary match expects a Binary/Bits/String subject; got {other}"),
+            });
+        }
+    };
+    let length_ok = if layout.has_greedy_tail {
+        bit_length >= layout.fixed_bits
+    } else {
+        bit_length == layout.fixed_bits
+    };
+    if !length_ok {
+        return Ok(false);
+    }
+
+    for segment in segments {
+        match segment {
+            LoweredBinaryPattern::LiteralInt {
+                bit_offset,
+                endian,
+                sign: _,
+                value,
+                width,
+            } => {
+                // Compare raw width-truncated bits: a negative
+                // signed literal and its two's-complement bit
+                // pattern agree under the mask, so the sign
+                // modifier doesn't change the test.
+                let extracted = extract_integer_segment(bytes, *width, *endian, *bit_offset);
+                if extracted != (*value as u64) & width_mask(*width) {
+                    return Ok(false);
+                }
+            }
+            LoweredBinaryPattern::LiteralBytes {
+                bit_offset,
+                bytes: expected,
+            } => {
+                let start = (*bit_offset / 8) as usize;
+                if bytes[start..start + expected.len()] != expected[..] {
+                    return Ok(false);
+                }
+            }
+            LoweredBinaryPattern::BindInt {
+                bit_offset,
+                endian,
+                local,
+                sign,
+                ty: _,
+                width,
+            } => {
+                let extracted = extract_integer_segment(bytes, *width, *endian, *bit_offset);
+                frame
+                    .locals
+                    .insert(*local, Value::Int(sign_interpret(extracted, *width, *sign)));
+            }
+            LoweredBinaryPattern::Discard { .. } => {}
+            LoweredBinaryPattern::GreedyTail {
+                bit_offset,
+                local,
+                ty,
+            } => {
+                let Some(local) = local else { continue };
+                let tail = match ty {
+                    // Typecheck guarantees a byte-aligned prefix for
+                    // a `Binary` tail.
+                    IRType::Binary => Value::binary(&bytes[(*bit_offset / 8) as usize..]),
+                    IRType::Bits => Value::bits(
+                        extract_bit_range(bytes, *bit_offset, bit_length - *bit_offset),
+                        bit_length - *bit_offset,
+                    ),
+                    other => panic!(
+                        "interpreter: binary-match greedy tail typed `{other:?}` — \
+                         seal invariant violation (tail is Binary or Bits)",
+                    ),
+                };
+                frame.locals.insert(*local, tail);
+            }
+        }
+    }
+    Ok(true)
+}
+
+/// Inverse of [`pack_integer_segment`]: read `width` bits at
+/// `start_bit` as an unsigned integer, byte-shuffled per `endian`
+/// on the byte-aligned fast path, MSB-first on the sub-byte path
+/// (where endianness is meaningless in v1).
+fn extract_integer_segment(bytes: &[u8], width: u64, endian: BinaryEndian, start_bit: u64) -> u64 {
+    if width == 0 {
+        return 0;
+    }
+    if start_bit.is_multiple_of(8) && width.is_multiple_of(8) {
+        let num_bytes = (width / 8) as usize;
+        let start_byte = (start_bit / 8) as usize;
+        let mut value = 0u64;
+        for (i, byte) in bytes[start_byte..start_byte + num_bytes].iter().enumerate() {
+            let shift = match endian {
+                BinaryEndian::Little => (i as u32) * 8,
+                BinaryEndian::Big => ((num_bytes - 1 - i) as u32) * 8,
+            };
+            value |= u64::from(*byte) << shift;
+        }
+        return value;
+    }
+    let mut value = 0u64;
+    for i in 0..width {
+        let bit_pos = start_bit + i;
+        let byte = (bit_pos / 8) as usize;
+        let bit_in_byte = 7 - (bit_pos % 8) as u32;
+        value = (value << 1) | u64::from((bytes[byte] >> bit_in_byte) & 1);
+    }
+    value
+}
+
+/// Reinterpret the raw `width`-bit pattern per the segment's sign
+/// modifier: sign-extend when `Signed` and the sign bit is set,
+/// zero-extend otherwise. Mirrors the LLVM emission's `sext`/`zext`
+/// choice on `BindInt`.
+fn sign_interpret(value: u64, width: u64, sign: BinarySign) -> i64 {
+    match sign {
+        BinarySign::Unsigned => value as i64,
+        BinarySign::Signed => {
+            if width == 0 || width >= 64 {
+                return value as i64;
+            }
+            let sign_bit = 1u64 << (width - 1);
+            if value & sign_bit != 0 {
+                (value | !width_mask(width)) as i64
+            } else {
+                value as i64
+            }
+        }
+    }
+}
+
+/// All-ones mask covering the low `width` bits (`u64::MAX` at 64+).
+fn width_mask(width: u64) -> u64 {
+    if width >= 64 {
+        u64::MAX
+    } else {
+        (1u64 << width) - 1
+    }
+}
+
+/// Copy `length` bits starting at `start_bit` into a fresh
+/// MSB-first, zero-padded byte buffer — the greedy-tail extraction
+/// for `Bits`. Byte-aligned starts take the `memcpy` fast path.
+fn extract_bit_range(bytes: &[u8], start_bit: u64, length: u64) -> Vec<u8> {
+    let byte_count = length.div_ceil(8) as usize;
+    if start_bit.is_multiple_of(8) {
+        let start = (start_bit / 8) as usize;
+        let mut out = bytes[start..start + byte_count].to_vec();
+        // Zero any trailing bits past `length` so equality on the
+        // resulting `Bits` value stays well-defined.
+        if !length.is_multiple_of(8) {
+            let last = out.len() - 1;
+            out[last] &= !(0xffu8 >> (length % 8));
+        }
+        return out;
+    }
+    let mut out = vec![0u8; byte_count];
+    for i in 0..length {
+        let bit_pos = start_bit + i;
+        let bit = (bytes[(bit_pos / 8) as usize] >> (7 - (bit_pos % 8) as u32)) & 1;
+        if bit != 0 {
+            out[(i / 8) as usize] |= 1 << (7 - (i % 8) as u32);
+        }
+    }
+    out
+}
+
 /// Materialize a `ConstValue` as a runtime [`Value`]. Every int
 /// width collapses to `Value::Int(i64)` (the seal pass keeps
 /// width-mismatched flows out, but the arms stay exhaustive).
 fn materialize_const(value: &ConstValue) -> Value {
     match value {
-        ConstValue::Binary(bytes) => Value::Binary(bytes.clone()),
-        ConstValue::Bits { bytes, bit_length } => Value::Bits {
-            bytes: bytes.clone(),
-            bit_length: *bit_length,
-        },
+        ConstValue::Binary(bytes) => Value::binary(bytes.clone()),
+        ConstValue::Bits { bytes, bit_length } => Value::bits(bytes.clone(), *bit_length),
         ConstValue::Bool(b) => Value::Bool(*b),
         ConstValue::Float32(v) => Value::Float32(*v),
         ConstValue::Float64(v) => Value::Float64(*v),
@@ -1437,7 +1736,7 @@ fn materialize_const(value: &ConstValue) -> Value {
         ConstValue::Int16(v) => Value::Int(*v as i64),
         ConstValue::Int32(v) => Value::Int(*v as i64),
         ConstValue::Int64(v) => Value::Int(*v),
-        ConstValue::String(s) => Value::String(s.as_bytes().to_vec()),
+        ConstValue::String(s) => Value::string(s.as_bytes()),
         ConstValue::UInt8(v) => Value::Int(*v as i64),
         ConstValue::UInt16(v) => Value::Int(*v as i64),
         ConstValue::UInt32(v) => Value::Int(*v as i64),

@@ -88,7 +88,7 @@ fn struct_with_mixed_type_fields_projects_each_field() {
     };
     assert_eq!(fields[0], Value::Int(30));
     assert_eq!(fields[1], Value::Bool(true));
-    assert_eq!(fields[2], Value::String("jules".into()));
+    assert_eq!(fields[2], Value::string("jules"));
 }
 
 #[test]

@@ -44,7 +44,7 @@ fn length(args: &[Value]) -> Result<Value, RuntimeError> {
 
 fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
     let bytes = expect_string_bytes(args, 0, "String.to_binary")?;
-    Ok(Value::Binary(bytes.to_vec()))
+    Ok(Value::binary(bytes))
 }
 
 fn to_cstring(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
@@ -78,7 +78,7 @@ fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     } else {
         s.chars()
             .nth(index as usize)
-            .map(|c| Value::String(c.to_string().into_bytes()))
+            .map(|c| Value::string(c.to_string()))
     };
     Ok(helpers::option_value(option_symbol, value))
 }
@@ -102,7 +102,7 @@ fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
             .map(|(i, _)| i)
             .unwrap_or(s.len())
     };
-    Ok(Value::String(s.as_bytes()[byte_start..byte_end].to_vec()))
+    Ok(Value::string(&s.as_bytes()[byte_start..byte_end]))
 }
 
 fn expect_arg<'a>(args: &'a [Value], index: usize, label: &str) -> Result<&'a Value, RuntimeError> {

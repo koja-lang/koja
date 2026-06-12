@@ -189,6 +189,6 @@ fn tls_loopback_handshake_and_echo() {
     let echoed = evaluate_qualified_program(&client_source(port)).expect("client fixture run");
     let served = server.join().expect("server thread should not panic");
 
-    assert_eq!(echoed, Value::String(ECHO_PAYLOAD.as_bytes().to_vec()));
+    assert_eq!(echoed, Value::string(ECHO_PAYLOAD.as_bytes()));
     assert_eq!(served, ECHO_PAYLOAD);
 }

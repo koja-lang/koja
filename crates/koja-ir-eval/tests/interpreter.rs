@@ -87,14 +87,14 @@ fn empty_main_returns_unit() {
 #[test]
 fn string_literal_evaluates_to_value_string() {
     let source = "fn main -> String\n  \"hello\"\nend\n";
-    assert_eq!(evaluate(source).unwrap(), Value::String("hello".into()),);
+    assert_eq!(evaluate(source).unwrap(), Value::string("hello"),);
 }
 
 #[test]
 fn string_literal_in_script_mode_evaluates_to_value_string() {
     assert_eq!(
         evaluate_script("\"hello\"\n").unwrap(),
-        Value::String("hello".into()),
+        Value::string("hello"),
     );
 }
 
@@ -102,13 +102,13 @@ fn string_literal_in_script_mode_evaluates_to_value_string() {
 fn empty_string_literal_evaluates_to_empty_value_string() {
     assert_eq!(
         evaluate("fn main -> String\n  \"\"\nend\n").unwrap(),
-        Value::String(Vec::new()),
+        Value::string(Vec::new()),
     );
 }
 
 #[test]
 fn value_string_displays_without_quotes() {
-    let value = Value::String("hello".into());
+    let value = Value::string("hello");
     assert_eq!(format!("{value}"), "hello");
 }
 
@@ -855,7 +855,7 @@ fn match_unguarded_catch_all_skips_lowering_of_following_arms() {
         ";
     assert_eq!(
         evaluate_script(&dedent(source)).unwrap(),
-        Value::String("catchall".into()),
+        Value::string("catchall"),
     );
 }
 

@@ -115,7 +115,7 @@ fn string_to_cstring_then_to_string_round_trips_utf8() {
         "#,
     ))
     .expect("to_cstring → to_string → free chain should evaluate");
-    assert_eq!(outcome, Value::String("hello".into()));
+    assert_eq!(outcome, Value::string("hello"));
 }
 
 #[test]
@@ -132,5 +132,5 @@ fn string_to_cstring_round_trips_multibyte_utf8() {
         "#,
     ))
     .expect("multibyte to_cstring → to_string round-trip");
-    assert_eq!(outcome, Value::String("héllo".into()));
+    assert_eq!(outcome, Value::string("héllo"));
 }

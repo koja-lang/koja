@@ -8,8 +8,8 @@
 //!   caller can hand it to C code; the caller owns the block.
 //!   Mirrors the LLVM backend's shape: `Binary` is itself
 //!   heap-backed there, so `.ptr()` just hands out the existing
-//!   payload offset — eval has to copy because `Value::Binary` owns
-//!   a `Vec<u8>` with no stable address guarantee, but the
+//!   payload offset — eval has to copy because `Value::Binary`'s
+//!   `Rc<Vec<u8>>` gives no stable address guarantee, but the
 //!   *observable* C-side shape is identical.
 //! - `Binary.slice(self, range: Range) -> Binary` — copies the
 //!   inclusive byte range `[start, stop]`; endpoints clamp to the
@@ -89,7 +89,7 @@ fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
     let len = bytes.len();
     let start = ((*start).max(0) as usize).min(len);
     let stop = ((*stop + 1).max(0) as usize).min(len).max(start);
-    Ok(Value::Binary(bytes[start..stop].to_vec()))
+    Ok(Value::binary(&bytes[start..stop]))
 }
 
 fn byte_size(args: &[Value]) -> Result<Value, RuntimeError> {
@@ -144,13 +144,10 @@ fn to_string(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErro
     let result_symbol = helpers::enum_return_symbol(function, "Binary.to_string")?;
     let parsed = match std::str::from_utf8(bytes) {
         Ok(_) => Ok(Value::String(bytes.clone())),
-        Err(err) => Err(Value::String(
-            format!(
-                "Binary.to_string: payload is not valid UTF-8 (invalid at byte {}): {err}",
-                err.valid_up_to(),
-            )
-            .into_bytes(),
-        )),
+        Err(err) => Err(Value::string(format!(
+            "Binary.to_string: payload is not valid UTF-8 (invalid at byte {}): {err}",
+            err.valid_up_to(),
+        ))),
     };
     Ok(helpers::result_value(result_symbol, parsed))
 }
@@ -168,13 +165,10 @@ fn bits_to_binary(function: &IRFunction, args: &[Value]) -> Result<Value, Runtim
     let parsed = if bit_length.is_multiple_of(8) {
         Ok(Value::Binary(bytes.clone()))
     } else {
-        Err(Value::String(
-            format!(
-                "Bits.to_binary: bit_length {bit_length} is not a multiple of 8 — payload \
-                 has a trailing partial byte"
-            )
-            .into_bytes(),
-        ))
+        Err(Value::string(format!(
+            "Bits.to_binary: bit_length {bit_length} is not a multiple of 8 — payload \
+             has a trailing partial byte"
+        )))
     };
     Ok(helpers::result_value(result_symbol, parsed))
 }

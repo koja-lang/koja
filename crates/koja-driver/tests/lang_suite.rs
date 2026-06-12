@@ -231,15 +231,24 @@ fn run_project_dir(dir: &Path, label: &str) {
 }
 
 fn run_project_dir_with(dir: &Path, label: &str, extra_args: &[&str]) {
+    run_project_dir_backend(dir, label, "llvm", extra_args);
+}
+
+/// Run a project fixture through `koja run --backend=<backend>` and
+/// assert stdout / exit code against the fixture's expectations.
+/// Fixtures exercised under both backends lock in interpreter ↔ LLVM
+/// parity for the project execution path.
+fn run_project_dir_backend(dir: &Path, label: &str, backend: &str, extra_args: &[&str]) {
     assert!(dir.exists(), "test fixture {label}/ not found");
 
     let expected_path = dir.join("expected.stdout");
     assert!(expected_path.exists(), "missing {label}/expected.stdout");
 
     let dir_owned = dir.to_path_buf();
+    let backend_flag = format!("--backend={backend}");
     let extra: Vec<String> = extra_args.iter().map(|s| s.to_string()).collect();
     let (stdout, stderr, code) = run_with_timeout(|cmd| {
-        cmd.arg("run").arg("--backend=llvm").current_dir(&dir_owned);
+        cmd.arg("run").arg(&backend_flag).current_dir(&dir_owned);
         if !extra.is_empty() {
             cmd.arg("--");
             for a in &extra {
@@ -260,13 +269,13 @@ fn run_project_dir_with(dir: &Path, label: &str, extra_args: &[&str]) {
 
     assert!(
         code == expected_code,
-        "koja run in {label}: expected exit code {expected_code}, got {code}\nstderr:\n{stderr}"
+        "koja run ({backend}) in {label}: expected exit code {expected_code}, got {code}\nstderr:\n{stderr}"
     );
 
     let expected = fs::read_to_string(&expected_path).unwrap();
     if stdout != expected {
         let diff = diff_lines(&stdout, &expected);
-        panic!("\n--- FAIL: {label} ---\n{diff}");
+        panic!("\n--- FAIL: {label} ({backend}) ---\n{diff}");
     }
 }
 
@@ -329,6 +338,12 @@ macro_rules! lang_test_dir {
             run_project_dir_with(&lang_dir().join($dir), $dir, &[$($arg),+]);
         }
     };
+    ($name:ident, $dir:expr, project_interpreted $(, $arg:expr)*) => {
+        #[test]
+        fn $name() {
+            run_project_dir_backend(&lang_dir().join($dir), $dir, "interpreter", &[$($arg),*]);
+        }
+    };
 }
 
 // Pass tests
@@ -371,6 +386,28 @@ fn lang_package_collision() {
 lang_test_dir!(lang_process_entry, "process_entry", project);
 lang_test_dir!(lang_process_exit, "process_exit", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
+lang_test_dir!(lang_receive_after, "receive_after", project);
+
+// Interpreter ↔ LLVM parity: the same project fixtures executed via
+// `koja run --backend=interpreter` must produce identical stdout and
+// exit codes.
+lang_test_dir!(
+    lang_process_entry_interpreted,
+    "process_entry",
+    project_interpreted
+);
+lang_test_dir!(
+    lang_process_argv_interpreted,
+    "process_argv",
+    project_interpreted,
+    "hello",
+    "world"
+);
+lang_test_dir!(
+    lang_receive_after_interpreted,
+    "receive_after",
+    project_interpreted
+);
 
 #[test]
 fn lang_ffi() {
@@ -439,15 +476,25 @@ fn lang_process_lifecycle() {
     );
 }
 
+/// Interpreter parity for the lifecycle fixture: `koja run` executes
+/// the entry process in-process, so signalling the spawned `koja` pid
+/// lands on the interpreter's latched signal handlers and must produce
+/// the same stdout and exit code as the compiled binary.
+#[test]
+fn lang_process_lifecycle_interpreted() {
+    run_signal_test_interpreted(
+        &lang_dir().join("process_lifecycle"),
+        "process_lifecycle",
+        libc::SIGTERM,
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Signal test runner
 // ---------------------------------------------------------------------------
 
 fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
     assert!(dir.exists(), "test fixture {label}/ not found");
-
-    let expected_path = dir.join("expected.stdout");
-    assert!(expected_path.exists(), "missing {label}/expected.stdout");
 
     let binary = dir.join("build").join("debug").join(label);
 
@@ -469,11 +516,47 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
         String::from_utf8_lossy(&build_out.stderr)
     );
 
-    let mut child = Command::new(&binary)
+    let child = Command::new(&binary)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
         .expect("failed to run compiled binary");
+
+    signal_child_and_assert(dir, label, signal, child);
+}
+
+/// Like [`run_signal_test`] but executes the fixture via
+/// `koja run --backend=interpreter`. The interpreter runs the entry
+/// process inside the `koja` process itself, so the signal goes to the
+/// spawned `koja` pid directly.
+fn run_signal_test_interpreted(dir: &Path, label: &str, signal: libc::c_int) {
+    assert!(dir.exists(), "test fixture {label}/ not found");
+
+    let mut cmd = Command::new(koja_bin());
+    cmd.arg("run").arg("--backend=interpreter").current_dir(dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", &lib_path);
+    }
+    let child = cmd
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run koja");
+
+    signal_child_and_assert(dir, label, signal, child);
+}
+
+/// Shared back half of the signal tests: wait for the fixture's ready
+/// line, deliver `signal`, then assert stdout and exit code against the
+/// fixture's expectations.
+fn signal_child_and_assert(
+    dir: &Path,
+    label: &str,
+    signal: libc::c_int,
+    mut child: std::process::Child,
+) {
+    let expected_path = dir.join("expected.stdout");
+    assert!(expected_path.exists(), "missing {label}/expected.stdout");
 
     let pid = child.id() as libc::pid_t;
 

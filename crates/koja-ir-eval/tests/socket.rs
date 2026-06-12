@@ -67,7 +67,7 @@ fn tcp_loopback_round_trip() {
     ));
     assert_eq!(
         evaluate_qualified_program(&source).expect("fixture should run"),
-        Value::String(b"ping/pong".to_vec()),
+        Value::string(b"ping/pong".as_slice()),
     );
 }
 
@@ -135,7 +135,7 @@ fn udp_loopback_send_and_recv_from() {
     ));
     assert_eq!(
         evaluate_qualified_program(&source).expect("fixture should run"),
-        Value::String(b"datagram".to_vec()),
+        Value::string(b"datagram".as_slice()),
     );
 }
 

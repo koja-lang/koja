@@ -875,9 +875,11 @@ fn collect_test_project_sources(
 /// project and execute the Process entry in-process via
 /// [`Interpreter::run_program`] — no codegen, no link, no binary.
 /// The entry body's returned exit code becomes the driver's exit
-/// status. Process features the interpreter doesn't cover yet
-/// (spawn / receive scheduling) surface a runtime error plus a
-/// `--backend=llvm` hint. Diverges either way.
+/// status. The entry process gets blocking socket/TLS externs and
+/// `receive` over lifecycle signals + `after` timeouts; features the
+/// interpreter doesn't cover yet (spawn, cross-process messaging)
+/// surface a runtime error plus a `--backend=llvm` hint. Diverges
+/// either way.
 fn run_project_interpreted(config: &ProjectConfig, root: &Path, args: &[String]) -> ! {
     let program = build_project_program(config, root);
     match Interpreter::run_program(&program, args) {
