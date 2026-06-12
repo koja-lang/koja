@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Prettier check
         run: npx prettier@latest --check .
 
@@ -27,12 +27,14 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
         with:
           components: rustfmt, clippy
       - name: Check formatting
         run: cargo fmt --check
+      - name: Build runtime (debug)
+        run: cargo build -p koja-runtime
       - name: Clippy (zero warnings)
         run: cargo clippy --workspace -- -D warnings
 
@@ -45,7 +47,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Build runtime (debug + release)
         run: |
@@ -63,7 +65,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Build runtime (debug + release)
         run: |
@@ -81,7 +83,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - uses: ./.github/actions/setup
       - name: Build runtime (debug + release)
         run: |
