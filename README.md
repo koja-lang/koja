@@ -8,37 +8,25 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 
 For the full language specification, see [LANGUAGE.md](LANGUAGE.md).
 
-## Project Dependencies
+## Installation
 
-- Rust 1.85+
-- LLVM 18
+The easiest way to install Koja is with [asdf](https://asdf-vm.com). This ships prebuilt binaries for macOS arm64 and Linux x86_64 — the `koja` compiler and the `koja-lsp` language server, kept in lockstep:
+
+```sh
+asdf plugin add koja https://github.com/koja-lang/asdf-koja.git
+asdf install koja latest
+asdf set --home koja latest
+```
+
+Prebuilt tarballs are also attached to every [release](https://github.com/koja-lang/koja/releases). For other platforms, or to build from source, see [INSTALLING.md](INSTALLING.md).
 
 ## Getting Started
 
-1. Install LLVM 18.
+Write a hello world script and run it:
 
 ```sh
-brew install llvm@18
-```
-
-2. Clone the repository.
-
-```sh
-git clone https://github.com/koja-lang/koja && cd koja
-```
-
-3. Build the compiler.
-
-```sh
-LLVM_SYS_181_PREFIX=/opt/homebrew/opt/llvm@18 \
-LIBRARY_PATH="/opt/homebrew/lib:$LIBRARY_PATH" \
-cargo build
-```
-
-4. Run the hello world example.
-
-```sh
-./target/debug/koja run examples/hello.kojs
+echo 'IO.puts("hello, world!")' > hello.kojs
+koja run hello.kojs
 ```
 
 ## Language Overview
@@ -177,6 +165,8 @@ classify(200).print()
 ```
 
 ## Contributing
+
+Working on the compiler requires building from source — see [INSTALLING.md](INSTALLING.md) for toolchain setup (Rust 1.85+, LLVM 18).
 
 ### Testing
 
