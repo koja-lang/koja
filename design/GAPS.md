@@ -120,12 +120,6 @@ quietly produces `inf` at runtime, `Debug.format` prints it as `inf`,
 and `Float.parse` then refuses to read that text back. Finite text
 in, non-finite values out -- a format/parse round-trip asymmetry.
 
-Related bug found during the same recon: `Float32 + Float32`
-mis-routes to the int-arith path in `koja-ir-eval/src/ops.rs`
-(`apply_binary_op` only checks for `Value::Float64`) and dies with a
-runtime type mismatch, even though typecheck accepts same-width
-`Float32` arithmetic and the LLVM backend emits it correctly.
-
 **Proposed direction** -- an `ArithmeticError` trap, the Erlang
 `badarith` analogue:
 

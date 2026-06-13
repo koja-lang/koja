@@ -114,18 +114,6 @@ its I/O happens to complete.
 wait?). If yes, promote `WaitingIo → Runnable` on message arrival and
 have the resumed process re-check its mailbox before re-blocking on I/O.
 
-### 4. `malloc` results unchecked in several places
-
-**Severity: low. Bug class: null-deref on OOM.**
-
-`intrinsics.rs` checks `malloc` and aborts on null; `socket.rs`
-(`recv_from`, `resolve`) and `util.rs` (`build_argv`) write straight
-through without a check. Inconsistent.
-
-**Fix.** A single `xmalloc`-style helper that aborts on null, used
-everywhere — `memory.rs` is the single allocation funnel now, so that's
-its natural home.
-
 ---
 
 ## Launch priority
@@ -133,6 +121,5 @@ its natural home.
 No open entry is a launch blocker. With the owned-temporary /
 construction leak now fixed, the unbounded-memory class is closed, and
 everything that remains is a robustness/coverage cleanup — **#1**
-(`loom`), **#2** (typed `EventKey`), **#3** (wake `WaitingIo` on
-message), **#4** (`malloc` null checks) — that can land after a soft
-launch.
+(`loom`), **#2** (typed `EventKey`), and **#3** (wake `WaitingIo` on
+message) — that can land after a soft launch.
