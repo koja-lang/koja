@@ -156,10 +156,7 @@ struct Cli
         Result.Err(e) -> return Result.Err(e)
       end
 
-    match GitHub.repo(full_name)
-      Result.Ok(repo) -> Result.Ok(render_repo(repo))
-      Result.Err(e) -> Result.Err(e)
-    end
+    GitHub.repo(full_name).map(x -> render_repo(x))
   end
 
   priv fn run_repos(args: List<String>) -> Result<String, String>
@@ -169,22 +166,12 @@ struct Cli
         Result.Err(e) -> return Result.Err(e)
       end
 
-    match GitHub.repos(login)
-      Result.Ok(repos) -> Result.Ok(render_repos(login, repos))
-      Result.Err(e) -> Result.Err(e)
-    end
+    GitHub.repos(login).map(x -> render_repos(login, x))
   end
 
   priv fn run_user(args: List<String>) -> Result<String, String>
-    login =
-      match require_arg(args, "<login>")
-        Result.Ok(v) -> v
-        Result.Err(e) -> return Result.Err(e)
-      end
-
-    match GitHub.user(login)
-      Result.Ok(user) -> Result.Ok(render_user(user))
-      Result.Err(e) -> Result.Err(e)
-    end
+    require_arg(args, "<login>")
+      .then(login -> GitHub.user(login))
+      .map(x -> render_user(x))
   end
 end

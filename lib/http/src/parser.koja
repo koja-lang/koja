@@ -184,7 +184,8 @@ struct Parser
       end
 
     name = line.slice(Range{start: 0, stop: colon - 1})
-    value = line.slice(Range{start: colon + 1, stop: line.length() - 1}).trim_start()
+    value = line.slice(Range{start: colon + 1, stop: line.length() - 1})
+      .trim_start()
     headers = headers.append(name, value)
     Parser.parse_headers_loop(input, new_pos, headers)
   end

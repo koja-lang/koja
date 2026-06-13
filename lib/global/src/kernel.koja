@@ -21,23 +21,6 @@ struct Kernel
   priv fn koja_kernel_exit(code: Int64)
 end
 
-@doc """
-Represents a value that may or may not exist. Use `Some(value)` when a
-value is present, or `None` when it is absent.
-"""
-enum Option<T>
-  Some(T)
-  None
-end
-
-@doc """
-Represents either success or failure. Use `Ok(value)` for success, or
-`Err(error)` for failure.
-"""
-enum Result<T, E>
-  Ok(T)
-  Err(E)
-end
 
 @doc """
 A lightweight pair of two values. Access elements via `.first` and `.second`.
@@ -45,9 +28,7 @@ A lightweight pair of two values. Access elements via `.first` and `.second`.
 struct Pair<A, B>
   first: A
   second: B
-end
 
-extend Pair<A, B>
   fn new(first: A, second: B) -> Pair<A, B>
     Pair{first: first, second: second}
   end
@@ -61,7 +42,14 @@ struct Range
   stop: Int
 end
 
-extend Option<T>
+@doc """
+Represents a value that may or may not exist. Use `Some(value)` when a
+value is present, or `None` when it is absent.
+"""
+enum Option<T>
+  Some(T)
+  None
+
   @doc """
   Applies `f` to the contained value if `Some`, returns `None` otherwise.
   """
@@ -124,7 +112,14 @@ extend Option<T>
   end
 end
 
-extend Result<T, E>
+@doc """
+Represents either success or failure. Use `Ok(value)` for success, or
+`Err(error)` for failure.
+"""
+enum Result<T, E>
+  Ok(T)
+  Err(E)
+
   @doc """
   Returns `true` if the result is `Err`.
   """
