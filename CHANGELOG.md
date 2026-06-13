@@ -13,10 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `Float32` arithmetic, comparison, and negation now work under the interpreter.
 - Line-wrapping elements of a list when formatted now align properly vertically.
 - If a function signature line-wraps, always insert a blank line before the rest of the function body.
 - Preserve comment placement in match arms.
-- Overflowing method chains break at each `.method`, and a sole trailing closure argument hugs its parentheses instead of exploding.
+- Overflowing method chains break at each `.method`, and a sole trailing closure hugs its parentheses.
 
 ## [0.12.1] - 2026-06-12
 
