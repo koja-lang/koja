@@ -76,7 +76,7 @@ struct GitHub
   Fetches a repository by its `owner/name` path.
   """
   fn repo(full_name: String) -> Result<Repo, String>
-    match GitHub.fetch("/repos/" <> full_name)
+    match fetch("/repos/#{full_name}")
       Result.Ok(value) -> Result.Ok(Repo.from_json(value))
       Result.Err(e) -> Result.Err(e)
     end
@@ -87,19 +87,15 @@ struct GitHub
   """
   fn repos(login: String) -> Result<List<Repo>, String>
     value =
-      match GitHub.fetch("/users/" <> login <> "/repos?sort=updated&per_page=20")
+      match fetch("/users/#{login}/repos?sort=updated&per_page=20")
         Result.Ok(v) -> v
         Result.Err(e) -> return Result.Err(e)
       end
 
     match value
       Value.Array(items) ->
-        Result.Ok(items.map(fn (item: Value) -> Repo
-          Repo.from_json(item)
-        end))
-
-      _ ->
-        Result.Err("expected a JSON array of repositories")
+        Result.Ok(items.map(fn (item: Value) -> Repo Repo.from_json(item) end))
+      _ -> Result.Err("expected a JSON array of repositories")
     end
   end
 
@@ -107,7 +103,7 @@ struct GitHub
   Fetches a user profile by login.
   """
   fn user(login: String) -> Result<User, String>
-    match GitHub.fetch("/users/" <> login)
+    match fetch("/users/#{login}")
       Result.Ok(value) -> Result.Ok(User.from_json(value))
       Result.Err(e) -> Result.Err(e)
     end
@@ -116,28 +112,26 @@ struct GitHub
   priv fn decode(body: String) -> Result<Value, String>
     match Decoder.decode(body)
       Result.Ok(value) -> Result.Ok(value)
-      Result.Err(e) -> Result.Err("malformed JSON from GitHub: " <> e)
+      Result.Err(e) -> Result.Err("malformed JSON from GitHub: #{e}")
     end
   end
 
   priv fn fetch(path: String) -> Result<Value, String>
     response =
-      match HTTP.request(Method.Get, API_ROOT <> path, GitHub.headers(), "")
+      match HTTP.request(Method.Get, "#{API_ROOT}#{path}", headers(), "")
         Result.Ok(r) -> r
         Result.Err(e) -> return Result.Err(e.message())
       end
 
     match response.status.code
       code when code >= 200 and code < 300 ->
-        GitHub.decode(response.body)
+        decode(response.body)
 
       403 ->
-        Result.Err(
-          "rate limited or forbidden -- set GITHUB_TOKEN to authenticate",
-        )
+        Result.Err("rate limited or forbidden -- set GITHUB_TOKEN to authenticate")
 
       404 ->
-        Result.Err("not found: " <> path)
+        Result.Err("not found: #{path}")
 
       code ->
         Result.Err("GitHub returned HTTP #{code}")
@@ -150,7 +144,7 @@ struct GitHub
       .set("User-Agent", "koja-gh")
 
     match System.get_env("GITHUB_TOKEN")
-      Option.Some(token) -> base.set("Authorization", "Bearer " <> token)
+      Option.Some(token) -> base.set("Authorization", "Bearer #{token}")
       Option.None -> base
     end
   end

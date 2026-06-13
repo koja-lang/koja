@@ -101,6 +101,7 @@ struct PgIO
 
   priv fn scan_cstring(data: Binary, acc: Binary)
     -> Option<Pair<String, Binary>>
+
     match data
       <<0, rest: Binary>> ->
         match acc.to_string()

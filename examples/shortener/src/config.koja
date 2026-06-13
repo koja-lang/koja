@@ -19,11 +19,11 @@ struct Config
   """
   fn load -> Config
     Config{
-      db_host: Config.env_or("DB_HOST", "127.0.0.1"),
-      db_name: Config.env_or("DB_NAME", "shortener"),
-      db_port: Config.env_int("DB_PORT", 5433),
-      db_user: Config.env_or("DB_USER", "postgres"),
-      port: Config.env_int("PORT", 8080),
+      db_host: env_or("DB_HOST", "127.0.0.1"),
+      db_name: env_or("DB_NAME", "shortener"),
+      db_port: env_int("DB_PORT", 5433),
+      db_user: env_or("DB_USER", "postgres"),
+      port: env_int("PORT", 8080),
     }
   end
 

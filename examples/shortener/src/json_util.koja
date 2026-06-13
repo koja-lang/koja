@@ -13,10 +13,10 @@ struct JsonUtil
     Value.object(
       [
         Value.entry("code", Value.string(link.code)),
-         Value.entry("url", Value.string(link.url)),
-         Value.entry("created_at", Value.string(link.created_at)),
-         Value.entry("hits", Value.int(link.hits)),
-         Value.entry("short_path", Value.string("/" <> link.code))
+        Value.entry("url", Value.string(link.url)),
+        Value.entry("created_at", Value.string(link.created_at)),
+        Value.entry("hits", Value.int(link.hits)),
+        Value.entry("short_path", Value.string("/" <> link.code))
       ],
     )
   end
@@ -25,7 +25,7 @@ struct JsonUtil
   Renders a list of links as a JSON array.
   """
   fn links_to_value(links: List<Link>) -> Value
-    Value.array(JsonUtil.collect(links, 0, List.new()))
+    Value.array(collect(links, 0, List.new()))
   end
 
   @doc """
@@ -39,7 +39,7 @@ struct JsonUtil
         Result.Err(_) -> return Result.Err("body is not valid JSON")
       end
 
-    match JsonUtil.field(decoded, "url")
+    match field(decoded, "url")
       Option.None ->
         Result.Err("missing \"url\" field")
 
@@ -53,17 +53,18 @@ struct JsonUtil
 
   priv fn collect(links: List<Link>, index: Int, acc: List<Value>)
     -> List<Value>
+
     if index >= links.length()
       return acc
     end
 
     link = links.get(index).unwrap()
-    JsonUtil.collect(links, index + 1, acc.append(JsonUtil.link_to_value(link)))
+    collect(links, index + 1, acc.append(link_to_value(link)))
   end
 
   priv fn field(value: Value, key: String) -> Option<Value>
     match value
-      Value.Object(entries) -> JsonUtil.scan(entries, key, 0)
+      Value.Object(entries) -> scan(entries, key, 0)
       _ -> Option.None
     end
   end
@@ -78,6 +79,6 @@ struct JsonUtil
     entry = entries.get(index).unwrap()
     entry.first == key
       ? Option.Some(entry.second)
-      : JsonUtil.scan(entries, key, index + 1)
+      : scan(entries, key, index + 1)
   end
 end

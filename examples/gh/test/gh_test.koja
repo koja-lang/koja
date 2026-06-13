@@ -62,16 +62,16 @@ struct RenderTest
     rendered = Cli.render_user(User.from_json(value))
 
     unless rendered.contains?("The Octocat (@octocat)")
-      return Result.Err("missing title line in:\n" <> rendered)
+      return Result.Err("missing title line in:\n#{rendered}")
     end
 
     unless rendered.contains?("joined: 2011-01-25")
-      return Result.Err("missing joined date in:\n" <> rendered)
+      return Result.Err("missing joined date in:\n#{rendered}")
     end
 
     rendered.contains?("8 public repos · 9999 followers · 9 following")
       ? Result.Ok(true)
-      : Result.Err("missing counts line in:\n" <> rendered)
+      : Result.Err("missing counts line in:\n#{rendered}")
   end
 
   @test "repo payload renders a detail view"
@@ -85,16 +85,16 @@ struct RenderTest
     rendered = Cli.render_repo(Repo.from_json(value))
 
     unless rendered.contains?("octocat/Hello-World")
-      return Result.Err("missing repo name in:\n" <> rendered)
+      return Result.Err("missing repo name in:\n#{rendered}")
     end
 
     unless rendered.contains?("stars: 2500")
-      return Result.Err("missing stars in:\n" <> rendered)
+      return Result.Err("missing stars in:\n#{rendered}")
     end
 
     rendered.contains?("My first repository on GitHub!")
       ? Result.Ok(true)
-      : Result.Err("missing description in:\n" <> rendered)
+      : Result.Err("missing description in:\n#{rendered}")
   end
 
   @test "unknown commands and missing args fail with usage hints"
@@ -105,7 +105,7 @@ struct RenderTest
 
       Result.Err(e) ->
         unless e.contains?("unknown command: frobnicate")
-          return Result.Err("unexpected message: " <> e)
+          return Result.Err("unexpected message: #{e}")
         end
     end
 
@@ -116,7 +116,7 @@ struct RenderTest
       Result.Err(e) ->
         e.contains?("missing argument")
           ? Result.Ok(true)
-          : Result.Err("unexpected message: " <> e)
+          : Result.Err("unexpected message: #{e}")
     end
   end
 end
@@ -124,6 +124,6 @@ end
 priv fn decode_fixture(raw: String) -> Result<Value, String>
   match Decoder.decode(raw)
     Result.Ok(value) -> Result.Ok(value)
-    Result.Err(e) -> Result.Err("fixture did not decode: " <> e)
+    Result.Err(e) -> Result.Err("fixture did not decode: #{e}")
   end
 end

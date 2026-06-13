@@ -77,6 +77,7 @@ struct Postgres
 
   priv fn await_ready(socket: TCPSocket, buffer: Binary)
     -> Result<Binary, String>
+
     pair =
       match PgIO.read_message(socket, buffer)
         Result.Ok(p) -> p

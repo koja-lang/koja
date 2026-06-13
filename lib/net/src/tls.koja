@@ -47,8 +47,6 @@ enum VerificationError
       VerificationError.Expired ->
         "certificate has expired"
 
-        # Static string owned by BoringSSL: wrap and copy, never free.
-
       VerificationError.HostnameMismatch ->
         "certificate does not match the requested hostname"
 
@@ -56,6 +54,7 @@ enum VerificationError
         "certificate is not yet valid"
 
       VerificationError.Other(code) ->
+        # Static string owned by BoringSSL: wrap and copy, never free.
         x509_verify_cert_error_string(code).to_cstring().to_string()
 
       VerificationError.SelfSigned ->
@@ -397,6 +396,7 @@ struct TLSSession
 
   priv fn handshake_failure(ssl: CPtr<UInt8>, err: Int)
     -> SocketError | TLSError
+
     # Maps a failed handshake to its cause: certificate verification
     # first, then the SSL error itself.
 

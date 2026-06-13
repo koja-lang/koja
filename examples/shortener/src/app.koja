@@ -109,7 +109,7 @@ extend App
       end
 
     if raw.empty?()
-      App.close(client)
+      close(client)
       return self
     end
 
@@ -129,7 +129,7 @@ extend App
       _ -> ()
     end
 
-    App.close(client)
+    close(client)
     App{db: outcome.second, listener: self.listener}
   end
 

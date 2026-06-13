@@ -30,7 +30,7 @@ struct LinkStore
   retrying on the (unlikely) event of a code collision.
   """
   fn create(conn: Postgres, url: String) -> Pair<Postgres, Result<Link, String>>
-    LinkStore.create_attempt(conn, url, 0)
+    create_attempt(conn, url, 0)
   end
 
   @doc """
@@ -38,7 +38,7 @@ struct LinkStore
   """
   fn all(conn: Postgres) -> Pair<Postgres, Result<List<Link>, String>>
     outcome = conn.simple_query(
-      LinkStore.select_columns() <> " FROM links ORDER BY created_at DESC",
+      select_columns() <> " FROM links ORDER BY created_at DESC",
     )
     rows: List<Link> = List.new()
 
@@ -49,7 +49,7 @@ struct LinkStore
       Result.Ok(qr) ->
         Pair{
           first: outcome.first,
-          second: Result.Ok(LinkStore.map_rows(qr.rows, 0, rows)),
+          second: Result.Ok(map_rows(qr.rows, 0, rows)),
         }
     end
   end
@@ -60,10 +60,9 @@ struct LinkStore
   fn find(conn: Postgres, code: String)
     -> Pair<Postgres, Result<Option<Link>, String>>
 
-    LinkStore.query_one(
+    query_one(
       conn,
-      LinkStore.select_columns() <> " FROM links WHERE code = " <>
-      LinkStore.lit(code),
+      select_columns() <> " FROM links WHERE code = " <> lit(code),
     )
   end
 
@@ -74,10 +73,9 @@ struct LinkStore
   fn update(conn: Postgres, code: String, url: String)
     -> Pair<Postgres, Result<Option<Link>, String>>
 
-    LinkStore.query_one(
+    query_one(
       conn,
-      "UPDATE links SET url = " <> LinkStore.lit(url) <> " WHERE code = " <>
-      LinkStore.lit(code) <>
+      "UPDATE links SET url = " <> lit(url) <> " WHERE code = " <> lit(code) <>
       " RETURNING code, url, created_at::text, hits",
     )
   end
@@ -87,9 +85,8 @@ struct LinkStore
   """
   fn remove(conn: Postgres, code: String)
     -> Pair<Postgres, Result<Bool, String>>
-    outcome = conn.simple_query(
-      "DELETE FROM links WHERE code = " <> LinkStore.lit(code),
-    )
+
+    outcome = conn.simple_query("DELETE FROM links WHERE code = " <> lit(code))
 
     match outcome.second
       Result.Err(e) ->
@@ -108,7 +105,7 @@ struct LinkStore
     -> Pair<Postgres, Result<Option<String>, String>>
 
     outcome = conn.simple_query(
-      "UPDATE links SET hits = hits + 1 WHERE code = " <> LinkStore.lit(code) <>
+      "UPDATE links SET hits = hits + 1 WHERE code = " <> lit(code) <>
       " RETURNING url",
     )
 
@@ -119,7 +116,7 @@ struct LinkStore
       Result.Ok(qr) ->
         target: Option<String> =
           match qr.rows.get(0)
-            Option.Some(row) -> Option.Some(LinkStore.col(row, 0))
+            Option.Some(row) -> Option.Some(col(row, 0))
             Option.None -> Option.None
           end
 
@@ -137,10 +134,9 @@ struct LinkStore
       }
     end
 
-    code = LinkStore.generate_code(CODE_LENGTH, "")
+    code = generate_code(CODE_LENGTH, "")
     outcome = conn.simple_query(
-      "INSERT INTO links (code, url) VALUES (" <> LinkStore.lit(code) <> ", " <>
-      LinkStore.lit(url) <>
+      "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <> lit(url) <>
       ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
     )
 
@@ -149,11 +145,10 @@ struct LinkStore
         Pair{first: outcome.first, second: Result.Err(e)}
 
       Result.Ok(qr) ->
-        match LinkStore.first_link(qr)
+        match first_link(qr)
           Option.Some(link) ->
             Pair{first: outcome.first, second: Result.Ok(link)}
-          Option.None ->
-            LinkStore.create_attempt(outcome.first, url, attempt + 1)
+          Option.None -> create_attempt(outcome.first, url, attempt + 1)
         end
     end
   end
@@ -165,7 +160,7 @@ struct LinkStore
 
     result: Result<Option<Link>, String> =
       match outcome.second
-        Result.Ok(qr) -> Result.Ok(LinkStore.first_link(qr))
+        Result.Ok(qr) -> Result.Ok(first_link(qr))
         Result.Err(e) -> Result.Err(e)
       end
 
@@ -183,28 +178,28 @@ struct LinkStore
     end
 
     row = rows.get(index).unwrap()
-    LinkStore.map_rows(rows, index + 1, acc.append(LinkStore.row_to_link(row)))
+    map_rows(rows, index + 1, acc.append(row_to_link(row)))
   end
 
   priv fn first_link(qr: QueryResult) -> Option<Link>
     match qr.rows.get(0)
-      Option.Some(row) -> Option.Some(LinkStore.row_to_link(row))
+      Option.Some(row) -> Option.Some(row_to_link(row))
       Option.None -> Option.None
     end
   end
 
   priv fn row_to_link(row: List<Option<String>>) -> Link
     hits =
-      match LinkStore.col(row, 3).to_int()
+      match col(row, 3).to_int()
         Result.Ok(n) -> n
         Result.Err(_) -> 0
       end
 
     Link{
-      code: LinkStore.col(row, 0),
-      created_at: LinkStore.col(row, 2),
+      code: col(row, 0),
+      created_at: col(row, 2),
       hits: hits,
-      url: LinkStore.col(row, 1),
+      url: col(row, 1),
     }
   end
 
@@ -229,6 +224,6 @@ struct LinkStore
     end
 
     char = CODE_ALPHABET.get(Random.int(0, CODE_ALPHABET.length() - 1)).or("0")
-    LinkStore.generate_code(remaining - 1, acc <> char)
+    generate_code(remaining - 1, acc <> char)
   end
 end

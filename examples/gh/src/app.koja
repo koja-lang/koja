@@ -24,7 +24,7 @@ impl Process<List<String>, (), String> for App
         StopReason.Normal
 
       Result.Err(message) ->
-        IO.puts("error: " <> message)
+        IO.puts("error: #{message}")
         StopReason.Shutdown
     end
   end

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- Line-wrapping elements of a list when formatted now align properly vertically.
+- If a function signature line-wraps, always insert a blank line before the rest of the function body.
+- Preserve comment placement in match arms.
+
 ## [0.12.1] - 2026-06-12
 
 ### Fixed
