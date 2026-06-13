@@ -107,4 +107,63 @@ struct ResultTest
 
     Result.Ok(true)
   end
+
+  @test "ok converts Ok to Some and Err to None"
+  fn test_ok -> Result<Bool, String>
+    ok: Result<Int, Int> = Result.Ok(42)
+    err: Result<Int, Int> = Result.Err(1)
+
+    unless ok.ok().or(-1) == 42
+      return Result.Err("expected Some(42)")
+    end
+
+    unless err.ok().none?()
+      return Result.Err("expected None")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "err converts Err to Some and Ok to None"
+  fn test_err -> Result<Bool, String>
+    ok: Result<Int, Int> = Result.Ok(42)
+    err: Result<Int, Int> = Result.Err(1)
+
+    unless err.err().or(-1) == 1
+      return Result.Err("expected Some(1)")
+    end
+
+    unless ok.err().none?()
+      return Result.Err("expected None")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "map_err transforms Err and leaves Ok unchanged"
+  fn test_map_err_transform -> Result<Bool, String>
+    err: Result<Int, Int> = Result.Err(1)
+    mapped =
+      err.map_err(fn (e: Int) -> Int e + 100 end)
+
+    match mapped
+      Result.Ok(_) ->
+        return Result.Err("expected Err")
+
+      Result.Err(e) ->
+        unless e == 101
+          return Result.Err("expected 101")
+        end
+    end
+
+    ok: Result<Int, Int> = Result.Ok(42)
+    ok_mapped =
+      ok.map_err(fn (e: Int) -> Int e + 100 end)
+
+    unless ok_mapped.or(-1) == 42
+      return Result.Err("expected 42")
+    end
+
+    Result.Ok(true)
+  end
 end

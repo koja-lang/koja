@@ -7,11 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `Option` / `Result` interop combinators `Option.or_err(error)`, `Result.ok()`, `Result.err()`, and `Result.map_err(f)`.
+
 ### Fixed
 
 - Line-wrapping elements of a list when formatted now align properly vertically.
 - If a function signature line-wraps, always insert a blank line before the rest of the function body.
 - Preserve comment placement in match arms.
+- Overflowing method chains break at each `.method`, and a sole trailing closure argument hugs its parentheses instead of exploding.
 
 ## [0.12.1] - 2026-06-12
 

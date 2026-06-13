@@ -55,11 +55,9 @@ struct TLSTest
       end
 
     server =
-      Task.async(
-        fn () -> Result<String, String>
-          serve_tls_attempt(listener, server_config)
-        end,
-      )
+      Task.async(fn () -> Result<String, String>
+        serve_tls_attempt(listener, server_config)
+      end)
 
     plain =
       match TCPSocket.connect_addr(addr)
@@ -119,11 +117,9 @@ struct TLSTest
       end
 
     server =
-      Task.async(
-        fn () -> Result<String, String>
-          serve_tls_echo(listener, server_config)
-        end,
-      )
+      Task.async(fn () -> Result<String, String>
+        serve_tls_echo(listener, server_config)
+      end)
 
     plain =
       match TCPSocket.connect_addr(addr)

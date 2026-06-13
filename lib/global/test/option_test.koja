@@ -121,4 +121,37 @@ struct OptionTest
 
     Result.Ok(true)
   end
+
+  @test "or_err converts Some to Ok"
+  fn test_or_err_some -> Result<Bool, String>
+    converted: Result<Int, String> = Option.Some(42).or_err("missing")
+
+    unless converted.or(-1) == 42
+      return Result.Err("expected 42")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "or_err converts None to Err"
+  fn test_or_err_none -> Result<Bool, String>
+    none: Option<Int> = Option.None
+    converted = none.or_err("missing")
+
+    unless converted.err?()
+      return Result.Err("expected Err")
+    end
+
+    match converted
+      Result.Ok(_) ->
+        Result.Err("expected Err")
+
+      Result.Err(e) ->
+        if e == "missing"
+          Result.Ok(true)
+        else
+          Result.Err("wrong error")
+        end
+    end
+  end
 end

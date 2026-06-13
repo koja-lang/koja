@@ -65,7 +65,7 @@ impl<'a> Printer<'a> {
 
             ExprKind::MethodCall { .. } => {
                 let depth = method_chain_depth(expr);
-                if depth >= 3 {
+                if depth >= 2 {
                     self.method_chain_to_doc(expr)
                 } else {
                     let ExprKind::MethodCall {
@@ -393,6 +393,12 @@ impl<'a> Printer<'a> {
     pub(super) fn call_args_to_doc(&mut self, args: &[Arg]) -> Doc {
         if args.is_empty() {
             text("()")
+        } else if let [arg] = args
+            && arg.name.is_none()
+            && is_closure_arg(&arg.value)
+        {
+            // Hug a sole trailing closure instead of exploding the arg list.
+            concat(vec![text("("), self.arg_to_doc(arg), text(")")])
         } else {
             let arg_docs: Vec<Doc> = args.iter().map(|a| self.arg_to_doc(a)).collect();
             group(concat(vec![
@@ -616,12 +622,17 @@ impl<'a> Printer<'a> {
 
         let root_doc = self.expr_to_doc(current);
 
-        let (first_method, first_args) = calls.remove(0);
-        let anchor = concat(vec![
-            root_doc,
-            text(format!(".{}", first_method)),
-            self.call_args_to_doc(first_args),
-        ]);
+        // Glue the first call to a simple root; break it for call-rooted chains.
+        let anchor = if is_simple_chain_root(current) {
+            let (first_method, first_args) = calls.remove(0);
+            concat(vec![
+                root_doc,
+                text(format!(".{}", first_method)),
+                self.call_args_to_doc(first_args),
+            ])
+        } else {
+            root_doc
+        };
 
         let mut chain_parts = Vec::with_capacity(calls.len());
         for (method, args) in calls {
@@ -632,6 +643,31 @@ impl<'a> Printer<'a> {
 
         group(concat(vec![anchor, indent(2, concat(chain_parts))]))
     }
+}
+
+/// True for block or short closures (the hug-eligible argument shapes).
+fn is_closure_arg(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::Closure { .. } | ExprKind::ShortClosure { .. }
+    )
+}
+
+/// True when a chain root is a simple receiver whose first call should stay
+/// glued (the `StringBuilder.new()...` idiom), vs. a call-rooted pipeline.
+fn is_simple_chain_root(expr: &Expr) -> bool {
+    matches!(
+        &expr.kind,
+        ExprKind::Ident { .. }
+            | ExprKind::Self_ { .. }
+            | ExprKind::Literal { .. }
+            | ExprKind::String { .. }
+            | ExprKind::FieldAccess { .. }
+            | ExprKind::EnumConstruction {
+                data: EnumConstructionData::Unit,
+                ..
+            }
+    )
 }
 
 /// Counts the depth of nested MethodCall nodes on the left spine.

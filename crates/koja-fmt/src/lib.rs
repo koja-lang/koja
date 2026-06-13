@@ -702,6 +702,65 @@ mod tests {
     }
 
     #[test]
+    fn depth_two_chain_breaks_at_dots() {
+        // A call-rooted depth-2 chain that overflows breaks at every dot
+        // (the root call does not glue the first `.method`), and each sole
+        // closure argument is hugged rather than exploded.
+        assert_fmt(
+            r#"
+            fn run_user(args: List<String>) -> Result<String, String>
+              require_arg(args, "<login>").then(login -> GitHub.user(login)).map(x -> render_user(x))
+            end
+        "#,
+            r#"
+            fn run_user(args: List<String>) -> Result<String, String>
+              require_arg(args, "<login>")
+                .then(login -> GitHub.user(login))
+                .map(x -> render_user(x))
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn sole_short_closure_arg_does_not_explode() {
+        // An overflowing single call with a sole short-closure argument stays
+        // hugged on one line rather than exploding the arg list.
+        assert_fmt(
+            r#"
+            fn f(opt: Option<Int>) -> Option<Int>
+              some_extremely_long_receiver_variable_name_here.map(value -> value_plus_something)
+            end
+        "#,
+            r#"
+            fn f(opt: Option<Int>) -> Option<Int>
+              some_extremely_long_receiver_variable_name_here.map(value -> value_plus_something)
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn sole_block_closure_arg_hugs_and_breaks_internally() {
+        // A sole block-closure argument hugs the parens and breaks inside the
+        // closure body, with `end)` closing both the closure and the call.
+        assert_fmt(
+            r#"
+            fn f(nums: List<Int>) -> List<Int>
+              nums.map(fn (n: Int) -> Int compute_a_doubled_display_value_for_each_number(n) end)
+            end
+        "#,
+            r#"
+            fn f(nums: List<Int>) -> List<Int>
+              nums.map(fn (n: Int) -> Int
+                compute_a_doubled_display_value_for_each_number(n)
+              end)
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn match_ternary_body_breaks_arms_consistently() {
         // The `scan_error` shape: a ternary body overflows, so the short
         // sibling arm breaks consistently rather than staying inline.

@@ -323,9 +323,9 @@ struct ListTest
   @test "filter then map chaining"
   fn test_chaining -> Result<Bool, String>
     chained =
-      [1, 2, 3, 4, 5].filter(fn (n: Int) -> Bool n > 2 end).map(
-        fn (n: Int) -> Int n * 10 end,
-      )
+      [1, 2, 3, 4, 5]
+        .filter(fn (n: Int) -> Bool n > 2 end)
+        .map(fn (n: Int) -> Int n * 10 end)
 
     unless chained.length() == 3
       return Result.Err("expected length 3")
@@ -375,9 +375,8 @@ struct ListTest
     end
 
     chained =
-      nums.filter(fn (n: Int) -> Bool n > 2 end).map(
-        fn (n: Int) -> Int n * 10 end,
-      )
+      nums.filter(fn (n: Int) -> Bool n > 2 end)
+        .map(fn (n: Int) -> Int n * 10 end)
     sum_c = 0
 
     for c in chained
