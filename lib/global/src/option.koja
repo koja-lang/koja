@@ -1,0 +1,79 @@
+@doc """
+Represents a value that may or may not exist. Use `Some(value)` when a
+value is present, or `None` when it is absent.
+"""
+enum Option<T>
+  Some(T)
+  None
+
+  @doc """
+  Applies `f` to the contained value if `Some`, returns `None` otherwise.
+  """
+  fn map<U>(self, f: fn (T) -> U) -> Option<U>
+    match self
+      Option.Some(val) -> Option.Some(f(val))
+      Option.None -> Option.None
+    end
+  end
+
+  @doc """
+  Returns `true` if the option is `None`.
+  """
+  fn none?(self) -> Bool
+    match self
+      Option.Some(_) -> false
+      Option.None -> true
+    end
+  end
+
+  @doc """
+  Returns the contained value if `Some`, otherwise returns `default`.
+  """
+  fn or(self, default: T) -> T
+    match self
+      Option.Some(val) -> val
+      Option.None -> default
+    end
+  end
+
+  @doc """
+  Converts to a `Result`: `Ok(value)` if `Some`, otherwise `Err(error)`.
+  """
+  fn or_err<E>(self, error: E) -> Result<T, E>
+    match self
+      Option.Some(val) -> Result.Ok(val)
+      Option.None -> Result.Err(error)
+    end
+  end
+
+  @doc """
+  Returns `true` if the option contains a value.
+  """
+  fn some?(self) -> Bool
+    match self
+      Option.Some(_) -> true
+      Option.None -> false
+    end
+  end
+
+  @doc """
+  Applies `f` to the contained value if `Some` (where `f` returns an
+  `Option`), returns `None` otherwise. Also known as flat_map.
+  """
+  fn then<U>(self, f: fn (T) -> Option<U>) -> Option<U>
+    match self
+      Option.Some(val) -> f(val)
+      Option.None -> Option.None
+    end
+  end
+
+  @doc """
+  Returns the contained value. Panics if the option is `None`.
+  """
+  fn unwrap(self) -> T
+    match self
+      Option.Some(val) -> val
+      Option.None -> Kernel.panic("called unwrap on None")
+    end
+  end
+end

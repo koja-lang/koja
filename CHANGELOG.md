@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- `Option` / `Result` interop combinators `Option.or_err(error)`, `Result.ok()`, `Result.err()`, and `Result.map_err(f)`.
+
 ### Fixed
 
 - Line-wrapping elements of a list when formatted now align properly vertically.

@@ -90,42 +90,25 @@ fn main() {
     // file becomes pipeline-ready (typecheck + lower + emit on both
     // backends).
     let autoimport_modules: &[&str] = &[
-        // kernel first — defines Option/Result/Pair referenced downstream
-        "Global.kernel",
-        // numeric right after kernel: Equality/Hash impls for the
-        // numeric primitives plus parse / checked conversions, all
-        // referencing kernel's protocol decls and Result.
-        "Global.numeric",
+        "Global.bitwise",
         "Global.cptr",
         "Global.cstring",
-        "Global.bitwise",
+        "Global.debug",
+        "Global.debug_containers",
         "Global.fd",
         "Global.io",
+        "Global.kernel",
         "Global.list",
         "Global.map",
+        "Global.numeric",
+        "Global.option",
+        "Global.process",
+        "Global.random",
+        "Global.result",
         "Global.set",
         "Global.string",
-        // debug after string (uses `String.escape_debug` in
-        // `Debug for String`) and io (`Debug.print` calls `IO.puts`).
-        "Global.debug",
-        // debug_containers ships hand-written `Debug` impls for the
-        // stdlib generic containers (Pair / Option / Result / List
-        // / Map / Set). Must come after `Global.debug` and the leaf
-        // containers so the protocol decl + container types are
-        // already in scope.
-        "Global.debug_containers",
         "Global.system",
         "Global.time",
-        // process needs `Task<R>.run`'s `self.work()` to typecheck via
-        // typecheck's field-as-callable dispatch (a struct's
-        // function-typed field called with method syntax desugars to
-        // `(self.field)(args)`). Order: after the leaf containers but
-        // before random, which has no dependency either way.
-        "Global.process",
-        // random comes last — calls into `String.to_binary`, so the
-        // string module must be lowered before this module's bodies
-        // can resolve.
-        "Global.random",
     ];
     code.push_str("\n/// Curated stdlib sources auto-imported by\n");
     code.push_str("/// every pipeline run (driver, tests, REPL).\n");

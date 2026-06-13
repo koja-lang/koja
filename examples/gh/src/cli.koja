@@ -143,10 +143,7 @@ struct Cli
   priv fn require_arg(args: List<String>, name: String)
     -> Result<String, String>
 
-    match args.get(1)
-      Option.Some(value) -> Result.Ok(value)
-      Option.None -> Result.Err("missing argument: #{name}")
-    end
+    args.get(1).or_err("missing argument: #{name}")
   end
 
   priv fn run_repo(args: List<String>) -> Result<String, String>
