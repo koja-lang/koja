@@ -26,21 +26,21 @@ struct Router
   fn route(req: Request, conn: Postgres) -> Pair<Response, Postgres>
     match req.method
       Method.Delete ->
-        Router.handle_delete(req.path, conn)
+        handle_delete(req.path, conn)
 
       Method.Get ->
-        Router.handle_get(req.path, conn)
+        handle_get(req.path, conn)
 
       Method.Post ->
-        Router.handle_post(req, conn)
+        handle_post(req, conn)
 
       Method.Put ->
-        Router.handle_put(req, conn)
+        handle_put(req, conn)
 
       _ ->
-        Router.respond(
+        respond(
           conn,
-          Router.error(
+          error(
             Status.method_not_allowed(),
             "#{req.method.to_string()} is not supported",
           ),
@@ -52,13 +52,13 @@ struct Router
   Builds a JSON error response with the given status and message.
   """
   fn error(status: Status, message: String) -> Response
-    Router.json_response(
+    json_response(
       status,
       Value.object(
         [
           Value.entry("error", Value.string(status.reason)),
-           Value.entry("message", Value.string(message)),
-           Value.entry("status", Value.int(status.code))
+          Value.entry("message", Value.string(message)),
+          Value.entry("status", Value.int(status.code))
         ],
       ),
     )
@@ -66,92 +66,87 @@ struct Router
 
   priv fn handle_get(path: String, conn: Postgres) -> Pair<Response, Postgres>
     if path == "/"
-      return Router.respond(conn, Router.info())
+      return respond(conn, info())
     end
 
     if path == "/links"
-      return Router.list_all(conn)
+      return list_all(conn)
     end
 
-    match Router.code_after(path, LINKS_PREFIX)
+    match code_after(path, LINKS_PREFIX)
       Option.Some(code) ->
-        Router.metadata(conn, code)
+        metadata(conn, code)
 
       Option.None ->
-        match Router.code_after(path, "/")
+        match code_after(path, "/")
           Option.Some(code) ->
-            Router.redirect(conn, code)
+            redirect(conn, code)
 
           Option.None ->
-            Router.respond(
-              conn,
-              Router.error(Status.not_found(), "no route for #{path}"),
-            )
+            respond(conn, error(Status.not_found(), "no route for #{path}"))
         end
     end
   end
 
   priv fn handle_post(req: Request, conn: Postgres) -> Pair<Response, Postgres>
     unless req.path == "/links"
-      return Router.respond(
+      return respond(
         conn,
-        Router.error(Status.not_found(), "no route for POST #{req.path}"),
+        error(Status.not_found(), "no route for POST #{req.path}"),
       )
     end
 
     match JsonUtil.parse_url(req.body)
       Result.Err(message) ->
-        Router.respond(conn, Router.error(Status.bad_request(), message))
+        respond(conn, error(Status.bad_request(), message))
 
       Result.Ok(url) ->
         outcome = LinkStore.create(conn, url)
 
         match outcome.second
           Result.Ok(link) ->
-            Router.respond(
+            respond(
               outcome.first,
-              Router.json_response(
-                Status.created(),
-                JsonUtil.link_to_value(link),
-              ),
+              json_response(Status.created(), JsonUtil.link_to_value(link)),
             )
 
           Result.Err(e) ->
-            Router.respond(outcome.first, Router.db_error(e))
+            respond(outcome.first, db_error(e))
         end
     end
   end
 
   priv fn handle_put(req: Request, conn: Postgres) -> Pair<Response, Postgres>
     code =
-      match Router.code_after(req.path, LINKS_PREFIX)
+      match code_after(req.path, LINKS_PREFIX)
         Option.Some(c) -> c
         Option.None ->
-          return Router.respond(
+          return respond(
             conn,
-            Router.error(Status.not_found(), "no route for PUT #{req.path}"),
+            error(Status.not_found(), "no route for PUT #{req.path}"),
           )
       end
 
     match JsonUtil.parse_url(req.body)
       Result.Err(message) ->
-        Router.respond(conn, Router.error(Status.bad_request(), message))
+        respond(conn, error(Status.bad_request(), message))
 
       Result.Ok(url) ->
         outcome = LinkStore.update(conn, code, url)
-        Router.link_or_404(outcome, code)
+        link_or_404(outcome, code)
     end
   end
 
   priv fn handle_delete(path: String, conn: Postgres)
     -> Pair<Response, Postgres>
+
     code =
-      match Router.code_after(path, LINKS_PREFIX)
+      match code_after(path, LINKS_PREFIX)
         Option.Some(c) -> c
         Option.None ->
-          return Router.respond(
+          return respond(
             conn,
-            Router.error(Status.not_found(), "no route for DELETE #{path}"),
+            error(Status.not_found(), "no route for DELETE #{path}"),
           )
       end
 
@@ -159,12 +154,12 @@ struct Router
 
     match outcome.second
       Result.Err(e) ->
-        Router.respond(outcome.first, Router.db_error(e))
+        respond(outcome.first, db_error(e))
 
       Result.Ok(deleted) ->
         deleted
-          ? Router.respond(outcome.first, Router.no_content())
-          : Router.respond(outcome.first, Router.not_found(code))
+          ? respond(outcome.first, no_content())
+          : respond(outcome.first, not_found(code))
     end
   end
 
@@ -173,18 +168,18 @@ struct Router
 
     match outcome.second
       Result.Ok(links) ->
-        Router.respond(
+        respond(
           outcome.first,
-          Router.json_response(Status.ok(), JsonUtil.links_to_value(links)),
+          json_response(Status.ok(), JsonUtil.links_to_value(links)),
         )
 
       Result.Err(e) ->
-        Router.respond(outcome.first, Router.db_error(e))
+        respond(outcome.first, db_error(e))
     end
   end
 
   priv fn metadata(conn: Postgres, code: String) -> Pair<Response, Postgres>
-    Router.link_or_404(LinkStore.find(conn, code), code)
+    link_or_404(LinkStore.find(conn, code), code)
   end
 
   priv fn redirect(conn: Postgres, code: String) -> Pair<Response, Postgres>
@@ -192,15 +187,12 @@ struct Router
 
     match outcome.second
       Result.Err(e) ->
-        Router.respond(outcome.first, Router.db_error(e))
+        respond(outcome.first, db_error(e))
 
       Result.Ok(target) ->
         match target
-          Option.Some(url) ->
-            Router.respond(outcome.first, Router.redirect_response(url))
-
-          Option.None ->
-            Router.respond(outcome.first, Router.not_found(code))
+          Option.Some(url) -> respond(outcome.first, redirect_response(url))
+          Option.None -> respond(outcome.first, not_found(code))
         end
     end
   end
@@ -212,41 +204,42 @@ struct Router
 
     match outcome.second
       Result.Err(e) ->
-        Router.respond(outcome.first, Router.db_error(e))
+        respond(outcome.first, db_error(e))
 
       Result.Ok(maybe) ->
         match maybe
           Option.Some(link) ->
-            Router.respond(
+            respond(
               outcome.first,
-              Router.json_response(Status.ok(), JsonUtil.link_to_value(link)),
+              json_response(Status.ok(), JsonUtil.link_to_value(link)),
             )
 
           Option.None ->
-            Router.respond(outcome.first, Router.not_found(code))
+            respond(outcome.first, not_found(code))
         end
     end
   end
 
   priv fn respond(conn: Postgres, response: Response)
     -> Pair<Response, Postgres>
+
     Pair{first: response, second: conn}
   end
 
   priv fn info -> Response
-    Router.json_response(
+    json_response(
       Status.ok(),
       Value.object(
         [
           Value.entry("name", Value.string("koja-shortener")),
-           Value.entry(
+          Value.entry(
             "routes",
             Value.array(
               [
                 Value.string("GET /links"), Value.string("POST /links"),
-                 Value.string("GET /links/:code"),
-                 Value.string("PUT /links/:code"),
-                 Value.string("DELETE /links/:code"), Value.string("GET /:code")
+                Value.string("GET /links/:code"),
+                Value.string("PUT /links/:code"),
+                Value.string("DELETE /links/:code"), Value.string("GET /:code")
               ],
             ),
           )
@@ -256,11 +249,11 @@ struct Router
   end
 
   priv fn not_found(code: String) -> Response
-    Router.error(Status.not_found(), "no link with code #{code}")
+    error(Status.not_found(), "no link with code #{code}")
   end
 
   priv fn db_error(message: String) -> Response
-    Router.error(Status.internal_server_error(), message)
+    error(Status.internal_server_error(), message)
   end
 
   priv fn json_response(status: Status, body: Value) -> Response

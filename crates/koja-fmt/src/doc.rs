@@ -100,7 +100,8 @@ pub fn space() -> Doc {
 // Renderer
 // =========================================================================
 
-const DEFAULT_WIDTH: u32 = 80;
+/// The page width the formatter targets.
+pub const DEFAULT_WIDTH: u32 = 80;
 
 /// Layout mode for the renderer's stack entries.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -131,9 +132,10 @@ fn emit_newline(out: &mut String, col: &mut u32, ind: u32) {
 /// Fill rendering: pack items left-to-right, breaking only when an item
 /// doesn't fit on the current line.
 ///
-/// Each item in `items` is expected to be a single "element" (possibly
-/// preceded by a separator like ", "). We try to fit each item flat;
-/// if it doesn't fit, we emit a line break and then the item flat.
+/// Each item carries any separator as a *trailing* suffix (e.g. `", "` or
+/// `" and "`), so a break lands on a fresh line at the fill indent with no
+/// stray leading space; the dangling trailing separator is removed by the
+/// final per-line `trim_end`.
 fn render_fill(out: &mut String, col: &mut u32, ind: u32, items: &[Doc], width: u32) {
     for (i, item) in items.iter().enumerate() {
         if i > 0 && !fits(width.saturating_sub(*col), &[(ind, Mode::Flat, item)]) {

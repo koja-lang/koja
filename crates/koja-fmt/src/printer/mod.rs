@@ -209,7 +209,7 @@ impl<'a> Printer<'a> {
             Item::Struct(s) => self.struct_to_doc(s),
             Item::Enum(e) => self.enum_to_doc(e),
             Item::Extend(e) => self.extend_to_doc(e),
-            Item::Function(f) => self.function_to_doc(f),
+            Item::Function(f) => self.function_to_doc(f, 0),
             Item::Impl(i) => self.impl_to_doc(i),
             Item::Protocol(p) => self.protocol_to_doc(p),
             Item::Alias(a) => alias_to_doc(a),
@@ -247,7 +247,7 @@ impl<'a> Printer<'a> {
                 body.push(hardline());
             }
             body.push(hardline());
-            body.push(self.function_to_doc(func));
+            body.push(self.function_to_doc(func, 2));
         }
         let (mut trailing, _) = self.comments.drain_before(s.span.end.line);
         if !trailing.is_empty() {
@@ -308,7 +308,7 @@ impl<'a> Printer<'a> {
                 body.push(hardline());
             }
             body.push(hardline());
-            body.push(self.function_to_doc(func));
+            body.push(self.function_to_doc(func, 2));
         }
         let (mut trailing, _) = self.comments.drain_before(e.span.end.line);
         if !trailing.is_empty() {
@@ -359,7 +359,12 @@ impl<'a> Printer<'a> {
     }
 
     /// Formats a `fn` declaration (annotation, signature, body, `end`).
-    fn function_to_doc(&mut self, f: &Function) -> Doc {
+    ///
+    /// `indent_cols` is the column the declaration starts at (0 at the top
+    /// level, 2 inside a type body), used to detect — from the actually
+    /// rendered signature — whether it wraps across lines, in which case a
+    /// blank line separates it from the body.
+    fn function_to_doc(&mut self, f: &Function, indent_cols: u32) -> Doc {
         let mut parts = Vec::new();
 
         if let Some(doc) = annotations_to_doc(&f.annotations) {
@@ -367,8 +372,9 @@ impl<'a> Printer<'a> {
             parts.push(hardline());
         }
 
-        let sig_multiline = sig_will_break(f);
-        parts.push(self.function_sig_to_doc(f));
+        let sig = self.function_sig_to_doc(f);
+        let sig_multiline = signature_wraps(&sig, indent_cols);
+        parts.push(sig);
 
         if sig_multiline && f.body.is_some() {
             parts.push(hardline());
@@ -576,7 +582,7 @@ impl<'a> Printer<'a> {
     /// Formats a member inside an `impl` block (function or type alias).
     fn impl_member_to_doc(&mut self, member: &ImplMember) -> Doc {
         match member {
-            ImplMember::Function(f) => self.function_to_doc(f),
+            ImplMember::Function(f) => self.function_to_doc(f, 2),
             ImplMember::TypeAlias(ta) => concat(vec![
                 text(format!("type {} = ", ta.name)),
                 type_expr_to_doc(&ta.type_expr),

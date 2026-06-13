@@ -34,21 +34,16 @@ pub fn format_type_params(tps: &[TypeParam]) -> String {
 /// whole list can collapse to a single line when it fits.
 pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc {
     let last = items.len() - 1;
-    let items: Vec<Doc> = items
+    let fill_items: Vec<Doc> = items
         .into_iter()
         .enumerate()
         .map(|(i, d)| {
             if i < last {
-                concat(vec![d, text(",")])
+                concat(vec![d, text(", ")])
             } else {
                 d
             }
         })
-        .collect();
-    let fill_items: Vec<Doc> = items
-        .into_iter()
-        .enumerate()
-        .map(|(i, d)| if i > 0 { concat(vec![text(" "), d]) } else { d })
         .collect();
     group(concat(vec![
         text(open),
@@ -739,89 +734,14 @@ pub(super) fn is_unit_type(ty: &TypeExpr) -> bool {
     matches!(ty, TypeExpr::Unit { .. })
 }
 
-/// Estimates whether a function signature will exceed 80 columns when
-/// rendered on a single line, so the printer can pre-emptively break it.
-pub(super) fn sig_will_break(f: &Function) -> bool {
-    let mut len: usize = 0;
-    if f.visibility == Visibility::Private {
-        len += 5;
-    }
-    len += 3;
-    len += f.name.len();
-    if !f.type_params.is_empty() {
-        len += 1;
-        len += format_type_params(&f.type_params).len();
-        len += 1;
-    }
-    len += 1;
-    for (i, p) in f.params.iter().enumerate() {
-        if i > 0 {
-            len += 2;
-        }
-        len += param_text_len(p);
-    }
-    len += 1;
-    if let Some(rt) = &f.return_type
-        && !is_unit_type(rt)
-    {
-        len += 4;
-        len += type_expr_text_len(rt);
-    }
-    len > 80
-}
-
-/// Estimates the rendered text length of a function parameter.
-pub(super) fn param_text_len(p: &Param) -> usize {
-    match p {
-        Param::Self_ { .. } => 4,
-        Param::Regular {
-            name,
-            type_expr,
-            default,
-            ..
-        } => {
-            let mut n = 0;
-            n += name.len();
-            n += 2;
-            n += type_expr_text_len(type_expr);
-            if let Some(_d) = default {
-                n += 3;
-                n += 20; // estimate
-            }
-            n
-        }
-    }
-}
-
-/// Estimates the rendered text length of a type expression.
-pub(super) fn type_expr_text_len(ty: &TypeExpr) -> usize {
-    match ty {
-        TypeExpr::Named { path, .. } => {
-            path.iter().map(|s| s.len()).sum::<usize>() + path.len().saturating_sub(1)
-        }
-        TypeExpr::Generic { path, args, .. } => {
-            let path_len: usize =
-                path.iter().map(|s| s.len()).sum::<usize>() + path.len().saturating_sub(1);
-            let args_len: usize = args.iter().map(type_expr_text_len).sum::<usize>()
-                + args.len().saturating_sub(1) * 2;
-            path_len + 1 + args_len + 1
-        }
-        TypeExpr::Unit { .. } => 2,
-        TypeExpr::Self_ { .. } => 4,
-        TypeExpr::Function {
-            params,
-            return_type,
-            ..
-        } => {
-            let params_len: usize = params.iter().map(type_expr_text_len).sum::<usize>()
-                + params.len().saturating_sub(1) * 2;
-            4 + params_len + 5 + type_expr_text_len(return_type)
-        }
-        TypeExpr::Union { types, .. } => {
-            let inner: usize = types.iter().map(type_expr_text_len).sum::<usize>();
-            inner + types.len().saturating_sub(1) * 3 // " | " between each
-        }
-    }
+/// Returns `true` if the rendered signature wraps onto more than one line
+/// at the given starting indentation. Rendering at `width - indent_cols`
+/// from column 0 reproduces the printer's break decisions exactly (the
+/// signature is alone on its opening line), so this stays in lockstep with
+/// the layout rather than re-estimating widths by hand.
+pub(super) fn signature_wraps(signature: &Doc, indent_cols: u32) -> bool {
+    let available = DEFAULT_WIDTH.saturating_sub(indent_cols);
+    render(signature, available).contains('\n')
 }
 
 fn expr_span(expr: &Expr) -> &Span {

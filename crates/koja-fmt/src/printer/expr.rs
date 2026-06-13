@@ -153,7 +153,13 @@ impl<'a> Printer<'a> {
                 });
                 let rendered: Vec<Doc> = arms
                     .iter()
-                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, expr.span.end.line))
+                    .enumerate()
+                    .map(|(i, arm)| {
+                        let body_end = arms
+                            .get(i + 1)
+                            .map_or(expr.span.end.line, |next| next.span.start.line);
+                        self.match_arm_to_doc(arm, any_multiline, body_end)
+                    })
                     .collect();
                 let header = concat(vec![text("match "), self.expr_to_doc(subject)]);
                 arms_block(header, rendered, any_multiline, vec![])
@@ -171,7 +177,13 @@ impl<'a> Printer<'a> {
                     });
                 let mut rendered: Vec<Doc> = arms
                     .iter()
-                    .map(|arm| self.cond_arm_to_doc(arm, any_multiline, expr.span.end.line))
+                    .enumerate()
+                    .map(|(i, arm)| {
+                        let body_end = arms
+                            .get(i + 1)
+                            .map_or(expr.span.end.line, |next| next.span.start.line);
+                        self.cond_arm_to_doc(arm, any_multiline, body_end)
+                    })
                     .collect();
                 if let Some(body) = else_body {
                     rendered.push(self.else_arm_to_doc(body, any_multiline, expr.span.end.line));
@@ -191,7 +203,13 @@ impl<'a> Printer<'a> {
                 }) || arm_is_multiline(after_body);
                 let rendered: Vec<Doc> = arms
                     .iter()
-                    .map(|arm| self.match_arm_to_doc(arm, any_multiline, expr.span.end.line))
+                    .enumerate()
+                    .map(|(i, arm)| {
+                        let body_end = arms
+                            .get(i + 1)
+                            .map_or(expr.span.end.line, |next| next.span.start.line);
+                        self.match_arm_to_doc(arm, any_multiline, body_end)
+                    })
                     .collect();
                 let mut suffix = Vec::new();
                 if let Some(timeout) = after_timeout {

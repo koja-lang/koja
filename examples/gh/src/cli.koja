@@ -11,17 +11,17 @@ struct Cli
   """
   fn dispatch(args: List<String>) -> Result<String, String>
     if args.empty?()
-      return Result.Ok(Cli.usage())
+      return Result.Ok(usage())
     end
 
     command = args.get(0).unwrap()
 
     match command
-      "help" -> Result.Ok(Cli.usage())
-      "repo" -> Cli.run_repo(args)
-      "repos" -> Cli.run_repos(args)
-      "user" -> Cli.run_user(args)
-      _ -> Result.Err("unknown command: " <> command <> "\n\n" <> Cli.usage())
+      "help" -> Result.Ok(usage())
+      "repo" -> run_repo(args)
+      "repos" -> run_repos(args)
+      "user" -> run_user(args)
+      _ -> Result.Err("unknown command: #{command}\n\n#{usage()}")
     end
   end
 
@@ -30,10 +30,10 @@ struct Cli
   """
   fn render_repo(repo: Repo) -> String
     lines = [repo.full_name]
-    lines = Cli.push(lines, "stars", "#{repo.stars}")
-    lines = Cli.push(lines, "forks", "#{repo.forks}")
-    lines = Cli.push(lines, "language", repo.language)
-    lines = Cli.push(lines, "updated", Cli.date_of(repo.updated_at))
+    lines = push(lines, "stars", "#{repo.stars}")
+    lines = push(lines, "forks", "#{repo.forks}")
+    lines = push(lines, "language", repo.language)
+    lines = push(lines, "updated", date_of(repo.updated_at))
 
     if repo.fork
       lines = lines.append("  (fork)")
@@ -52,12 +52,11 @@ struct Cli
   """
   fn render_repos(login: String, repos: List<Repo>) -> String
     if repos.empty?()
-      return "no public repositories for " <> login
+      return "no public repositories for #{login}"
     end
 
-    lines = repos.map(fn (repo: Repo) -> String
-      Cli.repo_line(repo)
-    end)
+    lines =
+      repos.map(fn (repo: Repo) -> String repo_line(repo) end)
 
     String.join(lines, "\n")
   end
@@ -67,18 +66,22 @@ struct Cli
   """
   fn render_user(user: User) -> String
     title = user.name.empty?()
-      ? "@" <> user.login
-      : user.name <> " (@" <> user.login <> ")"
+      ? "@#{user.login}"
+      : "#{user.name} (@#{user.login})"
 
     lines = [title]
-    lines = Cli.push(lines, "company", user.company)
-    lines = Cli.push(lines, "location", user.location)
-    lines = Cli.push(lines, "blog", user.blog)
-    lines = Cli.push(lines, "joined", Cli.date_of(user.created_at))
-    lines = lines.append(
-      "  #{user.public_repos} public repos · " <>
-        "#{user.followers} followers · #{user.following} following",
+    lines = push(lines, "company", user.company)
+    lines = push(lines, "location", user.location)
+    lines = push(lines, "blog", user.blog)
+    lines = push(lines, "joined", date_of(user.created_at))
+    counts = String.join(
+      [
+        "#{user.public_repos} public repos", "#{user.followers} followers",
+        "#{user.following} following"
+      ],
+      " · ",
     )
+    lines = lines.append("  #{counts}")
 
     if not user.bio.empty?()
       lines = lines.append("")
@@ -94,22 +97,20 @@ struct Cli
   fn usage -> String
     String.join(
       [
-        "gh -- a tiny GitHub client (Koja example)",
-        "",
-        "usage:",
+        "gh -- a tiny GitHub client (Koja example)", "", "usage:",
         "  gh user <login>        show a user profile",
         "  gh repos <login>       list a user's repositories",
         "  gh repo <owner/name>   show one repository",
-        "  gh help                show this message",
-        "",
-        "set GITHUB_TOKEN to authenticate (raises the rate limit)",
+        "  gh help                show this message", "",
+        "set GITHUB_TOKEN to authenticate (raises the rate limit)"
       ],
       "\n",
     )
   end
 
-  # Trims an ISO-8601 timestamp to its date part.
   priv fn date_of(timestamp: String) -> String
+    # Trims an ISO-8601 timestamp to its date part.
+
     timestamp.length() < 10
       ? timestamp
       : timestamp.slice(Range{start: 0, stop: 9})
@@ -118,22 +119,22 @@ struct Cli
   priv fn push(lines: List<String>, label: String, value: String)
     -> List<String>
 
-    value.empty?() ? lines : lines.append("  " <> label <> ": " <> value)
+    value.empty?() ? lines : lines.append("  #{label}: #{value}")
   end
 
   priv fn repo_line(repo: Repo) -> String
-    line = repo.full_name <> " -- #{repo.stars} stars"
+    line = "#{repo.full_name} -- #{repo.stars} stars"
 
     if not repo.language.empty?()
-      line = line <> " (" <> repo.language <> ")"
+      line = "#{line} (#{repo.language})"
     end
 
     if repo.fork
-      line = line <> " [fork]"
+      line = "#{line} [fork]"
     end
 
     if not repo.description.empty?()
-      line = line <> "\n    " <> repo.description
+      line = "#{line}\n    #{repo.description}"
     end
 
     line
@@ -144,45 +145,45 @@ struct Cli
 
     match args.get(1)
       Option.Some(value) -> Result.Ok(value)
-      Option.None -> Result.Err("missing argument: " <> name)
+      Option.None -> Result.Err("missing argument: #{name}")
     end
   end
 
   priv fn run_repo(args: List<String>) -> Result<String, String>
     full_name =
-      match Cli.require_arg(args, "<owner/name>")
+      match require_arg(args, "<owner/name>")
         Result.Ok(v) -> v
         Result.Err(e) -> return Result.Err(e)
       end
 
     match GitHub.repo(full_name)
-      Result.Ok(repo) -> Result.Ok(Cli.render_repo(repo))
+      Result.Ok(repo) -> Result.Ok(render_repo(repo))
       Result.Err(e) -> Result.Err(e)
     end
   end
 
   priv fn run_repos(args: List<String>) -> Result<String, String>
     login =
-      match Cli.require_arg(args, "<login>")
+      match require_arg(args, "<login>")
         Result.Ok(v) -> v
         Result.Err(e) -> return Result.Err(e)
       end
 
     match GitHub.repos(login)
-      Result.Ok(repos) -> Result.Ok(Cli.render_repos(login, repos))
+      Result.Ok(repos) -> Result.Ok(render_repos(login, repos))
       Result.Err(e) -> Result.Err(e)
     end
   end
 
   priv fn run_user(args: List<String>) -> Result<String, String>
     login =
-      match Cli.require_arg(args, "<login>")
+      match require_arg(args, "<login>")
         Result.Ok(v) -> v
         Result.Err(e) -> return Result.Err(e)
       end
 
     match GitHub.user(login)
-      Result.Ok(user) -> Result.Ok(Cli.render_user(user))
+      Result.Ok(user) -> Result.Ok(render_user(user))
       Result.Err(e) -> Result.Err(e)
     end
   end
