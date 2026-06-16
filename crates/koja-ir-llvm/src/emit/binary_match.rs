@@ -62,15 +62,49 @@ pub(super) fn emit_binary_match<'ctx>(
     let payload = lookup(values, subject)?.into_pointer_value();
     let bit_length = load_subject_bit_length(ctx, payload)?;
     let byte_length = shift_right_by_three(ctx, bit_length)?;
-    let mut success = length_check(ctx, &layout, byte_length)?;
+    let length_ok = length_check(ctx, &layout, byte_length)?;
+
+    // Segment extraction indexes off the subject length, so on a
+    // too-short subject the reads run past the payload and the
+    // greedy-tail size underflows to a huge `malloc` -> null -> SIGBUS.
+    // Gate it behind the length check: a failed check short-circuits to
+    // `false` without touching the payload.
+    let entry_block = ctx.builder.get_insert_block().ok_or_else(|| {
+        LlvmError::Codegen("binary match emitted with no active block".to_string())
+    })?;
+    let function = entry_block.get_parent().ok_or_else(|| {
+        LlvmError::Codegen("binary match active block has no parent function".to_string())
+    })?;
+    let extract_block = ctx.context.append_basic_block(function, "bin_pat_extract");
+    let merge_block = ctx.context.append_basic_block(function, "bin_pat_merge");
+    ctx.builder
+        .build_conditional_branch(length_ok, extract_block, merge_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(extract_block);
+    let mut extracted = true_i1(ctx);
     for segment in segments {
         let segment_ok = emit_segment(ctx, payload, bit_length, byte_length, segment)?;
-        success = ctx
+        extracted = ctx
             .builder
-            .build_and(success, segment_ok, "bin_pat_and")
+            .build_and(extracted, segment_ok, "bin_pat_and")
             .or_ice()?;
     }
-    Ok(success)
+    // `emit_segment` is straight-line, but capture the builder's block
+    // for the phi edge in case that ever stops being true.
+    let extract_end = ctx.builder.get_insert_block().unwrap_or(extract_block);
+    ctx.builder
+        .build_unconditional_branch(merge_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(merge_block);
+    let result = ctx
+        .builder
+        .build_phi(ctx.context.bool_type(), "bin_pat_result")
+        .or_ice()?;
+    let length_failed = ctx.context.bool_type().const_int(0, false);
+    result.add_incoming(&[(&length_failed, entry_block), (&extracted, extract_end)]);
+    Ok(result.as_basic_value().into_int_value())
 }
 
 /// Read `i64 bit_length` from `payload - 8`. The IR contract puts

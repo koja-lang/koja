@@ -422,11 +422,11 @@ fn dispatch_arms<'ctx>(
     ctx.builder.build_unreachable().or_ice().map(|_| ())
 }
 
-/// Load the typed payload the runtime copied into `payload_slot` (at
-/// offset 0 — the runtime already stripped the tag header) and store it
-/// into the arm's payload local slot. `Business` arms load the unboxed
-/// message struct (today a `Pair<M, Option<ReplyTo<R>>>`); `Lifecycle`
-/// arms load the enum-outer whose variant byte the runtime wrote.
+/// Load the typed payload the runtime copied into `payload_slot` (the
+/// tag header is already stripped) and store it into the arm's payload
+/// local. `Business` arms load the message `Pair<M, Option<ReplyTo<R>>>`,
+/// `Lifecycle` arms the signal enum, and `IOReady` arms the bare
+/// `IOReady` enum that the `elaborate` body rewraps into the `Pair`.
 fn deserialize_payload_into_local<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload_slot: PointerValue<'ctx>,
@@ -435,6 +435,7 @@ fn deserialize_payload_into_local<'ctx>(
     let payload_llvm_type = ir_basic_type(ctx, &arm.payload_type)?;
     let label = match arm.tag {
         ReceiveTag::Business => "business_payload",
+        ReceiveTag::IOReady => "io_ready_payload",
         ReceiveTag::Lifecycle => "lifecycle_payload",
     };
     let payload = ctx

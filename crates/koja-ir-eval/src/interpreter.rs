@@ -677,6 +677,9 @@ fn execute_receive<R: CallResolver>(
     frame: &mut Frame,
     resolver: &R,
 ) -> Result<IRBlockId, RuntimeError> {
+    // Only the lifecycle arm and the `after` timeout unblock a receive
+    // here. A synthesized `ReceiveTag::IOReady` arm is inert: the
+    // interpreter has no reactor, so it's never selected.
     let lifecycle_arm = arms.iter().find(|arm| arm.tag == ReceiveTag::Lifecycle);
     let deadline = after
         .map(|clause| {

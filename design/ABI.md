@@ -98,9 +98,11 @@ offset 0                  offset TAG_HEADER_SIZE (8)
   the long-form spec, including which tags can surface in `receive`
   arms).
 - Mirror: `koja-ir/src/function.rs` (`ReceiveTag::wire_byte` —
-  `Business == 0`, `Lifecycle == 1`); the LLVM backend consumes the
-  payload at offset 0 because the runtime strips the tag header
-  before delivery.
+  `Business == 0`, `Lifecycle == 1`, `IOReady == 2`); the LLVM backend
+  consumes the payload at offset 0 because the runtime strips the tag
+  header before delivery. `IOReady` arms are synthesized by the
+  `elaborate` I/O sub-pass (not source lowering) for processes whose
+  message union contains `IOReady`.
 
 ## Numeric parse helper return codes
 

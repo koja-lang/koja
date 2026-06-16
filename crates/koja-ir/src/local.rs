@@ -15,6 +15,13 @@ impl IRLocalId {
         Self(local_id.as_u32())
     }
 
+    /// The slot's raw index. Read-only escape hatch for post-lowering
+    /// IR passes ([`crate::elaborate`]) that must mint a fresh slot one
+    /// past every existing one in a function.
+    pub(crate) fn as_u32(self) -> u32 {
+        self.0
+    }
+
     /// Placeholder slot id for synthesized glue
     /// ([`crate::FunctionKind::CloneGlue`] / `DropGlue`). Glue bodies
     /// read the operand straight off the parameter's SSA value

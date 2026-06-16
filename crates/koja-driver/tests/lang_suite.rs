@@ -489,6 +489,72 @@ fn lang_process_lifecycle_interpreted() {
     );
 }
 
+/// Regression for `IOReady` union-message delivery: the `process_io`
+/// fixture watches STDIN and must receive the reactor's readiness event
+/// through its ordinary `handle` (tag-2 dispatch) rather than trapping.
+/// Pre-filling STDIN makes the watched fd readable the instant the
+/// process registers it, so the sentinel is deterministic without a
+/// signal. Compiled-only: the interpreter has no reactor to deliver the
+/// event (the synthesized arm is inert there).
+#[test]
+fn lang_process_io() {
+    use std::io::Write;
+
+    let dir = lang_dir().join("process_io");
+    assert!(dir.exists(), "test fixture process_io/ not found");
+    let expected = fs::read_to_string(dir.join("expected.stdout")).unwrap();
+
+    let mut cmd = Command::new(koja_bin());
+    cmd.arg("run").arg("--backend=llvm").current_dir(&dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", &lib_path);
+    }
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().expect("failed to execute koja");
+    // The bytes sit in the pipe buffer (and closing the write end leaves
+    // it at readable EOF), so the watched fd is ready before — or the
+    // instant — the process registers it with the reactor.
+    child
+        .stdin
+        .take()
+        .expect("child stdin already taken")
+        .write_all(b"go\n")
+        .expect("failed to pre-fill stdin");
+
+    let deadline = std::time::Instant::now() + TEST_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("process_io: timed out after {}s", TEST_TIMEOUT.as_secs());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => panic!("process_io: wait error: {e}"),
+        }
+    }
+
+    let output = child.wait_with_output().expect("failed to collect output");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+
+    assert!(
+        code == 1,
+        "process_io: expected exit code 1 (StopReason.Shutdown), got {code}\nstderr:\n{stderr}"
+    );
+    if stdout != expected {
+        panic!(
+            "\n--- FAIL: process_io ---\n{}",
+            diff_lines(&stdout, &expected)
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Signal test runner
 // ---------------------------------------------------------------------------
