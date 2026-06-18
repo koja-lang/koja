@@ -309,7 +309,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
             ctx.builder
                 .build_unconditional_branch(llvm_target)
                 .or_ice()?;
-            wire_phi_incomings(target, pred, values, block_map, phi_map)
+            wire_phi_incomings(ctx, target, pred, values, phi_map)
         }
         IRTerminator::CondBranch {
             cond,
@@ -322,8 +322,8 @@ pub(crate) fn emit_terminator_default<'ctx>(
             ctx.builder
                 .build_conditional_branch(cond_value, llvm_then, llvm_else)
                 .or_ice()?;
-            wire_phi_incomings(then_target, pred, values, block_map, phi_map)?;
-            wire_phi_incomings(else_target, pred, values, block_map, phi_map)
+            wire_phi_incomings(ctx, then_target, pred, values, phi_map)?;
+            wire_phi_incomings(ctx, else_target, pred, values, phi_map)
         }
         IRTerminator::Return { value: None } => ctx.builder.build_return(None).or_ice().map(|_| ()),
         IRTerminator::Return { value: Some(id) } => {
@@ -417,10 +417,10 @@ fn emit_tail_call<'ctx>(
 /// rather than surfacing a `Codegen` error the caller would have to
 /// add a fallthrough for.
 fn wire_phi_incomings<'ctx>(
+    ctx: &EmitContext<'ctx>,
     target: &BranchTarget,
     pred: IRBlockId,
     values: &ValueMap<'ctx>,
-    block_map: &BlockMap<'ctx>,
     phi_map: &PhiMap<'ctx>,
 ) -> Result<(), LlvmError> {
     let phis = phi_map.get(&target.block).ok_or_else(|| {
@@ -438,7 +438,12 @@ fn wire_phi_incomings<'ctx>(
             phis.len(),
         );
     }
-    let pred_block = lookup_block(block_map, pred)?;
+    // The true predecessor is the builder's current block, not
+    // `block_map[pred]`: they differ when an instruction splits its host
+    // block mid-body (e.g. `BinaryMatch`'s length-guarded extraction).
+    let pred_block = ctx.builder.get_insert_block().ok_or_else(|| {
+        LlvmError::Codegen("phi incoming wiring with no active block".to_string())
+    })?;
     for (phi, arg) in phis.iter().zip(target.args.iter()) {
         let Some(phi) = phi else {
             // Unit-typed BlockParam: no phi to wire, no LLVM value

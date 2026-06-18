@@ -65,6 +65,7 @@
 //! composite's glue body recurses into its constituents' glue. Leaves
 //! and `Indirect` boxes themselves are skipped — they carry no glue.
 
+mod io_ready;
 mod rewrite;
 mod synthesis;
 
@@ -90,6 +91,7 @@ pub(crate) fn elaborate(packages: &mut [IRPackage]) {
     let deep_needed = discover_deep_copy_types(packages, &[]);
     register_all(packages, &needed, &deep_needed);
     rewrite_all(packages, &needed, &deep_needed);
+    io_ready::deliver_io_ready(packages);
 }
 
 /// Run the elaborate sub-pass for a script: same three steps as
@@ -102,6 +104,7 @@ pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBl
     register_all(packages, &needed, &deep_needed);
     rewrite_all(packages, &needed, &deep_needed);
     rewrite::rewrite_blocks_standalone(body, &needed, &deep_needed);
+    io_ready::deliver_io_ready(packages);
 }
 
 fn register_all(

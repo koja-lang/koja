@@ -1,0 +1,21 @@
+# Regression: a fixed-prefix + greedy-tail pattern against a subject
+# shorter than the prefix must fail cleanly. A prior LLVM codegen bug
+# ran extraction unconditionally, so the greedy tail's underflowed
+# `byte_length - prefix` drove a giant malloc -> null -> SIGBUS.
+# Concatenation forces heap binaries so the bindings' drops run.
+
+empty: Binary = <<>>
+classify(empty).print()
+
+one: Binary = <<0xAA::8>> <> <<>>
+classify(one).print()
+
+two: Binary = <<0xAA::8, 0xBB::8>> <> <<>>
+classify(two).print()
+
+fn classify(buffer: Binary) -> Int
+  match buffer
+    <<b0::8, b1::8, rest: Binary>> -> b0 + b1 + rest.byte_size()
+    _ -> -1
+  end
+end

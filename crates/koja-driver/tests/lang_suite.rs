@@ -489,6 +489,69 @@ fn lang_process_lifecycle_interpreted() {
     );
 }
 
+/// Regression for `IOReady` union-message delivery: the fixture watches
+/// STDIN and must receive the reactor's readiness event through its
+/// `handle` (tag-2 dispatch) instead of trapping. Pre-filled STDIN makes
+/// the fd readable immediately. Compiled-only: the interpreter has no
+/// reactor, so the synthesized arm is inert.
+#[test]
+fn lang_process_io() {
+    use std::io::Write;
+
+    let dir = lang_dir().join("process_io");
+    assert!(dir.exists(), "test fixture process_io/ not found");
+    let expected = fs::read_to_string(dir.join("expected.stdout")).unwrap();
+
+    let mut cmd = Command::new(koja_bin());
+    cmd.arg("run").arg("--backend=llvm").current_dir(&dir);
+    if let Some(lib_path) = library_path() {
+        cmd.env("LIBRARY_PATH", &lib_path);
+    }
+    cmd.stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    let mut child = cmd.spawn().expect("failed to execute koja");
+    // Bytes wait in the pipe (closing the write end leaves it at readable
+    // EOF), so the fd is ready by the time the process watches it.
+    child
+        .stdin
+        .take()
+        .expect("child stdin already taken")
+        .write_all(b"go\n")
+        .expect("failed to pre-fill stdin");
+
+    let deadline = std::time::Instant::now() + TEST_TIMEOUT;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if std::time::Instant::now() >= deadline => {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("process_io: timed out after {}s", TEST_TIMEOUT.as_secs());
+            }
+            Ok(None) => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => panic!("process_io: wait error: {e}"),
+        }
+    }
+
+    let output = child.wait_with_output().expect("failed to collect output");
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let code = output.status.code().unwrap_or(-1);
+
+    assert!(
+        code == 1,
+        "process_io: expected exit code 1 (StopReason.Shutdown), got {code}\nstderr:\n{stderr}"
+    );
+    if stdout != expected {
+        panic!(
+            "\n--- FAIL: process_io ---\n{}",
+            diff_lines(&stdout, &expected)
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Signal test runner
 // ---------------------------------------------------------------------------

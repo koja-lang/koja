@@ -741,27 +741,24 @@ pub struct ReceiveArm {
     pub tag: ReceiveTag,
 }
 
-/// Envelope kind a receive arm matches. The runtime tags every
-/// message with a single byte at offset 0 and places the payload at
-/// offset 8; `Business == 0`, `Lifecycle == 1`. (`IORead == 2` is
-/// reserved for the future I/O fast path; the pipeline does not yet
-/// emit it.)
+/// Envelope kind a receive arm matches. `IOReady` arms aren't written
+/// by source lowering — the `elaborate` I/O sub-pass synthesizes them
+/// for a `Process` whose message type `M` is a union containing
+/// `IOReady`, so reactor readiness reaches the business `handle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiveTag {
     Business,
+    IOReady,
     Lifecycle,
 }
 
 impl ReceiveTag {
-    /// Wire byte the runtime stamps in the envelope's tag header.
-    ///
-    /// These values conform to the envelope wire ABI, whose
-    /// authoritative definition is `koja-runtime/src/wire.rs`
-    /// (`TAG_BUSINESS` / `TAG_LIFECYCLE`). They mirror it by spec, not
-    /// via a shared type.
+    /// Wire byte the runtime stamps in the envelope tag header. Mirrors
+    /// `koja-runtime/src/wire.rs` (`TAG_*`) by spec, not a shared type.
     pub fn wire_byte(self) -> u8 {
         match self {
             Self::Business => 0,
+            Self::IOReady => 2,
             Self::Lifecycle => 1,
         }
     }
