@@ -27,12 +27,7 @@ use crate::scheduler::{
 };
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
-/// Whether the reactor should wake for readable or writable readiness.
-#[derive(Clone, Copy)]
-pub enum Interest {
-    Readable,
-    Writable,
-}
+pub use koja_runtime_core::Interest;
 
 /// Key offset for watched fds so they don't collide with io_block keys
 /// (which use the PID, starting at 1).

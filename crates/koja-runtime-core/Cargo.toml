@@ -1,0 +1,9 @@
+[package]
+name = "koja-runtime-core"
+description = "Target-agnostic scheduler core and runtime protocol for the Koja language"
+edition.workspace = true
+license.workspace = true
+version.workspace = true
+
+[dependencies]
+libc = "0.2"

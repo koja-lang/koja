@@ -149,7 +149,7 @@ pub(crate) struct Process {
     /// nested heap) when the process's resources are reclaimed.
     init_state: OwnedPayload,
     /// Routed message queues plus the one-shot reply slot.
-    pub(crate) mailbox: Mailbox,
+    pub(crate) mailbox: Mailbox<Envelope>,
     /// Claim flag: `true` from the moment a worker switches into this
     /// process until that same worker has persisted the post-yield `sp`.
     ///
@@ -235,7 +235,7 @@ impl Process {
 #[allow(dead_code)]
 pub(crate) struct Reclaim {
     init_state: OwnedPayload,
-    mailbox: Mailbox,
+    mailbox: Mailbox<Envelope>,
     stack: ProcessStack,
 }
 

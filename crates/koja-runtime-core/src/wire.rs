@@ -34,40 +34,41 @@
 use std::ptr;
 
 use crate::memory;
+use crate::protocol::{Message, Tag};
 
 /// Forward business traffic: casts, call requests, timer fires. Payload
 /// is the message, a `Pair<M, Option<ReplyTo<R>>>`.
-pub(crate) const TAG_BUSINESS: u8 = 0;
+pub const TAG_BUSINESS: u8 = 0;
 /// Lifecycle signal. Payload is the lifecycle variant byte.
-pub(crate) const TAG_LIFECYCLE: u8 = 1;
+pub const TAG_LIFECYCLE: u8 = 1;
 /// I/O readiness event from the reactor. Payload is the IOReady
 /// variant byte followed by the `Fd`.
-pub(crate) const TAG_IO_READY: u8 = 2;
+pub const TAG_IO_READY: u8 = 2;
 /// Reply to an in-flight `Ref.call`, correlated by the envelope's
 /// [`reply_token`](Envelope::reply_token). Routed to the caller's
 /// one-shot reply slot, never the receive queues.
-pub(crate) const TAG_REPLY: u8 = 3;
+pub const TAG_REPLY: u8 = 3;
 
 /// Bytes reserved for the tag header. The payload begins at this
 /// offset; backends know this value as the envelope payload offset.
-pub(crate) const TAG_HEADER_SIZE: usize = 8;
+pub const TAG_HEADER_SIZE: usize = 8;
 
 /// Total size of a lifecycle envelope: tag header + one variant byte.
-pub(crate) const LIFECYCLE_BUF_SIZE: usize = 16;
+pub const LIFECYCLE_BUF_SIZE: usize = 16;
 
 /// Total size of an IOReady envelope: tag header + variant byte + `Fd`.
-pub(crate) const IO_READY_BUF_SIZE: usize = 24;
+pub const IO_READY_BUF_SIZE: usize = 24;
 /// Offset of the IOReady variant byte within the envelope.
-pub(crate) const IO_READY_VARIANT_OFFSET: usize = 8;
+pub const IO_READY_VARIANT_OFFSET: usize = 8;
 /// Offset of the `Fd` (i64) within an IOReady envelope.
-pub(crate) const IO_READY_FD_OFFSET: usize = 16;
+pub const IO_READY_FD_OFFSET: usize = 16;
 
 /// IOReady variant: the fd became readable.
-pub(crate) const IO_READY_READ: u8 = 0;
+pub const IO_READY_READ: u8 = 0;
 /// IOReady variant: the fd became writable.
-pub(crate) const IO_READY_WRITE: u8 = 1;
+pub const IO_READY_WRITE: u8 = 1;
 /// IOReady variant: the fd reported an error or hangup.
-pub(crate) const IO_READY_ERROR: u8 = 2;
+pub const IO_READY_ERROR: u8 = 2;
 
 /// An owned mailbox message: the tagged transport buffer plus the
 /// metadata needed to free it without consulting the send site.
@@ -80,22 +81,22 @@ pub(crate) const IO_READY_ERROR: u8 = 2;
 /// opts out of the glue via [`Envelope::free_transport`], so only the
 /// transport buffer is freed (the nested heap has moved to the
 /// receiver).
-pub(crate) struct Envelope {
+pub struct Envelope {
     /// Transport buffer `[tag header | payload]`, owned by the
     /// allocator funnel (`memory::alloc`, 8-byte aligned) and freed with
     /// `memory::free` on drop.
-    pub(crate) buffer: *mut u8,
+    pub buffer: *mut u8,
     /// Drop glue for nested Koja heap in the payload, run before the
     /// buffer is freed on the discard path. Null when the payload owns
     /// no nested heap.
-    pub(crate) drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
+    drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
     /// Total buffer length in bytes, so the delivered-receive copy can
     /// size the payload without consulting the send site.
-    pub(crate) length: usize,
+    pub length: usize,
     /// Correlation token, meaningful only for [`TAG_REPLY`] envelopes
     /// (zero otherwise). `koja_rt_call_receive` discards a slotted
     /// reply whose token doesn't match the in-flight call.
-    pub(crate) reply_token: i64,
+    pub reply_token: i64,
 }
 
 /// Envelope owns a heap pointer detached from any thread, so moving it
@@ -105,7 +106,7 @@ unsafe impl Send for Envelope {}
 impl Envelope {
     /// Wraps a hand-built transport buffer of `length` bytes (the tag
     /// must already be stamped at offset 0), with no payload drop glue.
-    pub(crate) fn new(buffer: *mut u8, length: usize) -> Self {
+    pub fn new(buffer: *mut u8, length: usize) -> Self {
         Self {
             buffer,
             drop_glue: None,
@@ -120,7 +121,7 @@ impl Envelope {
     /// # Safety
     /// `payload` must point to `payload_len` readable bytes (it may be
     /// anything, including null, when `payload_len` is zero).
-    pub(crate) unsafe fn from_payload(
+    pub unsafe fn from_payload(
         tag: u8,
         payload: *const u8,
         payload_len: usize,
@@ -143,8 +144,8 @@ impl Envelope {
         }
     }
 
-    /// The wire tag stamped at offset 0 of the transport buffer.
-    pub(crate) fn tag(&self) -> u8 {
+    /// The wire tag byte stamped at offset 0 of the transport buffer.
+    pub fn tag_byte(&self) -> u8 {
         unsafe { *self.buffer }
     }
 
@@ -153,8 +154,20 @@ impl Envelope {
     /// so the transport buffer must be freed *without* running
     /// `drop_glue`. Clearing the glue and letting the envelope drop
     /// deallocates the buffer only. Consumes the envelope.
-    pub(crate) fn free_transport(mut self) {
+    pub fn free_transport(mut self) {
         self.drop_glue = None;
+    }
+}
+
+/// Routing tag for the mailbox: maps the wire byte to its [`Tag`] class.
+impl Message for Envelope {
+    fn tag(&self) -> Tag {
+        match self.tag_byte() {
+            TAG_LIFECYCLE => Tag::Lifecycle,
+            TAG_IO_READY => Tag::IOReady,
+            TAG_REPLY => Tag::Reply,
+            _ => Tag::Business,
+        }
     }
 }
 
@@ -181,7 +194,7 @@ impl Drop for Envelope {
 /// The empty value ([`Default`]) is null and drops as a no-op, so it
 /// doubles as the placeholder left behind when ownership moves out via
 /// `mem::take`.
-pub(crate) struct OwnedPayload {
+pub struct OwnedPayload {
     buf: *mut u8,
     drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
 }
@@ -193,12 +206,12 @@ unsafe impl Send for OwnedPayload {}
 impl OwnedPayload {
     /// Wraps an allocation from [`memory::alloc`] (or null for empty)
     /// and the drop glue for its nested heap (or null for none).
-    pub(crate) fn new(buf: *mut u8, drop_glue: Option<unsafe extern "C" fn(*mut u8)>) -> Self {
+    pub fn new(buf: *mut u8, drop_glue: Option<unsafe extern "C" fn(*mut u8)>) -> Self {
         Self { buf, drop_glue }
     }
 
     /// The payload bytes, or null for the empty value.
-    pub(crate) fn as_ptr(&self) -> *const u8 {
+    pub fn as_ptr(&self) -> *const u8 {
         self.buf
     }
 }
