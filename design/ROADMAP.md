@@ -8,7 +8,7 @@ Solo developer + AI assistance. Bootstrap in Rust; self-host in Koja post-1.0.
 
 ### Compiler
 
-A 15-crate Rust workspace built around the four-phase sealed pipeline described in [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md): `koja-parser → koja-typecheck → koja-ir → koja-ir-llvm` / `koja-ir-eval`. The typecheck phase populates `Resolution` and `resolved_type` annotations on the AST and asserts via `seal_ast`; the IR phase consumes the sealed AST and produces a sealed `IRProgram` asserted by `seal_program`; both backends consume the same sealed `IRProgram` as siblings.
+A 16-crate Rust workspace built around the four-phase sealed pipeline described in [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md): `koja-parser → koja-typecheck → koja-ir → koja-ir-llvm` / `koja-ir-eval`. The typecheck phase populates `Resolution` and `resolved_type` annotations on the AST and asserts via `seal_ast`; the IR phase consumes the sealed AST and produces a sealed `IRProgram` asserted by `seal_program`; both backends consume the same sealed `IRProgram` as siblings.
 
 Pipeline crates:
 
@@ -22,7 +22,8 @@ Pipeline crates:
 Shared substrate:
 
 - `koja-ast` -- tokens, spans, AST node definitions, `Resolution`/`Identifier` shapes, `seal_ast`
-- `koja-runtime` -- multi-threaded process scheduler and C-ABI intrinsics (static library linked into compiled binaries)
+- `koja-runtime-core` -- platform-agnostic scheduler substrate: the `ProcessTable`/`Mailbox` data structures, the scheduler-protocol traits (`Executor`, `Reactor`, `Driver`, `Clock`, `SignalSource`, `Message`, `MessageSource`), the generic `CooperativeDriver`, and the cross-platform heap-block allocator/accounting
+- `koja-runtime-posix` -- the native POSIX adapter implementing those traits (multi-threaded work-stealing scheduler, `polling`-backed reactor, `sigaction` signals) plus the C-ABI intrinsics linked into compiled binaries
 - `koja-stdlib` -- build script auto-discovers `.koja` sources under `koja/lib/` and embeds them via `include_str!`
 
 Tooling:
@@ -51,6 +52,8 @@ Additional flags: `--release` on `run`/`build` (LLVM aggressive optimizations), 
 
 Both backends share the same feature surface by design -- they consume the same sealed `IRProgram` and follow the same "one emission pattern per `IRInstruction`" rule. The LLVM backend produces native binaries; the interpreter runs the IR directly for `koja eval`, `koja shell`, and `koja run --backend=interpreter` (the new default for `run`).
 
+Interpreter script mode (`.kojs` and `koja run --backend=interpreter`) now boots its implicit body as PID 1 under the cooperative runtime, so top-level `spawn` / `receive` / timers / I/O behave exactly as under LLVM (previously these were available only in project/process-entry mode). The golden lang suite asserts every parity-eligible fixture under **both** backends; the only opt-outs are FFI (links a user C library), the pre-backend compile-fail / backend-specific runtime-fail diagnostics, and three `memory/` fixtures that busy-wait on a signalled child's death (needs A1 preemptive yield-checks the cooperative backend does not have yet).
+
 - Multi-module imports (including qualified calls like `math.add()`)
 - Functions (`fn`/`priv fn`)
 - Constants (`const`) with optional type annotations (`const NAME: Type = expr`), including enum unit variants and struct literals with all-constant fields
@@ -77,7 +80,7 @@ Both backends share the same feature surface by design -- they consume the same 
 - Function type syntax (`fn(T) -> U`) for closure-accepting parameters
 - `print` builtin (dispatches through `Debug.format()` for all types)
 - `panic` builtin (prints to stderr, aborts)
-- Lightweight processes -- structs implement `Process<C, M, R>` protocol. `spawn T.start(config)` creates a process and returns `Ref<M, R>`. `receive` blocks for messages with optional `after timeout` clause. Message type `M` can be any type (primitives, structs, enums). Backed by `koja-runtime` cooperative scheduler.
+- Lightweight processes -- structs implement `Process<C, M, R>` protocol. `spawn T.start(config)` creates a process and returns `Ref<M, R>`. `receive` blocks for messages with optional `after timeout` clause. Message type `M` can be any type (primitives, structs, enums). Backed by the `koja-runtime-core` scheduler protocol -- the multi-threaded `koja-runtime-posix` adapter under LLVM, the single-threaded cooperative `koja-ir-eval` implementation under the interpreter.
 - **`Task<R>`** -- `Task.async(fn () -> R)` / `Task.await` for one-off async work on top of processes (`Ref<(), R>` + `call`); see `lib/global/src/kernel.koja` and `tests/lang/task.koja`.
 - Primitives: `Int`, `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, `UInt32`, `UInt64`, `Float`, `Float32`, `Bool`, `String`
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
@@ -221,7 +224,7 @@ Four sub-milestones, the first of which is a design spike. **Constraint added** 
 
 #### A1: Scheduler hardening
 
-- **Scheduler protocol** -- define the runtime as a formal interface; native scheduler is first impl; **the protocol must accommodate a single-threaded cooperative WASM-target backend** (Phase 6 prerequisite). I/O reactor, preemption, and process state transitions all need pluggable shapes.
+- **Scheduler protocol** *(done)* -- the runtime is a formal trait interface in `koja-runtime-core`: `Executor` / `Reactor` / `Driver` / `Clock` / `SignalSource` / `Message` / `MessageSource`, plus the generic `CooperativeDriver` run loop. `koja-runtime-posix` is the first (multi-threaded native) implementation; `koja-ir-eval` is the second -- a single-threaded **cooperative** implementor that genuinely shares the protocol, with full I/O-reactor parity (`io_block` parks `WaitingIO`, `Fd.watch` → `IOReady` delivery, all over its own `libc::poll` reactor). This discharges the WASM-compat constraint up front and pulls forward the Phase 6 Track A "runtime split into core + per-target adapters". See [SCHEDULER-PROTOCOL.md](SCHEDULER-PROTOCOL.md). Remaining A1 items below are still open.
 - Work-stealing per-thread run queues for the native backend (replacing the round-robin Mutex pool).
 - Graceful SIGTERM grace period: stop accepting spawns, drain in-flight processes, exit cleanly; configurable timeout, hard-kill on SIGKILL.
 - Timer wheel for timeouts, intervals, deadlines.
@@ -321,7 +324,7 @@ flowchart LR
 ### Track A: WASM target
 
 - **WASM flavor decision** -- first sub-deliverable of the phase. WASI (server-side, POSIX-shaped via wasmtime / wasmer / Cloudflare Workers / Fastly) vs browser (DOM/JS interop, async via Promises) vs both. Default lean: WASI first as the easier and more strategically valuable path; browser as a separate effort or post-1.0.
-- **Runtime split** -- `koja-runtime-core` (target-agnostic scheduler skeleton, conforming to the Phase 5 A1 scheduler protocol) plus per-target adapters (`koja-runtime-posix`, `koja-runtime-wasi`, eventually `koja-runtime-browser`).
+- **Runtime split** -- *already landed in Phase 5 A1*: `koja-runtime-core` (target-agnostic scheduler skeleton, the scheduler-protocol traits) plus per-target adapters. `koja-runtime-posix` exists today; Phase 6 adds `koja-runtime-wasi` (and eventually `koja-runtime-browser`) as further adapters.
 - **WASM codegen** -- `--target=wasm32-wasi` via LLVM (the easy part).
 - **I/O reactor for WASI** -- `poll_oneoff`-shaped reactor implementing the same scheduler-protocol contract as the POSIX kqueue/epoll reactor.
 - **FFI under WASM** -- `@extern "C"` resolves to WASM imports rather than linker symbols; same user-facing syntax, different resolution model.

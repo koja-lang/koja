@@ -31,12 +31,13 @@ use std::task::{Context, Poll, Wake};
 use std::thread::{self, Thread};
 use std::time::Instant;
 
-use koja_ir::{IRProgram, IRSymbol};
+use koja_ir::IRSymbol;
 use koja_runtime_core::{
     Clock, CooperativeDriver, Executor, Lifecycle, Message, MessageSource, Pid, ProcessTable,
     Readiness, SignalSource, Tag, WaitTarget,
 };
 
+use crate::interpreter::CallResolver;
 use crate::reactor::EvalReactor;
 use crate::value::Value;
 
@@ -55,9 +56,12 @@ pub(crate) type CoreHandle = Rc<RefCell<EvalTable>>;
 /// the program for the run (`'a`), so it is not `'static`.
 pub(crate) type ProcessFuture<'a> = Pin<Box<dyn Future<Output = ()> + 'a>>;
 
-/// The fully-applied cooperative driver for eval.
-pub(crate) type EvalDriver<'a> =
-    CooperativeDriver<EvalExecutor<'a>, EvalReactor, EvalClock, EvalSignals>;
+/// The fully-applied cooperative driver for eval, generic over the
+/// [`CallResolver`] backing the run: an `IRProgram` in project mode, an
+/// `IRScript` in script mode. Both can `spawn` processes, so the executor
+/// builds children's futures off whichever resolver it holds.
+pub(crate) type EvalDriver<'a, R> =
+    CooperativeDriver<EvalExecutor<'a, R>, EvalReactor, EvalClock, EvalSignals>;
 
 thread_local! {
     /// The core table for the in-flight `run_program`, installed for the
@@ -164,6 +168,15 @@ pub(crate) fn park_io(pid: Pid) -> bool {
 /// the single thread on the fd (function mode, no driver).
 pub(crate) fn runtime_installed() -> bool {
     CORE.with(|slot| slot.borrow().is_some())
+}
+
+/// Illegal state-transition count for the installed cooperative core —
+/// eval's analog of the native `koja_rt_sched_violations` oracle. Reads
+/// eval's own `ProcessTable` (not the native `SCHED`, which never runs
+/// under eval) so the kill/park race fixtures actually exercise the
+/// cooperative scheduler's transition guard.
+pub(crate) fn sched_violations() -> i64 {
+    with_table(|table| table.counters().violations as i64)
 }
 
 /// Routes `message` into `pid`'s mailbox, waking it if it is parked on the
@@ -281,20 +294,21 @@ impl Future for YieldOnce {
 }
 
 /// The cooperative executor: owns the per-process interpreter futures and
-/// the program (to build spawned children's futures). Process execution
-/// state and the resume token both stay `()`.
-pub(crate) struct EvalExecutor<'a> {
+/// the [`CallResolver`] (to build spawned children's futures and mint
+/// `IOReady` values). Process execution state and the resume token both
+/// stay `()`.
+pub(crate) struct EvalExecutor<'a, R: CallResolver> {
     core: CoreHandle,
     futures: RefCell<HashMap<Pid, ProcessFuture<'a>>>,
-    program: &'a IRProgram,
+    resolver: &'a R,
 }
 
-impl<'a> EvalExecutor<'a> {
-    pub(crate) fn new(core: CoreHandle, program: &'a IRProgram) -> Self {
+impl<'a, R: CallResolver> EvalExecutor<'a, R> {
+    pub(crate) fn new(core: CoreHandle, resolver: &'a R) -> Self {
         Self {
             core,
             futures: RefCell::new(HashMap::new()),
-            program,
+            resolver,
         }
     }
 
@@ -313,13 +327,13 @@ impl<'a> EvalExecutor<'a> {
             PENDING_SPAWNS.with(|queue| queue.borrow_mut().drain(..).collect());
         for spawn in pending {
             let future =
-                crate::interpreter::build_spawn_future(self.program, &spawn.wrapper, spawn.config);
+                crate::interpreter::build_spawn_future(self.resolver, &spawn.wrapper, spawn.config);
             self.futures.borrow_mut().insert(spawn.pid, future);
         }
     }
 }
 
-impl Executor for EvalExecutor<'_> {
+impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
     type Continuation = ();
     type Execution = ();
     type Message = EvalMessage;
@@ -345,7 +359,7 @@ impl Executor for EvalExecutor<'_> {
     }
 }
 
-impl MessageSource<EvalMessage> for EvalExecutor<'_> {
+impl<R: CallResolver> MessageSource<EvalMessage> for EvalExecutor<'_, R> {
     fn lifecycle_message(&self, event: Lifecycle) -> EvalMessage {
         EvalMessage {
             reply: None,
@@ -358,7 +372,7 @@ impl MessageSource<EvalMessage> for EvalExecutor<'_> {
         EvalMessage {
             reply: None,
             tag: Tag::IOReady,
-            value: crate::interpreter::build_io_ready_value(self.program, readiness, fd),
+            value: crate::interpreter::build_io_ready_value(self.resolver, readiness, fd),
         }
     }
 }

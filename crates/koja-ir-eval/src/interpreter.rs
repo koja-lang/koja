@@ -122,14 +122,34 @@ impl Interpreter {
     /// LLVM's `void`-return coercion in
     /// `koja_ir_llvm::emit::emit_terminator`.
     pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
-        let mut frame = Frame::new();
-        match block_on(execute_blocks(&script.blocks, &mut frame, script))? {
-            BlockOutcome::Done(value) => Ok(coerce_return(value, &script.return_type)),
-            BlockOutcome::TailRestart(_) => panic!(
-                "interpreter: script body produced a `TailCall` terminator — \
-                 tail-call rewrite never targets the implicit script body",
-            ),
-        }
+        // Run the implicit body as PID 1 under the shared cooperative
+        // driver — same boot as `run_program` — so top-level `spawn` /
+        // `receive` / timers / I/O engage the runtime instead of tripping
+        // the "runtime not installed" guard. The body's trailing value
+        // surfaces through `exit_cell` once the driver tears down.
+        let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
+        let _guard = scheduler::install_runtime(Rc::clone(&core));
+        let main = core.borrow_mut().spawn(());
+
+        let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
+            Rc::new(RefCell::new(None));
+        let body_future: ProcessFuture = {
+            let cell = Rc::clone(&exit_cell);
+            Box::pin(async move {
+                *cell.borrow_mut() = Some(run_script_body(script).await);
+            })
+        };
+
+        let executor = EvalExecutor::new(Rc::clone(&core), script);
+        executor.install_future(main, body_future);
+
+        let signals = EvalSignals::new(script_uses_lifecycle(script));
+        EvalDriver::new(core, executor, EvalReactor, EvalClock, signals).run();
+
+        exit_cell
+            .borrow_mut()
+            .take()
+            .expect("script body produced no result before shutdown")
     }
 
     /// Dispatch the `Debug.format` instance for `value`, returning
@@ -328,16 +348,27 @@ async fn run_entry_body<'a>(
     execute_function(body_fn, vec![config_value], program).await
 }
 
-/// Whether any function in `program` has a `receive` with a `Lifecycle`
-/// arm — i.e. whether the program observes OS lifecycle signals at all.
-/// Gates signal draining so a run that ignores lifecycle events leaves
-/// the process-global signal latches for a run that wants them.
-fn program_uses_lifecycle(program: &IRProgram) -> bool {
-    program
-        .packages
-        .iter()
-        .flat_map(|package| package.functions.values())
-        .flat_map(|function| &function.blocks)
+/// Run the script-mode implicit body as PID 1: walk its blocks to the
+/// trailing value, coercing to [`Value::Unit`] when the script's static
+/// return type is `Unit`. The async analogue of the former synchronous
+/// `run_script`, so a top-level `receive` parks against the core mailbox.
+async fn run_script_body(script: &IRScript) -> Result<Value, RuntimeError> {
+    let mut frame = Frame::new();
+    match execute_blocks(&script.blocks, &mut frame, script).await? {
+        BlockOutcome::Done(value) => Ok(coerce_return(value, &script.return_type)),
+        BlockOutcome::TailRestart(_) => panic!(
+            "interpreter: script body produced a `TailCall` terminator — \
+             tail-call rewrite never targets the implicit script body",
+        ),
+    }
+}
+
+/// Whether any of `blocks` has a `receive` with a `Lifecycle` arm — i.e.
+/// whether the run observes OS lifecycle signals at all. Gates signal
+/// draining so a run that ignores lifecycle events leaves the
+/// process-global signal latches for a run that wants them.
+fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> bool {
+    blocks
         .flat_map(|block| &block.instructions)
         .any(|instruction| {
             matches!(
@@ -348,14 +379,39 @@ fn program_uses_lifecycle(program: &IRProgram) -> bool {
         })
 }
 
+/// [`blocks_use_lifecycle`] over every function body in `program`.
+fn program_uses_lifecycle(program: &IRProgram) -> bool {
+    blocks_use_lifecycle(
+        program
+            .packages
+            .iter()
+            .flat_map(|package| package.functions.values())
+            .flat_map(|function| &function.blocks),
+    )
+}
+
+/// [`blocks_use_lifecycle`] over the script's helper functions and its
+/// implicit top-level body.
+fn script_uses_lifecycle(script: &IRScript) -> bool {
+    let function_blocks = script
+        .packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .flat_map(|function| &function.blocks);
+    blocks_use_lifecycle(function_blocks.chain(script.blocks.iter()))
+}
+
 /// Resolve a process wrapper's body — the [`FunctionKind::Regular`]
 /// function its single IR `Call` names. Shared by the entry boot and the
 /// `spawn` path: a `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
 /// shim whose body holds the real `start` → `run` dispatch. `None` only
 /// for a malformed wrapper (seal violation); callers decide whether that
 /// is an error or a panic.
-fn process_body_of<'a>(program: &'a IRProgram, wrapper: &IRSymbol) -> Option<&'a IRFunction> {
-    let wrapper_fn = program.function(wrapper.mangled())?;
+fn process_body_of<'a, R: CallResolver>(
+    resolver: &'a R,
+    wrapper: &IRSymbol,
+) -> Option<&'a IRFunction> {
+    let wrapper_fn = resolver.resolve(wrapper.mangled())?;
     let body_symbol = wrapper_fn
         .blocks
         .iter()
@@ -364,25 +420,25 @@ fn process_body_of<'a>(program: &'a IRProgram, wrapper: &IRSymbol) -> Option<&'a
             IRInstruction::Call { callee, .. } => Some(callee),
             _ => None,
         })?;
-    program.function(body_symbol.mangled())
+    resolver.resolve(body_symbol.mangled())
 }
 
 /// Build the boxed process future a `spawn` site installs: run the spawn
 /// wrapper's body with `config`, discarding its `Unit` result (the
 /// scheduler owns the spawned process's lifecycle). A missing body is a
 /// seal violation, since `Spawn::wrapper` always names a `SpawnWrapper`.
-pub(crate) fn build_spawn_future<'a>(
-    program: &'a IRProgram,
+pub(crate) fn build_spawn_future<'a, R: CallResolver>(
+    resolver: &'a R,
     wrapper: &IRSymbol,
     config: Value,
 ) -> ProcessFuture<'a> {
-    let body_fn = process_body_of(program, wrapper).unwrap_or_else(|| {
+    let body_fn = process_body_of(resolver, wrapper).unwrap_or_else(|| {
         panic!(
             "interpreter: spawn wrapper `{wrapper}` has no process body — seal invariant violation"
         )
     });
     Box::pin(async move {
-        let _ = execute_function(body_fn, vec![config], program).await;
+        let _ = execute_function(body_fn, vec![config], resolver).await;
     })
 }
 

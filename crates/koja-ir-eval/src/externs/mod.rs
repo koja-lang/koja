@@ -34,6 +34,7 @@ mod kernel;
 mod marshal;
 mod net;
 mod random;
+mod runtime;
 mod system;
 mod time;
 mod tls;
@@ -115,6 +116,8 @@ pub(crate) async fn dispatch(
         "koja_last_error_code" => Some(net::last_error_code(args)),
         "koja_random_bytes" => Some(random::bytes(args)),
         "koja_random_int" => Some(random::int(args)),
+        "koja_rt_live_blocks" => Some(runtime::live_blocks(args)),
+        "koja_rt_sched_violations" => Some(runtime::sched_violations(args)),
         "koja_rt_unwatch_fd" => Some(fd::rt_unwatch_fd(args)),
         "koja_rt_watch_fd" => Some(fd::rt_watch_fd(args)),
         "koja_set_env" => Some(system::set_env(args)),
