@@ -489,13 +489,11 @@ fn lang_process_lifecycle_interpreted() {
     );
 }
 
-/// Regression for `IOReady` union-message delivery: the `process_io`
-/// fixture watches STDIN and must receive the reactor's readiness event
-/// through its ordinary `handle` (tag-2 dispatch) rather than trapping.
-/// Pre-filling STDIN makes the watched fd readable the instant the
-/// process registers it, so the sentinel is deterministic without a
-/// signal. Compiled-only: the interpreter has no reactor to deliver the
-/// event (the synthesized arm is inert there).
+/// Regression for `IOReady` union-message delivery: the fixture watches
+/// STDIN and must receive the reactor's readiness event through its
+/// `handle` (tag-2 dispatch) instead of trapping. Pre-filled STDIN makes
+/// the fd readable immediately. Compiled-only: the interpreter has no
+/// reactor, so the synthesized arm is inert.
 #[test]
 fn lang_process_io() {
     use std::io::Write;
@@ -514,9 +512,8 @@ fn lang_process_io() {
         .stderr(Stdio::piped());
 
     let mut child = cmd.spawn().expect("failed to execute koja");
-    // The bytes sit in the pipe buffer (and closing the write end leaves
-    // it at readable EOF), so the watched fd is ready before — or the
-    // instant — the process registers it with the reactor.
+    // Bytes wait in the pipe (closing the write end leaves it at readable
+    // EOF), so the fd is ready by the time the process watches it.
     child
         .stdin
         .take()
