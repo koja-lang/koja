@@ -141,7 +141,7 @@ reordering them would be a flag-day change. Every other stdlib enum
 a backend needs to construct (e.g. `NumericConversionError`) must be
 resolved **by variant name** at emit/eval time:
 `TypeLayouts::enum_variant_tag` in `koja-ir-llvm`,
-`helpers::conversion_error_value`'s decl lookup in `koja-ir-eval`.
+`helpers::err_variant_value`'s decl lookup in `koja-ir-eval`.
 Declaration order in stdlib sources is alpha-sorted and free to
 change; name lookup makes that a non-event.
 

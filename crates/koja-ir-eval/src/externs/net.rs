@@ -1,28 +1,30 @@
 //! Externs declared in `lib/net/src/net.koja` and
 //! `lib/net/src/error.koja`.
 //!
-//! Eval reuses the runtime's `koja_socket_*` symbols (sockaddr
-//! building, last-error recording) but normalizes every fd it hands
-//! out to **blocking** mode. The runtime targets the coroutine
-//! scheduler: it creates non-blocking fds and parks the calling
-//! process via the reactor on `EAGAIN` — machinery that doesn't
-//! exist under eval. On a blocking fd no syscall ever returns
-//! `EAGAIN`, so the runtime's `block_until_ready` loops complete on
-//! their first iteration and the reactor path is never taken —
-//! fd-blocking ops just block the (single) interpreter thread.
+//! Eval reuses the runtime's `koja_socket_*` symbols (sockaddr building,
+//! last-error recording) over **non-blocking** fds — the runtime creates
+//! them non-blocking and eval keeps them that way. Because the native
+//! blocking entry points (`accept` / `send_to`) park via the *native*
+//! reactor on `EAGAIN`, which eval cannot drive, eval waits for readiness
+//! through its own [`crate::reactor`] *first* and only then delegates, so
+//! the native syscall succeeds on its first try:
 //!
-//! Concretely:
-//!
-//! - `create` / `accept` / `try_accept` call the runtime symbol,
-//!   then clear `O_NONBLOCK` on the returned fd.
-//! - `try_accept` additionally pre-polls the listener — the runtime
-//!   symbol relies on a non-blocking listener to deliver its
-//!   "nothing pending" `-2`, which a blocking listener can't do.
-//! - `bind` / `connect` / `listen` / `send_to` / `setsockopt_reuse`
-//!   and the last-error readers pass straight through.
+//! - `accept` / `send_to` [`io_block`](crate::reactor::io_block) for
+//!   readiness, then call the native symbol.
+//! - `try_accept` calls the native non-blocking symbol directly (a
+//!   non-blocking listener reports its `-2` "nothing pending" itself).
+//! - `connect` is the one path that cannot pre-wait (the fd is not
+//!   writable until the handshake is initiated), so it flips the fd to
+//!   blocking for the duration of the native call — a bounded,
+//!   one-time setup wait — then restores non-blocking for subsequent I/O.
+//! - `create` / `bind` / `listen` / `setsockopt_reuse` and the last-error
+//!   readers pass straight through.
+
+use koja_runtime_core::Interest;
 
 use crate::error::RuntimeError;
 use crate::externs::marshal::{pass_through_externs, type_mismatch};
+use crate::reactor;
 use crate::value::Value;
 
 /// `fcntl` get-flags command. API contract: MUST equal
@@ -38,23 +40,13 @@ const O_NONBLOCK: i32 = 0x0004;
 #[cfg(target_os = "linux")]
 const O_NONBLOCK: i32 = 0x800;
 
-/// `poll(2)` readability event bit (same value on macOS and Linux).
-const POLLIN: i16 = 0x1;
-
-/// POSIX `struct pollfd` (identical layout on macOS and Linux).
-#[repr(C)]
-struct PollFd {
-    fd: i32,
-    events: i16,
-    revents: i16,
-}
-
 unsafe extern "C" {
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     fn koja_socket_accept(fd: i32) -> i32;
+    fn koja_socket_connect(fd: i32, ip: *const u8, port: i64) -> i64;
     fn koja_socket_create(sock_type: i64) -> i32;
+    fn koja_socket_send_to(fd: i32, data: *const u8, ip: *const u8, port: i64) -> i64;
     fn koja_socket_try_accept(fd: i32) -> i32;
-    fn poll(fds: *mut PollFd, nfds: u32, timeout: i32) -> i32;
 }
 
 pass_through_externs! {
@@ -62,71 +54,96 @@ pass_through_externs! {
     last_error => fn koja_last_error() -> CPtr;
     last_error_code => fn koja_last_error_code() -> Int32;
     socket_bind => fn koja_socket_bind(fd: Int32, ip: CPtr, port: Int64) -> Int64;
-    socket_connect => fn koja_socket_connect(fd: Int32, ip: CPtr, port: Int64) -> Int64;
     socket_listen => fn koja_socket_listen(fd: Int32, backlog: Int64) -> Int64;
-    socket_send_to => fn koja_socket_send_to(fd: Int32, data: CPtr, ip: CPtr, port: Int64) -> Int64;
     socket_setsockopt_reuse => fn koja_socket_setsockopt_reuse(fd: Int32) -> Int64;
 }
 
-pub(super) fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd)] = args else {
-        return Err(type_mismatch("koja_socket_accept", "(fd: Int32)", args));
-    };
-    let client = unsafe { koja_socket_accept(*fd as i32) };
-    if client >= 0 {
-        set_blocking(client);
-    }
-    Ok(Value::Int(client as i64))
-}
-
+/// `koja_socket_create(kind)` — a fresh non-blocking socket (the native
+/// symbol already sets `O_NONBLOCK`; eval keeps it).
 pub(super) fn socket_create(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(sock_type)] = args else {
         return Err(type_mismatch("koja_socket_create", "(kind: Int64)", args));
     };
     let fd = unsafe { koja_socket_create(*sock_type) };
-    if fd >= 0 {
-        set_blocking(fd);
-    }
-    Ok(Value::Int(fd as i64))
+    Ok(Value::Int(i64::from(fd)))
 }
 
+/// `koja_socket_accept(fd)` — wait for the listener to be readable (a
+/// pending connection), then delegate to the native blocking accept, which
+/// now completes on its first syscall.
+pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Int(fd)] = args else {
+        return Err(type_mismatch("koja_socket_accept", "(fd: Int32)", args));
+    };
+    reactor::io_block(*fd as i32, Interest::Readable).await;
+    let client = unsafe { koja_socket_accept(*fd as i32) };
+    Ok(Value::Int(i64::from(client)))
+}
+
+/// `koja_socket_try_accept(fd)` — native non-blocking accept; returns the
+/// client fd, `-2` when nothing is pending, or `-1` on error.
 pub(super) fn socket_try_accept(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(fd)] = args else {
         return Err(type_mismatch("koja_socket_try_accept", "(fd: Int32)", args));
     };
-    let fd = *fd as i32;
-    if !readable_now(fd) {
-        return Ok(Value::Int(-2));
-    }
-    let client = unsafe { koja_socket_try_accept(fd) };
-    if client >= 0 {
-        set_blocking(client);
-    }
-    Ok(Value::Int(client as i64))
+    let client = unsafe { koja_socket_try_accept(*fd as i32) };
+    Ok(Value::Int(i64::from(client)))
 }
 
-/// Clear `O_NONBLOCK` on `fd`. Inverse of the runtime's
-/// `set_nonblocking`; applied to every fd a runtime socket symbol
-/// hands back so subsequent reads/writes block instead of `EAGAIN`ing
-/// into the (absent) reactor.
-fn set_blocking(fd: i32) {
+/// `koja_socket_connect(fd, ip, port)` — the one path that cannot pre-wait
+/// for readiness (the fd is not writable until the handshake starts).
+/// Flip the fd to blocking so the native connect waits in the kernel
+/// instead of parking via the native reactor, then restore non-blocking
+/// for subsequent reads / writes.
+pub(super) fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Int(fd), Value::CPtr(ip), Value::Int(port)] = args else {
+        return Err(type_mismatch(
+            "koja_socket_connect",
+            "(fd: Int32, ip: CPtr, port: Int64)",
+            args,
+        ));
+    };
+    let fd = *fd as i32;
+    set_nonblocking(fd, false);
+    let result = unsafe { koja_socket_connect(fd, *ip, *port) };
+    set_nonblocking(fd, true);
+    Ok(Value::Int(result))
+}
+
+/// `koja_socket_send_to(fd, data, ip, port)` — wait for the socket to be
+/// writable, then delegate to the native sender.
+pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [
+        Value::Int(fd),
+        Value::CPtr(data),
+        Value::CPtr(ip),
+        Value::Int(port),
+    ] = args
+    else {
+        return Err(type_mismatch(
+            "koja_socket_send_to",
+            "(fd: Int32, data: CPtr, ip: CPtr, port: Int64)",
+            args,
+        ));
+    };
+    reactor::io_block(*fd as i32, Interest::Writable).await;
+    let sent = unsafe { koja_socket_send_to(*fd as i32, *data, *ip, *port) };
+    Ok(Value::Int(sent))
+}
+
+/// Set or clear `O_NONBLOCK` on `fd`. A no-op on `fcntl` failure (the
+/// subsequent syscall surfaces any real error).
+fn set_nonblocking(fd: i32, nonblocking: bool) {
     unsafe {
         let flags = fcntl(fd, F_GETFL);
-        if flags >= 0 {
-            fcntl(fd, F_SETFL, flags & !O_NONBLOCK);
+        if flags < 0 {
+            return;
         }
+        let updated = if nonblocking {
+            flags | O_NONBLOCK
+        } else {
+            flags & !O_NONBLOCK
+        };
+        fcntl(fd, F_SETFL, updated);
     }
-}
-
-/// Zero-timeout `poll` for pending readability. Guards `try_accept`:
-/// a blocking listener would make the runtime's bare `accept` wait
-/// for a connection instead of reporting "nothing pending".
-fn readable_now(fd: i32) -> bool {
-    let mut pollfd = PollFd {
-        fd,
-        events: POLLIN,
-        revents: 0,
-    };
-    let ready = unsafe { poll(&mut pollfd, 1, 0) };
-    ready > 0 && (pollfd.revents & POLLIN) != 0
 }

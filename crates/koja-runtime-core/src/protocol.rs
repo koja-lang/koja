@@ -40,6 +40,25 @@ pub trait Message {
     fn tag(&self) -> Tag;
 }
 
+/// Mints the protocol messages the
+/// [`CooperativeDriver`](crate::CooperativeDriver) must synthesize on its
+/// own — lifecycle signals drained from the [`SignalSource`] and I/O
+/// readiness events the [`Reactor`] reports for a `Fd.watch` owner. The
+/// native driver builds these inline in its own loop (signals into the
+/// system queue, `IOReady`s via `send_io_event`), so only cooperative
+/// backends (eval, then WASI) implement this. Carries the message as a
+/// type parameter (rather than an associated type) so the driver can bind
+/// it to the executor's `Message` — `E: MessageSource<E::Message>` —
+/// without a second `Message` associated type to disambiguate.
+pub trait MessageSource<M: Message> {
+    /// Build the message delivered to the entry process for `event`.
+    fn lifecycle_message(&self, event: Lifecycle) -> M;
+
+    /// Build the `IOReady` message for a watched `fd` that became ready in
+    /// `readiness`, delivered to its watcher's business queue.
+    fn io_ready_message(&self, readiness: Readiness, fd: i32) -> M;
+}
+
 /// A lifecycle event delivered to the entry process. Discriminants are
 /// the wire variant indices (`SIGTERM` -> `Shutdown`, `SIGINT` ->
 /// `Interrupt`, `SIGHUP` -> `Reload`); see `koja/design/ABI.md`.

@@ -4,8 +4,11 @@
 //! dispatch code; only callee lookup differs. Operator math lives in
 //! [`crate::ops`].
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::thread;
+use std::future::Future;
+use std::pin::Pin;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use koja_ir::{
@@ -15,13 +18,25 @@ use koja_ir::{
     IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId,
 };
+use koja_runtime_core::{Driver, Readiness, Tag};
 
 use crate::error::RuntimeError;
 use crate::externs;
 use crate::intrinsics;
 use crate::ops::{apply_binary_op, apply_unary_op};
-use crate::signals;
+use crate::reactor::EvalReactor;
+use crate::scheduler::{
+    self, CoreHandle, EvalClock, EvalDriver, EvalExecutor, EvalMessage, EvalSignals, EvalTable,
+    ProcessFuture, YieldOnce, block_on,
+};
 use crate::value::{EnumPayload, Value};
+
+/// A boxed, lifetime-bound interpreter future. Every function on the
+/// suspension-reachable call tree returns one so the tree can `.await`
+/// a process park (`receive` / `io_block`) and so the mutual recursion
+/// type-checks — a boxed `dyn Future` breaks the otherwise-infinite
+/// `impl Future` cycle between the call-tree functions.
+type EvalFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RuntimeError>> + 'a>>;
 
 pub struct Interpreter;
 
@@ -44,11 +59,44 @@ impl Interpreter {
             "interpreter: program entry `{}` is not a `ProcessEntryWrapper` (seal violation)",
             entry.symbol,
         );
-        // Latch SIGTERM/SIGINT/SIGHUP so the entry's `receive` can
-        // observe them as `Lifecycle` messages — same handlers the
-        // LLVM runtime installs at boot.
-        signals::install();
-        run_process_entry(program, entry, args)
+        let args = args.to_vec();
+
+        // Boot PID 1 (the entry process) into a fresh cooperative core, then
+        // hand the run loop to the shared `CooperativeDriver`. The entry's
+        // `StopReason`-derived exit code surfaces through `exit_cell` — the
+        // process future has `Output = ()`, so it stashes its `Value` result
+        // here for `run_program` to return once the driver tears down.
+        let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
+        let _guard = scheduler::install_runtime(Rc::clone(&core));
+        let main = core.borrow_mut().spawn(());
+
+        let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
+            Rc::new(RefCell::new(None));
+        let entry_future: ProcessFuture = {
+            let cell = Rc::clone(&exit_cell);
+            Box::pin(async move {
+                let result = run_entry_body(program, entry, &args).await;
+                *cell.borrow_mut() = Some(result);
+            })
+        };
+
+        let executor = EvalExecutor::new(Rc::clone(&core), program);
+        executor.install_future(main, entry_future);
+
+        // The driver installs the signal handlers (SIGTERM/SIGINT/SIGHUP)
+        // and drains them into PID 1's mailbox, the same boot the native
+        // runtime performs. Draining is gated on the program actually
+        // having a `Lifecycle`-arm `receive`: the latch flags are
+        // process-global, so an indifferent run must not steal them from a
+        // concurrent one (eval runs share one host process; native ones
+        // don't).
+        let signals = EvalSignals::new(program_uses_lifecycle(program));
+        EvalDriver::new(core, executor, EvalReactor, EvalClock, signals).run();
+
+        exit_cell
+            .borrow_mut()
+            .take()
+            .expect("entry process produced no result before shutdown")
     }
 
     /// Execute a named function from `program` with no arguments and
@@ -60,7 +108,7 @@ impl Interpreter {
         let function = program
             .function(mangled)
             .unwrap_or_else(|| panic!("interpreter: function `{mangled}` not found in IRProgram"));
-        execute_function(function, Vec::new(), program)
+        block_on(execute_function(function, Vec::new(), program))
     }
 
     /// Execute the script-mode implicit body and return its trailing
@@ -75,7 +123,7 @@ impl Interpreter {
     /// `koja_ir_llvm::emit::emit_terminator`.
     pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
         let mut frame = Frame::new();
-        match execute_blocks(&script.blocks, &mut frame, script)? {
+        match block_on(execute_blocks(&script.blocks, &mut frame, script))? {
             BlockOutcome::Done(value) => Ok(coerce_return(value, &script.return_type)),
             BlockOutcome::TailRestart(_) => panic!(
                 "interpreter: script body produced a `TailCall` terminator — \
@@ -139,7 +187,7 @@ impl Interpreter {
                         symbol.mangled(),
                     ),
                 })?;
-        let result = execute_function(function, vec![value], script)?;
+        let result = block_on(execute_function(function, vec![value], script))?;
         match result {
             Value::String(bytes) => Ok(Some(bytes.to_vec())),
             other => Err(RuntimeError::TypeMismatch {
@@ -240,17 +288,18 @@ enum BlockOutcome {
     TailRestart(Vec<Value>),
 }
 
-/// Drive a [`FunctionKind::ProcessEntryWrapper`] entry under the
-/// interpreter. The wrapper itself is a backend ABI shim; the full
-/// `start` → `run` → `StopReason.code` dispatch lives in the
-/// IR-synthesized `<state>.__entry_body` its IR `Call` names, which
-/// the interpreter executes directly with the argv-derived (or
-/// default) config. The returned value is the integer exit code
-/// (`Value::Int`) — analogous to what the LLVM shim stores into
-/// `__koja_exit_code`.
-fn run_process_entry(
-    program: &IRProgram,
-    entry: &IRFunction,
+/// Run a [`FunctionKind::ProcessEntryWrapper`] entry's body as PID 1.
+/// The wrapper itself is a backend ABI shim; the full `start` → `run` →
+/// `StopReason.code` dispatch lives in the IR-synthesized
+/// `<state>.__entry_body` its IR `Call` names, which the interpreter
+/// executes directly with the argv-derived (or default) config. The
+/// returned [`Value::Int`] is the exit code — analogous to what the LLVM
+/// shim stores into `__koja_exit_code`. Driven by the
+/// [`crate::scheduler::EvalExecutor`] (not [`block_on`]) so a `receive`
+/// inside it parks against the core mailbox.
+async fn run_entry_body<'a>(
+    program: &'a IRProgram,
+    entry: &'a IRFunction,
     args: &[String],
 ) -> Result<Value, RuntimeError> {
     let config_type =
@@ -269,31 +318,72 @@ fn run_process_entry(
     } else {
         default_value_for_type(config_type, program)?
     };
+    let body_fn =
+        process_body_of(program, &entry.symbol).ok_or_else(|| RuntimeError::Unsupported {
+            detail: format!(
+                "process entry wrapper `{}` IR body carries no resolvable process-body call",
+                entry.symbol,
+            ),
+        })?;
+    execute_function(body_fn, vec![config_value], program).await
+}
 
-    let body_symbol = entry
+/// Whether any function in `program` has a `receive` with a `Lifecycle`
+/// arm — i.e. whether the program observes OS lifecycle signals at all.
+/// Gates signal draining so a run that ignores lifecycle events leaves
+/// the process-global signal latches for a run that wants them.
+fn program_uses_lifecycle(program: &IRProgram) -> bool {
+    program
+        .packages
+        .iter()
+        .flat_map(|package| package.functions.values())
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .any(|instruction| {
+            matches!(
+                instruction,
+                IRInstruction::Receive { arms, .. }
+                    if arms.iter().any(|arm| arm.tag == ReceiveTag::Lifecycle)
+            )
+        })
+}
+
+/// Resolve a process wrapper's body — the [`FunctionKind::Regular`]
+/// function its single IR `Call` names. Shared by the entry boot and the
+/// `spawn` path: a `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
+/// shim whose body holds the real `start` → `run` dispatch. `None` only
+/// for a malformed wrapper (seal violation); callers decide whether that
+/// is an error or a panic.
+fn process_body_of<'a>(program: &'a IRProgram, wrapper: &IRSymbol) -> Option<&'a IRFunction> {
+    let wrapper_fn = program.function(wrapper.mangled())?;
+    let body_symbol = wrapper_fn
         .blocks
         .iter()
         .flat_map(|block| &block.instructions)
         .find_map(|instruction| match instruction {
             IRInstruction::Call { callee, .. } => Some(callee),
             _ => None,
-        })
-        .ok_or_else(|| RuntimeError::Unsupported {
-            detail: format!(
-                "process entry wrapper `{}` IR body carries no process-body call",
-                entry.symbol,
-            ),
         })?;
-    let body_fn =
-        program
-            .function(body_symbol.mangled())
-            .ok_or_else(|| RuntimeError::Unsupported {
-                detail: format!(
-                    "process entry wrapper `{}` cannot resolve process body `{body_symbol}`",
-                    entry.symbol,
-                ),
-            })?;
-    execute_function(body_fn, vec![config_value], program)
+    program.function(body_symbol.mangled())
+}
+
+/// Build the boxed process future a `spawn` site installs: run the spawn
+/// wrapper's body with `config`, discarding its `Unit` result (the
+/// scheduler owns the spawned process's lifecycle). A missing body is a
+/// seal violation, since `Spawn::wrapper` always names a `SpawnWrapper`.
+pub(crate) fn build_spawn_future<'a>(
+    program: &'a IRProgram,
+    wrapper: &IRSymbol,
+    config: Value,
+) -> ProcessFuture<'a> {
+    let body_fn = process_body_of(program, wrapper).unwrap_or_else(|| {
+        panic!(
+            "interpreter: spawn wrapper `{wrapper}` has no process body — seal invariant violation"
+        )
+    });
+    Box::pin(async move {
+        let _ = execute_function(body_fn, vec![config], program).await;
+    })
 }
 
 /// Whether a process-entry config type is `List<String>` — the one
@@ -323,8 +413,8 @@ fn argv_value(args: &[String]) -> Value {
 /// structs round-trip as `Value::Struct` with no fields, `List<T>`
 /// produces an empty list, and primitive scalars default to their
 /// zero element. The argv-shaped `List<String>` config never reaches
-/// this helper — [`run_process_entry`] routes it through
-/// [`argv_value`] first.
+/// this helper — [`run_entry_body`] routes it through [`argv_value`]
+/// first.
 fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, RuntimeError> {
     match ty {
         IRType::Bool => Ok(Value::Bool(false)),
@@ -405,99 +495,104 @@ fn coerce_return(value: Value, return_type: &IRType) -> Value {
 /// `BlockOutcome::TailRestart(new_args)`, which we re-seed the
 /// frame with and re-enter the same body, keeping host-stack
 /// usage flat across any number of recursive tail calls.
-fn execute_function<R: CallResolver>(
-    function: &IRFunction,
-    mut args: Vec<Value>,
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    debug_assert_eq!(
-        function.params.len(),
-        args.len(),
-        "arity mismatch calling `{}`: {} params vs {} args (typecheck invariant)",
-        function.symbol,
-        function.params.len(),
-        args.len(),
-    );
-    match &function.kind {
-        FunctionKind::Intrinsic(id) => {
-            return intrinsics::dispatch(id, function, &args, resolver);
-        }
-        FunctionKind::Extern(attrs) => {
-            let c_symbol = attrs
-                .link_name
-                .as_deref()
-                .unwrap_or_else(|| function.symbol.last_segment());
-            return match externs::dispatch(c_symbol, &args) {
-                Some(result) => result,
-                None => Err(RuntimeError::ExternNotSupported {
-                    symbol: function.symbol.mangled().to_string(),
-                }),
-            };
-        }
-        // Acquisition / release glue is a no-op under the interpreter:
-        // every host `Value` is independent (deep-cloned on `lookup`)
-        // and reclaimed by the host GC, so a clone is a rebind of the
-        // argument and a drop returns unit. Short-circuiting here means
-        // eval never executes a glue body — neither the aggregate CFG
-        // `elaborate` synthesizes nor the empty collection shell the
-        // LLVM backend fills.
-        FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue => {
-            return Ok(args.into_iter().next().unwrap_or(Value::Unit));
-        }
-        FunctionKind::DropGlue => return Ok(Value::Unit),
-        FunctionKind::Closure { .. } => panic!(
-            "interpreter: direct `Call` to closure body `{}` — must dispatch via \
+fn execute_function<'a, R: CallResolver>(
+    function: &'a IRFunction,
+    args: Vec<Value>,
+    resolver: &'a R,
+) -> EvalFuture<'a, Value> {
+    Box::pin(async move {
+        let mut args = args;
+        debug_assert_eq!(
+            function.params.len(),
+            args.len(),
+            "arity mismatch calling `{}`: {} params vs {} args (typecheck invariant)",
+            function.symbol,
+            function.params.len(),
+            args.len(),
+        );
+        match &function.kind {
+            FunctionKind::Intrinsic(id) => {
+                return intrinsics::dispatch(id, function, &args, resolver).await;
+            }
+            FunctionKind::Extern(attrs) => {
+                let c_symbol = attrs
+                    .link_name
+                    .as_deref()
+                    .unwrap_or_else(|| function.symbol.last_segment());
+                return match externs::dispatch(c_symbol, &args).await {
+                    Some(result) => result,
+                    None => Err(RuntimeError::ExternNotSupported {
+                        symbol: function.symbol.mangled().to_string(),
+                    }),
+                };
+            }
+            // Acquisition / release glue is a no-op under the interpreter:
+            // every host `Value` is independent (deep-cloned on `lookup`)
+            // and reclaimed by the host GC, so a clone is a rebind of the
+            // argument and a drop returns unit. Short-circuiting here means
+            // eval never executes a glue body — neither the aggregate CFG
+            // `elaborate` synthesizes nor the empty collection shell the
+            // LLVM backend fills.
+            FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue => {
+                return Ok(args.into_iter().next().unwrap_or(Value::Unit));
+            }
+            FunctionKind::DropGlue => return Ok(Value::Unit),
+            FunctionKind::Closure { .. } => panic!(
+                "interpreter: direct `Call` to closure body `{}` — must dispatch via \
              `CallClosure` (seal invariant violation)",
-            function.symbol,
-        ),
-        // The env glue siblings exist only to back the LLVM env block
-        // ABI (teardown via the header's `drop_fn`, process-boundary
-        // copy via `copy_fn`). The interpreter's `Value::Closure`
-        // carries its captures by value and is reclaimed by the host
-        // GC, so it never calls (or even references) either.
-        FunctionKind::CopyClosureGlue { .. } => panic!(
-            "interpreter: `$copy_env$` env deep-copy glue `{}` is LLVM-only — eval copies \
+                function.symbol,
+            ),
+            // The env glue siblings exist only to back the LLVM env block
+            // ABI (teardown via the header's `drop_fn`, process-boundary
+            // copy via `copy_fn`). The interpreter's `Value::Closure`
+            // carries its captures by value and is reclaimed by the host
+            // GC, so it never calls (or even references) either.
+            FunctionKind::CopyClosureGlue { .. } => panic!(
+                "interpreter: `$copy_env$` env deep-copy glue `{}` is LLVM-only — eval copies \
              closures structurally and never invokes it",
-            function.symbol,
-        ),
-        FunctionKind::DropClosureGlue { .. } => panic!(
-            "interpreter: `$drop_env$` capture-release glue `{}` is LLVM-only — eval reclaims \
+                function.symbol,
+            ),
+            FunctionKind::DropClosureGlue { .. } => panic!(
+                "interpreter: `$drop_env$` capture-release glue `{}` is LLVM-only — eval reclaims \
              closures via the host GC and never invokes it",
-            function.symbol,
-        ),
-        FunctionKind::SpawnWrapper { .. } => {
-            return Err(RuntimeError::Unsupported {
-                detail: format!(
-                    "spawn wrapper `{}` cannot be invoked directly under the interpreter; \
+                function.symbol,
+            ),
+            FunctionKind::SpawnWrapper { .. } => {
+                return Err(RuntimeError::Unsupported {
+                    detail: format!(
+                        "spawn wrapper `{}` cannot be invoked directly under the interpreter; \
                      spawn/receive scheduling lives in the LLVM runtime",
-                    function.symbol,
-                ),
-            });
-        }
-        FunctionKind::ProcessEntryWrapper { .. } => {
-            return Err(RuntimeError::Unsupported {
-                detail: format!(
-                    "process entry wrapper `{}` cannot be invoked directly; use \
+                        function.symbol,
+                    ),
+                });
+            }
+            FunctionKind::ProcessEntryWrapper { .. } => {
+                return Err(RuntimeError::Unsupported {
+                    detail: format!(
+                        "process entry wrapper `{}` cannot be invoked directly; use \
                      `Interpreter::run_program`, which dispatches through state.start / \
                      state.run for ProcessEntryWrapper entries",
-                    function.symbol,
-                ),
-            });
+                        function.symbol,
+                    ),
+                });
+            }
+            FunctionKind::Regular => {}
         }
-        FunctionKind::Regular => {}
-    }
-    loop {
-        let mut frame = Frame::new();
-        for (param, value) in function.params.iter().zip(args.into_iter()) {
-            frame.values.insert(param.id, value);
-        }
-        match execute_blocks(&function.blocks, &mut frame, resolver)? {
-            BlockOutcome::Done(value) => return Ok(coerce_return(value, &function.return_type)),
-            BlockOutcome::TailRestart(new_args) => {
-                args = new_args;
+        loop {
+            let mut frame = Frame::new();
+            for (param, value) in function.params.iter().zip(args.into_iter()) {
+                frame.values.insert(param.id, value);
+            }
+            match execute_blocks(&function.blocks, &mut frame, resolver).await? {
+                BlockOutcome::Done(value) => {
+                    return Ok(coerce_return(value, &function.return_type));
+                }
+                BlockOutcome::TailRestart(new_args) => {
+                    args = new_args;
+                }
             }
         }
-    }
+    })
 }
 
 /// Dispatch a [`FunctionKind::Closure`] body with its captured
@@ -505,47 +600,49 @@ fn execute_function<R: CallResolver>(
 /// but seeds `frame.captures` so [`IRInstruction::LoadCapture`] can
 /// index into the env array. `captures.len()` matches the body's
 /// `env_layout` (seal invariant).
-fn execute_closure_function<R: CallResolver>(
-    function: &IRFunction,
+fn execute_closure_function<'a, R: CallResolver>(
+    function: &'a IRFunction,
     args: Vec<Value>,
     captures: Vec<Value>,
-    resolver: &R,
-) -> Result<Value, RuntimeError> {
-    debug_assert_eq!(
-        function.params.len(),
-        args.len(),
-        "arity mismatch calling closure body `{}`: {} params vs {} args",
-        function.symbol,
-        function.params.len(),
-        args.len(),
-    );
-    let env_layout = match &function.kind {
-        FunctionKind::Closure { env_layout } => env_layout,
-        other => panic!(
-            "interpreter: `execute_closure_function` on non-Closure kind {other:?} for `{}`",
+    resolver: &'a R,
+) -> EvalFuture<'a, Value> {
+    Box::pin(async move {
+        debug_assert_eq!(
+            function.params.len(),
+            args.len(),
+            "arity mismatch calling closure body `{}`: {} params vs {} args",
             function.symbol,
-        ),
-    };
-    debug_assert_eq!(
-        env_layout.len(),
-        captures.len(),
-        "env arity mismatch calling closure body `{}`: layout has {} entries vs {} captures",
-        function.symbol,
-        env_layout.len(),
-        captures.len(),
-    );
-    let mut frame = Frame::with_captures(captures);
-    for (param, value) in function.params.iter().zip(args.into_iter()) {
-        frame.values.insert(param.id, value);
-    }
-    match execute_blocks(&function.blocks, &mut frame, resolver)? {
-        BlockOutcome::Done(value) => Ok(coerce_return(value, &function.return_type)),
-        BlockOutcome::TailRestart(_) => panic!(
-            "interpreter: closure body `{}` produced a `TailCall` terminator — \
+            function.params.len(),
+            args.len(),
+        );
+        let env_layout = match &function.kind {
+            FunctionKind::Closure { env_layout } => env_layout,
+            other => panic!(
+                "interpreter: `execute_closure_function` on non-Closure kind {other:?} for `{}`",
+                function.symbol,
+            ),
+        };
+        debug_assert_eq!(
+            env_layout.len(),
+            captures.len(),
+            "env arity mismatch calling closure body `{}`: layout has {} entries vs {} captures",
+            function.symbol,
+            env_layout.len(),
+            captures.len(),
+        );
+        let mut frame = Frame::with_captures(captures);
+        for (param, value) in function.params.iter().zip(args.into_iter()) {
+            frame.values.insert(param.id, value);
+        }
+        match execute_blocks(&function.blocks, &mut frame, resolver).await? {
+            BlockOutcome::Done(value) => Ok(coerce_return(value, &function.return_type)),
+            BlockOutcome::TailRestart(_) => panic!(
+                "interpreter: closure body `{}` produced a `TailCall` terminator — \
              tail-call rewrite is not enabled for closures yet",
-            function.symbol,
-        ),
-    }
+                function.symbol,
+            ),
+        }
+    })
 }
 
 /// Drive a function body starting at `blocks[0]` until a `Return`
@@ -557,63 +654,67 @@ fn execute_closure_function<R: CallResolver>(
 /// loops (a server's main loop, an actor's `receive`, the eventual
 /// `loop { ... }` construct). Test harnesses provide their own
 /// timeouts at the binary level if a test accidentally diverges.
-fn execute_blocks<R: CallResolver>(
-    blocks: &[IRBasicBlock],
-    frame: &mut Frame,
-    resolver: &R,
-) -> Result<BlockOutcome, RuntimeError> {
-    let mut current = blocks
-        .first()
-        .expect("sealed function has at least one basic block")
-        .id;
-    'blocks: loop {
-        let block = find_block(blocks, current);
-        for instruction in &block.instructions {
-            // `Receive` transfers control to an arm (or after) body
-            // block instead of defining a value — lowering places it
-            // last in its block with an `Unreachable` terminator —
-            // so it dispatches here rather than in
-            // `execute_instruction`.
-            if let IRInstruction::Receive { after, arms, .. } = instruction {
-                current = execute_receive(arms, after.as_ref(), frame, resolver)?;
-                continue 'blocks;
-            }
-            execute_instruction(instruction, frame, resolver)?;
-        }
-        match &block.terminator {
-            IRTerminator::Branch(target) => {
-                bind_block_params(target, blocks, &mut frame.values)?;
-                current = target.block;
-            }
-            IRTerminator::CondBranch {
-                cond,
-                else_target,
-                then_target,
-            } => {
-                let cond_value = lookup(&frame.values, *cond)?;
-                let Value::Bool(b) = cond_value else {
-                    return Err(RuntimeError::TypeMismatch {
-                        detail: format!("cond_branch expects a Bool condition; got {cond_value}",),
-                    });
-                };
-                let chosen = if b { then_target } else { else_target };
-                bind_block_params(chosen, blocks, &mut frame.values)?;
-                current = chosen.block;
-            }
-            IRTerminator::Return { value: None } => return Ok(BlockOutcome::Done(Value::Unit)),
-            IRTerminator::Return { value: Some(id) } => {
-                return lookup(&frame.values, *id).map(BlockOutcome::Done);
-            }
-            IRTerminator::TailCall { args, .. } => {
-                let mut arg_values = Vec::with_capacity(args.len());
-                for arg in args {
-                    arg_values.push(lookup(&frame.values, *arg)?);
+fn execute_blocks<'a, R: CallResolver>(
+    blocks: &'a [IRBasicBlock],
+    frame: &'a mut Frame,
+    resolver: &'a R,
+) -> EvalFuture<'a, BlockOutcome> {
+    Box::pin(async move {
+        let mut current = blocks
+            .first()
+            .expect("sealed function has at least one basic block")
+            .id;
+        'blocks: loop {
+            let block = find_block(blocks, current);
+            for instruction in &block.instructions {
+                // `Receive` transfers control to an arm (or after) body
+                // block instead of defining a value — lowering places it
+                // last in its block with an `Unreachable` terminator —
+                // so it dispatches here rather than in
+                // `execute_instruction`.
+                if let IRInstruction::Receive { after, arms, .. } = instruction {
+                    current = execute_receive(arms, after.as_ref(), frame, resolver).await?;
+                    continue 'blocks;
                 }
-                return Ok(BlockOutcome::TailRestart(arg_values));
+                execute_instruction(instruction, frame, resolver).await?;
             }
-            IRTerminator::Unreachable => return Err(RuntimeError::UnreachableExecuted),
+            match &block.terminator {
+                IRTerminator::Branch(target) => {
+                    bind_block_params(target, blocks, &mut frame.values)?;
+                    current = target.block;
+                }
+                IRTerminator::CondBranch {
+                    cond,
+                    else_target,
+                    then_target,
+                } => {
+                    let cond_value = lookup(&frame.values, *cond)?;
+                    let Value::Bool(b) = cond_value else {
+                        return Err(RuntimeError::TypeMismatch {
+                            detail: format!(
+                                "cond_branch expects a Bool condition; got {cond_value}",
+                            ),
+                        });
+                    };
+                    let chosen = if b { then_target } else { else_target };
+                    bind_block_params(chosen, blocks, &mut frame.values)?;
+                    current = chosen.block;
+                }
+                IRTerminator::Return { value: None } => return Ok(BlockOutcome::Done(Value::Unit)),
+                IRTerminator::Return { value: Some(id) } => {
+                    return lookup(&frame.values, *id).map(BlockOutcome::Done);
+                }
+                IRTerminator::TailCall { args, .. } => {
+                    let mut arg_values = Vec::with_capacity(args.len());
+                    for arg in args {
+                        arg_values.push(lookup(&frame.values, *arg)?);
+                    }
+                    return Ok(BlockOutcome::TailRestart(arg_values));
+                }
+                IRTerminator::Unreachable => return Err(RuntimeError::UnreachableExecuted),
+            }
         }
-    }
+    })
 }
 
 /// Evaluate `target.args` in the predecessor's value-map and bind
@@ -655,73 +756,98 @@ fn bind_block_params(
     Ok(())
 }
 
-/// How often a blocked `receive` rechecks the signal flags (and the
-/// `after` deadline). Bounds signal-delivery latency without
-/// busy-spinning the host thread.
-const RECEIVE_POLL_SLICE: Duration = Duration::from_millis(10);
-
-/// Execute an [`IRInstruction::Receive`] for the entry process,
-/// returning the basic block control transfers to.
+/// Execute an [`IRInstruction::Receive`], returning the basic block
+/// control transfers to.
 ///
-/// The interpreter has no spawn, so the only message producer is
-/// the OS signal handler: lifecycle arms poll [`signals`], business
-/// arms can never fire, and the `after` timeout runs its body when
-/// the deadline passes with nothing pending. A pending signal beats
-/// an already-expired timeout, matching the runtime's
-/// message-before-timeout priority. With neither a lifecycle arm
-/// nor an `after` clause the receive could never unblock — that's
-/// the one shape that errors.
-fn execute_receive<R: CallResolver>(
+/// Parks against the running process's core mailbox: pop a delivered
+/// message (system traffic before business), dispatch it to a matching
+/// arm, else (when an `after` clause is present) check the deadline, else
+/// park `Blocked` and yield back to the driver. The driver re-resumes
+/// only once a delivery or the deadline promotes the process, so a
+/// delivered message beats an already-expired timeout — the runtime's
+/// message-before-timeout priority. A `receive` with no matching delivery
+/// and no `after` parks indefinitely, exactly as the native runtime does
+/// (a genuine deadlock is a program bug). A synthesized
+/// `ReceiveTag::IOReady` arm is inert until the reactor phase.
+fn execute_receive<'a, R: CallResolver>(
+    arms: &'a [ReceiveArm],
+    after: Option<&'a ReceiveAfter>,
+    frame: &'a mut Frame,
+    resolver: &'a R,
+) -> EvalFuture<'a, IRBlockId> {
+    Box::pin(async move {
+        let deadline = after
+            .map(|clause| {
+                let value = lookup(&frame.values, clause.timeout)?;
+                let Value::Int(ms) = value else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("receive `after` expects an Int timeout; got {value}"),
+                    });
+                };
+                Ok(Instant::now() + Duration::from_millis(ms.max(0) as u64))
+            })
+            .transpose()?;
+
+        let pid = scheduler::current_pid();
+        loop {
+            if let Some(message) = scheduler::pop_received(pid)
+                && let Some(block) = dispatch_received(message, arms, frame, resolver)
+            {
+                return Ok(block);
+            }
+            if let Some(deadline) = deadline
+                && Instant::now() >= deadline
+            {
+                let clause = after.expect("deadline implies an after clause");
+                return Ok(clause.body);
+            }
+            scheduler::park_receive(pid, deadline);
+            YieldOnce::new().await;
+        }
+    })
+}
+
+/// Dispatch a mailbox message popped during `receive` to the arm whose
+/// tag matches, binding the arm's payload local and returning its body
+/// block. `None` when no arm matches (the message is dropped). Business
+/// traffic binds a `Pair<M, Option<ReplyTo<R>>>` (built from the arm's
+/// payload type); lifecycle traffic binds the `Lifecycle` enum value.
+fn dispatch_received<R: CallResolver>(
+    message: EvalMessage,
     arms: &[ReceiveArm],
-    after: Option<&ReceiveAfter>,
     frame: &mut Frame,
     resolver: &R,
-) -> Result<IRBlockId, RuntimeError> {
-    // Only the lifecycle arm and the `after` timeout unblock a receive
-    // here. A synthesized `ReceiveTag::IOReady` arm is inert: the
-    // interpreter has no reactor, so it's never selected.
-    let lifecycle_arm = arms.iter().find(|arm| arm.tag == ReceiveTag::Lifecycle);
-    let deadline = after
-        .map(|clause| {
-            let value = lookup(&frame.values, clause.timeout)?;
-            let Value::Int(ms) = value else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("receive `after` expects an Int timeout; got {value}"),
-                });
+) -> Option<IRBlockId> {
+    match message.tag {
+        Tag::Business => {
+            let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::Business)?;
+            let payload = intrinsics::build_business_payload(&arm.payload_type, message, resolver);
+            frame.locals.insert(arm.payload_local, payload);
+            Some(arm.body)
+        }
+        // The reactor delivers a fully-built `IOReady` enum value
+        // ([`build_io_ready_value`]); bind it into the synthesized
+        // `IOReady` arm (whose body reshapes it into the business `Pair`).
+        Tag::IOReady => {
+            let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::IOReady)?;
+            frame.locals.insert(arm.payload_local, message.value);
+            Some(arm.body)
+        }
+        Tag::Lifecycle => {
+            let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::Lifecycle)?;
+            let Value::Int(variant) = message.value else {
+                panic!(
+                    "interpreter: lifecycle message carries non-Int variant `{}`",
+                    message.value,
+                );
             };
-            Ok(Instant::now() + Duration::from_millis(ms.max(0) as u64))
-        })
-        .transpose()?;
-
-    if lifecycle_arm.is_none() && deadline.is_none() {
-        return Err(RuntimeError::Unsupported {
-            detail: "`receive` with only business-message arms and no `after` timeout would \
-                     block forever under the interpreter: `spawn` is unsupported, so no \
-                     business message can ever arrive"
-                .to_string(),
-        });
-    }
-
-    loop {
-        if let Some(arm) = lifecycle_arm
-            && let Some(variant) = signals::next_lifecycle()
-        {
             let payload = lifecycle_value(arm, variant, resolver);
             frame.locals.insert(arm.payload_local, payload);
-            return Ok(arm.body);
+            Some(arm.body)
         }
-        let slice = match deadline {
-            Some(deadline) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    let clause = after.expect("deadline implies an after clause");
-                    return Ok(clause.body);
-                }
-                (deadline - now).min(RECEIVE_POLL_SLICE)
-            }
-            None => RECEIVE_POLL_SLICE,
-        };
-        thread::sleep(slice);
+        // Replies never surface through `pop_received` (they live in the
+        // one-shot reply slot, read by `Ref.call`).
+        Tag::Reply => None,
     }
 }
 
@@ -755,6 +881,58 @@ fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R
     }
 }
 
+/// Mangled symbol of the kernel `IOReady` enum (`lib/global/src/io.koja`).
+/// Non-generic, so its symbol is the bare package-qualified name — the
+/// same constant the `koja-ir` `deliver_io_ready` elaborate pass keys on.
+const IO_READY_SYMBOL: &str = "Global.IOReady";
+
+/// Materialize the `IOReady.{Read,Write,Error}(Fd)` value the reactor
+/// delivers to a `Fd.watch` owner. Built at send time (the driver's
+/// readiness pass) so the receiver's synthesized `ReceiveTag::IOReady` arm
+/// just binds it. `readiness` selects the variant; `fd` fills the wrapped
+/// `Fd{ descriptor }`, whose struct symbol is recovered from the variant
+/// payload rather than fabricated.
+pub(crate) fn build_io_ready_value<R: CallResolver>(
+    resolver: &R,
+    readiness: Readiness,
+    fd: i32,
+) -> Value {
+    let variant_name = match readiness {
+        Readiness::Error => "Error",
+        Readiness::Readable => "Read",
+        Readiness::Writable => "Write",
+    };
+    let decl = resolver.enum_decl(IO_READY_SYMBOL).unwrap_or_else(|| {
+        panic!("interpreter: kernel enum `{IO_READY_SYMBOL}` missing from IR — a watched fd fired but `IOReady` is not in the program")
+    });
+    let variant = decl
+        .variants
+        .iter()
+        .find(|variant| variant.name == variant_name)
+        .unwrap_or_else(|| {
+            panic!("interpreter: `{IO_READY_SYMBOL}` has no `{variant_name}` variant — seal invariant violation")
+        });
+    let IRVariantPayload::Tuple(types) = &variant.payload else {
+        panic!(
+            "interpreter: `IOReady.{variant_name}` payload is not a tuple — seal invariant violation"
+        );
+    };
+    let [IRType::Struct(fd_symbol)] = types.as_slice() else {
+        panic!(
+            "interpreter: `IOReady.{variant_name}` payload is not a single `Fd` struct — seal invariant violation"
+        );
+    };
+    Value::Enum {
+        name: variant_name.to_string(),
+        payload: EnumPayload::Tuple(vec![Value::Struct {
+            symbol: fd_symbol.clone(),
+            fields: vec![Value::Int(i64::from(fd))],
+        }]),
+        symbol: decl.symbol.clone(),
+        tag: variant.tag,
+    }
+}
+
 fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
     blocks
         .iter()
@@ -762,420 +940,442 @@ fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
         .unwrap_or_else(|| panic!("interpreter: block `{id}` missing — seal invariant violation"))
 }
 
-fn execute_instruction<R: CallResolver>(
-    instruction: &IRInstruction,
-    frame: &mut Frame,
-    resolver: &R,
-) -> Result<(), RuntimeError> {
-    match instruction {
-        IRInstruction::BinaryConstruct {
-            dest,
-            layout,
-            segments,
-        } => {
-            let value = construct_binary_literal(*layout, segments, frame)?;
-            frame.values.insert(*dest, value);
-            Ok(())
-        }
-        IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
-            let lhs_value = lookup(&frame.values, *lhs)?;
-            let rhs_value = lookup(&frame.values, *rhs)?;
-            let result = apply_binary_op(*op, lhs_value, rhs_value)?;
-            frame.values.insert(*dest, result);
-            Ok(())
-        }
-        IRInstruction::Call { dest, callee, args } => {
-            let mut arg_values = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_values.push(lookup(&frame.values, *arg)?);
+fn execute_instruction<'a, R: CallResolver>(
+    instruction: &'a IRInstruction,
+    frame: &'a mut Frame,
+    resolver: &'a R,
+) -> EvalFuture<'a, ()> {
+    Box::pin(async move {
+        match instruction {
+            IRInstruction::BinaryConstruct {
+                dest,
+                layout,
+                segments,
+            } => {
+                let value = construct_binary_literal(*layout, segments, frame)?;
+                frame.values.insert(*dest, value);
+                Ok(())
             }
-            let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
-                panic!(
-                    "interpreter: callee `{callee}` missing from IR — \
+            IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
+                let lhs_value = lookup(&frame.values, *lhs)?;
+                let rhs_value = lookup(&frame.values, *rhs)?;
+                let result = apply_binary_op(*op, lhs_value, rhs_value)?;
+                frame.values.insert(*dest, result);
+                Ok(())
+            }
+            IRInstruction::Call { dest, callee, args } => {
+                let mut arg_values = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_values.push(lookup(&frame.values, *arg)?);
+                }
+                let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: callee `{callee}` missing from IR — \
                      seal invariant violation",
-                )
-            });
-            let result = execute_function(callee_fn, arg_values, resolver)?;
-            frame.values.insert(*dest, result);
-            Ok(())
-        }
-        // The host `Value` is deep-cloned on every `lookup`, so a
-        // `Clone` is just a re-bind: the result is already an
-        // independent copy with no shared backing. The LLVM backend
-        // does the real allocation; here the GC handles reclamation.
-        // `DeepCopy` (the process-boundary copy) gets the same
-        // treatment for the same reason — lookup's clone is already
-        // physically independent.
-        IRInstruction::Clone { dest, source, .. }
-        | IRInstruction::DeepCopy { dest, source, .. } => {
-            let value = lookup(&frame.values, *source)?;
-            frame.values.insert(*dest, value);
-            Ok(())
-        }
-        IRInstruction::Concat {
-            dest,
-            kind,
-            lhs,
-            rhs,
-        } => {
-            let left = lookup(&frame.values, *lhs)?;
-            let right = lookup(&frame.values, *rhs)?;
-            let result = concat_values(*kind, &left, &right)?;
-            frame.values.insert(*dest, result);
-            Ok(())
-        }
-        IRInstruction::Const { dest, value } => {
-            frame.values.insert(*dest, materialize_const(value));
-            Ok(())
-        }
-        IRInstruction::LoadConst {
-            dest,
-            const_id,
-            ty: _,
-        } => {
-            let pooled = resolver.constant_value(const_id.mangled()).unwrap_or_else(|| {
+                    )
+                });
+                let result = execute_function(callee_fn, arg_values, resolver).await?;
+                frame.values.insert(*dest, result);
+                Ok(())
+            }
+            // The host `Value` is deep-cloned on every `lookup`, so a
+            // `Clone` is just a re-bind: the result is already an
+            // independent copy with no shared backing. The LLVM backend
+            // does the real allocation; here the GC handles reclamation.
+            // `DeepCopy` (the process-boundary copy) gets the same
+            // treatment for the same reason — lookup's clone is already
+            // physically independent.
+            IRInstruction::Clone { dest, source, .. }
+            | IRInstruction::DeepCopy { dest, source, .. } => {
+                let value = lookup(&frame.values, *source)?;
+                frame.values.insert(*dest, value);
+                Ok(())
+            }
+            IRInstruction::Concat {
+                dest,
+                kind,
+                lhs,
+                rhs,
+            } => {
+                let left = lookup(&frame.values, *lhs)?;
+                let right = lookup(&frame.values, *rhs)?;
+                let result = concat_values(*kind, &left, &right)?;
+                frame.values.insert(*dest, result);
+                Ok(())
+            }
+            IRInstruction::Const { dest, value } => {
+                frame.values.insert(*dest, materialize_const(value));
+                Ok(())
+            }
+            IRInstruction::LoadConst {
+                dest,
+                const_id,
+                ty: _,
+            } => {
+                let pooled = resolver.constant_value(const_id.mangled()).unwrap_or_else(|| {
                 panic!(
                     "interpreter: LoadConst `{}` missing from pooled constants — seal invariant violation",
                     const_id.mangled(),
                 )
             });
-            let value = materialize_pooled_constant(pooled, resolver)?;
-            frame.values.insert(*dest, value);
-            Ok(())
-        }
-        IRInstruction::EnumConstruct {
-            dest,
-            payload,
-            tag,
-            ty,
-        } => {
-            let value = materialize_enum(ty, *tag, payload, frame, resolver)?;
-            frame.values.insert(*dest, value);
-            Ok(())
-        }
-        IRInstruction::EnumPayloadFieldGet {
-            dest,
-            payload_index,
-            tag,
-            value,
-            ..
-        } => {
-            let base = lookup(&frame.values, *value)?;
-            let Value::Enum {
+                let value = materialize_pooled_constant(pooled, resolver)?;
+                frame.values.insert(*dest, value);
+                Ok(())
+            }
+            IRInstruction::EnumConstruct {
+                dest,
                 payload,
-                tag: actual_tag,
+                tag,
+                ty,
+            } => {
+                let value = materialize_enum(ty, *tag, payload, frame, resolver)?;
+                frame.values.insert(*dest, value);
+                Ok(())
+            }
+            IRInstruction::EnumPayloadFieldGet {
+                dest,
+                payload_index,
+                tag,
+                value,
                 ..
-            } = base
-            else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("EnumPayloadFieldGet expects an Enum receiver; got {base}"),
-                });
-            };
-            if actual_tag != *tag {
-                panic!(
-                    "interpreter: EnumPayloadFieldGet expected tag {tag} but value carries \
+            } => {
+                let base = lookup(&frame.values, *value)?;
+                let Value::Enum {
+                    payload,
+                    tag: actual_tag,
+                    ..
+                } = base
+                else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("EnumPayloadFieldGet expects an Enum receiver; got {base}"),
+                    });
+                };
+                if actual_tag != *tag {
+                    panic!(
+                        "interpreter: EnumPayloadFieldGet expected tag {tag} but value carries \
                      tag {actual_tag} — match driver should have gated on a tag check first",
-                );
+                    );
+                }
+                let field = match payload {
+                    EnumPayload::Tuple(values) => values
+                        .into_iter()
+                        .nth(*payload_index as usize)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
+                             out of range — seal invariant violation",
+                            )
+                        }),
+                    EnumPayload::Struct(fields) => fields
+                        .into_iter()
+                        .nth(*payload_index as usize)
+                        .map(|(_, value)| value)
+                        .unwrap_or_else(|| {
+                            panic!(
+                                "interpreter: EnumPayloadFieldGet struct index {payload_index} \
+                             out of range — seal invariant violation",
+                            )
+                        }),
+                    EnumPayload::Unit => panic!(
+                        "interpreter: EnumPayloadFieldGet on a Unit variant — seal invariant violation",
+                    ),
+                };
+                frame.values.insert(*dest, field);
+                Ok(())
             }
-            let field = match payload {
-                EnumPayload::Tuple(values) => values
+            IRInstruction::EnumTagGet { dest, value, .. } => {
+                let base = lookup(&frame.values, *value)?;
+                let Value::Enum { tag, .. } = base else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("EnumTagGet expects an Enum receiver; got {base}"),
+                    });
+                };
+                frame.values.insert(*dest, Value::Int(i64::from(tag.0)));
+                Ok(())
+            }
+            IRInstruction::FieldGet {
+                base,
+                dest,
+                field_index,
+                field_type: _,
+                struct_symbol: _,
+            } => {
+                let base_value = lookup(&frame.values, *base)?;
+                let Value::Struct { fields, .. } = base_value else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("field_get expects a Struct receiver; got {base_value}",),
+                    });
+                };
+                let field = fields
                     .into_iter()
-                    .nth(*payload_index as usize)
+                    .nth(*field_index as usize)
                     .unwrap_or_else(|| {
                         panic!(
-                            "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
-                             out of range — seal invariant violation",
-                        )
-                    }),
-                EnumPayload::Struct(fields) => fields
-                    .into_iter()
-                    .nth(*payload_index as usize)
-                    .map(|(_, value)| value)
-                    .unwrap_or_else(|| {
-                        panic!(
-                            "interpreter: EnumPayloadFieldGet struct index {payload_index} \
-                             out of range — seal invariant violation",
-                        )
-                    }),
-                EnumPayload::Unit => panic!(
-                    "interpreter: EnumPayloadFieldGet on a Unit variant — seal invariant violation",
-                ),
-            };
-            frame.values.insert(*dest, field);
-            Ok(())
-        }
-        IRInstruction::EnumTagGet { dest, value, .. } => {
-            let base = lookup(&frame.values, *value)?;
-            let Value::Enum { tag, .. } = base else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("EnumTagGet expects an Enum receiver; got {base}"),
-                });
-            };
-            frame.values.insert(*dest, Value::Int(i64::from(tag.0)));
-            Ok(())
-        }
-        IRInstruction::FieldGet {
-            base,
-            dest,
-            field_index,
-            field_type: _,
-            struct_symbol: _,
-        } => {
-            let base_value = lookup(&frame.values, *base)?;
-            let Value::Struct { fields, .. } = base_value else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("field_get expects a Struct receiver; got {base_value}",),
-                });
-            };
-            let field = fields
-                .into_iter()
-                .nth(*field_index as usize)
-                .unwrap_or_else(|| {
-                    panic!(
-                        "interpreter: FieldGet index {field_index} out of range — \
+                            "interpreter: FieldGet index {field_index} out of range — \
                          seal invariant violation",
-                    )
-                });
-            frame.values.insert(*dest, field);
-            Ok(())
-        }
-        IRInstruction::FieldSet {
-            base,
-            dest,
-            field_index,
-            field_type: _,
-            struct_symbol: _,
-            value,
-        } => {
-            let base_value = lookup(&frame.values, *base)?;
-            let Value::Struct { mut fields, symbol } = base_value else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("field_set expects a Struct receiver; got {base_value}",),
-                });
-            };
-            let new_field = lookup(&frame.values, *value)?;
-            let slot = fields.get_mut(*field_index as usize).unwrap_or_else(|| {
-                panic!(
-                    "interpreter: FieldSet index {field_index} out of range — seal invariant \
-                     violation",
-                )
-            });
-            *slot = new_field;
-            frame.values.insert(*dest, Value::Struct { fields, symbol });
-            Ok(())
-        }
-        IRInstruction::DropLocal { .. } => Ok(()),
-        // Heap reclamation is handled by the host GC; the IR-level
-        // value-keyed drop is a no-op for the interpreter (mirrors
-        // [`IRInstruction::DropLocal`] above).
-        IRInstruction::DropValue { .. } => Ok(()),
-        // The LLVM backend zero-initializes the slot at the decl
-        // site so scope-exit drop glue can run on never-written
-        // slots (e.g. the payload local of a receive arm that did
-        // not fire). Mirror with a `Unit` placeholder — eval's drop
-        // glue short-circuits, so the placeholder is only ever
-        // observed by a glue-feeding `LocalRead`, never by user
-        // code (a user-level read-before-write cannot pass
-        // typecheck).
-        IRInstruction::LocalDecl { local, .. } => {
-            frame.locals.insert(*local, Value::Unit);
-            Ok(())
-        }
-        IRInstruction::LocalRead { dest, local, .. } => {
-            let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
-                panic!(
-                    "interpreter: `LocalRead` of `{local}` before its `LocalDecl` — \
-                     seal invariant violation",
-                )
-            });
-            frame.values.insert(*dest, value);
-            Ok(())
-        }
-        IRInstruction::LocalWrite { local, value } => {
-            let resolved = lookup(&frame.values, *value)?;
-            frame.locals.insert(*local, resolved);
-            Ok(())
-        }
-        IRInstruction::StructInit { dest, fields, ty } => {
-            let mut materialized = Vec::with_capacity(fields.len());
-            for field in fields {
-                materialized.push(lookup(&frame.values, field.value)?);
+                        )
+                    });
+                frame.values.insert(*dest, field);
+                Ok(())
             }
-            frame.values.insert(
-                *dest,
-                Value::Struct {
-                    symbol: ty.clone(),
-                    fields: materialized,
-                },
-            );
-            Ok(())
-        }
-        IRInstruction::UnaryOp { dest, op, operand } => {
-            let operand_value = lookup(&frame.values, *operand)?;
-            let result = apply_unary_op(*op, operand_value)?;
-            frame.values.insert(*dest, result);
-            Ok(())
-        }
-        IRInstruction::CallClosure {
-            args,
-            callee,
-            dest,
-            result_ty: _,
-        } => {
-            let callee_value = lookup(&frame.values, *callee)?;
-            let Value::Closure { body, captures } = callee_value else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("CallClosure expects a Closure receiver; got {callee_value}"),
-                });
-            };
-            let mut arg_values = Vec::with_capacity(args.len());
-            for arg in args {
-                arg_values.push(lookup(&frame.values, *arg)?);
-            }
-            let body_fn = resolver.resolve(body.mangled()).unwrap_or_else(|| {
-                panic!(
-                    "interpreter: closure body `{body}` missing from IR — \
-                     seal invariant violation",
-                )
-            });
-            let result = execute_closure_function(body_fn, arg_values, captures, resolver)?;
-            frame.values.insert(*dest, result);
-            Ok(())
-        }
-        IRInstruction::LoadCapture {
-            capture_index,
-            dest,
-            ty: _,
-        } => {
-            let value = frame
-                .captures
-                .get(*capture_index as usize)
-                .cloned()
-                .unwrap_or_else(|| {
+            IRInstruction::FieldSet {
+                base,
+                dest,
+                field_index,
+                field_type: _,
+                struct_symbol: _,
+                value,
+            } => {
+                let base_value = lookup(&frame.values, *base)?;
+                let Value::Struct { mut fields, symbol } = base_value else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("field_set expects a Struct receiver; got {base_value}",),
+                    });
+                };
+                let new_field = lookup(&frame.values, *value)?;
+                let slot = fields.get_mut(*field_index as usize).unwrap_or_else(|| {
                     panic!(
-                        "interpreter: LoadCapture index {capture_index} out of range \
-                         (env has {} entries) — seal invariant violation",
-                        frame.captures.len(),
+                        "interpreter: FieldSet index {field_index} out of range — seal invariant \
+                     violation",
                     )
                 });
-            frame.values.insert(*dest, value);
-            Ok(())
-        }
-        IRInstruction::MakeClosure {
-            body,
-            captures,
-            dest,
-            ty: _,
-        } => {
-            let mut env = Vec::with_capacity(captures.len());
-            for capture in captures {
-                env.push(lookup(&frame.values, *capture)?);
+                *slot = new_field;
+                frame.values.insert(*dest, Value::Struct { fields, symbol });
+                Ok(())
             }
-            frame.values.insert(
-                *dest,
-                Value::Closure {
-                    body: body.clone(),
-                    captures: env,
-                },
-            );
-            Ok(())
-        }
-        // Sized integers are already canonical `Value::Int(i64)`
-        // (sign/zero-extended at materialization), so the integer
-        // widen is a pass-through; only `Float32 -> Float64`
-        // changes representation.
-        IRInstruction::NumericWiden { dest, value, .. } => {
-            let source = lookup(&frame.values, *value)?;
-            let widened = match source {
-                Value::Float32(v) => Value::Float64(f64::from(v)),
-                other => other,
-            };
-            frame.values.insert(*dest, widened);
-            Ok(())
-        }
-        IRInstruction::Spawn { wrapper, .. } => Err(RuntimeError::Unsupported {
-            detail: format!(
-                "`spawn` (wrapper `{wrapper}`) is not supported under the interpreter; \
-                 process scheduling lives in the LLVM runtime",
-            ),
-        }),
-        IRInstruction::Receive { .. } => panic!(
-            "interpreter: `Receive` reached `execute_instruction` — `execute_blocks` \
-             intercepts it as a control transfer (lowering places it last in its block)",
-        ),
-        IRInstruction::UnionWrap {
-            dest,
-            member_index,
-            member_type: _,
-            ty,
-            value,
-        } => {
-            let payload = lookup(&frame.values, *value)?;
-            let IRType::Union { mangled, .. } = ty else {
-                panic!(
-                    "interpreter: UnionWrap target IRType is not Union (got `{ty:?}`) — \
-                     IR seal invariant violation",
-                );
-            };
-            frame.values.insert(
-                *dest,
-                Value::Union {
-                    payload: Box::new(payload),
-                    symbol: mangled.clone(),
-                    tag: *member_index,
-                },
-            );
-            Ok(())
-        }
-        IRInstruction::UnionTagGet { dest, ty: _, value } => {
-            let base = lookup(&frame.values, *value)?;
-            let Value::Union { tag, .. } = base else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("UnionTagGet expects a Union receiver; got {base}"),
+            IRInstruction::DropLocal { .. } => Ok(()),
+            // Heap reclamation is handled by the host GC; the IR-level
+            // value-keyed drop is a no-op for the interpreter (mirrors
+            // [`IRInstruction::DropLocal`] above).
+            IRInstruction::DropValue { .. } => Ok(()),
+            // The LLVM backend zero-initializes the slot at the decl
+            // site so scope-exit drop glue can run on never-written
+            // slots (e.g. the payload local of a receive arm that did
+            // not fire). Mirror with a `Unit` placeholder — eval's drop
+            // glue short-circuits, so the placeholder is only ever
+            // observed by a glue-feeding `LocalRead`, never by user
+            // code (a user-level read-before-write cannot pass
+            // typecheck).
+            IRInstruction::LocalDecl { local, .. } => {
+                frame.locals.insert(*local, Value::Unit);
+                Ok(())
+            }
+            IRInstruction::LocalRead { dest, local, .. } => {
+                let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: `LocalRead` of `{local}` before its `LocalDecl` — \
+                     seal invariant violation",
+                    )
                 });
-            };
-            frame.values.insert(*dest, Value::Int(i64::from(tag)));
-            Ok(())
-        }
-        IRInstruction::UnionPayloadGet {
-            dest,
-            member_index,
-            member_type: _,
-            ty: _,
-            value,
-        } => {
-            let base = lookup(&frame.values, *value)?;
-            let Value::Union {
-                payload,
-                tag: actual_tag,
+                frame.values.insert(*dest, value);
+                Ok(())
+            }
+            IRInstruction::LocalWrite { local, value } => {
+                let resolved = lookup(&frame.values, *value)?;
+                frame.locals.insert(*local, resolved);
+                Ok(())
+            }
+            IRInstruction::StructInit { dest, fields, ty } => {
+                let mut materialized = Vec::with_capacity(fields.len());
+                for field in fields {
+                    materialized.push(lookup(&frame.values, field.value)?);
+                }
+                frame.values.insert(
+                    *dest,
+                    Value::Struct {
+                        symbol: ty.clone(),
+                        fields: materialized,
+                    },
+                );
+                Ok(())
+            }
+            IRInstruction::UnaryOp { dest, op, operand } => {
+                let operand_value = lookup(&frame.values, *operand)?;
+                let result = apply_unary_op(*op, operand_value)?;
+                frame.values.insert(*dest, result);
+                Ok(())
+            }
+            IRInstruction::CallClosure {
+                args,
+                callee,
+                dest,
+                result_ty: _,
+            } => {
+                let callee_value = lookup(&frame.values, *callee)?;
+                let Value::Closure { body, captures } = callee_value else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!(
+                            "CallClosure expects a Closure receiver; got {callee_value}"
+                        ),
+                    });
+                };
+                let mut arg_values = Vec::with_capacity(args.len());
+                for arg in args {
+                    arg_values.push(lookup(&frame.values, *arg)?);
+                }
+                let body_fn = resolver.resolve(body.mangled()).unwrap_or_else(|| {
+                    panic!(
+                        "interpreter: closure body `{body}` missing from IR — \
+                     seal invariant violation",
+                    )
+                });
+                let result =
+                    execute_closure_function(body_fn, arg_values, captures, resolver).await?;
+                frame.values.insert(*dest, result);
+                Ok(())
+            }
+            IRInstruction::LoadCapture {
+                capture_index,
+                dest,
+                ty: _,
+            } => {
+                let value = frame
+                    .captures
+                    .get(*capture_index as usize)
+                    .cloned()
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "interpreter: LoadCapture index {capture_index} out of range \
+                         (env has {} entries) — seal invariant violation",
+                            frame.captures.len(),
+                        )
+                    });
+                frame.values.insert(*dest, value);
+                Ok(())
+            }
+            IRInstruction::MakeClosure {
+                body,
+                captures,
+                dest,
+                ty: _,
+            } => {
+                let mut env = Vec::with_capacity(captures.len());
+                for capture in captures {
+                    env.push(lookup(&frame.values, *capture)?);
+                }
+                frame.values.insert(
+                    *dest,
+                    Value::Closure {
+                        body: body.clone(),
+                        captures: env,
+                    },
+                );
+                Ok(())
+            }
+            // Sized integers are already canonical `Value::Int(i64)`
+            // (sign/zero-extended at materialization), so the integer
+            // widen is a pass-through; only `Float32 -> Float64`
+            // changes representation.
+            IRInstruction::NumericWiden { dest, value, .. } => {
+                let source = lookup(&frame.values, *value)?;
+                let widened = match source {
+                    Value::Float32(v) => Value::Float64(f64::from(v)),
+                    other => other,
+                };
+                frame.values.insert(*dest, widened);
+                Ok(())
+            }
+            IRInstruction::Spawn {
+                config,
+                dest,
+                ref_type,
+                wrapper,
                 ..
-            } = base
-            else {
-                return Err(RuntimeError::TypeMismatch {
-                    detail: format!("UnionPayloadGet expects a Union receiver; got {base}"),
-                });
-            };
-            if actual_tag != *member_index {
-                panic!(
-                    "interpreter: UnionPayloadGet expected member-index {member_index} but value \
-                     carries tag {actual_tag} — match driver should have gated on a tag check first",
+            } => {
+                // Register the child in the core table now (so its PID is
+                // stable for the returned `Ref`) and queue the spawn request;
+                // the executor builds and installs the child's future after
+                // this resume, before the driver can claim it. `Ref<M, R>`
+                // lays out as `{ i64 id }` (see `koja-ir-llvm`'s `pid_from_self`).
+                let config_value = lookup(&frame.values, *config)?;
+                let pid = scheduler::spawn_child(wrapper.clone(), config_value);
+                frame.values.insert(
+                    *dest,
+                    Value::Struct {
+                        symbol: ref_type.clone(),
+                        fields: vec![Value::Int(pid)],
+                    },
                 );
+                Ok(())
             }
-            frame.values.insert(*dest, *payload);
-            Ok(())
+            IRInstruction::Receive { .. } => panic!(
+                "interpreter: `Receive` reached `execute_instruction` — `execute_blocks` \
+             intercepts it as a control transfer (lowering places it last in its block)",
+            ),
+            IRInstruction::UnionWrap {
+                dest,
+                member_index,
+                member_type: _,
+                ty,
+                value,
+            } => {
+                let payload = lookup(&frame.values, *value)?;
+                let IRType::Union { mangled, .. } = ty else {
+                    panic!(
+                        "interpreter: UnionWrap target IRType is not Union (got `{ty:?}`) — \
+                     IR seal invariant violation",
+                    );
+                };
+                frame.values.insert(
+                    *dest,
+                    Value::Union {
+                        payload: Box::new(payload),
+                        symbol: mangled.clone(),
+                        tag: *member_index,
+                    },
+                );
+                Ok(())
+            }
+            IRInstruction::UnionTagGet { dest, ty: _, value } => {
+                let base = lookup(&frame.values, *value)?;
+                let Value::Union { tag, .. } = base else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("UnionTagGet expects a Union receiver; got {base}"),
+                    });
+                };
+                frame.values.insert(*dest, Value::Int(i64::from(tag)));
+                Ok(())
+            }
+            IRInstruction::UnionPayloadGet {
+                dest,
+                member_index,
+                member_type: _,
+                ty: _,
+                value,
+            } => {
+                let base = lookup(&frame.values, *value)?;
+                let Value::Union {
+                    payload,
+                    tag: actual_tag,
+                    ..
+                } = base
+                else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("UnionPayloadGet expects a Union receiver; got {base}"),
+                    });
+                };
+                if actual_tag != *member_index {
+                    panic!(
+                        "interpreter: UnionPayloadGet expected member-index {member_index} but value \
+                     carries tag {actual_tag} — match driver should have gated on a tag check first",
+                    );
+                }
+                frame.values.insert(*dest, *payload);
+                Ok(())
+            }
+            IRInstruction::BinaryMatch {
+                dest,
+                layout,
+                segments,
+                subject,
+            } => {
+                let subject_value = lookup(&frame.values, *subject)?;
+                let matched = execute_binary_match(*layout, segments, &subject_value, frame)?;
+                frame.values.insert(*dest, Value::Bool(matched));
+                Ok(())
+            }
         }
-        IRInstruction::BinaryMatch {
-            dest,
-            layout,
-            segments,
-            subject,
-        } => {
-            let subject_value = lookup(&frame.values, *subject)?;
-            let matched = execute_binary_match(*layout, segments, &subject_value, frame)?;
-            frame.values.insert(*dest, Value::Bool(matched));
-            Ok(())
-        }
-    }
+    })
 }
 
 fn lookup(values: &BTreeMap<ValueId, Value>, id: ValueId) -> Result<Value, RuntimeError> {

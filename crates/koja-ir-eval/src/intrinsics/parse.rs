@@ -8,7 +8,7 @@
 //! number that doesn't fit: an overflowing integer, or a float
 //! magnitude that rounds to infinity). The Result enum's symbol
 //! comes from `function.return_type`; the error variant tag is
-//! resolved by name via `helpers::conversion_error_value`.
+//! resolved by name via `helpers::err_variant_value`.
 
 use koja_ir::{IRFunction, ParseTarget};
 use koja_runtime::parse_text::{ParseOutcome, parse_float_text, parse_int_text};
@@ -47,12 +47,12 @@ pub(super) fn dispatch<R: CallResolver>(
     };
     let parsed = match outcome {
         ParseOutcome::Ok(v) => Ok(v),
-        ParseOutcome::InvalidFormat => Err(helpers::conversion_error_value(
+        ParseOutcome::InvalidFormat => Err(helpers::err_variant_value(
             &result_symbol,
             resolver,
             "InvalidFormat",
         )?),
-        ParseOutcome::OutOfRange => Err(helpers::conversion_error_value(
+        ParseOutcome::OutOfRange => Err(helpers::err_variant_value(
             &result_symbol,
             resolver,
             "OutOfRange",

@@ -41,7 +41,15 @@ mod tls;
 /// Run the registered extern under C symbol `link_name` against
 /// `args`. Returns `None` when no handler is registered so the
 /// caller can surface [`RuntimeError::ExternNotSupported`].
-pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, RuntimeError>> {
+///
+/// `async` because the cooperative I/O externs suspend: `koja_io_block`
+/// and the fd / socket read-write wrappers park the process (or, in
+/// function mode, block the thread) on fd readiness via the reactor before
+/// the syscall. Every other extern resolves synchronously.
+pub(crate) async fn dispatch(
+    link_name: &str,
+    args: &[Value],
+) -> Option<Result<Value, RuntimeError>> {
     match link_name {
         "BIO_free" => Some(tls::bio_free(args)),
         "BIO_new_mem_buf" => Some(tls::bio_new_mem_buf(args)),
@@ -91,8 +99,8 @@ pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, 
         "koja_cwd" => Some(system::cwd(args)),
         "koja_errno_code" => Some(net::errno_code(args)),
         "koja_fd_close" => Some(fd::fd_close(args)),
-        "koja_fd_read" => Some(fd::fd_read(args)),
-        "koja_fd_write" => Some(fd::fd_write(args)),
+        "koja_fd_read" => Some(fd::fd_read(args).await),
+        "koja_fd_write" => Some(fd::fd_write(args).await),
         "koja_file_delete" => Some(fd::file_delete(args)),
         "koja_file_exists" => Some(fd::file_exists(args)),
         "koja_file_open" => Some(fd::file_open(args)),
@@ -101,7 +109,7 @@ pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, 
         "koja_file_write_all" => Some(fd::file_write_all(args)),
         "koja_get_env" => Some(system::get_env(args)),
         "koja_hostname" => Some(system::hostname(args)),
-        "koja_io_block" => Some(fd::io_block(args)),
+        "koja_io_block" => Some(fd::io_block(args).await),
         "koja_kernel_exit" => Some(kernel::exit(args)),
         "koja_last_error" => Some(net::last_error(args)),
         "koja_last_error_code" => Some(net::last_error_code(args)),
@@ -110,12 +118,12 @@ pub(crate) fn dispatch(link_name: &str, args: &[Value]) -> Option<Result<Value, 
         "koja_rt_unwatch_fd" => Some(fd::rt_unwatch_fd(args)),
         "koja_rt_watch_fd" => Some(fd::rt_watch_fd(args)),
         "koja_set_env" => Some(system::set_env(args)),
-        "koja_socket_accept" => Some(net::socket_accept(args)),
+        "koja_socket_accept" => Some(net::socket_accept(args).await),
         "koja_socket_bind" => Some(net::socket_bind(args)),
         "koja_socket_connect" => Some(net::socket_connect(args)),
         "koja_socket_create" => Some(net::socket_create(args)),
         "koja_socket_listen" => Some(net::socket_listen(args)),
-        "koja_socket_send_to" => Some(net::socket_send_to(args)),
+        "koja_socket_send_to" => Some(net::socket_send_to(args).await),
         "koja_socket_setsockopt_reuse" => Some(net::socket_setsockopt_reuse(args)),
         "koja_socket_try_accept" => Some(net::socket_try_accept(args)),
         "koja_time_now_millis" => Some(time::now_millis(args)),

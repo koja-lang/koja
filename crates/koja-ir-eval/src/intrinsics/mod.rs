@@ -36,6 +36,8 @@ mod set;
 mod socket;
 mod string;
 
+pub(crate) use process::build_business_payload;
+
 /// Run the registered intrinsic `id` against `args`. `function` is
 /// the calling [`IRFunction`] — handlers that mint typed return
 /// values (`Option<T>`, `Result<T, E>`, `Pair<...>`) read the
@@ -46,7 +48,12 @@ mod string;
 /// handler needs sibling decl info (e.g. Pair's `first` field type
 /// for `List.pop`) so neither path fabricates an `IRSymbol` from a
 /// string.
-pub(crate) fn dispatch<R: CallResolver>(
+///
+/// `async` because the process intrinsics suspend: `Ref.call` parks on
+/// the caller's reply slot and yields to the driver until the reply lands
+/// (or the timeout fires). Every other intrinsic resolves synchronously
+/// and just returns its value through the state machine.
+pub(crate) async fn dispatch<R: CallResolver>(
     id: &IRIntrinsicId,
     function: &IRFunction,
     args: &[Value],
@@ -69,10 +76,10 @@ pub(crate) fn dispatch<R: CallResolver>(
         }
         IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args, resolver),
         IRIntrinsicId::Print => print::global_print(args),
-        IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function),
-        IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, function),
+        IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function, args, resolver).await,
+        IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, function, args).await,
         IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
-        IRIntrinsicId::Socket(method) => socket::dispatch(method, function, args, resolver),
+        IRIntrinsicId::Socket(method) => socket::dispatch(method, function, args, resolver).await,
         IRIntrinsicId::String(method) => string::dispatch(method, function, args),
     }
 }

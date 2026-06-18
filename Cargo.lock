@@ -745,6 +745,7 @@ dependencies = [
  "koja-ast",
  "koja-ir",
  "koja-parser",
+ "koja-runtime-core",
  "koja-runtime-posix",
  "koja-stdlib",
  "koja-typecheck",

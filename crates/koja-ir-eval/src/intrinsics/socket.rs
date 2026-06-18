@@ -13,20 +13,23 @@
 //! and frees the blocks through `koja_free` (keeping the runtime's
 //! live-block accounting balanced).
 //!
-//! `recv_from` blocks the interpreter thread until a datagram
-//! arrives — the eval-sanctioned semantics for fd waits (see
-//! `externs/net.rs` for the blocking-fd rationale).
+//! `recv_from` waits for the socket to be readable through eval's
+//! [`crate::reactor`] (cooperatively parking the process, or blocking the
+//! thread in function mode) before delegating to the native receiver — the
+//! same pre-wait-then-delegate pattern as the `externs/net.rs` wrappers.
 
 use std::cell::RefCell;
 use std::ffi::CString;
 use std::rc::Rc;
 
 use koja_ir::{IRFunction, IRSymbol, IRType, SocketMethod};
+use koja_runtime_core::Interest;
 
 use crate::abi;
 use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
 use crate::intrinsics::helpers;
+use crate::reactor;
 use crate::value::Value;
 
 /// Byte count of the `i64 count` header at the front of the
@@ -44,14 +47,14 @@ unsafe extern "C" {
     fn koja_socket_resolve(hostname: *const u8) -> *mut u8;
 }
 
-pub(super) fn dispatch<R: CallResolver>(
+pub(super) async fn dispatch<R: CallResolver>(
     method: SocketMethod,
     function: &IRFunction,
     args: &[Value],
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match method {
-        SocketMethod::RecvFrom => recv_from(function, args, resolver),
+        SocketMethod::RecvFrom => recv_from(function, args, resolver).await,
         SocketMethod::Resolve => resolve(function, args, resolver),
     }
 }
@@ -96,7 +99,7 @@ fn resolve<R: CallResolver>(
     Ok(helpers::result_value(result_symbol, Ok(list)))
 }
 
-fn recv_from<R: CallResolver>(
+async fn recv_from<R: CallResolver>(
     function: &IRFunction,
     args: &[Value],
     resolver: &R,
@@ -112,6 +115,7 @@ fn recv_from<R: CallResolver>(
     let address_symbol = struct_field_symbol(&pair_symbol, 1, resolver)?;
     let ip_symbol = struct_field_symbol(&address_symbol, 0, resolver)?;
 
+    reactor::io_block(fd, Interest::Readable).await;
     let buffer = unsafe { koja_socket_recv_from(fd, *count) };
     if buffer.is_null() {
         return Ok(helpers::result_value(

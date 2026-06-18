@@ -14,6 +14,7 @@
 //!
 //! See `koja/design/SCHEDULER-PROTOCOL.md` for the full design.
 
+pub mod driver;
 pub mod mailbox;
 pub mod memory;
 pub mod process_table;
@@ -21,14 +22,15 @@ pub mod protocol;
 pub mod scheduler_trace;
 pub mod wire;
 
+pub use driver::CooperativeDriver;
 pub use mailbox::{Mailbox, WaitTarget};
 pub use process_table::{
     ProcessControlBlock, ProcessState, ProcessTable, Reclaim, ScheduleCounters, TimerEntry,
     slot_index,
 };
 pub use protocol::{
-    Clock, Driver, Executor, Interest, Lifecycle, Message, Pid, Reactor, Readiness, SignalSource,
-    Tag, Waker,
+    Clock, Driver, Executor, Interest, Lifecycle, Message, MessageSource, Pid, Reactor, Readiness,
+    SignalSource, Tag, Waker,
 };
 pub use scheduler_trace::{TraceEntry, TraceEvent};
 pub use wire::{Envelope, OwnedPayload};
