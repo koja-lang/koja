@@ -1,11 +1,15 @@
 [package]
-name = "koja-runtime"
-description = "Lightweight process runtime for the Koja language"
+name = "koja-runtime-posix"
+description = "POSIX (threads + asm) implementation of the Koja scheduler protocol"
 edition.workspace = true
 license.workspace = true
 version.workspace = true
 
 [lib]
+# Package renamed to `koja-runtime-posix`, but the staticlib stays
+# `libkoja_runtime.a` so the `-lkoja_runtime` linker contract and the
+# `koja-driver` embedding are untouched.
+name = "koja_runtime"
 crate-type = ["rlib", "staticlib"]
 
 [lints.rust]

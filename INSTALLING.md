@@ -63,15 +63,15 @@ git clone https://github.com/koja-lang/koja && cd koja
 export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
 
-cargo build -p koja-runtime
-cargo build -p koja-runtime --release
+cargo build -p koja-runtime-posix
+cargo build -p koja-runtime-posix --release
 cargo build --release -p koja-driver
 
 cp target/release/koja ~/.local/bin/koja
 codesign --force -s - ~/.local/bin/koja
 ```
 
-The two-step `koja-runtime` build is intentional: the driver's `build.rs` searches for `libkoja_runtime.a` in both the debug and release build directories. `codesign` is required on macOS so the kernel doesn't kill the binary on launch.
+The two-step `koja-runtime-posix` build is intentional: the driver's `build.rs` searches for `libkoja_runtime.a` in both the debug and release build directories. `codesign` is required on macOS so the kernel doesn't kill the binary on launch.
 
 ### Linux (Debian / Ubuntu — rustup + apt)
 
@@ -99,8 +99,8 @@ git clone https://github.com/koja-lang/koja && cd koja
 
 export LLVM_SYS_181_PREFIX="$(llvm-config-18 --prefix)"
 
-cargo build -p koja-runtime
-cargo build -p koja-runtime --release
+cargo build -p koja-runtime-posix
+cargo build -p koja-runtime-posix --release
 cargo build --release -p koja-driver
 
 cp target/release/koja ~/.local/bin/koja
@@ -117,8 +117,8 @@ git clone https://github.com/koja-lang/koja && cd koja
 export LLVM_SYS_181_PREFIX="$(brew --prefix llvm@18)"
 export LIBRARY_PATH="$(brew --prefix)/lib:$LIBRARY_PATH"
 
-cargo build -p koja-runtime
-cargo build -p koja-runtime --release
+cargo build -p koja-runtime-posix
+cargo build -p koja-runtime-posix --release
 cargo build --release -p koja-driver
 
 cp target/release/koja ~/.local/bin/koja

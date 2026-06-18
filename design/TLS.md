@@ -88,7 +88,7 @@ socket isn't ready. The TLS code needs to suspend the Koja process
 until the fd is ready, then retry -- exactly what the runtime's
 internal `io_block` function does.
 
-### `koja/crates/koja-runtime/src/fs.rs`
+### `koja/crates/koja-runtime-posix/src/fs.rs`
 
 Add one function (4 lines) at the end of the file:
 
@@ -450,12 +450,12 @@ After implementation, run:
 
 ## File summary
 
-| File                                      | Change                                                            |
-| ----------------------------------------- | ----------------------------------------------------------------- |
-| `koja/crates/koja-driver/build.rs`        | Find `libssl.a`, set env var                                      |
-| `koja/crates/koja-driver/src/pipeline.rs` | Embed + write `libssl.a`                                          |
-| `koja/crates/koja-runtime/src/fs.rs`      | Add `koja_io_block` (4 lines)                                     |
-| `koja/lib/global/src/fd.koja`             | Add `Fd.block` + extern decl                                      |
-| `koja/lib/net/src/tls.koja`               | **New file**: TLSConfig, FFI bindings, TLS operations             |
-| `koja/lib/net/src/tcp.koja`               | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
-| `koja/lib/http/src/client.koja`           | Use `connect_tls` for https:// URLs                               |
+| File                                       | Change                                                            |
+| ------------------------------------------ | ----------------------------------------------------------------- |
+| `koja/crates/koja-driver/build.rs`         | Find `libssl.a`, set env var                                      |
+| `koja/crates/koja-driver/src/pipeline.rs`  | Embed + write `libssl.a`                                          |
+| `koja/crates/koja-runtime-posix/src/fs.rs` | Add `koja_io_block` (4 lines)                                     |
+| `koja/lib/global/src/fd.koja`              | Add `Fd.block` + extern decl                                      |
+| `koja/lib/net/src/tls.koja`                | **New file**: TLSConfig, FFI bindings, TLS operations             |
+| `koja/lib/net/src/tcp.koja`                | Add ssl/ssl_ctx fields, TLS methods, dispatch in read/write/close |
+| `koja/lib/http/src/client.koja`            | Use `connect_tls` for https:// URLs                               |

@@ -27,21 +27,21 @@ this effort does not _build_ them.
 
 Today the runtime is one concrete scheduler. The _scheduling policy_ is
 already platform-agnostic — `ProcessTable`
-([`process_table.rs`](../crates/koja-runtime/src/process_table.rs)),
-`Mailbox` ([`mailbox.rs`](../crates/koja-runtime/src/mailbox.rs)), and
-the wire envelope ([`wire.rs`](../crates/koja-runtime/src/wire.rs))
+([`process_table.rs`](../crates/koja-runtime-core/src/process_table.rs)),
+`Mailbox` ([`mailbox.rs`](../crates/koja-runtime-core/src/mailbox.rs)), and
+the wire envelope ([`wire.rs`](../crates/koja-runtime-core/src/wire.rs))
 depend only on `Instant`, raw pointers, and an allocator. But that
 policy is reachable only through machinery welded to one platform:
 
 - `SCHED: Mutex<ProcessTable>` + `WORK_AVAILABLE: Condvar` — assumes N
   OS threads contend for the table
-  ([`scheduler.rs`](../crates/koja-runtime/src/scheduler.rs)).
+  ([`scheduler.rs`](../crates/koja-runtime-posix/src/scheduler.rs)).
 - `CURRENT_PID` / `SCHED_SP` / `YIELD_SP` thread-locals — assume one
   process per OS worker.
 - `koja_context_switch` (hand-written asm) + `mmap` stacks — assume
   stackful coroutines.
 - the `polling`-crate reactor thread
-  ([`reactor.rs`](../crates/koja-runtime/src/reactor.rs)) — assumes
+  ([`reactor.rs`](../crates/koja-runtime-posix/src/reactor.rs)) — assumes
   kqueue/epoll.
 
 None of these exist on `wasm32-wasi` (no threads by default, no asm
@@ -66,7 +66,7 @@ flowchart TB
     OPS["generic ops: receive/send/spawn/reply/call/send_after logic"]
     TR["protocol traits: Executor, Reactor, Clock, SignalSource, Driver"]
   end
-  subgraph native [koja-runtime: POSIX adapter = impl 1]
+  subgraph native [koja-runtime-posix: POSIX adapter = impl 1]
     ASM["Executor: asm context switch + mmap stacks"]
     PLL["Reactor: polling kqueue/epoll"]
     DRV["Driver: N worker threads + Mutex/Condvar"]
@@ -114,7 +114,7 @@ central structural move.
   operations, and the protocol traits. No `libc`, no `polling`, no asm,
   no `std::thread`.
 - **Platform adapter.** A crate implementing the protocol traits for one
-  target. `koja-runtime` (POSIX) is the first; `koja-runtime-wasi` and a
+  target. `koja-runtime-posix` is the first; `koja-runtime-wasi` and a
   cooperative eval adapter come later.
 - **`ProcessControlBlock` (PCB).** The agnostic per-process record:
   lifecycle `state`, `waiting` target, optional `deadline`, `on_cpu`
@@ -378,7 +378,7 @@ backing allocator. Its eventual formalization is therefore most likely
 codegen side" — not a bespoke Koja trait.
 
 That seam already half-exists.
-[`memory.rs`](../crates/koja-runtime/src/memory.rs) is not "the
+[`memory.rs`](../crates/koja-runtime-core/src/memory.rs) is not "the
 allocator" — it is the _single current implementation_ of an
 already-stable contract: codegen emits calls to `koja_alloc` /
 `koja_free`, and `memory.rs` is the libc-backed conformer behind those
@@ -451,15 +451,13 @@ not move.
 
 - **New `koja-runtime-core`** (`rlib`): agnostic core + trait defs. No
   `polling`, no asm, no `std::thread`; `libc` only for the allocator.
-- **`koja-runtime` keeps its name and `staticlib` output.** It becomes
-  the POSIX adapter, depends on `koja-runtime-core`, implements the
-  traits, and hosts the `extern "C" koja_rt_*` wrappers. Keeping the
-  crate name means `libkoja_runtime.a`, the `-lkoja_runtime` link flag,
-  and the embedded-archive bytes in
+- **`koja-runtime-posix` (the POSIX adapter, `staticlib`).** Renamed
+  from `koja-runtime`; depends on `koja-runtime-core`, implements the
+  traits, and hosts the `extern "C" koja_rt_*` wrappers. Its `[lib]
+  name` is pinned to `koja_runtime`, so `libkoja_runtime.a`, the
+  `-lkoja_runtime` link flag, and the embedded-archive bytes in
   [`koja-driver/src/link.rs`](../crates/koja-driver/src/link.rs) are
-  **untouched**, and `koja-ir-llvm` needs **zero** changes. (Renaming to
-  `koja-runtime-posix` per the Phase 6 adapter scheme is a deferred
-  cosmetic move, not part of this spike.)
+  **untouched**, and `koja-ir-llvm` needs **zero** code changes.
 
 That `koja-ir-llvm` compiles and passes against an unchanged C ABI is
 the integration proof that the shim is a clean seam.
@@ -472,12 +470,12 @@ the integration proof that the shim is a clean seam.
 | scheduling-policy + generic `koja_rt_*` logic (extracted from `scheduler.rs`)                                      | core                                                     |
 | trait defs (`Executor`, `Reactor`, `Clock`, `SignalSource`, `Driver`, `Message`)                                   | core (new)                                               |
 | `memory.rs`                                                                                                        | core (shared libc passthrough)                           |
-| asm stacks, `process_trampoline`, `worker_loop`, `koja_rt_main_done`, Mutex/Condvar, thread-locals, `worker_count` | `koja-runtime` (native `Executor` + `Driver`)            |
-| `reactor.rs`                                                                                                       | `koja-runtime` (native `Reactor`)                        |
-| `signals.rs`                                                                                                       | `koja-runtime` (native `SignalSource`)                   |
-| `tsan.rs`, `ffi.rs`, `arch/*.s`                                                                                    | `koja-runtime` (native executor detail)                  |
-| `extern "C" koja_rt_*` wrappers + global accessor                                                                  | `koja-runtime`                                           |
-| `fs.rs`, `socket.rs`, `system.rs`, `intrinsics/`, `string`, `format`, `util`, `parse_text`                         | `koja-runtime` (POSIX externs; not scheduler, untouched) |
+| asm stacks, `process_trampoline`, `worker_loop`, `koja_rt_main_done`, Mutex/Condvar, thread-locals, `worker_count` | `koja-runtime-posix` (native `Executor` + `Driver`)            |
+| `reactor.rs`                                                                                                       | `koja-runtime-posix` (native `Reactor`)                        |
+| `signals.rs`                                                                                                       | `koja-runtime-posix` (native `SignalSource`)                   |
+| `tsan.rs`, `ffi.rs`, `arch/*.s`                                                                                    | `koja-runtime-posix` (native executor detail)                  |
+| `extern "C" koja_rt_*` wrappers + global accessor                                                                  | `koja-runtime-posix`                                           |
+| `fs.rs`, `socket.rs`, `system.rs`, `intrinsics/`, `string`, `format`, `util`, `parse_text`                         | `koja-runtime-posix` (POSIX externs; not scheduler, untouched) |
 
 ## Mechanical checks
 
@@ -508,8 +506,6 @@ the integration proof that the shim is a clean seam.
 - **Monitors / supervision** (A0/A2), **preemption + priority**, and
   **work-stealing run queues**. The protocol must not preclude them; it
   does not add them here.
-- **Renaming `koja-runtime` → `koja-runtime-posix`.** Deferred to keep
-  the linker and `koja-ir-llvm` untouched.
 - **An allocation protocol.** Allocation is a separate, already-latent
   seam (the `koja_alloc` / `koja_free` C-ABI contract), not a sixth
   scheduler trait. See [Allocator](#allocator). It stays a shared core
@@ -532,6 +528,6 @@ the integration proof that the shim is a clean seam.
 - [archive/20260612-EVAL-PROCESS.md](archive/20260612-EVAL-PROCESS.md) —
   the superseded thread-per-process eval plan; its observable-parity
   test strategy and typed-`Value`-mailbox rationale are inherited here.
-- [crates/koja-runtime/src/scheduler.rs](../crates/koja-runtime/src/scheduler.rs)
+- [crates/koja-runtime-posix/src/scheduler.rs](../crates/koja-runtime-posix/src/scheduler.rs)
   — the native reference implementation; when observable semantics are
   in doubt, the native runtime is the spec.

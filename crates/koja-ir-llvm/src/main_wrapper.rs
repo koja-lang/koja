@@ -31,7 +31,7 @@
 //! emitted on every compiled binary so the runtime archive's
 //! panic handler links cleanly regardless of cgu partitioning.
 //!
-//! See [`koja-runtime/src/intrinsics.rs`](../../koja-runtime/src/intrinsics.rs)
+//! See [`koja-runtime-posix/src/intrinsics.rs`](../../koja-runtime-posix/src/intrinsics.rs)
 //! for the runtime side of these conventions.
 
 use std::collections::HashSet;

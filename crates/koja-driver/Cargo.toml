@@ -20,7 +20,7 @@ koja-ir-eval = { path = "../koja-ir-eval" }
 koja-ir-llvm = { path = "../koja-ir-llvm" }
 koja-lexer = { path = "../koja-lexer" }
 koja-parser = { path = "../koja-parser" }
-koja-runtime = { path = "../koja-runtime" }
+koja-runtime-posix = { path = "../koja-runtime-posix" }
 koja-shell = { path = "../koja-shell" }
 koja-stdlib = { path = "../koja-stdlib" }
 koja-test = { path = "../koja-test" }

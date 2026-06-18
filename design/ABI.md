@@ -52,7 +52,7 @@ byte**; the headers are reached by negative offsets.
 | `LENGTH_OFFSET`     | 8          | payload → `bit_length` word distance                                    |
 | `RC_IMMORTAL`       | `i64::MIN` | rodata sentinel; any `rc < 0` is immortal (inc/dec no-ops, never freed) |
 
-- Authoritative: `koja-runtime/src/util.rs` (`BLOCK_HEADER_SIZE`, `LENGTH_OFFSET`; immortality is the `rc < 0`
+- Authoritative: `koja-runtime-posix/src/util.rs` (`BLOCK_HEADER_SIZE`, `LENGTH_OFFSET`; immortality is the `rc < 0`
   test in `koja_rc_inc` / `koja_rc_dec`).
 - Mirrors: `koja-ir-llvm/src/emit/heap_layout.rs` (`HEADER_BYTES`, `LENGTH_OFFSET`, `RC_IMMORTAL`),
   `koja-ir-eval/src/intrinsics/cptr.rs` and `binary.rs`
@@ -68,7 +68,7 @@ A closure env block carries a 24-byte header instead of the leaf header — drop
           ^ +8            ^ +COPY_FN_OFFSET (16)
 ```
 
-- Authoritative: `koja-runtime/src/util.rs` (`COPY_FN_OFFSET`; the drop_fn offset reuses `LENGTH_OFFSET`).
+- Authoritative: `koja-runtime-posix/src/util.rs` (`COPY_FN_OFFSET`; the drop_fn offset reuses `LENGTH_OFFSET`).
 - Mirror: `koja-ir-llvm/src/types.rs` (`CLOSURE_ENV_HEADER_FIELDS = 3` — the same three words expressed
   as LLVM struct fields).
 - Eval does not mirror this: it represents closures as Rust values, not raw blocks.
@@ -94,7 +94,7 @@ offset 0                  offset TAG_HEADER_SIZE (8)
 | `IO_READY_VARIANT_OFFSET` | 8     |
 | `IO_READY_FD_OFFSET`      | 16    |
 
-- Authoritative: `koja-runtime/src/wire.rs` (the module doc there is
+- Authoritative: `koja-runtime-core/src/wire.rs` (the module doc there is
   the long-form spec, including which tags can surface in `receive`
   arms).
 - Mirror: `koja-ir/src/function.rs` (`ReceiveTag::wire_byte` —
@@ -115,7 +115,7 @@ plus an out-pointer and return a classification code:
 | `PARSE_OK`             | 1     | parsed; value written through the out-pointer                                               |
 | `PARSE_OUT_OF_RANGE`   | 2     | well-formed number that does not fit (`Int` overflow, float magnitude rounding to infinity) |
 
-- Authoritative: `koja-runtime/src/parse_text.rs` (codes and the
+- Authoritative: `koja-runtime-posix/src/parse_text.rs` (codes and the
   classification rules; the C-ABI wrappers live in `string.rs`).
 - Mirror: `koja-ir-llvm/src/intrinsics/parse.rs` (`PARSE_OK`,
   `PARSE_OUT_OF_RANGE`; invalid-format is the switch default).

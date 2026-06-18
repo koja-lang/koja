@@ -249,7 +249,7 @@ pub fn cmd_shell() {
 /// [`koja_ir_llvm::compile_script`] → link. The script body
 /// becomes `main`'s body, so executing the binary prints the
 /// script's trailing value and exits 0 (via the temporary
-/// auto-print wrapper in `koja-runtime/src/intrinsics.rs`; goes away
+/// auto-print wrapper in `koja-runtime-posix/src/intrinsics.rs`; goes away
 /// with `IO.puts`). `-o`/`--output` overrides the default
 /// stem-based output name.
 pub fn cmd_build(

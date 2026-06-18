@@ -5,7 +5,7 @@
 //! *capabilities* — how a process runs and suspends ([`Executor`]), how
 //! fd readiness arrives ([`Reactor`]), how the run loop is driven and
 //! synchronized ([`Driver`]), and how time and OS signals are observed
-//! ([`Clock`], [`SignalSource`]). The native adapter (`koja-runtime`)
+//! ([`Clock`], [`SignalSource`]). The native adapter (`koja-runtime-posix`)
 //! is the first implementation; a single-threaded cooperative adapter
 //! (eval, then WASI) is the second.
 //!

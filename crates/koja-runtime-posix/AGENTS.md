@@ -1,6 +1,6 @@
-# koja-runtime
+# koja-runtime-posix
 
-C ABI static library linked into compiled Koja binaries. Multi-threaded process scheduler and system intrinsics.
+POSIX (threads + asm) implementation of the `koja-runtime-core` scheduler protocol. C ABI static library (`libkoja_runtime.a`) linked into compiled Koja binaries. Multi-threaded process scheduler and system intrinsics.
 
 ## Key files
 

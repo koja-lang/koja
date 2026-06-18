@@ -708,7 +708,7 @@ dependencies = [
  "koja-ir-llvm",
  "koja-lexer",
  "koja-parser",
- "koja-runtime",
+ "koja-runtime-posix",
  "koja-shell",
  "koja-stdlib",
  "koja-test",
@@ -745,7 +745,7 @@ dependencies = [
  "koja-ast",
  "koja-ir",
  "koja-parser",
- "koja-runtime",
+ "koja-runtime-posix",
  "koja-stdlib",
  "koja-typecheck",
 ]
@@ -795,7 +795,14 @@ dependencies = [
 ]
 
 [[package]]
-name = "koja-runtime"
+name = "koja-runtime-core"
+version = "0.12.3-dev"
+dependencies = [
+ "libc",
+]
+
+[[package]]
+name = "koja-runtime-posix"
 version = "0.12.3-dev"
 dependencies = [
  "backtrace",
@@ -803,13 +810,6 @@ dependencies = [
  "koja-runtime-core",
  "libc",
  "polling",
-]
-
-[[package]]
-name = "koja-runtime-core"
-version = "0.12.3-dev"
-dependencies = [
- "libc",
 ]
 
 [[package]]

@@ -9,7 +9,7 @@
 //! Emits a single-module LLVM IR program with one external `main`
 //! symbol of signature `i64 ()`. `main` always returns 0 — the
 //! body's value is fed to a runtime printer
-//! ([`koja-runtime/src/intrinsics.rs`](../../koja-runtime/src/intrinsics.rs))
+//! ([`koja-runtime-posix/src/intrinsics.rs`](../../koja-runtime-posix/src/intrinsics.rs))
 //! before the return so the binary's observable behavior matches
 //! the eval interpreter's `print value, exit 0` contract. Temporary
 //! scaffolding; goes away with `IO.puts`.

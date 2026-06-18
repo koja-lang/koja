@@ -4,7 +4,7 @@
 //!
 //! This crate names no platform — no `polling`, no inline assembly, no
 //! OS threads (`libc` appears only for the allocator passthrough). The
-//! native adapter (`koja-runtime`) and the future cooperative adapters
+//! native adapter (`koja-runtime-posix`) and the future cooperative adapters
 //! (eval, WASI) depend on it and supply the capabilities behind the
 //! protocol traits. The scheduling data structures (`ProcessTable`,
 //! `ProcessState`, `scheduler_trace`) live here too, generic over the
