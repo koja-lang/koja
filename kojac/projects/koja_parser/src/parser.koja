@@ -1,2 +1,0 @@
-# Parser port lands here (recursive descent over `KojaLexer` tokens).
-# Track A in Phase 5: port from `crates/koja-parser/src/`.

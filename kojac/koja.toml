@@ -1,7 +1,0 @@
-[project]
-name = "KojaCompiler"
-version = "0.1.0"
-entry = "App"
-
-[dependencies]
-KojaAST = { path = "projects/koja_ast" }

@@ -1,6 +1,0 @@
-[project]
-name = "KojaLexer"
-version = "0.1.0"
-
-[dependencies]
-KojaAST = { path = "../koja_ast" }
