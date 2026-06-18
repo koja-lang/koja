@@ -217,8 +217,9 @@ pub extern "C" fn koja_rt_watch_fd(fd: i32, interest: i64) {
         Event::readable(key)
     };
 
-    poller_add_or_modify(fd, event);
+    // Insert before arming: an already-ready fd can fire immediately.
     reactor.watched.lock().unwrap().insert(key, (pid, fd));
+    poller_add_or_modify(fd, event);
 }
 
 /// Removes a file descriptor from I/O readiness monitoring.

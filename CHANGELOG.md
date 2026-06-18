@@ -14,12 +14,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - I/O readiness events now reach a process whose message union includes `IOReady` — the `handle` arm receives them instead of the program hitting an unreachable trap and exiting.
-- Binary pattern matching no longer crashes on a subject shorter than the pattern's fixed prefix (e.g. `<<a::8, b::8, rest: Binary>>` against `<<>>`); the match cleanly fails instead.
 - `Float32` arithmetic, comparison, and negation now work under the interpreter.
-- Line-wrapping elements of a list when formatted now align properly vertically.
-- If a function signature line-wraps, always insert a blank line before the rest of the function body.
-- Preserve comment placement in match arms.
-- Overflowing method chains break at each `.method`, and a sole trailing closure hugs its parentheses.
+- Binary pattern matching no longer crashes on a subject shorter than the pattern's fixed prefix (e.g. `<<a::8, b::8, rest: Binary>>` against `<<>>`); the match cleanly fails instead.
+- `Fd.watch` on an already-readable fd (e.g. a pipe with buffered data) no longer hangs the process — a race could drop the first readiness event.
+- Formatter: Line-wrapping elements of a list when formatted now align properly vertically.
+- Formatter: If a function signature line-wraps, always insert a blank line before the rest of the function body.
+- Formatter: preserve comment placement in match arms.
+- Formatter: verflowing method chains break at each `.method`, and a sole trailing closure hugs its parentheses.
 
 ## [0.12.1] - 2026-06-12
 
