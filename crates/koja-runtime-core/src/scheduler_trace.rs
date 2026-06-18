@@ -1,15 +1,15 @@
 //! Bounded ring buffer of scheduler lifecycle events, recorded by
-//! [`crate::process_table::ProcessTable`] under the `SCHED` lock.
+//! [`crate::process_table::ProcessTable`] at its state-change chokepoints.
 //!
 //! The trace is the debugging companion to the invariant counters
-//! (`koja_rt_sched_violations` / `koja_rt_parks_refused`): when a
-//! counter fixture fails, re-run with `KOJA_SCHED_TRACE` set and the
-//! runtime dumps the last [`TRACE_CAPACITY`] events at shutdown, oldest
-//! first, so the offending interleaving can be read directly.
+//! ([`crate::process_table::ScheduleCounters`]): when a counter fixture
+//! fails, re-run with `KOJA_SCHED_TRACE` set and the adapter dumps the
+//! last [`TRACE_CAPACITY`] events at shutdown, oldest first, so the
+//! offending interleaving can be read directly.
 
 use std::fmt;
 
-use crate::scheduler::ProcessState;
+use crate::process_table::ProcessState;
 
 /// Ring size. At 4096 events the buffer covers the tail of even a
 /// large storm while staying a fixed ~128 KiB.
@@ -17,7 +17,7 @@ const TRACE_CAPACITY: usize = 4096;
 
 /// One recorded scheduler event.
 #[derive(Clone, Copy)]
-pub(crate) enum TraceEvent {
+pub enum TraceEvent {
     /// An envelope landed in the target's mailbox.
     Delivered,
     /// A dead process's slot was reclaimed.
@@ -50,21 +50,21 @@ impl fmt::Display for TraceEvent {
 
 /// A [`TraceEvent`] stamped with its target and a monotonic sequence
 /// number (so wraparound is visible in the dump).
-pub(crate) struct TraceEntry {
-    pub(crate) event: TraceEvent,
-    pub(crate) pid: i64,
-    pub(crate) seq: u64,
+pub struct TraceEntry {
+    pub event: TraceEvent,
+    pub pid: i64,
+    pub seq: u64,
 }
 
 /// The ring itself. `entries` grows to [`TRACE_CAPACITY`] and is then
 /// overwritten in place at `next`.
-pub(crate) struct SchedTrace {
+pub(crate) struct SchedulerTrace {
     entries: Vec<TraceEntry>,
     next: usize,
     seq: u64,
 }
 
-impl SchedTrace {
+impl SchedulerTrace {
     pub(crate) const fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn iterates_oldest_first_after_wraparound() {
-        let mut trace = SchedTrace::new();
+        let mut trace = SchedulerTrace::new();
         for pid in 0..(TRACE_CAPACITY as i64 + 10) {
             trace.record(pid, TraceEvent::Delivered);
         }

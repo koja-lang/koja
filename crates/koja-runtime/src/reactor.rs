@@ -1,15 +1,15 @@
 //! I/O reactor backed by the `polling` crate (kqueue on macOS, epoll on Linux).
 //!
-//! A single dedicated reactor thread runs [`reactor_loop`], polling for
-//! readiness events on registered file descriptors. When a fd becomes
-//! ready, the reactor promotes the associated process from `WaitingIo`
-//! to `Runnable` and wakes a worker thread via the scheduler's Condvar.
+//! A single dedicated reactor thread runs [`reactor_loop`], driving the
+//! [`NativeReactor`]'s [`poll`](Reactor::poll) and applying the [`Waker`]s
+//! it returns: promoting a process blocked on a fd from `WaitingIO` to
+//! `Runnable`, or delivering an `IOReady` message to a `Fd.watch` owner.
 //!
 //! I/O-performing runtime functions (accept, read, write, etc.) call
-//! [`io_block`] when a syscall returns `EAGAIN`. This registers the fd,
-//! marks the process `WaitingIo`, and context-switches back to the
-//! scheduler. When the reactor detects readiness, the process resumes
-//! and retries the syscall.
+//! [`io_block`] when a syscall returns `EAGAIN`. This registers the fd as
+//! a [`Waker::Resume`], marks the process `WaitingIO`, and context-switches
+//! back to the scheduler. When the reactor reports readiness, the process
+//! resumes and retries the syscall.
 
 use std::collections::{HashMap, HashSet};
 use std::io;
@@ -20,177 +20,202 @@ use std::time::Duration;
 
 use polling::{Event, Events, PollMode, Poller};
 
+use koja_runtime_core::{ProcessState, Reactor, Readiness, Waker};
+
 use crate::ffi::{EAGAIN, get_errno, koja_context_switch};
-use crate::process_table::ProcessTable;
 use crate::scheduler::{
-    CURRENT_PID, ProcessState, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
+    CURRENT_PID, NativeTable, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
 };
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
 pub use koja_runtime_core::Interest;
 
-/// Key offset for watched fds so they don't collide with io_block keys
-/// (which use the PID, starting at 1).
-const WATCH_KEY_OFFSET: usize = 1_000_000;
-
-/// Global I/O reactor. Initialized once at startup.
+/// The native [`Reactor`]: a `polling` poller plus the bookkeeping to map
+/// a fired event back to the [`Waker`] registered for its fd.
 ///
-/// The `Poller` is thread-safe internally. The `registered` set tracks
-/// which fds are currently in the poller so we know whether to `add` or
-/// `modify` on re-registration.
-///
-/// `watched` maps event keys (fd + WATCH_KEY_OFFSET) to (owner_pid, fd)
-/// for fds registered via `Fd.watch`. When the reactor fires an event
-/// for a watched key, it sends an `IOReady` message instead of marking
-/// the process Runnable.
-///
-/// `blocking` maps an fd to the pid currently `io_block`-ed on it. The
-/// poller keys those waiters by pid, so without this reverse map a
-/// close-while-blocked (`release_fd`) from another worker can't find
-/// the waiter to wake it. One waiter per fd (last `register` wins),
-/// matching the poller's oneshot semantics.
-struct Reactor {
+/// The poller tracks exactly one registration per fd, so a single
+/// `fd -> Waker` map is the faithful model: the last `register` for an fd
+/// wins, matching the poller's own semantics. `registered` mirrors which
+/// fds are currently armed so we know whether to `add` or `modify`.
+struct NativeReactor {
     poller: Poller,
     registered: Mutex<HashSet<i32>>,
-    watched: Mutex<HashMap<usize, (i64, i32)>>,
-    blocking: Mutex<HashMap<i32, i64>>,
+    wakers: Mutex<HashMap<i32, Waker>>,
+}
+
+impl NativeReactor {
+    /// Adds or modifies `fd` in the poller with oneshot mode, using the
+    /// `registered` set to pick `add` vs `modify`.
+    fn arm(&self, fd: i32, event: Event) {
+        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+        let mut set = self.registered.lock().unwrap();
+        if set.contains(&fd) {
+            let _ = self
+                .poller
+                .modify_with_mode(borrowed, event, PollMode::Oneshot);
+        } else {
+            unsafe {
+                let _ = self
+                    .poller
+                    .add_with_mode(&borrowed, event, PollMode::Oneshot);
+            }
+            set.insert(fd);
+        }
+    }
+
+    /// Drops `fd` from the poller and the `registered` set. Idempotent.
+    fn disarm(&self, fd: i32) {
+        let mut set = self.registered.lock().unwrap();
+        if set.remove(&fd) {
+            let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
+            let _ = self.poller.delete(borrowed);
+        }
+    }
+}
+
+impl Reactor for NativeReactor {
+    /// Records the action to take when `fd` next becomes ready and arms
+    /// the poller for `interest`. The waker is stored before arming: an
+    /// already-ready fd can fire immediately.
+    fn register(&self, fd: i32, interest: Interest, waker: Waker) {
+        let event = match interest {
+            Interest::Readable => Event::readable(fd as usize),
+            Interest::Writable => Event::writable(fd as usize),
+        };
+        self.wakers.lock().unwrap().insert(fd, waker);
+        self.arm(fd, event);
+    }
+
+    fn deregister(&self, fd: i32) {
+        self.wakers.lock().unwrap().remove(&fd);
+        self.disarm(fd);
+    }
+
+    /// Waits for readiness up to `timeout` and returns a waker for each
+    /// fired fd. Oneshot disarms the poller entry on fire, but the waker
+    /// stays registered until an explicit [`deregister`](Reactor::deregister)
+    /// (an `io_block` waiter, on resume) or `release_fd` (a watcher) — a
+    /// `Fd.watch` owner re-arms by watching again.
+    fn poll(&self, timeout: Option<Duration>) -> Vec<Waker> {
+        let mut events = Events::new();
+        match self.poller.wait(&mut events, timeout) {
+            Ok(_) => {}
+            Err(e) if e.kind() == io::ErrorKind::Interrupted => return Vec::new(),
+            Err(_) => return Vec::new(),
+        }
+
+        let wakers = self.wakers.lock().unwrap();
+        events
+            .iter()
+            .filter_map(|event| with_readiness(*wakers.get(&(event.key as i32))?, &event))
+            .collect()
+    }
+}
+
+/// Fills a `Deliver` waker's readiness in from the fired event; passes a
+/// `Resume` waker through unchanged.
+fn with_readiness(waker: Waker, event: &Event) -> Option<Waker> {
+    match waker {
+        Waker::Deliver { fd, pid, .. } => Some(Waker::Deliver {
+            fd,
+            pid,
+            readiness: readiness_of(event),
+        }),
+        resume => Some(resume),
+    }
+}
+
+/// The direction an event fired in, preferring readable then writable;
+/// anything else (hangup, poll error) is `Error`.
+fn readiness_of(event: &Event) -> Readiness {
+    if event.readable {
+        Readiness::Readable
+    } else if event.writable {
+        Readiness::Writable
+    } else {
+        Readiness::Error
+    }
+}
+
+/// The `IOReady` wire variant byte for a readiness direction.
+fn io_variant(readiness: Readiness) -> u8 {
+    match readiness {
+        Readiness::Readable => IO_READY_READ,
+        Readiness::Writable => IO_READY_WRITE,
+        Readiness::Error => IO_READY_ERROR,
+    }
 }
 
 /// Singleton reactor instance, created in [`init`].
-static REACTOR: OnceLock<Reactor> = OnceLock::new();
+static REACTOR: OnceLock<NativeReactor> = OnceLock::new();
 
-/// Initializes the global reactor. Called once from `koja_rt_main_done`
-/// before spawning the reactor thread.
+/// Initializes the global reactor. Called once from the driver before
+/// spawning the reactor thread.
 pub fn init() {
-    REACTOR.get_or_init(|| Reactor {
+    REACTOR.get_or_init(|| NativeReactor {
         poller: Poller::new().expect("failed to create I/O poller"),
         registered: Mutex::new(HashSet::new()),
-        watched: Mutex::new(HashMap::new()),
-        blocking: Mutex::new(HashMap::new()),
+        wakers: Mutex::new(HashMap::new()),
     });
 }
 
-/// Adds or modifies a file descriptor in the poller with oneshot mode.
-/// Handles the add-vs-modify distinction using the `registered` set.
-fn poller_add_or_modify(fd: i32, event: Event) {
-    let reactor = REACTOR.get().expect("reactor not initialized");
-    let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-    let mut set = reactor.registered.lock().unwrap();
-
-    if set.contains(&fd) {
-        let _ = reactor
-            .poller
-            .modify_with_mode(borrowed, event, PollMode::Oneshot);
-    } else {
-        unsafe {
-            let _ = reactor
-                .poller
-                .add_with_mode(&borrowed, event, PollMode::Oneshot);
-        }
-        set.insert(fd);
-    }
-}
-
-/// Registers a file descriptor for readiness notification.
-///
-/// Uses oneshot mode: after one event fires the fd stops generating
-/// events until re-registered. The `key` is the process PID so the
-/// reactor thread knows which process to wake.
-fn register(fd: i32, interest: Interest, pid: i64) {
-    let event = match interest {
-        Interest::Readable => Event::readable(pid as usize),
-        Interest::Writable => Event::writable(pid as usize),
-    };
-    let reactor = REACTOR.get().expect("reactor not initialized");
-    reactor.blocking.lock().unwrap().insert(fd, pid);
-    poller_add_or_modify(fd, event);
-}
-
-/// Removes a file descriptor from the reactor.
-fn deregister(fd: i32) {
-    let reactor = REACTOR.get().expect("reactor not initialized");
-    reactor.blocking.lock().unwrap().remove(&fd);
-    let mut set = reactor.registered.lock().unwrap();
-    if set.remove(&fd) {
-        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-        let _ = reactor.poller.delete(borrowed);
-    }
-}
-
-/// Promotes a process from `WaitingIo` to `Runnable` if (and only if)
+/// Promotes a process from `WaitingIO` to `Runnable` if (and only if)
 /// it is still parked. The state guard is essential: a process whose
 /// state is `Running` (mid-`io_block`, before its context switch) or
 /// already `Runnable` must not be transitioned, or `ProcessTable::
 /// transition` trips its legal-edge assertion. Shared by the reactor
 /// readiness path and `release_fd` so the two can't drift.
-fn promote_io_waiter(sched: &mut ProcessTable, pid: i64) {
+fn promote_io_waiter(sched: &mut NativeTable, pid: i64) {
     if sched
         .get(pid)
-        .is_some_and(|process| process.state == ProcessState::WaitingIo)
+        .is_some_and(|process| process.state == ProcessState::WaitingIO)
     {
         sched.transition(pid, ProcessState::Runnable);
     }
 }
 
-/// Wakes the reactor thread from its `poller.wait()` call.
-/// Used during shutdown to unblock the reactor so it can exit.
+/// Applies the wakers from one [`poll`](Reactor::poll) pass. `Resume`
+/// wakers are promoted in a single `SCHED` critical section; `Deliver`
+/// wakers send their `IOReady` afterward (`send_io_event` takes `SCHED`
+/// itself), so payload glue never runs under the promote lock.
+fn apply_wakers(wakers: Vec<Waker>) {
+    {
+        let mut sched = SCHED.lock().unwrap();
+        for waker in &wakers {
+            if let Waker::Resume(pid) = waker {
+                promote_io_waiter(&mut sched, *pid);
+            }
+        }
+    }
+    for waker in wakers {
+        if let Waker::Deliver { fd, pid, readiness } = waker {
+            send_io_event(pid, io_variant(readiness), fd as i64);
+        }
+    }
+}
+
+/// Wakes the reactor thread from its `poll` wait. Used during shutdown so
+/// the reactor can observe [`SHUTDOWN`] and exit.
 pub fn notify() {
     if let Some(reactor) = REACTOR.get() {
         let _ = reactor.poller.notify();
     }
 }
 
-/// Dedicated reactor thread loop.
-///
-/// Polls for I/O readiness events and promotes waiting processes back
-/// to `Runnable`. Exits when the global [`SHUTDOWN`] flag is set.
+/// Dedicated reactor thread loop. Drives the reactor's [`poll`](Reactor::poll)
+/// and applies the returned wakers, waking workers afterward. Exits when
+/// the global [`SHUTDOWN`] flag is set.
 pub fn reactor_loop() {
     let reactor = REACTOR.get().expect("reactor not initialized");
-    let mut events = Events::new();
-
     loop {
         if SHUTDOWN.load(Ordering::Relaxed) {
             break;
         }
-
-        events.clear();
-        let timeout = Some(Duration::from_millis(50));
-        match reactor.poller.wait(&mut events, timeout) {
-            Ok(_) => {}
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => continue,
-            Err(_) => break,
-        }
-
-        if events.is_empty() {
+        let wakers = reactor.poll(Some(Duration::from_millis(50)));
+        if wakers.is_empty() {
             continue;
         }
-
-        let mut io_events: Vec<(i64, u8, i64)> = Vec::new();
-
-        {
-            let watched_guard = reactor.watched.lock().unwrap();
-            let mut sched_guard = SCHED.lock().unwrap();
-
-            for ev in events.iter() {
-                if let Some(&(owner_pid, fd)) = watched_guard.get(&ev.key) {
-                    let variant: u8 = if ev.readable {
-                        IO_READY_READ
-                    } else if ev.writable {
-                        IO_READY_WRITE
-                    } else {
-                        IO_READY_ERROR
-                    };
-                    io_events.push((owner_pid, variant, fd as i64));
-                } else {
-                    promote_io_waiter(&mut sched_guard, ev.key as i64);
-                }
-            }
-        }
-
-        for (pid, variant, fd) in io_events {
-            send_io_event(pid, variant, fd);
-        }
-
+        apply_wakers(wakers);
         WORK_AVAILABLE.notify_all();
     }
 }
@@ -202,72 +227,51 @@ pub fn reactor_loop() {
 /// `interest`: 0 = Read, 1 = Write.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_watch_fd(fd: i32, interest: i64) {
-    let reactor = REACTOR.get().expect("reactor not initialized");
-    let pid = CURRENT_PID.with(|c| c.get());
-    let key = WATCH_KEY_OFFSET + fd as usize;
-
-    let event = if interest == 1 {
-        Event::writable(key)
-    } else {
-        Event::readable(key)
+    let Some(reactor) = REACTOR.get() else {
+        return;
     };
-
-    // Insert before arming: an already-ready fd can fire immediately.
-    reactor.watched.lock().unwrap().insert(key, (pid, fd));
-    poller_add_or_modify(fd, event);
+    let pid = CURRENT_PID.with(|c| c.get());
+    let (interest, readiness) = if interest == 1 {
+        (Interest::Writable, Readiness::Writable)
+    } else {
+        (Interest::Readable, Readiness::Readable)
+    };
+    reactor.register(fd, interest, Waker::Deliver { fd, pid, readiness });
 }
 
 /// Removes a file descriptor from I/O readiness monitoring.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_unwatch_fd(fd: i32) {
-    let reactor = REACTOR.get().expect("reactor not initialized");
-    let key = WATCH_KEY_OFFSET + fd as usize;
-
-    reactor.watched.lock().unwrap().remove(&key);
-
-    let mut reg = reactor.registered.lock().unwrap();
-    if reg.remove(&fd) {
-        let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-        let _ = reactor.poller.delete(borrowed);
+    if let Some(reactor) = REACTOR.get() {
+        reactor.deregister(fd);
     }
 }
 
-/// Drops `fd` from the reactor's bookkeeping and wakes anyone parked
-/// on it, so closing an fd from one worker can't strand a process
-/// blocked on it from another. Idempotent.
+/// Drops `fd` from the reactor's bookkeeping and wakes whoever was parked
+/// on it, so closing an fd from one worker can't strand a process blocked
+/// on it from another. Idempotent.
 ///
-/// A process `io_block`-ed on `fd` is promoted `WaitingIo -> Runnable`
-/// (it resumes, retries the syscall, and gets `EBADF`); a `Fd.watch`
-/// owner is sent a synthetic `IOReady.Error` so its handler observes
-/// the hangup. Without this, the poller entry is torn down and no
-/// further readiness event ever fires for that fd.
-///
-/// Lock order mirrors [`reactor_loop`]: `watched` -> `blocking` ->
-/// `registered` -> `SCHED`, with `send_io_event` (which takes `SCHED`
-/// itself) called only after every guard is dropped.
+/// A process `io_block`-ed on `fd` is promoted `WaitingIO -> Runnable` (it
+/// resumes, retries the syscall, and gets `EBADF`); a `Fd.watch` owner is
+/// sent a synthetic `IOReady.Error` so its handler observes the hangup.
+/// Without this, the poller entry is torn down and no further readiness
+/// event ever fires for that fd.
 pub(crate) fn release_fd(fd: i32) {
     let Some(reactor) = REACTOR.get() else {
         return;
     };
-    let key = WATCH_KEY_OFFSET + fd as usize;
-    let watch_owner = reactor.watched.lock().unwrap().remove(&key);
-    let blocked_waiter = reactor.blocking.lock().unwrap().remove(&fd);
+    let waker = reactor.wakers.lock().unwrap().remove(&fd);
+    reactor.disarm(fd);
 
-    {
-        let mut reg = reactor.registered.lock().unwrap();
-        if reg.remove(&fd) {
-            let borrowed = unsafe { BorrowedFd::borrow_raw(fd) };
-            let _ = reactor.poller.delete(borrowed);
+    match waker {
+        Some(Waker::Resume(pid)) => {
+            let mut sched = SCHED.lock().unwrap();
+            promote_io_waiter(&mut sched, pid);
         }
-    }
-
-    if let Some(pid) = blocked_waiter {
-        let mut sched = SCHED.lock().unwrap();
-        promote_io_waiter(&mut sched, pid);
-    }
-
-    if let Some((owner_pid, _)) = watch_owner {
-        send_io_event(owner_pid, IO_READY_ERROR, fd as i64);
+        Some(Waker::Deliver { fd, pid, .. }) => {
+            send_io_event(pid, IO_READY_ERROR, fd as i64);
+        }
+        None => {}
     }
 
     WORK_AVAILABLE.notify_all();
@@ -276,17 +280,19 @@ pub(crate) fn release_fd(fd: i32) {
 /// Suspends the current process until `fd` is ready for the given
 /// [`Interest`]. Called from runtime I/O paths on `EAGAIN`.
 ///
-/// State must be set to `WaitingIo` **before** `register`: the
-/// reactor's wake guard checks `state == WaitingIo`, so a state of
-/// `Running` at fire time silently drops the event and the process
-/// parks forever. Reverse order means at worst a spurious resume.
+/// State must be set to `WaitingIO` **before** `register`: the reactor's
+/// wake guard checks `state == WaitingIO`, so a state of `Running` at fire
+/// time silently drops the event and the process parks forever. Reverse
+/// order means at worst a spurious resume.
 pub fn io_block(fd: i32, interest: Interest) {
     let pid = CURRENT_PID.with(|c| c.get());
 
     // A refused park means a kill landed mid-run: skip the registration
     // (no waiter to wake) and let the switch-out below be permanent.
-    if SCHED.lock().unwrap().try_park_io(pid) {
-        register(fd, interest, pid);
+    if SCHED.lock().unwrap().try_park_io(pid)
+        && let Some(reactor) = REACTOR.get()
+    {
+        reactor.register(fd, interest, Waker::Resume(pid));
     }
 
     crate::tsan::switch_to_scheduler();
@@ -296,7 +302,9 @@ pub fn io_block(fd: i32, interest: Interest) {
         koja_context_switch(yield_sp_ptr, sched_sp);
     }
 
-    deregister(fd);
+    if let Some(reactor) = REACTOR.get() {
+        reactor.deregister(fd);
+    }
 }
 
 /// Runs a non-blocking syscall, suspending the process on `EAGAIN`

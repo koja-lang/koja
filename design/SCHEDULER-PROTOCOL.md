@@ -3,10 +3,10 @@
 The destination design for the Koja runtime as a **formal protocol**
 rather than a single hard-coded scheduler. This is the ROADMAP Phase 5
 A1 deliverable: define the interface first, make the existing
-multi-threaded native scheduler the *first implementation* of it, and
+multi-threaded native scheduler the _first implementation_ of it, and
 shape the interface so a **single-threaded cooperative** backend (the
 Phase 6 WASM prerequisite, and the path to `koja-ir-eval` process
-parity) can be the *second implementation* without changing the core or
+parity) can be the _second implementation_ without changing the core or
 any user code.
 
 This is a destination doc, not a trajectory. Every claim reduces to a
@@ -20,12 +20,12 @@ surface, the agnostic-core / platform-adapter seam, the suspension
 model, and the native-side conformance refactor. Out of scope (named in
 [Non-goals](#non-goals)): building the cooperative executor for
 `koja-ir-eval`, the WASI reactor, monitors / supervision (A0/A2),
-preemption, and work-stealing. The protocol must *accommodate* those;
-this effort does not *build* them.
+preemption, and work-stealing. The protocol must _accommodate_ those;
+this effort does not _build_ them.
 
 ## Why a protocol
 
-Today the runtime is one concrete scheduler. The *scheduling policy* is
+Today the runtime is one concrete scheduler. The _scheduling policy_ is
 already platform-agnostic — `ProcessTable`
 ([`process_table.rs`](../crates/koja-runtime/src/process_table.rs)),
 `Mailbox` ([`mailbox.rs`](../crates/koja-runtime/src/mailbox.rs)), and
@@ -49,12 +49,12 @@ stack switch, no kqueue). And `koja-ir-eval` can't use any of them
 either — it is a synchronous tree-walker, which is why every process
 feature there returns `RuntimeError::Unsupported` today. A protocol that
 both the native runtime and a single-threaded cooperative backend
-satisfy is the one design that unblocks WASM *and* eval parity at once.
+satisfy is the one design that unblocks WASM _and_ eval parity at once.
 
 ## The seam
 
-Two layers. The **agnostic core** owns scheduling *decisions*; the
-**platform adapter** owns *capabilities* (how a process runs, how I/O
+Two layers. The **agnostic core** owns scheduling _decisions_; the
+**platform adapter** owns _capabilities_ (how a process runs, how I/O
 readiness arrives, how time and signals are observed, how the loop is
 driven and synchronized).
 
@@ -93,19 +93,19 @@ semantics, kill-tombstone discipline, and counter oracles for free.
 The current `Process` struct conflates both layers; splitting it is the
 central structural move.
 
-| Concern | Layer | Today | Destination |
-| --- | --- | --- | --- |
-| `state`, `waiting`, `deadline`, `on_cpu` | agnostic | `Process` fields | `ProcessControlBlock` in core |
-| ready queue, slotmap, generations, timer/deadline heaps, transitions, counters, trace | agnostic | `ProcessTable` | `ProcessTable<E, M>` in core (unchanged logic) |
-| mailbox routing (system/business/reply, priority, displacement, wait targets) | agnostic | `Mailbox` | `Mailbox<M>` in core (generic over message repr) |
-| `func`, `init_state`, `sp`, `stack`, `tsan_fiber` | platform | `Process` fields | `E::Context` owned by the executor |
-| message representation | platform | byte `Envelope` | `M`: native bytes vs coop `Value` |
-| process activation / suspension | platform | `koja_context_switch`, `process_trampoline` | `Executor` trait |
-| fd readiness | platform | `reactor.rs` (`polling`) | `Reactor` trait |
-| run loop + synchronization | platform | `worker_loop`, `SCHED` Mutex, `Condvar` | `Driver` trait |
-| clock | platform | `Instant::now()` inline | `Clock` trait |
-| OS signals | platform | `signals.rs` (`sigaction`) | `SignalSource` trait |
-| allocator | shared | `memory.rs` (libc passthrough) | stays libc passthrough; see [Allocator](#allocator) |
+| Concern                                                                               | Layer    | Today                                       | Destination                                         |
+| ------------------------------------------------------------------------------------- | -------- | ------------------------------------------- | --------------------------------------------------- |
+| `state`, `waiting`, `deadline`, `on_cpu`                                              | agnostic | `Process` fields                            | `ProcessControlBlock` in core                       |
+| ready queue, slotmap, generations, timer/deadline heaps, transitions, counters, trace | agnostic | `ProcessTable`                              | `ProcessTable<X, M>` in core (`X` = `E::Execution`)  |
+| mailbox routing (system/business/reply, priority, displacement, wait targets)         | agnostic | `Mailbox`                                   | `Mailbox<M>` in core (generic over message repr)    |
+| `func`, `init_state`, `sp`, `stack`, `tsan_fiber`                                     | platform | `Process` fields                            | `E::Execution` owned by the executor                |
+| message representation                                                                | platform | byte `Envelope`                             | `M`: native bytes vs coop `Value`                   |
+| process activation / suspension                                                       | platform | `koja_context_switch`, `process_trampoline` | `Executor` trait                                    |
+| fd readiness                                                                          | platform | `reactor.rs` (`polling`)                    | `Reactor` trait                                     |
+| run loop + synchronization                                                            | platform | `worker_loop`, `SCHED` Mutex, `Condvar`     | `Driver` trait                                      |
+| clock                                                                                 | platform | `Instant::now()` inline                     | `Clock` trait                                       |
+| OS signals                                                                            | platform | `signals.rs` (`sigaction`)                  | `SignalSource` trait                                |
+| allocator                                                                             | shared   | `memory.rs` (libc passthrough)              | stays libc passthrough; see [Allocator](#allocator) |
 
 ## Glossary
 
@@ -118,15 +118,21 @@ central structural move.
   cooperative eval adapter come later.
 - **`ProcessControlBlock` (PCB).** The agnostic per-process record:
   lifecycle `state`, `waiting` target, optional `deadline`, `on_cpu`
-  claim flag. Holds an `E::Context` for the executor's private execution
-  state.
-- **Execution context (`E::Context`).** Everything an executor needs to
+  claim flag. Holds an `E::Execution` for the executor's private
+  execution state — a PCB is precisely the structure that owns a
+  process's saved execution, so the core stores it without inspecting it.
+- **Execution state (`E::Execution`).** Everything an executor needs to
   run and resume one process. Native: entry fn, config payload, saved
   `sp`, stack mapping, TSan fiber. Cooperative: entry reference, config
   value, and resumption state.
+- **Continuation (`E::Continuation`).** The small `Copy` resume token the
+  driver marshals in and out of the PCB around a `resume` — a projection
+  of the execution state (native: the saved `sp`). It crosses the lock
+  boundary by value so no `&mut Execution` is held across a switch.
 - **Yield.** The act of a running process handing control back to the
-  driver at a suspension point (`receive`, `io_block`). The executor
-  reports *why* via a [`YieldReason`](#executor).
+  driver at a suspension point (`receive`, `io_block`). The driver reads
+  _why_ from the PCB's lifecycle `state`, the authoritative record it
+  must consult anyway to handle a concurrent kill or wake.
 - **Suspension point.** A site in a process body that may yield:
   `koja_rt_receive[_timeout]`, `koja_rt_call_receive`, and `io_block`.
   The **release-before-suspend invariant** governs all of them.
@@ -138,36 +144,45 @@ shape and the obligations.
 
 ### `Executor`
 
-Owns how a process is created, entered, suspended, and resumed. This is
-the trait that abstracts stackful-vs-cooperative.
+Owns how a process is entered, suspended, and resumed. This is the trait
+that abstracts stackful-vs-cooperative.
 
 ```rust
 pub trait Executor {
     /// Per-process execution state the core stores opaquely in the PCB.
-    type Context;
+    type Execution;
+    /// The Copy resume token the driver marshals in/out of the PCB around
+    /// a resume — a projection of Execution (native: the saved `sp`).
+    type Continuation: Copy;
     /// Message payload representation carried in this executor's mailbox.
     type Message: Message;
 
-    /// Build the execution context for a freshly spawned process.
-    fn create(&self, entry: EntryPoint, config: Config<Self>) -> Self::Context;
-
-    /// Run or resume `ctx` until it yields or finishes. Called by the
+    /// Enter or continue `pid` from `continuation`, run it until it
+    /// yields, and return the token to resume it next time. Called by the
     /// Driver with the core lock/borrow *released*.
-    fn resume(&self, pid: Pid, ctx: &mut Self::Context) -> YieldReason;
-}
-
-/// Why a process handed control back to the driver.
-pub enum YieldReason {
-    Blocked,    // parked on receive / reply (already recorded in the PCB)
-    WaitingIo,  // parked on fd readiness
-    Finished,   // returned; the driver marks it Dead and reclaims
+    fn resume(&self, pid: Pid, continuation: Self::Continuation) -> Self::Continuation;
 }
 ```
 
+`resume` deliberately trades only the `Copy` `Continuation`, not
+`&mut Execution`: the native switch releases the core lock across the
+context switch, and the running process reads its own execution state
+mid-switch (the trampoline re-locks to read entry fn + config), so a
+borrow can't span the suspension point. The driver reads the prior token
+out of the PCB under the lock, drops the lock, calls `resume`, stores the
+returned token back, and reads the PCB's lifecycle `state` to decide what
+to do next — there is no separate yield-reason channel, because a
+concurrent kill or wake means the PCB is the only trustworthy source.
+
+Construction is **not** a trait method: each backend builds its own
+`Execution` from its own spawn entry point (native: `koja_rt_spawn` maps
+a stack and copies the config; cooperative: the eval driver's spawn
+builtin), so there is no generic caller for a `create`.
+
 Native `resume` does a `koja_context_switch` into the process stack and
-reads the post-switch state from the PCB. Cooperative `resume` calls the
-interpreter to run the process until it reaches a suspension point and
-returns the reason directly — no stack switch.
+returns the saved `sp`. Cooperative `resume` calls the interpreter to run
+the process until it reaches a suspension point and returns its
+resumption token — no stack switch.
 
 The suspension primitive itself (what `koja_rt_receive` calls to give up
 control) is the executor's inverse of `resume`. Native: switch back to
@@ -177,7 +192,7 @@ call stack to the driver. Both obey the same invariant below.
 ### `Reactor`
 
 Abstracts fd readiness. Unifies the two existing modes — `io_block`
-(promote a `WaitingIo` waiter) and `Fd.watch` (deliver an `IOReady`
+(promote a `WaitingIO` waiter) and `Fd.watch` (deliver an `IOReady`
 message) — behind one waker vocabulary, which also resolves
 [RUNTIME-GAPS.md](RUNTIME-GAPS.md) gap #2 (the two keyspaces multiplexed
 into one integer).
@@ -186,18 +201,28 @@ into one integer).
 pub trait Reactor {
     fn register(&self, fd: Fd, interest: Interest, waker: Waker);
     fn deregister(&self, fd: Fd);
-    /// Drive one readiness pass; return wakers whose fds are ready.
-    fn poll(&self, timeout: Option<Duration>) -> Vec<Ready>;
+    /// Drive one readiness pass; return the wakers whose fds fired.
+    fn poll(&self, timeout: Option<Duration>) -> Vec<Waker>;
 }
 
 pub enum Waker {
-    Resume(Pid),              // io_block: WaitingIo -> Runnable
-    Deliver { pid: Pid, fd: Fd }, // watch: enqueue an IOReady message
+    Resume(Pid),                                  // io_block: WaitingIO -> Runnable
+    Deliver { fd: Fd, pid: Pid, readiness: Readiness }, // watch: enqueue an IOReady
 }
+
+pub enum Readiness { Error, Readable, Writable } // the fired direction
 ```
 
-Native drives `poll` on a dedicated thread (`polling` crate). A
-cooperative driver calls `poll` inline when the ready queue empties
+The waker is registered as the *action* to take; `poll` returns it with
+the `Deliver` `readiness` filled in from the event that fired (the
+`IOReady` variant a watcher observes). The poller tracks one registration
+per fd, so the native reactor stores a single `fd -> Waker` map — the last
+`register` wins, matching the poller's own semantics, which is why the two
+old keyspaces collapse into one.
+
+Native drives `poll` on a dedicated thread (`polling` crate) and applies
+the returned wakers (promote under `SCHED`, then send `IOReady`s after).
+A cooperative driver calls `poll` inline when the ready queue empties
 (WASI `poll_oneoff`; eval may block the single thread on the syscall and
 skip the reactor entirely for the blocking path).
 
@@ -221,7 +246,7 @@ a no-op or host-specific.
 
 ### `Driver`
 
-Owns the run loop and *all* synchronization. This is where
+Owns the run loop and _all_ synchronization. This is where
 multi-threaded and single-threaded diverge most.
 
 ```rust
@@ -248,7 +273,7 @@ Driver's choice.
 
 ## Generic runtime operations
 
-The `koja_rt_*` *logic* (peek mailbox, park if empty, yield, re-peek;
+The `koja_rt_*` _logic_ (peek mailbox, park if empty, yield, re-peek;
 token correlation for `call`; envelope routing for `send`) is
 platform-agnostic and lives in core **once**, generic over the traits:
 
@@ -277,7 +302,7 @@ exactly where target divergence belongs.
 ## The suspension model (the crux)
 
 The one decision the spike must nail. A suspension point must give up
-control *without* assuming OS threads or asm stack switching.
+control _without_ assuming OS threads or asm stack switching.
 
 Options considered:
 
@@ -288,9 +313,9 @@ Options considered:
 2. **Stackful coroutines everywhere** (asm context switch): native
    already does this; WASM can't (no portable stack switch without
    Asyncify, which is a toolchain feature, not a runtime one).
-3. **Executor-owned suspension** (chosen): the *core* defines suspension
-   abstractly as "executor yields control back to the driver with a
-   `YieldReason`"; each executor implements it in its native idiom.
+3. **Executor-owned suspension** (chosen): the _core_ defines suspension
+   abstractly as "executor yields control back to the driver, leaving the
+   reason in the PCB"; each executor implements it in its native idiom.
 
 **Decision: option 3.** The `Executor` owns activation and suspension;
 the core never names a stack or a thread. Native implements suspension
@@ -306,8 +331,8 @@ The load-bearing rule that makes one set of scheduling code correct on
 both a `Mutex`-guarded native core and a single-borrow cooperative core:
 
 > A suspension point must **release its access to the core** (drop the
-> `Mutex` guard / end the `&mut` borrow) *before* yielding, and
-> re-acquire it *after* resuming.
+> `Mutex` guard / end the `&mut` borrow) _before_ yielding, and
+> re-acquire it _after_ resuming.
 
 Native already obeys this — `koja_rt_receive` drops the `SCHED` guard
 before `yield_to_scheduler`, and `io_block` drops it before
@@ -334,7 +359,7 @@ pub trait Message {
   the same tag bits, skipping byte (de)serialization — the on-the-wire
   format is observable to nobody but the runtime.
 
-The *priority and lifecycle semantics* — the part that must stay
+The _priority and lifecycle semantics_ — the part that must stay
 identical for observable parity — live in core and are shared.
 
 ## Allocator
@@ -343,9 +368,9 @@ Allocation is **not a scheduler-protocol concern.** It is a distinct,
 orthogonal seam, and it is called out here only to fix that boundary
 explicitly — no allocator trait joins the five capability traits above.
 
-The distinction is categorical. The scheduler protocol is a *policy*
+The distinction is categorical. The scheduler protocol is a _policy_
 interface with genuinely different implementations (multi-threaded,
-cooperative, WASI). Allocation is a *provider* interface — one correct
+cooperative, WASI). Allocation is a _provider_ interface — one correct
 behavior (`alloc` / `realloc` / `free`), swapped only to change the
 backing allocator. Its eventual formalization is therefore most likely
 "conform to Rust's `GlobalAlloc` on the Rust side, plus the existing
@@ -354,7 +379,7 @@ codegen side" — not a bespoke Koja trait.
 
 That seam already half-exists.
 [`memory.rs`](../crates/koja-runtime/src/memory.rs) is not "the
-allocator" — it is the *single current implementation* of an
+allocator" — it is the _single current implementation_ of an
 already-stable contract: codegen emits calls to `koja_alloc` /
 `koja_free`, and `memory.rs` is the libc-backed conformer behind those
 symbols (with a load-bearing C-interop passthrough equivalence — see its
@@ -366,7 +391,7 @@ Every planned tier-1 target has a working `malloc`: POSIX (system libc)
 and `wasm32-wasip1` (`wasi-libc`); the `libc` crate links on both. The
 only genuinely libc-less target is bare-browser `wasm32-unknown-unknown`
 — post-1.0 per [ROADMAP.md](ROADMAP.md), and even then resolvable by
-*providing* `malloc` / `free` at link time (link `wasi-libc`, or export
+_providing_ `malloc` / `free` at link time (link `wasi-libc`, or export
 a `dlmalloc` shim) rather than threading an allocator through every core
 type. The real forcing function for a second implementation is an arena
 / GC allocator, which `memory.rs`'s own module doc already anticipates —
@@ -379,16 +404,19 @@ How a future eval/WASI adapter satisfies the protocol — the proof the
 seam is real. (Not built in this spike; included so the trait surface is
 validated against its hardest consumer.)
 
-- **`Executor::Context`** = `{ entry: FnRef, config: Value, resume:
-  ResumeState }`. `resume(pid, ctx)` re-enters the interpreter at
-  `ctx.resume`, runs until the body hits `receive`/`io_block`, and
-  returns `YieldReason`. No stack, no asm.
+- **`Executor::Execution`** = `{ entry: FnRef, config: Value, resume:
+ResumeState }`, with `Continuation` = the resume token (an interpreter
+  state handle; possibly `()` if the state lives in `Execution`).
+  `resume(pid, continuation)` re-enters the interpreter at the saved
+  point, runs until the body hits `receive`/`io_block`, parks via the
+  core (recording the reason in the PCB), and returns the next token. No
+  stack, no asm.
 - **`Driver::run`** = single loop, no `Mutex`: `promote_due_deadlines`,
   `take_due_timers`, `signals.drain`, `claim_next`, `resume`,
   `after_switch`; when `ready` is empty, `reactor.poll(nearest_wakeup)`
   or block; exit on entry death. Identical control flow to
   `worker_loop`, minus threads and locking.
-- **`receive`** runs the *core* `receive` op: peek the mailbox (core),
+- **`receive`** runs the _core_ `receive` op: peek the mailbox (core),
   park via `try_park` (core), end the borrow, return to the driver
   (executor suspension), and on resume re-peek (core). The borrow
   discipline is the same statements native runs under the lock.
@@ -402,18 +430,18 @@ the protocol is correct.
 
 ## Native conformance (impl #1)
 
-The proof the protocol describes a *real* scheduler, not an aspiration:
+The proof the protocol describes a _real_ scheduler, not an aspiration:
 refactor `koja-runtime` to implement the traits with zero behavior
 change.
 
-| Trait | Native implementation | Source today |
-| --- | --- | --- |
-| `Executor` | asm `koja_context_switch`, `mmap` stacks, `process_trampoline`, TSan fibers | `scheduler.rs`, `ffi.rs`, `arch/*.s`, `tsan.rs` |
-| `Reactor` | `polling` kqueue/epoll on a dedicated thread | `reactor.rs` |
-| `Driver` | N worker threads, `Mutex<ProcessTable>`, `Condvar`, `SHUTDOWN`, cgroup-aware `worker_count` | `scheduler.rs` |
-| `Clock` | `Instant::now()` | inline |
-| `SignalSource` | `sigaction` latch + drain | `signals.rs` |
-| message `M` | `Envelope` (byte wire) | `wire.rs` |
+| Trait          | Native implementation                                                                       | Source today                                    |
+| -------------- | ------------------------------------------------------------------------------------------- | ----------------------------------------------- |
+| `Executor`     | asm `koja_context_switch`, `mmap` stacks, `process_trampoline`, TSan fibers                 | `scheduler.rs`, `ffi.rs`, `arch/*.s`, `tsan.rs` |
+| `Reactor`      | `polling` kqueue/epoll on a dedicated thread                                                | `reactor.rs`                                    |
+| `Driver`       | N worker threads, `Mutex<ProcessTable>`, `Condvar`, `SHUTDOWN`, cgroup-aware `worker_count` | `scheduler.rs`                                  |
+| `Clock`        | `Instant::now()`                                                                            | inline                                          |
+| `SignalSource` | `sigaction` latch + drain                                                                   | `signals.rs`                                    |
+| message `M`    | `Envelope` (byte wire)                                                                      | `wire.rs`                                       |
 
 The race/leak oracles (`koja_rt_sched_violations`, `koja_rt_live_blocks`,
 `tests/lang/memory/`) and `just tsan` are the guardrails: behavior must
@@ -438,18 +466,18 @@ the integration proof that the shim is a clean seam.
 
 ## What moves where
 
-| File | Destination |
-| --- | --- |
-| `process_table.rs`, `mailbox.rs`, `wire.rs`, `sched_trace.rs` | core (generic over `E`, `M`) |
-| scheduling-policy + generic `koja_rt_*` logic (extracted from `scheduler.rs`) | core |
-| trait defs (`Executor`, `Reactor`, `Clock`, `SignalSource`, `Driver`, `Message`) | core (new) |
-| `memory.rs` | core (shared libc passthrough) |
-| asm stacks, `process_trampoline`, `worker_loop`, `koja_rt_main_done`, Mutex/Condvar, thread-locals, `worker_count` | `koja-runtime` (native `Executor` + `Driver`) |
-| `reactor.rs` | `koja-runtime` (native `Reactor`) |
-| `signals.rs` | `koja-runtime` (native `SignalSource`) |
-| `tsan.rs`, `ffi.rs`, `arch/*.s` | `koja-runtime` (native executor detail) |
-| `extern "C" koja_rt_*` wrappers + global accessor | `koja-runtime` |
-| `fs.rs`, `socket.rs`, `system.rs`, `intrinsics/`, `string`, `format`, `util`, `parse_text` | `koja-runtime` (POSIX externs; not scheduler, untouched) |
+| File                                                                                                               | Destination                                              |
+| ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
+| `process_table.rs`, `mailbox.rs`, `wire.rs`, `scheduler_trace.rs`                                                  | core (generic over `E`, `M`)                             |
+| scheduling-policy + generic `koja_rt_*` logic (extracted from `scheduler.rs`)                                      | core                                                     |
+| trait defs (`Executor`, `Reactor`, `Clock`, `SignalSource`, `Driver`, `Message`)                                   | core (new)                                               |
+| `memory.rs`                                                                                                        | core (shared libc passthrough)                           |
+| asm stacks, `process_trampoline`, `worker_loop`, `koja_rt_main_done`, Mutex/Condvar, thread-locals, `worker_count` | `koja-runtime` (native `Executor` + `Driver`)            |
+| `reactor.rs`                                                                                                       | `koja-runtime` (native `Reactor`)                        |
+| `signals.rs`                                                                                                       | `koja-runtime` (native `SignalSource`)                   |
+| `tsan.rs`, `ffi.rs`, `arch/*.s`                                                                                    | `koja-runtime` (native executor detail)                  |
+| `extern "C" koja_rt_*` wrappers + global accessor                                                                  | `koja-runtime`                                           |
+| `fs.rs`, `socket.rs`, `system.rs`, `intrinsics/`, `string`, `format`, `util`, `parse_text`                         | `koja-runtime` (POSIX externs; not scheduler, untouched) |
 
 ## Mechanical checks
 
@@ -497,7 +525,7 @@ the integration proof that the shim is a clean seam.
 - [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) — backends as siblings
   over a sealed `IRProgram`; this protocol is the runtime analogue.
 - [RUNTIME-GAPS.md](RUNTIME-GAPS.md) — gap #2 (typed `EventKey`) folds
-  into the `Reactor`/`Waker` vocabulary; gap #3 (wake `WaitingIo` on
+  into the `Reactor`/`Waker` vocabulary; gap #3 (wake `WaitingIO` on
   message) is a `Reactor`/core policy question surfaced by the seam.
 - [ABI.md](ABI.md) — the `koja_rt_*` and `wire.rs` contract this spike
   preserves verbatim.

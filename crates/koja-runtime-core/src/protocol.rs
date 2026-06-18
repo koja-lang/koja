@@ -57,26 +57,32 @@ pub enum Interest {
     Writable,
 }
 
-/// Why a process handed control back to the driver at a suspension
-/// point. The parked state is already recorded in the process's control
-/// block; this only tells the driver what to do next.
-pub enum YieldReason {
-    /// Parked on `receive` / reply.
-    Blocked,
-    /// Returned; the driver marks it dead and reclaims.
-    Finished,
-    /// Parked on fd readiness.
-    WaitingIo,
+/// Which direction a registered fd became ready in. Set by the reactor
+/// from the fired event, then carried to the watcher as the `IOReady`
+/// variant. `Error` covers hangup / poll error / a forced `release_fd`.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Readiness {
+    Error,
+    Readable,
+    Writable,
 }
 
 /// What the reactor does when a registered fd becomes ready: resume a
 /// process blocked on the fd (`io_block` path), or enqueue an `IOReady`
 /// message for a watcher (`Fd.watch` path). Replaces the integer-offset
 /// keyspace multiplexing called out in `koja/design/RUNTIME-GAPS.md`.
+///
+/// Registered as the action to take; returned by [`Reactor::poll`] with
+/// the `Deliver` `readiness` filled in from the event that fired.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Waker {
     /// Deliver an `IOReady` message to `pid` for `fd`.
-    Deliver { fd: i32, pid: Pid },
-    /// Promote `pid` from `WaitingIo` to `Runnable`.
+    Deliver {
+        fd: i32,
+        pid: Pid,
+        readiness: Readiness,
+    },
+    /// Promote `pid` from `WaitingIO` to `Runnable`.
     Resume(Pid),
 }
 
@@ -106,21 +112,37 @@ pub trait Reactor {
 /// Process activation and suspension — the abstraction that decouples
 /// stackful-native from single-threaded-cooperative execution.
 ///
-/// Native [`resume`](Executor::resume) context-switches into the
-/// process stack and reads the post-switch state from the control
-/// block; a cooperative executor re-enters the interpreter and returns
-/// the [`YieldReason`] directly. The **release-before-suspend
-/// invariant** holds for both: a suspension point releases its access to
-/// the core before yielding and re-acquires it on resume.
+/// [`resume`](Executor::resume) enters or continues a process until it
+/// next yields control back. It deliberately trades only a small `Copy`
+/// [`Continuation`](Executor::Continuation) token (native: the saved
+/// stack pointer) rather than `&mut Execution`: the native switch
+/// releases the core lock across the context switch, and the running
+/// process reads its own execution state mid-switch, so a borrow can't
+/// span the suspension point. The [`Driver`] reads the prior token out
+/// of the table under the lock, drops the lock, calls `resume`, then
+/// stores the returned token back — and consults the process's
+/// control-block state (the authoritative record) to decide what to do
+/// next, since a concurrent kill or wake may have landed meanwhile.
+///
+/// The **release-before-suspend invariant** holds for both backends: a
+/// suspension point releases its access to the core before yielding and
+/// re-acquires it on resume.
 pub trait Executor {
-    /// Per-process execution state the core stores opaquely.
-    type Context;
+    /// Per-process execution state, stored opaquely in each process's
+    /// [`ProcessControlBlock`](crate::process_table::ProcessControlBlock).
+    type Execution;
+    /// The `Copy` resume token the driver marshals in and out of the
+    /// table around a [`resume`](Executor::resume) (native: the saved
+    /// stack pointer). A projection of [`Execution`](Executor::Execution)
+    /// small enough to move across the lock boundary by value.
+    type Continuation: Copy;
     /// Message representation carried in this executor's mailbox.
     type Message: Message;
 
-    /// Run or resume `ctx` until it yields or finishes. Called by the
-    /// [`Driver`] with the core lock / borrow released.
-    fn resume(&self, pid: Pid, ctx: &mut Self::Context) -> YieldReason;
+    /// Enter or continue process `pid` from `continuation`, running it
+    /// until it yields, and return the token to resume it next time.
+    /// Called by the [`Driver`] with the core lock / borrow released.
+    fn resume(&self, pid: Pid, continuation: Self::Continuation) -> Self::Continuation;
 }
 
 /// Owns the run loop and all synchronization. Native spins

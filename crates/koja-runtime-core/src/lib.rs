@@ -7,20 +7,28 @@
 //! native adapter (`koja-runtime`) and the future cooperative adapters
 //! (eval, WASI) depend on it and supply the capabilities behind the
 //! protocol traits. The scheduling data structures (`ProcessTable`,
-//! `ProcessState`, `sched_trace`) join this crate when `Process` is
-//! split into an agnostic control block plus an executor-owned
-//! execution context.
+//! `ProcessState`, `scheduler_trace`) live here too, generic over the
+//! executor's per-process execution state `X` and message representation `M`,
+//! so the policy is shared while a process splits into an agnostic control
+//! block plus an executor-owned execution state.
 //!
 //! See `koja/design/SCHEDULER-PROTOCOL.md` for the full design.
 
 pub mod mailbox;
 pub mod memory;
+pub mod process_table;
 pub mod protocol;
+pub mod scheduler_trace;
 pub mod wire;
 
 pub use mailbox::{Mailbox, WaitTarget};
-pub use protocol::{
-    Clock, Driver, Executor, Interest, Lifecycle, Message, Pid, Reactor, SignalSource, Tag, Waker,
-    YieldReason,
+pub use process_table::{
+    ProcessControlBlock, ProcessState, ProcessTable, Reclaim, ScheduleCounters, TimerEntry,
+    slot_index,
 };
+pub use protocol::{
+    Clock, Driver, Executor, Interest, Lifecycle, Message, Pid, Reactor, Readiness, SignalSource,
+    Tag, Waker,
+};
+pub use scheduler_trace::{TraceEntry, TraceEvent};
 pub use wire::{Envelope, OwnedPayload};

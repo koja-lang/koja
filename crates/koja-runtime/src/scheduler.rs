@@ -7,36 +7,42 @@
 
 use std::alloc;
 use std::cell::{Cell, UnsafeCell};
-use std::mem;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Condvar, Mutex, Once};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use koja_runtime_core::{
+    Clock, Driver, Executor, Lifecycle, Pid, ProcessTable, SignalSource, slot_index,
+};
+
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
-use crate::mailbox::{Mailbox, WaitTarget};
+use crate::mailbox::WaitTarget;
 use crate::memory;
-use crate::process_table::ProcessTable;
 use crate::tsan;
 use crate::wire::{
     Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
     OwnedPayload, TAG_BUSINESS, TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE, TAG_REPLY,
 };
 
+/// The native process table: a generational slotmap of [`NativeExecution`]
+/// execution states carrying byte [`Envelope`] messages.
+pub(crate) type NativeTable = ProcessTable<NativeExecution, Envelope>;
+
 /// Checks the shared signal flags ([`crate::signals`]) and injects
 /// lifecycle messages into the main process's system queue. Called
 /// from the worker loop. Only takes the lock when a signal actually
 /// fired.
 fn poll_signals() {
-    let fired = crate::signals::drain();
+    let fired = NativeSignals.drain();
     if fired.is_empty() {
         return;
     }
 
     let main_pid = SCHED.lock().unwrap().main_pid();
-    for variant in fired {
-        send_lifecycle_to(main_pid, variant);
+    for lifecycle in fired {
+        send_lifecycle_to(main_pid, lifecycle as i64);
     }
 }
 
@@ -79,45 +85,15 @@ const RET_ADDR_OFFSET: usize = 48;
 // Process & scheduler state
 // ---------------------------------------------------------------------------
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum ProcessState {
-    /// Newly spawned, not yet entered by any worker.
-    Created,
-    /// Ready to run; waiting for a worker to pick it up.
-    Runnable,
-    /// Currently executing on a worker thread.
-    Running,
-    /// Waiting for a message (via `receive`). Becomes `Runnable` when a
-    /// message arrives or its deadline expires.
-    Blocked,
-    /// Waiting for I/O readiness on a file descriptor. The reactor
-    /// thread promotes this to `Runnable` when the fd is ready.
-    WaitingIo,
-    /// Function returned; process will not be scheduled again.
-    Dead,
-}
-
 /// An `mmap`-backed process stack: a `PROT_NONE` guard page at the
 /// lowest address (the growth end, since stacks grow down) followed by
-/// the usable region. Held on each [`Process`] so the mapping is
+/// the usable region. Held on each [`NativeExecution`] so the mapping is
 /// `munmap`ped on drop when the process's resources are reclaimed.
 pub(crate) struct ProcessStack {
     /// Base of the whole mapping (start of the guard page).
     base: *mut u8,
     /// Total mapped bytes: guard page + usable stack.
     size: usize,
-}
-
-impl ProcessStack {
-    /// The empty placeholder left behind when a stack's ownership is
-    /// moved out (see [`Process::take_resources`]). A null base drops as
-    /// a no-op.
-    pub(crate) const fn null() -> Self {
-        Self {
-            base: ptr::null_mut(),
-            size: 0,
-        }
-    }
 }
 
 impl Drop for ProcessStack {
@@ -131,121 +107,128 @@ impl Drop for ProcessStack {
     }
 }
 
-/// A single lightweight Koja process.
+/// A native process's execution state: everything the native
+/// [`Executor`](koja_runtime_core::Executor) needs to enter and resume one
+/// process. Stored opaquely in the agnostic
+/// [`ProcessControlBlock`](koja_runtime_core::ProcessControlBlock); the
+/// scheduling policy in `koja-runtime-core` never inspects it.
 ///
-/// Each process has its own stack, a routed [`Mailbox`] of message
-/// envelopes, and a state machine driven by the scheduler. Processes live
-/// in a generational slotmap ([`ProcessTable`]); a PID packs the slot
-/// index and generation rather than being a bare `Vec` offset.
-pub(crate) struct Process {
-    /// Optional wake deadline. Set by `koja_rt_receive_timeout` and
-    /// `koja_rt_call_receive`, cleared on resume. The worker loop promotes
-    /// `Blocked → Runnable` when the deadline passes.
-    pub(crate) deadline: Option<Instant>,
+/// Dropping an execution state unmaps its `stack` and releases its `init_state`
+/// (running the config's drop glue), which is how a reclaimed process frees
+/// its native resources.
+pub(crate) struct NativeExecution {
     /// The compiled Koja function to call when first entering this process.
     func: ProcessFn,
-    /// Heap-allocated initial state passed to `func` on first entry. Owned
-    /// by the process: its payload drop glue runs (releasing the config's
-    /// nested heap) when the process's resources are reclaimed.
+    /// Heap-allocated initial state passed to `func` on first entry. Owned by
+    /// the process: its payload drop glue runs (releasing the config's nested
+    /// heap) when the execution state is dropped.
     init_state: OwnedPayload,
-    /// Routed message queues plus the one-shot reply slot.
-    pub(crate) mailbox: Mailbox<Envelope>,
-    /// Claim flag: `true` from the moment a worker switches into this
-    /// process until that same worker has persisted the post-yield `sp`.
-    ///
-    /// A yielding process publishes a resumable state (`Blocked` /
-    /// `WaitingIo`) under the lock *before* the context switch saves its
-    /// new `sp`, so there is a window where the process looks schedulable
-    /// but `sp` still points at the previous yield's (now-clobbered)
-    /// frame. Gating pickup on `!on_cpu` keeps any other worker from
-    /// resuming that stale frame until the owning worker writes the
-    /// correct `sp` and clears the flag.
-    pub(crate) on_cpu: bool,
-    /// Saved stack pointer. Written by `koja_context_switch` when the
-    /// process yields, read when a worker resumes it.
+    /// Saved stack pointer. Written by `koja_context_switch` when the process
+    /// yields, read when a worker resumes it.
     pub(crate) sp: *mut u8,
-    /// The process's `mmap`-backed stack, unmapped when the process dies.
+    /// The process's `mmap`-backed stack. Never read by name — held purely so
+    /// its [`Drop`] `munmap`s the mapping when the execution state is reclaimed.
+    #[allow(dead_code)]
     stack: ProcessStack,
-    /// Current lifecycle state, driven by the scheduler and runtime intrinsics.
-    pub(crate) state: ProcessState,
-    /// What a `Blocked` process is waiting on, so delivery only wakes it
-    /// for traffic that can satisfy the wait (a business message must not
-    /// wake a caller parked on its reply slot, and vice versa). Only
-    /// meaningful while `state` is `Blocked`.
-    pub(crate) waiting: WaitTarget,
 }
 
-/// Process contains raw pointers that are heap-allocated and not
-/// thread-affine, so cross-thread transfer is safe.
-unsafe impl Send for Process {}
+/// `NativeExecution` holds raw pointers that are heap-allocated and not
+/// thread-affine, so cross-thread transfer is safe. This is what makes the
+/// concrete `ProcessTable<NativeExecution, Envelope>` `Send` for the `Mutex`.
+unsafe impl Send for NativeExecution {}
 
-impl Process {
-    /// Builds a freshly spawned process in the `Created` state. Called by
-    /// [`ProcessTable::spawn`], which owns the slot/PID assignment.
-    pub(crate) fn new(
-        func: ProcessFn,
-        init_state: OwnedPayload,
-        stack: ProcessStack,
-        sp: *mut u8,
-    ) -> Self {
-        Process {
-            deadline: None,
+impl NativeExecution {
+    /// Builds the execution state for a freshly spawned process.
+    fn new(func: ProcessFn, init_state: OwnedPayload, stack: ProcessStack, sp: *mut u8) -> Self {
+        Self {
             func,
             init_state,
-            mailbox: Mailbox::default(),
-            on_cpu: false,
             sp,
             stack,
-            state: ProcessState::Created,
-            waiting: WaitTarget::Receive,
         }
     }
 
     /// The entry function and its heap-allocated initial state, read by
     /// [`process_trampoline`] on first entry.
-    pub(crate) fn entry(&self) -> (ProcessFn, *const u8) {
+    fn entry(&self) -> (ProcessFn, *const u8) {
         (self.func, self.init_state.as_ptr())
     }
+}
 
-    /// Moves a dead process's reclaimable resources out of its slot,
-    /// leaving empty/null placeholders so the actual frees happen when
-    /// the returned [`Reclaim`] is dropped — after the `SCHED` lock is
-    /// released. Idempotent: a second call returns an empty `Reclaim`
-    /// (already-empty owners drop as no-ops), so a kill racing the
-    /// worker loop reclaims at most once.
-    pub(crate) fn take_resources(&mut self) -> Reclaim {
-        Reclaim {
-            init_state: mem::take(&mut self.init_state),
-            mailbox: mem::take(&mut self.mailbox),
-            stack: mem::replace(&mut self.stack, ProcessStack::null()),
+/// The native [`Executor`]: stackful processes switched via the
+/// `koja_context_switch` assembly. A zero-sized handle — all per-process
+/// state lives in the [`NativeExecution`] stored in the table, and all
+/// per-worker state in this thread's [`SCHED_SP`] / [`YIELD_SP`] /
+/// [`CURRENT_PID`] thread-locals.
+pub(crate) struct NativeExecutor;
+
+impl Executor for NativeExecutor {
+    /// The saved stack pointer: read from the table before the switch,
+    /// written back after. The whole point of [`Continuation`] being a
+    /// bare `Copy` pointer is that the driver marshals it without holding
+    /// a borrow into the table across the switch.
+    type Continuation = *mut u8;
+    type Execution = NativeExecution;
+    type Message = Envelope;
+
+    /// Switches onto `pid`'s stack at `continuation` (its saved `sp`) and
+    /// runs until the process yields back via [`yield_to_scheduler`], then
+    /// returns the `sp` it yielded at. The caller (driver) has already
+    /// released `SCHED`; this touches only thread-locals and the assembly,
+    /// never the table, so the lock stays dropped across the switch.
+    fn resume(&self, pid: Pid, continuation: Self::Continuation) -> Self::Continuation {
+        CURRENT_PID.with(|c| c.set(pid));
+        tsan::switch_to_process(tsan::slot_fiber(slot_index(pid)));
+        let sched_sp_ptr = SCHED_SP.with(|c| c.get());
+        let yield_sp_ptr = YIELD_SP.with(|c| c.get());
+        unsafe {
+            koja_context_switch(sched_sp_ptr, continuation);
+            *yield_sp_ptr
         }
     }
 }
 
-/// Resources moved out of a dead process, freed when this value is
-/// dropped — which the reclaim sites do only after the `SCHED` lock is
-/// released. Produced by [`Process::take_resources`]. Each field is an
-/// RAII owner, so dropping a `Reclaim` drains the mailbox (running each
-/// envelope's drop glue), unmaps the stack, and releases `init_state`
-/// (running its config drop glue); an already-reclaimed `Reclaim` holds
-/// empty owners and drops as a no-op.
-///
-/// The fields are never read by name — they exist purely so their own
-/// `Drop` runs at this controlled point — hence `allow(dead_code)`.
-#[allow(dead_code)]
-pub(crate) struct Reclaim {
-    init_state: OwnedPayload,
-    mailbox: Mailbox<Envelope>,
-    stack: ProcessStack,
+/// The native [`Clock`]: the OS monotonic clock, used by the driver for
+/// deadline promotion, timer firing, and idle-park sizing.
+pub(crate) struct NativeClock;
+
+impl Clock for NativeClock {
+    fn now(&self) -> Instant {
+        Instant::now()
+    }
 }
 
-/// Reclaim owns heap detached from a [`Process`]; freeing it off the
-/// scheduler thread is sound.
-unsafe impl Send for Reclaim {}
+/// The native [`SignalSource`]: latches SIGTERM / SIGINT / SIGHUP via the
+/// process-wide handlers in [`crate::signals`] and drains them into
+/// [`Lifecycle`] events on the driver's schedule.
+pub(crate) struct NativeSignals;
+
+impl SignalSource for NativeSignals {
+    fn install(&self) {
+        crate::signals::install();
+    }
+
+    fn drain(&self) -> Vec<Lifecycle> {
+        crate::signals::drain()
+            .into_iter()
+            .map(lifecycle_from_index)
+            .collect()
+    }
+}
+
+/// Maps a drained signal's wire index back to its [`Lifecycle`] variant
+/// (`0 -> Shutdown`, `1 -> Interrupt`, `2 -> Reload`); see `koja/design/ABI.md`.
+fn lifecycle_from_index(index: i64) -> Lifecycle {
+    match index {
+        0 => Lifecycle::Shutdown,
+        1 => Lifecycle::Interrupt,
+        _ => Lifecycle::Reload,
+    }
+}
 
 /// Global scheduler state. Workers hold this lock briefly to find or
 /// update processes; the lock is always released before context-switching.
-pub(crate) static SCHED: Mutex<ProcessTable> = Mutex::new(ProcessTable::new());
+pub(crate) static SCHED: Mutex<NativeTable> = Mutex::new(ProcessTable::new());
 
 /// Condvar paired with [`SCHED`]. Workers park here when idle.
 /// Woken by `koja_rt_send`, `koja_rt_spawn`, the reactor, and on shutdown.
@@ -318,7 +301,12 @@ unsafe fn init_process_stack(stack_top: *mut u8, entry: unsafe extern "C" fn()) 
 unsafe extern "C" fn process_trampoline() {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    let Some((func, init_state)) = SCHED.lock().unwrap().get(pid).map(Process::entry) else {
+    let Some((func, init_state)) = SCHED
+        .lock()
+        .unwrap()
+        .get(pid)
+        .map(|pcb| pcb.execution.entry())
+    else {
         return;
     };
 
@@ -414,8 +402,6 @@ fn cgroup_cpu_quota() -> Option<usize> {
 /// `spawn`, `send`, or a deadline timeout. Exits when [`SHUTDOWN`] is
 /// set (main process died or all processes are dead).
 fn worker_loop() {
-    let sched_sp_ptr = SCHED_SP.with(|c| c.get());
-    let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     tsan::capture_scheduler_fiber();
 
     loop {
@@ -427,25 +413,29 @@ fn worker_loop() {
 
         let mut guard = SCHED.lock().unwrap();
 
-        let now = Instant::now();
+        let now = NativeClock.now();
         guard.promote_due_deadlines(now);
         fire_due_timers(&mut guard, now);
 
-        if let Some((pid, proc_sp, proc_fiber)) = guard.claim_next() {
+        if let Some(pid) = guard.claim_next() {
+            let proc_sp = guard
+                .get(pid)
+                .expect("just-claimed process exists")
+                .execution
+                .sp;
             drop(guard);
 
-            CURRENT_PID.with(|c| c.set(pid));
-            tsan::switch_to_process(proc_fiber);
-            unsafe {
-                koja_context_switch(sched_sp_ptr, proc_sp);
-            }
+            let saved_sp = NativeExecutor.resume(pid, proc_sp);
 
-            let saved_sp = unsafe { *yield_sp_ptr };
             let mut guard = SCHED.lock().unwrap();
-            // Persist the saved `sp`, release the `on_cpu` claim, and reclaim
-            // the slot if the process died. Detaching resources here (under
-            // the lock) lets the unmap/dealloc run after the lock is dropped.
-            let reclaim = guard.after_switch(pid, saved_sp);
+            // Persist the saved `sp` into the executor's execution state, then
+            // release the `on_cpu` claim and reclaim the slot if the process
+            // died. Detaching resources here (under the lock) lets the
+            // unmap/dealloc run after the lock is dropped.
+            if let Some(pcb) = guard.get_mut(pid) {
+                pcb.execution.sp = saved_sp;
+            }
+            let reclaim = guard.after_switch(pid);
 
             let shutdown = guard.should_shutdown();
             if shutdown {
@@ -484,7 +474,7 @@ fn worker_loop() {
 /// format at schedule time, so firing is a plain delivery; an
 /// undeliverable timer (target gone or dead) drops its envelope,
 /// running its payload drop glue.
-fn fire_due_timers(table: &mut ProcessTable, now: Instant) {
+fn fire_due_timers(table: &mut NativeTable, now: Instant) {
     for entry in table.take_due_timers(now) {
         if let Some(undelivered) = table.deliver(entry.target_pid, entry.envelope) {
             drop(undelivered);
@@ -508,18 +498,18 @@ fn ensure_runtime_init() {
     RUNTIME_INIT.call_once(crate::panic::install_panic_hook);
 }
 
-/// Called by the compiled Koja program after `main` returns.
-///
-/// Initializes the I/O reactor, spawns `worker_count() - 1` worker OS
-/// threads plus a dedicated reactor thread, and runs the scheduling
-/// loop on the current thread. Blocks until all threads finish, i.e.
-/// until the main process (PID 1) dies and [`SHUTDOWN`] is set.
+/// Called by the compiled Koja program after `main` returns. The C-ABI
+/// entry point for the runtime: installs the panic hook, then hands off to
+/// the [`NativeDriver`], which runs until the main process (PID 1) dies.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_main_done() {
     ensure_runtime_init();
+    NativeDriver.run();
+}
 
-    // Force line-buffered stdout so output is visible immediately even
-    // when stdout is a pipe (e.g. when spawned by a test harness).
+/// Forces line-buffered stdout so output is visible immediately even when
+/// stdout is a pipe (e.g. when the process is spawned by a test harness).
+fn line_buffer_stdout() {
     unsafe {
         #[cfg(target_os = "macos")]
         unsafe extern "C" {
@@ -534,29 +524,43 @@ pub extern "C" fn koja_rt_main_done() {
         const _IOLBF: i32 = 1;
         setvbuf(stdout_ptr, ptr::null_mut(), _IOLBF, 0);
     }
+}
 
-    crate::signals::install();
-    crate::reactor::init();
+/// The native [`Driver`]: a pool of `worker_count()` worker OS threads
+/// plus a dedicated reactor thread, all sharing the `Mutex`-guarded
+/// [`SCHED`] table and parking on [`WORK_AVAILABLE`] when idle.
+pub(crate) struct NativeDriver;
 
-    let n = worker_count();
-    let mut handles = Vec::with_capacity(n);
+impl Driver for NativeDriver {
+    type Executor = NativeExecutor;
 
-    handles.push(thread::spawn(crate::reactor::reactor_loop));
+    /// Boots the I/O reactor and signal handlers, spawns the reactor
+    /// thread plus `worker_count() - 1` workers, and runs the final worker
+    /// loop on the current thread. Blocks until every thread joins — i.e.
+    /// until the main process dies and [`SHUTDOWN`] is set — then reports
+    /// shutdown diagnostics.
+    fn run(self) {
+        line_buffer_stdout();
+        NativeSignals.install();
+        crate::reactor::init();
 
-    for _ in 1..n {
-        handles.push(thread::spawn(worker_loop));
+        let n = worker_count();
+        let mut handles = Vec::with_capacity(n);
+        handles.push(thread::spawn(crate::reactor::reactor_loop));
+        for _ in 1..n {
+            handles.push(thread::spawn(worker_loop));
+        }
+
+        worker_loop();
+
+        crate::reactor::notify();
+        for handle in handles {
+            let _ = handle.join();
+        }
+
+        maybe_report_live_heap();
+        maybe_dump_scheduler_trace();
     }
-
-    worker_loop();
-
-    crate::reactor::notify();
-
-    for h in handles {
-        let _ = h.join();
-    }
-
-    maybe_report_live_heap();
-    maybe_dump_sched_trace();
 }
 
 /// When `KOJA_HEAP_REPORT` is set, print the runtime's net live-block
@@ -578,7 +582,7 @@ fn maybe_report_live_heap() {
 /// ring (oldest first) and counter totals at shutdown. The debugging
 /// companion to `koja_rt_sched_violations`: when a race fixture fails,
 /// re-run with this set and read the offending interleaving directly.
-fn maybe_dump_sched_trace() {
+fn maybe_dump_scheduler_trace() {
     if std::env::var_os("KOJA_SCHED_TRACE").is_none() {
         return;
     }
@@ -932,11 +936,19 @@ pub unsafe extern "C" fn koja_rt_spawn(
     };
 
     let (stack, sp) = allocate_process_stack();
+    let execution = NativeExecution::new(fn_ptr, init_state, stack, sp);
 
     let id = {
         let mut guard = SCHED.lock().unwrap();
-        guard.spawn(fn_ptr, init_state, stack, sp)
+        guard.spawn(execution)
     };
+
+    // Materialize the slot's TSan fiber here, at spawn, rather than lazily on
+    // first claim. Creation is a no-op off `koja_tsan`; under it, deferring to
+    // claim would move every `__tsan_create_fiber` into the high-concurrency
+    // scheduling window, where it trips TSan's own cooperative-fiber
+    // bookkeeping (see `crate::tsan` and the `tsan` justfile recipe).
+    tsan::slot_fiber(slot_index(id));
 
     WORK_AVAILABLE.notify_one();
     id
