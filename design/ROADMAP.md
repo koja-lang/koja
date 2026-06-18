@@ -224,7 +224,7 @@ Four sub-milestones, the first of which is a design spike. **Constraint added** 
 
 #### A1: Scheduler hardening
 
-- **Scheduler protocol** *(done)* -- the runtime is a formal trait interface in `koja-runtime-core`: `Executor` / `Reactor` / `Driver` / `Clock` / `SignalSource` / `Message` / `MessageSource`, plus the generic `CooperativeDriver` run loop. `koja-runtime-posix` is the first (multi-threaded native) implementation; `koja-ir-eval` is the second -- a single-threaded **cooperative** implementor that genuinely shares the protocol, with full I/O-reactor parity (`io_block` parks `WaitingIO`, `Fd.watch` → `IOReady` delivery, all over its own `libc::poll` reactor). This discharges the WASM-compat constraint up front and pulls forward the Phase 6 Track A "runtime split into core + per-target adapters". See [SCHEDULER-PROTOCOL.md](SCHEDULER-PROTOCOL.md). Remaining A1 items below are still open.
+- **Scheduler protocol** _(done)_ -- the runtime is a formal trait interface in `koja-runtime-core`: `Executor` / `Reactor` / `Driver` / `Clock` / `SignalSource` / `Message` / `MessageSource`, plus the generic `CooperativeDriver` run loop. `koja-runtime-posix` is the first (multi-threaded native) implementation; `koja-ir-eval` is the second -- a single-threaded **cooperative** implementor that genuinely shares the protocol, with full I/O-reactor parity (`io_block` parks `WaitingIO`, `Fd.watch` → `IOReady` delivery, all over its own `libc::poll` reactor). This discharges the WASM-compat constraint up front and pulls forward the Phase 6 Track A "runtime split into core + per-target adapters". See [SCHEDULER-PROTOCOL.md](SCHEDULER-PROTOCOL.md). Remaining A1 items below are still open.
 - Work-stealing per-thread run queues for the native backend (replacing the round-robin Mutex pool).
 - Graceful SIGTERM grace period: stop accepting spawns, drain in-flight processes, exit cleanly; configurable timeout, hard-kill on SIGKILL.
 - Timer wheel for timeouts, intervals, deadlines.
@@ -324,7 +324,7 @@ flowchart LR
 ### Track A: WASM target
 
 - **WASM flavor decision** -- first sub-deliverable of the phase. WASI (server-side, POSIX-shaped via wasmtime / wasmer / Cloudflare Workers / Fastly) vs browser (DOM/JS interop, async via Promises) vs both. Default lean: WASI first as the easier and more strategically valuable path; browser as a separate effort or post-1.0.
-- **Runtime split** -- *already landed in Phase 5 A1*: `koja-runtime-core` (target-agnostic scheduler skeleton, the scheduler-protocol traits) plus per-target adapters. `koja-runtime-posix` exists today; Phase 6 adds `koja-runtime-wasi` (and eventually `koja-runtime-browser`) as further adapters.
+- **Runtime split** -- _already landed in Phase 5 A1_: `koja-runtime-core` (target-agnostic scheduler skeleton, the scheduler-protocol traits) plus per-target adapters. `koja-runtime-posix` exists today; Phase 6 adds `koja-runtime-wasi` (and eventually `koja-runtime-browser`) as further adapters.
 - **WASM codegen** -- `--target=wasm32-wasi` via LLVM (the easy part).
 - **I/O reactor for WASI** -- `poll_oneoff`-shaped reactor implementing the same scheduler-protocol contract as the POSIX kqueue/epoll reactor.
 - **FFI under WASM** -- `@extern "C"` resolves to WASM imports rather than linker symbols; same user-facing syntax, different resolution model.

@@ -96,7 +96,7 @@ central structural move.
 | Concern                                                                               | Layer    | Today                                       | Destination                                         |
 | ------------------------------------------------------------------------------------- | -------- | ------------------------------------------- | --------------------------------------------------- |
 | `state`, `waiting`, `deadline`, `on_cpu`                                              | agnostic | `Process` fields                            | `ProcessControlBlock` in core                       |
-| ready queue, slotmap, generations, timer/deadline heaps, transitions, counters, trace | agnostic | `ProcessTable`                              | `ProcessTable<X, M>` in core (`X` = `E::Execution`)  |
+| ready queue, slotmap, generations, timer/deadline heaps, transitions, counters, trace | agnostic | `ProcessTable`                              | `ProcessTable<X, M>` in core (`X` = `E::Execution`) |
 | mailbox routing (system/business/reply, priority, displacement, wait targets)         | agnostic | `Mailbox`                                   | `Mailbox<M>` in core (generic over message repr)    |
 | `func`, `init_state`, `sp`, `stack`, `tsan_fiber`                                     | platform | `Process` fields                            | `E::Execution` owned by the executor                |
 | message representation                                                                | platform | byte `Envelope`                             | `M`: native bytes vs coop `Value`                   |
@@ -213,7 +213,7 @@ pub enum Waker {
 pub enum Readiness { Error, Readable, Writable } // the fired direction
 ```
 
-The waker is registered as the *action* to take; `poll` returns it with
+The waker is registered as the _action_ to take; `poll` returns it with
 the `Deliver` `readiness` filled in from the event that fired (the
 `IOReady` variant a watcher observes). The poller tracks one registration
 per fd, so the native reactor stores a single `fd -> Waker` map — the last
@@ -454,7 +454,7 @@ not move.
 - **`koja-runtime-posix` (the POSIX adapter, `staticlib`).** Renamed
   from `koja-runtime`; depends on `koja-runtime-core`, implements the
   traits, and hosts the `extern "C" koja_rt_*` wrappers. Its `[lib]
-  name` is pinned to `koja_runtime`, so `libkoja_runtime.a`, the
+name` is pinned to `koja_runtime`, so `libkoja_runtime.a`, the
   `-lkoja_runtime` link flag, and the embedded-archive bytes in
   [`koja-driver/src/link.rs`](../crates/koja-driver/src/link.rs) are
   **untouched**, and `koja-ir-llvm` needs **zero** code changes.
@@ -464,12 +464,12 @@ the integration proof that the shim is a clean seam.
 
 ## What moves where
 
-| File                                                                                                               | Destination                                              |
-| ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------- |
-| `process_table.rs`, `mailbox.rs`, `wire.rs`, `scheduler_trace.rs`                                                  | core (generic over `E`, `M`)                             |
-| scheduling-policy + generic `koja_rt_*` logic (extracted from `scheduler.rs`)                                      | core                                                     |
-| trait defs (`Executor`, `Reactor`, `Clock`, `SignalSource`, `Driver`, `Message`)                                   | core (new)                                               |
-| `memory.rs`                                                                                                        | core (shared libc passthrough)                           |
+| File                                                                                                               | Destination                                                    |
+| ------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------- |
+| `process_table.rs`, `mailbox.rs`, `wire.rs`, `scheduler_trace.rs`                                                  | core (generic over `E`, `M`)                                   |
+| scheduling-policy + generic `koja_rt_*` logic (extracted from `scheduler.rs`)                                      | core                                                           |
+| trait defs (`Executor`, `Reactor`, `Clock`, `SignalSource`, `Driver`, `Message`)                                   | core (new)                                                     |
+| `memory.rs`                                                                                                        | core (shared libc passthrough)                                 |
 | asm stacks, `process_trampoline`, `worker_loop`, `koja_rt_main_done`, Mutex/Condvar, thread-locals, `worker_count` | `koja-runtime-posix` (native `Executor` + `Driver`)            |
 | `reactor.rs`                                                                                                       | `koja-runtime-posix` (native `Reactor`)                        |
 | `signals.rs`                                                                                                       | `koja-runtime-posix` (native `SignalSource`)                   |
