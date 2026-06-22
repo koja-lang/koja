@@ -328,6 +328,7 @@ mod tests {
         let read_dest = ValueId(1);
         let call_dest = ValueId(2);
         IRFunction {
+            def_location: None,
             blocks: vec![IRBasicBlock {
                 id: IRBlockId(0),
                 label: "entry".to_string(),
@@ -554,6 +555,7 @@ mod tests {
         let call_dest = ValueId(4);
         let merge_param = ValueId(5);
         IRFunction {
+            def_location: None,
             blocks: vec![
                 IRBasicBlock {
                     id: IRBlockId(0),
@@ -722,6 +724,7 @@ mod tests {
             IRTerminator::Branch(BranchTarget::with_args(IRBlockId(target), vec![arg]))
         };
         let function = IRFunction {
+            def_location: None,
             blocks: vec![
                 IRBasicBlock {
                     id: IRBlockId(0),
@@ -861,6 +864,7 @@ mod tests {
         let unit = ValueId(4);
         let merge_param = ValueId(5);
         let function = IRFunction {
+            def_location: None,
             blocks: vec![
                 IRBasicBlock {
                     id: IRBlockId(0),

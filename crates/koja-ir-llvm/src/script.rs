@@ -63,7 +63,7 @@ pub(crate) fn compile_script(
             declared.push((function, declare_function(ctx, function)?));
         }
     }
-    emit_script_main(ctx, &script.blocks)?;
+    emit_script_main(ctx, &script.blocks, script.def_location.as_ref())?;
     for (function, llvm_function) in declared {
         define_function(ctx, function, llvm_function).map_err(|e| {
             LlvmError::Codegen(format!("while defining `{}`: {e:?}", function.symbol))

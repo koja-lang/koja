@@ -28,7 +28,7 @@ use koja_ast::identifier::Identifier;
 
 use crate::enum_decl::IREnumDecl;
 use crate::error::LowerError;
-use crate::function::{IRBasicBlock, IRFunction, IRSymbol};
+use crate::function::{IRBasicBlock, IRFunction, IRSourceDef, IRSymbol};
 use crate::generics;
 use crate::lower::{LowerOutput, lower_body_to_blocks, lower_package};
 use crate::package::IRPackage;
@@ -60,9 +60,14 @@ use crate::types::IRType;
 /// expression value (or `IRType::Unit` for an empty / non-expression
 /// trailing statement). Backends consume this directly to size the
 /// `main` return slot and the `Return` terminator's value width.
+/// `def_location` points at the script's own source file (line 1):
+/// the LLVM backend stamps it on the synthesized `__koja_user_main`
+/// so a panic in top-level script code resolves to the user's file.
+/// `None` for an items-only / synthetic body with no source path.
 #[derive(Debug, Clone)]
 pub struct IRScript {
     pub blocks: Vec<IRBasicBlock>,
+    pub def_location: Option<IRSourceDef>,
     pub link_libraries: Vec<String>,
     pub packages: Vec<IRPackage>,
     pub return_type: IRType,
@@ -196,6 +201,7 @@ pub fn lower_script(checked: &CheckedProgram) -> Result<IRScript, LowerError> {
     let link_libraries = collect_link_libraries(packages.iter());
     let mut script = IRScript {
         blocks,
+        def_location: locate_script_body_location(checked),
         link_libraries,
         packages,
         return_type,
@@ -242,6 +248,24 @@ fn locate_script_body_package(checked: &CheckedProgram) -> Option<&str> {
         for file in &pkg.files {
             if file.body.is_some() {
                 return Some(pkg.package.as_str());
+            }
+        }
+    }
+    None
+}
+
+/// Source location of the script body for DWARF: the path of the
+/// (unique) file carrying `File.body`, attributed to line 1. `None`
+/// when no file owns a body (items-only script) or the body file has
+/// no path (in-memory REPL / eval fragment).
+fn locate_script_body_location(checked: &CheckedProgram) -> Option<IRSourceDef> {
+    for pkg in &checked.packages {
+        for file in &pkg.files {
+            if file.body.is_some() {
+                return file.path.clone().map(|path| IRSourceDef {
+                    file: path,
+                    line: 1,
+                });
             }
         }
     }

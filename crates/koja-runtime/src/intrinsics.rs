@@ -9,7 +9,8 @@
 //!   intrinsic. Writes the bytes of a heap string followed by a
 //!   newline.
 //! - [`__koja_panic`] — the runtime body of `Kernel.panic`.
-//!   Writes `panic: <message>\n` to stderr and aborts.
+//!   Routes the message through the panic backtrace formatter
+//!   (`** (panic) <message>` + filtered stack), then aborts.
 //! - [`__koja_concat_bits`] / [`__koja_pack_bits`] — helpers for
 //!   the LLVM emitter's bit-packing paths; emitting the sub-byte
 //!   alignment logic is far cleaner in Rust than in LLVM IR.
@@ -17,6 +18,7 @@
 use std::io::{self, Write};
 
 use crate::memory;
+use crate::panic::{PanicOrigin, abort_with_diagnostic};
 use crate::util::{BLOCK_HEADER_SIZE, read_bit_length, string_payload_bytes, write_block_header};
 
 /// Concatenate two `Bits` values produced by the LLVM backend.
@@ -164,8 +166,10 @@ pub unsafe extern "C" fn __koja_pack_bits(
 /// LLVM backend's `Kernel.panic` emitter — the emitter passes the
 /// `String` payload pointer (8 bytes past the length header) and
 /// trails the call with `unreachable`, so this helper never has
-/// to return. Reads the `i64` bit length from `payload-8`, writes
-/// `panic: <message>\n` to stderr, then `process::abort`s.
+/// to return. Reads the `i64` bit length from `payload-8`, then
+/// routes the message through [`crate::panic::abort_with_diagnostic`]
+/// — printing `** (panic) <message>` followed by a filtered,
+/// symbolicated backtrace — before aborting.
 ///
 /// # Safety
 ///
@@ -175,11 +179,8 @@ pub unsafe extern "C" fn __koja_pack_bits(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __koja_panic(payload: *const u8) -> ! {
     let bytes = unsafe { string_payload_bytes(payload) };
-    let mut stderr = io::stderr().lock();
-    let _ = stderr.write_all(b"panic: ");
-    let _ = stderr.write_all(bytes);
-    let _ = stderr.write_all(b"\n");
-    std::process::abort();
+    let message = String::from_utf8_lossy(bytes);
+    abort_with_diagnostic(PanicOrigin::User, &message);
 }
 
 /// Print a `String`-flavored body value followed by a newline.

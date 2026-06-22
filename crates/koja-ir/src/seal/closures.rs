@@ -281,6 +281,7 @@ mod tests {
         };
         IRFunction {
             blocks: vec![entry],
+            def_location: None,
             kind: FunctionKind::Closure { env_layout },
             params: vec![IRFunctionParam {
                 id: param_id,
@@ -303,6 +304,7 @@ mod tests {
         };
         IRFunction {
             blocks: vec![entry],
+            def_location: None,
             kind: FunctionKind::Regular,
             params: Vec::new(),
             return_type: IRType::Unit,

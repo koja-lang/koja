@@ -1,11 +1,12 @@
 //! Native object-file emission via inkwell's `TargetMachine`.
 //! Mirrors the v1 codegen pattern in `koja-codegen`'s
-//! `emit_object_file`, trimmed to non-release defaults.
+//! `emit_object_file`.
 
 use std::path::Path;
 
 use inkwell::OptimizationLevel;
 use inkwell::module::Module;
+use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
@@ -28,10 +29,16 @@ const MACOS_TARGET_ARCH: &str = "arm64";
 const MACOS_TARGET_ARCH: &str = "x86_64";
 
 /// Initialize the native target, build a target machine for the host
-/// triple + CPU + features, and write `module` to `path` as a native
-/// object file. Always emits at `OptimizationLevel::None` for the
-/// feature slice — release-mode optimization is a follow-up.
-pub(crate) fn emit_object_file(module: &Module<'_>, path: &Path) -> Result<(), LlvmError> {
+/// triple + CPU + features, run the optimization pipeline at
+/// `opt_level`, and write `module` to `path` as a native object file.
+/// At `OptimizationLevel::None` no middle-end passes run (debug
+/// builds); release builds pass `Aggressive` to engage the full
+/// pipeline.
+pub(crate) fn emit_object_file(
+    module: &Module<'_>,
+    path: &Path,
+    opt_level: OptimizationLevel,
+) -> Result<(), LlvmError> {
     Target::initialize_native(&InitializationConfig::default())
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to initialize native target: {e}")))?;
 
@@ -52,15 +59,33 @@ pub(crate) fn emit_object_file(module: &Module<'_>, path: &Path) -> Result<(), L
             &triple,
             &cpu,
             &features,
-            OptimizationLevel::None,
+            opt_level,
             RelocMode::Default,
             CodeModel::Default,
         )
         .ok_or_else(|| LlvmError::ObjectEmit("failed to create target machine".to_string()))?;
 
+    if let Some(passes) = passes_for(opt_level) {
+        module
+            .run_passes(passes, &machine, PassBuilderOptions::create())
+            .map_err(|e| LlvmError::ObjectEmit(format!("optimization passes failed: {e}")))?;
+    }
+
     machine
         .write_to_file(module, FileType::Object, path)
         .map_err(|e| LlvmError::ObjectEmit(format!("failed to write object file: {e}")))
+}
+
+/// Map an [`OptimizationLevel`] to a new-PM pass-pipeline string for
+/// [`Module::run_passes`]. `None` skips the pipeline entirely so debug
+/// builds stay at `-O0`.
+fn passes_for(level: OptimizationLevel) -> Option<&'static str> {
+    match level {
+        OptimizationLevel::None => None,
+        OptimizationLevel::Less => Some("default<O1>"),
+        OptimizationLevel::Default => Some("default<O2>"),
+        OptimizationLevel::Aggressive => Some("default<O3>"),
+    }
 }
 
 /// Returns the LLVM triple the emitted object file declares. On

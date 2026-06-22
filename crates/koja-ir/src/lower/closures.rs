@@ -181,6 +181,7 @@ fn synthesize_drop_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Opti
         .set_terminator(entry, IRTerminator::Return { value: None });
     Some(IRFunction {
         blocks: ctx.into_blocks(),
+        def_location: None,
         kind: FunctionKind::DropClosureGlue { env_layout },
         params: Vec::new(),
         return_type: IRType::Unit,
@@ -207,6 +208,7 @@ fn synthesize_copy_env(body_symbol: &IRSymbol, captures: &[CaptureInfo]) -> Opti
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     Some(IRFunction {
         blocks: Vec::new(),
+        def_location: None,
         kind: FunctionKind::CopyClosureGlue { env_layout },
         params: Vec::new(),
         return_type: IRType::Unit,
@@ -645,6 +647,7 @@ fn synthesize_body(
     let env_layout: Vec<IRType> = captures.iter().map(|c| c.ir_type.clone()).collect();
     Ok(IRFunction {
         blocks: ctx.into_blocks(),
+        def_location: None,
         kind: FunctionKind::Closure { env_layout },
         params,
         return_type,
@@ -838,6 +841,7 @@ fn build_fn_as_closure_wrapper(
 
     IRFunction {
         blocks: ctx.into_blocks(),
+        def_location: None,
         kind: FunctionKind::Closure {
             env_layout: Vec::new(),
         },
