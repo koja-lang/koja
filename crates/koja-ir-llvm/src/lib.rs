@@ -78,10 +78,32 @@ pub use error::LlvmError;
 
 use std::path::Path;
 
+use inkwell::OptimizationLevel;
 use inkwell::context::Context;
 use koja_ir::{IRProgram, IRScript};
 
 use crate::ctx::EmitContext;
+
+/// Codegen knobs for the `compile_*` entry points. Kept inkwell-free
+/// so the driver API stays decoupled from LLVM types, and a struct
+/// (rather than positional flags) so future additions — debug-info
+/// emission, `--target=<triple>` — land as new fields without churning
+/// the signatures.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct CompileOptions {
+    /// Engage the LLVM optimization pipeline (`-O3`). Off keeps `-O0`.
+    pub release: bool,
+}
+
+impl CompileOptions {
+    fn opt_level(self) -> OptimizationLevel {
+        if self.release {
+            OptimizationLevel::Aggressive
+        } else {
+            OptimizationLevel::None
+        }
+    }
+}
 
 /// Compile a sealed [`IRProgram`] to a native object file at
 /// `output`. `app_name` is embedded as the runtime's
@@ -91,11 +113,12 @@ pub fn compile_program(
     program: &IRProgram,
     app_name: &str,
     output: &Path,
+    options: &CompileOptions,
 ) -> Result<(), LlvmError> {
     let context = Context::create();
     let ctx = EmitContext::new(&context, app_name);
     program::compile_program(&ctx, program, app_name)?;
-    object::emit_object_file(&ctx.module, output)
+    object::emit_object_file(&ctx.module, output, options.opt_level())
 }
 
 /// Compile a sealed [`IRProgram`] and return its LLVM IR text — for
@@ -109,11 +132,16 @@ pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmE
 }
 
 /// Counterpart to [`compile_program`] for script-mode sources.
-pub fn compile_script(script: &IRScript, app_name: &str, output: &Path) -> Result<(), LlvmError> {
+pub fn compile_script(
+    script: &IRScript,
+    app_name: &str,
+    output: &Path,
+    options: &CompileOptions,
+) -> Result<(), LlvmError> {
     let context = Context::create();
     let ctx = EmitContext::new(&context, app_name);
     script::compile_script(&ctx, script, app_name)?;
-    object::emit_object_file(&ctx.module, output)
+    object::emit_object_file(&ctx.module, output, options.opt_level())
 }
 
 /// Counterpart to [`emit_llvm_ir`] for script-mode sources.
