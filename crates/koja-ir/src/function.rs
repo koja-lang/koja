@@ -4,6 +4,7 @@
 
 use std::borrow::Borrow;
 use std::fmt;
+use std::path::PathBuf;
 
 use koja_ast::identifier::Identifier;
 
@@ -262,13 +263,31 @@ pub enum FunctionKind {
     },
 }
 
+/// Source-definition location of a callable, captured at lower time
+/// for function-granular DWARF emission. `file` is the source path as
+/// the compiler saw it (may be relative); `line` is the 1-based line
+/// the declaration opened on. Only the LLVM backend consumes it (to
+/// stamp a `DISubprogram`); the interpreter ignores it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct IRSourceDef {
+    pub file: PathBuf,
+    pub line: u32,
+}
+
 /// A lowered function. `blocks[0]` is the entry block; `params`
 /// occupy the first `ValueId`s allocated for the function. `kind`
 /// distinguishes regular fns from `@intrinsic`-annotated ones (see
 /// [`FunctionKind`]).
+///
+/// `def_location` carries the surface-source origin for DWARF. It is
+/// `Some` for user-declared functions (top-level, methods, and their
+/// monomorphizations) and `None` for synthesized callables — glue
+/// (`*Glue`), closure bodies, and spawn/entry wrappers — which have
+/// no single source line to attribute.
 #[derive(Debug, Clone)]
 pub struct IRFunction {
     pub blocks: Vec<IRBasicBlock>,
+    pub def_location: Option<IRSourceDef>,
     pub kind: FunctionKind,
     pub params: Vec<IRFunctionParam>,
     pub return_type: IRType,

@@ -24,6 +24,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::panic::Location;
 use std::sync::Arc;
 
+use inkwell::attributes::AttributeLoc;
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -33,9 +34,10 @@ use inkwell::values::BasicMetadataValueEnum;
 use inkwell::values::BasicValueEnum;
 use inkwell::values::FunctionValue;
 use inkwell::values::PointerValue;
-use koja_ir::{IRBlockId, IRLocalId, IRSymbol, IRType};
+use koja_ir::{IRBlockId, IRLocalId, IRSourceDef, IRSymbol, IRType};
 
 use crate::constant_pool::ConstantPoolSnapshot;
+use crate::debug::DebugInfo;
 use crate::error::{IceExt, LlvmError};
 use crate::layout::TypeLayouts;
 
@@ -101,6 +103,11 @@ pub(crate) struct EmitContext<'ctx> {
     /// header. `None` for non-TCO functions; the terminator emitter
     /// panics if it ever fires without a frame staged.
     tco_frame: RefCell<Option<TcoFrame<'ctx>>>,
+    /// DWARF emitter, present only on the object-emitting `compile_*`
+    /// paths. `None` keeps the `emit_*_llvm_ir` snapshot paths free of
+    /// debug metadata. Drives [`Self::declare_function_debug`] /
+    /// [`Self::enter_function_debug`] / [`Self::finalize_debug_info`].
+    debug: Option<DebugInfo<'ctx>>,
 }
 
 /// Per-function tail-call frame staged by
@@ -141,10 +148,14 @@ impl<'ctx> EmitContext<'ctx> {
     /// name (matching the `__koja_app_name` global the runtime
     /// printer reads) so the generated IR's `; ModuleID = …` line
     /// identifies the binary that produced it.
-    pub(crate) fn new(context: &'ctx Context, module_name: &str) -> Self {
+    /// `emit_debug_info` engages DWARF emission — set by the
+    /// object-emitting `compile_*` entry points and left off by the
+    /// `emit_*_llvm_ir` snapshot paths so their IR stays metadata-free.
+    pub(crate) fn new(context: &'ctx Context, module_name: &str, emit_debug_info: bool) -> Self {
         let layouts = TypeLayouts::new();
         let module = context.create_module(module_name);
         layouts.pin_module_data_layout(&module);
+        let debug = emit_debug_info.then(|| DebugInfo::new(context, &module, module_name));
         Self {
             builder: context.create_builder(),
             context,
@@ -158,7 +169,87 @@ impl<'ctx> EmitContext<'ctx> {
             closure_frame: RefCell::new(None),
             current_block_map: RefCell::new(None),
             tco_frame: RefCell::new(None),
+            debug,
         }
+    }
+
+    /// Mint and attach a `DISubprogram` for a user-declared function.
+    /// No-op when DWARF is off or `def_location` is `None` (synthetic
+    /// callables, which stay unattributed). Pairs with
+    /// [`Self::enter_function_debug`] at define time.
+    pub(crate) fn declare_function_debug(
+        &self,
+        llvm_function: FunctionValue<'ctx>,
+        name: &str,
+        def_location: Option<&IRSourceDef>,
+    ) {
+        if let (Some(debug), Some(def)) = (&self.debug, def_location) {
+            debug.attach_subprogram(llvm_function, name, &def.file, def.line);
+        }
+    }
+
+    /// Set the builder's current debug location for the body about to
+    /// be emitted: the function's `DISubprogram` line when one was
+    /// attached, otherwise *unset* it so the body's instructions don't
+    /// inherit a stale scope from the previously-emitted function.
+    pub(crate) fn enter_function_debug(
+        &self,
+        llvm_function: FunctionValue<'ctx>,
+        def_location: Option<&IRSourceDef>,
+    ) {
+        match (&self.debug, llvm_function.get_subprogram(), def_location) {
+            (Some(debug), Some(subprogram), Some(def)) => {
+                let location = debug.location_in(self.context, subprogram, def.line);
+                self.builder.set_current_debug_location(location);
+            }
+            _ => self.builder.unset_current_debug_location(),
+        }
+    }
+
+    /// Clear any active debug location before emitting a synthetic
+    /// function's body (trampolines, glue). Keeps a previously-set
+    /// scope from leaking onto instructions in a function that owns no
+    /// `DISubprogram`, which the LLVM verifier rejects.
+    pub(crate) fn enter_synthetic_debug(&self) {
+        if self.debug.is_some() {
+            self.builder.unset_current_debug_location();
+        }
+    }
+
+    /// Attach a `DISubprogram` named `name` to a synthesized entry
+    /// thunk (the script body's `__koja_user_main`) and set the
+    /// builder location to it. No-op when DWARF is off or the source
+    /// has no path.
+    pub(crate) fn enter_named_function_debug(
+        &self,
+        llvm_function: FunctionValue<'ctx>,
+        name: &str,
+        def_location: Option<&IRSourceDef>,
+    ) {
+        if let (Some(debug), Some(def)) = (&self.debug, def_location) {
+            debug.attach_subprogram(llvm_function, name, &def.file, def.line);
+        }
+        self.enter_function_debug(llvm_function, def_location);
+    }
+
+    /// Flush DWARF metadata before object emission. No-op without
+    /// debug info.
+    pub(crate) fn finalize_debug_info(&self) {
+        if let Some(debug) = &self.debug {
+            debug.finalize();
+        }
+    }
+
+    /// Force a maintained frame pointer (`frame-pointer=all`) on
+    /// `llvm_function`. Without it LLVM stores `fp`/`lr` as ordinary
+    /// callee-saved registers but never repoints the frame-pointer
+    /// register, so the `fp`-chain unwinder `libc::backtrace` uses
+    /// walks straight past every koja frame — leaving panic backtraces
+    /// with only the runtime's own frames. Applied to every emitted
+    /// body so the whole koja call chain is walkable.
+    pub(crate) fn set_frame_pointer(&self, llvm_function: FunctionValue<'ctx>) {
+        let attribute = self.context.create_string_attribute("frame-pointer", "all");
+        llvm_function.add_attribute(AttributeLoc::Function, attribute);
     }
 
     /// Stage the per-function [`TcoFrame`] for the body currently

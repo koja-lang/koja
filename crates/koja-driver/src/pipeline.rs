@@ -560,7 +560,12 @@ fn print_program_ir(program: &IRProgram, app_name: &str) {
 
 fn emit_and_link_script(script: &IRScript, app_name: &str, output: &str, release: bool) {
     let object_path = format!("{output}.o");
-    if let Err(err) = koja_ir_llvm::compile_script(script, app_name, Path::new(&object_path)) {
+    if let Err(err) = koja_ir_llvm::compile_script(
+        script,
+        app_name,
+        Path::new(&object_path),
+        &koja_ir_llvm::CompileOptions { release },
+    ) {
         eprintln!("error: {err}");
         process::exit(1);
     }
@@ -1148,7 +1153,12 @@ fn emit_and_link_program(
         process::exit(1);
     }
     let object_path = format!("{output}.o");
-    if let Err(err) = koja_ir_llvm::compile_program(program, app_name, Path::new(&object_path)) {
+    if let Err(err) = koja_ir_llvm::compile_program(
+        program,
+        app_name,
+        Path::new(&object_path),
+        &koja_ir_llvm::CompileOptions { release },
+    ) {
         eprintln!("error: {err}");
         process::exit(1);
     }

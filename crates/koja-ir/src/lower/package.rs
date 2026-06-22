@@ -20,7 +20,7 @@ use koja_typecheck::{CheckedPackage, FunctionSignature, GlobalKind, GlobalRegist
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IREnumDecl;
 use crate::extern_attrs::IRExternAttrs;
-use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSymbol};
+use crate::function::{FunctionKind, IRFunction, IRFunctionParam, IRSourceDef, IRSymbol};
 use crate::generics::Instantiation;
 use crate::intrinsic_id::IRIntrinsicId;
 use crate::local::IRLocalId;
@@ -37,6 +37,7 @@ use super::ownership::promote_param;
 use super::structs::lower_struct_decl;
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 /// Lower one [`CheckedPackage`] into an [`IRPackage`] fragment.
 /// Generic struct / enum decls are skipped here — they live in the
@@ -57,6 +58,7 @@ pub(crate) fn lower_package(
     let mut functions: BTreeMap<IRSymbol, IRFunction> = BTreeMap::new();
     let mut structs: BTreeMap<IRSymbol, IRStructDecl> = BTreeMap::new();
     for file in &pkg.files {
+        let def_file = file.path.as_deref();
         for item in &file.items {
             match item {
                 Item::Constant(constant) => {
@@ -77,7 +79,7 @@ pub(crate) fn lower_package(
                                 vec![decl.name.clone(), function.name.clone()],
                             );
                             if let Some(lowered) = lower_function_with_identifier(
-                                function, identifier, registry, output,
+                                function, identifier, def_file, registry, output,
                             ) {
                                 functions.insert(lowered.symbol.clone(), lowered);
                             }
@@ -86,9 +88,9 @@ pub(crate) fn lower_package(
                 }
                 Item::Function(function) => {
                     let identifier = Identifier::new(&pkg.package, vec![function.name.clone()]);
-                    if let Some(lowered) =
-                        lower_function_with_identifier(function, identifier, registry, output)
-                    {
+                    if let Some(lowered) = lower_function_with_identifier(
+                        function, identifier, def_file, registry, output,
+                    ) {
                         functions.insert(lowered.symbol.clone(), lowered);
                     }
                 }
@@ -103,7 +105,7 @@ pub(crate) fn lower_package(
                                 vec![decl.name.clone(), function.name.clone()],
                             );
                             if let Some(lowered) = lower_function_with_identifier(
-                                function, identifier, registry, output,
+                                function, identifier, def_file, registry, output,
                             ) {
                                 functions.insert(lowered.symbol.clone(), lowered);
                             }
@@ -111,10 +113,24 @@ pub(crate) fn lower_package(
                     }
                 }
                 Item::Impl(impl_block) => {
-                    lower_impl(impl_block, &pkg.package, registry, output, &mut functions);
+                    lower_impl(
+                        impl_block,
+                        &pkg.package,
+                        def_file,
+                        registry,
+                        output,
+                        &mut functions,
+                    );
                 }
                 Item::Extend(extend_block) => {
-                    lower_extend(extend_block, &pkg.package, registry, output, &mut functions);
+                    lower_extend(
+                        extend_block,
+                        &pkg.package,
+                        def_file,
+                        registry,
+                        output,
+                        &mut functions,
+                    );
                 }
                 _ => {}
             }
@@ -141,6 +157,7 @@ pub(crate) fn lower_package(
 fn lower_impl(
     impl_block: &ImplBlock,
     package: &str,
+    def_file: Option<&Path>,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
@@ -155,6 +172,7 @@ fn lower_impl(
         package,
         target_name,
         &impl_block.members,
+        def_file,
         registry,
         output,
         functions,
@@ -167,6 +185,7 @@ fn lower_impl(
 fn lower_extend(
     extend_block: &ExtendBlock,
     package: &str,
+    def_file: Option<&Path>,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
@@ -182,6 +201,7 @@ fn lower_extend(
         target_package.as_str(),
         target_name,
         &extend_block.members,
+        def_file,
         registry,
         output,
         functions,
@@ -212,6 +232,7 @@ fn lower_block_members(
     target_package: &str,
     target_name: &str,
     members: &[ImplMember],
+    def_file: Option<&Path>,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
@@ -225,7 +246,7 @@ fn lower_block_members(
             vec![target_name.to_string(), function.name.clone()],
         );
         if let Some(lowered) =
-            lower_function_with_identifier(function, identifier, registry, output)
+            lower_function_with_identifier(function, identifier, def_file, registry, output)
         {
             functions.insert(lowered.symbol.clone(), lowered);
         }
@@ -274,6 +295,7 @@ pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
 pub(super) fn lower_function_with_identifier(
     function: &Function,
     identifier: Identifier,
+    def_file: Option<&Path>,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRFunction> {
@@ -282,7 +304,26 @@ pub(super) fn lower_function_with_identifier(
     }
     let signature = function_signature(registry, &identifier)?;
     let symbol = IRSymbol::from_identifier(&identifier);
-    lower_function_inner(function, &identifier, signature, symbol, registry, output)
+    lower_function_inner(
+        function,
+        &identifier,
+        signature,
+        symbol,
+        def_file,
+        registry,
+        output,
+    )
+}
+
+/// Build the DWARF source location for a user-declared `function`,
+/// given the path of the file it was parsed from. `None` when the
+/// file has no path (in-memory source) so synthetic and pathless
+/// callables stay unattributed.
+pub(crate) fn def_location_of(function: &Function, def_file: Option<&Path>) -> Option<IRSourceDef> {
+    def_file.map(|path| IRSourceDef {
+        file: path.to_path_buf(),
+        line: function.span.start.line,
+    })
 }
 
 /// Body of [`lower_function_with_identifier`] minus the registry
@@ -295,11 +336,13 @@ pub(crate) fn lower_function_inner(
     identifier: &Identifier,
     signature: &FunctionSignature,
     symbol: IRSymbol,
+    def_file: Option<&Path>,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRFunction> {
     let return_type =
         resolved_type_to_ir_type(&signature.return_type, registry, &mut output.instantiations);
+    let def_location = def_location_of(function, def_file);
     let intrinsic = is_intrinsic(&function.annotations);
     let extern_c = is_extern_c(&function.annotations);
 
@@ -328,6 +371,7 @@ pub(crate) fn lower_function_inner(
         let params = lower_intrinsic_params(function, signature, registry, output, &mut ctx)?;
         return Some(IRFunction {
             blocks: Vec::new(),
+            def_location,
             kind: FunctionKind::Intrinsic(intrinsic_id),
             params,
             return_type,
@@ -340,6 +384,7 @@ pub(crate) fn lower_function_inner(
         let attrs = IRExternAttrs::from_annotations(&function.annotations);
         return Some(IRFunction {
             blocks: Vec::new(),
+            def_location,
             kind: FunctionKind::Extern(attrs),
             params,
             return_type,
@@ -367,6 +412,7 @@ pub(crate) fn lower_function_inner(
     let blocks = ctx.into_blocks();
     Some(IRFunction {
         blocks,
+        def_location,
         kind: FunctionKind::Regular,
         params,
         return_type,

@@ -17,11 +17,12 @@ use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, BasicType, FunctionType};
 use inkwell::values::FunctionValue;
 use koja_ir::{
-    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRLocalId, IRType, ValueId,
-    function_has_tail_call,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRLocalId, IRSourceDef,
+    IRType, ValueId, function_has_tail_call,
 };
 
 use crate::ctx::{ClosureFrame, EmitContext, TcoFrame};
+use crate::debug::display_name;
 use crate::emit::process::{emit_process_entry_wrapper_body, emit_spawn_wrapper_body};
 use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::{IceExt, LlvmError};
@@ -79,7 +80,29 @@ pub(crate) fn declare_function<'ctx>(
             .add_function(&llvm_name, signature, Some(Linkage::External)),
     };
     ctx.register_declared_function(function.symbol.clone(), llvm_function);
+    // FFI declarations carry no body we define; everything else gets a
+    // maintained frame pointer so panic backtraces can walk it.
+    if !matches!(function.kind, FunctionKind::Extern(_)) {
+        ctx.set_frame_pointer(llvm_function);
+    }
+    ctx.declare_function_debug(
+        llvm_function,
+        &display_name(&function.symbol),
+        debuggable_def_location(function),
+    );
     Ok(llvm_function)
+}
+
+/// Source location to attribute in DWARF for `function`, or `None`
+/// when the function carries no surface-source frame worth showing.
+/// Only user-declared `Regular` bodies qualify — synthesized glue,
+/// closures, wrappers, and the bodyless `Intrinsic` / `Extern` kinds
+/// stay unattributed even when they retain a `def_location`.
+fn debuggable_def_location(function: &IRFunction) -> Option<&IRSourceDef> {
+    match function.kind {
+        FunctionKind::Regular => function.def_location.as_ref(),
+        _ => None,
+    }
 }
 
 fn function_signature<'ctx>(
@@ -144,6 +167,10 @@ pub(crate) fn define_function<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
+    // Stage the body's debug scope before any instruction is built —
+    // including the synthetic early-return kinds below, which unset the
+    // location so they don't inherit the previous function's scope.
+    ctx.enter_function_debug(llvm_function, debuggable_def_location(function));
     let env_layout = match &function.kind {
         FunctionKind::CopyClosureGlue { env_layout } => {
             // Env deep-copy glue has no IR body at all (it returns a

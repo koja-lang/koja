@@ -22,8 +22,8 @@ pub enum RuntimeError {
     UnaryIntegerOverflow { op: IRUnaryOp, operand: i64 },
     /// `Kernel.panic(message)` was called. The user-supplied message
     /// is preserved verbatim so tests / callers can assert on it
-    /// (mirrors the LLVM backend's `__koja_panic` runtime helper
-    /// printing `panic: <message>` to stderr before aborting).
+    /// (mirrors the LLVM backend's `__koja_panic` runtime helper, which
+    /// prints `** (panic) <message>` plus a backtrace before aborting).
     Panicked { message: String },
     /// An `@intrinsic`-tagged call resolved to a mangled symbol the
     /// interpreter has no registered handler for. Indicates a missing
@@ -64,7 +64,7 @@ impl fmt::Display for RuntimeError {
             RuntimeError::UnaryIntegerOverflow { op, operand } => {
                 write!(f, "integer overflow: {op:?} {operand}")
             }
-            RuntimeError::Panicked { message } => write!(f, "panic: {message}"),
+            RuntimeError::Panicked { message } => write!(f, "** (panic) {message}"),
             RuntimeError::UnknownIntrinsic { symbol } => {
                 write!(
                     f,

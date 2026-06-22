@@ -409,6 +409,32 @@ lang_test_dir!(lang_memory, "memory");
 lang_test_dir!(lang_compile_fail, "compile_fail", compile_fail);
 lang_test_dir!(lang_runtime_fail, "runtime_fail", runtime_fail);
 
+/// Backtrace smoke test: a debug `koja run` of the `panic_backtrace`
+/// fixture must surface the user's Koja call chain — the `crash()`
+/// frame attributed to the fixture's source file. Guards against silent
+/// regressions in DWARF emission, frame-pointer maintenance, or the
+/// runtime symbolizer that would collapse the trace to "<no frames>".
+#[test]
+fn lang_panic_backtrace_frames() {
+    let file = lang_dir().join("runtime_fail").join("panic_backtrace.kojs");
+    let (_stdout, stderr, code) = run_koja(&file);
+
+    assert!(
+        code != 0,
+        "panic_backtrace: expected nonzero exit, got {code}"
+    );
+    for needle in [
+        "** (panic) called unwrap on None",
+        "crash()",
+        "panic_backtrace.kojs:",
+    ] {
+        assert!(
+            stderr.contains(needle),
+            "expected backtrace stderr to contain {needle:?}, got:\n{stderr}"
+        );
+    }
+}
+
 // Multi-file project tests
 lang_test_dir!(lang_project, "project", project);
 lang_test_dir!(lang_diamond, "diamond", project);
