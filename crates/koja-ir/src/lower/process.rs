@@ -660,6 +660,7 @@ fn build_process_body(
 
     IRFunction {
         blocks: ctx.into_blocks(),
+        def_location: None,
         kind: FunctionKind::Regular,
         params: vec![param],
         return_type: tail.return_type(),
@@ -841,6 +842,7 @@ fn build_wrapper_shim(
 
     IRFunction {
         blocks: ctx.into_blocks(),
+        def_location: None,
         kind,
         params: vec![IRFunctionParam {
             id: config_id,

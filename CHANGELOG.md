@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## Unreleased
 
+### Added
+
+- Compiled (`--backend=llvm`) programs now print a source backtrace on panic — `** (panic) <message>` followed by `file:line: name()` frames for the user's call chain, including across spawned processes. Function-granular DWARF, so each frame resolves to its function's declaration line.
+
 ### Fixed
 
 - `--release` now actually engages LLVM `-O3` optimization; previously the flag only affected linking and emitted unoptimized (`-O0`) code.

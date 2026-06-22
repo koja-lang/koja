@@ -497,6 +497,7 @@ fn glue_shell(
 ) -> IRFunction {
     IRFunction {
         blocks,
+        def_location: None,
         kind,
         params: vec![IRFunctionParam {
             id: synthesis::SELF_VALUE,
@@ -587,6 +588,7 @@ mod tests {
                 instructions,
                 terminator: IRTerminator::Return { value: None },
             }],
+            def_location: None,
             kind: FunctionKind::Regular,
             params: Vec::new(),
             return_type: IRType::Unit,

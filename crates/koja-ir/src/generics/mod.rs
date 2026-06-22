@@ -38,6 +38,7 @@ mod monomorphize;
 mod substitute;
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 
 use koja_ast::ast::{Function, ImplMember, Item};
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
@@ -145,7 +146,17 @@ fn drain_synthesized_into_packages(packages: &mut [IRPackage], output: &mut Lowe
 /// node. Covers top-level `fn`s, inline methods on struct/enum
 /// decls, and methods in `impl` / `extend` blocks (the latter may
 /// target another package).
-pub(super) type FunctionAstIndex<'a> = BTreeMap<GlobalRegistryId, &'a Function>;
+/// An indexed function template: the AST node plus the path of the
+/// file it was parsed from. The path threads through to
+/// [`crate::lower::package::lower_function_inner`] when a
+/// monomorphization re-lowers the body, so specialized generics keep
+/// their source attribution for DWARF.
+pub(super) struct FunctionAstEntry<'a> {
+    pub def_file: Option<&'a Path>,
+    pub function: &'a Function,
+}
+
+pub(super) type FunctionAstIndex<'a> = BTreeMap<GlobalRegistryId, FunctionAstEntry<'a>>;
 
 fn build_function_index<'a>(
     packages: &'a [CheckedPackage],
@@ -154,8 +165,9 @@ fn build_function_index<'a>(
     let mut map: FunctionAstIndex<'a> = BTreeMap::new();
     for pkg in packages {
         for file in &pkg.files {
+            let def_file = file.path.as_deref();
             for item in &file.items {
-                index_item(item, &pkg.package, registry, &mut map);
+                index_item(item, &pkg.package, def_file, registry, &mut map);
             }
         }
     }
@@ -165,26 +177,27 @@ fn build_function_index<'a>(
 fn index_item<'a>(
     item: &'a Item,
     package: &str,
+    def_file: Option<&'a Path>,
     registry: &GlobalRegistry,
     map: &mut FunctionAstIndex<'a>,
 ) {
     match item {
         Item::Function(function) => {
             let identifier = Identifier::new(package, vec![function.name.clone()]);
-            insert_function(map, registry, &identifier, function);
+            insert_function(map, registry, &identifier, function, def_file);
         }
         Item::Struct(decl) => {
             for function in &decl.functions {
                 let identifier =
                     Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-                insert_function(map, registry, &identifier, function);
+                insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Enum(decl) => {
             for function in &decl.functions {
                 let identifier =
                     Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
-                insert_function(map, registry, &identifier, function);
+                insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Impl(impl_block) => {
@@ -199,7 +212,7 @@ fn index_item<'a>(
                     package,
                     vec![target_name.to_string(), function.name.clone()],
                 );
-                insert_function(map, registry, &identifier, function);
+                insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Extend(extend_block) => {
@@ -216,7 +229,7 @@ fn index_item<'a>(
                     &target_package,
                     vec![target_name.to_string(), function.name.clone()],
                 );
-                insert_function(map, registry, &identifier, function);
+                insert_function(map, registry, &identifier, function, def_file);
             }
         }
         _ => {}
@@ -228,9 +241,10 @@ fn insert_function<'a>(
     registry: &GlobalRegistry,
     identifier: &Identifier,
     function: &'a Function,
+    def_file: Option<&'a Path>,
 ) {
     if let Some((id, _)) = registry.lookup(identifier) {
-        map.insert(id, function);
+        map.insert(id, FunctionAstEntry { def_file, function });
     }
 }
 

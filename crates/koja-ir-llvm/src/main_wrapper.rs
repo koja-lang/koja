@@ -38,7 +38,7 @@ use std::collections::HashSet;
 
 use inkwell::AddressSpace;
 use inkwell::module::Linkage;
-use koja_ir::{IRBasicBlock, IRBlockId, IRFunction, IRTerminator, IRType};
+use koja_ir::{IRBasicBlock, IRBlockId, IRFunction, IRSourceDef, IRTerminator, IRType};
 
 use crate::ctx::EmitContext;
 use crate::emit::{self, ValueMap};
@@ -105,8 +105,9 @@ pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
 pub(crate) fn emit_script_main<'ctx>(
     ctx: &EmitContext<'ctx>,
     blocks: &[IRBasicBlock],
+    def_location: Option<&IRSourceDef>,
 ) -> Result<(), LlvmError> {
-    define_user_main(ctx, blocks)?;
+    define_user_main(ctx, blocks, def_location)?;
     define_main_trampoline(ctx)
 }
 
@@ -117,12 +118,17 @@ pub(crate) fn emit_script_main<'ctx>(
 fn define_user_main<'ctx>(
     ctx: &EmitContext<'ctx>,
     blocks: &[IRBasicBlock],
+    def_location: Option<&IRSourceDef>,
 ) -> Result<(), LlvmError> {
     let ptr_type = ctx.context.ptr_type(AddressSpace::default());
     let signature = ctx.context.void_type().fn_type(&[ptr_type.into()], false);
     let function = ctx
         .module
         .add_function(USER_MAIN_SYMBOL, signature, Some(Linkage::External));
+    ctx.set_frame_pointer(function);
+    // Attribute the synthesized body to the script's source file so a
+    // top-level panic resolves to `main` at the user's file:line.
+    ctx.enter_named_function_debug(function, "main", def_location);
     // The script-mode body is its own function from a slot-identity
     // perspective; flush any stragglers from a prior compile or
     // helper so `LocalDecl` registers cleanly here.
@@ -201,9 +207,11 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     let main_fn = ctx
         .module
         .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
+    ctx.set_frame_pointer(main_fn);
 
     let entry_bb = ctx.context.append_basic_block(main_fn, "entry");
     ctx.builder.position_at_end(entry_bb);
+    ctx.enter_synthetic_debug();
 
     // `value_basic_type` so a `Process<(), _, _>` entry's Unit config
     // allocates as the inert `i8` placeholder.
@@ -294,8 +302,10 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
     let function = ctx
         .module
         .add_function(ENTRY_SYMBOL, signature, Some(Linkage::External));
+    ctx.set_frame_pointer(function);
     let entry = ctx.context.append_basic_block(function, "entry");
     ctx.builder.position_at_end(entry);
+    ctx.enter_synthetic_debug();
 
     let user_main_fn = ctx.module.get_function(USER_MAIN_SYMBOL).ok_or_else(|| {
         LlvmError::Codegen(format!(

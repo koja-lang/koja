@@ -8,7 +8,6 @@
 
 use std::collections::BTreeSet;
 
-use koja_ast::ast::Function;
 use koja_ast::identifier::{Identifier, ResolvedType};
 use koja_typecheck::{
     EnumDefinition, FunctionSignature, GlobalKind, GlobalRegistry, ResolvedVariantData,
@@ -25,7 +24,7 @@ use crate::struct_decl::{IRStructDecl, IRStructField};
 use crate::types::IRType;
 
 use super::substitute::{substitute_in_function, substitute_signature};
-use super::{FunctionAstIndex, Instantiation, substitute_resolved_type};
+use super::{FunctionAstEntry, FunctionAstIndex, Instantiation, substitute_resolved_type};
 
 /// Specialize one [`Instantiation`] into a concrete decl on the
 /// owning [`IRPackage`]. Surfaces any nested instantiations
@@ -124,7 +123,7 @@ pub(super) fn monomorphize(
                     &method_arg_types,
                 )
             };
-            let function_ast = function_index.get(&inst.template).unwrap_or_else(|| {
+            let ast_entry = function_index.get(&inst.template).unwrap_or_else(|| {
                 panic!(
                     "IR generics: function template `{}` registered but no AST \
                      entry in CheckedProgram — generics index invariant violation",
@@ -133,7 +132,7 @@ pub(super) fn monomorphize(
             });
             let Some(decl) = monomorphize_function(
                 inst,
-                function_ast,
+                ast_entry,
                 &entry.identifier,
                 signature,
                 symbol,
@@ -233,14 +232,14 @@ fn monomorphize_enum(
 /// the body resolves to its concrete arg.
 fn monomorphize_function(
     inst: &Instantiation,
-    function_ast: &Function,
+    ast_entry: &FunctionAstEntry,
     identifier: &Identifier,
     signature: &FunctionSignature,
     symbol: IRSymbol,
     registry: &GlobalRegistry,
     output: &mut LowerOutput,
 ) -> Option<IRFunction> {
-    let mut substituted_ast = function_ast.clone();
+    let mut substituted_ast = ast_entry.function.clone();
     substitute_in_function(&mut substituted_ast, &inst.args, inst.owner);
     let mut substituted_signature = substitute_signature(signature, &inst.args, inst.owner);
     if !inst.method_args.is_empty() {
@@ -253,6 +252,7 @@ fn monomorphize_function(
         identifier,
         &substituted_signature,
         symbol,
+        ast_entry.def_file,
         registry,
         output,
     )

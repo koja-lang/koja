@@ -108,6 +108,54 @@ pub(crate) fn install_panic_hook() {
     }));
 }
 
+/// A single resolved, user-relevant stack frame. Produced by [`capture`]
+/// and rendered by [`abort_with_diagnostic`]. Kept structured (rather than
+/// pre-formatted) so a future observability reporter (Sentry / OpenTelemetry)
+/// can consume the same frames the human renderer does.
+struct Frame {
+    /// Demangled display name (e.g. `Option.unwrap`, `main`).
+    name: String,
+    /// Raw source file path as recorded in debug info (may be empty).
+    file: String,
+    /// 1-based source line, or 0 when debug info carries none.
+    line: u32,
+    /// Whether the frame is stdlib/runtime (drives the label + path elision).
+    is_stdlib: bool,
+}
+
+/// Walk the live stack and return the filtered, demangled frames worth
+/// showing for `origin`. Must run with the panicking stack still live.
+fn capture(origin: PanicOrigin) -> Vec<Frame> {
+    const MAX_FRAMES: usize = 128;
+    let mut buf = [std::ptr::null_mut::<std::ffi::c_void>(); MAX_FRAMES];
+    let n = unsafe { libc::backtrace(buf.as_mut_ptr(), MAX_FRAMES as i32) } as usize;
+    let ips = &buf[..n];
+
+    let mut frames = Vec::new();
+    for ip in ips {
+        let resolve_ip = (*ip as usize).wrapping_sub(1) as *mut std::ffi::c_void;
+        backtrace::resolve(resolve_ip, |symbol| {
+            let name = symbol
+                .name()
+                .map(|n| n.to_string())
+                .unwrap_or_else(|| "<unknown>".to_string());
+
+            if should_skip_frame(&name, origin) {
+                return;
+            }
+
+            let file = symbol.filename().and_then(|p| p.to_str()).unwrap_or("");
+            frames.push(Frame {
+                name: demangle_koja_name(&name),
+                file: file.to_string(),
+                line: symbol.lineno().unwrap_or(0),
+                is_stdlib: is_stdlib_frame(file),
+            });
+        });
+    }
+    frames
+}
+
 /// Prints `message` and a filtered backtrace to stderr in the Elixir-style
 /// koja format, then aborts the process. Captures the backtrace at the call
 /// site, so callers must invoke it with the panicking stack still live.
@@ -125,47 +173,26 @@ pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
     eprintln!("** ({tag}) {message}");
 
     let cwd = std::env::current_dir().ok();
+    let frames = capture(origin);
 
-    const MAX_FRAMES: usize = 128;
-    let mut buf = [std::ptr::null_mut::<std::ffi::c_void>(); MAX_FRAMES];
-    let n = unsafe { libc::backtrace(buf.as_mut_ptr(), MAX_FRAMES as i32) } as usize;
-    let ips = &buf[..n];
-
-    let mut frame_num = 0;
-    for ip in ips {
-        let resolve_ip = (*ip as usize).wrapping_sub(1) as *mut std::ffi::c_void;
-        backtrace::resolve(resolve_ip, |symbol| {
-            let name = symbol
-                .name()
-                .map(|n| n.to_string())
-                .unwrap_or_else(|| "<unknown>".to_string());
-
-            if should_skip_frame(&name, origin) {
-                return;
-            }
-
-            let file_path = symbol.filename().and_then(|p| p.to_str()).unwrap_or("");
-            let line = symbol.lineno().unwrap_or(0);
-            let display_name = demangle_koja_name(&name);
-            let is_stdlib = is_stdlib_frame(file_path);
-
-            let display_file = format_file_path(file_path, cwd.as_deref(), is_stdlib);
-            let label = if is_stdlib {
-                "(stdlib)".to_string()
-            } else {
-                format!("({app})")
-            };
-            if line > 0 {
-                eprintln!("    {label} {display_file}:{line}: {display_name}()");
-            } else {
-                eprintln!("    {label} {display_file}: {display_name}()");
-            }
-
-            frame_num += 1;
-        });
+    for frame in &frames {
+        let display_file = format_file_path(&frame.file, cwd.as_deref(), frame.is_stdlib);
+        let label = if frame.is_stdlib {
+            "(stdlib)".to_string()
+        } else {
+            format!("({app})")
+        };
+        if frame.line > 0 {
+            eprintln!(
+                "    {label} {display_file}:{}: {}()",
+                frame.line, frame.name
+            );
+        } else {
+            eprintln!("    {label} {display_file}: {}()", frame.name);
+        }
     }
 
-    if frame_num == 0 {
+    if frames.is_empty() {
         eprintln!("    <no frames available — was the binary compiled with debug info?>");
     }
 
@@ -224,10 +251,14 @@ fn should_skip_frame(name: &str, origin: PanicOrigin) -> bool {
 }
 
 fn is_stdlib_frame(file_path: &str) -> bool {
-    file_path.is_empty()
-        || file_path.starts_with('<')
-        || file_path.contains("/koja-stdlib/")
-        || file_path.contains("/crates/koja-")
+    // DWARF reconstructs parentless virtual paths (e.g. the stdlib's
+    // `<Global.option>`) with a `./` directory prefix; strip it so the
+    // `<…>` marker is still recognized.
+    let path = file_path.strip_prefix("./").unwrap_or(file_path);
+    path.is_empty()
+        || path.starts_with('<')
+        || path.contains("/koja-stdlib/")
+        || path.contains("/crates/koja-")
 }
 
 // ---------------------------------------------------------------------------

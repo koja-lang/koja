@@ -62,6 +62,7 @@
 
 mod constant_pool;
 mod ctx;
+mod debug;
 mod emit;
 mod error;
 mod function;
@@ -116,8 +117,9 @@ pub fn compile_program(
     options: &CompileOptions,
 ) -> Result<(), LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name);
+    let ctx = EmitContext::new(&context, app_name, true);
     program::compile_program(&ctx, program, app_name)?;
+    ctx.finalize_debug_info();
     object::emit_object_file(&ctx.module, output, options.opt_level())
 }
 
@@ -126,7 +128,7 @@ pub fn compile_program(
 /// subprocess.
 pub fn emit_llvm_ir(program: &IRProgram, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name);
+    let ctx = EmitContext::new(&context, app_name, false);
     program::compile_program(&ctx, program, app_name)?;
     Ok(ctx.module.print_to_string().to_string())
 }
@@ -139,15 +141,16 @@ pub fn compile_script(
     options: &CompileOptions,
 ) -> Result<(), LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name);
+    let ctx = EmitContext::new(&context, app_name, true);
     script::compile_script(&ctx, script, app_name)?;
+    ctx.finalize_debug_info();
     object::emit_object_file(&ctx.module, output, options.opt_level())
 }
 
 /// Counterpart to [`emit_llvm_ir`] for script-mode sources.
 pub fn emit_script_llvm_ir(script: &IRScript, app_name: &str) -> Result<String, LlvmError> {
     let context = Context::create();
-    let ctx = EmitContext::new(&context, app_name);
+    let ctx = EmitContext::new(&context, app_name, false);
     script::compile_script(&ctx, script, app_name)?;
     Ok(ctx.module.print_to_string().to_string())
 }
