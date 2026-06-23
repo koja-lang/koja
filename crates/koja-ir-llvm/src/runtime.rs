@@ -51,6 +51,7 @@ pub(crate) const RT_CALL_TOKEN_SYMBOL: &str = "koja_rt_call_token";
 pub(crate) const RT_KILL_SYMBOL: &str = "koja_rt_kill";
 pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "koja_rt_main_done";
 pub(crate) const RT_PROCESS_ALIVE_SYMBOL: &str = "koja_rt_is_process_alive";
+pub(crate) const RT_PROCESS_EXIT_SYMBOL: &str = "koja_rt_process_exit";
 pub(crate) const RT_RECEIVE_SYMBOL: &str = "koja_rt_receive";
 pub(crate) const RT_RECEIVE_TIMEOUT_SYMBOL: &str = "koja_rt_receive_timeout";
 pub(crate) const RT_REPLY_SYMBOL: &str = "koja_rt_reply";
@@ -579,6 +580,20 @@ pub(crate) fn declare_rt_send_lifecycle_extern<'ctx>(
         .fn_type(&[i64_ty.into(), i64_ty.into()], false);
     ctx.module
         .add_function(RT_SEND_LIFECYCLE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `koja_rt_process_exit`. Signature:
+/// `void koja_rt_process_exit(i64 reason)` — records the terminating
+/// process's exit reason (0=Normal, 1=Shutdown, ...) on its control block.
+/// Emitted in the process-body tail from the process's own `StopReason`.
+pub(crate) fn declare_rt_process_exit_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_PROCESS_EXIT_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
+    ctx.module
+        .add_function(RT_PROCESS_EXIT_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) `koja_rt_set_priority`. Signature:

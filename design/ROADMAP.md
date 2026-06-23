@@ -234,7 +234,7 @@ Four sub-milestones, the first of which is a design spike. **Constraint added** 
 #### A2: Supervision (depends on A0 + supervision prerequisites)
 
 - `Pid` type -- type-erased process ID, distinct from `Ref<M, R>`.
-- `ExitSignal` struct + `Process.monitor(ref)`.
+- `ExitSignal` struct + `Process.monitor(ref)`. _(seam in place: the runtime now records an `ExitReason` (`Normal`/`Shutdown`/`Killed`) on every process at its death site — set from the process's own `StopReason` via `koja_rt_process_exit`, or `Killed` on a forced `kill` — and fires a no-op `ProcessTable::notify_exit(pid, reason)` on the `-> Dead` edge for this milestone to fill with signal delivery.)_
 - `ChildSpec` + `child_spec` default impl on `Process`. (Restart closures need no language support under value semantics: a closure captures `config` as an independent value and stays re-callable -- the formerly-prerequisite `copy` keyword is obsolete.)
 - `Supervisor` stdlib process with `OneForOne` / `OneForAll` / `RestForOne` strategies; max-restarts-exceeded crashes the supervisor.
 - Application startup convention -- entry process builds child specs via `Type.child_spec(config)`, passes to `Supervisor`, spawns it.

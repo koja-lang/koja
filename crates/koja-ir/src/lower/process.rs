@@ -927,9 +927,29 @@ fn finish_process_arm(
     types: &ProcessBodyTypes,
     tail: &ProcessBodyTail,
 ) {
+    let IRType::Enum(stop_reason_symbol) = &types.stop_reason else {
+        panic!(
+            "IR lower: `StopReason` must lower to an enum, got `{:?}`",
+            types.stop_reason,
+        );
+    };
+    // The process's own `StopReason.code()` is a name-keyed mapping to the
+    // exit wire code (Normal=0, Shutdown=1); record it as the exit reason for
+    // every process, and reuse it as the OS exit code on the entry path.
+    let code = ctx.fresh_value(IRType::Int64);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Call {
+            args: vec![stop_reason],
+            callee: mangled_method_name(stop_reason_symbol, &[], "code", &[]),
+            dest: code,
+        },
+    );
+    ctx.cfg
+        .append(block, IRInstruction::ProcessExit { reason: code });
+    drop_discarded_temp(ctx, block, stop_reason);
     let result = match tail {
         ProcessBodyTail::Discard => {
-            drop_discarded_temp(ctx, block, stop_reason);
             let unit = ctx.fresh_value(IRType::Unit);
             ctx.cfg.append(
                 block,
@@ -940,25 +960,7 @@ fn finish_process_arm(
             );
             unit
         }
-        ProcessBodyTail::ExitCode => {
-            let IRType::Enum(stop_reason_symbol) = &types.stop_reason else {
-                panic!(
-                    "IR lower: `StopReason` must lower to an enum, got `{:?}`",
-                    types.stop_reason,
-                );
-            };
-            let code = ctx.fresh_value(IRType::Int64);
-            ctx.cfg.append(
-                block,
-                IRInstruction::Call {
-                    args: vec![stop_reason],
-                    callee: mangled_method_name(stop_reason_symbol, &[], "code", &[]),
-                    dest: code,
-                },
-            );
-            drop_discarded_temp(ctx, block, stop_reason);
-            code
-        }
+        ProcessBodyTail::ExitCode => code,
     };
     emit_slot_drops(ctx, block);
     ctx.cfg.set_terminator(

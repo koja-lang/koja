@@ -14,7 +14,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use koja_runtime_core::{
-    Clock, Driver, Executor, Lifecycle, Pid, Priority, ProcessTable, SignalSource, slot_index,
+    Clock, Driver, Executor, ExitReason, Lifecycle, Pid, Priority, ProcessTable, SignalSource,
+    slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
@@ -822,6 +823,19 @@ pub unsafe extern "C" fn koja_rt_reply(
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
     send_lifecycle_to(pid, variant);
+}
+
+/// Records the calling process's exit reason from a wire code (0=Normal,
+/// 1=Shutdown, ...). Emitted in the process-body tail from the process's
+/// own `StopReason`, so the reason is set before the trampoline marks it
+/// dead and `notify_exit` fires.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_process_exit(reason: i64) {
+    let pid = CURRENT_PID.with(|c| c.get());
+    SCHED
+        .lock()
+        .unwrap()
+        .set_exit_reason(pid, ExitReason::from_index(reason));
 }
 
 /// Sets the calling process's scheduling priority from a `Priority`

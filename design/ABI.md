@@ -169,6 +169,15 @@ tail-recursion monopolizes a worker. The budget is granted by priority
 interpreter has no extern: `koja-ir-eval` routes `YieldCheck` through
 `scheduler::reduce` for the same effect.
 
+`koja_rt_process_exit(i64 reason)` (`void(i64)`) records why the current
+process terminated on its control block (read by `ProcessTable`'s
+exit-notification seam). The compiler emits it in the process-body tail
+from the process's own `StopReason`, which maps by variant name to the
+wire code (`Normal` → 0, `Shutdown` → 1; out-of-range clamps to `Normal`
+via `koja_runtime_core::ExitReason::from_index`). A forced `kill` records
+`Killed` (2) directly in the runtime. The interpreter has no extern:
+`koja-ir-eval` routes `ProcessExit` through `scheduler::process_exit`.
+
 ## Runtime extern function signatures
 
 The `koja_*` / `koja_rt_*` C-ABI function surface (allocation, rc,

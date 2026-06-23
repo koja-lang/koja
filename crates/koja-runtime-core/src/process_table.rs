@@ -73,6 +73,10 @@ pub struct ProcessControlBlock<X, M> {
     /// counter from this on resume via [`ProcessTable::reductions_left`]; the
     /// per-`YieldCheck` spend happens there, not on this field.
     reductions_left: u32,
+    /// Why the process terminated, recorded at its death site and read by
+    /// [`ProcessTable::notify_exit`] on the `-> Dead` edge. `Normal` until a
+    /// reason is set.
+    exit_reason: ExitReason,
     /// Current lifecycle state, driven by [`ProcessTable::transition`].
     pub state: ProcessState,
     /// What a `Blocked` process is waiting on, so delivery only wakes it for
@@ -90,6 +94,7 @@ impl<X, M> ProcessControlBlock<X, M> {
             on_cpu: false,
             priority: Priority::default(),
             reductions_left: Priority::default().budget(),
+            exit_reason: ExitReason::default(),
             state: ProcessState::Created,
             waiting: WaitTarget::Receive,
         }
@@ -166,6 +171,34 @@ impl Priority {
             Self::Low => 1_000,
             Self::Normal => 2_000,
             Self::High => 4_000,
+        }
+    }
+}
+
+/// Why a process terminated, recorded on its PCB and read by the
+/// [`ProcessTable::notify_exit`] seam when it goes `Dead`. The wire code is
+/// an ABI contract (0 = `Normal`, 1 = `Shutdown`, 2 = `Killed`, 3 =
+/// `Crashed`) decoded by `from_index`: `Normal`/`Shutdown` mirror the stop
+/// reason a process returns, `Killed` marks a forced kill, and `Crashed` is
+/// reserved for fault capture (nothing produces it yet). Default is `Normal`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExitReason {
+    #[default]
+    Normal,
+    Shutdown,
+    Killed,
+    Crashed,
+}
+
+impl ExitReason {
+    /// The reason for a wire/FFI code, clamping unknown values to `Normal`
+    /// so a malformed boundary value can't panic the scheduler.
+    pub fn from_index(index: i64) -> Self {
+        match index {
+            1 => Self::Shutdown,
+            2 => Self::Killed,
+            3 => Self::Crashed,
+            _ => Self::Normal,
         }
     }
 }
@@ -429,6 +462,8 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
         if from != ProcessState::Dead && to == ProcessState::Dead {
             self.alive -= 1;
+            let reason = self.get(pid).map_or(ExitReason::Normal, |p| p.exit_reason);
+            self.notify_exit(pid, reason);
         }
         // A `Running -> Runnable` edge is a cooperative yield: the worker's
         // following `after_switch` re-enqueues the process once `on_cpu`
@@ -506,9 +541,13 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// instead (it sees `Dead` in [`after_switch`](Self::after_switch)). The
     /// mailbox rides along either way, so envelopes are freed exactly once.
     pub fn kill(&mut self, pid: Pid) -> Option<Reclaim<X, M>> {
-        if !self.mark_dead_if_alive(pid) {
+        if !self.is_alive(pid) {
             return None;
         }
+        // Record the reason before the `-> Dead` edge so `notify_exit` sees
+        // `Killed`, not the `Normal` default.
+        self.set_exit_reason(pid, ExitReason::Killed);
+        self.mark_dead_if_alive(pid);
         if self.get(pid).is_some_and(|process| process.on_cpu) {
             self.counters.kills_deferred += 1;
             self.trace.record(pid, TraceEvent::KillDeferred);
@@ -517,6 +556,22 @@ impl<X, M: Message> ProcessTable<X, M> {
             self.free(pid)
         }
     }
+
+    /// Records why `pid` is terminating, to be read by [`notify_exit`] on the
+    /// `-> Dead` edge. Set before marking the process dead; a no-op for a
+    /// stale PID. A process that sets no reason dies `Normal`.
+    ///
+    /// [`notify_exit`]: Self::notify_exit
+    pub fn set_exit_reason(&mut self, pid: Pid, reason: ExitReason) {
+        if let Some(process) = self.get_mut(pid) {
+            process.exit_reason = reason;
+        }
+    }
+
+    /// Fired from [`transition`](Self::transition) when a process goes `Dead`,
+    /// carrying its recorded [`ExitReason`]. A no-op seam today; process
+    /// monitoring delivers exit signals to linked/monitoring processes here.
+    fn notify_exit(&mut self, _pid: Pid, _reason: ExitReason) {}
 
     /// Pops the next claimable process, marking it `Running` and `on_cpu`.
     /// Serves the highest-priority non-empty queue, but ages the ready queues
@@ -793,6 +848,28 @@ mod tests {
             let pid = encode(index, generation);
             assert_eq!(decode(pid), (index, generation));
         }
+    }
+
+    #[test]
+    fn exit_reason_defaults_normal_until_set() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        assert_eq!(table.get(pid).unwrap().exit_reason, ExitReason::Normal);
+        table.set_exit_reason(pid, ExitReason::Shutdown);
+        assert_eq!(table.get(pid).unwrap().exit_reason, ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn kill_records_killed_reason() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        // Claim it so the kill is deferred (on_cpu) and the slot survives for
+        // inspection rather than being reclaimed inline.
+        assert_eq!(table.claim_next(), Some(pid));
+        assert!(table.kill(pid).is_none(), "on_cpu kill defers reclaim");
+        let process = table.get(pid).expect("deferred kill keeps the slot");
+        assert_eq!(process.state, ProcessState::Dead);
+        assert_eq!(process.exit_reason, ExitReason::Killed);
     }
 
     #[test]

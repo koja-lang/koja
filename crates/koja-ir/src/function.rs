@@ -686,6 +686,13 @@ pub enum IRInstruction {
         ref_type: IRSymbol,
         wrapper: IRSymbol,
     },
+    /// `process_exit(reason)` — record the terminating process's exit
+    /// reason on its control block. `reason` is an `Int64` SSA value
+    /// holding the wire code (0=Normal, 1=Shutdown, ...), emitted in the
+    /// process-body tail from the process's own `StopReason`. LLVM lowers
+    /// it to `koja_rt_process_exit(i64)`; eval routes it to
+    /// `scheduler::process_exit`. Produces no value.
+    ProcessExit { reason: ValueId },
     /// `set_priority(tag)` — hand the current process's scheduling
     /// weight to the runtime. `tag` is an `Int64` SSA value holding the
     /// wire weight (0=Low, 1=Normal, 2=High), emitted once per process
@@ -844,6 +851,7 @@ impl IRInstruction {
             | IRInstruction::DropValue { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalWrite { .. }
+            | IRInstruction::ProcessExit { .. }
             | IRInstruction::SetPriority { .. }
             | IRInstruction::YieldCheck => None,
         }

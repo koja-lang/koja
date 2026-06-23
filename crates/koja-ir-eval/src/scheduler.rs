@@ -33,8 +33,8 @@ use std::time::Instant;
 
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
-    Clock, CooperativeDriver, Executor, Lifecycle, Message, MessageSource, Pid, Priority,
-    ProcessTable, Readiness, SignalSource, Tag, WaitTarget,
+    Clock, CooperativeDriver, Executor, ExitReason, Lifecycle, Message, MessageSource, Pid,
+    Priority, ProcessTable, Readiness, SignalSource, Tag, WaitTarget,
 };
 
 use crate::interpreter::CallResolver;
@@ -223,6 +223,15 @@ pub(crate) fn is_alive(pid: Pid) -> bool {
 pub(crate) fn set_priority(level: i64) {
     let pid = current_pid();
     with_table(|table| table.set_priority(pid, Priority::from_index(level)));
+}
+
+/// Records the currently-resuming process's exit reason from a wire code
+/// (0=Normal, 1=Shutdown, ...). The cooperative analog of native's
+/// `koja_rt_process_exit`; runs in the process-body tail just before the
+/// process completes, so the reason is set when `mark_dead_if_alive` fires.
+pub(crate) fn process_exit(reason: i64) {
+    let pid = current_pid();
+    with_table(|table| table.set_exit_reason(pid, ExitReason::from_index(reason)));
 }
 
 /// Spends one reduction for the currently-resuming process. Returns `true`

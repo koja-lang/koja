@@ -1354,6 +1354,16 @@ fn execute_instruction<'a, R: CallResolver>(
                 );
                 Ok(())
             }
+            IRInstruction::ProcessExit { reason } => {
+                let reason = lookup(&frame.values, *reason)?;
+                let Value::Int(reason) = reason else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("ProcessExit expects an Int reason; got {reason}"),
+                    });
+                };
+                scheduler::process_exit(reason);
+                Ok(())
+            }
             IRInstruction::SetPriority { tag } => {
                 let level = lookup(&frame.values, *tag)?;
                 let Value::Int(level) = level else {

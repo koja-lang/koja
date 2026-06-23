@@ -229,8 +229,9 @@ pub(super) fn instruction_operands(inst: &IRInstruction) -> Vec<ValueId> {
         // resolves through the program's function index, validated
         // by `seal_program_calls`.
         IRInstruction::Spawn { config, .. } => vec![*config],
-        // `SetPriority` consumes the priority tag value; the
+        // `ProcessExit` / `SetPriority` consume their single tag value; the
         // defined-before-use walk validates it like any other operand.
+        IRInstruction::ProcessExit { reason } => vec![*reason],
         IRInstruction::SetPriority { tag } => vec![*tag],
         // `YieldCheck` is a bare preemption point — no operands, no dest.
         IRInstruction::YieldCheck => vec![],
