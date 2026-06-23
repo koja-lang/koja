@@ -49,7 +49,8 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::process::payload_drop_glue;
 use crate::main_wrapper::EXIT_CODE_SYMBOL;
 use crate::runtime::{
-    declare_rt_receive_extern, declare_rt_receive_timeout_extern, declare_rt_spawn_extern,
+    declare_rt_receive_extern, declare_rt_receive_timeout_extern, declare_rt_set_priority_extern,
+    declare_rt_spawn_extern,
 };
 use crate::types::{ir_basic_type, value_basic_type};
 
@@ -247,6 +248,26 @@ pub(super) fn emit_spawn<'ctx>(
         .into_struct_value();
 
     values.insert(dest, ref_value.into());
+    Ok(())
+}
+
+// ----- IRInstruction::SetPriority ------------------------------------------
+
+/// Emit `IRInstruction::SetPriority`: forward the `Int64` scheduling
+/// weight to `koja_rt_set_priority`, which retargets the current
+/// process. The lowering layer's name-keyed `Priority` mapping already
+/// produced the `Int64` weight, so this is a straight pass-through call
+/// producing no value.
+pub(super) fn emit_set_priority<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    tag: ValueId,
+    values: &ValueMap<'ctx>,
+) -> Result<(), LlvmError> {
+    let level = lookup(values, tag)?.into_int_value();
+    let set_priority_fn = declare_rt_set_priority_extern(ctx);
+    ctx.builder
+        .build_call(set_priority_fn, &[level.into()], "")
+        .or_ice()?;
     Ok(())
 }
 

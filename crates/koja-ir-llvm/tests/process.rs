@@ -51,6 +51,12 @@ const PROCESS_STUB: &str = "
       Shutdown
     end
 
+    enum Priority
+      Low
+      Normal
+      High
+    end
+
     enum CallError
       Timeout
       ProcessDown
@@ -115,6 +121,9 @@ const PROCESS_STUB: &str = "
       fn start(config: C) -> Result<Self, StopReason>
       fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
       fn run(self) -> StopReason
+      fn priority(self) -> Priority
+        Priority.Normal
+      end
     end
     ";
 

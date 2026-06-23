@@ -1354,6 +1354,16 @@ fn execute_instruction<'a, R: CallResolver>(
                 );
                 Ok(())
             }
+            IRInstruction::SetPriority { tag } => {
+                let level = lookup(&frame.values, *tag)?;
+                let Value::Int(level) = level else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("SetPriority expects an Int tag; got {level}"),
+                    });
+                };
+                scheduler::set_priority(level);
+                Ok(())
+            }
             IRInstruction::Receive { .. } => panic!(
                 "interpreter: `Receive` reached `execute_instruction` — `execute_blocks` \
              intercepts it as a control transfer (lowering places it last in its block)",

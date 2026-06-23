@@ -556,11 +556,11 @@ mod tests {
 
     /// Install a minimal Process-entry scaffold satisfying the
     /// program-level seal checks: a `ProcessEntryWrapper` entry whose
-    /// state has registered `start` / `run` stubs. Returns the
-    /// wrapper symbol to stamp on `IRProgram::entry_point`.
+    /// state has registered `start` / `run` / `priority` stubs.
+    /// Returns the wrapper symbol to stamp on `IRProgram::entry_point`.
     fn install_entry_scaffold(pkg: &mut IRPackage) -> IRSymbol {
         let state = sym("Test.EntryState");
-        for method in ["start", "run"] {
+        for method in ["priority", "run", "start"] {
             let stub = seed_function(
                 crate::mangling::mangled_method_name(&state, &[], method, &[]),
                 Vec::new(),

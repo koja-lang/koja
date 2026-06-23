@@ -18,6 +18,18 @@ enum StopReason
 end
 
 @doc """
+Scheduling priority for a process. Variant order is cosmetic and not
+significant: the runtime scheduling weight is assigned by the compiler by
+variant name (the runtime maps weight 0=Low, 1=Normal, 2=High), so variants
+stay alpha-sorted and reordering them changes nothing.
+"""
+enum Priority
+  High
+  Low
+  Normal
+end
+
+@doc """
 Maps a stop reason to an OS exit code. Only the entry process needs this.
 """
 protocol ExitStatus
@@ -185,6 +197,15 @@ protocol Process<C, M, R>
       Lifecycle.Interrupt -> Step.Done(StopReason.Shutdown)
       Lifecycle.Reload -> Step.Continue(self)
     end
+  end
+
+  @doc """
+  The process's scheduling priority. The runtime reads this once, right
+  after `start` succeeds, and schedules the process at that priority for
+  the rest of its life. Defaults to `Normal`; override to raise or lower.
+  """
+  fn priority(self) -> Priority
+    Priority.Normal
   end
 
   @doc """

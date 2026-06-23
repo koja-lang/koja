@@ -1,0 +1,4 @@
+[project]
+entry = "App"
+name = "ProcessPriority"
+version = "0.1.0"

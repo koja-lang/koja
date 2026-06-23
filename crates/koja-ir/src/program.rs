@@ -298,7 +298,7 @@ fn enqueue_process_methods(
     let Some(state_entry) = registry.get(state_id) else {
         return;
     };
-    for method in ["start", "run"] {
+    for method in ["priority", "run", "start"] {
         let mut path = state_entry.identifier.path().to_vec();
         path.push(method.to_string());
         let method_ident = Identifier::new(state_entry.identifier.package(), path);

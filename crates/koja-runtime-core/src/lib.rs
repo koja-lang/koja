@@ -26,7 +26,8 @@ pub mod wire;
 pub use driver::CooperativeDriver;
 pub use mailbox::{Mailbox, WaitTarget};
 pub use process_table::{
-    ProcessControlBlock, ProcessState, ProcessTable, Reclaim, ScheduleCounters, slot_index,
+    Priority, ProcessControlBlock, ProcessState, ProcessTable, Reclaim, ScheduleCounters,
+    slot_index,
 };
 pub use protocol::{
     Clock, Driver, Executor, Interest, Lifecycle, Message, MessageSource, Pid, Reactor, Readiness,

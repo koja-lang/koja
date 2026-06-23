@@ -686,6 +686,16 @@ pub enum IRInstruction {
         ref_type: IRSymbol,
         wrapper: IRSymbol,
     },
+    /// `set_priority(tag)` — hand the current process's scheduling
+    /// weight to the runtime. `tag` is an `Int64`-typed SSA value
+    /// holding the wire weight (0=Low, 1=Normal, 2=High), selected by
+    /// the compiler's name-keyed `Priority` diamond off the state's
+    /// `priority()` result (see `lower::process::emit_apply_priority`)
+    /// — not derived from enum declaration order. Emitted once per
+    /// process body right after `start` succeeds, before the `run`
+    /// loop. The LLVM backend lowers it to `koja_rt_set_priority(i64)`;
+    /// eval routes it to `scheduler::set_priority`. Produces no value.
+    SetPriority { tag: ValueId },
     /// `dest = receive arms after?`. Block on the current process's
     /// mailbox; on message arrival, dispatch to the matching arm
     /// based on the envelope tag (business vs lifecycle); on
@@ -828,7 +838,8 @@ impl IRInstruction {
             IRInstruction::DropLocal { .. }
             | IRInstruction::DropValue { .. }
             | IRInstruction::LocalDecl { .. }
-            | IRInstruction::LocalWrite { .. } => None,
+            | IRInstruction::LocalWrite { .. }
+            | IRInstruction::SetPriority { .. } => None,
         }
     }
 }

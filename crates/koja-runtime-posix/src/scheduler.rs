@@ -14,7 +14,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use koja_runtime_core::{
-    Clock, Driver, Executor, Lifecycle, Pid, ProcessTable, SignalSource, slot_index,
+    Clock, Driver, Executor, Lifecycle, Pid, Priority, ProcessTable, SignalSource, slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
@@ -815,6 +815,19 @@ pub unsafe extern "C" fn koja_rt_reply(
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
     send_lifecycle_to(pid, variant);
+}
+
+/// Sets the calling process's scheduling priority from a `Priority`
+/// variant index (0=Low, 1=Normal, 2=High). Called once per process
+/// body right after `start` succeeds, so the process runs at its
+/// declared priority for the rest of its life.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_set_priority(level: i64) {
+    let pid = CURRENT_PID.with(|c| c.get());
+    SCHED
+        .lock()
+        .unwrap()
+        .set_priority(pid, Priority::from_index(level));
 }
 
 /// Sends an IOReady event to the process identified by `pid`.

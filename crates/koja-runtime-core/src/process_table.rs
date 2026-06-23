@@ -66,6 +66,8 @@ pub struct ProcessControlBlock<X, M> {
     /// until it has persisted the post-yield execution state. Gates pickup so no
     /// other worker resumes a stale frame in the publish-before-save window.
     on_cpu: bool,
+    /// Scheduling priority, selecting which ready queue an enqueue lands in.
+    priority: Priority,
     /// Current lifecycle state, driven by [`ProcessTable::transition`].
     pub state: ProcessState,
     /// What a `Blocked` process is waiting on, so delivery only wakes it for
@@ -81,6 +83,7 @@ impl<X, M> ProcessControlBlock<X, M> {
             deadline: None,
             mailbox: Mailbox::default(),
             on_cpu: false,
+            priority: Priority::default(),
             state: ProcessState::Created,
             waiting: WaitTarget::Receive,
         }
@@ -119,6 +122,38 @@ pub enum ProcessState {
     Dead,
 }
 
+/// A process's scheduling priority. The wire weight is an explicit ABI
+/// contract (0 = `Low`, 1 = `Normal`, 2 = `High`) assigned by the compiler
+/// by variant name and decoded here by `from_index`; the Rust enum's
+/// declaration order only fixes the internal ready-queue index via
+/// `as usize`. The default is `Normal`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Priority {
+    Low,
+    #[default]
+    Normal,
+    High,
+}
+
+/// Number of scheduling priority levels.
+const LEVELS: usize = 3;
+
+/// Selections a non-empty ready queue may be passed over before it ages
+/// enough to preempt in `next_ready_level`, bounding every level's wait.
+const STARVATION_THRESHOLD: u32 = 8;
+
+impl Priority {
+    /// The priority for a wire/FFI tag index, clamping unknown values to
+    /// `Normal` so a malformed boundary value can't panic the scheduler.
+    pub fn from_index(index: i64) -> Self {
+        match index {
+            0 => Self::Low,
+            2 => Self::High,
+            _ => Self::Normal,
+        }
+    }
+}
+
 /// One slot in the table. `process` is `None` when the slot is free;
 /// `generation` is bumped on free so recycled slots reject stale PIDs.
 struct Slot<X, M> {
@@ -137,17 +172,18 @@ fn is_active(state: ProcessState) -> bool {
 /// Built from the audited transition sites: a worker claims a fresh or woken
 /// process (`Created`/`Runnable -> Running`); a running process blocks on a
 /// message or I/O (`Running -> Blocked`/`WaitingIO`); a wake re-arms a parked
-/// process (`Blocked`/`WaitingIO -> Runnable`); and any live process can die
-/// via return (`Running -> Dead`) or a kill from another worker (`* -> Dead`).
-/// No legal edge is a self-edge, because every call site gates its
-/// precondition first.
+/// process (`Blocked`/`WaitingIO -> Runnable`); a running process voluntarily
+/// yields back to the ready queue (`Running -> Runnable`, cooperative
+/// preemption); and any live process can die via return (`Running -> Dead`) or
+/// a kill from another worker (`* -> Dead`). No legal edge is a self-edge,
+/// because every call site gates its precondition first.
 fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
     use ProcessState::*;
     matches!(
         (from, to),
         (Created | Runnable, Running)
             | (Running, Blocked | WaitingIO | Dead)
-            | (Blocked | WaitingIO, Runnable)
+            | (Running | Blocked | WaitingIO, Runnable)
             | (Created | Runnable | Blocked | WaitingIO, Dead)
     )
 }
@@ -212,8 +248,13 @@ pub struct ProcessTable<X, M> {
     /// First spawned process (the program entry). Drives signal delivery and
     /// the shutdown decision; `0` until the first spawn.
     main_pid: Pid,
-    /// Packed PIDs ready to run, in arrival order.
-    ready: VecDeque<Pid>,
+    /// Packed PIDs ready to run, one FIFO queue per priority level
+    /// (index = `priority as usize`), highest level served first.
+    ready: [VecDeque<Pid>; LEVELS],
+    /// Per-level count of consecutive selections each ready queue has
+    /// been passed over while non-empty; a level that reaches
+    /// `STARVATION_THRESHOLD` preempts so no priority is starved.
+    ready_ages: [u32; LEVELS],
     /// All slots, indexed by a PID's low 32 bits.
     slots: Vec<Slot<X, M>>,
     /// Lifecycle event ring, dumped at shutdown under `KOJA_SCHED_TRACE`.
@@ -232,7 +273,8 @@ impl<X, M: Message> ProcessTable<X, M> {
             free: Vec::new(),
             last_advance: None,
             main_pid: 0,
-            ready: VecDeque::new(),
+            ready: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
+            ready_ages: [0; LEVELS],
             slots: Vec::new(),
             trace: SchedulerTrace::new(),
             wheel: TimerWheel::new(),
@@ -289,6 +331,14 @@ impl<X, M: Message> ProcessTable<X, M> {
             .is_some_and(|process| process.mailbox.has_system())
     }
 
+    /// Sets `pid`'s scheduling priority. Takes effect at the next enqueue —
+    /// an entry already queued at the old level is not moved.
+    pub fn set_priority(&mut self, pid: Pid, priority: Priority) {
+        if let Some(process) = self.get_mut(pid) {
+            process.priority = priority;
+        }
+    }
+
     /// Registers a new process (with its executor `execution` state) in a free
     /// or freshly grown slot, queues it as runnable, and returns its packed PID.
     pub fn spawn(&mut self, execution: X) -> Pid {
@@ -307,7 +357,7 @@ impl<X, M: Message> ProcessTable<X, M> {
         let pid = encode(index, generation);
         self.slots[index as usize].process = Some(ProcessControlBlock::new(execution));
         self.alive += 1;
-        self.ready.push_back(pid);
+        self.enqueue_ready(pid);
         if self.main_pid == 0 {
             self.main_pid = pid;
         }
@@ -365,8 +415,14 @@ impl<X, M: Message> ProcessTable<X, M> {
             self.alive -= 1;
         }
         if to == ProcessState::Runnable {
-            self.ready.push_back(pid);
+            self.enqueue_ready(pid);
         }
+    }
+
+    /// Enqueues `pid` onto the ready queue for its current priority.
+    fn enqueue_ready(&mut self, pid: Pid) {
+        let level = self.get(pid).map_or(Priority::Normal, |p| p.priority) as usize;
+        self.ready[level].push_back(pid);
     }
 
     /// Parks `pid` as `Blocked`, recording which part of its mailbox it waits
@@ -441,13 +497,15 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
     }
 
-    /// Pops the next claimable process, marking it `Running` and `on_cpu`, and
-    /// returns its PID. Skips stale ready-queue entries — killed, already
-    /// resumed, or still `on_cpu` in the publish-before-save window (the owning
-    /// worker re-queues those from [`after_switch`](Self::after_switch)). The
-    /// caller reads the process's execution state via [`get`](Self::get).
+    /// Pops the next claimable process, marking it `Running` and `on_cpu`.
+    /// Serves the highest-priority non-empty queue, but ages the ready queues
+    /// so any non-empty level passed over `STARVATION_THRESHOLD` times preempts
+    /// — bounding every level's wait so no priority is starved. Skips stale
+    /// ready-queue entries (killed, already resumed, or still `on_cpu`).
     pub fn claim_next(&mut self) -> Option<Pid> {
-        while let Some(pid) = self.ready.pop_front() {
+        loop {
+            let level = self.next_ready_level()?;
+            let pid = self.ready[level].pop_front()?;
             match self.get_mut(pid) {
                 Some(process)
                     if !process.on_cpu
@@ -466,7 +524,32 @@ impl<X, M: Message> ProcessTable<X, M> {
             self.transition(pid, ProcessState::Running);
             return Some(pid);
         }
-        None
+    }
+
+    /// Chooses which priority level `claim_next` serves, aging the ready
+    /// queues so no level starves. Normally the highest-priority non-empty
+    /// level wins; but any non-empty level that has been passed over
+    /// `STARVATION_THRESHOLD` times preempts (most-aged first, ties broken
+    /// toward higher priority), bounding every level's wait. Returns `None`
+    /// only when all queues are empty.
+    fn next_ready_level(&mut self) -> Option<usize> {
+        let highest = (0..LEVELS)
+            .rev()
+            .find(|&level| !self.ready[level].is_empty())?;
+        let chosen = (0..LEVELS)
+            .filter(|&level| {
+                !self.ready[level].is_empty() && self.ready_ages[level] >= STARVATION_THRESHOLD
+            })
+            .max_by_key(|&level| (self.ready_ages[level], level))
+            .unwrap_or(highest);
+        for level in 0..LEVELS {
+            if level == chosen || self.ready[level].is_empty() {
+                self.ready_ages[level] = 0;
+            } else {
+                self.ready_ages[level] += 1;
+            }
+        }
+        Some(chosen)
     }
 
     /// After a process yields back to its driver, releases the `on_cpu` claim
@@ -483,10 +566,24 @@ impl<X, M: Message> ProcessTable<X, M> {
         match state {
             ProcessState::Dead => self.free(pid),
             ProcessState::Created | ProcessState::Runnable => {
-                self.ready.push_back(pid);
+                self.enqueue_ready(pid);
                 None
             }
             _ => None,
+        }
+    }
+
+    /// Voluntarily returns a running process to the ready queue (cooperative
+    /// preemption). No-op unless `pid` is currently `Running`. The `on_cpu`
+    /// claim is released by [`after_switch`](Self::after_switch) as usual,
+    /// which performs the single real re-enqueue; the in-window entry this
+    /// transition adds is stale-skipped by `claim_next` like any other.
+    pub fn yield_running(&mut self, pid: Pid) {
+        if self
+            .get(pid)
+            .is_some_and(|process| process.state == ProcessState::Running)
+        {
+            self.transition(pid, ProcessState::Runnable);
         }
     }
 
@@ -629,6 +726,26 @@ mod tests {
 
     fn fake_spawn(table: &mut TestTable) -> Pid {
         table.spawn(())
+    }
+
+    /// Spawns a process, promotes it to `priority`, and parks it off the ready
+    /// queue (so a later `transition(.., Runnable)` enqueues it at the new
+    /// level). Requires the ready queues to be empty at call time so the fresh
+    /// PID is the one claimed.
+    fn spawn_parked(table: &mut TestTable, priority: Priority) -> Pid {
+        let pid = table.spawn(());
+        assert_eq!(table.claim_next(), Some(pid), "freshly spawned pid claimed");
+        table.set_priority(pid, priority);
+        assert!(table.try_park(pid, WaitTarget::Receive, None));
+        assert!(table.after_switch(pid).is_none(), "parked, not reclaimed");
+        pid
+    }
+
+    /// Cooperatively yields a just-claimed (Running) process back to its ready
+    /// queue, as a driver would around `after_switch`.
+    fn yield_back(table: &mut TestTable, pid: Pid) {
+        table.yield_running(pid);
+        assert!(table.after_switch(pid).is_none(), "yielded, re-queued");
     }
 
     /// A minimal business envelope (empty payload, no glue).
@@ -871,5 +988,128 @@ mod tests {
 
         table.transition(pid, ProcessState::Dead);
         assert!(table.should_shutdown(), "main dead");
+    }
+
+    #[test]
+    fn higher_priority_served_first_fifo_within_level() {
+        let mut table = TestTable::new();
+        let a = spawn_parked(&mut table, Priority::High);
+        let b = spawn_parked(&mut table, Priority::High);
+        let c = spawn_parked(&mut table, Priority::Normal);
+
+        // Wake all three; High queue gets a then b (FIFO), Normal gets c.
+        table.transition(a, ProcessState::Runnable);
+        table.transition(b, ProcessState::Runnable);
+        table.transition(c, ProcessState::Runnable);
+
+        let order: Vec<Pid> = std::iter::from_fn(|| table.claim_next()).take(3).collect();
+        assert_eq!(order, vec![a, b, c], "High before Normal, FIFO within High");
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn low_priority_served_within_starvation_bound() {
+        let mut table = TestTable::new();
+        let low = spawn_parked(&mut table, Priority::Low);
+        let high = spawn_parked(&mut table, Priority::High);
+        table.transition(low, ProcessState::Runnable);
+        table.transition(high, ProcessState::Runnable);
+
+        // Keep the High queue continuously non-empty by re-queuing it each
+        // claim; the Low process must still be served within the bound.
+        let mut claims = 0;
+        loop {
+            let pid = table.claim_next().expect("a process is always ready");
+            claims += 1;
+            if pid == low {
+                break;
+            }
+            assert_eq!(pid, high);
+            yield_back(&mut table, high);
+            assert!(
+                claims <= STARVATION_THRESHOLD + 1,
+                "low priority starved past the bound"
+            );
+        }
+        assert!(claims <= STARVATION_THRESHOLD + 1);
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn all_tiers_served_when_high_and_low_stay_busy() {
+        // Regression: with both High and Low continuously non-empty, the old
+        // "highest or forced-lowest" scheme never selected the middle Normal
+        // tier, starving default-priority work. Per-level aging must serve it.
+        let mut table = TestTable::new();
+        let low = spawn_parked(&mut table, Priority::Low);
+        let normal = spawn_parked(&mut table, Priority::Normal);
+        let high = spawn_parked(&mut table, Priority::High);
+        table.transition(low, ProcessState::Runnable);
+        table.transition(normal, ProcessState::Runnable);
+        table.transition(high, ProcessState::Runnable);
+
+        // Keep High and Low queues continuously non-empty; the Normal process
+        // must still be claimed within the aging bound.
+        let mut claims = 0;
+        let mut normal_seen = false;
+        let mut low_seen = false;
+        loop {
+            let pid = table.claim_next().expect("a process is always ready");
+            claims += 1;
+            if pid == normal {
+                normal_seen = true;
+            } else if pid == low {
+                low_seen = true;
+                yield_back(&mut table, low);
+            } else {
+                assert_eq!(pid, high);
+                yield_back(&mut table, high);
+            }
+            if normal_seen && low_seen {
+                break;
+            }
+            assert!(
+                claims <= STARVATION_THRESHOLD + LEVELS as u32,
+                "a tier was starved past the aging bound"
+            );
+        }
+        assert!(normal_seen, "middle Normal tier must not be starved");
+        assert!(low_seen, "Low tier must still be served while High is busy");
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn yield_running_requeues_at_priority() {
+        let mut table = TestTable::new();
+        let pid = spawn_parked(&mut table, Priority::High);
+        table.transition(pid, ProcessState::Runnable);
+        assert_eq!(table.claim_next(), Some(pid));
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Running);
+
+        table.yield_running(pid);
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+        assert!(table.after_switch(pid).is_none(), "yielded, not reclaimed");
+
+        // Re-queued at High: it is served ahead of a freshly spawned Normal.
+        let normal = fake_spawn(&mut table);
+        let order: Vec<Pid> = std::iter::from_fn(|| table.claim_next()).take(2).collect();
+        assert_eq!(order, vec![pid, normal], "yielded High beats Normal");
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn set_priority_promotes_next_enqueue() {
+        let mut table = TestTable::new();
+        let promoted = spawn_parked(&mut table, Priority::High);
+        let normal = fake_spawn(&mut table);
+        table.transition(promoted, ProcessState::Runnable);
+
+        let order: Vec<Pid> = std::iter::from_fn(|| table.claim_next()).take(2).collect();
+        assert_eq!(
+            order,
+            vec![promoted, normal],
+            "set_priority lands the next enqueue at High"
+        );
+        assert_eq!(table.counters().violations, 0);
     }
 }

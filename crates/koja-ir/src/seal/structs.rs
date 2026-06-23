@@ -167,6 +167,7 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::MakeClosure { .. }
             | IRInstruction::NumericWiden { .. }
             | IRInstruction::Receive { .. }
+            | IRInstruction::SetPriority { .. }
             | IRInstruction::Spawn { .. }
             | IRInstruction::UnaryOp { .. }
             | IRInstruction::UnionPayloadGet { .. }

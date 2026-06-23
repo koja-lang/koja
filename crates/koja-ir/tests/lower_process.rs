@@ -49,6 +49,12 @@ const PROCESS_STUB: &str = "
       Shutdown
     end
 
+    enum Priority
+      Low
+      Normal
+      High
+    end
+
     enum Step<S>
       Continue(S)
       Done(StopReason)
@@ -79,13 +85,17 @@ const PROCESS_STUB: &str = "
       fn start(config: C) -> Result<Self, StopReason>
       fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
       fn run(self) -> StopReason
+      fn priority(self) -> Priority
+        Priority.Normal
+      end
     end
     ";
 
 /// Synthetic Process state appended by [`lower`] so fixtures that
 /// only exercise spawn/receive lowering still give `lower_program`
 /// a valid entry. Spells out `run` because [`PROCESS_STUB`]'s
-/// protocol has no default bodies.
+/// protocol declares it without a default body; `priority` is
+/// defaulted there, so it is synthesized per-impl automatically.
 const TEST_ENTRY_SNIPPET: &str = "
     struct TestEntry
     end
