@@ -1,0 +1,34 @@
+struct App
+end
+
+enum AppMsg
+  Ping
+end
+
+# A deliberately unresponsive process: it acknowledges `Shutdown` but keeps
+# running instead of stopping, so the SIGTERM drain's grace timer has to
+# force-kill it. Used by the native `lang_process_drain_hard_kill` test.
+impl Process<App, AppMsg, String> for App
+  fn start(config: App) -> Result<Self, StopReason>
+    IO.puts("started")
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn handle_signal(self, event: Lifecycle) -> Step<Self>
+    match event
+      Lifecycle.Shutdown ->
+        IO.puts("ignoring shutdown")
+        Step.Continue(self)
+
+      Lifecycle.Interrupt ->
+        Step.Continue(self)
+
+      Lifecycle.Reload ->
+        Step.Continue(self)
+    end
+  end
+end

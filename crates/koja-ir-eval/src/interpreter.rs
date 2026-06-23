@@ -91,7 +91,15 @@ impl Interpreter {
         // concurrent one (eval runs share one host process; native ones
         // don't).
         let signals = EvalSignals::new(program_uses_lifecycle(program));
-        EvalDriver::new(core, executor, EvalReactor, EvalClock, signals).run();
+        EvalDriver::new(
+            core,
+            executor,
+            EvalReactor,
+            EvalClock,
+            signals,
+            scheduler::grace_period(),
+        )
+        .run();
 
         exit_cell
             .borrow_mut()
@@ -144,7 +152,15 @@ impl Interpreter {
         executor.install_future(main, body_future);
 
         let signals = EvalSignals::new(script_uses_lifecycle(script));
-        EvalDriver::new(core, executor, EvalReactor, EvalClock, signals).run();
+        EvalDriver::new(
+            core,
+            executor,
+            EvalReactor,
+            EvalClock,
+            signals,
+            scheduler::grace_period(),
+        )
+        .run();
 
         exit_cell
             .borrow_mut()

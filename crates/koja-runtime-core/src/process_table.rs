@@ -23,7 +23,7 @@
 //! cooperative one. See `koja/design/SCHEDULER-PROTOCOL.md`.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::mailbox::{Mailbox, WaitTarget};
 use crate::protocol::{Message, Pid, Tag};
@@ -274,6 +274,16 @@ impl ScheduleCounters {
     }
 }
 
+/// The runtime's lifecycle mode. `Draining` is entered on `SIGTERM`: new
+/// spawns are refused and a grace deadline is armed, after which any
+/// straggler is force-killed. Resets to `Running` by construction (a fresh
+/// table per program / per run).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mode {
+    Running,
+    Draining,
+}
+
 /// The scheduler's process store: a generational slotmap with a ready queue
 /// and a timing wheel. Contains no synchronization; the adapter's driver
 /// supplies it.
@@ -290,6 +300,9 @@ pub struct ProcessTable<X, M> {
     due_delivers: Vec<TimerEntry<M>>,
     /// Indices of free slots available for reuse.
     free: Vec<u32>,
+    /// When draining, the instant after which stragglers are force-killed
+    /// (armed once by [`Self::enter_draining`]). `None` while `Running`.
+    grace_deadline: Option<Instant>,
     /// The instant the wheel was last advanced to, so the paired
     /// `promote_due_deadlines` / `take_due_timers` calls for one `now` drain
     /// the wheel exactly once.
@@ -297,6 +310,8 @@ pub struct ProcessTable<X, M> {
     /// First spawned process (the program entry). Drives signal delivery and
     /// the shutdown decision; `0` until the first spawn.
     main_pid: Pid,
+    /// Runtime lifecycle mode; `Draining` once a `SIGTERM` has been seen.
+    mode: Mode,
     /// Packed PIDs ready to run, one FIFO queue per priority level
     /// (index = `priority as usize`), highest level served first.
     ready: [VecDeque<Pid>; LEVELS],
@@ -320,8 +335,10 @@ impl<X, M: Message> ProcessTable<X, M> {
             counters: ScheduleCounters::new(),
             due_delivers: Vec::new(),
             free: Vec::new(),
+            grace_deadline: None,
             last_advance: None,
             main_pid: 0,
+            mode: Mode::Running,
             ready: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             ready_ages: [0; LEVELS],
             slots: Vec::new(),
@@ -785,9 +802,62 @@ impl<X, M: Message> ProcessTable<X, M> {
         self.alive == 0 || (self.main_pid != 0 && !self.is_alive(self.main_pid))
     }
 
-    /// The soonest pending timer or deadline, for sizing the idle park.
+    /// The soonest pending timer or deadline (folding in the drain grace
+    /// deadline so the idle park wakes to enforce it), for sizing the idle
+    /// park.
     pub fn nearest_wakeup(&self) -> Option<Instant> {
-        self.wheel.nearest()
+        match (self.wheel.nearest(), self.grace_deadline) {
+            (Some(timer), Some(grace)) => Some(timer.min(grace)),
+            (timer, grace) => timer.or(grace),
+        }
+    }
+
+    /// Enters `Draining` and arms the grace deadline at `now + grace`.
+    /// Idempotent: a second `SIGTERM` neither re-arms the deadline nor
+    /// extends it, so the grace window is measured from the first signal.
+    pub fn enter_draining(&mut self, now: Instant, grace: Duration) {
+        if self.mode == Mode::Draining {
+            return;
+        }
+        self.mode = Mode::Draining;
+        self.grace_deadline = Some(now + grace);
+    }
+
+    /// Whether the runtime is draining (a `SIGTERM` has been seen). New
+    /// spawns are refused while this holds.
+    pub fn is_draining(&self) -> bool {
+        self.mode == Mode::Draining
+    }
+
+    /// Whether the drain grace deadline has passed at `now`. Always `false`
+    /// while `Running` (no deadline armed).
+    pub fn grace_expired(&self, now: Instant) -> bool {
+        self.grace_deadline.is_some_and(|deadline| now >= deadline)
+    }
+
+    /// Force-kills every live process (recording [`ExitReason::Killed`]),
+    /// returning their detached resources for the caller to drop after
+    /// releasing the lock. The drain grace backstop: once the deadline
+    /// passes, stragglers are killed so [`should_shutdown`](Self::should_shutdown)
+    /// fires. A process still `on_cpu` is marked `Dead` (decrementing
+    /// `alive`) and reclaimed by its worker on switch-out.
+    pub fn kill_all(&mut self) -> Vec<Reclaim<X, M>> {
+        self.live_pids()
+            .into_iter()
+            .filter_map(|pid| self.kill(pid))
+            .collect()
+    }
+
+    /// The PIDs of all currently-live (non-`Dead`) processes.
+    fn live_pids(&self) -> Vec<Pid> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let process = slot.process.as_ref()?;
+                (process.state != ProcessState::Dead).then(|| encode(index as u32, slot.generation))
+            })
+            .collect()
     }
 }
 
@@ -870,6 +940,54 @@ mod tests {
         let process = table.get(pid).expect("deferred kill keeps the slot");
         assert_eq!(process.state, ProcessState::Dead);
         assert_eq!(process.exit_reason, ExitReason::Killed);
+    }
+
+    #[test]
+    fn enter_draining_arms_grace_once() {
+        let mut table = TestTable::new();
+        assert!(!table.is_draining());
+        assert!(!table.grace_expired(Instant::now()));
+
+        let start = Instant::now();
+        table.enter_draining(start, Duration::from_secs(5));
+        assert!(table.is_draining());
+        assert!(!table.grace_expired(start));
+        assert!(table.grace_expired(start + Duration::from_secs(5)));
+
+        // A second SIGTERM neither re-arms nor extends the window.
+        table.enter_draining(start + Duration::from_secs(1), Duration::from_secs(100));
+        assert!(table.grace_expired(start + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn nearest_wakeup_folds_in_grace_deadline() {
+        let mut table = TestTable::new();
+        assert_eq!(table.nearest_wakeup(), None);
+        let start = Instant::now();
+        table.enter_draining(start, Duration::from_secs(5));
+        assert_eq!(table.nearest_wakeup(), Some(start + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn kill_all_kills_every_live_process() {
+        let mut table = TestTable::new();
+        // Park one process off the ready queue (so `spawn_parked`'s claim
+        // sees an empty queue), then spawn + claim main so it is on_cpu.
+        let parked = spawn_parked(&mut table, Priority::Normal);
+        let main = fake_spawn(&mut table);
+        // A claimed (on_cpu) process is marked dead but reclaimed by its
+        // worker on switch-out, so it isn't in the returned batch.
+        assert_eq!(table.claim_next(), Some(main));
+
+        let reclaimed = table.kill_all();
+        assert_eq!(
+            reclaimed.len(),
+            1,
+            "only the off-cpu process reclaims inline"
+        );
+        assert!(table.should_shutdown(), "every process is now dead");
+        assert_eq!(table.get(main).unwrap().exit_reason, ExitReason::Killed);
+        assert!(table.get(parked).is_none(), "parked process was freed");
     }
 
     #[test]

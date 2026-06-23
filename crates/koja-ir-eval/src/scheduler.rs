@@ -29,7 +29,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake};
 use std::thread::{self, Thread};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
@@ -234,6 +234,19 @@ pub(crate) fn process_exit(reason: i64) {
     with_table(|table| table.set_exit_reason(pid, ExitReason::from_index(reason)));
 }
 
+/// The SIGTERM drain grace window, from `KOJA_GRACE_MS` (default 30s, to
+/// match Kubernetes' `terminationGracePeriodSeconds`). After this elapses,
+/// the driver force-kills any straggler. Read here so the core driver stays
+/// env-free; the native adapter has its own copy.
+pub(crate) fn grace_period() -> Duration {
+    const DEFAULT_GRACE_MS: u64 = 30_000;
+    let millis = std::env::var("KOJA_GRACE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_GRACE_MS);
+    Duration::from_millis(millis)
+}
+
 /// Spends one reduction for the currently-resuming process. Returns `true`
 /// when its budget is exhausted, having re-queued it (`Running -> Runnable`)
 /// so the caller should yield ([`YieldOnce`]) and let the driver round-robin
@@ -270,6 +283,12 @@ pub(crate) fn mint_token() -> i64 {
 /// returned immediately (for the `Ref` the spawning process produces);
 /// the child's future is installed by the executor after this resume.
 pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
+    // Refuse new processes once draining (SIGTERM seen): the program is
+    // shutting down. The invalid pid 0 makes the returned `Ref` behave like
+    // a ref to an already-dead process. Dropping `config` runs its glue.
+    if with_table(|table| table.is_draining()) {
+        return 0;
+    }
     let pid = with_table(|table| table.spawn(()));
     PENDING_SPAWNS.with(|queue| {
         queue.borrow_mut().push(PendingSpawn {

@@ -41,10 +41,32 @@ fn poll_signals() {
         return;
     }
 
-    let main_pid = SCHED.lock().unwrap().main_pid();
+    let main_pid = {
+        let mut guard = SCHED.lock().unwrap();
+        // SIGTERM (`Shutdown`) starts the drain: refuse new spawns and arm the
+        // grace deadline. The signal is still delivered to main below so a
+        // lifecycle-aware program can shut itself down before the deadline.
+        if fired.contains(&Lifecycle::Shutdown) {
+            guard.enter_draining(NativeClock.now(), grace_period());
+        }
+        guard.main_pid()
+    };
     for lifecycle in fired {
         send_lifecycle_to(main_pid, lifecycle as i64);
     }
+}
+
+/// The SIGTERM drain grace window, from `KOJA_GRACE_MS` (default 30s, to
+/// match Kubernetes' `terminationGracePeriodSeconds`). After this elapses,
+/// the worker loop force-kills any straggler. Read in the adapter so the
+/// core driver stays env-free.
+fn grace_period() -> Duration {
+    const DEFAULT_GRACE_MS: u64 = 30_000;
+    let millis = std::env::var("KOJA_GRACE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_GRACE_MS);
+    Duration::from_millis(millis)
 }
 
 /// Internal helper: allocates a tagged lifecycle message buffer and
@@ -421,6 +443,18 @@ fn worker_loop() {
         let now = NativeClock.now();
         guard.promote_due_deadlines(now);
         fire_due_timers(&mut guard, now);
+
+        // Drain grace elapsed: force-kill stragglers. They become `Dead`
+        // (alive == 0, main included), so the runtime tears down; the
+        // detached resources drop after the lock is released.
+        if guard.is_draining() && guard.grace_expired(now) {
+            let reclaim = guard.kill_all();
+            SHUTDOWN.store(true, Ordering::Relaxed);
+            drop(guard);
+            WORK_AVAILABLE.notify_all();
+            drop(reclaim);
+            break;
+        }
 
         if let Some(pid) = guard.claim_next() {
             let proc_sp = guard
@@ -991,6 +1025,14 @@ pub unsafe extern "C" fn koja_rt_spawn(
     } else {
         OwnedPayload::default()
     };
+
+    // Refuse new processes once draining (SIGTERM seen): the program is
+    // shutting down. Return the invalid pid 0 (a `Ref` over it behaves like a
+    // ref to an already-dead process); dropping `init_state` runs its glue.
+    if SCHED.lock().unwrap().is_draining() {
+        drop(init_state);
+        return 0;
+    }
 
     let (stack, sp) = allocate_process_stack();
     let execution = NativeExecution::new(fn_ptr, init_state, stack, sp);
