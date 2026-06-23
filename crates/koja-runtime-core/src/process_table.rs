@@ -551,7 +551,10 @@ impl<X, M: Message> ProcessTable<X, M> {
     }
 
     /// Removes and returns every timer whose `fire_at` is at or before `now`,
-    /// soonest first. The caller delivers each staged envelope.
+    /// soonest first; the caller delivers each staged envelope. Pairs with
+    /// [`Self::promote_due_deadlines`] for the same `now` — the wheel is
+    /// advanced at most once per `now`, so whichever of the two runs first
+    /// does the draining and the second only reads what that advance staged.
     pub fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry<M>> {
         self.advance_timers(now);
         std::mem::take(&mut self.due_delivers)
@@ -567,6 +570,11 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// (the process was woken by a message, resumed, or died, or re-blocked
     /// with a different deadline) are validated against the live state and
     /// skipped.
+    ///
+    /// Drives the shared wheel via [`Self::advance_timers`]. A driver calls
+    /// this *before* [`Self::take_due_timers`] for the same `now`: this call
+    /// advances the wheel and applies expired deadlines inline; the paired
+    /// `take` then collects the deliveries staged by the same advance.
     pub fn promote_due_deadlines(&mut self, now: Instant) {
         self.advance_timers(now);
     }

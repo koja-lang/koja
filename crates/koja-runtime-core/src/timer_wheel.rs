@@ -43,6 +43,9 @@ const WHEEL_TICK: Duration = Duration::from_millis(1);
 /// Number of buckets; the wheel covers `WHEEL_SLOTS * WHEEL_TICK`
 /// (~4 s) before an entry falls to the overflow heap.
 const WHEEL_SLOTS: u64 = 4096;
+/// `WHEEL_TICK` in nanoseconds, so tick math is a `u64` divide rather
+/// than a 128-bit one.
+const WHEEL_TICK_NANOS: u64 = WHEEL_TICK.as_nanos() as u64;
 /// `u64` words backing the occupied-bucket bitmap.
 const BITMAP_WORDS: usize = (WHEEL_SLOTS / 64) as usize;
 
@@ -65,7 +68,9 @@ enum WheelKind<M> {
 }
 
 /// One scheduled entry. Bucketed at insert time by its fire tick; fired
-/// when the exact `fire_at <= now`.
+/// when the exact `fire_at <= now`. Ordered by `(fire_at, seq)` for the
+/// overflow heap — `seq` is unique, so the order is total and `Eq` holds
+/// only between an entry and itself.
 struct WheelEntry<M> {
     fire_at: Instant,
     kind: WheelKind<M>,
@@ -73,29 +78,23 @@ struct WheelEntry<M> {
     seq: u64,
 }
 
-/// An overflow-heap entry: a wheel entry parked beyond the horizon,
-/// ordered by `(fire_at, seq)` so the soonest surfaces first.
-struct OverflowEntry<M> {
-    entry: WheelEntry<M>,
-}
-
-impl<M> PartialEq for OverflowEntry<M> {
+impl<M> PartialEq for WheelEntry<M> {
     fn eq(&self, other: &Self) -> bool {
-        self.entry.fire_at == other.entry.fire_at && self.entry.seq == other.entry.seq
+        self.fire_at == other.fire_at && self.seq == other.seq
     }
 }
 
-impl<M> Eq for OverflowEntry<M> {}
+impl<M> Eq for WheelEntry<M> {}
 
-impl<M> PartialOrd for OverflowEntry<M> {
+impl<M> PartialOrd for WheelEntry<M> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl<M> Ord for OverflowEntry<M> {
+impl<M> Ord for WheelEntry<M> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.entry.fire_at, self.entry.seq).cmp(&(other.entry.fire_at, other.entry.seq))
+        (self.fire_at, self.seq).cmp(&(other.fire_at, other.seq))
     }
 }
 
@@ -118,7 +117,7 @@ pub struct TimerWheel<M> {
     /// Occupied-bucket bitmap, so `nearest` skips empty buckets.
     occupied: [u64; BITMAP_WORDS],
     /// Entries parked beyond the wheel horizon, soonest first.
-    overflow: BinaryHeap<Reverse<OverflowEntry<M>>>,
+    overflow: BinaryHeap<Reverse<WheelEntry<M>>>,
     /// Count of pending entries across wheel + overflow.
     pending: usize,
     /// Monotonic tie-breaker for stable ordering.
@@ -171,7 +170,7 @@ impl<M> TimerWheel<M> {
             self.set_occupied(idx);
             self.slots[idx].push(entry);
         } else {
-            self.overflow.push(Reverse(OverflowEntry { entry }));
+            self.overflow.push(Reverse(entry));
         }
     }
 
@@ -187,8 +186,8 @@ impl<M> TimerWheel<M> {
 
         // Overflow first: the soonest parked entries that have come due.
         while let Some(Reverse(top)) = self.overflow.peek() {
-            if top.entry.fire_at <= now {
-                due.push(self.overflow.pop().unwrap().0.entry);
+            if top.fire_at <= now {
+                due.push(self.overflow.pop().unwrap().0);
             } else {
                 break;
             }
@@ -235,7 +234,7 @@ impl<M> TimerWheel<M> {
 
     /// The soonest pending fire instant, for sizing the idle park.
     pub fn nearest(&self) -> Option<Instant> {
-        let mut best = self.overflow.peek().map(|Reverse(top)| top.entry.fire_at);
+        let mut best = self.overflow.peek().map(|Reverse(top)| top.fire_at);
         for word in 0..BITMAP_WORDS {
             let mut bits = self.occupied[word];
             while bits != 0 {
@@ -280,7 +279,7 @@ impl<M> Default for TimerWheel<M> {
 
 /// Ticks between `base` and `t`, saturating at zero for `t < base`.
 fn tick_of(base: Instant, t: Instant) -> u64 {
-    (t.saturating_duration_since(base).as_nanos() / WHEEL_TICK.as_nanos()) as u64
+    (t.saturating_duration_since(base).as_nanos() as u64) / WHEEL_TICK_NANOS
 }
 
 #[cfg(test)]
@@ -343,7 +342,13 @@ mod tests {
 
         let due = wheel.drain_due(base + Duration::from_millis(20));
         assert!(matches!(due[0], Due::Promote { pid: 100, .. }));
-        assert!(matches!(due[1], Due::Deliver { target_pid: 200, .. }));
+        assert!(matches!(
+            due[1],
+            Due::Deliver {
+                target_pid: 200,
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -357,5 +362,25 @@ mod tests {
 
         let due = wheel.drain_due(now + Duration::from_millis(3));
         assert_eq!(pids(&due), vec![2]);
+    }
+
+    #[test]
+    fn same_tick_entry_is_not_fired_early() {
+        // Sub-tick precision: an entry later within the cursor's own tick
+        // must wait for the exact fire_at rather than firing when the tick
+        // is first entered — and must still fire (not be stranded behind
+        // the cursor) on the next drain once the instant passes.
+        let mut wheel: TimerWheel<()> = TimerWheel::new();
+        let base = Instant::now();
+        let fire = base + Duration::from_micros(10_500); // tick 10, mid-tick
+        wheel.insert_deliver(fire, 1, ());
+
+        let early = wheel.drain_due(base + Duration::from_millis(10));
+        assert!(early.is_empty(), "must not fire before the exact instant");
+        assert_eq!(wheel.nearest(), Some(fire), "still pending in its bucket");
+
+        let due = wheel.drain_due(base + Duration::from_micros(10_600));
+        assert_eq!(pids(&due), vec![1], "fires once the instant passes");
+        assert!(wheel.is_empty());
     }
 }
