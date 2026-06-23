@@ -159,6 +159,16 @@ variant name: the compiler assigns the Koja→wire scheduling weight in
 process; `level` is the wire weight and out-of-range values clamp to
 `Normal` (`koja_runtime_core::Priority::from_index`).
 
+`koja_rt_yield_check()` (`void()`) is a cooperative-preemption point the
+compiler inserts at loop back-edges and before each tail call (see
+`koja-ir`'s `yield_checks` pass). It spends one reduction from the
+running process's per-quantum budget and, when the budget hits zero,
+re-queues the process so a peer can run — bounding how long any loop or
+tail-recursion monopolizes a worker. The budget is granted by priority
+(`Priority::budget`) and reset when the process is next scheduled. The
+interpreter has no extern: `koja-ir-eval` routes `YieldCheck` through
+`scheduler::reduce` for the same effect.
+
 ## Runtime extern function signatures
 
 The `koja_*` / `koja_rt_*` C-ABI function surface (allocation, rc,

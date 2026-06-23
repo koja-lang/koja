@@ -50,7 +50,7 @@ use crate::intrinsics::process::payload_drop_glue;
 use crate::main_wrapper::EXIT_CODE_SYMBOL;
 use crate::runtime::{
     declare_rt_receive_extern, declare_rt_receive_timeout_extern, declare_rt_set_priority_extern,
-    declare_rt_spawn_extern,
+    declare_rt_spawn_extern, declare_rt_yield_check_extern,
 };
 use crate::types::{ir_basic_type, value_basic_type};
 
@@ -266,6 +266,16 @@ pub(super) fn emit_set_priority<'ctx>(
     ctx.builder
         .build_call(set_priority_fn, &[level.into()], "")
         .or_ice()?;
+    Ok(())
+}
+
+// ----- IRInstruction::YieldCheck -------------------------------------------
+
+/// Emit `IRInstruction::YieldCheck`: a bare call to `koja_rt_yield_check`.
+/// No operands, no value — the runtime decides whether to re-queue.
+pub(super) fn emit_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
+    let yield_check_fn = declare_rt_yield_check_extern(ctx);
+    ctx.builder.build_call(yield_check_fn, &[], "").or_ice()?;
     Ok(())
 }
 

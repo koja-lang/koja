@@ -50,15 +50,13 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 /// pins interpreter <-> LLVM output parity.
 const BACKENDS: [&str; 2] = ["llvm", "interpreter"];
 
-/// Fixtures (by file stem) that run under LLVM only. These `signal(...)`
-/// a child then **busy-wait** on `alive?()` for it to die — which works
-/// under the multi-threaded native scheduler (the child runs on another
-/// worker) but livelocks under the single-threaded cooperative
-/// interpreter: the spin loop has no yield point, so the signalled child
-/// is starved. Cooperative parity here needs preemptive yield-checks at
-/// loop back-edges (Phase 5 A1, not yet implemented). They still run
-/// under LLVM, where the reclaim assertion is what matters.
-const LLVM_ONLY: &[&str] = &["message_reclaim", "signal_only", "spawn_reclaim"];
+/// Fixtures (by file stem) that run under LLVM only. Currently empty: the
+/// `signal(...)`-then-busy-wait-on-`alive?()` memory fixtures used to
+/// livelock the single-threaded cooperative interpreter (the spin loop
+/// starved the signalled child), but compiler-inserted yield-checks at
+/// loop back-edges now preempt the spinner under both backends. Add a
+/// stem here only for a genuinely backend-specific fixture.
+const LLVM_ONLY: &[&str] = &[];
 
 /// Whether `file` runs under the interpreter in addition to LLVM.
 fn eval_eligible(file: &Path) -> bool {

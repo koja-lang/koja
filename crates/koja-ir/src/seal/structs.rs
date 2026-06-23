@@ -172,7 +172,8 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::UnaryOp { .. }
             | IRInstruction::UnionPayloadGet { .. }
             | IRInstruction::UnionTagGet { .. }
-            | IRInstruction::UnionWrap { .. } => {}
+            | IRInstruction::UnionWrap { .. }
+            | IRInstruction::YieldCheck => {}
         }
     }
 }

@@ -60,6 +60,7 @@ pub(crate) const RT_SEND_LIFECYCLE_SYMBOL: &str = "koja_rt_send_lifecycle";
 pub(crate) const RT_SET_PRIORITY_SYMBOL: &str = "koja_rt_set_priority";
 pub(crate) const RT_SEND_SYMBOL: &str = "koja_rt_send";
 pub(crate) const RT_SPAWN_SYMBOL: &str = "koja_rt_spawn";
+pub(crate) const RT_YIELD_CHECK_SYMBOL: &str = "koja_rt_yield_check";
 
 /// Get the existing declaration for `symbol` or stamp a fresh
 /// `void(arg_type)` external one. Idempotent so callers can declare
@@ -592,6 +593,18 @@ pub(crate) fn declare_rt_set_priority_extern<'ctx>(ctx: &EmitContext<'ctx>) -> F
     let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
     ctx.module
         .add_function(RT_SET_PRIORITY_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `koja_rt_yield_check`. Signature:
+/// `void koja_rt_yield_check()` — a cooperative preemption point that
+/// spends one reduction and re-queues the process when its budget runs out.
+pub(crate) fn declare_rt_yield_check_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_YIELD_CHECK_SYMBOL) {
+        return existing;
+    }
+    let signature = ctx.context.void_type().fn_type(&[], false);
+    ctx.module
+        .add_function(RT_YIELD_CHECK_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) `koja_rt_send_after`. Signature:

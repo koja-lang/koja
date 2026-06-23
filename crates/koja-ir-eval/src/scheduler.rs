@@ -71,6 +71,11 @@ thread_local! {
     /// The PID the executor is currently resuming, set around each
     /// `resume`. Mirrors native's per-worker `CURRENT_PID`.
     static CURRENT_PID: Cell<Pid> = const { Cell::new(0) };
+    /// Reductions the resuming process may still spend before a `YieldCheck`
+    /// forces it to yield. Seeded from the PCB's budget on each resume so the
+    /// per-check decrement is a plain `Cell` write, never a table borrow —
+    /// the cooperative analog of native's `REDUCTIONS_LEFT`.
+    static REDUCTIONS_LEFT: Cell<u32> = const { Cell::new(0) };
     /// `spawn` requests raised during a resume, drained and fulfilled by
     /// the executor before the driver claims the next process.
     static PENDING_SPAWNS: RefCell<Vec<PendingSpawn>> = const { RefCell::new(Vec::new()) };
@@ -98,6 +103,7 @@ impl Drop for RuntimeGuard {
     fn drop(&mut self) {
         CORE.with(|core| *core.borrow_mut() = None);
         CURRENT_PID.with(|pid| pid.set(0));
+        REDUCTIONS_LEFT.with(|remaining| remaining.set(0));
         PENDING_SPAWNS.with(|queue| queue.borrow_mut().clear());
         NEXT_TOKEN.with(|token| token.set(1));
     }
@@ -108,6 +114,7 @@ impl Drop for RuntimeGuard {
 pub(crate) fn install_runtime(core: CoreHandle) -> RuntimeGuard {
     CORE.with(|slot| *slot.borrow_mut() = Some(core));
     CURRENT_PID.with(|pid| pid.set(0));
+    REDUCTIONS_LEFT.with(|remaining| remaining.set(0));
     PENDING_SPAWNS.with(|queue| queue.borrow_mut().clear());
     NEXT_TOKEN.with(|token| token.set(1));
     RuntimeGuard
@@ -216,6 +223,29 @@ pub(crate) fn is_alive(pid: Pid) -> bool {
 pub(crate) fn set_priority(level: i64) {
     let pid = current_pid();
     with_table(|table| table.set_priority(pid, Priority::from_index(level)));
+}
+
+/// Spends one reduction for the currently-resuming process. Returns `true`
+/// when its budget is exhausted, having re-queued it (`Running -> Runnable`)
+/// so the caller should yield ([`YieldOnce`]) and let the driver round-robin
+/// to a peer. The cooperative analog of native's `koja_rt_yield_check`: the
+/// common (not-exhausted) path is a lock-free [`REDUCTIONS_LEFT`] decrement,
+/// touching the table only to re-queue at zero. A no-op (`false`) in function
+/// mode, where IR runs with no driver to yield to.
+pub(crate) fn reduce() -> bool {
+    if !runtime_installed() {
+        return false;
+    }
+    let exhausted = REDUCTIONS_LEFT.with(|remaining| {
+        let next = remaining.get().saturating_sub(1);
+        remaining.set(next);
+        next == 0
+    });
+    if exhausted {
+        let pid = current_pid();
+        with_table(|table| table.yield_running(pid));
+    }
+    exhausted
 }
 
 /// Mints the next `Ref.call` correlation token. Monotonic within a run.
@@ -349,6 +379,11 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
 
     fn resume(&self, pid: Pid, _continuation: ()) {
         CURRENT_PID.with(|current| current.set(pid));
+        // Seed this quantum's reduction budget (reset by `claim_next` on the
+        // `-> Running` edge) so `reduce` decrements a `Cell` rather than the
+        // table on every `YieldCheck`.
+        let budget = self.core.borrow().reductions_left(pid);
+        REDUCTIONS_LEFT.with(|remaining| remaining.set(budget));
         // Take the future out so the map is not borrowed across the poll;
         // a process whose future has already completed (or was killed) is
         // a no-op resume.

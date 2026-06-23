@@ -1,0 +1,62 @@
+# Preemption: an unbounded Low-priority spinner must not monopolize the
+# single-threaded cooperative interpreter. Compiler-inserted yield-checks
+# at the spinner's loop back-edge let a Normal-priority worker run to
+# completion, which the main process confirms by busy-waiting on the
+# worker's liveness. Without preemption the spinner starves everything and
+# this livelocks under the interpreter; under LLVM the worker runs on
+# another thread. Both backends must print the same line.
+
+struct Spinner
+end
+
+impl Process<Int, Int, Int> for Spinner
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Spinner{})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn priority(self) -> Priority
+    Priority.Low
+  end
+
+  fn run(self) -> StopReason
+    n = 0
+    loop
+      n += 1
+    end
+    StopReason.Normal
+  end
+end
+
+struct Worker
+end
+
+impl Process<Int, Int, Int> for Worker
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Worker{})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    StopReason.Normal
+  end
+end
+
+spinner = spawn Spinner.start(0)
+worker = spawn Worker.start(0)
+
+loop
+  if worker.alive?()
+    ()
+  else
+    break
+  end
+end
+
+"preemption: ok".print()

@@ -68,6 +68,11 @@ pub struct ProcessControlBlock<X, M> {
     on_cpu: bool,
     /// Scheduling priority, selecting which ready queue an enqueue lands in.
     priority: Priority,
+    /// This quantum's reduction budget, granted (= `priority.budget()`) on
+    /// each `-> Running` claim. An adapter seeds its thread-local decrement
+    /// counter from this on resume via [`ProcessTable::reductions_left`]; the
+    /// per-`YieldCheck` spend happens there, not on this field.
+    reductions_left: u32,
     /// Current lifecycle state, driven by [`ProcessTable::transition`].
     pub state: ProcessState,
     /// What a `Blocked` process is waiting on, so delivery only wakes it for
@@ -84,6 +89,7 @@ impl<X, M> ProcessControlBlock<X, M> {
             mailbox: Mailbox::default(),
             on_cpu: false,
             priority: Priority::default(),
+            reductions_left: Priority::default().budget(),
             state: ProcessState::Created,
             waiting: WaitTarget::Receive,
         }
@@ -149,6 +155,17 @@ impl Priority {
             0 => Self::Low,
             2 => Self::High,
             _ => Self::Normal,
+        }
+    }
+
+    /// Reductions granted per scheduling quantum at this priority — one
+    /// spent per `YieldCheck`, bounding how long a process runs before
+    /// yielding. `Normal` mirrors BEAM's 2000-reduction quantum.
+    pub fn budget(&self) -> u32 {
+        match self {
+            Self::Low => 1_000,
+            Self::Normal => 2_000,
+            Self::High => 4_000,
         }
     }
 }
@@ -413,7 +430,12 @@ impl<X, M: Message> ProcessTable<X, M> {
         if from != ProcessState::Dead && to == ProcessState::Dead {
             self.alive -= 1;
         }
-        if to == ProcessState::Runnable {
+        // A `Running -> Runnable` edge is a cooperative yield: the worker's
+        // following `after_switch` re-enqueues the process once `on_cpu`
+        // clears, so enqueuing here too would leave a duplicate that piles
+        // up under a tight yield loop. Every other `-> Runnable` edge wakes a
+        // parked process with no such follow-up and must enqueue.
+        if to == ProcessState::Runnable && from != ProcessState::Running {
             self.enqueue_ready(pid);
         }
     }
@@ -514,6 +536,7 @@ impl<X, M: Message> ProcessTable<X, M> {
                         ) =>
                 {
                     process.on_cpu = true;
+                    process.reductions_left = process.priority.budget();
                 }
                 _ => {
                     self.counters.stale_claims_skipped += 1;
@@ -572,11 +595,18 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
     }
 
+    /// The reductions `pid` has left this quantum, or 0 for a stale PID. Each
+    /// adapter reads this once per resume to seed its own lock-free
+    /// thread-local decrement counter (`YieldCheck` spends from that, not from
+    /// the PCB), so the value here is just the freshly granted budget.
+    pub fn reductions_left(&self, pid: Pid) -> u32 {
+        self.get(pid).map_or(0, |process| process.reductions_left)
+    }
+
     /// Voluntarily returns a running process to the ready queue (cooperative
-    /// preemption). No-op unless `pid` is currently `Running`. The `on_cpu`
-    /// claim is released by [`after_switch`](Self::after_switch) as usual,
-    /// which performs the single real re-enqueue; the in-window entry this
-    /// transition adds is stale-skipped by `claim_next` like any other.
+    /// preemption). No-op unless `pid` is currently `Running`. Only marks the
+    /// process `Runnable`; the actual re-enqueue happens in
+    /// [`after_switch`](Self::after_switch) once `on_cpu` is released.
     pub fn yield_running(&mut self, pid: Pid) {
         if self
             .get(pid)

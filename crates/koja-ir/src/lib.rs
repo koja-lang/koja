@@ -51,6 +51,7 @@ mod struct_decl;
 mod tail_calls;
 mod types;
 mod union_decl;
+mod yield_checks;
 
 pub use constant::IRConstantValue;
 pub use elaborate::needs_drop;

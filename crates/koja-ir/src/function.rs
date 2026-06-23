@@ -694,6 +694,13 @@ pub enum IRInstruction {
     /// `koja_rt_set_priority(i64)`; eval routes it to
     /// `scheduler::set_priority`. Produces no value.
     SetPriority { tag: ValueId },
+    /// `yield_check()` — a cooperative preemption point inserted by the
+    /// `yield_checks` pass at loop back-edges and before each tail call.
+    /// Spends one reduction from the running process's budget; when it
+    /// hits zero the process re-queues. LLVM lowers it to
+    /// `koja_rt_yield_check()`; eval routes it to `scheduler::reduce`.
+    /// No operands, no value.
+    YieldCheck,
     /// `dest = receive arms after?`. Block on the current process's
     /// mailbox; on message arrival, dispatch to the matching arm
     /// based on the envelope tag (business vs lifecycle); on
@@ -837,7 +844,8 @@ impl IRInstruction {
             | IRInstruction::DropValue { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalWrite { .. }
-            | IRInstruction::SetPriority { .. } => None,
+            | IRInstruction::SetPriority { .. }
+            | IRInstruction::YieldCheck => None,
         }
     }
 }

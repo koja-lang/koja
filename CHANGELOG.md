@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A process stuck in a long-running or infinite loop no longer freezes the others. The runtime now periodically interrupts CPU-bound work so every process gets a fair turn — and higher-priority processes get a larger share. This works the same on both backends.
 - Per-process scheduling priority via `Process.priority()` returning `Priority.Low`, `Priority.Normal`, or `Priority.High` (default `Normal`); the scheduler serves higher priorities first but periodically forces the lowest non-empty tier so lower priorities aren't starved.
 - Scheduler timers and deadlines are now backed by a single hashed timing wheel (plus an overflow heap for far-future entries) instead of two binary heaps, making timer arming amortized O(1).
 - The interpreter now supports `spawn`, cross-process messaging, timers, and I/O in scripts and `koja run --backend=interpreter` — process programs that previously required `--backend=llvm` now run identically on both backends.

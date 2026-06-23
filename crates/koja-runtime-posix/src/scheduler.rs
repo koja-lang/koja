@@ -255,6 +255,10 @@ thread_local! {
     pub(crate) static CURRENT_PID: Cell<i64> = const { Cell::new(-1) };
     pub(crate) static SCHED_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
     pub(crate) static YIELD_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
+    /// Reductions the resumed process may still spend before
+    /// `koja_rt_yield_check` forces it to yield. Seeded from the PCB's
+    /// `reductions_left` on each resume so the decrement stays lock-free.
+    pub(crate) static REDUCTIONS_LEFT: Cell<u32> = const { Cell::new(0) };
 }
 
 // ---------------------------------------------------------------------------
@@ -423,6 +427,9 @@ fn worker_loop() {
                 .expect("just-claimed process exists")
                 .execution
                 .sp;
+            // Seed this quantum's reduction budget (reset by `claim_next`)
+            // so `koja_rt_yield_check` can decrement it without the lock.
+            REDUCTIONS_LEFT.with(|c| c.set(guard.reductions_left(pid)));
             drop(guard);
 
             let saved_sp = NativeExecutor.resume(pid, proc_sp);
@@ -828,6 +835,29 @@ pub extern "C" fn koja_rt_set_priority(level: i64) {
         .lock()
         .unwrap()
         .set_priority(pid, Priority::from_index(level));
+}
+
+/// Cooperative preemption point emitted at loop back-edges and tail calls.
+/// Spends one reduction from the per-worker budget on the lock-free fast
+/// path; only when the budget is exhausted does it take `SCHED` to re-queue
+/// the process (`Running -> Runnable`) and context-switch back to the
+/// worker, which re-enqueues it via the usual `after_switch` path.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_yield_check() {
+    let exhausted = REDUCTIONS_LEFT.with(|c| {
+        let remaining = c.get().saturating_sub(1);
+        c.set(remaining);
+        remaining == 0
+    });
+    if !exhausted {
+        return;
+    }
+    let pid = CURRENT_PID.with(|c| c.get());
+    if pid < 0 {
+        return;
+    }
+    SCHED.lock().unwrap().yield_running(pid);
+    yield_to_scheduler();
 }
 
 /// Sends an IOReady event to the process identified by `pid`.

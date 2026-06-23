@@ -1364,6 +1364,12 @@ fn execute_instruction<'a, R: CallResolver>(
                 scheduler::set_priority(level);
                 Ok(())
             }
+            IRInstruction::YieldCheck => {
+                if scheduler::reduce() {
+                    YieldOnce::new().await;
+                }
+                Ok(())
+            }
             IRInstruction::Receive { .. } => panic!(
                 "interpreter: `Receive` reached `execute_instruction` — `execute_blocks` \
              intercepts it as a control transfer (lowering places it last in its block)",

@@ -37,7 +37,7 @@ use crate::struct_decl::IRStructDecl;
 use crate::tail_calls::rewrite_tail_calls;
 use crate::types::IRType;
 use crate::union_decl::{IRUnionDecl, discover_unions};
-use crate::{lower, merge, seal};
+use crate::{lower, merge, seal, yield_checks};
 
 /// Sealed output of [`lower_program`]'s success path. Backends consume
 /// this directly; they build their own indices over the sealed
@@ -200,6 +200,7 @@ pub fn lower_program(
     discover_unions(&mut program.packages);
     break_type_cycles(&mut program.packages);
     rewrite_tail_calls(&mut program.packages);
+    yield_checks::insert_yield_checks(&mut program.packages);
     elaborate::elaborate(&mut program.packages);
 
     if program.function(program.entry_point.mangled()).is_none() {

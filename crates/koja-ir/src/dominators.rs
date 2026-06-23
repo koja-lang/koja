@@ -86,6 +86,32 @@ pub(crate) fn compute_immediate_dominators(
     immediate_dominators
 }
 
+/// Whether `dominator` dominates `block`, given the immediate-dominator
+/// map and its `entry`. The entry dominates every reachable block;
+/// otherwise walk `block`'s idom chain looking for `dominator`. `entry`
+/// is absent from `immediate_dominators` (its sentinel is stripped), so
+/// the walk terminates with `false` rather than looping.
+pub(crate) fn dominates(
+    immediate_dominators: &HashMap<IRBlockId, IRBlockId>,
+    entry: IRBlockId,
+    dominator: IRBlockId,
+    block: IRBlockId,
+) -> bool {
+    if dominator == entry {
+        return true;
+    }
+    let mut current = block;
+    loop {
+        if current == dominator {
+            return true;
+        }
+        match immediate_dominators.get(&current) {
+            Some(parent) => current = *parent,
+            None => return false,
+        }
+    }
+}
+
 /// Invert the immediate-dominator map into a parent-to-children
 /// adjacency list for top-down dominator-tree traversal. Children
 /// for any given parent are emitted in `blocks` declaration order
@@ -162,11 +188,9 @@ fn visit(
     order.push(block_id);
 }
 
-/// Successor block ids reachable from `terminator`. Mirrors the
-/// `terminator_targets` helper in `seal/mod.rs`; kept private to
-/// avoid an import cycle with the seal module that also walks
-/// terminators for its own purposes.
-fn successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
+/// Successor block ids reachable from `terminator`. `seal/mod.rs` keeps
+/// its own `terminator_targets` copy to avoid depending on this module.
+pub(crate) fn successors(terminator: &IRTerminator) -> Vec<IRBlockId> {
     match terminator {
         IRTerminator::Branch(target) => vec![target.block],
         IRTerminator::CondBranch {

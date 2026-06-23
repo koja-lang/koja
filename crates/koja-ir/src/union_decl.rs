@@ -367,7 +367,8 @@ fn walk_instruction(instruction: &IRInstruction, out: &mut BTreeMap<IRSymbol, IR
         | IRInstruction::LocalWrite { .. }
         | IRInstruction::SetPriority { .. }
         | IRInstruction::StructInit { .. }
-        | IRInstruction::UnaryOp { .. } => {}
+        | IRInstruction::UnaryOp { .. }
+        | IRInstruction::YieldCheck => {}
     }
 }
 

@@ -11,7 +11,7 @@ use crate::error::LlvmError;
 
 use super::binary_construct::emit_binary_construct;
 use super::binary_match;
-use super::process::{emit_receive, emit_set_priority, emit_spawn};
+use super::process::{emit_receive, emit_set_priority, emit_spawn, emit_yield_check};
 use super::{
     ValueMap, calls, clone, closures, concat, constants, deep_copy, enums, locals, lookup, ops,
     structs, unions,
@@ -232,6 +232,7 @@ pub(crate) fn emit_instruction<'ctx>(
             wrapper,
         } => emit_spawn(ctx, *config, config_type, *dest, ref_type, wrapper, values),
         IRInstruction::SetPriority { tag } => emit_set_priority(ctx, *tag, values),
+        IRInstruction::YieldCheck => emit_yield_check(ctx),
         IRInstruction::Receive {
             after,
             arms,
