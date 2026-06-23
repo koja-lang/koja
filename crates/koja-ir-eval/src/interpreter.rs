@@ -91,7 +91,15 @@ impl Interpreter {
         // concurrent one (eval runs share one host process; native ones
         // don't).
         let signals = EvalSignals::new(program_uses_lifecycle(program));
-        EvalDriver::new(core, executor, EvalReactor, EvalClock, signals).run();
+        EvalDriver::new(
+            core,
+            executor,
+            EvalReactor,
+            EvalClock,
+            signals,
+            scheduler::grace_period(),
+        )
+        .run();
 
         exit_cell
             .borrow_mut()
@@ -144,7 +152,15 @@ impl Interpreter {
         executor.install_future(main, body_future);
 
         let signals = EvalSignals::new(script_uses_lifecycle(script));
-        EvalDriver::new(core, executor, EvalReactor, EvalClock, signals).run();
+        EvalDriver::new(
+            core,
+            executor,
+            EvalReactor,
+            EvalClock,
+            signals,
+            scheduler::grace_period(),
+        )
+        .run();
 
         exit_cell
             .borrow_mut()
@@ -1354,6 +1370,16 @@ fn execute_instruction<'a, R: CallResolver>(
                 );
                 Ok(())
             }
+            IRInstruction::ProcessExit { reason } => {
+                let reason = lookup(&frame.values, *reason)?;
+                let Value::Int(reason) = reason else {
+                    return Err(RuntimeError::TypeMismatch {
+                        detail: format!("ProcessExit expects an Int reason; got {reason}"),
+                    });
+                };
+                scheduler::process_exit(reason);
+                Ok(())
+            }
             IRInstruction::SetPriority { tag } => {
                 let level = lookup(&frame.values, *tag)?;
                 let Value::Int(level) = level else {
@@ -1362,6 +1388,12 @@ fn execute_instruction<'a, R: CallResolver>(
                     });
                 };
                 scheduler::set_priority(level);
+                Ok(())
+            }
+            IRInstruction::YieldCheck => {
+                if scheduler::reduce() {
+                    YieldOnce::new().await;
+                }
                 Ok(())
             }
             IRInstruction::Receive { .. } => panic!(

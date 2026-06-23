@@ -686,6 +686,13 @@ pub enum IRInstruction {
         ref_type: IRSymbol,
         wrapper: IRSymbol,
     },
+    /// `process_exit(reason)` — record the terminating process's exit
+    /// reason on its control block. `reason` is an `Int64` SSA value
+    /// holding the wire code (0=Normal, 1=Shutdown, ...), emitted in the
+    /// process-body tail from the process's own `StopReason`. LLVM lowers
+    /// it to `koja_rt_process_exit(i64)`; eval routes it to
+    /// `scheduler::process_exit`. Produces no value.
+    ProcessExit { reason: ValueId },
     /// `set_priority(tag)` — hand the current process's scheduling
     /// weight to the runtime. `tag` is an `Int64` SSA value holding the
     /// wire weight (0=Low, 1=Normal, 2=High), emitted once per process
@@ -694,6 +701,13 @@ pub enum IRInstruction {
     /// `koja_rt_set_priority(i64)`; eval routes it to
     /// `scheduler::set_priority`. Produces no value.
     SetPriority { tag: ValueId },
+    /// `yield_check()` — a cooperative preemption point inserted by the
+    /// `yield_checks` pass at loop back-edges and before each tail call.
+    /// Spends one reduction from the running process's budget; when it
+    /// hits zero the process re-queues. LLVM lowers it to
+    /// `koja_rt_yield_check()`; eval routes it to `scheduler::reduce`.
+    /// No operands, no value.
+    YieldCheck,
     /// `dest = receive arms after?`. Block on the current process's
     /// mailbox; on message arrival, dispatch to the matching arm
     /// based on the envelope tag (business vs lifecycle); on
@@ -837,7 +851,9 @@ impl IRInstruction {
             | IRInstruction::DropValue { .. }
             | IRInstruction::LocalDecl { .. }
             | IRInstruction::LocalWrite { .. }
-            | IRInstruction::SetPriority { .. } => None,
+            | IRInstruction::ProcessExit { .. }
+            | IRInstruction::SetPriority { .. }
+            | IRInstruction::YieldCheck => None,
         }
     }
 }

@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 extern crate libc;
 
@@ -50,15 +50,13 @@ const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 /// pins interpreter <-> LLVM output parity.
 const BACKENDS: [&str; 2] = ["llvm", "interpreter"];
 
-/// Fixtures (by file stem) that run under LLVM only. These `signal(...)`
-/// a child then **busy-wait** on `alive?()` for it to die — which works
-/// under the multi-threaded native scheduler (the child runs on another
-/// worker) but livelocks under the single-threaded cooperative
-/// interpreter: the spin loop has no yield point, so the signalled child
-/// is starved. Cooperative parity here needs preemptive yield-checks at
-/// loop back-edges (Phase 5 A1, not yet implemented). They still run
-/// under LLVM, where the reclaim assertion is what matters.
-const LLVM_ONLY: &[&str] = &["message_reclaim", "signal_only", "spawn_reclaim"];
+/// Fixtures (by file stem) that run under LLVM only. Currently empty: the
+/// `signal(...)`-then-busy-wait-on-`alive?()` memory fixtures used to
+/// livelock the single-threaded cooperative interpreter (the spin loop
+/// starved the signalled child), but compiler-inserted yield-checks at
+/// loop back-edges now preempt the spinner under both backends. Add a
+/// stem here only for a genuinely backend-specific fixture.
+const LLVM_ONLY: &[&str] = &[];
 
 /// Whether `file` runs under the interpreter in addition to LLVM.
 fn eval_eligible(file: &Path) -> bool {
@@ -533,6 +531,66 @@ fn lang_process_lifecycle() {
     let dir = lang_dir().join("process_lifecycle");
     run_signal_test(&dir, "process_lifecycle", libc::SIGTERM);
     run_signal_test_interpreted(&dir, "process_lifecycle", libc::SIGTERM);
+}
+
+/// Graceful SIGTERM drain backstop (native): a process that acknowledges
+/// `Shutdown` but keeps running is force-killed once the `KOJA_GRACE_MS`
+/// window elapses, instead of hanging forever. Asserts it received the
+/// signal (so termination was the grace hard-kill, not the kernel default)
+/// and exited within roughly the grace window.
+#[test]
+fn lang_process_drain_hard_kill() {
+    let label = "process_drain";
+    let dir = lang_dir().join(label);
+    assert!(dir.exists(), "test fixture {label}/ not found");
+
+    let binary = dir.join("build").join("debug").join(label);
+    let build_out = {
+        let mut cmd = Command::new(koja_bin());
+        cmd.arg("build")
+            .arg("-o")
+            .arg(binary.to_str().unwrap())
+            .current_dir(&dir);
+        if let Some(lib_path) = library_path() {
+            cmd.env("LIBRARY_PATH", &lib_path);
+        }
+        cmd.output().expect("failed to build")
+    };
+    assert!(
+        build_out.status.success(),
+        "koja build failed for {label}:\n{}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let grace = Duration::from_millis(500);
+    let mut child = Command::new(&binary)
+        .env("KOJA_GRACE_MS", grace.as_millis().to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to run compiled binary");
+    let pid = child.id() as libc::pid_t;
+
+    let mut stdout_bytes =
+        wait_for_ready_line(&mut child, "started", Duration::from_secs(10), label);
+
+    let signalled_at = Instant::now();
+    unsafe {
+        libc::kill(pid, libc::SIGTERM);
+    }
+    let output = child.wait_with_output().expect("failed to collect output");
+    let elapsed = signalled_at.elapsed();
+
+    stdout_bytes.extend_from_slice(&output.stdout);
+    let stdout = String::from_utf8_lossy(&stdout_bytes);
+    assert!(
+        stdout.contains("ignoring shutdown"),
+        "{label}: process should have received Shutdown and kept running; stdout:\n{stdout}"
+    );
+    assert!(
+        elapsed < grace + Duration::from_secs(8),
+        "{label}: forced shutdown took {elapsed:?}; the grace hard-kill did not fire"
+    );
 }
 
 /// RUNTIME-GAPS #3: a process blocked in a synchronous `accept` must wake

@@ -23,7 +23,7 @@
 //! cooperative one. See `koja/design/SCHEDULER-PROTOCOL.md`.
 
 use std::collections::VecDeque;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::mailbox::{Mailbox, WaitTarget};
 use crate::protocol::{Message, Pid, Tag};
@@ -68,6 +68,15 @@ pub struct ProcessControlBlock<X, M> {
     on_cpu: bool,
     /// Scheduling priority, selecting which ready queue an enqueue lands in.
     priority: Priority,
+    /// This quantum's reduction budget, granted (= `priority.budget()`) on
+    /// each `-> Running` claim. An adapter seeds its thread-local decrement
+    /// counter from this on resume via [`ProcessTable::reductions_left`]; the
+    /// per-`YieldCheck` spend happens there, not on this field.
+    reductions_left: u32,
+    /// Why the process terminated, recorded at its death site and read by
+    /// [`ProcessTable::notify_exit`] on the `-> Dead` edge. `Normal` until a
+    /// reason is set.
+    exit_reason: ExitReason,
     /// Current lifecycle state, driven by [`ProcessTable::transition`].
     pub state: ProcessState,
     /// What a `Blocked` process is waiting on, so delivery only wakes it for
@@ -84,6 +93,8 @@ impl<X, M> ProcessControlBlock<X, M> {
             mailbox: Mailbox::default(),
             on_cpu: false,
             priority: Priority::default(),
+            reductions_left: Priority::default().budget(),
+            exit_reason: ExitReason::default(),
             state: ProcessState::Created,
             waiting: WaitTarget::Receive,
         }
@@ -148,6 +159,45 @@ impl Priority {
         match index {
             0 => Self::Low,
             2 => Self::High,
+            _ => Self::Normal,
+        }
+    }
+
+    /// Reductions granted per scheduling quantum at this priority — one
+    /// spent per `YieldCheck`, bounding how long a process runs before
+    /// yielding. `Normal` mirrors BEAM's 2000-reduction quantum.
+    pub fn budget(&self) -> u32 {
+        match self {
+            Self::Low => 1_000,
+            Self::Normal => 2_000,
+            Self::High => 4_000,
+        }
+    }
+}
+
+/// Why a process terminated, recorded on its PCB and read by the
+/// [`ProcessTable::notify_exit`] seam when it goes `Dead`. The wire code is
+/// an ABI contract (0 = `Normal`, 1 = `Shutdown`, 2 = `Killed`, 3 =
+/// `Crashed`) decoded by `from_index`: `Normal`/`Shutdown` mirror the stop
+/// reason a process returns, `Killed` marks a forced kill, and `Crashed` is
+/// reserved for fault capture (nothing produces it yet). Default is `Normal`.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ExitReason {
+    #[default]
+    Normal,
+    Shutdown,
+    Killed,
+    Crashed,
+}
+
+impl ExitReason {
+    /// The reason for a wire/FFI code, clamping unknown values to `Normal`
+    /// so a malformed boundary value can't panic the scheduler.
+    pub fn from_index(index: i64) -> Self {
+        match index {
+            1 => Self::Shutdown,
+            2 => Self::Killed,
+            3 => Self::Crashed,
             _ => Self::Normal,
         }
     }
@@ -224,6 +274,16 @@ impl ScheduleCounters {
     }
 }
 
+/// The runtime's lifecycle mode. `Draining` is entered on `SIGTERM`: new
+/// spawns are refused and a grace deadline is armed, after which any
+/// straggler is force-killed. Resets to `Running` by construction (a fresh
+/// table per program / per run).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Mode {
+    Running,
+    Draining,
+}
+
 /// The scheduler's process store: a generational slotmap with a ready queue
 /// and a timing wheel. Contains no synchronization; the adapter's driver
 /// supplies it.
@@ -240,6 +300,9 @@ pub struct ProcessTable<X, M> {
     due_delivers: Vec<TimerEntry<M>>,
     /// Indices of free slots available for reuse.
     free: Vec<u32>,
+    /// When draining, the instant after which stragglers are force-killed
+    /// (armed once by [`Self::enter_draining`]). `None` while `Running`.
+    grace_deadline: Option<Instant>,
     /// The instant the wheel was last advanced to, so the paired
     /// `promote_due_deadlines` / `take_due_timers` calls for one `now` drain
     /// the wheel exactly once.
@@ -247,6 +310,8 @@ pub struct ProcessTable<X, M> {
     /// First spawned process (the program entry). Drives signal delivery and
     /// the shutdown decision; `0` until the first spawn.
     main_pid: Pid,
+    /// Runtime lifecycle mode; `Draining` once a `SIGTERM` has been seen.
+    mode: Mode,
     /// Packed PIDs ready to run, one FIFO queue per priority level
     /// (index = `priority as usize`), highest level served first.
     ready: [VecDeque<Pid>; LEVELS],
@@ -270,8 +335,10 @@ impl<X, M: Message> ProcessTable<X, M> {
             counters: ScheduleCounters::new(),
             due_delivers: Vec::new(),
             free: Vec::new(),
+            grace_deadline: None,
             last_advance: None,
             main_pid: 0,
+            mode: Mode::Running,
             ready: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             ready_ages: [0; LEVELS],
             slots: Vec::new(),
@@ -412,8 +479,15 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
         if from != ProcessState::Dead && to == ProcessState::Dead {
             self.alive -= 1;
+            let reason = self.get(pid).map_or(ExitReason::Normal, |p| p.exit_reason);
+            self.notify_exit(pid, reason);
         }
-        if to == ProcessState::Runnable {
+        // A `Running -> Runnable` edge is a cooperative yield: the worker's
+        // following `after_switch` re-enqueues the process once `on_cpu`
+        // clears, so enqueuing here too would leave a duplicate that piles
+        // up under a tight yield loop. Every other `-> Runnable` edge wakes a
+        // parked process with no such follow-up and must enqueue.
+        if to == ProcessState::Runnable && from != ProcessState::Running {
             self.enqueue_ready(pid);
         }
     }
@@ -484,9 +558,13 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// instead (it sees `Dead` in [`after_switch`](Self::after_switch)). The
     /// mailbox rides along either way, so envelopes are freed exactly once.
     pub fn kill(&mut self, pid: Pid) -> Option<Reclaim<X, M>> {
-        if !self.mark_dead_if_alive(pid) {
+        if !self.is_alive(pid) {
             return None;
         }
+        // Record the reason before the `-> Dead` edge so `notify_exit` sees
+        // `Killed`, not the `Normal` default.
+        self.set_exit_reason(pid, ExitReason::Killed);
+        self.mark_dead_if_alive(pid);
         if self.get(pid).is_some_and(|process| process.on_cpu) {
             self.counters.kills_deferred += 1;
             self.trace.record(pid, TraceEvent::KillDeferred);
@@ -495,6 +573,22 @@ impl<X, M: Message> ProcessTable<X, M> {
             self.free(pid)
         }
     }
+
+    /// Records why `pid` is terminating, to be read by [`notify_exit`] on the
+    /// `-> Dead` edge. Set before marking the process dead; a no-op for a
+    /// stale PID. A process that sets no reason dies `Normal`.
+    ///
+    /// [`notify_exit`]: Self::notify_exit
+    pub fn set_exit_reason(&mut self, pid: Pid, reason: ExitReason) {
+        if let Some(process) = self.get_mut(pid) {
+            process.exit_reason = reason;
+        }
+    }
+
+    /// Fired from [`transition`](Self::transition) when a process goes `Dead`,
+    /// carrying its recorded [`ExitReason`]. A no-op seam today; process
+    /// monitoring delivers exit signals to linked/monitoring processes here.
+    fn notify_exit(&mut self, _pid: Pid, _reason: ExitReason) {}
 
     /// Pops the next claimable process, marking it `Running` and `on_cpu`.
     /// Serves the highest-priority non-empty queue, but ages the ready queues
@@ -514,6 +608,7 @@ impl<X, M: Message> ProcessTable<X, M> {
                         ) =>
                 {
                     process.on_cpu = true;
+                    process.reductions_left = process.priority.budget();
                 }
                 _ => {
                     self.counters.stale_claims_skipped += 1;
@@ -572,11 +667,18 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
     }
 
+    /// The reductions `pid` has left this quantum, or 0 for a stale PID. Each
+    /// adapter reads this once per resume to seed its own lock-free
+    /// thread-local decrement counter (`YieldCheck` spends from that, not from
+    /// the PCB), so the value here is just the freshly granted budget.
+    pub fn reductions_left(&self, pid: Pid) -> u32 {
+        self.get(pid).map_or(0, |process| process.reductions_left)
+    }
+
     /// Voluntarily returns a running process to the ready queue (cooperative
-    /// preemption). No-op unless `pid` is currently `Running`. The `on_cpu`
-    /// claim is released by [`after_switch`](Self::after_switch) as usual,
-    /// which performs the single real re-enqueue; the in-window entry this
-    /// transition adds is stale-skipped by `claim_next` like any other.
+    /// preemption). No-op unless `pid` is currently `Running`. Only marks the
+    /// process `Runnable`; the actual re-enqueue happens in
+    /// [`after_switch`](Self::after_switch) once `on_cpu` is released.
     pub fn yield_running(&mut self, pid: Pid) {
         if self
             .get(pid)
@@ -700,9 +802,62 @@ impl<X, M: Message> ProcessTable<X, M> {
         self.alive == 0 || (self.main_pid != 0 && !self.is_alive(self.main_pid))
     }
 
-    /// The soonest pending timer or deadline, for sizing the idle park.
+    /// The soonest pending timer or deadline (folding in the drain grace
+    /// deadline so the idle park wakes to enforce it), for sizing the idle
+    /// park.
     pub fn nearest_wakeup(&self) -> Option<Instant> {
-        self.wheel.nearest()
+        match (self.wheel.nearest(), self.grace_deadline) {
+            (Some(timer), Some(grace)) => Some(timer.min(grace)),
+            (timer, grace) => timer.or(grace),
+        }
+    }
+
+    /// Enters `Draining` and arms the grace deadline at `now + grace`.
+    /// Idempotent: a second `SIGTERM` neither re-arms the deadline nor
+    /// extends it, so the grace window is measured from the first signal.
+    pub fn enter_draining(&mut self, now: Instant, grace: Duration) {
+        if self.mode == Mode::Draining {
+            return;
+        }
+        self.mode = Mode::Draining;
+        self.grace_deadline = Some(now + grace);
+    }
+
+    /// Whether the runtime is draining (a `SIGTERM` has been seen). New
+    /// spawns are refused while this holds.
+    pub fn is_draining(&self) -> bool {
+        self.mode == Mode::Draining
+    }
+
+    /// Whether the drain grace deadline has passed at `now`. Always `false`
+    /// while `Running` (no deadline armed).
+    pub fn grace_expired(&self, now: Instant) -> bool {
+        self.grace_deadline.is_some_and(|deadline| now >= deadline)
+    }
+
+    /// Force-kills every live process (recording [`ExitReason::Killed`]),
+    /// returning their detached resources for the caller to drop after
+    /// releasing the lock. The drain grace backstop: once the deadline
+    /// passes, stragglers are killed so [`should_shutdown`](Self::should_shutdown)
+    /// fires. A process still `on_cpu` is marked `Dead` (decrementing
+    /// `alive`) and reclaimed by its worker on switch-out.
+    pub fn kill_all(&mut self) -> Vec<Reclaim<X, M>> {
+        self.live_pids()
+            .into_iter()
+            .filter_map(|pid| self.kill(pid))
+            .collect()
+    }
+
+    /// The PIDs of all currently-live (non-`Dead`) processes.
+    fn live_pids(&self) -> Vec<Pid> {
+        self.slots
+            .iter()
+            .enumerate()
+            .filter_map(|(index, slot)| {
+                let process = slot.process.as_ref()?;
+                (process.state != ProcessState::Dead).then(|| encode(index as u32, slot.generation))
+            })
+            .collect()
     }
 }
 
@@ -763,6 +918,76 @@ mod tests {
             let pid = encode(index, generation);
             assert_eq!(decode(pid), (index, generation));
         }
+    }
+
+    #[test]
+    fn exit_reason_defaults_normal_until_set() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        assert_eq!(table.get(pid).unwrap().exit_reason, ExitReason::Normal);
+        table.set_exit_reason(pid, ExitReason::Shutdown);
+        assert_eq!(table.get(pid).unwrap().exit_reason, ExitReason::Shutdown);
+    }
+
+    #[test]
+    fn kill_records_killed_reason() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        // Claim it so the kill is deferred (on_cpu) and the slot survives for
+        // inspection rather than being reclaimed inline.
+        assert_eq!(table.claim_next(), Some(pid));
+        assert!(table.kill(pid).is_none(), "on_cpu kill defers reclaim");
+        let process = table.get(pid).expect("deferred kill keeps the slot");
+        assert_eq!(process.state, ProcessState::Dead);
+        assert_eq!(process.exit_reason, ExitReason::Killed);
+    }
+
+    #[test]
+    fn enter_draining_arms_grace_once() {
+        let mut table = TestTable::new();
+        assert!(!table.is_draining());
+        assert!(!table.grace_expired(Instant::now()));
+
+        let start = Instant::now();
+        table.enter_draining(start, Duration::from_secs(5));
+        assert!(table.is_draining());
+        assert!(!table.grace_expired(start));
+        assert!(table.grace_expired(start + Duration::from_secs(5)));
+
+        // A second SIGTERM neither re-arms nor extends the window.
+        table.enter_draining(start + Duration::from_secs(1), Duration::from_secs(100));
+        assert!(table.grace_expired(start + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn nearest_wakeup_folds_in_grace_deadline() {
+        let mut table = TestTable::new();
+        assert_eq!(table.nearest_wakeup(), None);
+        let start = Instant::now();
+        table.enter_draining(start, Duration::from_secs(5));
+        assert_eq!(table.nearest_wakeup(), Some(start + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn kill_all_kills_every_live_process() {
+        let mut table = TestTable::new();
+        // Park one process off the ready queue (so `spawn_parked`'s claim
+        // sees an empty queue), then spawn + claim main so it is on_cpu.
+        let parked = spawn_parked(&mut table, Priority::Normal);
+        let main = fake_spawn(&mut table);
+        // A claimed (on_cpu) process is marked dead but reclaimed by its
+        // worker on switch-out, so it isn't in the returned batch.
+        assert_eq!(table.claim_next(), Some(main));
+
+        let reclaimed = table.kill_all();
+        assert_eq!(
+            reclaimed.len(),
+            1,
+            "only the off-cpu process reclaims inline"
+        );
+        assert!(table.should_shutdown(), "every process is now dead");
+        assert_eq!(table.get(main).unwrap().exit_reason, ExitReason::Killed);
+        assert!(table.get(parked).is_none(), "parked process was freed");
     }
 
     #[test]

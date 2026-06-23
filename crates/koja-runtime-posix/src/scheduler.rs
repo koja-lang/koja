@@ -14,7 +14,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use koja_runtime_core::{
-    Clock, Driver, Executor, Lifecycle, Pid, Priority, ProcessTable, SignalSource, slot_index,
+    Clock, Driver, Executor, ExitReason, Lifecycle, Pid, Priority, ProcessTable, SignalSource,
+    slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, setvbuf};
@@ -40,10 +41,32 @@ fn poll_signals() {
         return;
     }
 
-    let main_pid = SCHED.lock().unwrap().main_pid();
+    let main_pid = {
+        let mut guard = SCHED.lock().unwrap();
+        // SIGTERM (`Shutdown`) starts the drain: refuse new spawns and arm the
+        // grace deadline. The signal is still delivered to main below so a
+        // lifecycle-aware program can shut itself down before the deadline.
+        if fired.contains(&Lifecycle::Shutdown) {
+            guard.enter_draining(NativeClock.now(), grace_period());
+        }
+        guard.main_pid()
+    };
     for lifecycle in fired {
         send_lifecycle_to(main_pid, lifecycle as i64);
     }
+}
+
+/// The SIGTERM drain grace window, from `KOJA_GRACE_MS` (default 30s, to
+/// match Kubernetes' `terminationGracePeriodSeconds`). After this elapses,
+/// the worker loop force-kills any straggler. Read in the adapter so the
+/// core driver stays env-free.
+fn grace_period() -> Duration {
+    const DEFAULT_GRACE_MS: u64 = 30_000;
+    let millis = std::env::var("KOJA_GRACE_MS")
+        .ok()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_GRACE_MS);
+    Duration::from_millis(millis)
 }
 
 /// Internal helper: allocates a tagged lifecycle message buffer and
@@ -255,6 +278,10 @@ thread_local! {
     pub(crate) static CURRENT_PID: Cell<i64> = const { Cell::new(-1) };
     pub(crate) static SCHED_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
     pub(crate) static YIELD_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
+    /// Reductions the resumed process may still spend before
+    /// `koja_rt_yield_check` forces it to yield. Seeded from the PCB's
+    /// `reductions_left` on each resume so the decrement stays lock-free.
+    pub(crate) static REDUCTIONS_LEFT: Cell<u32> = const { Cell::new(0) };
 }
 
 // ---------------------------------------------------------------------------
@@ -417,12 +444,27 @@ fn worker_loop() {
         guard.promote_due_deadlines(now);
         fire_due_timers(&mut guard, now);
 
+        // Drain grace elapsed: force-kill stragglers. They become `Dead`
+        // (alive == 0, main included), so the runtime tears down; the
+        // detached resources drop after the lock is released.
+        if guard.is_draining() && guard.grace_expired(now) {
+            let reclaim = guard.kill_all();
+            SHUTDOWN.store(true, Ordering::Relaxed);
+            drop(guard);
+            WORK_AVAILABLE.notify_all();
+            drop(reclaim);
+            break;
+        }
+
         if let Some(pid) = guard.claim_next() {
             let proc_sp = guard
                 .get(pid)
                 .expect("just-claimed process exists")
                 .execution
                 .sp;
+            // Seed this quantum's reduction budget (reset by `claim_next`)
+            // so `koja_rt_yield_check` can decrement it without the lock.
+            REDUCTIONS_LEFT.with(|c| c.set(guard.reductions_left(pid)));
             drop(guard);
 
             let saved_sp = NativeExecutor.resume(pid, proc_sp);
@@ -817,6 +859,19 @@ pub extern "C" fn koja_rt_send_lifecycle(pid: i64, variant: i64) {
     send_lifecycle_to(pid, variant);
 }
 
+/// Records the calling process's exit reason from a wire code (0=Normal,
+/// 1=Shutdown, ...). Emitted in the process-body tail from the process's
+/// own `StopReason`, so the reason is set before the trampoline marks it
+/// dead and `notify_exit` fires.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_process_exit(reason: i64) {
+    let pid = CURRENT_PID.with(|c| c.get());
+    SCHED
+        .lock()
+        .unwrap()
+        .set_exit_reason(pid, ExitReason::from_index(reason));
+}
+
 /// Sets the calling process's scheduling priority from a `Priority`
 /// variant index (0=Low, 1=Normal, 2=High). Called once per process
 /// body right after `start` succeeds, so the process runs at its
@@ -828,6 +883,29 @@ pub extern "C" fn koja_rt_set_priority(level: i64) {
         .lock()
         .unwrap()
         .set_priority(pid, Priority::from_index(level));
+}
+
+/// Cooperative preemption point emitted at loop back-edges and tail calls.
+/// Spends one reduction from the per-worker budget on the lock-free fast
+/// path; only when the budget is exhausted does it take `SCHED` to re-queue
+/// the process (`Running -> Runnable`) and context-switch back to the
+/// worker, which re-enqueues it via the usual `after_switch` path.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_yield_check() {
+    let exhausted = REDUCTIONS_LEFT.with(|c| {
+        let remaining = c.get().saturating_sub(1);
+        c.set(remaining);
+        remaining == 0
+    });
+    if !exhausted {
+        return;
+    }
+    let pid = CURRENT_PID.with(|c| c.get());
+    if pid < 0 {
+        return;
+    }
+    SCHED.lock().unwrap().yield_running(pid);
+    yield_to_scheduler();
 }
 
 /// Sends an IOReady event to the process identified by `pid`.
@@ -947,6 +1025,14 @@ pub unsafe extern "C" fn koja_rt_spawn(
     } else {
         OwnedPayload::default()
     };
+
+    // Refuse new processes once draining (SIGTERM seen): the program is
+    // shutting down. Return the invalid pid 0 (a `Ref` over it behaves like a
+    // ref to an already-dead process); dropping `init_state` runs its glue.
+    if SCHED.lock().unwrap().is_draining() {
+        drop(init_state);
+        return 0;
+    }
 
     let (stack, sp) = allocate_process_stack();
     let execution = NativeExecution::new(fn_ptr, init_state, stack, sp);

@@ -260,6 +260,12 @@ fn assert_process_body_shape(program: &IRProgram, wrapper: &IRFunction, state_ma
         "process body should release the start result via a DropValue marker",
     );
     assert!(
+        instructions
+            .iter()
+            .any(|i| matches!(i, IRInstruction::ProcessExit { .. })),
+        "process body should record its exit reason via ProcessExit on the run tail",
+    );
+    assert!(
         body.blocks
             .iter()
             .any(|block| matches!(block.terminator, IRTerminator::CondBranch { .. })),

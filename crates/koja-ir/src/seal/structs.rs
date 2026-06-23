@@ -166,13 +166,15 @@ pub(super) fn seal_struct_ops<'inst, 'decl>(
             | IRInstruction::LocalWrite { .. }
             | IRInstruction::MakeClosure { .. }
             | IRInstruction::NumericWiden { .. }
+            | IRInstruction::ProcessExit { .. }
             | IRInstruction::Receive { .. }
             | IRInstruction::SetPriority { .. }
             | IRInstruction::Spawn { .. }
             | IRInstruction::UnaryOp { .. }
             | IRInstruction::UnionPayloadGet { .. }
             | IRInstruction::UnionTagGet { .. }
-            | IRInstruction::UnionWrap { .. } => {}
+            | IRInstruction::UnionWrap { .. }
+            | IRInstruction::YieldCheck => {}
         }
     }
 }

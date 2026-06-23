@@ -159,6 +159,25 @@ variant name: the compiler assigns the Koja→wire scheduling weight in
 process; `level` is the wire weight and out-of-range values clamp to
 `Normal` (`koja_runtime_core::Priority::from_index`).
 
+`koja_rt_yield_check()` (`void()`) is a cooperative-preemption point the
+compiler inserts at loop back-edges and before each tail call (see
+`koja-ir`'s `yield_checks` pass). It spends one reduction from the
+running process's per-quantum budget and, when the budget hits zero,
+re-queues the process so a peer can run — bounding how long any loop or
+tail-recursion monopolizes a worker. The budget is granted by priority
+(`Priority::budget`) and reset when the process is next scheduled. The
+interpreter has no extern: `koja-ir-eval` routes `YieldCheck` through
+`scheduler::reduce` for the same effect.
+
+`koja_rt_process_exit(i64 reason)` (`void(i64)`) records why the current
+process terminated on its control block (read by `ProcessTable`'s
+exit-notification seam). The compiler emits it in the process-body tail
+from the process's own `StopReason`, which maps by variant name to the
+wire code (`Normal` → 0, `Shutdown` → 1; out-of-range clamps to `Normal`
+via `koja_runtime_core::ExitReason::from_index`). A forced `kill` records
+`Killed` (2) directly in the runtime. The interpreter has no extern:
+`koja-ir-eval` routes `ProcessExit` through `scheduler::process_exit`.
+
 ## Runtime extern function signatures
 
 The `koja_*` / `koja_rt_*` C-ABI function surface (allocation, rc,

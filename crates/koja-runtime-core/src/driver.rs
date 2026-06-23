@@ -25,7 +25,9 @@ use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use crate::process_table::{ProcessState, ProcessTable};
-use crate::protocol::{Clock, Driver, Executor, MessageSource, Reactor, SignalSource, Waker};
+use crate::protocol::{
+    Clock, Driver, Executor, Lifecycle, MessageSource, Reactor, SignalSource, Waker,
+};
 
 /// Idle park cap when a process is `Running`/`WaitingIO` — work is
 /// imminent, so wake often. Mirrors the native worker loop.
@@ -49,6 +51,9 @@ where
     clock: C,
     core: Rc<RefCell<ProcessTable<E::Execution, E::Message>>>,
     executor: E,
+    /// Drain grace window armed when a `SIGTERM` arrives; supplied by the
+    /// adapter (which reads `KOJA_GRACE_MS`) so the core stays env-free.
+    grace: Duration,
     reactor: R,
     signals: S,
 }
@@ -69,11 +74,13 @@ where
         reactor: R,
         clock: C,
         signals: S,
+        grace: Duration,
     ) -> Self {
         Self {
             clock,
             core,
             executor,
+            grace,
             reactor,
             signals,
         }
@@ -87,12 +94,34 @@ where
         if fired.is_empty() {
             return;
         }
+        // A `SIGTERM` (`Shutdown`) starts the drain: refuse new spawns and
+        // arm the grace deadline. The signal is still delivered to main so a
+        // `Lifecycle`-aware program can shut itself down before the deadline.
+        if fired.contains(&Lifecycle::Shutdown) {
+            let now = self.clock.now();
+            self.core.borrow_mut().enter_draining(now, self.grace);
+        }
         let main = self.core.borrow().main_pid();
         for event in fired {
             let message = self.executor.lifecycle_message(event);
             let leftover = self.core.borrow_mut().deliver(main, message);
             drop(leftover);
         }
+    }
+
+    /// Once the drain grace deadline passes, force-kills every straggler so
+    /// the shutdown condition (`alive == 0`) fires. Drops the detached
+    /// resources off the table borrow.
+    fn enforce_grace(&self, now: Instant) {
+        let reclaimed = {
+            let mut table = self.core.borrow_mut();
+            if table.is_draining() && table.grace_expired(now) {
+                table.kill_all()
+            } else {
+                Vec::new()
+            }
+        };
+        drop(reclaimed);
     }
 
     /// Delivers every timer due at `now`, dropping any undeliverable
@@ -176,6 +205,7 @@ where
             let now = self.clock.now();
             self.core.borrow_mut().promote_due_deadlines(now);
             self.fire_due_timers(now);
+            self.enforce_grace(now);
 
             // Bind before matching so the `borrow_mut` temporary is dropped
             // here, not held across the arms (and across `resume`, which
@@ -202,5 +232,166 @@ where
                 break;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::protocol::{Interest, Message, Pid, Readiness, Tag};
+    use std::cell::Cell;
+
+    struct MockMessage;
+    impl Message for MockMessage {
+        fn tag(&self) -> Tag {
+            Tag::Lifecycle
+        }
+    }
+
+    type MockTable = ProcessTable<(), MockMessage>;
+
+    /// Executor that optionally marks a resumed process `Dead` — modelling a
+    /// `main` that reacts to `Shutdown` by returning. Counts resumes so a
+    /// test can tell whether `main` ever ran.
+    struct MockExecutor {
+        core: Rc<RefCell<MockTable>>,
+        exit_on_resume: bool,
+        resumes: Rc<Cell<usize>>,
+    }
+
+    impl Executor for MockExecutor {
+        type Execution = ();
+        type Continuation = ();
+        type Message = MockMessage;
+
+        fn resume(&self, pid: Pid, _continuation: ()) {
+            self.resumes.set(self.resumes.get() + 1);
+            if self.exit_on_resume {
+                self.core.borrow_mut().mark_dead_if_alive(pid);
+            }
+        }
+    }
+
+    impl MessageSource<MockMessage> for MockExecutor {
+        fn lifecycle_message(&self, _event: Lifecycle) -> MockMessage {
+            MockMessage
+        }
+        fn io_ready_message(&self, _readiness: Readiness, _fd: i32) -> MockMessage {
+            MockMessage
+        }
+    }
+
+    struct MockReactor;
+    impl Reactor for MockReactor {
+        fn register(&self, _fd: i32, _interest: Interest, _waker: Waker) {}
+        fn deregister(&self, _fd: i32) {}
+        fn poll(&self, _timeout: Option<Duration>) -> Vec<Waker> {
+            Vec::new()
+        }
+    }
+
+    /// Clock whose logical time advances by `step` on every read, so the
+    /// loop crosses a grace deadline deterministically without sleeping.
+    struct MockClock {
+        now: Rc<Cell<Instant>>,
+        step: Duration,
+    }
+    impl Clock for MockClock {
+        fn now(&self) -> Instant {
+            let current = self.now.get();
+            self.now.set(current + self.step);
+            current
+        }
+    }
+
+    /// Fires a single `SIGTERM` (`Shutdown`) on its first drain, nothing
+    /// after — the injected signal the drain reacts to.
+    struct OneShotSigterm {
+        pending: Cell<bool>,
+    }
+    impl SignalSource for OneShotSigterm {
+        fn install(&self) {}
+        fn drain(&self) -> Vec<Lifecycle> {
+            if self.pending.replace(false) {
+                vec![Lifecycle::Shutdown]
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    #[test]
+    fn sigterm_lets_a_responsive_main_exit_before_the_deadline() {
+        let core = Rc::new(RefCell::new(MockTable::new()));
+        let main = core.borrow_mut().spawn(());
+        assert_eq!(main, core.borrow().main_pid());
+
+        let resumes = Rc::new(Cell::new(0));
+        let start = Instant::now();
+        let clock_now = Rc::new(Cell::new(start));
+        let grace = Duration::from_secs(3600);
+        CooperativeDriver::new(
+            Rc::clone(&core),
+            MockExecutor {
+                core: Rc::clone(&core),
+                exit_on_resume: true,
+                resumes: Rc::clone(&resumes),
+            },
+            MockReactor,
+            MockClock {
+                now: Rc::clone(&clock_now),
+                step: Duration::from_millis(100),
+            },
+            OneShotSigterm {
+                pending: Cell::new(true),
+            },
+            grace,
+        )
+        .run();
+
+        assert!(resumes.get() >= 1, "main must have run to exit on its own");
+        assert!(core.borrow().is_draining(), "SIGTERM should enter draining");
+        assert!(
+            clock_now.get() < start + grace,
+            "responsive main should exit well before the grace deadline",
+        );
+    }
+
+    #[test]
+    fn sigterm_hard_kills_an_unresponsive_main_at_the_deadline() {
+        let core = Rc::new(RefCell::new(MockTable::new()));
+        let main = core.borrow_mut().spawn(());
+
+        let resumes = Rc::new(Cell::new(0));
+        let start = Instant::now();
+        let clock_now = Rc::new(Cell::new(start));
+        let grace = Duration::from_millis(250);
+        CooperativeDriver::new(
+            Rc::clone(&core),
+            // Never exits on its own: the only way `run` returns is the
+            // grace-deadline hard-kill.
+            MockExecutor {
+                core: Rc::clone(&core),
+                exit_on_resume: false,
+                resumes: Rc::clone(&resumes),
+            },
+            MockReactor,
+            MockClock {
+                now: Rc::clone(&clock_now),
+                step: Duration::from_millis(100),
+            },
+            OneShotSigterm {
+                pending: Cell::new(true),
+            },
+            grace,
+        )
+        .run();
+
+        assert!(
+            clock_now.get() >= start + grace,
+            "forced shutdown must wait for the grace deadline to pass",
+        );
+        assert!(core.borrow().get(main).is_none(), "straggler was killed");
+        assert!(core.borrow().should_shutdown());
     }
 }

@@ -49,8 +49,8 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::process::payload_drop_glue;
 use crate::main_wrapper::EXIT_CODE_SYMBOL;
 use crate::runtime::{
-    declare_rt_receive_extern, declare_rt_receive_timeout_extern, declare_rt_set_priority_extern,
-    declare_rt_spawn_extern,
+    declare_rt_process_exit_extern, declare_rt_receive_extern, declare_rt_receive_timeout_extern,
+    declare_rt_set_priority_extern, declare_rt_spawn_extern, declare_rt_yield_check_extern,
 };
 use crate::types::{ir_basic_type, value_basic_type};
 
@@ -251,6 +251,24 @@ pub(super) fn emit_spawn<'ctx>(
     Ok(())
 }
 
+// ----- IRInstruction::ProcessExit ------------------------------------------
+
+/// Emit `IRInstruction::ProcessExit`: forward the `Int64` exit-reason wire
+/// code to `koja_rt_process_exit`, recording it on the terminating process.
+/// A straight pass-through call producing no value.
+pub(super) fn emit_process_exit<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    reason: ValueId,
+    values: &ValueMap<'ctx>,
+) -> Result<(), LlvmError> {
+    let reason = lookup(values, reason)?.into_int_value();
+    let process_exit_fn = declare_rt_process_exit_extern(ctx);
+    ctx.builder
+        .build_call(process_exit_fn, &[reason.into()], "")
+        .or_ice()?;
+    Ok(())
+}
+
 // ----- IRInstruction::SetPriority ------------------------------------------
 
 /// Emit `IRInstruction::SetPriority`: forward the `Int64` scheduling
@@ -266,6 +284,16 @@ pub(super) fn emit_set_priority<'ctx>(
     ctx.builder
         .build_call(set_priority_fn, &[level.into()], "")
         .or_ice()?;
+    Ok(())
+}
+
+// ----- IRInstruction::YieldCheck -------------------------------------------
+
+/// Emit `IRInstruction::YieldCheck`: a bare call to `koja_rt_yield_check`.
+/// No operands, no value — the runtime decides whether to re-queue.
+pub(super) fn emit_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
+    let yield_check_fn = declare_rt_yield_check_extern(ctx);
+    ctx.builder.build_call(yield_check_fn, &[], "").or_ice()?;
     Ok(())
 }
 

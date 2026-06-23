@@ -28,6 +28,16 @@
 //! is validated in the debug build here while TSan focuses on the ping-pong
 //! concurrency soak.
 //!
+//! Finally it runs a preemption phase: `SPINNERS` compute-bound children that
+//! never block, each calling `koja_rt_yield_check` enough times to exhaust its
+//! reduction budget repeatedly. Every exhaustion re-queues the spinner
+//! (`Running -> Runnable`) and context-switches back to its worker, so this
+//! soaks the cooperative-preemption path — budget decrement, `yield_running`
+//! under the scheduler lock, and live-fiber migration across workers — that
+//! the blocking ping-pong never hits. Like a parked process being woken on
+//! another worker (not a freed slot reused), it stays TSan-clean, so `just
+//! tsan` leaves it on.
+//!
 //! The runtime is a process-global singleton (`SCHED`, the reactor
 //! `OnceLock`, signal handlers, and a one-shot `SHUTDOWN` flag), so this
 //! file deliberately contains exactly one `#[test]`: a second call to
@@ -57,6 +67,7 @@ unsafe extern "C" {
     );
     fn koja_rt_receive(out: *mut u8, out_cap: i64) -> i64;
     fn koja_rt_self() -> i64;
+    fn koja_rt_yield_check();
     fn koja_rt_main_done();
 }
 
@@ -83,6 +94,12 @@ static CHURN_WAVES: AtomicUsize = AtomicUsize::new(0);
 static CHURN_WAVE_SIZE: AtomicUsize = AtomicUsize::new(0);
 /// Short-lived churn children that ran to completion.
 static CHURN_DONE: AtomicUsize = AtomicUsize::new(0);
+/// Compute-bound spinners the controller runs in the preemption phase.
+static SPINNERS: AtomicUsize = AtomicUsize::new(0);
+/// `koja_rt_yield_check` calls each spinner makes before exiting.
+static SPIN_ITERS: AtomicUsize = AtomicUsize::new(0);
+/// Spinners that ran to completion.
+static SPIN_DONE: AtomicUsize = AtomicUsize::new(0);
 
 const PING: u8 = 0xAB;
 const PONG: u8 = 0xCD;
@@ -112,6 +129,19 @@ extern "C" fn child_entry(_state: *const u8) {
 extern "C" fn churn_child_entry(_state: *const u8) {
     let controller = CONTROLLER_PID.load(Ordering::SeqCst);
     CHURN_DONE.fetch_add(1, Ordering::SeqCst);
+    unsafe { koja_rt_send(controller, &CHURN_BYTE, 1, None) };
+}
+
+/// Compute-bound spinner: never blocks, just burns reductions via
+/// `koja_rt_yield_check`. With `SPIN_ITERS` well above the per-quantum
+/// budget it is preempted (re-queued and switched out) many times before it
+/// announces completion and exits.
+extern "C" fn spin_child_entry(_state: *const u8) {
+    let controller = CONTROLLER_PID.load(Ordering::SeqCst);
+    for _ in 0..SPIN_ITERS.load(Ordering::SeqCst) {
+        unsafe { koja_rt_yield_check() };
+    }
+    SPIN_DONE.fetch_add(1, Ordering::SeqCst);
     unsafe { koja_rt_send(controller, &CHURN_BYTE, 1, None) };
 }
 
@@ -152,6 +182,17 @@ extern "C" fn controller_entry(_state: *const u8) {
             recv_blocking();
         }
     }
+
+    // Preemption: compute-bound spinners that yield repeatedly rather than
+    // block, then reap them. Exercises the budget/`yield_running` path under
+    // worker concurrency.
+    let spinners = SPINNERS.load(Ordering::SeqCst);
+    for _ in 0..spinners {
+        unsafe { koja_rt_spawn(spin_child_entry, std::ptr::null(), 0, None) };
+    }
+    for _ in 0..spinners {
+        recv_blocking();
+    }
 }
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -167,11 +208,15 @@ fn scheduler_ping_pong_storm() {
     let rounds = env_usize("KOJA_STRESS_ROUNDS", 200);
     let waves = env_usize("KOJA_STRESS_WAVES", 50);
     let wave_size = env_usize("KOJA_STRESS_WAVE_SIZE", 16);
+    let spinners = env_usize("KOJA_STRESS_SPINNERS", 8);
+    let spin_iters = env_usize("KOJA_STRESS_SPIN_ITERS", 5000);
 
     CHILDREN.store(children, Ordering::SeqCst);
     ROUNDS.store(rounds, Ordering::SeqCst);
     CHURN_WAVES.store(waves, Ordering::SeqCst);
     CHURN_WAVE_SIZE.store(wave_size, Ordering::SeqCst);
+    SPINNERS.store(spinners, Ordering::SeqCst);
+    SPIN_ITERS.store(spin_iters, Ordering::SeqCst);
 
     unsafe {
         koja_rt_spawn(controller_entry, std::ptr::null(), 0, None);
@@ -192,5 +237,10 @@ fn scheduler_ping_pong_storm() {
         CHURN_DONE.load(Ordering::SeqCst),
         waves * wave_size,
         "every churn child should run to completion across all waves",
+    );
+    assert_eq!(
+        SPIN_DONE.load(Ordering::SeqCst),
+        spinners,
+        "every spinner should be preempted repeatedly yet run to completion",
     );
 }
