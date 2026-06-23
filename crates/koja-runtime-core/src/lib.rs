@@ -20,14 +20,15 @@ pub mod memory;
 pub mod process_table;
 pub mod protocol;
 pub mod scheduler_trace;
+pub mod timer_wheel;
 pub mod wire;
 
 pub use driver::CooperativeDriver;
 pub use mailbox::{Mailbox, WaitTarget};
 pub use process_table::{
-    ProcessControlBlock, ProcessState, ProcessTable, Reclaim, ScheduleCounters, TimerEntry,
-    slot_index,
+    ProcessControlBlock, ProcessState, ProcessTable, Reclaim, ScheduleCounters, slot_index,
 };
+pub use timer_wheel::TimerEntry;
 pub use protocol::{
     Clock, Driver, Executor, Interest, Lifecycle, Message, MessageSource, Pid, Reactor, Readiness,
     SignalSource, Tag, Waker,

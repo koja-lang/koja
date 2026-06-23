@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Scheduler timers and deadlines are now backed by a single hashed timing wheel (plus an overflow heap for far-future entries) instead of two binary heaps, making timer arming amortized O(1).
 - The interpreter now supports `spawn`, cross-process messaging, timers, and I/O in scripts and `koja run --backend=interpreter` — process programs that previously required `--backend=llvm` now run identically on both backends.
 - Compiled (`--backend=llvm`) programs now print a source backtrace on panic — `** (panic) <message>` followed by `file:line: name()` frames for the user's call chain, including across spawned processes. Function-granular DWARF, so each frame resolves to its function's declaration line.
 
