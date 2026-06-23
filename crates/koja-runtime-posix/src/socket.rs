@@ -10,7 +10,7 @@ use std::mem;
 use std::ptr;
 
 use crate::ffi::{
-    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, SO_ERROR, SO_REUSEADDR, SOL_SOCKET, SockaddrIn,
+    AF_INET, Addrinfo, EAGAIN, EINPROGRESS, EINTR, SO_ERROR, SO_REUSEADDR, SOL_SOCKET, SockaddrIn,
     get_errno, libc_accept, libc_bind, libc_connect, libc_freeaddrinfo, libc_getaddrinfo,
     libc_getsockopt, libc_listen, libc_recvfrom, libc_sendto, libc_setsockopt, libc_socket,
     set_nonblocking,
@@ -95,7 +95,10 @@ pub extern "C" fn koja_socket_connect(fd: i32, ip_ptr: *const u8, port: i64) -> 
     }
     let errno = get_errno();
     if errno == EINPROGRESS || errno == EAGAIN {
-        io_block(fd, Interest::Writable);
+        if io_block(fd, Interest::Writable) {
+            set_last_error(io::Error::from_raw_os_error(EINTR));
+            return -1;
+        }
 
         let mut err: i32 = 0;
         let mut len = mem::size_of::<i32>() as u32;

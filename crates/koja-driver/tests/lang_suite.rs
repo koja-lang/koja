@@ -534,6 +534,16 @@ fn lang_process_lifecycle() {
     run_signal_test_interpreted(&dir, "process_lifecycle", libc::SIGTERM);
 }
 
+/// RUNTIME-GAPS #3: a process blocked in a synchronous `accept` must wake
+/// when a lifecycle signal arrives. Mirrors `lang_process_lifecycle` but
+/// the entry process is parked in I/O (`WaitingIO`), not `receive`.
+#[test]
+fn lang_process_io_signal() {
+    let dir = lang_dir().join("process_io_signal");
+    run_signal_test(&dir, "process_io_signal", libc::SIGTERM);
+    run_signal_test_interpreted(&dir, "process_io_signal", libc::SIGTERM);
+}
+
 /// Regression for `IOReady` union-message delivery under both backends:
 /// the fixture watches STDIN and must receive the reactor's readiness
 /// event through its `handle` (tag-2 dispatch) instead of trapping.

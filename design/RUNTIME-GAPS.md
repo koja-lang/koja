@@ -101,19 +101,6 @@ cleanup, not an active bug.
 **Fix.** Fold both into a typed `enum EventKey { Process(Pid),
 Watch(Fd) }` resolved through a table, rather than an integer offset.
 
-### 3. Messages to an I/O-blocked process don't wake it
-
-**Severity: low. Bug class: delivery latency / missed signals.**
-
-`koja_rt_send`, `send_lifecycle_to`, and the timer-fire path only
-promote `state == Blocked`, never `WaitingIo`. A lifecycle message
-(e.g. `SIGTERM`) sent to a process parked in `accept()` isn't seen until
-its I/O happens to complete.
-
-**Fix.** Decide the intended semantics (does a message interrupt an I/O
-wait?). If yes, promote `WaitingIo → Runnable` on message arrival and
-have the resumed process re-check its mailbox before re-blocking on I/O.
-
 ---
 
 ## Launch priority
@@ -121,5 +108,5 @@ have the resumed process re-check its mailbox before re-blocking on I/O.
 No open entry is a launch blocker. With the owned-temporary /
 construction leak now fixed, the unbounded-memory class is closed, and
 everything that remains is a robustness/coverage cleanup — **#1**
-(`loom`), **#2** (typed `EventKey`), and **#3** (wake `WaitingIo` on
-message) — that can land after a soft launch.
+(`loom`) and **#2** (typed `EventKey`) — that can land after a soft
+launch.

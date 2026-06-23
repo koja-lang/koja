@@ -26,7 +26,7 @@ use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::mailbox::{Mailbox, WaitTarget};
-use crate::protocol::{Message, Pid};
+use crate::protocol::{Message, Pid, Tag};
 use crate::scheduler_trace::{SchedulerTrace, TraceEntry, TraceEvent};
 use crate::timer_wheel::{Due, TimerEntry, TimerWheel};
 
@@ -282,6 +282,13 @@ impl<X, M: Message> ProcessTable<X, M> {
             .is_some_and(|process| process.state != ProcessState::Dead)
     }
 
+    /// Whether `pid` has a pending system/lifecycle message — the signal a
+    /// blocking I/O wait checks to decide whether it was interrupted.
+    pub fn has_system_mail(&self, pid: Pid) -> bool {
+        self.get(pid)
+            .is_some_and(|process| process.mailbox.has_system())
+    }
+
     /// Registers a new process (with its executor `execution` state) in a free
     /// or freshly grown slot, queues it as runnable, and returns its packed PID.
     pub fn spawn(&mut self, execution: X) -> Pid {
@@ -495,10 +502,17 @@ impl<X, M: Message> ProcessTable<X, M> {
             return Some(envelope);
         }
         let target = Mailbox::target_of(&envelope);
+        let is_system = matches!(envelope.tag(), Tag::Lifecycle);
         let process = self
             .get_mut(pid)
             .expect("is_alive implies the process exists");
-        let wake = process.state == ProcessState::Blocked && process.waiting == target;
+        // Wake a `Blocked` receiver for the matching queue, or a `WaitingIO`
+        // process for a system/lifecycle signal (RUNTIME-GAPS #3).
+        let wake = match process.state {
+            ProcessState::Blocked => process.waiting == target,
+            ProcessState::WaitingIO => is_system,
+            _ => false,
+        };
         let displaced = process.mailbox.push(envelope);
         self.trace.record(pid, TraceEvent::Delivered);
         if wake {
@@ -605,7 +619,7 @@ impl<X, M: Message> Default for ProcessTable<X, M> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{Envelope, TAG_BUSINESS};
+    use crate::wire::{Envelope, TAG_BUSINESS, TAG_LIFECYCLE};
     use std::ptr;
     use std::time::Duration;
 
@@ -620,6 +634,11 @@ mod tests {
     /// A minimal business envelope (empty payload, no glue).
     fn fake_envelope() -> Envelope {
         unsafe { Envelope::from_payload(TAG_BUSINESS, ptr::null(), 0, None) }
+    }
+
+    /// A minimal lifecycle/system envelope (empty payload, no glue).
+    fn fake_lifecycle() -> Envelope {
+        unsafe { Envelope::from_payload(TAG_LIFECYCLE, ptr::null(), 0, None) }
     }
 
     #[test]
@@ -778,6 +797,26 @@ mod tests {
         table.promote_due_deadlines(deadline + Duration::from_millis(1));
         assert_eq!(table.counters().stale_deadlines_skipped, 1);
         assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+    }
+
+    #[test]
+    fn lifecycle_wakes_waiting_io_but_business_does_not() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        table.transition(pid, ProcessState::Running);
+        assert!(table.try_park_io(pid));
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::WaitingIO);
+        assert!(!table.has_system_mail(pid));
+
+        // Business traffic must not wake an I/O waiter.
+        assert!(table.deliver(pid, fake_envelope()).is_none());
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::WaitingIO);
+
+        // A lifecycle/system message wakes it and is observable as pending.
+        assert!(table.deliver(pid, fake_lifecycle()).is_none());
+        assert_eq!(table.get(pid).unwrap().state, ProcessState::Runnable);
+        assert!(table.has_system_mail(pid));
+        assert_eq!(table.counters().violations, 0);
     }
 
     #[test]

@@ -22,7 +22,7 @@ use polling::{Event, Events, PollMode, Poller};
 
 use koja_runtime_core::{ProcessState, Reactor, Readiness, Waker};
 
-use crate::ffi::{EAGAIN, get_errno, koja_context_switch};
+use crate::ffi::{EAGAIN, EINTR, get_errno, koja_context_switch};
 use crate::scheduler::{
     CURRENT_PID, NativeTable, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
 };
@@ -278,20 +278,29 @@ pub(crate) fn release_fd(fd: i32) {
 }
 
 /// Suspends the current process until `fd` is ready for the given
-/// [`Interest`]. Called from runtime I/O paths on `EAGAIN`.
+/// [`Interest`], or a system/lifecycle message arrives. Called from
+/// runtime I/O paths on `EAGAIN`. Returns `true` when a queued system
+/// message interrupted the wait (the caller must stop retrying the
+/// syscall and return to the run loop), `false` when fd readiness woke it.
 ///
 /// State must be set to `WaitingIO` **before** `register`: the reactor's
 /// wake guard checks `state == WaitingIO`, so a state of `Running` at fire
 /// time silently drops the event and the process parks forever. Reverse
 /// order means at worst a spurious resume.
-pub fn io_block(fd: i32, interest: Interest) {
+pub fn io_block(fd: i32, interest: Interest) -> bool {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    // A refused park means a kill landed mid-run: skip the registration
-    // (no waiter to wake) and let the switch-out below be permanent.
-    if SCHED.lock().unwrap().try_park_io(pid)
-        && let Some(reactor) = REACTOR.get()
-    {
+    // A queued system message must not be stranded behind the wait — bail so the caller can interrupt.
+    let parked = {
+        let mut sched = SCHED.lock().unwrap();
+        if sched.has_system_mail(pid) {
+            return true;
+        }
+        // A refused park means a kill landed mid-run: skip the registration
+        // (no waiter to wake) and let the switch-out below be permanent.
+        sched.try_park_io(pid)
+    };
+    if parked && let Some(reactor) = REACTOR.get() {
         reactor.register(fd, interest, Waker::Resume(pid));
     }
 
@@ -305,6 +314,9 @@ pub fn io_block(fd: i32, interest: Interest) {
     if let Some(reactor) = REACTOR.get() {
         reactor.deregister(fd);
     }
+
+    // A queued system message means a signal interrupted the wait, not readiness.
+    SCHED.lock().unwrap().has_system_mail(pid)
 }
 
 /// Runs a non-blocking syscall, suspending the process on `EAGAIN`
@@ -322,10 +334,12 @@ pub(crate) fn block_until_ready(
         if n >= 0 {
             return Ok(n);
         }
-        if get_errno() == EAGAIN {
-            io_block(fd, interest);
-            continue;
+        if get_errno() != EAGAIN {
+            return Err(io::Error::last_os_error());
         }
-        return Err(io::Error::last_os_error());
+        // A pending signal interrupts the wait so the process can handle it.
+        if io_block(fd, interest) {
+            return Err(io::Error::from_raw_os_error(EINTR));
+        }
     }
 }

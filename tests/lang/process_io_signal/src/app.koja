@@ -1,0 +1,43 @@
+alias Net.TCPListener
+
+struct App
+end
+
+enum AppMsg
+  Noop
+end
+
+impl Process<App, AppMsg, String> for App
+  fn start(config: App) -> Result<Self, StopReason>
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: AppMsg, from: Option<ReplyTo<String>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn run(self) -> StopReason
+    match TCPListener.bind(0)
+      Result.Err(_) ->
+        IO.puts("listening")
+        StopReason.Shutdown
+
+      Result.Ok(listener) ->
+        IO.puts("listening")
+        match listener.accept()
+          Result.Ok(_) ->
+            StopReason.Shutdown
+
+          Result.Err(_) ->
+            receive
+              event: Lifecycle ->
+                IO.puts("woke from accept")
+                StopReason.Shutdown
+
+              pair: Pair<AppMsg, Option<ReplyTo<String>>> ->
+                StopReason.Shutdown
+            end
+        end
+    end
+  end
+end

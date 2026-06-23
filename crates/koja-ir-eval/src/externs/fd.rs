@@ -56,7 +56,10 @@ pub(super) async fn fd_read(args: &[Value]) -> Result<Value, RuntimeError> {
             args,
         ));
     };
-    reactor::io_block(*fd as i32, Interest::Readable).await;
+    // Interrupted by a signal — return the native null sentinel.
+    if reactor::io_block(*fd as i32, Interest::Readable).await {
+        return Ok(Value::CPtr(std::ptr::null_mut()));
+    }
     let ptr = unsafe { koja_fd_read(*fd as i32, *count) };
     Ok(Value::CPtr(ptr))
 }
@@ -71,7 +74,10 @@ pub(super) async fn fd_write(args: &[Value]) -> Result<Value, RuntimeError> {
             args,
         ));
     };
-    reactor::io_block(*fd as i32, Interest::Writable).await;
+    // Interrupted by a signal — return the native -1 sentinel.
+    if reactor::io_block(*fd as i32, Interest::Writable).await {
+        return Ok(Value::Int(-1));
+    }
     let written = unsafe { koja_fd_write(*fd as i32, *data, *len) };
     Ok(Value::Int(written))
 }
@@ -91,7 +97,7 @@ pub(super) async fn io_block(args: &[Value]) -> Result<Value, RuntimeError> {
     } else {
         Interest::Writable
     };
-    reactor::io_block(*fd as i32, interest).await;
+    let _ = reactor::io_block(*fd as i32, interest).await;
     Ok(Value::Unit)
 }
 

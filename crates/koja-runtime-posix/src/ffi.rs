@@ -13,6 +13,7 @@ mod platform {
     pub const O_NONBLOCK: i32 = 0x0004;
     pub const EAGAIN: i32 = 35;
     pub const EINPROGRESS: i32 = 36;
+    pub const EINTR: i32 = 4;
 }
 
 #[cfg(target_os = "linux")]
@@ -23,6 +24,7 @@ mod platform {
     pub const O_NONBLOCK: i32 = 0x800;
     pub const EAGAIN: i32 = 11;
     pub const EINPROGRESS: i32 = 115;
+    pub const EINTR: i32 = 4;
 }
 
 pub use platform::*;

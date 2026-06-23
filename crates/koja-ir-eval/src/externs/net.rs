@@ -75,7 +75,10 @@ pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError>
     let [Value::Int(fd)] = args else {
         return Err(type_mismatch("koja_socket_accept", "(fd: Int32)", args));
     };
-    reactor::io_block(*fd as i32, Interest::Readable).await;
+    // Interrupted by a signal, not readiness — return the native -1 sentinel.
+    if reactor::io_block(*fd as i32, Interest::Readable).await {
+        return Ok(Value::Int(i64::from(-1i32)));
+    }
     let client = unsafe { koja_socket_accept(*fd as i32) };
     Ok(Value::Int(i64::from(client)))
 }
@@ -126,7 +129,10 @@ pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError
             args,
         ));
     };
-    reactor::io_block(*fd as i32, Interest::Writable).await;
+    // Interrupted by a signal — return the native -1 sentinel.
+    if reactor::io_block(*fd as i32, Interest::Writable).await {
+        return Ok(Value::Int(-1));
+    }
     let sent = unsafe { koja_socket_send_to(*fd as i32, *data, *ip, *port) };
     Ok(Value::Int(sent))
 }
