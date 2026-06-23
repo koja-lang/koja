@@ -1,5 +1,5 @@
 //! Generational slotmap of live processes plus the scheduler's ready queue
-//! and timer / deadline min-heaps — the agnostic scheduling *policy*.
+//! and timing wheel — the agnostic scheduling *policy*.
 //!
 //! A PID packs a slot index and a generation: `pid = (generation << 32) |
 //! index`. Slots are reused after a process dies (so memory is bounded), and
@@ -9,8 +9,9 @@
 //!
 //! All state changes funnel through [`ProcessTable::transition`], which keeps
 //! the ready queue and the live / active counts in sync. The ready queue makes
-//! process pickup O(1), and the two min-heaps make deadline promotion and
-//! timer firing O(log n) instead of full O(n) scans every worker turn.
+//! process pickup O(1), and the [`TimerWheel`] makes deadline promotion and
+//! timer firing amortized O(1) — both delayed deliveries and receive/call
+//! deadlines share one wheel keyed by fire instant.
 //!
 //! The table is generic over two platform types and contains **no locking,
 //! no threads, and no I/O**: the per-process execution state `X` (opaque —
@@ -21,13 +22,13 @@
 //! multi-threaded native driver, a bare `&mut` borrow for a single-threaded
 //! cooperative one. See `koja/design/SCHEDULER-PROTOCOL.md`.
 
-use std::cmp::Reverse;
-use std::collections::{BinaryHeap, VecDeque};
+use std::collections::VecDeque;
 use std::time::Instant;
 
 use crate::mailbox::{Mailbox, WaitTarget};
 use crate::protocol::{Message, Pid};
 use crate::scheduler_trace::{SchedulerTrace, TraceEntry, TraceEvent};
+use crate::timer_wheel::{Due, TimerEntry, TimerWheel};
 
 /// Splits a packed PID into `(slot_index, generation)`.
 fn decode(pid: Pid) -> (u32, u32) {
@@ -125,45 +126,6 @@ struct Slot<X, M> {
     process: Option<ProcessControlBlock<X, M>>,
 }
 
-/// A pending delayed message (`send_after`). Ordered in the min-heap by
-/// `(fire_at, seq)`; `seq` is a unique tie-breaker so the order is total.
-/// The message is staged at schedule time, so firing is just a delivery and
-/// an unfired or undeliverable entry reclaims its payload by dropping it.
-pub struct TimerEntry<M> {
-    pub envelope: M,
-    fire_at: Instant,
-    seq: u64,
-    pub target_pid: Pid,
-}
-
-impl<M> PartialEq for TimerEntry<M> {
-    fn eq(&self, other: &Self) -> bool {
-        self.fire_at == other.fire_at && self.seq == other.seq
-    }
-}
-
-impl<M> Eq for TimerEntry<M> {}
-
-impl<M> PartialOrd for TimerEntry<M> {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-impl<M> Ord for TimerEntry<M> {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        (self.fire_at, self.seq).cmp(&(other.fire_at, other.seq))
-    }
-}
-
-/// A pending receive deadline. Ordered by `(deadline, seq)`.
-#[derive(Eq, Ord, PartialEq, PartialOrd)]
-struct DeadlineEntry {
-    deadline: Instant,
-    seq: u64,
-    pid: Pid,
-}
-
 /// Whether a state counts toward the `active` tally (work the reactor or
 /// another worker will make progress on without a timer wakeup).
 fn is_active(state: ProcessState) -> bool {
@@ -228,8 +190,8 @@ impl ScheduleCounters {
 }
 
 /// The scheduler's process store: a generational slotmap with a ready queue
-/// and timer / deadline min-heaps. Contains no synchronization; the adapter's
-/// driver supplies it.
+/// and a timing wheel. Contains no synchronization; the adapter's driver
+/// supplies it.
 pub struct ProcessTable<X, M> {
     /// Count of `Running` + `WaitingIO` processes (park-timeout heuristic).
     active: usize,
@@ -237,13 +199,16 @@ pub struct ProcessTable<X, M> {
     alive: usize,
     /// Invariant counters, exposed to fixtures via the adapter.
     counters: ScheduleCounters,
-    /// Monotonic tie-breaker for deadline-heap ordering.
-    deadline_seq: u64,
-    /// Earliest receive deadlines, validated on pop (a process woken by a
-    /// message before its deadline leaves a stale entry behind).
-    deadlines: BinaryHeap<Reverse<DeadlineEntry>>,
+    /// Due deliveries staged by the most recent [`Self::advance_timers`],
+    /// drained by [`Self::take_due_timers`]. Promotions are applied inline
+    /// during the advance; only the deliveries the driver routes wait here.
+    due_delivers: Vec<TimerEntry<M>>,
     /// Indices of free slots available for reuse.
     free: Vec<u32>,
+    /// The instant the wheel was last advanced to, so the paired
+    /// `promote_due_deadlines` / `take_due_timers` calls for one `now` drain
+    /// the wheel exactly once.
+    last_advance: Option<Instant>,
     /// First spawned process (the program entry). Drives signal delivery and
     /// the shutdown decision; `0` until the first spawn.
     main_pid: Pid,
@@ -251,12 +216,10 @@ pub struct ProcessTable<X, M> {
     ready: VecDeque<Pid>,
     /// All slots, indexed by a PID's low 32 bits.
     slots: Vec<Slot<X, M>>,
-    /// Monotonic tie-breaker for timer-heap ordering.
-    timer_seq: u64,
-    /// Pending delayed messages, soonest first.
-    timers: BinaryHeap<Reverse<TimerEntry<M>>>,
     /// Lifecycle event ring, dumped at shutdown under `KOJA_SCHED_TRACE`.
     trace: SchedulerTrace,
+    /// Delayed deliveries and receive/call deadlines, soonest first.
+    wheel: TimerWheel<M>,
 }
 
 impl<X, M: Message> ProcessTable<X, M> {
@@ -265,15 +228,14 @@ impl<X, M: Message> ProcessTable<X, M> {
             active: 0,
             alive: 0,
             counters: ScheduleCounters::new(),
-            deadline_seq: 0,
-            deadlines: BinaryHeap::new(),
+            due_delivers: Vec::new(),
             free: Vec::new(),
+            last_advance: None,
             main_pid: 0,
             ready: VecDeque::new(),
             slots: Vec::new(),
-            timer_seq: 0,
-            timers: BinaryHeap::new(),
             trace: SchedulerTrace::new(),
+            wheel: TimerWheel::new(),
         }
     }
 
@@ -549,63 +511,72 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// process that later dies is simply dropped (undeliverable) when it fires,
     /// reclaiming its envelope then.
     pub fn push_timer(&mut self, fire_at: Instant, target_pid: Pid, envelope: M) {
-        self.timer_seq += 1;
-        self.timers.push(Reverse(TimerEntry {
-            envelope,
-            fire_at,
-            seq: self.timer_seq,
-            target_pid,
-        }));
+        self.wheel.insert_deliver(fire_at, target_pid, envelope);
+    }
+
+    /// Drains the wheel up to `now` exactly once: applies expired deadlines
+    /// inline (promoting validated waiters, counting stale entries) and stages
+    /// due deliveries in [`Self::due_delivers`] for the driver to route. The
+    /// paired `promote_due_deadlines` / `take_due_timers` calls a driver makes
+    /// for one `now` both route here; the second is a no-op.
+    fn advance_timers(&mut self, now: Instant) {
+        if self.last_advance.is_some_and(|last| now <= last) {
+            return;
+        }
+        self.last_advance = Some(now);
+        for due in self.wheel.drain_due(now) {
+            match due {
+                Due::Deliver {
+                    envelope,
+                    target_pid,
+                } => self.due_delivers.push(TimerEntry {
+                    envelope,
+                    target_pid,
+                }),
+                Due::Promote { pid, fire_at } => {
+                    let expired = matches!(
+                        self.get(pid),
+                        Some(process)
+                            if process.state == ProcessState::Blocked
+                                && process.deadline == Some(fire_at)
+                    );
+                    if expired {
+                        self.transition(pid, ProcessState::Runnable);
+                    } else {
+                        self.counters.stale_deadlines_skipped += 1;
+                    }
+                }
+            }
+        }
     }
 
     /// Removes and returns every timer whose `fire_at` is at or before `now`,
-    /// soonest first. The caller delivers each staged envelope.
+    /// soonest first; the caller delivers each staged envelope. Pairs with
+    /// [`Self::promote_due_deadlines`] for the same `now` — the wheel is
+    /// advanced at most once per `now`, so whichever of the two runs first
+    /// does the draining and the second only reads what that advance staged.
     pub fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry<M>> {
-        let mut due = Vec::new();
-        while self
-            .timers
-            .peek()
-            .is_some_and(|Reverse(entry)| entry.fire_at <= now)
-        {
-            due.push(self.timers.pop().unwrap().0);
-        }
-        due
+        self.advance_timers(now);
+        std::mem::take(&mut self.due_delivers)
     }
 
     /// Records a receive deadline so the driver can promote the waiter back to
     /// `Runnable` when it expires.
     fn push_deadline(&mut self, pid: Pid, deadline: Instant) {
-        self.deadline_seq += 1;
-        self.deadlines.push(Reverse(DeadlineEntry {
-            deadline,
-            pid,
-            seq: self.deadline_seq,
-        }));
+        self.wheel.insert_deadline(deadline, pid);
     }
 
     /// Promotes every process whose receive deadline has passed. Stale entries
     /// (the process was woken by a message, resumed, or died, or re-blocked
     /// with a different deadline) are validated against the live state and
     /// skipped.
+    ///
+    /// Drives the shared wheel via [`Self::advance_timers`]. A driver calls
+    /// this *before* [`Self::take_due_timers`] for the same `now`: this call
+    /// advances the wheel and applies expired deadlines inline; the paired
+    /// `take` then collects the deliveries staged by the same advance.
     pub fn promote_due_deadlines(&mut self, now: Instant) {
-        while self
-            .deadlines
-            .peek()
-            .is_some_and(|Reverse(entry)| entry.deadline <= now)
-        {
-            let entry = self.deadlines.pop().unwrap().0;
-            let expired = matches!(
-                self.get(entry.pid),
-                Some(process)
-                    if process.state == ProcessState::Blocked
-                        && process.deadline == Some(entry.deadline)
-            );
-            if expired {
-                self.transition(entry.pid, ProcessState::Runnable);
-            } else {
-                self.counters.stale_deadlines_skipped += 1;
-            }
-        }
+        self.advance_timers(now);
     }
 
     /// Whether any process is `Running` or `WaitingIO`.
@@ -621,12 +592,7 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// The soonest pending timer or deadline, for sizing the idle park.
     pub fn nearest_wakeup(&self) -> Option<Instant> {
-        let timer = self.timers.peek().map(|Reverse(entry)| entry.fire_at);
-        let deadline = self.deadlines.peek().map(|Reverse(entry)| entry.deadline);
-        match (timer, deadline) {
-            (Some(a), Some(b)) => Some(a.min(b)),
-            (a, b) => a.or(b),
-        }
+        self.wheel.nearest()
     }
 }
 
@@ -711,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn timer_heap_pops_in_fire_order() {
+    fn timer_wheel_pops_in_fire_order() {
         let mut table = TestTable::new();
         let base = Instant::now();
         table.push_timer(base + Duration::from_millis(30), 1, fake_envelope());
