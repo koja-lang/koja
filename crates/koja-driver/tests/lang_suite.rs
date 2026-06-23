@@ -620,7 +620,6 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
     let build_out = {
         let mut cmd = Command::new(koja_bin());
         cmd.arg("build")
-            .arg("--backend=llvm")
             .arg("-o")
             .arg(binary.to_str().unwrap())
             .current_dir(dir);
@@ -815,7 +814,6 @@ fn lang_project_build_test() {
 
     let mut cmd = Command::new(koja_bin());
     cmd.arg("build")
-        .arg("--backend=llvm")
         .arg("-o")
         .arg(binary_path.to_str().unwrap())
         .current_dir(&project_dir);
@@ -901,7 +899,6 @@ fn lang_release_build_test() {
 
     let mut cmd = Command::new(koja_bin());
     cmd.arg("build")
-        .arg("--backend=llvm")
         .arg("--release")
         .arg("-o")
         .arg(binary_path.to_str().unwrap())
