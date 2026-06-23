@@ -11,7 +11,8 @@ members = [
     "crates/koja-lexer",
     "crates/koja-lsp",
     "crates/koja-parser",
-    "crates/koja-runtime",
+    "crates/koja-runtime-core",
+    "crates/koja-runtime-posix",
     "crates/koja-shell",
     "crates/koja-stdlib",
     "crates/koja-test",
@@ -21,4 +22,4 @@ members = [
 [workspace.package]
 edition = "2024"
 license = "MIT"
-version = "0.12.2"
+version = "0.12.3-dev"

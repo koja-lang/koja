@@ -1,6 +1,6 @@
 //! Eval handlers for the `Debug.format` intrinsic family — the 8
 //! integer cells, `Float` / `Float32`, and `Bool`. Mirrors
-//! `koja_format_*` in `koja-runtime/src/format.rs` byte-for-byte
+//! `koja_format_*` in `koja-runtime-posix/src/format.rs` byte-for-byte
 //! so eval output stays exactly aligned with the LLVM backend's
 //! native rendering.
 //!

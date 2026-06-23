@@ -64,7 +64,7 @@ enum SocketError
   end
 
   priv fn from_code(code: Int) -> SocketError
-    # Mirrors `error_kind_code` in `crates/koja-runtime/src/util.rs`;
+    # Mirrors `error_kind_code` in `crates/koja-runtime-posix/src/util.rs`;
     # negative codes are raw OS errno values for unmapped causes.
 
     match code

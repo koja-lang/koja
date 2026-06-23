@@ -1,7 +1,6 @@
-//! Entry-process `receive` coverage: the `after`-timeout path, OS
-//! signal → `Lifecycle` arm delivery, and the unsupported shape
-//! (business-only arms with no `after`, which could never unblock
-//! since eval has no spawn).
+//! Entry-process `receive` coverage: the `after`-timeout path and OS
+//! signal → `Lifecycle` arm delivery. Cross-process business delivery
+//! (cast/call) lives in `process_intrinsics.rs`.
 //!
 //! Signal flags are process-global, so the lifecycle test installs
 //! handlers by running a trivial entry first, latches SIGTERM with
@@ -100,21 +99,5 @@ fn sigterm_delivers_lifecycle_shutdown() {
         exit_code,
         Value::Int(1),
         "pending SIGTERM should dispatch the Lifecycle arm as Shutdown",
-    );
-}
-
-#[test]
-fn business_only_receive_without_after_is_unsupported() {
-    let source = entry_with_run(
-        "
-        receive
-          pair: Pair<String, Option<ReplyTo<()>>> -> StopReason.Normal
-        end
-        ",
-    );
-    let err = run_entry(&source).expect_err("receive that can never unblock should error");
-    assert!(
-        matches!(&err, RuntimeError::Unsupported { detail } if detail.contains("block forever")),
-        "expected an Unsupported error about blocking forever, got: {err:?}",
     );
 }

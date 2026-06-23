@@ -1,76 +1,156 @@
 //! Generational slotmap of live processes plus the scheduler's ready queue
-//! and timer / deadline min-heaps.
+//! and timer / deadline min-heaps — the agnostic scheduling *policy*.
 //!
-//! Replaces the old `Vec<Process>` indexed by `pid - 1`. A PID packs a slot
-//! index and a generation: `pid = (generation << 32) | index`. Slots are
-//! reused after a process dies (so memory is bounded), and the generation is
-//! bumped on free so a stale `Ref` to a recycled slot fails the lookup
-//! ([`ProcessTable::get`] returns `None` -> `ProcessDown`) instead of
-//! aliasing the new occupant.
+//! A PID packs a slot index and a generation: `pid = (generation << 32) |
+//! index`. Slots are reused after a process dies (so memory is bounded), and
+//! the generation is bumped on free so a stale `Ref` to a recycled slot fails
+//! the lookup ([`ProcessTable::get`] returns `None` -> `ProcessDown`) instead
+//! of aliasing the new occupant.
 //!
 //! All state changes funnel through [`ProcessTable::transition`], which keeps
-//! the ready queue and the live / active counts in sync. The ready queue
-//! makes process pickup O(1), and the two min-heaps make deadline promotion
-//! and timer firing O(log n) instead of full O(n) scans every worker turn.
+//! the ready queue and the live / active counts in sync. The ready queue makes
+//! process pickup O(1), and the two min-heaps make deadline promotion and
+//! timer firing O(log n) instead of full O(n) scans every worker turn.
+//!
+//! The table is generic over two platform types and contains **no locking,
+//! no threads, and no I/O**: the per-process execution state `X` (opaque —
+//! the executor's private state, e.g. a native stack + saved `sp`) and the
+//! mailbox message representation `M` (byte [`Envelope`](crate::wire::Envelope)
+//! natively, a typed value cooperatively). An adapter wraps the table in
+//! whatever synchronization its driver needs — a `Mutex` for the
+//! multi-threaded native driver, a bare `&mut` borrow for a single-threaded
+//! cooperative one. See `koja/design/SCHEDULER-PROTOCOL.md`.
 
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::time::Instant;
 
 use crate::mailbox::{Mailbox, WaitTarget};
-use crate::sched_trace::{SchedTrace, TraceEntry, TraceEvent};
-use crate::scheduler::{Process, ProcessFn, ProcessStack, ProcessState, Reclaim};
-use crate::tsan::{self, Fiber};
-use crate::wire::{Envelope, OwnedPayload};
+use crate::protocol::{Message, Pid};
+use crate::scheduler_trace::{SchedulerTrace, TraceEntry, TraceEvent};
 
 /// Splits a packed PID into `(slot_index, generation)`.
-fn decode(pid: i64) -> (u32, u32) {
+fn decode(pid: Pid) -> (u32, u32) {
     ((pid & 0xFFFF_FFFF) as u32, (pid >> 32) as u32)
 }
 
 /// Packs a slot index and generation into a PID. Generation starts at 1, so a
 /// live PID is always `>= 2^32` and `0` is never a valid handle.
-fn encode(index: u32, generation: u32) -> i64 {
+fn encode(index: u32, generation: u32) -> Pid {
     ((generation as i64) << 32) | (index as i64)
 }
 
+/// The slot index a PID resolves to. Adapters use it to key per-slot
+/// platform state (e.g. a reused TSan fiber) outside the table.
+pub const fn slot_index(pid: Pid) -> usize {
+    (pid & 0xFFFF_FFFF) as usize
+}
+
+/// A single lightweight process: the agnostic lifecycle record plus the
+/// opaque executor `execution` state and the mailbox.
+///
+/// The control-block fields (`state`, `waiting`, `deadline`, `on_cpu`) are
+/// the scheduling policy's; `execution` is the executor's private state,
+/// which the table stores and hands back but never inspects.
+pub struct ProcessControlBlock<X, M> {
+    /// The executor's per-process execution state (native: entry fn, config,
+    /// saved `sp`, stack mapping). Opaque to the table.
+    pub execution: X,
+    /// Optional wake deadline. Set when parking with a timeout, cleared on
+    /// resume; the driver promotes `Blocked -> Runnable` when it passes.
+    pub deadline: Option<Instant>,
+    /// Routed message queues plus the one-shot reply slot.
+    pub mailbox: Mailbox<M>,
+    /// Claim flag: `true` from the moment a driver activates this process
+    /// until it has persisted the post-yield execution state. Gates pickup so no
+    /// other worker resumes a stale frame in the publish-before-save window.
+    on_cpu: bool,
+    /// Current lifecycle state, driven by [`ProcessTable::transition`].
+    pub state: ProcessState,
+    /// What a `Blocked` process is waiting on, so delivery only wakes it for
+    /// traffic that can satisfy the wait. Meaningful only while `Blocked`.
+    waiting: WaitTarget,
+}
+
+impl<X, M> ProcessControlBlock<X, M> {
+    /// A freshly spawned process in the `Created` state with an empty mailbox.
+    fn new(execution: X) -> Self {
+        Self {
+            execution,
+            deadline: None,
+            mailbox: Mailbox::default(),
+            on_cpu: false,
+            state: ProcessState::Created,
+            waiting: WaitTarget::Receive,
+        }
+    }
+}
+
+/// Resources moved out of a dead process, freed when this value is dropped —
+/// which the reclaim sites do only after any driver lock is released. Each
+/// field is an RAII owner, so dropping a `Reclaim` runs the execution state's
+/// drop glue (native: unmaps the stack, releases the spawn config) and drains the
+/// mailbox (running each message's drop glue).
+///
+/// The fields are never read by name — they exist purely so their own `Drop`
+/// runs at this controlled point — hence `allow(dead_code)`.
+#[allow(dead_code)]
+pub struct Reclaim<X, M> {
+    execution: X,
+    mailbox: Mailbox<M>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProcessState {
+    /// Newly spawned, not yet entered by any worker.
+    Created,
+    /// Ready to run; waiting for a worker to pick it up.
+    Runnable,
+    /// Currently executing on a worker.
+    Running,
+    /// Waiting for a message (via `receive`). Becomes `Runnable` when a
+    /// message arrives or its deadline expires.
+    Blocked,
+    /// Waiting for I/O readiness on a file descriptor. The reactor promotes
+    /// this to `Runnable` when the fd is ready.
+    WaitingIO,
+    /// Function returned; process will not be scheduled again.
+    Dead,
+}
+
 /// One slot in the table. `process` is `None` when the slot is free;
-/// `generation` is bumped on free so recycled slots reject stale PIDs. The
-/// TSan fiber is bound to the slot (not the process) and reused across the
-/// slot's successive occupants — see [`crate::tsan`].
-struct Slot {
+/// `generation` is bumped on free so recycled slots reject stale PIDs.
+struct Slot<X, M> {
     generation: u32,
-    process: Option<Process>,
-    tsan_fiber: Fiber,
+    process: Option<ProcessControlBlock<X, M>>,
 }
 
 /// A pending delayed message (`send_after`). Ordered in the min-heap by
 /// `(fire_at, seq)`; `seq` is a unique tie-breaker so the order is total.
-/// The message is staged as a finished [`Envelope`] at schedule time, so
-/// firing is just a delivery and an unfired or undeliverable entry
-/// reclaims its payload by dropping the envelope.
-pub(crate) struct TimerEntry {
-    pub(crate) envelope: Envelope,
+/// The message is staged at schedule time, so firing is just a delivery and
+/// an unfired or undeliverable entry reclaims its payload by dropping it.
+pub struct TimerEntry<M> {
+    pub envelope: M,
     fire_at: Instant,
     seq: u64,
-    pub(crate) target_pid: i64,
+    pub target_pid: Pid,
 }
 
-impl PartialEq for TimerEntry {
+impl<M> PartialEq for TimerEntry<M> {
     fn eq(&self, other: &Self) -> bool {
         self.fire_at == other.fire_at && self.seq == other.seq
     }
 }
 
-impl Eq for TimerEntry {}
+impl<M> Eq for TimerEntry<M> {}
 
-impl PartialOrd for TimerEntry {
+impl<M> PartialOrd for TimerEntry<M> {
     fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
         Some(self.cmp(other))
     }
 }
 
-impl Ord for TimerEntry {
+impl<M> Ord for TimerEntry<M> {
     fn cmp(&self, other: &Self) -> std::cmp::Ordering {
         (self.fire_at, self.seq).cmp(&(other.fire_at, other.seq))
     }
@@ -81,21 +161,21 @@ impl Ord for TimerEntry {
 struct DeadlineEntry {
     deadline: Instant,
     seq: u64,
-    pid: i64,
+    pid: Pid,
 }
 
 /// Whether a state counts toward the `active` tally (work the reactor or
 /// another worker will make progress on without a timer wakeup).
 fn is_active(state: ProcessState) -> bool {
-    matches!(state, ProcessState::Running | ProcessState::WaitingIo)
+    matches!(state, ProcessState::Running | ProcessState::WaitingIO)
 }
 
 /// Whether `from -> to` is a legal process lifecycle edge.
 ///
 /// Built from the audited transition sites: a worker claims a fresh or woken
 /// process (`Created`/`Runnable -> Running`); a running process blocks on a
-/// message or I/O (`Running -> Blocked`/`WaitingIo`); a wake re-arms a parked
-/// process (`Blocked`/`WaitingIo -> Runnable`); and any live process can die
+/// message or I/O (`Running -> Blocked`/`WaitingIO`); a wake re-arms a parked
+/// process (`Blocked`/`WaitingIO -> Runnable`); and any live process can die
 /// via return (`Running -> Dead`) or a kill from another worker (`* -> Dead`).
 /// No legal edge is a self-edge, because every call site gates its
 /// precondition first.
@@ -104,35 +184,34 @@ fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
     matches!(
         (from, to),
         (Created | Runnable, Running)
-            | (Running, Blocked | WaitingIo | Dead)
-            | (Blocked | WaitingIo, Runnable)
-            | (Created | Runnable | Blocked | WaitingIo, Dead)
+            | (Running, Blocked | WaitingIO | Dead)
+            | (Blocked | WaitingIO, Runnable)
+            | (Created | Runnable | Blocked | WaitingIO, Dead)
     )
 }
 
-/// Monotonic invariant counters bumped at the [`ProcessTable`]
-/// chokepoints while the `SCHED` lock is already held. `violations` is
-/// the machine oracle (must stay zero); the rest are coverage evidence
-/// — e.g. a kill-storm fixture observing `parks_refused > 0` knows the
-/// kill-vs-park window was actually hit, not merely survived. Exposed
-/// to lang fixtures via `koja_rt_sched_violations` /
+/// Monotonic invariant counters bumped at the [`ProcessTable`] chokepoints.
+/// `violations` is the machine oracle (must stay zero); the rest are coverage
+/// evidence — e.g. a kill-storm fixture observing `parks_refused > 0` knows
+/// the kill-vs-park window was actually hit, not merely survived. Exposed to
+/// lang fixtures via the adapter's `koja_rt_sched_violations` /
 /// `koja_rt_parks_refused`.
-pub(crate) struct ScheduleCounters {
+pub struct ScheduleCounters {
     /// Kills that found the target `on_cpu` and deferred reclaim.
-    pub(crate) kills_deferred: u64,
+    pub kills_deferred: u64,
     /// Parks refused because the target was already `Dead` (or stale).
-    pub(crate) parks_refused: u64,
-    /// Ready-queue entries skipped by `claim_next` (killed, already
-    /// resumed, or still `on_cpu`).
-    pub(crate) stale_claims_skipped: u64,
+    pub parks_refused: u64,
+    /// Ready-queue entries skipped by `claim_next` (killed, already resumed,
+    /// or still `on_cpu`).
+    pub stale_claims_skipped: u64,
     /// Deadline-heap entries rejected by `promote_due_deadlines`.
-    pub(crate) stale_deadlines_skipped: u64,
+    pub stale_deadlines_skipped: u64,
     /// Envelopes bounced off a dead or stale target.
-    pub(crate) undeliverable_envelopes: u64,
-    /// Illegal lifecycle edges applied by `transition`. Always zero in
-    /// a correct runtime; counted (not just debug-asserted) so release
-    /// builds can detect ordering bugs too.
-    pub(crate) violations: u64,
+    pub undeliverable_envelopes: u64,
+    /// Illegal lifecycle edges applied by `transition`. Always zero in a
+    /// correct runtime; counted (not just debug-asserted) so release builds
+    /// can detect ordering bugs too.
+    pub violations: u64,
 }
 
 impl ScheduleCounters {
@@ -149,8 +228,17 @@ impl ScheduleCounters {
 }
 
 /// The scheduler's process store: a generational slotmap with a ready queue
-/// and timer / deadline min-heaps. Protected by `crate::scheduler::SCHED`.
-pub(crate) struct ProcessTable {
+/// and timer / deadline min-heaps. Contains no synchronization; the adapter's
+/// driver supplies it.
+pub struct ProcessTable<X, M> {
+    /// Count of `Running` + `WaitingIO` processes (park-timeout heuristic).
+    active: usize,
+    /// Count of processes not yet `Dead` (shutdown when this hits zero).
+    alive: usize,
+    /// Invariant counters, exposed to fixtures via the adapter.
+    counters: ScheduleCounters,
+    /// Monotonic tie-breaker for deadline-heap ordering.
+    deadline_seq: u64,
     /// Earliest receive deadlines, validated on pop (a process woken by a
     /// message before its deadline leaves a stale entry behind).
     deadlines: BinaryHeap<Reverse<DeadlineEntry>>,
@@ -158,29 +246,21 @@ pub(crate) struct ProcessTable {
     free: Vec<u32>,
     /// First spawned process (the program entry). Drives signal delivery and
     /// the shutdown decision; `0` until the first spawn.
-    main_pid: i64,
+    main_pid: Pid,
     /// Packed PIDs ready to run, in arrival order.
-    ready: VecDeque<i64>,
+    ready: VecDeque<Pid>,
     /// All slots, indexed by a PID's low 32 bits.
-    slots: Vec<Slot>,
-    /// Pending delayed messages, soonest first.
-    timers: BinaryHeap<Reverse<TimerEntry>>,
-    /// Count of processes not yet `Dead` (shutdown when this hits zero).
-    alive: usize,
-    /// Count of `Running` + `WaitingIo` processes (park-timeout heuristic).
-    active: usize,
-    /// Invariant counters, exposed to fixtures via `koja_rt_sched_*`.
-    counters: ScheduleCounters,
-    /// Monotonic tie-breaker for deadline-heap ordering.
-    deadline_seq: u64,
+    slots: Vec<Slot<X, M>>,
     /// Monotonic tie-breaker for timer-heap ordering.
     timer_seq: u64,
+    /// Pending delayed messages, soonest first.
+    timers: BinaryHeap<Reverse<TimerEntry<M>>>,
     /// Lifecycle event ring, dumped at shutdown under `KOJA_SCHED_TRACE`.
-    trace: SchedTrace,
+    trace: SchedulerTrace,
 }
 
-impl ProcessTable {
-    pub(crate) const fn new() -> Self {
+impl<X, M: Message> ProcessTable<X, M> {
+    pub const fn new() -> Self {
         Self {
             active: 0,
             alive: 0,
@@ -193,28 +273,28 @@ impl ProcessTable {
             slots: Vec::new(),
             timer_seq: 0,
             timers: BinaryHeap::new(),
-            trace: SchedTrace::new(),
+            trace: SchedulerTrace::new(),
         }
     }
 
-    /// The invariant counters (read under the `SCHED` lock).
-    pub(crate) fn counters(&self) -> &ScheduleCounters {
+    /// The invariant counters.
+    pub fn counters(&self) -> &ScheduleCounters {
         &self.counters
     }
 
     /// Recorded lifecycle events, oldest first.
-    pub(crate) fn trace_entries(&self) -> impl Iterator<Item = &TraceEntry> {
+    pub fn trace_entries(&self) -> impl Iterator<Item = &TraceEntry> {
         self.trace.iter()
     }
 
     /// The program entry process, or `0` before the first spawn.
-    pub(crate) fn main_pid(&self) -> i64 {
+    pub fn main_pid(&self) -> Pid {
         self.main_pid
     }
 
     /// Looks up a process by packed PID, validating the generation. Returns
     /// `None` for an out-of-range, freed, or recycled (stale) PID.
-    pub(crate) fn get(&self, pid: i64) -> Option<&Process> {
+    pub fn get(&self, pid: Pid) -> Option<&ProcessControlBlock<X, M>> {
         let (index, generation) = decode(pid);
         let slot = self.slots.get(index as usize)?;
         if slot.generation != generation {
@@ -224,7 +304,7 @@ impl ProcessTable {
     }
 
     /// Mutable [`get`](Self::get).
-    pub(crate) fn get_mut(&mut self, pid: i64) -> Option<&mut Process> {
+    pub fn get_mut(&mut self, pid: Pid) -> Option<&mut ProcessControlBlock<X, M>> {
         let (index, generation) = decode(pid);
         let slot = self.slots.get_mut(index as usize)?;
         if slot.generation != generation {
@@ -233,23 +313,16 @@ impl ProcessTable {
         slot.process.as_mut()
     }
 
-    /// Whether `pid` resolves to a live (non-`Dead`) process. Stale and
-    /// freed PIDs are not alive.
-    pub(crate) fn is_alive(&self, pid: i64) -> bool {
+    /// Whether `pid` resolves to a live (non-`Dead`) process. Stale and freed
+    /// PIDs are not alive.
+    pub fn is_alive(&self, pid: Pid) -> bool {
         self.get(pid)
             .is_some_and(|process| process.state != ProcessState::Dead)
     }
 
-    /// Registers a new process in a free (or freshly grown) slot, queues it
-    /// as runnable, and returns its packed PID. Creates the process's TSan
-    /// fiber here so spawn / free own the fiber lifecycle.
-    pub(crate) fn spawn(
-        &mut self,
-        func: ProcessFn,
-        init_state: OwnedPayload,
-        stack: ProcessStack,
-        sp: *mut u8,
-    ) -> i64 {
+    /// Registers a new process (with its executor `execution` state) in a free
+    /// or freshly grown slot, queues it as runnable, and returns its packed PID.
+    pub fn spawn(&mut self, execution: X) -> Pid {
         let (index, generation) = match self.free.pop() {
             Some(index) => (index, self.slots[index as usize].generation),
             None => {
@@ -257,14 +330,13 @@ impl ProcessTable {
                 self.slots.push(Slot {
                     generation: 1,
                     process: None,
-                    tsan_fiber: tsan::create_process_fiber(),
                 });
                 (index, 1)
             }
         };
 
         let pid = encode(index, generation);
-        self.slots[index as usize].process = Some(Process::new(func, init_state, stack, sp));
+        self.slots[index as usize].process = Some(ProcessControlBlock::new(execution));
         self.alive += 1;
         self.ready.push_back(pid);
         if self.main_pid == 0 {
@@ -276,21 +348,20 @@ impl ProcessTable {
     /// Reclaims a dead process's slot: detaches its resources (to drop
     /// off-lock), bumps the generation, and returns the slot to the freelist.
     /// Idempotent — a second call on the same PID returns `None`.
-    pub(crate) fn free(&mut self, pid: i64) -> Option<Reclaim> {
+    fn free(&mut self, pid: Pid) -> Option<Reclaim<X, M>> {
         let (index, generation) = decode(pid);
-        let reclaim = {
-            let slot = self.slots.get_mut(index as usize)?;
-            if slot.generation != generation {
-                return None;
-            }
-            let reclaim = slot.process.as_mut()?.take_resources();
-            slot.process = None;
-            slot.generation = slot.generation.wrapping_add(1);
-            reclaim
-        };
+        let slot = self.slots.get_mut(index as usize)?;
+        if slot.generation != generation {
+            return None;
+        }
+        let process = slot.process.take()?;
+        slot.generation = slot.generation.wrapping_add(1);
         self.free.push(index);
         self.trace.record(pid, TraceEvent::Freed);
-        Some(reclaim)
+        Some(Reclaim {
+            execution: process.execution,
+            mailbox: process.mailbox,
+        })
     }
 
     /// Single chokepoint for lifecycle state changes. Counts (and, in debug
@@ -298,7 +369,7 @@ impl ProcessTable {
     /// current, and enqueues the PID when it becomes `Runnable`. A `None`
     /// lookup (stale PID) is a no-op so racing wakeups against a freed slot
     /// are harmless.
-    pub(crate) fn transition(&mut self, pid: i64, to: ProcessState) {
+    pub fn transition(&mut self, pid: Pid, to: ProcessState) {
         let from = match self.get_mut(pid) {
             Some(process) => {
                 let from = process.state;
@@ -329,20 +400,14 @@ impl ProcessTable {
         }
     }
 
-    /// Parks `pid` as `Blocked`, recording which part of its mailbox it
-    /// waits on and an optional wake deadline. Refuses — returning `false`
-    /// without touching the state — when the process is dead or stale: a
-    /// kill can land while the process is mid-run on another worker
-    /// (`* -> Dead` is a legal cross-worker edge), and parking over the
-    /// tombstone would resurrect it. A refused caller should still yield;
-    /// the worker sees `Dead` on switch-out and reclaims the slot, so the
-    /// frame never resumes.
-    pub(crate) fn try_park(
-        &mut self,
-        pid: i64,
-        target: WaitTarget,
-        deadline: Option<Instant>,
-    ) -> bool {
+    /// Parks `pid` as `Blocked`, recording which part of its mailbox it waits
+    /// on and an optional wake deadline. Refuses — returning `false` without
+    /// touching the state — when the process is dead or stale: a kill can land
+    /// while the process is mid-run on another worker (`* -> Dead` is a legal
+    /// cross-worker edge), and parking over the tombstone would resurrect it.
+    /// A refused caller should still yield; the worker sees `Dead` on
+    /// switch-out and reclaims the slot, so the frame never resumes.
+    pub fn try_park(&mut self, pid: Pid, target: WaitTarget, deadline: Option<Instant>) -> bool {
         if !self.is_alive(pid) {
             self.note_refused_park(pid);
             return false;
@@ -358,28 +423,28 @@ impl ProcessTable {
         true
     }
 
-    /// Parks `pid` as `WaitingIo`, with the same kill-tombstone refusal as
-    /// [`try_park`](Self::try_park). A refused caller must not register
-    /// the fd with the reactor — there is no waiter to wake.
-    pub(crate) fn try_park_io(&mut self, pid: i64) -> bool {
+    /// Parks `pid` as `WaitingIO`, with the same kill-tombstone refusal as
+    /// [`try_park`](Self::try_park). A refused caller must not register the fd
+    /// with the reactor — there is no waiter to wake.
+    pub fn try_park_io(&mut self, pid: Pid) -> bool {
         if !self.is_alive(pid) {
             self.note_refused_park(pid);
             return false;
         }
-        self.transition(pid, ProcessState::WaitingIo);
+        self.transition(pid, ProcessState::WaitingIO);
         true
     }
 
-    fn note_refused_park(&mut self, pid: i64) {
+    fn note_refused_park(&mut self, pid: Pid) {
         self.counters.parks_refused += 1;
         self.trace.record(pid, TraceEvent::ParkRefused);
     }
 
-    /// Marks `pid` `Dead` unless it already is (a racing kill may have won)
-    /// or the slot is stale — re-marking would be an illegal self-edge and
-    /// would double-decrement the `alive` count. Returns whether this call
-    /// performed the transition.
-    pub(crate) fn mark_dead_if_alive(&mut self, pid: i64) -> bool {
+    /// Marks `pid` `Dead` unless it already is (a racing kill may have won) or
+    /// the slot is stale — re-marking would be an illegal self-edge and would
+    /// double-decrement the `alive` count. Returns whether this call performed
+    /// the transition.
+    pub fn mark_dead_if_alive(&mut self, pid: Pid) -> bool {
         if !self.is_alive(pid) {
             return false;
         }
@@ -388,14 +453,13 @@ impl ProcessTable {
     }
 
     /// The "last resort" termination primitive: marks `pid` `Dead` and
-    /// reclaims its slot, returning the detached resources for the caller
-    /// to drop off-lock. `None` when the target was already dead/stale, or
-    /// when it is still `on_cpu` — reclaiming a stack a worker is running
-    /// on would be a use-after-free, so the owning worker reclaims on
-    /// switch-out instead (it sees `Dead` in [`after_switch`](Self::after_switch)
-    /// after persisting `sp`). The mailbox rides along either way, so
-    /// envelopes are freed exactly once.
-    pub(crate) fn kill(&mut self, pid: i64) -> Option<Reclaim> {
+    /// reclaims its slot, returning the detached resources for the caller to
+    /// drop off-lock. `None` when the target was already dead/stale, or when
+    /// it is still `on_cpu` — reclaiming a stack a worker is running on would
+    /// be a use-after-free, so the owning worker reclaims on switch-out
+    /// instead (it sees `Dead` in [`after_switch`](Self::after_switch)). The
+    /// mailbox rides along either way, so envelopes are freed exactly once.
+    pub fn kill(&mut self, pid: Pid) -> Option<Reclaim<X, M>> {
         if !self.mark_dead_if_alive(pid) {
             return None;
         }
@@ -408,11 +472,12 @@ impl ProcessTable {
         }
     }
 
-    /// Pops the next claimable process, marking it `Running` and `on_cpu`.
-    /// Skips stale ready-queue entries — killed, already resumed, or still
-    /// `on_cpu` in the publish-before-save-`sp` window (the owning worker
-    /// re-queues those from [`after_switch`](Self::after_switch)).
-    pub(crate) fn claim_next(&mut self) -> Option<(i64, *mut u8, Fiber)> {
+    /// Pops the next claimable process, marking it `Running` and `on_cpu`, and
+    /// returns its PID. Skips stale ready-queue entries — killed, already
+    /// resumed, or still `on_cpu` in the publish-before-save window (the owning
+    /// worker re-queues those from [`after_switch`](Self::after_switch)). The
+    /// caller reads the process's execution state via [`get`](Self::get).
+    pub fn claim_next(&mut self) -> Option<Pid> {
         while let Some(pid) = self.ready.pop_front() {
             match self.get_mut(pid) {
                 Some(process)
@@ -430,26 +495,19 @@ impl ProcessTable {
                 }
             }
             self.transition(pid, ProcessState::Running);
-            let (index, _) = decode(pid);
-            let slot = &self.slots[index as usize];
-            let sp = slot
-                .process
-                .as_ref()
-                .expect("claimed process must exist")
-                .sp;
-            return Some((pid, sp, slot.tsan_fiber));
+            return Some(pid);
         }
         None
     }
 
-    /// After a process yields back to its worker, persists its saved `sp`,
-    /// releases the `on_cpu` claim, and then either re-queues it (woken during
-    /// the `on_cpu` window) or reclaims its slot (dead). Returns detached
-    /// resources for the caller to drop after releasing the lock.
-    pub(crate) fn after_switch(&mut self, pid: i64, saved_sp: *mut u8) -> Option<Reclaim> {
+    /// After a process yields back to its driver, releases the `on_cpu` claim
+    /// and then either re-queues it (woken during the `on_cpu` window) or
+    /// reclaims its slot (dead). The caller persists any executor execution
+    /// state (native: the saved `sp`) into the PCB *before* calling this. Returns
+    /// detached resources for the caller to drop after releasing the lock.
+    pub fn after_switch(&mut self, pid: Pid) -> Option<Reclaim<X, M>> {
         let state = {
             let process = self.get_mut(pid)?;
-            process.sp = saved_sp;
             process.on_cpu = false;
             process.state
         };
@@ -463,13 +521,12 @@ impl ProcessTable {
         }
     }
 
-    /// Routes `envelope` into a process's mailbox (see
-    /// [`Mailbox::push`]), waking the process if it is parked waiting on
-    /// the part of the mailbox this envelope satisfies. Returns an
-    /// envelope the caller must drop after releasing the lock: the
-    /// original when the target is gone or dead, or a stale reply
-    /// displaced from the reply slot.
-    pub(crate) fn deliver(&mut self, pid: i64, envelope: Envelope) -> Option<Envelope> {
+    /// Routes `envelope` into a process's mailbox (see [`Mailbox::push`]),
+    /// waking the process if it is parked waiting on the part of the mailbox
+    /// this envelope satisfies. Returns a message the caller must drop after
+    /// releasing the lock: the original when the target is gone or dead, or a
+    /// stale reply displaced from the reply slot.
+    pub fn deliver(&mut self, pid: Pid, envelope: M) -> Option<M> {
         if !self.is_alive(pid) {
             self.counters.undeliverable_envelopes += 1;
             self.trace.record(pid, TraceEvent::Undeliverable);
@@ -489,9 +546,9 @@ impl ProcessTable {
     }
 
     /// Schedules a delayed message. Cancellation is lazy: a timer aimed at a
-    /// process that later dies is simply dropped (undeliverable) when it
-    /// fires, reclaiming its envelope then.
-    pub(crate) fn push_timer(&mut self, fire_at: Instant, target_pid: i64, envelope: Envelope) {
+    /// process that later dies is simply dropped (undeliverable) when it fires,
+    /// reclaiming its envelope then.
+    pub fn push_timer(&mut self, fire_at: Instant, target_pid: Pid, envelope: M) {
         self.timer_seq += 1;
         self.timers.push(Reverse(TimerEntry {
             envelope,
@@ -503,7 +560,7 @@ impl ProcessTable {
 
     /// Removes and returns every timer whose `fire_at` is at or before `now`,
     /// soonest first. The caller delivers each staged envelope.
-    pub(crate) fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry> {
+    pub fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry<M>> {
         let mut due = Vec::new();
         while self
             .timers
@@ -515,9 +572,9 @@ impl ProcessTable {
         due
     }
 
-    /// Records a receive deadline so the worker loop can promote the waiter
-    /// back to `Runnable` when it expires.
-    pub(crate) fn push_deadline(&mut self, pid: i64, deadline: Instant) {
+    /// Records a receive deadline so the driver can promote the waiter back to
+    /// `Runnable` when it expires.
+    fn push_deadline(&mut self, pid: Pid, deadline: Instant) {
         self.deadline_seq += 1;
         self.deadlines.push(Reverse(DeadlineEntry {
             deadline,
@@ -530,7 +587,7 @@ impl ProcessTable {
     /// (the process was woken by a message, resumed, or died, or re-blocked
     /// with a different deadline) are validated against the live state and
     /// skipped.
-    pub(crate) fn promote_due_deadlines(&mut self, now: Instant) {
+    pub fn promote_due_deadlines(&mut self, now: Instant) {
         while self
             .deadlines
             .peek()
@@ -551,19 +608,19 @@ impl ProcessTable {
         }
     }
 
-    /// Whether any process is `Running` or `WaitingIo`.
-    pub(crate) fn any_active(&self) -> bool {
+    /// Whether any process is `Running` or `WaitingIO`.
+    pub fn any_active(&self) -> bool {
         self.active != 0
     }
 
     /// Whether the runtime should tear down: no live processes remain, or the
     /// program entry process has died (or its slot is already reclaimed).
-    pub(crate) fn should_shutdown(&self) -> bool {
+    pub fn should_shutdown(&self) -> bool {
         self.alive == 0 || (self.main_pid != 0 && !self.is_alive(self.main_pid))
     }
 
     /// The soonest pending timer or deadline, for sizing the idle park.
-    pub(crate) fn nearest_wakeup(&self) -> Option<Instant> {
+    pub fn nearest_wakeup(&self) -> Option<Instant> {
         let timer = self.timers.peek().map(|Reverse(entry)| entry.fire_at);
         let deadline = self.deadlines.peek().map(|Reverse(entry)| entry.deadline);
         match (timer, deadline) {
@@ -573,28 +630,30 @@ impl ProcessTable {
     }
 }
 
+impl<X, M: Message> Default for ProcessTable<X, M> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wire::{Envelope, TAG_BUSINESS};
     use std::ptr;
     use std::time::Duration;
 
-    extern "C" fn noop_entry(_state: *const u8) {}
+    /// A unit execution state: the table stores it opaquely, so tests need
+    /// no real stack or entry function.
+    type TestTable = ProcessTable<(), Envelope>;
 
-    /// A process with null resources: every owned handle drops as a no-op, so
-    /// fake processes are cheap to create and tear down in tests.
-    fn fake_spawn(table: &mut ProcessTable) -> i64 {
-        table.spawn(
-            noop_entry,
-            OwnedPayload::default(),
-            ProcessStack::null(),
-            ptr::null_mut(),
-        )
+    fn fake_spawn(table: &mut TestTable) -> Pid {
+        table.spawn(())
     }
 
     /// A minimal business envelope (empty payload, no glue).
     fn fake_envelope() -> Envelope {
-        unsafe { Envelope::from_payload(crate::wire::TAG_BUSINESS, ptr::null(), 0, None) }
+        unsafe { Envelope::from_payload(TAG_BUSINESS, ptr::null(), 0, None) }
     }
 
     #[test]
@@ -607,7 +666,7 @@ mod tests {
 
     #[test]
     fn first_pid_is_index_zero_generation_one() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         assert_eq!(decode(pid), (0, 1));
         assert!(table.get(pid).is_some());
@@ -617,7 +676,7 @@ mod tests {
     #[test]
     fn free_then_spawn_reuses_slot_with_bumped_generation() {
         // Drive to Dead through a legal path: Created -> Running -> Dead.
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let first = fake_spawn(&mut table);
         table.transition(first, ProcessState::Running);
         table.transition(first, ProcessState::Dead);
@@ -633,7 +692,7 @@ mod tests {
 
     #[test]
     fn stale_generation_is_rejected() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         let (index, generation) = decode(pid);
         let stale = encode(index, generation + 7);
@@ -643,26 +702,24 @@ mod tests {
 
     #[test]
     fn ready_queue_is_fifo() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let a = fake_spawn(&mut table);
         let b = fake_spawn(&mut table);
         let c = fake_spawn(&mut table);
-        let order: Vec<i64> = std::iter::from_fn(|| table.claim_next().map(|(pid, _, _)| pid))
-            .take(3)
-            .collect();
+        let order: Vec<Pid> = std::iter::from_fn(|| table.claim_next()).take(3).collect();
         assert_eq!(order, vec![a, b, c]);
     }
 
     #[test]
     fn timer_heap_pops_in_fire_order() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let base = Instant::now();
         table.push_timer(base + Duration::from_millis(30), 1, fake_envelope());
         table.push_timer(base + Duration::from_millis(10), 2, fake_envelope());
         table.push_timer(base + Duration::from_millis(20), 3, fake_envelope());
 
         let due = table.take_due_timers(base + Duration::from_millis(25));
-        let pids: Vec<i64> = due.iter().map(|entry| entry.target_pid).collect();
+        let pids: Vec<Pid> = due.iter().map(|entry| entry.target_pid).collect();
         assert_eq!(pids, vec![2, 3], "soonest-first, only due timers");
         assert_eq!(
             table.nearest_wakeup(),
@@ -673,9 +730,9 @@ mod tests {
 
     #[test]
     fn park_refuses_killed_process() {
-        // A cross-worker kill can land while the victim is mid-run; its
-        // next park must not resurrect it over the `Dead` tombstone.
-        let mut table = ProcessTable::new();
+        // A cross-worker kill can land while the victim is mid-run; its next
+        // park must not resurrect it over the `Dead` tombstone.
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.transition(pid, ProcessState::Running);
         assert!(table.mark_dead_if_alive(pid), "first kill wins");
@@ -689,9 +746,9 @@ mod tests {
 
     #[test]
     fn kill_defers_reclaim_while_on_cpu() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
-        let (claimed, sp, _) = table.claim_next().unwrap();
+        let claimed = table.claim_next().unwrap();
         assert_eq!(claimed, pid);
 
         // The worker is mid-run on this stack: kill must not reclaim it.
@@ -699,18 +756,18 @@ mod tests {
         assert_eq!(table.counters().kills_deferred, 1);
 
         // The owning worker switches out, sees `Dead`, and reclaims.
-        assert!(table.after_switch(pid, sp).is_some());
+        assert!(table.after_switch(pid).is_some());
         assert!(table.kill(pid).is_none(), "second kill is a no-op");
         assert_eq!(table.counters().violations, 0);
     }
 
     #[test]
     fn kill_reclaims_parked_process_directly() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
-        let (_, sp, _) = table.claim_next().unwrap();
+        table.claim_next().unwrap();
         assert!(table.try_park(pid, WaitTarget::Receive, None));
-        assert!(table.after_switch(pid, sp).is_none(), "parked, not dead");
+        assert!(table.after_switch(pid).is_none(), "parked, not dead");
 
         assert!(table.kill(pid).is_some(), "off-cpu target frees here");
         assert_eq!(table.counters().kills_deferred, 0);
@@ -719,7 +776,7 @@ mod tests {
 
     #[test]
     fn undeliverable_envelope_bounces_and_counts() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.transition(pid, ProcessState::Running);
         table.mark_dead_if_alive(pid);
@@ -731,7 +788,7 @@ mod tests {
 
     #[test]
     fn stale_ready_entry_skip_is_counted() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.kill(pid);
 
@@ -741,7 +798,7 @@ mod tests {
 
     #[test]
     fn stale_deadline_skip_is_counted() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.transition(pid, ProcessState::Running);
         let deadline = Instant::now() + Duration::from_millis(5);
@@ -761,7 +818,7 @@ mod tests {
     #[cfg(debug_assertions)]
     #[should_panic(expected = "illegal process state transition")]
     fn illegal_transition_asserts_in_debug() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         // `Created -> Blocked` is not a legal edge.
         table.transition(pid, ProcessState::Blocked);
@@ -769,7 +826,7 @@ mod tests {
 
     #[test]
     fn mark_dead_if_alive_is_idempotent() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.transition(pid, ProcessState::Running);
 
@@ -781,7 +838,7 @@ mod tests {
 
     #[test]
     fn try_park_records_wait_target_and_deadline() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         table.transition(pid, ProcessState::Running);
 
@@ -796,7 +853,7 @@ mod tests {
 
     #[test]
     fn alive_and_active_counts_track_transitions() {
-        let mut table = ProcessTable::new();
+        let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
         assert!(!table.any_active(), "Created is not active");
         assert!(!table.should_shutdown(), "one live process");

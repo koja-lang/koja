@@ -28,7 +28,7 @@
 //! |-----------|------------------------------------|--------------------------------------------|
 //! | `Script`  | parse Script + check               | full script pipeline                       |
 //! | `Program` | parse File + check (LSP-friendly)  | error: `.koja` needs project               |
-//! | `Project` | parse + check whole project        | full project pipeline (either backend for `run`; `build` is LLVM-only) |
+//! | `Project` | parse + check whole project        | full project pipeline (either backend for `run`; `build` is always LLVM) |
 //!
 //! `cmd_shell` has no file dimension and bypasses the resolver
 //! entirely; REPL fragments are always script-mode. Project mode
@@ -39,8 +39,8 @@
 //!
 //! ## Backend selection
 //!
-//! `run` and `build` accept `--backend={interpreter,llvm}` (see
-//! [`Backend`]):
+//! Only `run` has a backend dimension — it accepts
+//! `--backend={interpreter,llvm}` (see [`Backend`]):
 //!
 //! - `run` defaults to [`Backend::Interpreter`]: lower → run via
 //!   [`Interpreter::run_script`] (scripts, exit 0; the trailing
@@ -52,10 +52,9 @@
 //! - `run --backend=llvm`: lower → [`koja_ir_llvm::compile_script`]
 //!   / [`koja_ir_llvm::compile_program`] → link → exec the binary
 //!   → forward its exit code.
-//! - `build` defaults to [`Backend::Llvm`]: lower → compile →
-//!   link → keep the binary at the output path.
-//! - `build --backend=interpreter`: errors. The interpreter has
-//!   no codegen surface, so there's nothing to write out.
+//! - `build` is always LLVM: lower → compile → link → keep the
+//!   binary at the output path. The interpreter has no codegen
+//!   surface, so `build` carries no backend flag.
 //! - `check` and `shell` have no backend dimension.
 //!
 //! Scope today (mirrors `koja-typecheck` / `koja-ir`): the full
@@ -83,18 +82,19 @@ use crate::commands::load_project_or_exit;
 use crate::link::{self, LinkOptions};
 use crate::project::{self, ProjectConfig};
 
-/// Which downstream backend a `run` / `build` invocation drives.
+/// Which downstream backend a `run` invocation drives.
 ///
-/// `koja run` defaults to [`Backend::Interpreter`] (fast
-/// feedback, no link step); `koja build` defaults to
-/// [`Backend::Llvm`] (the only backend that produces a binary
-/// today). `build --backend=interpreter` is rejected up front
-/// since the interpreter can't emit object files.
+/// `koja run` defaults to [`Backend::Interpreter`] (fast feedback,
+/// no link step) and accepts `--backend=llvm` to compile + exec.
+/// `koja build` is LLVM-only and carries no backend flag — the
+/// interpreter can't emit object files, so there's no choice to
+/// expose.
 ///
 /// Future-proofing: when a WASM backend lands it slots in as a
-/// third variant here and `build --backend=wasm` becomes a
-/// one-line CLI extension. `check` and `shell` have no backend
-/// dimension and don't reference this enum.
+/// third variant here, and a `build --backend=wasm` flag can be
+/// re-added then (it'll have two genuinely valid targets). `check`
+/// and `shell` have no backend dimension and don't reference this
+/// enum.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
 pub enum Backend {
     /// Run via [`koja_ir_eval`]. Default for `run`. Not
@@ -195,17 +195,6 @@ fn bail_resolve_error(message: String) -> ! {
     process::exit(1);
 }
 
-/// Bail when the user asks `cmd_build` to use the interpreter.
-/// The interpreter has no codegen surface so it can't write an
-/// object file — there's nothing useful for `build` to produce.
-fn bail_interpreter_no_binary() -> ! {
-    eprintln!(
-        "error: --backend=interpreter cannot produce a binary; \
-         use --backend=llvm or omit the flag"
-    );
-    process::exit(1);
-}
-
 /// `koja check [file]` — parse and typecheck a single source
 /// file (or, eventually, a whole project) through the
 /// pipeline. Mirrors `koja check`'s contract: prints
@@ -238,37 +227,23 @@ pub fn cmd_shell() {
     koja_shell::run();
 }
 
-/// `koja build [file] [--backend=llvm|interpreter] [-o output]`
-/// — produce a native binary for a `.kojs` script (or, eventually,
-/// a project) on disk.
+/// `koja build [file] [-o output]` — produce a native binary for a
+/// `.kojs` script (or a project) on disk. LLVM is the only backend
+/// that emits object files, so `build` has no backend dimension.
 ///
-/// `--backend` defaults to [`Backend::Llvm`] — the only backend
-/// that emits object files. [`Backend::Interpreter`] errors here
-/// since there's nothing useful to write out. For a `.kojs`
-/// argument: parse Script → check → [`lower_script`] →
-/// [`koja_ir_llvm::compile_script`] → link. The script body
-/// becomes `main`'s body, so executing the binary prints the
-/// script's trailing value and exits 0 (via the temporary
-/// auto-print wrapper in `koja-runtime/src/intrinsics.rs`; goes away
-/// with `IO.puts`). `-o`/`--output` overrides the default
-/// stem-based output name.
-pub fn cmd_build(
-    file: Option<String>,
-    backend: Backend,
-    output: Option<String>,
-    release: bool,
-    emit_llvm: bool,
-) {
+/// For a `.kojs` argument: parse Script → check → [`lower_script`] →
+/// [`koja_ir_llvm::compile_script`] → link. The script body becomes
+/// `main`'s body, so executing the binary prints the script's
+/// trailing value and exits 0 (via the temporary auto-print wrapper
+/// in `koja-runtime-posix/src/intrinsics.rs`; goes away with
+/// `IO.puts`). `-o`/`--output` overrides the default stem-based
+/// output name.
+pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, emit_llvm: bool) {
     let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
-    match (mode, backend) {
-        (SourceShape::Script(_), Backend::Interpreter) => bail_interpreter_no_binary(),
-        (SourceShape::Script(path), Backend::Llvm) => {
-            build_and_keep(&path, output, release, emit_llvm)
-        }
-        (SourceShape::Program(_), Backend::Interpreter) => bail_interpreter_no_binary(),
-        (SourceShape::Program(path), Backend::Llvm) => bail_program_execution(&path),
-        (SourceShape::Project { .. }, Backend::Interpreter) => bail_interpreter_no_binary(),
-        (SourceShape::Project { config, root }, Backend::Llvm) => {
+    match mode {
+        SourceShape::Script(path) => build_and_keep(&path, output, release, emit_llvm),
+        SourceShape::Program(path) => bail_program_execution(&path),
+        SourceShape::Project { config, root } => {
             build_project_and_keep(&config, &root, output, release, emit_llvm)
         }
     }

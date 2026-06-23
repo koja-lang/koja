@@ -4,7 +4,7 @@
 [![GitHub Release](https://img.shields.io/github/v/release/koja-lang/koja)](https://github.com/koja-lang/koja/releases)
 [![Last Updated](https://img.shields.io/github/last-commit/koja-lang/koja.svg)](https://github.com/koja-lang/koja/commits/main)
 
-Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with value semantics and an Erlang-style concurrency model.
+Koja is a statically typed, compiled language targeting native binaries via LLVM, with no garbage collector. It combines a Rust-inspired type system, Swift-style value semantics, an Erlang-style concurrency model, and Ruby-inspired syntax.
 
 For the full language specification, see [LANGUAGE.md](LANGUAGE.md).
 

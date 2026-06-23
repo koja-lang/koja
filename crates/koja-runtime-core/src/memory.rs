@@ -4,11 +4,10 @@
 //! / `Bits` / `List` / `HashTable` / closure / socket buffers, the
 //! runtime's own envelope transport and process-local byte runs, and
 //! the `CPtr` / `CString` FFI types — routes through this one pair of
-//! `alloc` / `free` (plus `realloc`). Codegen calls the `koja_alloc` /
-//! `koja_realloc` / `koja_free` symbols; runtime Rust calls the
-//! `pub(crate)` helpers. Both bottom out in the same place, so drop
-//! glue can free a message's nested heap without ever crossing
-//! allocators.
+//! `alloc` / `free` (plus `realloc`). The platform adapter exports the
+//! `koja_alloc` / `koja_realloc` / `koja_free` C-ABI symbols over these
+//! helpers; both bottom out here, so drop glue can free a message's
+//! nested heap without ever crossing allocators.
 //!
 //! **Passthrough invariant.** These are thin wrappers over the libc
 //! allocator: a pointer from [`alloc`] is freeable by libc `free` and a
@@ -31,9 +30,9 @@ use std::sync::atomic::{AtomicI64, Ordering};
 /// unit per block — so it returns to its starting value once every
 /// allocation made since a checkpoint has been freed.
 ///
-/// Exposed via [`koja_rt_live_blocks`] for steady-state leak fixtures:
-/// record the count, run a leak-prone pattern N times, assert the delta
-/// is zero. `Relaxed` is sufficient — we only need eventual per-thread
+/// Exposed via [`live_blocks`] for steady-state leak fixtures: record
+/// the count, run a leak-prone pattern N times, assert the delta is
+/// zero. `Relaxed` is sufficient — we only need eventual per-thread
 /// visibility and an exact total at a quiesced checkpoint, not ordering
 /// against other memory.
 static LIVE_BLOCKS: AtomicI64 = AtomicI64::new(0);
@@ -42,7 +41,7 @@ static LIVE_BLOCKS: AtomicI64 = AtomicI64::new(0);
 /// callers never have to null-check. A zero-size request returns
 /// whatever the allocator yields (possibly null), matching libc
 /// `malloc(0)`.
-pub(crate) fn alloc(size: usize) -> *mut u8 {
+pub fn alloc(size: usize) -> *mut u8 {
     let ptr = unsafe { libc::malloc(size) } as *mut u8;
     if ptr.is_null() && size != 0 {
         process::abort();
@@ -58,7 +57,7 @@ pub(crate) fn alloc(size: usize) -> *mut u8 {
 ///
 /// # Safety
 /// `ptr` must be null or a live allocation from this funnel.
-pub(crate) unsafe fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
+pub unsafe fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     let new_ptr = unsafe { libc::realloc(ptr.cast(), size) } as *mut u8;
     if new_ptr.is_null() && size != 0 {
         process::abort();
@@ -82,7 +81,7 @@ pub(crate) unsafe fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
 /// # Safety
 /// `ptr` must be null or a live allocation from this funnel that has
 /// not already been freed.
-pub(crate) unsafe fn free(ptr: *mut u8) {
+pub unsafe fn free(ptr: *mut u8) {
     if !ptr.is_null() {
         LIVE_BLOCKS.fetch_sub(1, Ordering::Relaxed);
     }
@@ -90,34 +89,8 @@ pub(crate) unsafe fn free(ptr: *mut u8) {
 }
 
 /// Current net count of live heap blocks (see [`LIVE_BLOCKS`]). The
-/// codegen-facing symbol steady-state leak fixtures read to assert a
-/// zero delta across a repeated allocation pattern.
-#[unsafe(no_mangle)]
-pub extern "C" fn koja_rt_live_blocks() -> i64 {
+/// adapter's `koja_rt_live_blocks` C-ABI symbol reads this for the
+/// steady-state leak fixtures.
+pub fn live_blocks() -> i64 {
     LIVE_BLOCKS.load(Ordering::Relaxed)
-}
-
-/// Codegen-facing allocation symbol. See [`alloc`].
-#[unsafe(no_mangle)]
-pub extern "C" fn koja_alloc(size: usize) -> *mut u8 {
-    alloc(size)
-}
-
-/// Codegen-facing reallocation symbol. See [`realloc`].
-///
-/// # Safety
-/// `ptr` must be null or a live allocation from this funnel.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_realloc(ptr: *mut u8, size: usize) -> *mut u8 {
-    unsafe { realloc(ptr, size) }
-}
-
-/// Codegen-facing free symbol. See [`free`].
-///
-/// # Safety
-/// `ptr` must be null or a live allocation from this funnel that has
-/// not already been freed.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_free(ptr: *mut u8) {
-    unsafe { free(ptr) };
 }

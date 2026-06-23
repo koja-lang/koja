@@ -1,6 +1,6 @@
 //! LLVM emit for `IRInstruction::Spawn` / `IRInstruction::Receive`
 //! and the [`FunctionKind::SpawnWrapper`] / [`FunctionKind::ProcessEntryWrapper`]
-//! bodies. The mailbox surface lives in `koja-runtime/src/scheduler.rs`;
+//! bodies. The mailbox surface lives in `koja-runtime-posix/src/scheduler.rs`;
 //! this module is the sole call site for the `koja_rt_*` declares
 //! minted in [`crate::runtime`].
 //!

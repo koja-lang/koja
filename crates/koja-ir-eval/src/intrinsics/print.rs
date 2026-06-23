@@ -3,7 +3,7 @@
 //! [`__koja_print_string`] runtime contract byte-for-byte so
 //! both backends produce identical stdout for `print(...)` calls.
 //!
-//! [`__koja_print_string`]: ../../../koja-runtime/src/intrinsics.rs
+//! [`__koja_print_string`]: ../../../koja-runtime-posix/src/intrinsics.rs
 
 use std::io::{self, Write};
 

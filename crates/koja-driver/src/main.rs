@@ -14,12 +14,12 @@
 //! [`koja_ir_llvm::compile_program`] (`build`, `run
 //! --backend=llvm`) or [`koja_ir_eval::Interpreter`] (`run`).
 //!
-//! Backend selection: `run` and `build` accept
-//! `--backend={interpreter,llvm}` (see [`pipeline::Backend`]).
-//! `run` defaults to `interpreter` (fast feedback, no link step);
-//! `build` defaults to `llvm` (only backend that produces a
-//! binary). `build --backend=interpreter` errors. A future WASM
-//! backend slots in as a third variant.
+//! Backend selection: only `run` has a backend dimension — it
+//! accepts `--backend={interpreter,llvm}` (see [`pipeline::Backend`])
+//! and defaults to `interpreter` (fast feedback, no link step).
+//! `build` is always LLVM (the only backend that produces a
+//! binary), so it carries no backend flag. A future WASM backend
+//! slots in as a third variant.
 
 mod commands;
 mod diagnostics;
@@ -49,10 +49,6 @@ enum Command {
     Build {
         /// Source file (`.koja` / `.kojs`; omit to use `koja.toml`)
         file: Option<String>,
-
-        /// Backend to drive the build through (defaults to `llvm`; `interpreter` errors since it cannot produce a binary)
-        #[arg(long, value_enum, default_value = "llvm")]
-        backend: pipeline::Backend,
 
         /// Output binary name
         #[arg(short, long)]
@@ -122,7 +118,7 @@ enum Command {
         /// Source file (`.koja` / `.kojs`; omit to use `koja.toml`)
         file: Option<String>,
 
-        /// Backend to drive execution through (defaults to `interpreter`; `llvm` compiles + execs and forwards the exit code)
+        /// Execution backend: `interpreter` runs in-process for fast startup; `llvm` compiles to a native binary, runs it, and forwards its exit code
         #[arg(long, value_enum, default_value = "interpreter")]
         backend: pipeline::Backend,
 
@@ -190,11 +186,10 @@ fn main() {
     match cli.command {
         Command::Build {
             file,
-            backend,
             output,
             emit_llvm,
             release,
-        } => pipeline::cmd_build(file, backend, output, release, emit_llvm),
+        } => pipeline::cmd_build(file, output, release, emit_llvm),
         Command::Check { file, emit_ast } => pipeline::cmd_check(file, emit_ast),
         Command::Doc(args) => dispatch_doc(args, color),
         Command::Eval { file } => pipeline::cmd_run(

@@ -1,86 +1,103 @@
 //! Per-process mailbox: two receive queues plus a one-shot reply slot.
 //!
-//! Routing is by wire tag. Lifecycle signals land in the `system`
-//! queue, which `receive` drains before any business traffic, so a
-//! shutdown request can't be starved by a deep backlog. Casts, call
-//! requests, timer fires, and I/O readiness land in the `business`
-//! queue in arrival order.
+//! Generic over the message representation `M`: the native adapter
+//! carries byte [`Envelope`](crate::wire::Envelope)s; a cooperative
+//! adapter can carry typed values. The routing and priority semantics —
+//! the part that must stay identical across backends for observable
+//! parity — live here once and are driven purely by [`Message::tag`].
 //!
-//! Replies (`TAG_REPLY`) bypass both queues into a one-shot `reply`
-//! slot read only by `koja_rt_call_receive`. Calls are atomic — a
-//! caller blocked in `Ref.call` handles no other traffic until the
-//! call completes or times out — so at most one reply is expected at a
-//! time and a slot, not a queue, is sufficient. A reply that arrives
-//! while the slot is occupied displaces the occupant: the occupant is
-//! necessarily stale (a leftover from an earlier call that timed out),
-//! and the newest reply is the one the in-flight call is waiting on.
+//! Routing is by [`Tag`]. Lifecycle signals land in the `system` queue,
+//! which `receive` drains before any business traffic, so a shutdown
+//! request can't be starved by a deep backlog. Casts, call requests,
+//! timer fires, and I/O readiness land in the `business` queue in
+//! arrival order.
+//!
+//! Replies bypass both queues into a one-shot `reply` slot read only by
+//! `koja_rt_call_receive`. Calls are atomic — a caller blocked in
+//! `Ref.call` handles no other traffic until the call completes or times
+//! out — so at most one reply is expected at a time and a slot, not a
+//! queue, is sufficient. A reply that arrives while the slot is occupied
+//! displaces the occupant: the occupant is necessarily stale (a leftover
+//! from an earlier call that timed out), and the newest reply is the one
+//! the in-flight call is waiting on.
 
 use std::collections::VecDeque;
 
-use crate::wire::{Envelope, TAG_LIFECYCLE, TAG_REPLY};
+use crate::protocol::{Message, Tag};
 
 /// Which part of the mailbox a blocked process is waiting on. Stored on
 /// the process when it parks so delivery only wakes it for traffic that
 /// can actually satisfy the wait.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(crate) enum WaitTarget {
+pub enum WaitTarget {
     /// The receive queues — woken by system or business traffic.
     Receive,
-    /// The reply slot — woken only by a `TAG_REPLY` delivery.
+    /// The reply slot — woken only by a reply delivery.
     Reply,
 }
 
 /// A process's mailbox. Owned by the process slot and drained only by
-/// the process itself; dropping it discards every held envelope
-/// (running each one's payload drop glue).
-#[derive(Default)]
-pub(crate) struct Mailbox {
+/// the process itself; dropping it discards every held message (running
+/// each one's drop glue, for representations that carry it).
+pub struct Mailbox<M> {
     /// Business traffic in arrival order.
-    business: VecDeque<Envelope>,
+    business: VecDeque<M>,
     /// The reply to the in-flight `Ref.call`, if it has arrived.
-    reply: Option<Envelope>,
+    reply: Option<M>,
     /// Lifecycle signals, drained before business traffic.
-    system: VecDeque<Envelope>,
+    system: VecDeque<M>,
 }
 
-impl Mailbox {
-    /// Which wait target `envelope` will satisfy when pushed.
-    pub(crate) fn target_of(envelope: &Envelope) -> WaitTarget {
-        if envelope.tag() == TAG_REPLY {
+// Manual `Default` so `Mailbox<M>` is default-constructible regardless
+// of whether `M: Default` (the queues and slot start empty).
+impl<M> Default for Mailbox<M> {
+    fn default() -> Self {
+        Self {
+            business: VecDeque::new(),
+            reply: None,
+            system: VecDeque::new(),
+        }
+    }
+}
+
+impl<M: Message> Mailbox<M> {
+    /// Which wait target `message` will satisfy when pushed.
+    pub fn target_of(message: &M) -> WaitTarget {
+        if message.tag() == Tag::Reply {
             WaitTarget::Reply
         } else {
             WaitTarget::Receive
         }
     }
 
-    /// Routes an incoming envelope by its wire tag. Returns a displaced
+    /// Routes an incoming message by its [`Tag`]. Returns a displaced
     /// stale reply (when the slot still held a leftover from a
     /// timed-out call) for the caller to drop after releasing the
     /// scheduler lock.
-    pub(crate) fn push(&mut self, envelope: Envelope) -> Option<Envelope> {
-        match envelope.tag() {
-            TAG_LIFECYCLE => {
-                self.system.push_back(envelope);
+    pub fn push(&mut self, message: M) -> Option<M> {
+        match message.tag() {
+            Tag::Lifecycle => {
+                self.system.push_back(message);
                 None
             }
-            TAG_REPLY => self.reply.replace(envelope),
-            _ => {
-                self.business.push_back(envelope);
+            Tag::Reply => self.reply.replace(message),
+            Tag::Business | Tag::IOReady => {
+                self.business.push_back(message);
                 None
             }
         }
     }
 
-    /// Next envelope for `receive`: system traffic first, then
-    /// business. Never surfaces the reply slot.
-    pub(crate) fn pop_received(&mut self) -> Option<Envelope> {
+    /// Next message for `receive`: system traffic first, then business.
+    /// Never surfaces the reply slot.
+    pub fn pop_received(&mut self) -> Option<M> {
         self.system
             .pop_front()
             .or_else(|| self.business.pop_front())
     }
 
     /// Takes the pending reply, if one has arrived.
-    pub(crate) fn take_reply(&mut self) -> Option<Envelope> {
+    pub fn take_reply(&mut self) -> Option<M> {
         self.reply.take()
     }
 }
@@ -88,7 +105,7 @@ impl Mailbox {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::wire::{TAG_BUSINESS, TAG_IO_READY};
+    use crate::wire::{Envelope, TAG_BUSINESS, TAG_IO_READY, TAG_LIFECYCLE, TAG_REPLY};
 
     fn envelope(tag: u8, reply_token: i64) -> Envelope {
         let mut envelope = unsafe { Envelope::from_payload(tag, std::ptr::null(), 0, None) };
@@ -104,7 +121,7 @@ mod tests {
         assert!(mailbox.push(envelope(TAG_LIFECYCLE, 0)).is_none());
 
         let tags: Vec<u8> = std::iter::from_fn(|| mailbox.pop_received())
-            .map(|envelope| envelope.tag())
+            .map(|envelope| envelope.tag_byte())
             .collect();
         assert_eq!(tags, vec![TAG_LIFECYCLE, TAG_BUSINESS, TAG_IO_READY]);
     }
@@ -133,15 +150,15 @@ mod tests {
     #[test]
     fn wait_targets_partition_by_tag() {
         assert_eq!(
-            Mailbox::target_of(&envelope(TAG_BUSINESS, 0)),
+            Mailbox::<Envelope>::target_of(&envelope(TAG_BUSINESS, 0)),
             WaitTarget::Receive
         );
         assert_eq!(
-            Mailbox::target_of(&envelope(TAG_LIFECYCLE, 0)),
+            Mailbox::<Envelope>::target_of(&envelope(TAG_LIFECYCLE, 0)),
             WaitTarget::Receive
         );
         assert_eq!(
-            Mailbox::target_of(&envelope(TAG_REPLY, 0)),
+            Mailbox::<Envelope>::target_of(&envelope(TAG_REPLY, 0)),
             WaitTarget::Reply
         );
     }

@@ -4,7 +4,7 @@
 //! - The `@extern "C" priv fn koja_time_now_millis -> Int64` inside
 //!   `DateTime` lands as a bare `declare i64 @koja_time_now_millis()`
 //!   so the linker resolves against `koja-runtime`'s exported C
-//!   symbol (`koja/crates/koja-runtime/src/system.rs`).
+//!   symbol (`koja/crates/koja-runtime-posix/src/system.rs`).
 //! - `DateTime.now()` calls into the extern from a non-extern body,
 //!   so the user-facing call site for `DateTime.now()` routes
 //!   through the name-mangled `Global.DateTime.now` symbol that in

@@ -77,8 +77,8 @@ jobs:
 
       - name: Build release binaries
         run: |
-          cargo build -p koja-runtime
-          cargo build --release -p koja-runtime
+          cargo build -p koja-runtime-posix
+          cargo build --release -p koja-runtime-posix
           cargo build --release -p koja-driver -p koja-lsp
 
       - name: Codesign (macOS)

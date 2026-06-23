@@ -13,8 +13,8 @@
 //!
 //! Usage from the scheduler:
 //! - [`capture_scheduler_fiber`] once at the top of each worker loop;
-//! - [`create_process_fiber`] once per process-table slot, reused across slot
-//!   reuse (see [`crate::process_table`]);
+//! - [`slot_fiber`] to fetch a process-table slot's fiber, created lazily on
+//!   first use and reused across the slot's successive occupants;
 //! - [`switch_to_process`] right before context-switching into a process;
 //! - [`switch_to_scheduler`] right before a process yields back.
 //!
@@ -55,9 +55,12 @@ pub(crate) fn capture_scheduler_fiber() {
     SCHED_FIBER.with(|c| c.set(imp::current_fiber()));
 }
 
-/// Creates a fresh fiber modelling a process-table slot's stack.
-pub(crate) fn create_process_fiber() -> Fiber {
-    imp::create_fiber()
+/// The TSan fiber bound to process-table slot `index`, created on first
+/// use and reused across the slot's successive (strictly sequential)
+/// occupants. The single fiber-creation site; see the module docs for why
+/// fibers are slot-bound rather than per-process.
+pub(crate) fn slot_fiber(index: usize) -> Fiber {
+    imp::slot_fiber(index)
 }
 
 /// Announces a switch into `fiber`, immediately before a worker
@@ -76,6 +79,7 @@ pub(crate) fn switch_to_scheduler() {
 mod imp {
     use super::Fiber;
     use std::ffi::c_void;
+    use std::sync::Mutex;
 
     unsafe extern "C" {
         fn __tsan_create_fiber(flags: u32) -> *mut c_void;
@@ -83,8 +87,16 @@ mod imp {
         fn __tsan_switch_to_fiber(fiber: *mut c_void, flags: u32);
     }
 
-    pub(super) fn create_fiber() -> Fiber {
-        Fiber(unsafe { __tsan_create_fiber(0) })
+    /// Fibers indexed by process-table slot, lazily grown and never shrunk
+    /// so a slot's fiber is created once and reused across its occupants.
+    static SLOT_FIBERS: Mutex<Vec<Fiber>> = Mutex::new(Vec::new());
+
+    pub(super) fn slot_fiber(index: usize) -> Fiber {
+        let mut fibers = SLOT_FIBERS.lock().unwrap();
+        while fibers.len() <= index {
+            fibers.push(Fiber(unsafe { __tsan_create_fiber(0) }));
+        }
+        fibers[index]
     }
 
     pub(super) fn current_fiber() -> Fiber {
@@ -101,7 +113,7 @@ mod imp {
     use super::Fiber;
 
     #[inline(always)]
-    pub(super) fn create_fiber() -> Fiber {
+    pub(super) fn slot_fiber(_index: usize) -> Fiber {
         Fiber::null()
     }
 

@@ -1,7 +1,7 @@
 //! `Ref<M, R>` and `ReplyTo<R>` `@intrinsic` emitters. Single call
 //! site for the per-method `koja_rt_*` declares minted in
 //! [`crate::runtime`]; the matching runtime symbols live in
-//! `koja-runtime/src/scheduler.rs`.
+//! `koja-runtime-posix/src/scheduler.rs`.
 //!
 //! Per-method dispatch:
 //!

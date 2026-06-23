@@ -1,6 +1,6 @@
 # Koja Language Reference
 
-Koja is a statically typed, compiled language targeting native binaries via LLVM. It combines Ruby-inspired syntax with value semantics and an Erlang-style concurrency model. The compiler is a Rust workspace; the language compiles to native code with no runtime garbage collector.
+Koja is a statically typed, compiled language targeting native binaries via LLVM, with no garbage collector. It combines a Rust-inspired type system, Swift-style value semantics, an Erlang-style concurrency model, and Ruby-inspired syntax. The compiler itself is implemented as a Rust workspace.
 
 ---
 

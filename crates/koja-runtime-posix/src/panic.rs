@@ -51,7 +51,7 @@ const COLORS_OFF: Colors = Colors { red: "", reset: "" };
 /// from an internal runtime panic surfaced via the global hook. The origin
 /// selects both the leading tag and the backtrace frame-filter policy: user
 /// panics hide runtime/stdlib frames to show only user code, while runtime
-/// panics keep `koja_rt_*` / `koja_runtime::` frames since those are exactly
+/// panics keep `koja_rt_*` / `koja_runtime*` frames since those are exactly
 /// the ones worth seeing.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum PanicOrigin {
@@ -211,27 +211,36 @@ pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
 // Frame filtering
 // ---------------------------------------------------------------------------
 
+/// True for any Rust frame originating in a runtime crate — `koja_runtime`
+/// (this staticlib's lib name), `koja_runtime_core`, or a future
+/// `koja_runtime_*`. Bare `koja_runtime` prefix is safe: lowered Koja
+/// symbols never carry it (they demangle from `<pkg>.<name>`).
+fn is_runtime_frame(name: &str) -> bool {
+    name.starts_with("koja_runtime")
+}
+
 fn should_skip_frame(name: &str, origin: PanicOrigin) -> bool {
     if name == "__koja_user_main" || name == "main" {
         return false;
     }
 
     // The panic machinery itself is never interesting in a backtrace.
-    if name.starts_with("koja_runtime::panic::") {
+    // Match any runtime crate (`koja_runtime`, `koja_runtime_core`,
+    // `koja_runtime_posix`) since the staticlib keeps the `koja_runtime`
+    // lib name but `koja-runtime-core` mangles as `koja_runtime_core`.
+    if is_runtime_frame(name) && name.contains("::panic::") {
         return true;
     }
 
     // Internal runtime panics keep the runtime frames — they are the stack
     // worth seeing. User panics hide them to surface only user Koja code.
-    if origin == PanicOrigin::Runtime
-        && (name.starts_with("koja_rt_") || name.starts_with("koja_runtime::"))
-    {
+    if origin == PanicOrigin::Runtime && (name.starts_with("koja_rt_") || is_runtime_frame(name)) {
         return false;
     }
 
     if name.starts_with("koja_rt_")
         || name.starts_with("koja_panic")
-        || name.starts_with("koja_runtime::")
+        || is_runtime_frame(name)
         || name.starts_with("std::")
         || name.starts_with("core::")
         || name.contains("core::ops::function::")
@@ -366,7 +375,14 @@ mod tests {
     fn runtime_panics_keep_runtime_frames_user_panics_hide_them() {
         // Runtime frames are the stack worth seeing for an internal panic,
         // but noise for a user panic.
-        for frame in ["koja_rt_send", "koja_runtime::scheduler::worker_loop"] {
+        // Cover both the staticlib lib name (`koja_runtime`) and the
+        // split-out core crate (`koja_runtime_core`) so a frame from
+        // either is filtered for user panics but kept for runtime panics.
+        for frame in [
+            "koja_rt_send",
+            "koja_runtime::scheduler::worker_loop",
+            "koja_runtime_core::process_table::ProcessTable<X,M>::spawn",
+        ] {
             assert!(should_skip_frame(frame, PanicOrigin::User), "{frame}");
             assert!(!should_skip_frame(frame, PanicOrigin::Runtime), "{frame}");
         }
@@ -381,6 +397,7 @@ mod tests {
                 "backtrace::backtrace::trace",
                 "koja_panic_backtrace",
                 "koja_runtime::panic::abort_with_diagnostic",
+                "koja_runtime_core::panic::capture",
                 "__rust_try",
             ] {
                 assert!(should_skip_frame(frame, origin), "{frame}");

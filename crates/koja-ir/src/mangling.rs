@@ -172,7 +172,7 @@ pub fn drop_glue_symbol(ty: &IRType) -> IRSymbol {
 
 /// Symbol of the synthesized *by-pointer* envelope-payload drop shim
 /// for `ty` (`<type>.$envdrop$`). The runtime's type-erased discard
-/// path (`koja-runtime/src/wire.rs`) frees an undelivered message by
+/// path (`koja-runtime-posix/src/wire.rs`) frees an undelivered message by
 /// calling a `void(ptr)` function over the payload bytes — an ABI the
 /// by-value [`drop_glue_symbol`] can't satisfy. The LLVM backend
 /// synthesizes this thin shim per sent message / reply type: it loads

@@ -10,13 +10,10 @@ mod ffi;
 mod format;
 mod fs;
 mod intrinsics;
-mod mailbox;
 mod memory;
 mod panic;
 pub mod parse_text;
-mod process_table;
 mod reactor;
-mod sched_trace;
 mod scheduler;
 pub mod signals;
 mod socket;
@@ -24,4 +21,9 @@ mod string;
 mod system;
 mod tsan;
 mod util;
-mod wire;
+
+// The mailbox / wire message layer now lives in the agnostic core; the
+// native adapter re-exports the modules so `crate::mailbox` /
+// `crate::wire` paths keep resolving. See
+// `koja/design/SCHEDULER-PROTOCOL.md`.
+pub(crate) use koja_runtime_core::{mailbox, wire};

@@ -773,7 +773,7 @@ pub enum ReceiveTag {
 
 impl ReceiveTag {
     /// Wire byte the runtime stamps in the envelope tag header. Mirrors
-    /// `koja-runtime/src/wire.rs` (`TAG_*`) by spec, not a shared type.
+    /// `koja-runtime-posix/src/wire.rs` (`TAG_*`) by spec, not a shared type.
     pub fn wire_byte(self) -> u8 {
         match self {
             Self::Business => 0,

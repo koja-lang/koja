@@ -59,13 +59,13 @@ pub(super) fn result_value(symbol: IRSymbol, value: Result<Value, Value>) -> Val
     }
 }
 
-/// Build a `NumericConversionError.<variant>` value for a numeric
-/// intrinsic returning `Result<T, NumericConversionError>`. The
-/// error enum's symbol comes from the `Result` decl's `Err` payload
-/// and the variant tag is resolved by name, so neither the stdlib's
-/// mangling scheme nor `numeric.koja`'s declaration order is baked
-/// in here. Shared by the checked-narrowing and parse intrinsics.
-pub(super) fn conversion_error_value<R: CallResolver>(
+/// Build the `<ErrEnum>.<variant>` value for a unit-variant error of a
+/// `Result<T, ErrEnum>` intrinsic. The error enum's symbol comes from the
+/// `Result` decl's `Err` payload and the variant tag is resolved by name,
+/// so neither the stdlib's mangling scheme nor any enum's declaration
+/// order is baked in here. Shared by the checked-narrowing / parse
+/// intrinsics (`NumericConversionError`) and `Ref.call` (`CallError`).
+pub(super) fn err_variant_value<R: CallResolver>(
     result_symbol: &IRSymbol,
     resolver: &R,
     variant_name: &str,
@@ -91,8 +91,7 @@ pub(super) fn conversion_error_value<R: CallResolver>(
     let [IRType::Enum(error_symbol)] = types.as_slice() else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "`{result_symbol}`'s Err payload should be a single enum \
-                 (NumericConversionError), got `{types:?}`",
+                "`{result_symbol}`'s Err payload should be a single error enum, got `{types:?}`",
             ),
         });
     };

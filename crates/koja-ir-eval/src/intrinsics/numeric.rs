@@ -40,7 +40,7 @@ pub(super) fn dispatch<R: CallResolver>(
     let converted = if (min..=max).contains(v) {
         Ok(Value::Int(*v))
     } else {
-        Err(helpers::conversion_error_value(
+        Err(helpers::err_variant_value(
             &result_symbol,
             resolver,
             "OutOfRange",

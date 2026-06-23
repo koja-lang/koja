@@ -34,7 +34,7 @@ jobs:
       - name: Check formatting
         run: cargo fmt --check
       - name: Build runtime (debug)
-        run: cargo build -p koja-runtime
+        run: cargo build -p koja-runtime-posix
       - name: Clippy (zero warnings)
         run: cargo clippy --workspace -- -D warnings
 
@@ -51,8 +51,8 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Build runtime (debug + release)
         run: |
-          cargo build -p koja-runtime
-          cargo build --release -p koja-runtime
+          cargo build -p koja-runtime-posix
+          cargo build --release -p koja-runtime-posix
       - name: Compiler tests
         run: cargo test --workspace --exclude koja-driver
 
@@ -69,8 +69,8 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Build runtime (debug + release)
         run: |
-          cargo build -p koja-runtime
-          cargo build --release -p koja-runtime
+          cargo build -p koja-runtime-posix
+          cargo build --release -p koja-runtime-posix
       - name: Driver tests (lang suite + doc bundle)
         run: cargo test -p koja-driver -- --test-threads=4
 
@@ -87,8 +87,8 @@ jobs:
       - uses: ./.github/actions/setup
       - name: Build runtime (debug + release)
         run: |
-          cargo build -p koja-runtime
-          cargo build --release -p koja-runtime
+          cargo build -p koja-runtime-posix
+          cargo build --release -p koja-runtime-posix
       - name: Build koja CLI
         run: cargo build -p koja-driver
       - name: Stdlib package tests

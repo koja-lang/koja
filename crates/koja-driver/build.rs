@@ -9,7 +9,7 @@ fn main() {
         .find(|p| p.exists())
         .unwrap_or_else(|| {
             panic!(
-                "libkoja_runtime.a not found searching parents of {}. Build koja-runtime first.",
+                "libkoja_runtime.a not found searching parents of {}. Build koja-runtime-posix first.",
                 out_dir
             )
         });

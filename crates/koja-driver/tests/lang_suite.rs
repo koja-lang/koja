@@ -45,9 +45,45 @@ fn library_path() -> Option<String> {
 
 const TEST_TIMEOUT: Duration = Duration::from_secs(45);
 
+/// The two execution backends every parity-eligible fixture runs under.
+/// Both must produce the fixture's golden stdout, which (transitively)
+/// pins interpreter <-> LLVM output parity.
+const BACKENDS: [&str; 2] = ["llvm", "interpreter"];
+
+/// Fixtures (by file stem) that run under LLVM only. These `signal(...)`
+/// a child then **busy-wait** on `alive?()` for it to die — which works
+/// under the multi-threaded native scheduler (the child runs on another
+/// worker) but livelocks under the single-threaded cooperative
+/// interpreter: the spin loop has no yield point, so the signalled child
+/// is starved. Cooperative parity here needs preemptive yield-checks at
+/// loop back-edges (Phase 5 A1, not yet implemented). They still run
+/// under LLVM, where the reclaim assertion is what matters.
+const LLVM_ONLY: &[&str] = &["message_reclaim", "signal_only", "spawn_reclaim"];
+
+/// Whether `file` runs under the interpreter in addition to LLVM.
+fn eval_eligible(file: &Path) -> bool {
+    let stem = file.file_stem().unwrap_or_default().to_string_lossy();
+    !LLVM_ONLY.contains(&stem.as_ref())
+}
+
+/// The backends a single-file fixture runs under: both, unless it is an
+/// [`LLVM_ONLY`] fixture.
+fn backends_for(file: &Path) -> &'static [&'static str] {
+    if eval_eligible(file) {
+        &BACKENDS
+    } else {
+        &BACKENDS[..1]
+    }
+}
+
 fn run_koja(file: &Path) -> (String, String, i32) {
+    run_koja_backend(file, "llvm")
+}
+
+fn run_koja_backend(file: &Path, backend: &str) -> (String, String, i32) {
+    let backend_flag = format!("--backend={backend}");
     run_with_timeout(|cmd| {
-        cmd.arg("run").arg("--backend=llvm").arg(file);
+        cmd.arg("run").arg(&backend_flag).arg(file);
     })
 }
 
@@ -108,20 +144,23 @@ fn run_pass_dir(dir: &Path, label: &str) {
             failures.push(format!("{test_name}: missing .stdout file"));
             continue;
         }
-
-        let (stdout, stderr, code) = run_koja(file);
-
-        if code != 0 {
-            failures.push(format!(
-                "{test_name}: exited with code {code}\nstderr:\n{stderr}"
-            ));
-            continue;
-        }
-
         let expected = fs::read_to_string(&expected_path).unwrap();
-        if stdout != expected {
-            let diff = diff_lines(&stdout, &expected);
-            failures.push(format!("{test_name}: output mismatch\n{diff}"));
+
+        // Run under every eligible backend and assert each against the
+        // golden; both matching the same golden is interpreter <-> LLVM
+        // parity by transitivity.
+        for &backend in backends_for(file) {
+            let (stdout, stderr, code) = run_koja_backend(file, backend);
+            if code != 0 {
+                failures.push(format!(
+                    "{test_name} ({backend}): exited with code {code}\nstderr:\n{stderr}"
+                ));
+                continue;
+            }
+            if stdout != expected {
+                let diff = diff_lines(&stdout, &expected);
+                failures.push(format!("{test_name} ({backend}): output mismatch\n{diff}"));
+            }
         }
     }
 
@@ -134,6 +173,9 @@ fn run_pass_dir(dir: &Path, label: &str) {
     }
 }
 
+/// LLVM-only by nature: the failure is raised before any backend runs
+/// (typecheck / lowering), so the diagnostic is backend-independent and
+/// running the interpreter too would assert the identical stderr.
 fn run_compile_fail_dir(dir: &Path, label: &str) {
     if !dir.exists() {
         return;
@@ -180,6 +222,10 @@ fn run_compile_fail_dir(dir: &Path, label: &str) {
     }
 }
 
+/// LLVM-only: the two backends surface runtime faults through different
+/// channels (an LLVM panic stacktrace vs. the interpreter's
+/// `RuntimeError`), so the expected-stderr pattern is backend-specific
+/// rather than a cross-backend parity assertion.
 fn run_runtime_fail_dir(dir: &Path, label: &str) {
     if !dir.exists() {
         return;
@@ -230,14 +276,18 @@ fn run_project_dir(dir: &Path, label: &str) {
     run_project_dir_with(dir, label, &[]);
 }
 
+/// Run a project fixture under both backends, locking in interpreter ↔
+/// LLVM parity for the project execution path (same stdout, same exit
+/// code). The entry process installs the cooperative runtime under the
+/// interpreter, so `spawn` / `receive` / lifecycle behave as under LLVM.
 fn run_project_dir_with(dir: &Path, label: &str, extra_args: &[&str]) {
-    run_project_dir_backend(dir, label, "llvm", extra_args);
+    for backend in BACKENDS {
+        run_project_dir_backend(dir, label, backend, extra_args);
+    }
 }
 
 /// Run a project fixture through `koja run --backend=<backend>` and
 /// assert stdout / exit code against the fixture's expectations.
-/// Fixtures exercised under both backends lock in interpreter ↔ LLVM
-/// parity for the project execution path.
 fn run_project_dir_backend(dir: &Path, label: &str, backend: &str, extra_args: &[&str]) {
     assert!(dir.exists(), "test fixture {label}/ not found");
 
@@ -338,12 +388,6 @@ macro_rules! lang_test_dir {
             run_project_dir_with(&lang_dir().join($dir), $dir, &[$($arg),+]);
         }
     };
-    ($name:ident, $dir:expr, project_interpreted $(, $arg:expr)*) => {
-        #[test]
-        fn $name() {
-            run_project_dir_backend(&lang_dir().join($dir), $dir, "interpreter", &[$($arg),*]);
-        }
-    };
 }
 
 // Pass tests
@@ -409,32 +453,17 @@ lang_test_dir!(lang_pkg_fn, "pkg_fn", project);
 fn lang_package_collision() {
     run_project_dir(&lang_dir().join("package_collision"), "package_collision");
 }
+// Project fixtures run under both backends (see `run_project_dir_with`),
+// pinning interpreter ↔ LLVM parity for the project execution path.
+lang_test_dir!(lang_kernel_exit, "kernel_exit", project);
 lang_test_dir!(lang_process_entry, "process_entry", project);
 lang_test_dir!(lang_process_exit, "process_exit", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
 lang_test_dir!(lang_receive_after, "receive_after", project);
 
-// Interpreter ↔ LLVM parity: the same project fixtures executed via
-// `koja run --backend=interpreter` must produce identical stdout and
-// exit codes.
-lang_test_dir!(
-    lang_process_entry_interpreted,
-    "process_entry",
-    project_interpreted
-);
-lang_test_dir!(
-    lang_process_argv_interpreted,
-    "process_argv",
-    project_interpreted,
-    "hello",
-    "world"
-);
-lang_test_dir!(
-    lang_receive_after_interpreted,
-    "receive_after",
-    project_interpreted
-);
-
+/// LLVM-only: links a user-provided C static library (`@link`), which the
+/// interpreter cannot resolve (no linker / dlopen path for arbitrary
+/// symbols).
 #[test]
 fn lang_ffi() {
     let dir = lang_dir().join("ffi");
@@ -493,43 +522,41 @@ fn lang_ffi() {
     }
 }
 
+/// Lifecycle signal delivery under both backends: the compiled binary
+/// receives SIGTERM directly; under `koja run --backend=interpreter` the
+/// entry process runs in-process, so the signal lands on the
+/// interpreter's latched handlers. Both must produce the same stdout and
+/// exit code.
 #[test]
 fn lang_process_lifecycle() {
-    run_signal_test(
-        &lang_dir().join("process_lifecycle"),
-        "process_lifecycle",
-        libc::SIGTERM,
-    );
+    let dir = lang_dir().join("process_lifecycle");
+    run_signal_test(&dir, "process_lifecycle", libc::SIGTERM);
+    run_signal_test_interpreted(&dir, "process_lifecycle", libc::SIGTERM);
 }
 
-/// Interpreter parity for the lifecycle fixture: `koja run` executes
-/// the entry process in-process, so signalling the spawned `koja` pid
-/// lands on the interpreter's latched signal handlers and must produce
-/// the same stdout and exit code as the compiled binary.
-#[test]
-fn lang_process_lifecycle_interpreted() {
-    run_signal_test_interpreted(
-        &lang_dir().join("process_lifecycle"),
-        "process_lifecycle",
-        libc::SIGTERM,
-    );
-}
-
-/// Regression for `IOReady` union-message delivery: the fixture watches
-/// STDIN and must receive the reactor's readiness event through its
-/// `handle` (tag-2 dispatch) instead of trapping. Pre-filled STDIN makes
-/// the fd readable immediately. Compiled-only: the interpreter has no
-/// reactor, so the synthesized arm is inert.
+/// Regression for `IOReady` union-message delivery under both backends:
+/// the fixture watches STDIN and must receive the reactor's readiness
+/// event through its `handle` (tag-2 dispatch) instead of trapping.
+/// Pre-filled STDIN makes the fd readable immediately. The interpreter
+/// now drives its own cooperative reactor (see `koja-ir-eval/src/reactor`),
+/// so the watch -> `IOReady` path holds there too.
 #[test]
 fn lang_process_io() {
+    for backend in BACKENDS {
+        run_process_io(backend);
+    }
+}
+
+fn run_process_io(backend: &str) {
     use std::io::Write;
 
     let dir = lang_dir().join("process_io");
     assert!(dir.exists(), "test fixture process_io/ not found");
     let expected = fs::read_to_string(dir.join("expected.stdout")).unwrap();
 
+    let backend_flag = format!("--backend={backend}");
     let mut cmd = Command::new(koja_bin());
-    cmd.arg("run").arg("--backend=llvm").current_dir(&dir);
+    cmd.arg("run").arg(&backend_flag).current_dir(&dir);
     if let Some(lib_path) = library_path() {
         cmd.env("LIBRARY_PATH", &lib_path);
     }
@@ -554,10 +581,13 @@ fn lang_process_io() {
             Ok(None) if std::time::Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                panic!("process_io: timed out after {}s", TEST_TIMEOUT.as_secs());
+                panic!(
+                    "process_io ({backend}): timed out after {}s",
+                    TEST_TIMEOUT.as_secs()
+                );
             }
             Ok(None) => std::thread::sleep(Duration::from_millis(50)),
-            Err(e) => panic!("process_io: wait error: {e}"),
+            Err(e) => panic!("process_io ({backend}): wait error: {e}"),
         }
     }
 
@@ -568,11 +598,11 @@ fn lang_process_io() {
 
     assert!(
         code == 1,
-        "process_io: expected exit code 1 (StopReason.Shutdown), got {code}\nstderr:\n{stderr}"
+        "process_io ({backend}): expected exit code 1 (StopReason.Shutdown), got {code}\nstderr:\n{stderr}"
     );
     if stdout != expected {
         panic!(
-            "\n--- FAIL: process_io ---\n{}",
+            "\n--- FAIL: process_io ({backend}) ---\n{}",
             diff_lines(&stdout, &expected)
         );
     }
@@ -590,7 +620,6 @@ fn run_signal_test(dir: &Path, label: &str, signal: libc::c_int) {
     let build_out = {
         let mut cmd = Command::new(koja_bin());
         cmd.arg("build")
-            .arg("--backend=llvm")
             .arg("-o")
             .arg(binary.to_str().unwrap())
             .current_dir(dir);
@@ -785,7 +814,6 @@ fn lang_project_build_test() {
 
     let mut cmd = Command::new(koja_bin());
     cmd.arg("build")
-        .arg("--backend=llvm")
         .arg("-o")
         .arg(binary_path.to_str().unwrap())
         .current_dir(&project_dir);
@@ -871,7 +899,6 @@ fn lang_release_build_test() {
 
     let mut cmd = Command::new(koja_bin());
     cmd.arg("build")
-        .arg("--backend=llvm")
         .arg("--release")
         .arg("-o")
         .arg(binary_path.to_str().unwrap())

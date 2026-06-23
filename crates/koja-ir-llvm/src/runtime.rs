@@ -2,7 +2,7 @@
 //! calls them from compiler-synthesized `@intrinsic` bodies) and
 //! [`crate::main_wrapper`]'s spawn / main-done hand-off.
 //!
-//! Each runtime helper lives in `koja-runtime/src/intrinsics.rs`; this
+//! Each runtime helper lives in `koja-runtime-posix/src/intrinsics.rs`; this
 //! module owns the LLVM-side declarations so the callers stamp
 //! exactly one `module.get_function` lookup per symbol.
 
@@ -43,7 +43,7 @@ pub(crate) const STRING_LENGTH_SYMBOL: &str = "koja_string_length";
 pub(crate) const STRING_SLICE_SYMBOL: &str = "koja_string_slice";
 
 // `koja_rt_*` mailbox / scheduler symbols defined in
-// `koja-runtime/src/scheduler.rs`. Backend-side declare helpers
+// `koja-runtime-posix/src/scheduler.rs`. Backend-side declare helpers
 // live below the existing `declare_*_extern` family.
 pub(crate) const RT_BUILD_ARGV_SYMBOL: &str = "koja_rt_build_argv";
 pub(crate) const RT_CALL_RECEIVE_SYMBOL: &str = "koja_rt_call_receive";
@@ -100,7 +100,7 @@ pub(crate) fn declare_runtime_format<'ctx>(
 
 /// Declare (or look up) the `koja_free` extern — the runtime
 /// allocator funnel's free (a sizeless libc-`free` passthrough; see
-/// `koja-runtime/src/mem.rs`). The drop emitter calls this once per
+/// `koja-runtime-posix/src/mem.rs`). The drop emitter calls this once per
 /// heap-typed slot at function exit. Signature is `void(i8*)`; the
 /// heap-block pointers are computed by adjusting the SSA payload
 /// pointer (`payload - 8`) before the call so the funnel sees the
@@ -256,7 +256,7 @@ pub(crate) fn declare_last_error_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functi
 
 /// Declare (or look up) the `koja_alloc` extern — the runtime
 /// allocator funnel's alloc (a libc-`malloc` passthrough that aborts
-/// on OOM; see `koja-runtime/src/mem.rs`). The concat /
+/// on OOM; see `koja-runtime-posix/src/mem.rs`). The concat /
 /// binary-construct emitters call this for the heap block base.
 /// Signature: `i8* koja_alloc(i64)` (the runtime targets 64-bit hosts;
 /// the argument type matches `size_t` on those targets).
