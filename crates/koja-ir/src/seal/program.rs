@@ -39,10 +39,10 @@ pub(crate) fn seal_program(program: &IRProgram) {
 }
 
 /// Every [`FunctionKind::ProcessEntryWrapper`] must point at a struct
-/// state whose `start` and `run` methods are registered in the
-/// IRProgram. LLVM emit dereferences both symbols when synthesizing
-/// the wrapper body; a miss here would surface as a codegen-time
-/// panic instead of a clear seal violation.
+/// state whose `start`, `run`, and `priority` methods are registered
+/// in the IRProgram. LLVM emit dereferences these symbols when
+/// synthesizing the wrapper body; a miss here would surface as a
+/// codegen-time panic instead of a clear seal violation.
 fn seal_program_entry_wrappers(program: &IRProgram) {
     for pkg in &program.packages {
         for (owner, function) in &pkg.functions {
@@ -54,7 +54,7 @@ fn seal_program_entry_wrappers(program: &IRProgram) {
                     "process entry wrapper `{owner}` declared with non-struct state `{state:?}`",
                 ));
             };
-            for method in ["start", "run"] {
+            for method in ["priority", "run", "start"] {
                 let symbol = mangled_method_name(state_symbol, &[], method, &[]);
                 if program.function(symbol.mangled()).is_none() {
                     seal_panic(&format!(

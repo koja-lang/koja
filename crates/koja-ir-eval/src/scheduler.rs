@@ -33,8 +33,8 @@ use std::time::Instant;
 
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
-    Clock, CooperativeDriver, Executor, Lifecycle, Message, MessageSource, Pid, ProcessTable,
-    Readiness, SignalSource, Tag, WaitTarget,
+    Clock, CooperativeDriver, Executor, Lifecycle, Message, MessageSource, Pid, Priority,
+    ProcessTable, Readiness, SignalSource, Tag, WaitTarget,
 };
 
 use crate::interpreter::CallResolver;
@@ -207,6 +207,15 @@ pub(crate) fn kill(pid: Pid) {
 /// Whether `pid` resolves to a live process (`Ref.alive?`).
 pub(crate) fn is_alive(pid: Pid) -> bool {
     with_table(|table| table.is_alive(pid))
+}
+
+/// Sets the currently-resuming process's scheduling priority from a
+/// `Priority` variant index (0=Low, 1=Normal, 2=High). The cooperative
+/// analog of native's `koja_rt_set_priority`; reads [`current_pid`] and
+/// retargets it on the installed core table.
+pub(crate) fn set_priority(level: i64) {
+    let pid = current_pid();
+    with_table(|table| table.set_priority(pid, Priority::from_index(level)));
 }
 
 /// Mints the next `Ref.call` correlation token. Monotonic within a run.

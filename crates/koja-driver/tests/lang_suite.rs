@@ -458,6 +458,7 @@ fn lang_package_collision() {
 lang_test_dir!(lang_kernel_exit, "kernel_exit", project);
 lang_test_dir!(lang_process_entry, "process_entry", project);
 lang_test_dir!(lang_process_exit, "process_exit", project);
+lang_test_dir!(lang_process_priority, "process_priority", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
 lang_test_dir!(lang_receive_after, "receive_after", project);
 

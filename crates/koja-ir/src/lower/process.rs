@@ -33,7 +33,7 @@
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind, MatchArm, Pattern, Statement};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, LocalId, Resolution, ResolvedType};
 use koja_ast::span::Span;
-use koja_typecheck::{GlobalRegistry, RegistryEntry};
+use koja_typecheck::{GlobalKind, GlobalRegistry, RegistryEntry};
 
 use crate::enum_decl::IRVariantTag;
 use crate::function::{
@@ -359,10 +359,11 @@ fn resolve_spawn_target(inner: &Expr) -> Option<SpawnTarget<'_>> {
     })
 }
 
-/// Discover the `start` and `run` method instantiations for the
-/// receiver. `start` is what the wrapper invokes; `run` is the
-/// receive loop the wrapper chains into when `start` succeeds.
-/// Both go through [`LowerOutput::instantiations`] so the
+/// Discover the `start`, `run`, and `priority` method instantiations
+/// for the receiver. `start` is what the wrapper invokes; `run` is the
+/// receive loop the wrapper chains into when `start` succeeds;
+/// `priority` is read once right after `start` to set the process's
+/// scheduling priority. All go through [`LowerOutput::instantiations`] so the
 /// monomorphization driver synthesizes concrete bodies before seal.
 /// Non-generic receivers skip enqueueing — the methods already lift
 /// as concrete decls.
@@ -375,7 +376,7 @@ fn enqueue_process_method_instantiations(
     if receiver_args.is_empty() {
         return;
     }
-    for method in ["start", "run"] {
+    for method in ["priority", "run", "start"] {
         if let Some(method_id) = lookup_sibling_method(target.receiver_id, method, registry) {
             output.instantiations.push(Instantiation {
                 template: method_id,
@@ -411,17 +412,24 @@ fn receiver_type_args(receiver: &ResolvedType) -> Vec<ResolvedType> {
 /// body builder never touches the AST or registry.
 pub(crate) struct ProcessBodyTypes {
     pub(crate) config: IRType,
+    pub(crate) priority: IRType,
+    /// Compile-time tag of `Priority.High`, resolved by name so the
+    /// scheduling-weight diamond in [`emit_apply_priority`] never
+    /// depends on the enum's source variant order.
+    pub(crate) priority_high_tag: u8,
+    /// Compile-time tag of `Priority.Low`, resolved by name.
+    pub(crate) priority_low_tag: u8,
     pub(crate) result: IRType,
     pub(crate) state: IRType,
     pub(crate) stop_reason: IRType,
 }
 
 impl ProcessBodyTypes {
-    /// Resolve the `Result<State, StopReason>` cell and the
-    /// `StopReason` enum for `state_resolved`. Constructed from the
-    /// registry rather than read off `start`'s signature: typecheck
-    /// already guarantees `start` returns exactly this shape, and
-    /// building it here keeps the path free of `Self`-typed
+    /// Resolve the `Result<State, StopReason>` cell, the `StopReason`
+    /// enum, and the `Priority` enum for `state_resolved`. Constructed
+    /// from the registry rather than read off `start`'s signature:
+    /// typecheck already guarantees `start` returns exactly this shape,
+    /// and building it here keeps the path free of `Self`-typed
     /// signatures. Routing through [`resolved_type_to_ir_type`]
     /// enqueues the generic `Result` cell instantiation.
     pub(crate) fn resolve(
@@ -433,7 +441,9 @@ impl ProcessBodyTypes {
     ) -> Self {
         let result_id = lookup_global(registry, "Result");
         let stop_reason_id = lookup_global(registry, "StopReason");
+        let priority_id = lookup_global(registry, "Priority");
         let stop_reason_resolved = ResolvedType::leaf(Resolution::Global(stop_reason_id));
+        let priority_resolved = ResolvedType::leaf(Resolution::Global(priority_id));
         let result_resolved = ResolvedType::Named {
             resolution: Resolution::Global(result_id),
             type_args: vec![state_resolved.clone(), stop_reason_resolved.clone()],
@@ -442,13 +452,47 @@ impl ProcessBodyTypes {
             resolved_type_to_ir_type(&result_resolved, registry, &mut output.instantiations);
         let stop_reason =
             resolved_type_to_ir_type(&stop_reason_resolved, registry, &mut output.instantiations);
+        let priority =
+            resolved_type_to_ir_type(&priority_resolved, registry, &mut output.instantiations);
+        let (priority_high_tag, priority_low_tag) = priority_variant_tags(registry, priority_id);
         Self {
             config,
+            priority,
+            priority_high_tag,
+            priority_low_tag,
             result,
             state,
             stop_reason,
         }
     }
+}
+
+/// Resolve the `(High, Low)` variant tags of `Priority` by name. Tags
+/// are order-independent, so reordering the enum's source variants
+/// can't shift the scheduling weight the compiler emits. Asserts the
+/// three known variants resolve to distinct tags — a renamed or merged
+/// variant is a seal-level breakage we want to fail loudly on.
+fn priority_variant_tags(registry: &GlobalRegistry, priority_id: GlobalRegistryId) -> (u8, u8) {
+    let Some(RegistryEntry {
+        kind: GlobalKind::Enum(Some(definition)),
+        ..
+    }) = registry.get(priority_id)
+    else {
+        panic!("IR lower: `Global.Priority` is not a stamped enum in the registry");
+    };
+    let tag_of = |name: &str| {
+        definition
+            .lookup_variant(name)
+            .unwrap_or_else(|| panic!("IR lower: `Priority` is missing variant `{name}`"))
+            .0 as u8
+    };
+    let (high, low, normal) = (tag_of("High"), tag_of("Low"), tag_of("Normal"));
+    assert!(
+        high != low && low != normal && high != normal,
+        "IR lower: `Priority` variants High/Low/Normal must have distinct tags \
+         (got high={high}, low={low}, normal={normal})",
+    );
+    (high, low)
 }
 
 fn lookup_global(registry: &GlobalRegistry, name: &str) -> GlobalRegistryId {
@@ -621,8 +665,9 @@ fn build_process_body(
         err_block,
     );
 
-    // Ok arm: clone the state out, release the scrutinee, chain into
-    // the run loop (which borrows the state), release the state.
+    // Ok arm: clone the state out, release the scrutinee, apply the
+    // declared priority, then chain into the run loop (which borrows
+    // the state), release the state.
     let state_field = extract_result_payload(
         &mut ctx,
         ok_block,
@@ -632,6 +677,7 @@ fn build_process_body(
         &types.state,
     );
     drop_discarded_temp(&mut ctx, ok_block, start_result);
+    let ok_block = emit_apply_priority(&mut ctx, ok_block, state_symbol, state_field, types);
     let stop_reason = ctx.fresh_value(types.stop_reason.clone());
     ctx.cfg.append(
         ok_block,
@@ -738,6 +784,151 @@ fn extract_result_payload(
         },
     );
     materialize_owned(ctx, block, field, field_type)
+}
+
+/// Read the process's declared `priority()` off the started `state`
+/// and hand the runtime its scheduling weight via
+/// [`IRInstruction::SetPriority`], before the `run` loop begins.
+///
+/// The variant is a runtime value, so the weight is selected by a
+/// compile-time, name-keyed branch diamond: the `High`/`Low` tags are
+/// resolved by variant name (see [`priority_variant_tags`]) and the
+/// emitted CFG maps `High → 2`, `Low → 0`, and every other variant
+/// (`Normal`) → 1, matching `koja_runtime_core::Priority::from_index`.
+/// No Koja `weight()` method and no dependence on the enum's source
+/// variant order. The three arms converge on a join block carrying the
+/// chosen `Int64` weight as a [`crate::function::BlockParam`]; that
+/// join block is returned so the caller appends `run` to it.
+///
+/// `priority` borrows `state` (clone-on-entry, like every method
+/// call — see [`super::calls`]'s borrow convention), so the caller's
+/// owned `state` value flows on to `run` untouched and is released by
+/// the single post-`run` drop. The `priority()` result is acquired
+/// (`mark_owned`) and released in the join block (reachable on every
+/// arm); `Priority`'s all-unit variants make the release a no-op, but
+/// the discipline keeps the path correct if the enum ever grows heap
+/// payload.
+fn emit_apply_priority(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    state_symbol: &IRSymbol,
+    state: ValueId,
+    types: &ProcessBodyTypes,
+) -> IRBlockId {
+    let IRType::Enum(priority_symbol) = &types.priority else {
+        panic!(
+            "IR lower: `Priority` must lower to an enum, got `{:?}`",
+            types.priority
+        );
+    };
+    let priority_value = ctx.fresh_value(types.priority.clone());
+    ctx.cfg.append(
+        block,
+        IRInstruction::Call {
+            args: vec![state],
+            callee: mangled_method_name(state_symbol, &[], "priority", &[]),
+            dest: priority_value,
+        },
+    );
+    ctx.mark_owned(priority_value);
+
+    let tag = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::EnumTagGet {
+            dest: tag,
+            value: priority_value,
+            ty: priority_symbol.clone(),
+        },
+    );
+
+    let high_block = ctx.fresh_block("priority_high");
+    let check_low_block = ctx.fresh_block("priority_check_low");
+    let low_block = ctx.fresh_block("priority_low");
+    let normal_block = ctx.fresh_block("priority_normal");
+    let join_block = ctx.fresh_block("priority_set");
+    let weight = ctx.declare_block_param(join_block, IRType::Int64);
+
+    emit_priority_tag_branch(
+        ctx,
+        block,
+        tag,
+        types.priority_high_tag,
+        high_block,
+        check_low_block,
+    );
+    emit_priority_tag_branch(
+        ctx,
+        check_low_block,
+        tag,
+        types.priority_low_tag,
+        low_block,
+        normal_block,
+    );
+    branch_with_weight(ctx, high_block, join_block, 2);
+    branch_with_weight(ctx, low_block, join_block, 0);
+    branch_with_weight(ctx, normal_block, join_block, 1);
+
+    ctx.cfg
+        .append(join_block, IRInstruction::SetPriority { tag: weight });
+    drop_discarded_temp(ctx, join_block, priority_value);
+    join_block
+}
+
+/// Emit `cond_br (tag == variant_tag) then, else` as `block`'s
+/// terminator — one rung of [`emit_apply_priority`]'s weight diamond,
+/// modeled on [`emit_result_tag_branch`].
+fn emit_priority_tag_branch(
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    tag: ValueId,
+    variant_tag: u8,
+    then_block: IRBlockId,
+    else_block: IRBlockId,
+) {
+    let expected = ctx.fresh_value(IRType::Int8);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest: expected,
+            value: ConstValue::Int8(variant_tag as i8),
+        },
+    );
+    let matches = ctx.fresh_value(IRType::Bool);
+    ctx.cfg.append(
+        block,
+        IRInstruction::BinaryOp {
+            dest: matches,
+            lhs: tag,
+            op: IRBinOp::Eq,
+            rhs: expected,
+        },
+    );
+    ctx.cfg.set_terminator(
+        block,
+        IRTerminator::CondBranch {
+            cond: matches,
+            else_target: BranchTarget::to(else_block),
+            then_target: BranchTarget::to(then_block),
+        },
+    );
+}
+
+/// Materialize `weight` as an `Int64` const in `block` and branch to
+/// `join` carrying it as the join block's `Int64` param.
+fn branch_with_weight(ctx: &mut FnLowerCtx, block: IRBlockId, join: IRBlockId, weight: i64) {
+    let weight_const = ctx.fresh_value(IRType::Int64);
+    ctx.cfg.append(
+        block,
+        IRInstruction::Const {
+            dest: weight_const,
+            value: ConstValue::Int64(weight),
+        },
+    );
+    ctx.cfg.set_terminator(
+        block,
+        IRTerminator::Branch(BranchTarget::with_args(join, vec![weight_const])),
+    );
 }
 
 /// Close a process-body arm: dispose of the `StopReason` per the

@@ -57,6 +57,7 @@ pub(crate) const RT_REPLY_SYMBOL: &str = "koja_rt_reply";
 pub(crate) const RT_SELF_SYMBOL: &str = "koja_rt_self";
 pub(crate) const RT_SEND_AFTER_SYMBOL: &str = "koja_rt_send_after";
 pub(crate) const RT_SEND_LIFECYCLE_SYMBOL: &str = "koja_rt_send_lifecycle";
+pub(crate) const RT_SET_PRIORITY_SYMBOL: &str = "koja_rt_set_priority";
 pub(crate) const RT_SEND_SYMBOL: &str = "koja_rt_send";
 pub(crate) const RT_SPAWN_SYMBOL: &str = "koja_rt_spawn";
 
@@ -577,6 +578,21 @@ pub(crate) fn declare_rt_send_lifecycle_extern<'ctx>(
         .fn_type(&[i64_ty.into(), i64_ty.into()], false);
     ctx.module
         .add_function(RT_SEND_LIFECYCLE_SYMBOL, signature, Some(Linkage::External))
+}
+
+/// Declare (or look up) `koja_rt_set_priority`. Signature:
+/// `void koja_rt_set_priority(i64 level)`. Sets the *current* process's
+/// scheduling weight (0=Low, 1=Normal, 2=High), which the compiler's
+/// name-keyed `Priority` mapping assigns off the state's `priority()`.
+/// Called once per process body, right after `start` succeeds.
+pub(crate) fn declare_rt_set_priority_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    if let Some(existing) = ctx.module.get_function(RT_SET_PRIORITY_SYMBOL) {
+        return existing;
+    }
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
+    ctx.module
+        .add_function(RT_SET_PRIORITY_SYMBOL, signature, Some(Linkage::External))
 }
 
 /// Declare (or look up) `koja_rt_send_after`. Signature:
