@@ -145,11 +145,9 @@ resolved **by variant name** at emit/eval time:
 Declaration order in stdlib sources is alpha-sorted and free to
 change; name lookup makes that a non-event.
 
-The `Priority` enum (`lib/global/src/process.koja`) is **not**
-declaration-order-pinned: its variants are alpha-sorted and the
-Koja→wire scheduling weight is assigned by the compiler in
-`emit_apply_priority` (`koja-ir`) by resolving variant names — not by
-enum declaration order, and not via any Koja method:
+The `Priority` enum (`lib/global/src/process.koja`) is resolved by
+variant name: the compiler assigns the Koja→wire scheduling weight in
+`emit_apply_priority` (`koja-ir`), so its variants stay alpha-sorted.
 
 | Variant  | Wire weight |
 | -------- | ----------- |

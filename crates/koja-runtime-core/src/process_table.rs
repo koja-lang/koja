@@ -123,10 +123,9 @@ pub enum ProcessState {
 }
 
 /// A process's scheduling priority. The wire weight is an explicit ABI
-/// contract (0 = `Low`, 1 = `Normal`, 2 = `High`) assigned by the compiler
-/// by variant name and decoded here by `from_index`; the Rust enum's
-/// declaration order only fixes the internal ready-queue index via
-/// `as usize`. The default is `Normal`.
+/// contract (0 = `Low`, 1 = `Normal`, 2 = `High`) decoded by
+/// `from_index`; the Rust enum's order fixes the ready-queue index via
+/// `as usize`. Default is `Normal`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Priority {
     Low,

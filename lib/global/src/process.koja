@@ -18,10 +18,7 @@ enum StopReason
 end
 
 @doc """
-Scheduling priority for a process. Variant order is cosmetic and not
-significant: the runtime scheduling weight is assigned by the compiler by
-variant name (the runtime maps weight 0=Low, 1=Normal, 2=High), so variants
-stay alpha-sorted and reordering them changes nothing.
+Scheduling priority for a process.
 """
 enum Priority
   High

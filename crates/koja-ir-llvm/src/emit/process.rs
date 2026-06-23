@@ -254,10 +254,8 @@ pub(super) fn emit_spawn<'ctx>(
 // ----- IRInstruction::SetPriority ------------------------------------------
 
 /// Emit `IRInstruction::SetPriority`: forward the `Int64` scheduling
-/// weight to `koja_rt_set_priority`, which retargets the current
-/// process. The lowering layer's name-keyed `Priority` mapping already
-/// produced the `Int64` weight, so this is a straight pass-through call
-/// producing no value.
+/// weight to `koja_rt_set_priority`, retargeting the current process.
+/// A straight pass-through call producing no value.
 pub(super) fn emit_set_priority<'ctx>(
     ctx: &EmitContext<'ctx>,
     tag: ValueId,

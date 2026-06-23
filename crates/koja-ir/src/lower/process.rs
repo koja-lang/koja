@@ -413,9 +413,7 @@ fn receiver_type_args(receiver: &ResolvedType) -> Vec<ResolvedType> {
 pub(crate) struct ProcessBodyTypes {
     pub(crate) config: IRType,
     pub(crate) priority: IRType,
-    /// Compile-time tag of `Priority.High`, resolved by name so the
-    /// scheduling-weight diamond in [`emit_apply_priority`] never
-    /// depends on the enum's source variant order.
+    /// Compile-time tag of `Priority.High`, resolved by name.
     pub(crate) priority_high_tag: u8,
     /// Compile-time tag of `Priority.Low`, resolved by name.
     pub(crate) priority_low_tag: u8,
@@ -467,11 +465,9 @@ impl ProcessBodyTypes {
     }
 }
 
-/// Resolve the `(High, Low)` variant tags of `Priority` by name. Tags
-/// are order-independent, so reordering the enum's source variants
-/// can't shift the scheduling weight the compiler emits. Asserts the
-/// three known variants resolve to distinct tags — a renamed or merged
-/// variant is a seal-level breakage we want to fail loudly on.
+/// Resolve the `(High, Low)` variant tags of `Priority` by name, so the
+/// emitted scheduling weight never shifts if the enum's variants are
+/// reordered. Asserts `High`/`Low`/`Normal` resolve to distinct tags.
 fn priority_variant_tags(registry: &GlobalRegistry, priority_id: GlobalRegistryId) -> (u8, u8) {
     let Some(RegistryEntry {
         kind: GlobalKind::Enum(Some(definition)),
@@ -786,28 +782,19 @@ fn extract_result_payload(
     materialize_owned(ctx, block, field, field_type)
 }
 
-/// Read the process's declared `priority()` off the started `state`
-/// and hand the runtime its scheduling weight via
-/// [`IRInstruction::SetPriority`], before the `run` loop begins.
+/// Read `priority()` off the started `state` and hand the runtime its
+/// scheduling weight via [`IRInstruction::SetPriority`], before `run`.
 ///
-/// The variant is a runtime value, so the weight is selected by a
-/// compile-time, name-keyed branch diamond: the `High`/`Low` tags are
-/// resolved by variant name (see [`priority_variant_tags`]) and the
-/// emitted CFG maps `High → 2`, `Low → 0`, and every other variant
-/// (`Normal`) → 1, matching `koja_runtime_core::Priority::from_index`.
-/// No Koja `weight()` method and no dependence on the enum's source
-/// variant order. The three arms converge on a join block carrying the
-/// chosen `Int64` weight as a [`crate::function::BlockParam`]; that
-/// join block is returned so the caller appends `run` to it.
+/// The variant is a runtime value, so the weight is chosen by a
+/// name-keyed branch diamond — `High → 2`, `Low → 0`, else (`Normal`)
+/// → 1, matching `koja_runtime_core::Priority::from_index`. The arms
+/// converge on a join block carrying the `Int64` weight as a
+/// [`crate::function::BlockParam`]; that block is returned so the
+/// caller appends `run` to it.
 ///
-/// `priority` borrows `state` (clone-on-entry, like every method
-/// call — see [`super::calls`]'s borrow convention), so the caller's
-/// owned `state` value flows on to `run` untouched and is released by
-/// the single post-`run` drop. The `priority()` result is acquired
-/// (`mark_owned`) and released in the join block (reachable on every
-/// arm); `Priority`'s all-unit variants make the release a no-op, but
-/// the discipline keeps the path correct if the enum ever grows heap
-/// payload.
+/// `priority` borrows `state` (clone-on-entry), so the owned `state`
+/// flows on to `run`; the `priority()` result is acquired and released
+/// in the join block (a no-op for `Priority`'s unit variants).
 fn emit_apply_priority(
     ctx: &mut FnLowerCtx,
     block: IRBlockId,

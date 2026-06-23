@@ -581,10 +581,9 @@ pub(crate) fn declare_rt_send_lifecycle_extern<'ctx>(
 }
 
 /// Declare (or look up) `koja_rt_set_priority`. Signature:
-/// `void koja_rt_set_priority(i64 level)`. Sets the *current* process's
-/// scheduling weight (0=Low, 1=Normal, 2=High), which the compiler's
-/// name-keyed `Priority` mapping assigns off the state's `priority()`.
-/// Called once per process body, right after `start` succeeds.
+/// `void koja_rt_set_priority(i64 level)` — sets the current process's
+/// scheduling weight (0=Low, 1=Normal, 2=High). Called once per process
+/// body, right after `start` succeeds.
 pub(crate) fn declare_rt_set_priority_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     if let Some(existing) = ctx.module.get_function(RT_SET_PRIORITY_SYMBOL) {
         return existing;
