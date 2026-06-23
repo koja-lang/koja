@@ -166,18 +166,20 @@ pub(crate) fn unwatch(fd: i32) {
     REGISTRY.with(|registry| registry.borrow_mut().remove(&fd));
 }
 
-/// Suspend until `fd` is ready for `interest`, then return. The
-/// cooperative core of every eval I/O wait: an already-ready fd returns
-/// immediately (the common sequential case); otherwise a driven process
-/// parks `WaitingIO` and yields to the driver, while a driver-less
-/// function-mode run blocks the single thread on the fd.
-pub(crate) async fn io_block(fd: i32, interest: Interest) {
+/// Suspend until `fd` is ready for `interest`, then return whether the
+/// wait was *interrupted* (resumed without the fd becoming ready, i.e.
+/// woken by a message rather than readiness). The cooperative core of
+/// every eval I/O wait: an already-ready fd returns `false` immediately
+/// (the common sequential case); otherwise a driven process parks
+/// `WaitingIO` and yields to the driver, while a driver-less function-mode
+/// run blocks the single thread on the fd.
+pub(crate) async fn io_block(fd: i32, interest: Interest) -> bool {
     if ready_now(fd, interest) {
-        return;
+        return false;
     }
     if !scheduler::runtime_installed() {
         blocking_poll(fd, interest);
-        return;
+        return false;
     }
     let pid = scheduler::current_pid();
     // A refused park means a kill landed mid-run: skip the registration
@@ -186,7 +188,10 @@ pub(crate) async fn io_block(fd: i32, interest: Interest) {
         arm(fd, interest, Waker::Resume(pid));
         YieldOnce::new().await;
         unwatch(fd);
+        // Resumed without readiness ⇒ a message woke us; report the interrupt.
+        return !ready_now(fd, interest);
     }
+    false
 }
 
 /// Insert (or replace) `fd`'s registration. The last `register` for an fd

@@ -96,6 +96,11 @@ impl<M: Message> Mailbox<M> {
             .or_else(|| self.business.pop_front())
     }
 
+    /// Whether any system/lifecycle traffic is queued.
+    pub fn has_system(&self) -> bool {
+        !self.system.is_empty()
+    }
+
     /// Takes the pending reply, if one has arrived.
     pub fn take_reply(&mut self) -> Option<M> {
         self.reply.take()

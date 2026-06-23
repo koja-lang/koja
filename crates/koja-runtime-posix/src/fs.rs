@@ -211,5 +211,5 @@ pub extern "C" fn koja_io_block(fd: i32, readable: i64) {
     } else {
         Interest::Writable
     };
-    io_block(fd, interest);
+    let _ = io_block(fd, interest);
 }

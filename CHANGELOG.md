@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A process blocked in a synchronous syscall (e.g. socket `accept`) now wakes when a lifecycle signal (`SIGTERM` → `Shutdown`) arrives, instead of staying stuck until the I/O happens to complete.
 - `--release` now actually engages LLVM `-O3` optimization; previously the flag only affected linking and emitted unoptimized (`-O0`) code.
 
 ## [0.12.2] - 2026-06-17

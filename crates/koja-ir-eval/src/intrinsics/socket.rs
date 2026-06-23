@@ -115,7 +115,13 @@ async fn recv_from<R: CallResolver>(
     let address_symbol = struct_field_symbol(&pair_symbol, 1, resolver)?;
     let ip_symbol = struct_field_symbol(&address_symbol, 0, resolver)?;
 
-    reactor::io_block(fd, Interest::Readable).await;
+    // Interrupted by a signal — surface an error instead of reading.
+    if reactor::io_block(fd, Interest::Readable).await {
+        return Ok(helpers::result_value(
+            result_symbol,
+            Err(last_error_value()),
+        ));
+    }
     let buffer = unsafe { koja_socket_recv_from(fd, *count) };
     if buffer.is_null() {
         return Ok(helpers::result_value(
