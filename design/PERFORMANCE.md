@@ -103,7 +103,7 @@ EXPOIR design ([ROADMAP.md](ROADMAP.md): the Phase 5 "atomic-refcount sharing
 for deeply-immutable values" optimization question, currently deferrable; also
 [archive/20260427-EXPOIR.md](archive/20260427-EXPOIR.md)). A `Shared<T>` makes
 "this value may be referenced across processes, account for it atomically" a
-*typed, opt-in* property rather than a runtime guess, which keeps the
+_typed, opt-in_ property rather than a runtime guess, which keeps the
 non-`Shared` fast path provably non-atomic. **This lever is effectively gated
 on that type landing** — and the roadmap flags it as defer-if-complex, so treat
 zero-copy messaging as downstream of that decision, not independent of it. If
@@ -158,24 +158,24 @@ unlocks inlining on hot dispatch sites.
 
 **Leverage: high (eats most real sends; partially decouples the concurrency win from `Shared`). Effort: medium-high. Prior art: Pony `iso`/`consume`, Rust move + `Send`.**
 
-Value semantics already make copy-vs-move-vs-share an *implementation detail*:
+Value semantics already make copy-vs-move-vs-share an _implementation detail_:
 the spec says every binding is an independent value, so the backend is free to
 pick the cheapest sound lowering for a boundary `DeepCopy`, with the copy as the
 always-correct fallback. That licenses a pure optimization — no behavior change.
 
 The high-value, locally-provable case is **move-on-last-use**: if the sender
-provably never touches a sent value again *and* its heap subgraph isn't
+provably never touches a sent value again _and_ its heap subgraph isn't
 reachable from anything the sender keeps live, the boundary copy becomes a
-**move** — hand the block to the receiver, zero copy, and crucially *no atomic
-RC*, because ownership transfers wholesale and there's still exactly one owner.
+**move** — hand the block to the receiver, zero copy, and crucially _no atomic
+RC_, because ownership transfers wholesale and there's still exactly one owner.
 This is the strongest outcome on every axis and covers the dominant idioms
 (`spawn Foo.start(config)` with a locally-built `config`; a `send` of a
 freshly-constructed message). It is the same analysis Koja already runs
-*intra-process* — the owned-temporary discipline where construction results are
+_intra-process_ — the owned-temporary discipline where construction results are
 moved, not cloned (see the throughline in [RUNTIME-GAPS.md](RUNTIME-GAPS.md)) —
 generalized from the call boundary to the send boundary.
 
-Why this is move inference and **not** auto-sharing: promoting a *kept* or
+Why this is move inference and **not** auto-sharing: promoting a _kept_ or
 aliased value to a shared block runs into representation coherence — RC
 atomicity is a property of the heap block, fixed at allocation, and one count
 field can't be non-atomic for the sender's references and atomic for the
