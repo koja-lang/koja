@@ -5,26 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.13.0] - 2026-06-24
 
 ### Added
 
-- Graceful shutdown on `SIGTERM`: the runtime stops accepting new `spawn`s and gives the program a grace period (default 30s, configurable with the `KOJA_GRACE_MS` environment variable) to wind itself down. A process that handles the `Shutdown` lifecycle signal can exit cleanly; anything still running when the grace period elapses is stopped so the program always terminates. Works the same on both backends.
-- A process stuck in long-running CPU-bound work — an infinite loop, tail recursion, or deep non-tail recursion alike — no longer freezes the others. The runtime now periodically interrupts such work so every process gets a fair turn, and higher-priority processes get a larger share. This works the same on both backends.
-- Per-process scheduling priority via `Process.priority()` returning `Priority.Low`, `Priority.Normal`, or `Priority.High` (default `Normal`); the scheduler serves higher priorities first but periodically forces the lowest non-empty tier so lower priorities aren't starved.
 - The interpreter now supports `spawn`, cross-process messaging, timers, and I/O in scripts and `koja run --backend=interpreter` — process programs that previously required `--backend=llvm` now run identically on both backends.
+- A process stuck in long-running CPU-bound work — an infinite loop, tail recursion, or deep non-tail recursion alike — no longer freezes the others. The runtime now periodically interrupts such work so every process gets a fair turn, and higher-priority processes get a larger share.
+- Per-process scheduling priority via `Process.priority()` returning `Priority.Low`, `Priority.Normal`, or `Priority.High` (default `Normal`); the scheduler serves higher priorities first but periodically forces the lowest non-empty tier so lower priorities aren't starved.
+- Graceful shutdown on `SIGTERM`: the runtime stops accepting new `spawn`s and gives the program a grace period (default 30s, configurable with the `KOJA_GRACE_MS` environment variable) to wind itself down. A process that handles the `Shutdown` lifecycle signal can exit cleanly; anything still running when the grace period elapses is stopped so the program always terminates.
 - Compiled (`--backend=llvm`) programs now print a source backtrace on panic — `** (panic) <message>` followed by `file:line: name()` frames for the user's call chain, including across spawned processes. Function-granular DWARF, so each frame resolves to its function's declaration line.
 
 ### Changed
 
-- Message passing and process spawning are dramatically faster (roughly 10× and 25× in micro-benchmarks). When one process sends to, replies to, or spawns another, the runtime now keeps the pair on the same CPU core instead of handing the work off across threads, eliminating a context switch and wakeup per message. Programs that run many processes at once also make better use of every core: each worker thread keeps its own run queue and pulls work from busier threads when it would otherwise sit idle. This is a performance change only — no difference in behavior — and applies to compiled (`--backend=llvm`) programs.
+- Message passing and process spawning are dramatically faster (roughly 10× and 25× in micro-benchmarks). When one process sends to, replies to, or spawns another, the runtime now keeps the pair on the same CPU core instead of handing the work off across threads, eliminating a context switch and wakeup per message. Programs that run many processes at once also make better use of every core: each worker thread keeps its own run queue and pulls work from busier threads when it would otherwise sit idle. This is a performance change only — no difference in behavior — and applies to the compiled (`--backend=llvm`) backend.
+- Cooperative preemption is now much cheaper: the fairness check is a near-free inline operation that only calls into the scheduler once a process has used up its turn, instead of a function call on every check. Tight loops run measurably faster as a result (~2× on a 200M-iteration micro-benchmark).
 - Scheduler timers and deadlines are now backed by a single hashed timing wheel (plus an overflow heap for far-future entries) instead of two binary heaps, making timer arming amortized O(1).
-- Cooperative preemption is now cheaper and more thorough. The fairness check is a near-free inline operation (it only calls into the scheduler once a process has used up its turn), and it now also runs on entry to every function that makes a call — so deep recursion can no longer slip past it. Tight loops run measurably faster as a result (~2× on a 200M-iteration micro-benchmark). Applies to compiled (`--backend=llvm`) programs.
 
 ### Fixed
 
-- A process blocked in a synchronous syscall (e.g. socket `accept`) now wakes when a lifecycle signal (`SIGTERM` → `Shutdown`) arrives, instead of staying stuck until the I/O happens to complete.
 - `--release` now actually engages LLVM `-O3` optimization; previously the flag only affected linking and emitted unoptimized (`-O0`) code.
+- A process blocked in a synchronous syscall (e.g. socket `accept`) now wakes when a lifecycle signal (`SIGTERM` → `Shutdown`) arrives, instead of staying stuck until the I/O happens to complete.
 
 ## [0.12.2] - 2026-06-17
 
