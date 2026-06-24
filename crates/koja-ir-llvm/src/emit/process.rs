@@ -51,6 +51,7 @@ use crate::main_wrapper::EXIT_CODE_SYMBOL;
 use crate::runtime::{
     declare_rt_process_exit_extern, declare_rt_receive_extern, declare_rt_receive_timeout_extern,
     declare_rt_set_priority_extern, declare_rt_spawn_extern, declare_rt_yield_check_extern,
+    reductions_counter_global,
 };
 use crate::types::{ir_basic_type, value_basic_type};
 
@@ -289,11 +290,54 @@ pub(super) fn emit_set_priority<'ctx>(
 
 // ----- IRInstruction::YieldCheck -------------------------------------------
 
-/// Emit `IRInstruction::YieldCheck`: a bare call to `koja_rt_yield_check`.
-/// No operands, no value — the runtime decides whether to re-queue.
+/// Emit `IRInstruction::YieldCheck` as an inline reduction spend: decrement
+/// the per-worker `koja_reductions_left` thread-local and branch into
+/// `koja_rt_yield_check` only when it reaches zero. The common case is a
+/// load / sub / store with no call, so the dense placement stays cheap.
 pub(super) fn emit_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
+    let host_block = ctx.builder.get_insert_block().ok_or_else(|| {
+        LlvmError::Codegen("LLVM emit: YieldCheck emitted with no insertion block".to_string())
+    })?;
+    let function = host_block.get_parent().ok_or_else(|| {
+        LlvmError::Codegen("LLVM emit: YieldCheck's host block has no parent function".to_string())
+    })?;
+
+    let i32_ty = ctx.context.i32_type();
+    let counter = reductions_counter_global(ctx).as_pointer_value();
+    let current = ctx
+        .builder
+        .build_load(i32_ty, counter, "reductions")
+        .or_ice()?
+        .into_int_value();
+    let decremented = ctx
+        .builder
+        .build_int_sub(current, i32_ty.const_int(1, false), "reductions_next")
+        .or_ice()?;
+    ctx.builder.build_store(counter, decremented).or_ice()?;
+
+    let exhausted = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            decremented,
+            i32_ty.const_zero(),
+            "reductions_out",
+        )
+        .or_ice()?;
+    let yield_bb = ctx.context.append_basic_block(function, "yield_slow");
+    let continue_bb = ctx.context.append_basic_block(function, "yield_cont");
+    ctx.builder
+        .build_conditional_branch(exhausted, yield_bb, continue_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(yield_bb);
     let yield_check_fn = declare_rt_yield_check_extern(ctx);
     ctx.builder.build_call(yield_check_fn, &[], "").or_ice()?;
+    ctx.builder
+        .build_unconditional_branch(continue_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(continue_bb);
     Ok(())
 }
 

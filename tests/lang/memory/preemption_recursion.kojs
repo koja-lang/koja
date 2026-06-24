@@ -1,0 +1,75 @@
+# Preemption via the function-entry yield check. `fib/1` is pure non-tail
+# recursion: no loop back-edge, no tail call, so the compiler-inserted
+# *entry* check is its only preemption point. The Low-priority burner
+# spawns a High-priority worker mid-recursion and then grinds `fib`; only
+# if the burner yields on entry can the worker run, kill the burner, and
+# let the main process observe its death. Without entry checks the burner
+# monopolizes the single-threaded interpreter and this livelocks; under
+# LLVM the worker runs on another thread. Both backends print the same line.
+
+fn fib(n: Int) -> Int
+  if n <= 1
+    n
+  else
+    fib(n - 1) + fib(n - 2)
+  end
+end
+
+struct Worker
+  target: Ref<Int, Int>
+end
+
+impl Process<Ref<Int, Int>, Int, Int> for Worker
+  fn start(config: Ref<Int, Int>) -> Result<Self, StopReason>
+    Result.Ok(Worker{target: config})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn priority(self) -> Priority
+    Priority.High
+  end
+
+  fn run(self) -> StopReason
+    self.target.kill()
+    StopReason.Normal
+  end
+end
+
+struct Burner
+end
+
+impl Process<Int, Int, Int> for Burner
+  fn start(config: Int) -> Result<Self, StopReason>
+    Result.Ok(Burner{})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+
+  fn priority(self) -> Priority
+    Priority.Low
+  end
+
+  fn run(self) -> StopReason
+    me: Ref<Int, Int> = Ref.self_ref()
+    worker = spawn Worker.start(me)
+    fib(40)
+    StopReason.Normal
+  end
+end
+
+burner = spawn Burner.start(0)
+
+loop
+  if burner.alive?()
+    ()
+  else
+    break
+  end
+end
+
+"preemption recursion: ok".print()

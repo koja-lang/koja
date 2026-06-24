@@ -101,46 +101,15 @@ cleanup, not an active bug.
 **Fix.** Fold both into a typed `enum EventKey { Process(Pid),
 Watch(Fd) }` resolved through a table, rather than an integer offset.
 
-### 3. Preemption points cover only loops and tail calls
-
-**Severity: medium. Bug class: scheduler starvation / unfair preemption.**
-
-`YieldCheck` is inserted at exactly two sites: loop back-edges and
-immediately before a `TailCall` (`yield_checks.rs::insert_in_body`).
-Nothing sits at function entry or ordinary call sites, so a process
-that burns CPU without crossing either site never yields. The unguarded
-shapes are **deep non-tail recursion** (each frame is a plain `Call`, no
-back-edge) and **long straight-line blocks** (no branch, so no
-dominator analysis and no check). A `fib(35)` ran to completion with
-zero yield-checks — it didn't preempt, it monopolized the worker for its
-whole run, and on the single-threaded cooperative interpreter that shape
-can starve a peer indefinitely. Both backends are affected.
-
-In practice most long-running work is loops or tail recursion, which are
-covered — hence medium, not high — but the hole is real and is a
-correctness/fairness gap, not just a perf one.
-
-**Fix.** Add a preemption point that doesn't depend on control-flow
-shape: a check on function entry (and/or a bounded-instruction-count
-trip for pathological straight-line blocks). That multiplies how often
-`YieldCheck` runs, so pair it with an **inline fast-path lowering** —
-decrement a per-process reduction counter inline and call
-`koja_rt_yield_check` only on exhaustion, instead of an unconditional
-runtime call per check (the standard BEAM reduction trick). The inline
-path is the enabler that makes denser placement cheap; doing it for
-placement-completeness rather than to win a microbenchmark is the right
-ordering. Couples to where the reduction counter lives, so it wants to
-land after the scheduler/reduction model settles.
-
 ---
 
 ## Launch priority
 
 No open entry is a launch blocker. With the owned-temporary /
 construction leak now fixed, the unbounded-memory class is closed, and
-everything that remains is a robustness/coverage/fairness cleanup —
-**#1** (`loom`), **#2** (typed `EventKey`), and **#3** (preemption-point
-completeness) — that can land after a soft launch. **#3** is the one
-genuine correctness gap of the three (a CPU-bound non-tail-recursive
-process can starve peers), but it's bounded to code shapes that avoid
-loops and tail calls, so it doesn't block a soft launch.
+everything that remains is a robustness/coverage cleanup — **#1**
+(`loom`) and **#2** (typed `EventKey`) — that can land after a soft
+launch. The one-time fairness gap (preemption points covering only
+loops and tail calls, letting deep non-tail recursion monopolize a
+worker) is now closed: a `YieldCheck` sits at the entry of every
+call-containing function, lowered to an inline reduction decrement.
