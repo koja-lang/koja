@@ -1,0 +1,12 @@
+fn fib(n: Int) -> Int
+  if n <= 1
+    n
+  else
+    fib(n - 1) + fib(n - 2)
+  end
+end
+
+t0 = DateTime.now().timestamp_millis()
+r = fib(35)
+t1 = DateTime.now().timestamp_millis()
+"recursion_ms #{t1 - t0} result #{r}".print()

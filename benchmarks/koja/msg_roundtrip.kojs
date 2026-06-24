@@ -1,0 +1,37 @@
+struct W
+end
+
+enum M
+  Ping
+end
+
+impl Process<W, M, Int> for W
+  fn start(config: W) -> Result<Self, StopReason>
+    Result.Ok(W{})
+  end
+
+  fn handle(self, msg: M, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match from
+      Option.Some(reply) -> reply.send(1)
+      Option.None -> ()
+    end
+
+    Step.Continue(self)
+  end
+end
+
+w = spawn W.start(W{})
+t0 = DateTime.now().timestamp_millis()
+i = 0
+
+loop
+  w.call(M.Ping, 5000)
+  i += 1
+
+  if i >= 1000000
+    break
+  end
+end
+
+t1 = DateTime.now().timestamp_millis()
+"msg_ms #{t1 - t0}".print()

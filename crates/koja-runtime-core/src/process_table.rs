@@ -298,6 +298,11 @@ pub struct ProcessTable<X, M> {
     /// drained by [`Self::take_due_timers`]. Promotions are applied inline
     /// during the advance; only the deliveries the driver routes wait here.
     due_delivers: Vec<TimerEntry<M>>,
+    /// When set, [`Self::enqueue_ready`] stages PIDs in [`Self::pending_ready`]
+    /// for an adapter that owns the ready queue (native work-stealing) instead
+    /// of pushing into [`Self::ready`]. Off by default, so the cooperative and
+    /// WASM drivers keep using the in-core queues unchanged.
+    external_ready: bool,
     /// Indices of free slots available for reuse.
     free: Vec<u32>,
     /// When draining, the instant after which stragglers are force-killed
@@ -312,6 +317,9 @@ pub struct ProcessTable<X, M> {
     main_pid: Pid,
     /// Runtime lifecycle mode; `Draining` once a `SIGTERM` has been seen.
     mode: Mode,
+    /// Newly-runnable PIDs staged for an external queue owner, drained by
+    /// [`Self::drain_pending_ready`]. Only populated while [`Self::external_ready`].
+    pending_ready: Vec<Pid>,
     /// Packed PIDs ready to run, one FIFO queue per priority level
     /// (index = `priority as usize`), highest level served first.
     ready: [VecDeque<Pid>; LEVELS],
@@ -334,11 +342,13 @@ impl<X, M: Message> ProcessTable<X, M> {
             alive: 0,
             counters: ScheduleCounters::new(),
             due_delivers: Vec::new(),
+            external_ready: false,
             free: Vec::new(),
             grace_deadline: None,
             last_advance: None,
             main_pid: 0,
             mode: Mode::Running,
+            pending_ready: Vec::new(),
             ready: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             ready_ages: [0; LEVELS],
             slots: Vec::new(),
@@ -492,10 +502,38 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
     }
 
-    /// Enqueues `pid` onto the ready queue for its current priority.
+    /// Enqueues `pid` onto the ready queue for its current priority — or, in
+    /// [`external_ready`](Self::external_ready) mode, stages it in
+    /// [`pending_ready`](Self::pending_ready) for the adapter to route.
     fn enqueue_ready(&mut self, pid: Pid) {
+        if self.external_ready {
+            self.pending_ready.push(pid);
+            return;
+        }
         let level = self.get(pid).map_or(Priority::Normal, |p| p.priority) as usize;
         self.ready[level].push_back(pid);
+    }
+
+    /// Hands ready-queue ownership to the adapter: from now on
+    /// [`enqueue_ready`](Self::enqueue_ready) stages newly-runnable PIDs in
+    /// [`pending_ready`](Self::pending_ready) (drained via
+    /// [`drain_pending_ready`](Self::drain_pending_ready)) rather than the
+    /// in-core [`ready`](Self::ready) queues. One-way; set once at native boot.
+    pub fn use_external_ready(&mut self) {
+        self.external_ready = true;
+    }
+
+    /// Drains every PID staged since the last call, each paired with its
+    /// current [`Priority`] so the adapter can route to a priority queue
+    /// without re-locking per PID. Empty unless [`external_ready`](Self::external_ready).
+    pub fn drain_pending_ready(&mut self) -> Vec<(Pid, Priority)> {
+        std::mem::take(&mut self.pending_ready)
+            .into_iter()
+            .map(|pid| {
+                let priority = self.get(pid).map_or(Priority::Normal, |p| p.priority);
+                (pid, priority)
+            })
+            .collect()
     }
 
     /// Parks `pid` as `Blocked`, recording which part of its mailbox it waits
@@ -599,25 +637,37 @@ impl<X, M: Message> ProcessTable<X, M> {
         loop {
             let level = self.next_ready_level()?;
             let pid = self.ready[level].pop_front()?;
-            match self.get_mut(pid) {
-                Some(process)
-                    if !process.on_cpu
-                        && matches!(
-                            process.state,
-                            ProcessState::Created | ProcessState::Runnable
-                        ) =>
-                {
-                    process.on_cpu = true;
-                    process.reductions_left = process.priority.budget();
-                }
-                _ => {
-                    self.counters.stale_claims_skipped += 1;
-                    continue;
-                }
+            if self.try_claim(pid) {
+                return Some(pid);
             }
-            self.transition(pid, ProcessState::Running);
-            return Some(pid);
         }
+    }
+
+    /// Marks `pid` `Running` and `on_cpu`, granting its quantum's reduction
+    /// budget, when it is a fresh claim (alive, not already `on_cpu`,
+    /// `Created`/`Runnable`). Returns `false` for a stale ready entry (killed,
+    /// already resumed, or still `on_cpu`), counting the skip — the caller pops
+    /// the next candidate. The per-PID half of [`claim_next`](Self::claim_next),
+    /// used by an external queue owner that pops candidates itself.
+    pub fn try_claim(&mut self, pid: Pid) -> bool {
+        match self.get_mut(pid) {
+            Some(process)
+                if !process.on_cpu
+                    && matches!(
+                        process.state,
+                        ProcessState::Created | ProcessState::Runnable
+                    ) =>
+            {
+                process.on_cpu = true;
+                process.reductions_left = process.priority.budget();
+            }
+            _ => {
+                self.counters.stale_claims_skipped += 1;
+                return false;
+            }
+        }
+        self.transition(pid, ProcessState::Running);
+        true
     }
 
     /// Chooses which priority level `claim_next` serves, aging the ready
@@ -988,6 +1038,48 @@ mod tests {
         assert!(table.should_shutdown(), "every process is now dead");
         assert_eq!(table.get(main).unwrap().exit_reason, ExitReason::Killed);
         assert!(table.get(parked).is_none(), "parked process was freed");
+    }
+
+    #[test]
+    fn external_ready_stages_instead_of_enqueuing() {
+        let mut table = TestTable::new();
+        table.use_external_ready();
+        let pid = fake_spawn(&mut table);
+        // The spawn's enqueue went to the pending buffer, not the in-core
+        // queues, so the cooperative claim path sees nothing.
+        assert_eq!(table.claim_next(), None, "ready queues stay empty");
+        assert_eq!(table.drain_pending_ready(), vec![(pid, Priority::Normal)]);
+        // Draining is exhaustive: a second drain is empty.
+        assert!(table.drain_pending_ready().is_empty());
+    }
+
+    #[test]
+    fn drain_pending_ready_reports_current_priority() {
+        let mut table = TestTable::new();
+        table.use_external_ready();
+        let pid = fake_spawn(&mut table);
+        table.set_priority(pid, Priority::High);
+        let _ = table.drain_pending_ready();
+        // A later wake reports the updated priority.
+        assert!(table.try_claim(pid));
+        table.yield_running(pid);
+        assert!(table.after_switch(pid).is_none());
+        assert_eq!(table.drain_pending_ready(), vec![(pid, Priority::High)]);
+    }
+
+    #[test]
+    fn try_claim_marks_fresh_and_rejects_stale() {
+        let mut table = TestTable::new();
+        let pid = fake_spawn(&mut table);
+        assert!(table.try_claim(pid), "fresh runnable pid claims");
+        let process = table.get(pid).expect("claimed pid exists");
+        assert_eq!(process.state, ProcessState::Running);
+        assert_eq!(process.reductions_left, Priority::Normal.budget());
+        // Already on_cpu: a second claim is refused.
+        assert!(!table.try_claim(pid), "on_cpu pid is not re-claimed");
+        // Dead pid: refused.
+        table.kill(pid);
+        assert!(!table.try_claim(pid), "dead pid is not claimed");
     }
 
     #[test]

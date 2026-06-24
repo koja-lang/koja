@@ -503,9 +503,12 @@ the integration proof that the shim is a clean seam.
   `Executor`/`Driver` (spawn, mailboxes, `Ref`/`ReplyTo`, business
   `receive`) is the follow-on.
 - **The WASI adapter** (`poll_oneoff` reactor, WASM FFI). Phase 6.
-- **Monitors / supervision** (A0/A2), **preemption + priority**, and
-  **work-stealing run queues**. The protocol must not preclude them; it
-  does not add them here.
+- **Monitors / supervision** (A0/A2). The protocol must not preclude them;
+  it does not add them here. (**Preemption + priority** and **native
+  work-stealing run queues** have since landed — see ROADMAP A1; the native
+  adapter owns per-worker, per-priority deques plus global injectors behind
+  the table's opt-in external-ready seam, leaving the cooperative path on the
+  in-core ready queues.)
 - **An allocation protocol.** Allocation is a separate, already-latent
   seam (the `koja_alloc` / `koja_free` C-ABI contract), not a sixth
   scheduler trait. See [Allocator](#allocator). It stays a shared core
