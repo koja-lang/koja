@@ -10,6 +10,7 @@ fn main() {
 
     let mut build = cc::Build::new();
     build.file(src);
+    build.file("src/reductions.c");
     if os == "macos" {
         build.flag("-mmacosx-version-min=11.0");
     }

@@ -89,6 +89,11 @@ pub struct Addrinfo {
 unsafe extern "C" {
     pub fn koja_context_switch(save_sp: *mut *mut u8, load_sp: *mut u8);
 
+    /// Seed this worker thread's `koja_reductions_left` budget. The counter
+    /// is a C thread-local (`reductions.c`) so compiled process code can
+    /// decrement it inline; the runtime only ever writes it through here.
+    pub fn koja_seed_reductions(budget: u32);
+
     pub fn fflush(stream: *mut u8) -> i32;
     pub fn setvbuf(stream: *mut u8, buf: *mut u8, mode: i32, size: usize) -> i32;
 

@@ -6,10 +6,10 @@
 //! module owns the LLVM-side declarations so the callers stamp
 //! exactly one `module.get_function` lookup per symbol.
 
-use inkwell::AddressSpace;
 use inkwell::module::Linkage;
 use inkwell::types::{BasicMetadataTypeEnum, FunctionType};
-use inkwell::values::FunctionValue;
+use inkwell::values::{FunctionValue, GlobalValue};
+use inkwell::{AddressSpace, ThreadLocalMode};
 
 use crate::ctx::EmitContext;
 
@@ -62,6 +62,7 @@ pub(crate) const RT_SET_PRIORITY_SYMBOL: &str = "koja_rt_set_priority";
 pub(crate) const RT_SEND_SYMBOL: &str = "koja_rt_send";
 pub(crate) const RT_SPAWN_SYMBOL: &str = "koja_rt_spawn";
 pub(crate) const RT_YIELD_CHECK_SYMBOL: &str = "koja_rt_yield_check";
+pub(crate) const RT_REDUCTIONS_COUNTER_SYMBOL: &str = "koja_reductions_left";
 
 /// Get the existing declaration for `symbol`, or stamp a fresh external one
 /// with `signature`. Idempotent, so emit sites can declare the same symbol
@@ -493,11 +494,31 @@ pub(crate) fn declare_rt_set_priority_extern<'ctx>(ctx: &EmitContext<'ctx>) -> F
 }
 
 /// Declare (or look up) `koja_rt_yield_check`. Signature:
-/// `void koja_rt_yield_check()` — a cooperative preemption point that
-/// spends one reduction and re-queues the process when its budget runs out.
+/// `void koja_rt_yield_check()` — the slow path of a cooperative preemption
+/// point, called inline only once the reduction budget is exhausted, which
+/// re-queues the process and switches back to its worker.
 pub(crate) fn declare_rt_yield_check_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let signature = ctx.context.void_type().fn_type(&[], false);
     declare_extern(ctx, RT_YIELD_CHECK_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_reductions_left`, the per-worker reduction
+/// budget defined as a thread-local in `koja-runtime-posix/src/reductions.c`.
+/// Compiled `YieldCheck`s decrement it inline; the runtime seeds it on each
+/// resume. Initial-exec because it is resolved within the final executable.
+pub(crate) fn reductions_counter_global<'ctx>(ctx: &EmitContext<'ctx>) -> GlobalValue<'ctx> {
+    if let Some(existing) = ctx.module.get_global(RT_REDUCTIONS_COUNTER_SYMBOL) {
+        return existing;
+    }
+    let global = ctx.module.add_global(
+        ctx.context.i32_type(),
+        Some(AddressSpace::default()),
+        RT_REDUCTIONS_COUNTER_SYMBOL,
+    );
+    global.set_thread_local(true);
+    global.set_thread_local_mode(Some(ThreadLocalMode::InitialExecTLSModel));
+    global.set_linkage(Linkage::External);
+    global
 }
 
 /// Declare (or look up) `koja_rt_send_after`. Signature:
