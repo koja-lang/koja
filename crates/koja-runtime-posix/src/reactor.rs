@@ -24,7 +24,8 @@ use koja_runtime_core::{ProcessState, Reactor, Readiness, Waker};
 
 use crate::ffi::{EAGAIN, EINTR, get_errno, koja_context_switch};
 use crate::scheduler::{
-    CURRENT_PID, NativeTable, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, send_io_event,
+    CURRENT_PID, NativeTable, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, publish_ready,
+    send_io_event,
 };
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
@@ -186,6 +187,9 @@ fn apply_wakers(wakers: Vec<Waker>) {
                 promote_io_waiter(&mut sched, *pid);
             }
         }
+        // Route the promoted waiters (staged in `pending_ready`) to the
+        // work-stealing injectors; the `notify_all` below wakes the workers.
+        publish_ready(&mut sched);
     }
     for waker in wakers {
         if let Waker::Deliver { fd, pid, readiness } = waker {
@@ -267,6 +271,7 @@ pub(crate) fn release_fd(fd: i32) {
         Some(Waker::Resume(pid)) => {
             let mut sched = SCHED.lock().unwrap();
             promote_io_waiter(&mut sched, pid);
+            publish_ready(&mut sched);
         }
         Some(Waker::Deliver { fd, pid, .. }) => {
             send_io_event(pid, IO_READY_ERROR, fd as i64);

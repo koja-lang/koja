@@ -1,0 +1,13 @@
+t0 = DateTime.now().timestamp_millis()
+i = 0
+
+loop
+  i += 1
+
+  if i >= 200000000
+    break
+  end
+end
+
+t1 = DateTime.now().timestamp_millis()
+"loop_ms #{t1 - t0}".print()

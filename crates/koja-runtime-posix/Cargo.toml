@@ -19,6 +19,7 @@ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(koja_tsan)'] }
 
 [dependencies]
 backtrace = "0.3"
+crossbeam-deque = "0.8.6"
 koja-runtime-core = { path = "../koja-runtime-core" }
 libc = "0.2"
 polling = "3"

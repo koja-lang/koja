@@ -28,7 +28,7 @@
 //! is validated in the debug build here while TSan focuses on the ping-pong
 //! concurrency soak.
 //!
-//! Finally it runs a preemption phase: `SPINNERS` compute-bound children that
+//! It then runs a preemption phase: `SPINNERS` compute-bound children that
 //! never block, each calling `koja_rt_yield_check` enough times to exhaust its
 //! reduction budget repeatedly. Every exhaustion re-queues the spinner
 //! (`Running -> Runnable`) and context-switches back to its worker, so this
@@ -37,6 +37,13 @@
 //! the blocking ping-pong never hits. Like a parked process being woken on
 //! another worker (not a freed slot reused), it stays TSan-clean, so `just
 //! tsan` leaves it on.
+//!
+//! Finally it runs a steal phase: `STEAL_BURST` children are all spawned
+//! before any is reaped, so a large backlog of runnable processes piles into
+//! the work-stealing injectors at once and the idle workers must steal
+//! batches off each other to drain it. This is the workload the per-worker
+//! deques + steal protocol exist for, exercising injector hand-off and
+//! cross-worker stealing under contention.
 //!
 //! The runtime is a process-global singleton (`SCHED`, the reactor
 //! `OnceLock`, signal handlers, and a one-shot `SHUTDOWN` flag), so this
@@ -100,6 +107,10 @@ static SPINNERS: AtomicUsize = AtomicUsize::new(0);
 static SPIN_ITERS: AtomicUsize = AtomicUsize::new(0);
 /// Spinners that ran to completion.
 static SPIN_DONE: AtomicUsize = AtomicUsize::new(0);
+/// Children spawned all at once in the steal phase (before any is reaped).
+static STEAL_BURST: AtomicUsize = AtomicUsize::new(0);
+/// Steal-phase children that ran to completion.
+static STEAL_DONE: AtomicUsize = AtomicUsize::new(0);
 
 const PING: u8 = 0xAB;
 const PONG: u8 = 0xCD;
@@ -142,6 +153,18 @@ extern "C" fn spin_child_entry(_state: *const u8) {
         unsafe { koja_rt_yield_check() };
     }
     SPIN_DONE.fetch_add(1, Ordering::SeqCst);
+    unsafe { koja_rt_send(controller, &CHURN_BYTE, 1, None) };
+}
+
+/// Steal-phase child: do a little scheduler-visible work (so it actually
+/// migrates across workers) then announce completion and exit. Spawned en
+/// masse, these flood the injectors and are drained by stealing.
+extern "C" fn steal_child_entry(_state: *const u8) {
+    let controller = CONTROLLER_PID.load(Ordering::SeqCst);
+    for _ in 0..16 {
+        unsafe { koja_rt_yield_check() };
+    }
+    STEAL_DONE.fetch_add(1, Ordering::SeqCst);
     unsafe { koja_rt_send(controller, &CHURN_BYTE, 1, None) };
 }
 
@@ -193,6 +216,17 @@ extern "C" fn controller_entry(_state: *const u8) {
     for _ in 0..spinners {
         recv_blocking();
     }
+
+    // Steal: spawn the whole burst before reaping any, so a large backlog of
+    // runnable processes lands in the injectors at once and workers steal to
+    // distribute it.
+    let burst = STEAL_BURST.load(Ordering::SeqCst);
+    for _ in 0..burst {
+        unsafe { koja_rt_spawn(steal_child_entry, std::ptr::null(), 0, None) };
+    }
+    for _ in 0..burst {
+        recv_blocking();
+    }
 }
 
 fn env_usize(key: &str, default: usize) -> usize {
@@ -210,6 +244,7 @@ fn scheduler_ping_pong_storm() {
     let wave_size = env_usize("KOJA_STRESS_WAVE_SIZE", 16);
     let spinners = env_usize("KOJA_STRESS_SPINNERS", 8);
     let spin_iters = env_usize("KOJA_STRESS_SPIN_ITERS", 5000);
+    let steal_burst = env_usize("KOJA_STRESS_STEAL_BURST", 2000);
 
     CHILDREN.store(children, Ordering::SeqCst);
     ROUNDS.store(rounds, Ordering::SeqCst);
@@ -217,6 +252,7 @@ fn scheduler_ping_pong_storm() {
     CHURN_WAVE_SIZE.store(wave_size, Ordering::SeqCst);
     SPINNERS.store(spinners, Ordering::SeqCst);
     SPIN_ITERS.store(spin_iters, Ordering::SeqCst);
+    STEAL_BURST.store(steal_burst, Ordering::SeqCst);
 
     unsafe {
         koja_rt_spawn(controller_entry, std::ptr::null(), 0, None);
@@ -242,5 +278,10 @@ fn scheduler_ping_pong_storm() {
         SPIN_DONE.load(Ordering::SeqCst),
         spinners,
         "every spinner should be preempted repeatedly yet run to completion",
+    );
+    assert_eq!(
+        STEAL_DONE.load(Ordering::SeqCst),
+        steal_burst,
+        "every steal-phase child should be drained off the injectors and complete",
     );
 }

@@ -1,0 +1,45 @@
+fn busy(n: Int) -> Int
+  i = 0
+  acc = 0
+
+  loop
+    acc = acc + i * 7 + 3
+    i += 1
+
+    if i >= n
+      break
+    end
+  end
+
+  acc
+end
+
+procs = 10000
+iters = 50000
+
+t0 = DateTime.now().timestamp_millis()
+
+refs: List<Ref<(), Int>> = List.new()
+j = 0
+
+loop
+  refs =
+    refs.append(Task.async(fn () -> Int busy(iters) end))
+  j += 1
+
+  if j >= procs
+    break
+  end
+end
+
+total = 0
+
+for r in refs
+  match Task.await(r)
+    Result.Ok(v) -> total = total + v
+    Result.Err(_) -> ()
+  end
+end
+
+t1 = DateTime.now().timestamp_millis()
+"storm_ms #{t1 - t0} procs #{procs} total #{total}".print()
