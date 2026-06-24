@@ -23,23 +23,23 @@ test/          -- offline tests against canned API payloads
 ## Running
 
 ```sh
-koja run --backend=llvm -- user torvalds
-koja run --backend=llvm -- repos torvalds
-koja run --backend=llvm -- repo torvalds/linux
+koja run -- user torvalds
+koja run -- repos torvalds
+koja run -- repo torvalds/linux
 ```
 
 Or build a binary:
 
 ```sh
 koja build --release
-./build/release/gh user octocat
+./build/release/Gh user octocat
 ```
 
 Unauthenticated requests are limited to 60/hour by GitHub. Set
 `GITHUB_TOKEN` to a personal access token to authenticate:
 
 ```sh
-GITHUB_TOKEN=ghp_... koja run --backend=llvm -- repos my-org
+GITHUB_TOKEN=ghp_... koja run -- repos my-org
 ```
 
 ## Tests
