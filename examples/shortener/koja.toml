@@ -1,4 +1,8 @@
 [project]
+authors = ["The Koja Authors"]
+bin = "shortener"
+description = "A URL shortener service backed by PostgreSQL"
 entry = "App"
+license = "MIT"
 name = "Shortener"
 version = "0.1.0"

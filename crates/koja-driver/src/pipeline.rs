@@ -132,7 +132,7 @@ enum SourceShape {
     /// `src` directories and resolve dependencies without re-loading
     /// the manifest.
     Project {
-        config: ProjectConfig,
+        config: Box<ProjectConfig>,
         root: PathBuf,
     },
 }
@@ -165,7 +165,10 @@ fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
     let cwd = std::env::current_dir()
         .map_err(|err| format!("cannot determine current directory: {err}"))?;
     match project::load_project(&cwd).map_err(|err| err.to_string())? {
-        Some(config) => Ok(SourceShape::Project { config, root: cwd }),
+        Some(config) => Ok(SourceShape::Project {
+            config: Box::new(config),
+            root: cwd,
+        }),
         None => {
             Err("no source file specified and no `koja.toml` found in current directory".into())
         }
@@ -720,7 +723,7 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
     };
 
     let binary = project_build_dir(root, false)
-        .join(format!("{}_test", config.name))
+        .join(format!("{}_test", config.binary_name()))
         .to_string_lossy()
         .to_string();
     emit_and_link_program(&program, &config.name, &binary, &[root], false);
@@ -887,7 +890,10 @@ fn run_project_interpreted(config: &ProjectConfig, root: &Path, args: &[String])
 fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args: &[String]) -> ! {
     let program = build_project_program(config, root);
     let build_dir = project_build_dir(root, release);
-    let binary = build_dir.join(&config.name).to_string_lossy().to_string();
+    let binary = build_dir
+        .join(config.binary_name())
+        .to_string_lossy()
+        .to_string();
     emit_and_link_program(&program, &config.name, &binary, &[root], release);
 
     let status = process::Command::new(&binary).args(args).status();
@@ -1086,7 +1092,7 @@ fn walk_koja_files_into(dir: &Path, out: &mut Vec<PathBuf>) {
 /// `release` flag.
 fn default_project_output(config: &ProjectConfig, root: &Path, release: bool) -> String {
     project_build_dir(root, release)
-        .join(&config.name)
+        .join(config.binary_name())
         .to_string_lossy()
         .to_string()
 }

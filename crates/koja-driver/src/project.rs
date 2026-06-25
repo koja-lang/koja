@@ -27,6 +27,10 @@ pub struct DepConfig {
 pub struct ProjectConfig {
     pub name: String,
     pub version: String,
+    /// Output binary name. Falls back to the lowercased package name
+    /// when omitted (see [`ProjectConfig::binary_name`]).
+    #[serde(default)]
+    pub bin: Option<String>,
     #[serde(default = "default_src")]
     pub src: Vec<String>,
     #[serde(default = "default_test")]
@@ -35,6 +39,15 @@ pub struct ProjectConfig {
     pub entry: Option<String>,
     #[serde(skip)]
     pub dependencies: HashMap<String, DepConfig>,
+    // Registry metadata: parsed and validated as TOML, but not yet
+    // consumed by the build. Present so projects can declare it now
+    // without a `koja.toml` migration once a package registry lands.
+    #[serde(default)]
+    pub authors: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub license: Option<String>,
 }
 
 fn default_src() -> Vec<String> {
@@ -53,6 +66,13 @@ impl ProjectConfig {
         self.entry
             .as_deref()
             .filter(|e| e.starts_with(|c: char| c.is_ascii_uppercase()))
+    }
+
+    /// Output binary name: the explicit `bin` field when set, otherwise
+    /// the package name lowercased (the PascalCase namespace `Gh` yields
+    /// a `gh` binary).
+    pub fn binary_name(&self) -> String {
+        self.bin.clone().unwrap_or_else(|| self.name.to_lowercase())
     }
 }
 
@@ -75,4 +95,39 @@ pub fn load_project(dir: &Path) -> Result<Option<ProjectConfig>, String> {
     let mut config = parsed.project;
     config.dependencies = parsed.dependencies;
     Ok(Some(config))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(source: &str) -> ProjectConfig {
+        let parsed: KojaToml = toml::from_str(source).expect("valid koja.toml");
+        parsed.project
+    }
+
+    #[test]
+    fn binary_name_honors_explicit_bin() {
+        let config = parse(
+            r#"
+            [project]
+            name = "Gh"
+            version = "0.1.0"
+            bin = "gh-cli"
+            "#,
+        );
+        assert_eq!(config.binary_name(), "gh-cli");
+    }
+
+    #[test]
+    fn binary_name_defaults_to_lowercased_package_name() {
+        let config = parse(
+            r#"
+            [project]
+            name = "Gh"
+            version = "0.1.0"
+            "#,
+        );
+        assert_eq!(config.binary_name(), "gh");
+    }
 }

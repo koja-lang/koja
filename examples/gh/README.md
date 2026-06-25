@@ -32,7 +32,7 @@ Or build a binary:
 
 ```sh
 koja build --release
-./build/release/Gh user octocat
+./build/release/gh user octocat
 ```
 
 Unauthenticated requests are limited to 60/hour by GitHub. Set
