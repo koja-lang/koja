@@ -10,8 +10,10 @@
 //! outside the doc tree. URLs ending in `/` are rewritten to
 //! the directory's `index.html`.
 
+use std::error::Error;
+use std::fmt;
 use std::fs;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener, TcpStream};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
@@ -67,15 +69,15 @@ pub enum ServeError {
     /// `doc_root` couldn't be canonicalized (typically: dir
     /// missing because the user passed `--no-rebuild` on a
     /// fresh project).
-    DocRoot(PathBuf, std::io::Error),
+    DocRoot(PathBuf, io::Error),
     /// All probed ports were taken.
     NoFreePort { start: u16, end: u16 },
     /// `TcpListener::bind` failed for a fixed port.
-    Bind(std::io::Error),
+    Bind(io::Error),
 }
 
-impl std::fmt::Display for ServeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl fmt::Display for ServeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             ServeError::DocRoot(p, e) => {
                 write!(
@@ -92,7 +94,7 @@ impl std::fmt::Display for ServeError {
     }
 }
 
-impl std::error::Error for ServeError {}
+impl Error for ServeError {}
 
 fn bind_listener(port: Option<u16>) -> Result<TcpListener, ServeError> {
     if let Some(p) = port {
@@ -111,7 +113,7 @@ fn bind_listener(port: Option<u16>) -> Result<TcpListener, ServeError> {
     })
 }
 
-fn handle_client(mut stream: TcpStream, doc_root: &Path) -> std::io::Result<()> {
+fn handle_client(mut stream: TcpStream, doc_root: &Path) -> io::Result<()> {
     stream.set_read_timeout(Some(READ_TIMEOUT))?;
     stream.set_write_timeout(Some(READ_TIMEOUT))?;
 
@@ -137,7 +139,7 @@ fn handle_client(mut stream: TcpStream, doc_root: &Path) -> std::io::Result<()> 
 /// the client would then see "connection reset by peer" before
 /// it finishes reading the body. Returns `Ok(None)` on a clean
 /// EOF (empty connection, e.g. a port probe).
-fn read_request_head(stream: &mut TcpStream) -> std::io::Result<Option<String>> {
+fn read_request_head(stream: &mut TcpStream) -> io::Result<Option<String>> {
     let mut buf = Vec::with_capacity(512);
     let mut byte = [0u8; 1];
     loop {
@@ -217,7 +219,7 @@ pub(crate) fn resolve(doc_root: &Path, url_path: &str) -> Option<PathBuf> {
     Some(path)
 }
 
-fn serve_file(stream: &mut TcpStream, path: &Path) -> std::io::Result<()> {
+fn serve_file(stream: &mut TcpStream, path: &Path) -> io::Result<()> {
     let bytes = fs::read(path)?;
     let mime = mime_type(path);
     let header = format!(
@@ -229,12 +231,7 @@ fn serve_file(stream: &mut TcpStream, path: &Path) -> std::io::Result<()> {
     stream.flush()
 }
 
-fn write_status(
-    stream: &mut TcpStream,
-    code: u16,
-    reason: &str,
-    body: &[u8],
-) -> std::io::Result<()> {
+fn write_status(stream: &mut TcpStream, code: u16, reason: &str, body: &[u8]) -> io::Result<()> {
     let header = format!(
         "HTTP/1.1 {code} {reason}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
         body.len()

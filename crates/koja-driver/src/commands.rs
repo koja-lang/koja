@@ -14,7 +14,11 @@ use koja_ast::util::dedent;
 use koja_parser::ParseMode;
 
 use crate::diagnostics::render_diagnostics;
+use crate::loader::{
+    self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader, SourceOrigin, walk_source_files,
+};
 use crate::project::{self, ProjectConfig};
+use crate::serve;
 
 /// Returns the process's current directory, or prints an error to
 /// stderr and exits non-zero.
@@ -94,7 +98,7 @@ pub fn cmd_doc_serve(
         return;
     }
     let out_path = Path::new(&output);
-    if let Err(e) = crate::serve::run(out_path, port) {
+    if let Err(e) = serve::run(out_path, port) {
         eprintln!("error: {e}");
         process::exit(1);
     }
@@ -137,126 +141,81 @@ fn generate_docs(files: &[String], output: &str, project_only: bool, color: bool
 /// directory of `.koja` files. Stdlib + deps are bundled unless
 /// `project_only` is true.
 fn discover_doc_inputs(files: &[String], project_only: bool) -> (Vec<DocInput>, String) {
-    let mut inputs = Vec::new();
-    let project_package;
-
     if files.is_empty() {
-        let (config, cwd) = load_project_or_exit(&[
-            "error: no source file specified and no koja.toml found",
-            "Usage: koja doc <file.koja ...> [-o output_dir]",
-            "  or:  create an koja.toml in the current directory",
-        ]);
-        project_package = config.name.clone();
+        return discover_project_doc_inputs(project_only);
+    }
+    discover_explicit_doc_inputs(files, project_only)
+}
 
-        for src_dir in &config.src {
-            let dir = cwd.join(src_dir);
-            if dir.is_dir() {
-                collect_doc_inputs(
-                    &dir,
-                    &config.name,
-                    koja_doc::PackageKind::Project,
-                    &mut inputs,
-                );
-            }
+/// Project-mode doc inputs: no files given, so load `src` from the
+/// current `koja.toml` (exiting with usage help if there is none),
+/// plus every dependency's `src` and the stdlib unless `project_only`.
+/// The project package name doubles as the sidebar header.
+fn discover_project_doc_inputs(project_only: bool) -> (Vec<DocInput>, String) {
+    let (config, cwd) = load_project_or_exit(&[
+        "error: no source file specified and no koja.toml found",
+        "Usage: koja doc <file.koja ...> [-o output_dir]",
+        "  or:  create an koja.toml in the current directory",
+    ]);
+
+    let loaded = ProjectLoader::new(&config, &cwd)
+        .sources(LoadOptions {
+            extensions: &["koja"],
+            include_dependencies: !project_only,
+            include_stdlib: !project_only,
+            include_tests: false,
+            on_error: ErrorPolicy::Lenient,
+        })
+        .unwrap_or_default();
+    let inputs = loaded.into_iter().map(DocInput::from).collect();
+
+    (inputs, config.name.clone())
+}
+
+/// Explicit-file doc inputs: each entry in `files` is a `.koja` file
+/// or a directory of them, all tagged under the synthetic `Docs`
+/// package. The stdlib is appended unless `project_only`.
+fn discover_explicit_doc_inputs(files: &[String], project_only: bool) -> (Vec<DocInput>, String) {
+    let project_package = "Docs".to_string();
+    let mut inputs = Vec::new();
+    for input in files {
+        let p = Path::new(input);
+        if p.is_dir() {
+            collect_doc_inputs(
+                p,
+                &project_package,
+                koja_doc::PackageKind::Project,
+                &mut inputs,
+            );
+        } else if let Some(text) = read_doc_input(p) {
+            inputs.push(DocInput {
+                kind: koja_doc::PackageKind::Project,
+                label: input.clone(),
+                package: project_package.clone(),
+                source: text,
+            });
         }
-        if !project_only {
-            discover_dep_doc_inputs(&config, &cwd, &mut inputs);
-            push_stdlib_inputs(&mut inputs);
-        }
-    } else {
-        project_package = "Docs".to_string();
-        for input in files {
-            let p = Path::new(input);
-            if p.is_dir() {
-                collect_doc_inputs(
-                    p,
-                    &project_package,
-                    koja_doc::PackageKind::Project,
-                    &mut inputs,
-                );
-            } else if let Some(text) = read_doc_input(p) {
-                inputs.push(DocInput {
-                    kind: koja_doc::PackageKind::Project,
-                    label: input.clone(),
-                    package: project_package.clone(),
-                    source: text,
-                });
-            }
-        }
-        if !project_only {
-            push_stdlib_inputs(&mut inputs);
-        }
+    }
+    if !project_only {
+        inputs.extend(loader::stdlib_sources().into_iter().map(DocInput::from));
     }
 
     (inputs, project_package)
 }
 
-/// Walks every dependency declared in `[dependencies]` and
-/// appends its source files to `out`, tagged with the dep's
-/// `koja.toml` package name. Missing paths or unreadable
-/// `koja.toml` files emit a warning and skip the dep rather than
-/// aborting the doc build.
-fn discover_dep_doc_inputs(config: &ProjectConfig, cwd: &Path, out: &mut Vec<DocInput>) {
-    for (alias, dep) in &config.dependencies {
-        let dep_path = match &dep.path {
-            Some(p) => cwd.join(p),
-            None => {
-                eprintln!("warning: dependency `{alias}` has no path, skipping docs");
-                continue;
-            }
+impl From<LoadedSource> for DocInput {
+    fn from(source: LoadedSource) -> Self {
+        let kind = match source.origin {
+            SourceOrigin::Dependency => koja_doc::PackageKind::Dependency,
+            SourceOrigin::Project => koja_doc::PackageKind::Project,
+            SourceOrigin::Stdlib => koja_doc::PackageKind::Stdlib,
         };
-        let dep_config = match project::load_project(&dep_path) {
-            Ok(Some(c)) => c,
-            Ok(None) => {
-                eprintln!(
-                    "warning: dependency `{alias}` has no koja.toml at {}",
-                    dep_path.display()
-                );
-                continue;
-            }
-            Err(e) => {
-                eprintln!("warning: dependency `{alias}`: {e}");
-                continue;
-            }
-        };
-        for src_dir in &dep_config.src {
-            let dir = dep_path.join(src_dir);
-            if dir.is_dir() {
-                collect_doc_inputs(
-                    &dir,
-                    &dep_config.name,
-                    koja_doc::PackageKind::Dependency,
-                    out,
-                );
-            }
+        DocInput {
+            kind,
+            label: source.path.display().to_string(),
+            package: source.package,
+            source: source.source,
         }
-    }
-}
-
-/// Append the embedded stdlib sources (`autoimport_sources` +
-/// `qualified_sources`) to `out`, each tagged with its package
-/// name and the synthetic `<Pkg.module>` path the stdlib crate
-/// already stamps onto its [`koja_parser::SourceFile`]s. Skips
-/// any package the caller has already provided (project source
-/// or path dep) — without the skip, running `koja doc` from
-/// inside a stdlib package (e.g. `koja/lib/net`) would ingest
-/// that package's files twice and double every sidebar entry.
-fn push_stdlib_inputs(out: &mut Vec<DocInput>) {
-    let already_present: std::collections::HashSet<String> =
-        out.iter().map(|i| i.package.clone()).collect();
-    let stdlib = koja_stdlib::autoimport_sources()
-        .into_iter()
-        .chain(koja_stdlib::qualified_sources());
-    for src in stdlib {
-        if already_present.contains(&src.package) {
-            continue;
-        }
-        out.push(DocInput {
-            kind: koja_doc::PackageKind::Stdlib,
-            label: src.path.display().to_string(),
-            package: src.package,
-            source: src.source,
-        });
     }
 }
 
@@ -357,22 +316,7 @@ fn collect_doc_inputs(
     kind: koja_doc::PackageKind,
     out: &mut Vec<DocInput>,
 ) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("error reading directory {}: {e}", dir.display());
-            return;
-        }
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            collect_doc_inputs(&path, package, kind, out);
-            continue;
-        }
-        if path.extension().is_none_or(|ext| ext != "koja") {
-            continue;
-        }
+    for path in walk_source_files(dir, &["koja"]) {
         if let Some(text) = read_doc_input(&path) {
             out.push(DocInput {
                 kind,
@@ -400,49 +344,7 @@ fn read_doc_input(path: &Path) -> Option<String> {
 /// directories. Directory arguments are walked recursively for
 /// `.koja` files.
 pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
-    let resolved = if files.is_empty() {
-        let (config, cwd) = load_project_or_exit(&[
-            "error: no files specified and no koja.toml found",
-            "Usage: koja format [files...] [--check] [--write]",
-            "  or:  create an koja.toml in the current directory",
-        ]);
-
-        let roots: Vec<PathBuf> = config
-            .src
-            .iter()
-            .chain(config.test.iter())
-            .map(|s| cwd.join(s))
-            .collect();
-
-        let mut paths = Vec::new();
-        for root in &roots {
-            if root.is_dir() {
-                paths.extend(collect_koja_files_recursive(root));
-            }
-        }
-        paths.sort();
-        paths
-            .into_iter()
-            .filter_map(|p| p.to_str().map(String::from))
-            .collect::<Vec<_>>()
-    } else {
-        let mut paths = Vec::new();
-        for input in &files {
-            let p = Path::new(input);
-            if p.is_dir() {
-                let found = collect_koja_files_recursive(p);
-                for f in found {
-                    if let Some(s) = f.to_str() {
-                        paths.push(s.to_string());
-                    }
-                }
-            } else {
-                paths.push(input.clone());
-            }
-        }
-        paths.sort();
-        paths
-    };
+    let resolved = resolve_format_paths(&files);
 
     let mut has_diff = false;
     for path in &resolved {
@@ -492,28 +394,60 @@ pub fn cmd_format(files: Vec<String>, check: bool, write: bool, color: bool) {
     }
 }
 
-/// Recursively gather every Koja source file (`.koja` modules and
-/// `.kojs` scripts) under `dir`. Returns an empty vec if `dir` isn't
-/// readable so format/lex callers degrade gracefully on an unreadable
-/// subdirectory rather than aborting.
-fn collect_koja_files_recursive(dir: &Path) -> Vec<PathBuf> {
-    let mut result = Vec::new();
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return result,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            result.extend(collect_koja_files_recursive(&path));
-        } else if path
-            .extension()
-            .is_some_and(|ext| ext == "koja" || ext == "kojs")
-        {
-            result.push(path);
+/// Resolve which files `koja format` operates on: with no arguments,
+/// the project's `src` + `test` trees; otherwise the explicit file and
+/// directory arguments. Paths are sorted for deterministic output.
+fn resolve_format_paths(files: &[String]) -> Vec<String> {
+    if files.is_empty() {
+        return project_format_paths();
+    }
+    explicit_format_paths(files)
+}
+
+/// Project-mode format targets: every `.koja`/`.kojs` file under the
+/// current `koja.toml`'s `src` and `test` directories (exiting with
+/// usage help when there is no project).
+fn project_format_paths() -> Vec<String> {
+    let (config, cwd) = load_project_or_exit(&[
+        "error: no files specified and no koja.toml found",
+        "Usage: koja format [files...] [--check] [--write]",
+        "  or:  create an koja.toml in the current directory",
+    ]);
+
+    let roots = config.src.iter().chain(config.test.iter());
+    let mut paths = Vec::new();
+    for root in roots {
+        let dir = cwd.join(root);
+        if dir.is_dir() {
+            paths.extend(walk_source_files(&dir, &["koja", "kojs"]));
         }
     }
-    result
+    paths.sort();
+    paths
+        .into_iter()
+        .filter_map(|p| p.to_str().map(String::from))
+        .collect()
+}
+
+/// Explicit-argument format targets: directories are walked for source
+/// files, while plain file arguments pass through verbatim so read
+/// errors surface with the user's exact path.
+fn explicit_format_paths(files: &[String]) -> Vec<String> {
+    let mut paths = Vec::new();
+    for input in files {
+        let p = Path::new(input);
+        if p.is_dir() {
+            paths.extend(
+                walk_source_files(p, &["koja", "kojs"])
+                    .iter()
+                    .filter_map(|f| f.to_str().map(String::from)),
+            );
+        } else {
+            paths.push(input.clone());
+        }
+    }
+    paths.sort();
+    paths
 }
 
 /// `koja new <name>` -- scaffolds a new Koja project.

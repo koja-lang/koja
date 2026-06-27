@@ -61,7 +61,7 @@
 //! feature set surface those crates expose. Anything beyond
 //! typecheck-errors with a precise diagnostic.
 
-use std::collections::BTreeSet;
+use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
@@ -80,6 +80,7 @@ use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registr
 
 use crate::commands::load_project_or_exit;
 use crate::link::{self, LinkOptions};
+use crate::loader::{ErrorPolicy, LoadOptions, ProjectLoader};
 use crate::project::{self, ProjectConfig};
 
 /// Which downstream backend a `run` invocation drives.
@@ -162,8 +163,8 @@ fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
             )),
         };
     }
-    let cwd = std::env::current_dir()
-        .map_err(|err| format!("cannot determine current directory: {err}"))?;
+    let cwd =
+        env::current_dir().map_err(|err| format!("cannot determine current directory: {err}"))?;
     match project::load_project(&cwd).map_err(|err| err.to_string())? {
         Some(config) => Ok(SourceShape::Project {
             config: Box::new(config),
@@ -331,7 +332,7 @@ fn run_script_compiled(path: &Path, release: bool, args: &[String]) -> ! {
         .file_stem()
         .and_then(OsStr::to_str)
         .unwrap_or("alpha_program");
-    let output = std::env::temp_dir()
+    let output = env::temp_dir()
         .join(format!("koja-run-{}-{stem}", process::id()))
         .to_string_lossy()
         .to_string();
@@ -639,7 +640,7 @@ fn run_check(
 /// is set). Mirrors v1's `cmd_check`'s project arm but routes
 /// through typecheck.
 fn check_project(config: &ProjectConfig, root: &Path, emit_ast: bool) {
-    let user_files = collect_project_sources_or_exit(config, root);
+    let user_files = collect_project_sources_or_exit(config, root, false);
     let parsed = parse_program(
         bundle_many_with_autoimport(user_files, Some(&config.name)),
         ParseMode::File,
@@ -694,7 +695,7 @@ fn build_project_and_keep(
 /// pipeline failure or launch error prints `error: …` and exits 1.
 /// The early `no tests found` path is the lone non-diverging branch.
 fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
-    let user_files = collect_test_project_sources_or_exit(config, root);
+    let user_files = collect_project_sources_or_exit(config, root, true);
     let bundled = bundle_many_with_autoimport(user_files, Some(&config.name));
     let mut parsed = parse_program(bundled, ParseMode::File);
 
@@ -820,40 +821,6 @@ fn splice_test_harness(
 /// every dep, plus every `test` file from the project itself. Deps'
 /// `test` directories are intentionally skipped — they only show up
 /// when you `koja test` from inside that dep.
-fn collect_test_project_sources_or_exit(config: &ProjectConfig, root: &Path) -> Vec<SourceFile> {
-    match collect_test_project_sources(config, root) {
-        Ok(files) => files,
-        Err(err) => {
-            eprintln!("error: {err}");
-            process::exit(1);
-        }
-    }
-}
-
-fn collect_test_project_sources(
-    config: &ProjectConfig,
-    root: &Path,
-) -> Result<Vec<SourceFile>, String> {
-    let mut files: Vec<SourceFile> = Vec::new();
-    let mut seen_paths: BTreeSet<PathBuf> = BTreeSet::new();
-    let mut seen_pkgs: BTreeSet<String> = BTreeSet::new();
-    seen_pkgs.insert(config.name.clone());
-    if config.name != "Global" {
-        seen_pkgs.insert("Global".to_string());
-    }
-
-    push_package_sources(&config.name, &config.src, root, &mut files, &mut seen_paths)?;
-    push_package_sources(
-        &config.name,
-        &config.test,
-        root,
-        &mut files,
-        &mut seen_paths,
-    )?;
-    collect_project_dependencies(config, root, &mut files, &mut seen_paths, &mut seen_pkgs)?;
-    Ok(files)
-}
-
 /// `koja run` for a project under the interpreter: lower the full
 /// project and execute the Process entry in-process via
 /// [`Interpreter::run_program`] — no codegen, no link, no binary.
@@ -910,7 +877,7 @@ fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args
 /// `lower_program`) and return the sealed [`IRProgram`]. Bails the
 /// process with a formatted error on any failure.
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {
-    let user_files = collect_project_sources_or_exit(config, root);
+    let user_files = collect_project_sources_or_exit(config, root, false);
     let parsed = parse_program(
         bundle_many_with_autoimport(user_files, Some(&config.name)),
         ParseMode::File,
@@ -953,138 +920,36 @@ fn resolve_project_entry(config: &ProjectConfig) -> Identifier {
     Identifier::new(config.name.clone(), vec![entry.to_string()])
 }
 
-/// Walk the project's `src` directories (and recursively, every
-/// declared dep's `src` directories) and return one
-/// [`SourceFile`] per `.koja` file with the right `package` field.
-/// Bails on directory I/O errors or duplicate package names. Skips
-/// `alpha_*` files belonging to dependencies (they're loaded
-/// through the curated `AUTOIMPORT` set, not the dep's own
-/// source tree).
-fn collect_project_sources_or_exit(config: &ProjectConfig, root: &Path) -> Vec<SourceFile> {
-    match collect_project_sources(config, root) {
-        Ok(files) => files,
-        Err(err) => {
-            eprintln!("error: {err}");
-            process::exit(1);
-        }
-    }
-}
-
-fn collect_project_sources(config: &ProjectConfig, root: &Path) -> Result<Vec<SourceFile>, String> {
-    let mut files: Vec<SourceFile> = Vec::new();
-    let mut seen_paths: BTreeSet<PathBuf> = BTreeSet::new();
-    let mut seen_pkgs: BTreeSet<String> = BTreeSet::new();
-    seen_pkgs.insert(config.name.clone());
-    if config.name != "Global" {
-        seen_pkgs.insert("Global".to_string());
-    }
-
-    push_package_sources(&config.name, &config.src, root, &mut files, &mut seen_paths)?;
-    collect_project_dependencies(config, root, &mut files, &mut seen_paths, &mut seen_pkgs)?;
-    Ok(files)
-}
-
-/// Walk `[dependencies]`, load each dep's manifest, register its
-/// package name, and push the dep's `src` files. A dep's entry
-/// type (if any) rides along like any other decl — entries are
-/// package-qualified `Process` types, so there's nothing to
-/// collide with. Mirrors v1's
-/// [`crate::resolve::resolve_dependencies`] without the
-/// stdlib-collision short-circuit (the driver drives the curated stdlib
-/// through `bundle_with_autoimport` instead of the embedded
-/// `SOURCES` table).
-fn collect_project_dependencies(
+/// Collect the project's compiler inputs: the project's own `src`
+/// (plus `test` when `include_tests`) and every path dependency's
+/// `src`, each tagged with its package. Bails the process on any I/O
+/// or dependency-graph error. Stdlib rides in separately via
+/// `bundle_*_with_autoimport`, so it is not collected here.
+fn collect_project_sources_or_exit(
     config: &ProjectConfig,
     root: &Path,
-    files: &mut Vec<SourceFile>,
-    seen_paths: &mut BTreeSet<PathBuf>,
-    seen_pkgs: &mut BTreeSet<String>,
-) -> Result<(), String> {
-    for (alias, dep) in &config.dependencies {
-        let dep_root = match &dep.path {
-            Some(p) => root.join(p),
-            None => {
-                return Err(format!(
-                    "dependency `{alias}` has no `path` (git dependencies are not yet supported)"
-                ));
-            }
-        };
-        let dep_config = project::load_project(&dep_root)?.ok_or_else(|| {
-            format!(
-                "dependency `{alias}`: no koja.toml found at {}",
-                dep_root.display()
-            )
-        })?;
-        if !seen_pkgs.insert(dep_config.name.clone()) {
-            return Err(format!(
-                "duplicate package name `{}` in dependency graph (project, dependency `{alias}`, or implicit `Global`)",
-                dep_config.name
-            ));
-        }
-        push_package_sources(
-            &dep_config.name,
-            &dep_config.src,
-            &dep_root,
-            files,
-            seen_paths,
-        )?;
-    }
-    Ok(())
-}
-
-/// Walk every `src` root under `package_root`, scoop up `.koja`
-/// files, and push them as [`SourceFile`]s tagged with `package`.
-/// `seen_paths` keeps overlapping roots from double-counting a file
-/// across the multi-pass walk (project sources first, then each
-/// dep's sources).
-fn push_package_sources(
-    package: &str,
-    src_dirs: &[String],
-    package_root: &Path,
-    files: &mut Vec<SourceFile>,
-    seen_paths: &mut BTreeSet<PathBuf>,
-) -> Result<(), String> {
-    for src in src_dirs {
-        let dir = package_root.join(src);
-        if !dir.is_dir() {
-            continue;
-        }
-        for path in walk_koja_files(&dir) {
-            if !seen_paths.insert(path.clone()) {
-                continue;
-            }
-            let source = fs::read_to_string(&path)
-                .map_err(|err| format!("error reading {}: {err}", path.display()))?;
-            files.push(SourceFile {
-                package: package.to_string(),
-                path,
-                source,
-            });
-        }
-    }
-    Ok(())
-}
-
-fn walk_koja_files(dir: &Path) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    walk_koja_files_into(dir, &mut out);
-    out.sort();
-    out
-}
-
-fn walk_koja_files_into(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries = match fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return,
-    };
-    for entry in entries.flatten() {
-        let path = entry.path();
-        if path.is_dir() {
-            walk_koja_files_into(&path, out);
-        } else if path.extension().is_some_and(|e| e == "koja") {
-            out.push(path);
-        }
-    }
+    include_tests: bool,
+) -> Vec<SourceFile> {
+    let loaded = ProjectLoader::new(config, root)
+        .sources(LoadOptions {
+            extensions: &["koja"],
+            include_dependencies: true,
+            include_stdlib: false,
+            include_tests,
+            on_error: ErrorPolicy::Strict,
+        })
+        .unwrap_or_else(|err| {
+            eprintln!("error: {err}");
+            process::exit(1);
+        });
+    loaded
+        .into_iter()
+        .map(|source| SourceFile {
+            package: source.package,
+            path: source.path,
+            source: source.source,
+        })
+        .collect()
 }
 
 /// Default output path for project builds:
