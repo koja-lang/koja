@@ -11,10 +11,6 @@
 *.exe
 *.dSYM
 
-# VSCode extension
-editors/vscode/node_modules
-editors/vscode/out
-
 # Misc
 .DS_Store
 justfile

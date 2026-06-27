@@ -32,7 +32,7 @@ koja run hello.kojs
 ## Editor Extensions
 
 - **Vim** — [`editors/vim`](editors/vim) (syntax and indentation only; no language server)
-- **VS Code** — [`editors/vscode`](editors/vscode)
+- **VS Code** — [`vscode-koja`](https://github.com/koja-lang/vscode-koja)
 - **Zed** — [`zed-koja`](https://github.com/koja-lang/zed-koja)
 
 Any editor with a tree-sitter or LSP client can integrate directly against the grammar and `koja-lsp`.
