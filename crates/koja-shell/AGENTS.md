@@ -5,16 +5,23 @@ koja-ir-eval`.
 
 ## Public surface
 
-One entry point:
+One entry point plus the default-package constant:
 
 ```rust
-pub fn run();
+pub fn run(baseline: Vec<SourceFile>, session_package: String);
+pub const SESSION_PACKAGE: &str; // "REPL"
 ```
 
+The driver supplies `baseline` (stdlib prelude, plus a project's sources
+when launched inside one) and the package the session evaluates in
+(`SESSION_PACKAGE` for a bare shell, the project's package name in a
+project so its modules resolve unqualified).
+
 Reads stdin until `:quit` or EOF, evaluates each input through the
-pipeline, and prints trailing-expression values. Recovers cleanly from
-parse / typecheck / lower / runtime errors by rolling the session back to
-its pre-input state.
+pipeline, and prints the trailing expression's `Debug.format` rendering
+(the same bytes `value.print()` emits). Recovers cleanly from parse /
+typecheck / lower / runtime errors by rolling the session back to its
+pre-input state.
 
 ## Architecture
 
@@ -29,10 +36,23 @@ erase_current_line -> ANSI escape sequence (cursor up, erase line) backing
                       the rewrite trick
 Session            -> accumulating REPL state (statement history + counter)
 is_input_complete  -> token-level check: are blocks/brackets/strings closed?
-run_pipeline       -> drive one source string through the pipeline
+eval_fragment      -> drive assembled sources through the pipeline and
+                      produce the print line; rewrites the trailing expr to
+                      `<expr>.format()` (non-Unit only) so the script yields
+                      its real Debug.format string in one run
+lower_fragment     -> parse + typecheck + lower, optionally wrapping the
+                      trailing expr; wrap_trailing_in_format does the AST edit
 format_check_failure / parse_diagnostics / format_block
                    -> render typecheck / parse failures as user-facing strings
 ```
+
+Auto-print goes through the value's real `Debug.format` instance rather
+than the runtime `Display`: the trailing expression `E` is rewritten to
+`E.format()` before lowering, so the lowered script produces the
+`Debug.format` string and the monomorphizer specializes the instance as a
+side effect of the call (a post-hoc lookup can't — the program never
+formats the value otherwise). A side-effect-free probe lower decides
+Unit-ness first, so exactly one interpret runs per input.
 
 Line editing runs through `rustyline::Editor` (no `Validator`, no
 `Helper`): each `Editor::readline` returns one terminal line with full
@@ -77,5 +97,6 @@ entry); history is in-memory only and is discarded on exit.
 
 - **Self-contained.** No path back through `koja-driver` — the driver
   depends on this crate, never the other way round.
-- **One public function.** Today only `run()` is `pub`; the pipeline
-  driver and helpers stay private until a second consumer needs them.
+- **Narrow public surface.** Only `run()` and the `SESSION_PACKAGE`
+  constant are `pub`; the pipeline driver and helpers stay private until
+  a second consumer needs them.

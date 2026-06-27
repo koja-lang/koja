@@ -508,9 +508,9 @@ fn lifecycle_from_index(index: i64) -> Option<Lifecycle> {
 
 /// Drive `future` to completion on the current thread, parking between
 /// polls. The synchronous entry seams ([`crate::interpreter`]'s
-/// `run_function` / `run_script` / `format_via_debug`) use this to run a
-/// non-process body — which never parks — to its value; the driver loop
-/// polls process futures directly rather than through here.
+/// `run_function` / `run_script`) use this to run a non-process body —
+/// which never parks — to its value; the driver loop polls process
+/// futures directly rather than through here.
 pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);
     let waker = std::task::Waker::from(Arc::new(ThreadWaker(thread::current())));

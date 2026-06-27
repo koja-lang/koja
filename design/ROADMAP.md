@@ -246,8 +246,8 @@ Three sub-milestones. **Constraint added** in light of the Phase 6 WASM commitme
 
 Goal: `koja shell` graduates from scratch evaluator to project development surface.
 
-- `koja shell -S .` loads a project (`koja.toml`, deps, all package sources) into the interpreter's session state.
-- Call any user-defined function (including across modules) from the REPL.
+- `koja shell` loads a project (`koja.toml`, deps, all package sources) into the interpreter's session state -- **done**. It auto-detects the project from the working directory via `ProjectLoader`; an explicit `-S <path>` selector is still pending.
+- Call any user-defined function (including across modules) from the REPL -- **done**. The session evaluates inside the project's package, so modules resolve unqualified (`Cli.usage()`) exactly as they do from the project's own files.
 - `h module.function` / `h Type` pulls inline docs from `@doc` annotations.
 - Tab completion for module names, functions, types, and variables in scope (reuse the `koja-lsp` completion plumbing where it generalizes).
 - Process inspection: list spawned processes (pid, state, mailbox depth), dump a mailbox, step a single message.
