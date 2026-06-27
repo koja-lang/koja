@@ -31,7 +31,7 @@ koja run hello.kojs
 
 ## Editor Extensions
 
-- **Vim** — [`editors/vim`](editors/vim) (syntax and indentation only; no language server)
+- **Vim** — [`vim-koja`](https://github.com/koja-lang/vim-koja) (Syntax and indentation only. No language server.)
 - **VS Code** — [`vscode-koja`](https://github.com/koja-lang/vscode-koja)
 - **Zed** — [`zed-koja`](https://github.com/koja-lang/zed-koja)
 
