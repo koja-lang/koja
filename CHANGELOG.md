@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `koja.toml` now accepts a `bin` field under `[project]` to name the output binary independently of the package name. When omitted it defaults to the lowercased package name.
 - The `[project]` table accepts `authors`, `description`, and `license` metadata fields, though unused.
+- `koja shell` now properly loads project files when launched inside a project directory.
+
+### Fixed
+
+- `koja shell` now prints results the same way `.print()` does — structs with named fields, enums with their variant names, strings quoted — instead of garbled internal type names.
 
 ## [0.13.0] - 2026-06-24
 

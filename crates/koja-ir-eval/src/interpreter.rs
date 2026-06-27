@@ -120,9 +120,8 @@ impl Interpreter {
     }
 
     /// Execute the script-mode implicit body and return its trailing
-    /// value. Borrows `script` so the caller can dispatch follow-up
-    /// helper calls (e.g. [`Self::format_via_debug`] for the REPL's
-    /// inspect-style print) without re-lowering.
+    /// value. Borrows `script` so the caller can re-run or inspect it
+    /// without re-lowering.
     ///
     /// Coerces the trailing value to [`Value::Unit`] when the
     /// script's static [`IRScript::return_type`] is `Unit`. See
@@ -166,74 +165,6 @@ impl Interpreter {
             .borrow_mut()
             .take()
             .expect("script body produced no result before shutdown")
-    }
-
-    /// Dispatch the `Debug.format` instance for `value`, returning
-    /// the rendered UTF-8 bytes. Mirrors the symbol the IR
-    /// lower pass would emit for `value.format()`, so the caller's
-    /// output matches what a user-side `IO.puts(value.format())`
-    /// would produce. Today's only caller is
-    /// [`koja_shell`]'s REPL inspect line.
-    ///
-    /// Drives off the runtime [`Value`] shape rather than the
-    /// caller's static IR type so the lookup works without
-    /// re-deriving the trailing expression's declared type from
-    /// the IR; the runtime tag is the source of truth for the
-    /// `format()` instance we want.
-    ///
-    /// Returns `None` for shapes where the runtime [`Display`] of
-    /// [`Value`] is the right rendering — primitive scalars and the
-    /// first-class container shapes ([`Value::List`] / [`Value::Map`]
-    /// / [`Value::Set`]) whose `Display` recurses through nested
-    /// values' own `Display`. For the container shapes specifically,
-    /// this means a `List<Result<Int, String>>` falls back to the
-    /// runtime `Display`'s `[Global.Result_$..$.Ok(1)]` rendering —
-    /// improving that requires plumbing the element type through to
-    /// the caller's render site, a follow-up.
-    pub fn format_via_debug(
-        script: &IRScript,
-        value: Value,
-    ) -> Result<Option<Vec<u8>>, RuntimeError> {
-        let symbol = match &value {
-            Value::Enum { symbol, .. } | Value::Struct { symbol, .. } => {
-                koja_ir::mangling::debug_format_for_symbol(symbol)
-            }
-            Value::Binary(_)
-            | Value::Bits { .. }
-            | Value::Bool(_)
-            | Value::CPtr(_)
-            | Value::Closure { .. }
-            | Value::Float32(_)
-            | Value::Float64(_)
-            | Value::Int(_)
-            | Value::List(_)
-            | Value::Map(_)
-            | Value::Set(_)
-            | Value::String(_)
-            | Value::Union { .. }
-            | Value::Unit => return Ok(None),
-        };
-        let function =
-            script
-                .function(symbol.mangled())
-                .ok_or_else(|| RuntimeError::TypeMismatch {
-                    detail: format!(
-                        "format_via_debug: `Debug.format` instance `{}` is not in the IR \
-                         — the script's monomorphizer did not specialize it",
-                        symbol.mangled(),
-                    ),
-                })?;
-        let result = block_on(execute_function(function, vec![value], script))?;
-        match result {
-            Value::String(bytes) => Ok(Some(bytes.to_vec())),
-            other => Err(RuntimeError::TypeMismatch {
-                detail: format!(
-                    "format_via_debug: `{}` returned non-String value `{other}` — \
-                     Debug.format contract violation",
-                    symbol.mangled(),
-                ),
-            }),
-        }
     }
 }
 

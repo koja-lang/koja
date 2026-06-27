@@ -25,7 +25,7 @@ use crate::ParseMode;
 use crate::parse;
 
 /// A single source file ready to be parsed.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SourceFile {
     /// The package this file belongs to. For project files this is the
     /// declared project name; for stdlib files this is `"Global"`; for

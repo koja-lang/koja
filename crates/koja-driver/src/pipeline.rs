@@ -80,7 +80,7 @@ use koja_typecheck::{CheckFailure, CheckedProgram, check_program, format_registr
 
 use crate::commands::load_project_or_exit;
 use crate::link::{self, LinkOptions};
-use crate::loader::{ErrorPolicy, LoadOptions, ProjectLoader};
+use crate::loader::{self, ErrorPolicy, LoadOptions, LoadedSource, ProjectLoader};
 use crate::project::{self, ProjectConfig};
 
 /// Which downstream backend a `run` invocation drives.
@@ -228,7 +228,72 @@ pub fn cmd_check(file: Option<String>, emit_ast: bool) {
 /// crate owns session state, multiline detection, command
 /// parsing, and its own pipeline driver.
 pub fn cmd_shell() {
-    koja_shell::run();
+    let ShellSession {
+        baseline,
+        session_package,
+    } = shell_session();
+    koja_shell::run(baseline, session_package);
+}
+
+/// What the REPL evaluates against: the baseline sources plus the
+/// package the session source belongs to (the project's package in a
+/// project, so its modules resolve unqualified; otherwise `REPL`).
+struct ShellSession {
+    baseline: Vec<SourceFile>,
+    session_package: String,
+}
+
+/// Resolve the REPL session. In a project, [`ProjectLoader`] supplies
+/// stdlib + project + dependency sources and the session adopts the
+/// project's package; with no readable `koja.toml` (or on any load
+/// failure) fall back to a stdlib-only `REPL` session. A malformed
+/// manifest or broken dependency warns but never aborts the shell.
+fn shell_session() -> ShellSession {
+    let Ok(cwd) = env::current_dir() else {
+        return stdlib_session();
+    };
+    let config = match project::load_project(&cwd) {
+        Ok(Some(config)) => config,
+        Ok(None) => return stdlib_session(),
+        Err(err) => {
+            eprintln!("warning: ignoring koja.toml: {err}");
+            return stdlib_session();
+        }
+    };
+    println!("loading project `{}`", config.name);
+    match ProjectLoader::new(&config, &cwd).sources(LoadOptions {
+        extensions: &["koja"],
+        include_dependencies: true,
+        include_stdlib: true,
+        include_tests: false,
+        on_error: ErrorPolicy::Lenient,
+    }) {
+        Ok(sources) => ShellSession {
+            baseline: sources.into_iter().map(into_source_file).collect(),
+            session_package: config.name,
+        },
+        Err(_) => stdlib_session(),
+    }
+}
+
+/// Stdlib-only `REPL` session for a bare `koja shell` (no project),
+/// reusing the same primitive [`ProjectLoader`] loads stdlib from.
+fn stdlib_session() -> ShellSession {
+    ShellSession {
+        baseline: loader::stdlib_sources()
+            .into_iter()
+            .map(into_source_file)
+            .collect(),
+        session_package: koja_shell::SESSION_PACKAGE.to_string(),
+    }
+}
+
+fn into_source_file(loaded: LoadedSource) -> SourceFile {
+    SourceFile {
+        package: loaded.package,
+        path: loaded.path,
+        source: loaded.source,
+    }
 }
 
 /// `koja build [file] [-o output]` — produce a native binary for a

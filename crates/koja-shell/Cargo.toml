@@ -11,6 +11,8 @@ koja-ir = { path = "../koja-ir" }
 koja-ir-eval = { path = "../koja-ir-eval" }
 koja-lexer = { path = "../koja-lexer" }
 koja-parser = { path = "../koja-parser" }
-koja-stdlib = { path = "../koja-stdlib" }
 koja-typecheck = { path = "../koja-typecheck" }
 rustyline = { version = "18.0.0", features = ["derive"] }
+
+[dev-dependencies]
+koja-stdlib = { path = "../koja-stdlib" }

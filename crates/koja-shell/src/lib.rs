@@ -1,41 +1,27 @@
 //! Interactive REPL for the pipeline.
 //!
 //! `koja-shell` owns the runtime-side REPL: it accumulates user input
-//! into a [`Session`], re-runs the whole session through
-//! `koja-parser → koja-typecheck → koja-ir → koja-ir-eval`
-//! on every step, and prints the trailing expression's value (if any).
-//! Each fragment is lowered as a script (`lower_script` →
-//! `Interpreter::run_script`); top-level expressions and assignments
-//! are first-class, and any user-typed `fn` definitions land as
-//! helper functions in the script's package fragment.
+//! into a [`Session`] and, on every step, re-runs the whole session
+//! through `koja-parser → koja-typecheck → koja-ir → koja-ir-eval`,
+//! printing the trailing expression's value (if any). Each step is
+//! lowered as a script (`lower_script` → `Interpreter::run_script`), so
+//! top-level expressions, assignments, and `fn` definitions are all
+//! first-class.
 //!
-//! REPL fragments have no file dimension, so the shell bypasses the
-//! `.kojs` / `.koja` extension dispatch that `koja {build,run,
-//! eval,check}` use — every fragment is unconditionally script-mode.
-//!
-//! This crate is self-contained: it owns its own pipeline driver and depends
-//! directly on the pipeline crates, with no path back through
-//! `koja-driver`. Today's only public surface is [`run`] (the REPL entry
-//! point); when the shell grows file-input support it will gain an
-//! `eval_source`-style helper that the driver's `cmd_run --backend=interpreter`
-//! path can delegate to.
-//!
-//! Mirrors the v1 [`koja-shell`](https://docs.rs/koja-shell) crate's role
-//! relative to `koja eval` / `koja shell` — the mangled namespace is a clean
-//! cut from v1, not an evolution of it.
-//!
-//! Today's scope mirrors `koja-typecheck` / `koja-ir`:
-//! integer literals, integer arithmetic (`+ - * / %`), boolean and
-//! comparison operators, and parenthesized groups. Richer constructs
-//! typecheck-error with a precise diagnostic.
+//! The driver supplies the baseline source set (stdlib, plus a
+//! project's sources when launched inside one) and the package the
+//! session evaluates in — see [`run`]. REPL fragments have no file
+//! dimension, so the shell is unconditionally script-mode, bypassing
+//! the `.koja` / `.kojs` dispatch the other `koja` subcommands use. It
+//! depends only on the pipeline crates, never back on `koja-driver`.
 
 use std::io::{self, IsTerminal, Write};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process;
 
-use koja_ast::ast::Diagnostic;
+use koja_ast::ast::{Diagnostic, Expr, ExprKind, Statement};
 use koja_ast::token::TokenKind;
-use koja_ir::{IRScript, lower_script};
+use koja_ir::{IRScript, IRType, lower_script};
 use koja_ir_eval::{Interpreter, Value};
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
 use koja_typecheck::{CheckFailure, check_program};
@@ -43,11 +29,14 @@ use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
 
-/// Synthetic package name for the REPL session. The session re-runs
-/// the entire concatenated input history through the pipeline
-/// on every step; the package label flows through into any helper
-/// functions the user defines via top-level `fn` items.
-const SESSION_PACKAGE: &str = "REPL";
+/// Default session package for a bare `koja shell` (no project). The
+/// session re-runs the entire concatenated input history through the
+/// pipeline on every step; the package label flows through into any
+/// helper functions the user defines via top-level `fn` items. In a
+/// project the driver passes the project's package name instead, so
+/// project modules resolve unqualified (`Cli.usage()`) just as they do
+/// from the project's own files.
+pub const SESSION_PACKAGE: &str = "REPL";
 
 const BANNER: &str = "koja shell -- IR interpreter\n\
     Type :help for commands, :quit (or Ctrl-D) to exit\n";
@@ -66,9 +55,8 @@ Notes:\n  \
     - State accumulates across inputs: each new input runs the whole\n    \
       session (today's pipeline is whole-program; incremental support\n    \
       lands later).\n  \
-    - Scope today: integer literals, integer arithmetic (+, -, *, /, %),\n    \
-      boolean / comparison operators, and parenthesized groups.\n    \
-      Other constructs typecheck-error.\n";
+    - In a project, its modules are in scope and resolve unqualified\n    \
+      (e.g. `Cli.usage()`); the stdlib prelude is always available.\n";
 
 /// Outcome of one [`read_input`] call: either a complete buffer
 /// ready for the pipeline, the user bailed mid-multiline
@@ -90,8 +78,8 @@ enum InputOutcome {
 /// block reads as bare code; subsequent continuation lines come
 /// in without any prompt prefix. Successful inputs accumulate
 /// into a [`Session`] that re-runs the whole history every step;
-/// the trailing expression's value (if any) gets printed and a
-/// [`Value::Unit`] trailing value suppresses the print line.
+/// the trailing expression's `Debug.format` rendering (if any) gets
+/// printed and a [`Value::Unit`] trailing value suppresses the line.
 /// Pipeline errors print `error: …` and roll the session back to
 /// its pre-input state. Ctrl-C cancels the in-flight input and
 /// loops back to a fresh prompt; Ctrl-D / EOF exits cleanly.
@@ -100,8 +88,11 @@ enum InputOutcome {
 /// multi-line block, where applicable) is added as one entry so
 /// up-arrow recalls prior commands within the session, but
 /// nothing is persisted to disk.
-pub fn run() {
+pub fn run(baseline: Vec<SourceFile>, session_package: String) {
     print!("{BANNER}");
+    if !baseline.is_empty() {
+        println!("{} source file(s) in scope", baseline.len());
+    }
     let _ = io::stdout().flush();
 
     let mut editor = match Editor::<(), DefaultHistory>::new() {
@@ -112,7 +103,7 @@ pub fn run() {
         }
     };
 
-    let mut session = Session::new();
+    let mut session = Session::new(baseline, session_package);
     loop {
         let input = match read_input(&mut editor, session.counter()) {
             InputOutcome::Buffer(input) => input,
@@ -232,29 +223,35 @@ fn erase_current_line() {
     let _ = io::stdout().flush();
 }
 
-/// Accumulating REPL state. Each new input pushes one statement-text
-/// block; [`Session::try_eval`] concatenates the entire history into
-/// a single source string, parses it in [`ParseMode::Script`], and
-/// drives it through the pipeline as an [`koja_ir::IRScript`]:
-/// `koja_ir::lower_script` produces an implicit-function body
-/// for the top-level statements, and `Interpreter::run_script` runs
-/// it. Helper `fn` items the user defines land as helpers on
-/// `IRScript.packages`.
+/// Accumulating REPL state: each accepted input is one statement-text
+/// block. [`Session::try_eval`] concatenates the history into a single
+/// script source, runs it through the pipeline, and rolls back on
+/// failure.
 ///
-/// The pipeline is whole-program today (no incremental typecheck or
-/// IR delta), so re-running the whole history is the simplest way to
-/// make state "just work" — perf is fine for the first few hundred
-/// lines. Future incremental work would split this into a chunk-based
-/// representation; today's session is the reference shape.
+/// Re-running the whole history every step is deliberate: the pipeline
+/// is whole-program today (no incremental typecheck or IR delta), so
+/// this is the simplest way to make accumulated state work. Fine for
+/// the first few hundred lines.
 struct Session {
+    /// Baseline sources injected by the driver (stdlib plus, in a
+    /// project, the project + dependency sources). Prepended to every
+    /// pipeline run and preserved across `:reset` — it's the fixed
+    /// scope the REPL evaluates against, not session input.
+    baseline: Vec<SourceFile>,
     counter: u32,
+    /// Package the synthesized session source belongs to. In a project
+    /// this is the project's package name, so its modules resolve
+    /// unqualified; otherwise [`SESSION_PACKAGE`].
+    package: String,
     statements: Vec<String>,
 }
 
 impl Session {
-    fn new() -> Self {
+    fn new(baseline: Vec<SourceFile>, package: String) -> Self {
         Self {
+            baseline,
             counter: 1,
+            package,
             statements: Vec::new(),
         }
     }
@@ -282,28 +279,17 @@ impl Session {
     /// errors leave the session exactly as it was before the call).
     ///
     /// `Ok(Some(rendered))` carries the trailing expression's
-    /// `Debug.format` output, falling back to the runtime
-    /// [`Display`] when `Debug.format` isn't applicable
-    /// (primitives, containers) or when its instance wasn't
-    /// monomorphized into the session IR. The statement evaluated
-    /// successfully in either case (side effects already landed),
-    /// so we don't roll the session back. `Ok(None)` covers
-    /// [`Value::Unit`] so the REPL suppresses the trailing print
-    /// line for void inputs — including calls to functions like
-    /// `IO.puts` whose signature elides `-> T` and which the
-    /// interpreter coerces to [`Value::Unit`] at the call boundary.
+    /// `Debug.format` output — the exact bytes `value.print()` would
+    /// emit — and `Ok(None)` covers a [`Value::Unit`] trailing value
+    /// so the REPL suppresses the print line for void inputs (a `fn`
+    /// item, an assignment, or a call like `IO.puts` whose signature
+    /// elides `-> T`). The statement evaluated successfully in either
+    /// case (side effects already landed), so we don't roll back.
     fn try_eval(&mut self, input: &str) -> Result<Option<String>, String> {
         let snapshot = self.statements.len();
         self.statements.push(input.to_string());
         match self.run() {
-            Ok((_, Value::Unit)) => Ok(None),
-            Ok((script, value)) => {
-                let rendered = match Interpreter::format_via_debug(&script, value.clone()) {
-                    Ok(Some(bytes)) => String::from_utf8_lossy(&bytes).into_owned(),
-                    Ok(None) | Err(_) => value.to_string(),
-                };
-                Ok(Some(rendered))
-            }
+            Ok(rendered) => Ok(rendered),
             Err(error) => {
                 self.statements.truncate(snapshot);
                 Err(error)
@@ -311,14 +297,18 @@ impl Session {
         }
     }
 
-    /// Synthesize the full session source and drive it through the
-    /// pipeline. Returns both the sealed [`IRScript`] and the
-    /// trailing value so the caller can dispatch follow-up helpers
-    /// (e.g. `Debug.format` auto-print) without re-lowering.
-    fn run(&self) -> Result<(IRScript, Value), String> {
-        let source = self.synthesize();
-        let path = PathBuf::from(format!("{SESSION_PACKAGE}.koja"));
-        run_pipeline(source, SESSION_PACKAGE, path)
+    /// Synthesize the full session source and evaluate it, returning
+    /// the REPL's print line (`None` suppresses it for a `Unit`
+    /// trailing value).
+    fn run(&self) -> Result<Option<String>, String> {
+        let path = PathBuf::from(format!("{}.koja", self.package));
+        let mut sources = self.baseline.clone();
+        sources.push(SourceFile {
+            package: self.package.clone(),
+            path: path.clone(),
+            source: self.synthesize(),
+        });
+        eval_fragment(sources, &path)
     }
 
     /// Concatenate all statement blocks into the script source the
@@ -330,38 +320,110 @@ impl Session {
     }
 }
 
-/// Run one source string end-to-end through the script-mode
-/// pipeline. Returns the sealed [`IRScript`] alongside the trailing
-/// value so the caller can dispatch follow-up helpers (e.g.
-/// `Debug.format` auto-print) without re-lowering. On failure
-/// returns a formatted error string covering parse / typecheck /
-/// lower / runtime failures.
+/// Drive the assembled `sources` through the script-mode pipeline and
+/// produce the REPL's print line: `Some(text)` for a value, `None` for
+/// a `Unit` trailing value (suppressed).
+///
+/// The trailing expression is rendered through its real `Debug.format`
+/// instance — the same path `value.print()` takes — so structs show
+/// named fields and enums show source-level variant names instead of
+/// the runtime [`Display`]'s mangled monomorphization symbols. To get
+/// there, the trailing expression `E` is rewritten to `E.format()`
+/// before lowering (see [`wrap_trailing_in_format`]): the lowered
+/// script then yields the `Debug.format` string directly, and the
+/// monomorphizer specializes the instance as a side effect of the
+/// call. A post-hoc lookup can't, since the program never formats the
+/// value on its own.
+///
+/// The rewrite only fires for a non-`Unit` trailing value; the probe
+/// lower that decides this is side-effect-free, so exactly one
+/// [`Interpreter::run_script`] executes per input and a fragment like
+/// `GitHub.user("x")` fires its request once. If the wrapped lower
+/// fails — a trailing type with no usable `Debug.format`, e.g. a bare
+/// function value — the unwrapped body runs and the runtime [`Display`]
+/// renders it.
 ///
 /// Always parses in [`ParseMode::Script`]: the REPL treats top-level
-/// statements as first-class. Helper `fn` items land on
-/// [`koja_ir::IRScript::packages`] for [`Interpreter::run_script`]
-/// to resolve as call targets.
-///
-/// Prepends [`koja_stdlib::autoimport_sources`] so REPL input
-/// sees the same `Global.*` prelude the driver and tests do —
-/// `Duration.from_secs(3).millis()` and `0b1100.band(0b1010)` work
-/// at the prompt without any imports. Also prepends
-/// [`koja_stdlib::qualified_sources`] so qualified packages
-/// (`Crypto.SHA256`, `Net.Socket`, …) typecheck without an explicit
-/// alias — same behavior the driver gives non-`Global` compiles.
-fn run_pipeline(source: String, package: &str, path: PathBuf) -> Result<(IRScript, Value), String> {
-    let mut sources = koja_stdlib::autoimport_sources();
-    sources.extend(koja_stdlib::qualified_sources());
-    sources.push(SourceFile {
-        package: package.to_string(),
-        path,
-        source,
-    });
-    let parsed = parse_program(sources, ParseMode::Script);
+/// statements as first-class, and helper `fn` items land on
+/// [`koja_ir::IRScript::packages`] as call targets. `sources` is the
+/// driver-supplied baseline (stdlib prelude plus, in a project, the
+/// project + dependency sources) with the REPL fragment appended last;
+/// `fragment_path` identifies that fragment file for the rewrite.
+fn eval_fragment(sources: Vec<SourceFile>, fragment_path: &Path) -> Result<Option<String>, String> {
+    let probe = lower_fragment(sources.clone(), fragment_path, false)?;
+    if probe.return_type == IRType::Unit {
+        run_script(&probe)?;
+        return Ok(None);
+    }
+    let value = match lower_fragment(sources, fragment_path, true) {
+        Ok(formatted) => run_script(&formatted)?,
+        Err(_) => run_script(&probe)?,
+    };
+    Ok(Some(render(value)))
+}
+
+/// Parse + typecheck + lower `sources` in script mode. When `wrap` is
+/// set, the fragment file's trailing expression is rewritten to
+/// `<expr>.format()` so the lowered script yields its `Debug.format`
+/// string. On failure returns a formatted error string covering parse
+/// / typecheck / lower failures.
+fn lower_fragment(
+    sources: Vec<SourceFile>,
+    fragment_path: &Path,
+    wrap: bool,
+) -> Result<IRScript, String> {
+    let mut parsed = parse_program(sources, ParseMode::Script);
+    if wrap {
+        wrap_trailing_in_format(&mut parsed, fragment_path);
+    }
     let checked = check_program(parsed).map_err(format_check_failure)?;
-    let script = lower_script(&checked).map_err(|err| err.to_string())?;
-    let value = Interpreter::run_script(&script).map_err(|err| err.to_string())?;
-    Ok((script, value))
+    lower_script(&checked).map_err(|err| err.to_string())
+}
+
+fn run_script(script: &IRScript) -> Result<Value, String> {
+    Interpreter::run_script(script).map_err(|err| err.to_string())
+}
+
+/// The text the REPL prints for a trailing value. The wrapped lower
+/// hands back the `Debug.format` string verbatim; the unwrapped
+/// fallback renders the raw value through its runtime [`Display`].
+fn render(value: Value) -> String {
+    match value {
+        Value::String(bytes) => String::from_utf8_lossy(&bytes).into_owned(),
+        other => other.to_string(),
+    }
+}
+
+/// Rewrite the fragment file's trailing `Statement::Expr(e)` to
+/// `Statement::Expr(e.format())`, mirroring the `.format()` wrap the
+/// `Debug` synthesizer splices into interpolations. No-op when the
+/// fragment has no body or its trailing statement isn't a bare
+/// expression (assignment, `fn` item, empty) — those lower to a `Unit`
+/// trailing value the caller handles without rewriting.
+fn wrap_trailing_in_format(parsed: &mut ParsedProgram, fragment_path: &Path) {
+    let Some(file) = parsed.get_mut(fragment_path) else {
+        return;
+    };
+    let Some(body) = file.ast.body.as_mut() else {
+        return;
+    };
+    let Some(last) = body.pop() else {
+        return;
+    };
+    let Statement::Expr(expr) = last else {
+        body.push(last);
+        return;
+    };
+    let span = expr.span;
+    body.push(Statement::Expr(Expr::new(
+        ExprKind::MethodCall {
+            receiver: Box::new(expr),
+            method: "format".to_string(),
+            args: Vec::new(),
+            type_args: Vec::new(),
+        },
+        span,
+    )));
 }
 
 /// True when `source` (the accumulated multiline buffer) is a
@@ -459,4 +521,88 @@ fn format_block(prefix: &str, diagnostics: &[&Diagnostic]) -> String {
         out.push_str(&diag.message);
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Stdlib prelude plus a synthetic project package `Demo` so a REPL
+    /// fragment can call into project sources just like the driver wires
+    /// them up. `Calc` exercises a method call; `Point` exercises the
+    /// struct `Debug.format` rendering.
+    fn baseline_with_project() -> Vec<SourceFile> {
+        let mut baseline = koja_stdlib::autoimport_sources();
+        baseline.extend(koja_stdlib::qualified_sources());
+        baseline.push(SourceFile {
+            package: "Demo".to_string(),
+            path: PathBuf::from("demo.koja"),
+            source: "struct Calc\n  fn double(x: Int) -> Int\n    x * 2\n  end\nend\n\
+                     struct Point\n  x: Int\n  y: Int\nend\n"
+                .to_string(),
+        });
+        baseline
+    }
+
+    /// Append `source` as the REPL fragment for `package` and evaluate
+    /// it the way [`Session::run`] does.
+    fn eval(
+        baseline: &[SourceFile],
+        package: &str,
+        source: &str,
+    ) -> Result<Option<String>, String> {
+        let path = PathBuf::from(format!("{package}.koja"));
+        let mut sources = baseline.to_vec();
+        sources.push(SourceFile {
+            package: package.to_string(),
+            path: path.clone(),
+            source: source.to_string(),
+        });
+        eval_fragment(sources, &path)
+    }
+
+    #[test]
+    fn fragment_calls_into_project_baseline() {
+        let baseline = baseline_with_project();
+        match eval(&baseline, SESSION_PACKAGE, "Demo.Calc.double(21)") {
+            Ok(rendered) => assert_eq!(rendered.as_deref(), Some("42")),
+            Err(error) => panic!("expected project call to evaluate, got:\n{error}"),
+        }
+    }
+
+    #[test]
+    fn fragment_in_project_package_resolves_modules_unqualified() {
+        let baseline = baseline_with_project();
+        match eval(&baseline, "Demo", "Calc.double(21)") {
+            Ok(rendered) => assert_eq!(rendered.as_deref(), Some("42")),
+            Err(error) => panic!("expected unqualified project call to evaluate, got:\n{error}"),
+        }
+    }
+
+    #[test]
+    fn trailing_struct_renders_named_fields_via_debug_format() {
+        let baseline = baseline_with_project();
+        match eval(&baseline, "Demo", "Point{x: 1, y: 2}") {
+            Ok(rendered) => assert_eq!(rendered.as_deref(), Some("Point{x: 1, y: 2}")),
+            Err(error) => panic!("expected struct debug render, got:\n{error}"),
+        }
+    }
+
+    #[test]
+    fn trailing_string_renders_quoted_like_print() {
+        let baseline = baseline_with_project();
+        match eval(&baseline, SESSION_PACKAGE, "\"hi\"") {
+            Ok(rendered) => assert_eq!(rendered.as_deref(), Some("\"hi\"")),
+            Err(error) => panic!("expected quoted string render, got:\n{error}"),
+        }
+    }
+
+    #[test]
+    fn trailing_unit_suppresses_print_line() {
+        let baseline = baseline_with_project();
+        match eval(&baseline, SESSION_PACKAGE, "IO.puts(\"hi\")") {
+            Ok(rendered) => assert_eq!(rendered, None),
+            Err(error) => panic!("expected unit suppression, got:\n{error}"),
+        }
+    }
 }
