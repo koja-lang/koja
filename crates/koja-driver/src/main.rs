@@ -24,6 +24,7 @@
 mod commands;
 mod diagnostics;
 mod link;
+mod loader;
 mod pipeline;
 pub mod project;
 mod serve;
