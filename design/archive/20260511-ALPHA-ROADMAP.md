@@ -162,7 +162,7 @@ LoadCapture}`, and `FunctionKind::Closure { env_layout }` for
   `{fn_ptr, env_ptr}` fat pointers; closure bodies declare an
   extra `i8*`env parameter at LLVM position 0; env blocks
   heap-allocate via`malloc`and free at scope exit through
- `DropLocal { ty: Function }`. Backend symmetry: eval and LLVM
+  `DropLocal { ty: Function }`. Backend symmetry: eval and LLVM
   produce identical results for higher-order calls, captureless
   closures, single/double/heap captures, and fn-as-value adapters.
   Pinned by `crates/koja-alpha-typecheck/tests/resolve\*closures.rs`,
@@ -170,7 +170,7 @@ LoadCapture}`, and `FunctionKind::Closure { env_layout }` for
   `crates/koja-alpha-ir-eval/tests/closures.rs`,
   `crates/koja-alpha-ir-llvm/tests/closures.rs`, and the
   `\*\_closure\*\*`/`**higher_order**`/`\__fn_as_value_\*`driver
-tests in`crates/koja-driver/tests/alpha_two_plus_two.rs`.
+  tests in`crates/koja-driver/tests/alpha_two_plus_two.rs`.
   **Out**: recursive drops of nested heap captures inside the
   env block (the env itself frees, but heap-typed captures inside
   it leak today — alpha milestone trade-off for a simpler ABI; a
