@@ -27,6 +27,7 @@ use crate::scheduler::{
     CURRENT_PID, NativeTable, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, publish_ready,
     send_io_event,
 };
+use crate::tsan;
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
 pub use koja_runtime_core::Interest;
@@ -309,7 +310,7 @@ pub fn io_block(fd: i32, interest: Interest) -> bool {
         reactor.register(fd, interest, Waker::Resume(pid));
     }
 
-    crate::tsan::switch_to_scheduler();
+    tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
     unsafe {

@@ -22,6 +22,9 @@ use koja_runtime_core::{
 use crate::ffi::{fflush, koja_context_switch, koja_seed_reductions, setvbuf};
 use crate::mailbox::WaitTarget;
 use crate::memory;
+use crate::panic;
+use crate::reactor;
+use crate::signals;
 use crate::tsan;
 use crate::wire::{
     Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
@@ -228,11 +231,11 @@ pub(crate) struct NativeSignals;
 
 impl SignalSource for NativeSignals {
     fn install(&self) {
-        crate::signals::install();
+        signals::install();
     }
 
     fn drain(&self) -> Vec<Lifecycle> {
-        crate::signals::drain()
+        signals::drain()
             .into_iter()
             .map(lifecycle_from_index)
             .collect()
@@ -729,7 +732,7 @@ static RUNTIME_INIT: Once = Once::new();
 /// is live before any worker thread is spawned or any `SCHED` lock is taken.
 fn ensure_runtime_init() {
     RUNTIME_INIT.call_once(|| {
-        crate::panic::install_panic_hook();
+        panic::install_panic_hook();
         // Switch the table to external-ready before the first spawn enqueues,
         // so every runnable PID flows through the work-stealing injectors
         // (the in-core ready queues go unused on native).
@@ -784,7 +787,7 @@ impl Driver for NativeDriver {
     fn run(self) {
         line_buffer_stdout();
         NativeSignals.install();
-        crate::reactor::init();
+        reactor::init();
 
         let n = worker_count();
         // Build one deque-set per worker and register every stealer before
@@ -799,7 +802,7 @@ impl Driver for NativeDriver {
         let _ = STEALERS.set(stealers);
 
         let mut handles = Vec::with_capacity(n);
-        handles.push(thread::spawn(crate::reactor::reactor_loop));
+        handles.push(thread::spawn(reactor::reactor_loop));
         // Worker 0 runs on this thread; 1..n run on spawned threads. The
         // worker id indexes into `STEALERS`, so it must match `queues`.
         let mut main_queue = None;
@@ -812,7 +815,7 @@ impl Driver for NativeDriver {
         }
         worker_loop(main_queue.expect("worker_count() >= 1"), 0);
 
-        crate::reactor::notify();
+        reactor::notify();
         for handle in handles {
             let _ = handle.join();
         }
@@ -832,7 +835,7 @@ fn maybe_report_live_heap() {
     if std::env::var_os("KOJA_HEAP_REPORT").is_some() {
         eprintln!(
             "koja: live heap blocks at shutdown: {}",
-            crate::memory::koja_rt_live_blocks(),
+            memory::koja_rt_live_blocks(),
         );
     }
 }
