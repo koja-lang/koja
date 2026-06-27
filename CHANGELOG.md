@@ -15,7 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `koja shell` now renders a result through its real `Debug.format` — the same output `value.print()` produces — so structs show named fields (`User{name: "alice", id: 36}`) and enums show source-level variant names (`Ok(...)`) instead of mangled monomorphization symbols and positional fields. Strings now display quoted/escaped, matching `.print()`.
+- `koja shell` now prints results the same way `.print()` does — structs with named fields, enums with their variant names, strings quoted — instead of garbled internal type names.
 
 ## [0.13.0] - 2026-06-24
 
