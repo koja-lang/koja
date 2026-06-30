@@ -40,6 +40,7 @@ use koja_ast::span::Span;
 use expressions::seal_expr;
 use statements::seal_statement;
 
+use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
 use crate::program::CheckedProgram;
 use crate::registry::{GlobalKind, GlobalRegistry};
 
@@ -133,17 +134,14 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
 /// `impl Trait for Type<T>`), so their bodies carry `TypeParam`
 /// resolutions and seal must skip them.
 fn impl_target_is_generic(target: &TypeExpr, package: &str, registry: &GlobalRegistry) -> bool {
-    let path = match target {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => path,
-        _ => return false,
-    };
-    if path.len() != 1 {
+    let Some(path) = nominal_target_path(target) else {
         return false;
-    }
-    let identifier = Identifier::new(package, vec![path[0].clone()]);
-    registry
-        .lookup(&identifier)
-        .is_some_and(|(_, entry)| !entry.type_params.is_empty())
+    };
+    lookup_owner_path(path, package, registry).is_some_and(|(id, _, _)| {
+        registry
+            .get(id)
+            .is_some_and(|entry| !entry.type_params.is_empty())
+    })
 }
 
 /// Assert lift's constants pass produced a stamped

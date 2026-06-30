@@ -151,7 +151,7 @@ fn test_extern_c_struct_per_function_annotations() {
         Item::Struct(s) => s,
         _ => panic!("expected struct"),
     };
-    assert_eq!(s.name, "Argon2C");
+    assert_eq!(s.name(), "Argon2C");
     assert_eq!(s.functions.len(), 2);
     assert!(s.functions[0].body.is_none());
     assert!(s.functions[1].body.is_none());

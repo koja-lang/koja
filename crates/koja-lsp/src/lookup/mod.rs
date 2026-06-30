@@ -143,9 +143,9 @@ pub(crate) fn find_symbol_at(
                 if !span_contains(&s.span, line, col) {
                     continue;
                 }
-                if span_contains_name(&s.name, &s.span, line, col) {
+                if span_contains_name(s.name(), &s.span, line, col) {
                     return Some(SymbolInfo::Struct {
-                        name: s.name.clone(),
+                        name: s.name().to_string(),
                     });
                 }
                 for field in &s.fields {
@@ -161,9 +161,9 @@ pub(crate) fn find_symbol_at(
                 if !span_contains(&e.span, line, col) {
                     continue;
                 }
-                if span_contains_name(&e.name, &e.span, line, col) {
+                if span_contains_name(e.name(), &e.span, line, col) {
                     return Some(SymbolInfo::Enum {
-                        name: e.name.clone(),
+                        name: e.name().to_string(),
                     });
                 }
                 for variant in &e.variants {
@@ -254,18 +254,18 @@ pub(crate) fn find_doc_for(file: &File, name: &str) -> Option<String> {
                 return span::annotation_doc(&f.annotations);
             }
             Item::Struct(s) => {
-                if s.name == name {
+                if s.name() == name {
                     return span::annotation_doc(&s.annotations);
                 }
-                if let Some(doc) = doc_in_methods(&s.functions, &s.name, name) {
+                if let Some(doc) = doc_in_methods(&s.functions, s.name(), name) {
                     return Some(doc);
                 }
             }
             Item::Enum(e) => {
-                if e.name == name {
+                if e.name() == name {
                     return span::annotation_doc(&e.annotations);
                 }
-                if let Some(doc) = doc_in_methods(&e.functions, &e.name, name) {
+                if let Some(doc) = doc_in_methods(&e.functions, e.name(), name) {
                     return Some(doc);
                 }
             }

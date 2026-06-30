@@ -87,7 +87,7 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -
                     file: display_path.clone(),
                     fn_name: func.name.clone(),
                     line: func.span.start.line,
-                    struct_name: s.name.clone(),
+                    struct_name: s.name().to_string(),
                 });
             }
         }

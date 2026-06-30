@@ -225,7 +225,7 @@ impl<'a> Printer<'a> {
             parts.push(doc);
             parts.push(hardline());
         }
-        let mut header = format!("struct {}", s.name);
+        let mut header = format!("struct {}", s.path.join("."));
         if !s.type_params.is_empty() {
             header.push('<');
             header.push_str(&util::format_type_params(&s.type_params));
@@ -286,7 +286,7 @@ impl<'a> Printer<'a> {
             parts.push(doc);
             parts.push(hardline());
         }
-        let mut header = format!("enum {}", e.name);
+        let mut header = format!("enum {}", e.path.join("."));
         if !e.type_params.is_empty() {
             header.push('<');
             header.push_str(&util::format_type_params(&e.type_params));

@@ -15,7 +15,17 @@ use super::ctx::Callee;
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::lift_signatures::ResolutionScope;
 use crate::pipeline::unify::Substitution;
-use crate::registry::{GlobalRegistry, RegistryEntry};
+use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
+
+/// Whether `path` resolves to a registered struct. Lets the resolver
+/// tell a nested struct from a struct-shaped enum variant — they parse
+/// to the same node.
+pub(super) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool {
+    matches!(
+        lookup_type(path, scope),
+        Some((_, entry)) if matches!(entry.kind, GlobalKind::Struct(_))
+    )
+}
 
 /// Resolve a (possibly multi-segment) type path against the
 /// in-scope package, falling back to `Global` for stdlib stubs.

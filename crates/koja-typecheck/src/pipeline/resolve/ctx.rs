@@ -33,7 +33,7 @@ impl<'a> ResolverEnv<'a> {
     /// the `priv fn` type-private visibility check.
     pub(super) fn make_resolver<'b>(
         &'b mut self,
-        enclosing_type: Option<&'b str>,
+        enclosing_type: Option<&'b [String]>,
         enclosing_type_id: Option<GlobalRegistryId>,
         type_param_owners: &'b [GlobalRegistryId],
         scope: &'b mut LocalScope,
@@ -64,9 +64,10 @@ impl<'a> ResolverEnv<'a> {
 /// node (`Expr.literal_coercion`) so no resolver-level sink is
 /// needed.
 ///
-/// `enclosing_type` is the unqualified name of the function's
-/// owner — `"DateTime"` for a method on `Global.DateTime`, `None`
-/// for top-level free functions and file bodies. It encodes the
+/// `enclosing_type` is the owner type's full path — `["DateTime"]`
+/// for a method on `Global.DateTime`, `["Process", "ExitSignal"]`
+/// for a method on a nested type, `None` for top-level free
+/// functions and file bodies. It encodes the
 /// language's bare-call lookup rule: **prioritize your enclosing
 /// scope, then fall back to package scope**. So inside
 /// `System.cwd`, bare `koja_cwd()` resolves to the sibling
@@ -97,7 +98,7 @@ pub(super) struct Resolver<'a> {
     /// (rather than `&'a ResolvedType`) so closure save/restore can
     /// `mem::replace` without a borrowed-vs-owned mismatch.
     pub current_return_type: Option<ResolvedType>,
-    pub enclosing_type: Option<&'a str>,
+    pub enclosing_type: Option<&'a [String]>,
     /// Registry id of the enclosing type when the resolver is
     /// walking a method body, parallel to `enclosing_type`'s name.
     /// `None` for top-level functions and the file body. Anchors

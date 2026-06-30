@@ -278,6 +278,19 @@ impl Parser {
         }
     }
 
+    /// Parse a possibly-dotted declaration name (`A`, or `A.B.C` for a
+    /// nested type) into its full path. The last segment is the
+    /// declared type's leaf name; any preceding segments are the
+    /// owning type path.
+    pub(crate) fn parse_decl_path(&mut self) -> Vec<String> {
+        let mut segments = vec![self.expect_type_ident()];
+        while self.at(&TokenKind::Dot) && matches!(self.peek_nth(1), TokenKind::TypeIdent(_)) {
+            self.advance(); // .
+            segments.push(self.expect_type_ident());
+        }
+        segments
+    }
+
     pub(crate) fn save_pos(&self) -> Checkpoint {
         Checkpoint {
             pos: self.pos,

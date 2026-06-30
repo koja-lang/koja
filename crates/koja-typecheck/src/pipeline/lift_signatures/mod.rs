@@ -33,7 +33,7 @@ mod structs;
 mod type_aliases;
 mod types;
 
-pub(crate) use types::{ResolutionScope, TypeParamScope, impl_target_name, resolve_type_expr};
+pub(crate) use types::{ResolutionScope, TypeParamScope, resolve_type_expr};
 
 use types::resolve_bound_to_id;
 
@@ -257,10 +257,7 @@ fn resolve_all_bounds(
                         for function in &decl.functions {
                             resolve_function_bounds(
                                 function,
-                                Identifier::new(
-                                    scope.package,
-                                    vec![decl.name.clone(), function.name.clone()],
-                                ),
+                                Identifier::member(scope.package, &decl.path, &function.name),
                                 &mut scope,
                                 diagnostics,
                             );
@@ -278,7 +275,7 @@ fn resolve_struct_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -291,7 +288,7 @@ fn resolve_enum_bounds(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, _)) = scope.registry.lookup(&identifier) else {
         return;
     };
@@ -300,10 +297,7 @@ fn resolve_enum_bounds(
     for function in &decl.functions {
         resolve_function_bounds(
             function,
-            Identifier::new(
-                scope.package,
-                vec![decl.name.clone(), function.name.clone()],
-            ),
+            Identifier::member(scope.package, &decl.path, &function.name),
             scope,
             diagnostics,
         );

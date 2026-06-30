@@ -70,7 +70,7 @@ pub(super) fn lower_enum_decl(
     if has_feature_gap(decl, &mut output.diagnostics) {
         return None;
     }
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(package, decl.path.clone());
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Enum(Some(definition)) = &entry.kind else {
         panic!(
@@ -318,14 +318,15 @@ fn has_feature_gap(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) -> bool {
         diagnostics.push(Diagnostic::error(
             format!(
                 "IR does not yet lower annotations on enum items (`@{}` on `{}`)",
-                annotation.name, decl.name,
+                annotation.name,
+                decl.name(),
             ),
             annotation.span,
         ));
         gapped = true;
     }
     for variant in &decl.variants {
-        if variant_has_feature_gap(&decl.name, variant, diagnostics) {
+        if variant_has_feature_gap(decl.name(), variant, diagnostics) {
             gapped = true;
         }
     }

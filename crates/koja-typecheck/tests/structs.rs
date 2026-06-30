@@ -48,7 +48,7 @@ fn find_struct_decl<'a>(checked: &'a CheckedProgram, name: &str) -> &'a StructDe
     for file in &pkg.files {
         for item in &file.items {
             if let Item::Struct(decl) = item
-                && decl.name == name
+                && decl.name() == name
             {
                 return decl;
             }
@@ -141,7 +141,7 @@ fn struct_decl_registers_with_lifted_definition() {
     assert_eq!(definition.fields[1].ty, int);
 
     let decl = find_struct_decl(&checked, "Point");
-    assert_eq!(decl.name, "Point");
+    assert_eq!(decl.name(), "Point");
     assert_eq!(decl.fields.len(), 2);
 }
 
@@ -1313,7 +1313,7 @@ fn impl_on_unknown_type_diagnoses() {
     assert!(
         messages
             .iter()
-            .any(|m| m.contains("cannot extend unknown type `TestApp.Vector`")),
+            .any(|m| m.contains("cannot extend unknown type `Vector`")),
         "expected extend-unknown-type diagnostic, got {messages:?}",
     );
 }

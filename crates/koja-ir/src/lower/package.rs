@@ -74,10 +74,8 @@ pub(crate) fn lower_package(
                     }
                     if decl.type_params.is_empty() {
                         for function in &decl.functions {
-                            let identifier = Identifier::new(
-                                &pkg.package,
-                                vec![decl.name.clone(), function.name.clone()],
-                            );
+                            let identifier =
+                                Identifier::member(&pkg.package, &decl.path, &function.name);
                             if let Some(lowered) = lower_function_with_identifier(
                                 function, identifier, def_file, registry, output,
                             ) {
@@ -100,10 +98,8 @@ pub(crate) fn lower_package(
                     }
                     if decl.type_params.is_empty() {
                         for function in &decl.functions {
-                            let identifier = Identifier::new(
-                                &pkg.package,
-                                vec![decl.name.clone(), function.name.clone()],
-                            );
+                            let identifier =
+                                Identifier::member(&pkg.package, &decl.path, &function.name);
                             if let Some(lowered) = lower_function_with_identifier(
                                 function, identifier, def_file, registry, output,
                             ) {
@@ -162,15 +158,15 @@ fn lower_impl(
     output: &mut LowerOutput,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
 ) {
-    let Some(target_name) = impl_target_name(&impl_block.target) else {
+    let Some(target_path) = nominal_target_path(&impl_block.target) else {
         return;
     };
-    if impl_target_is_generic(target_name, package, registry) {
+    if impl_target_is_generic(target_path, package, registry) {
         return;
     }
     lower_block_members(
         package,
-        target_name,
+        target_path,
         &impl_block.members,
         def_file,
         registry,
@@ -190,16 +186,18 @@ fn lower_extend(
     output: &mut LowerOutput,
     functions: &mut BTreeMap<IRSymbol, IRFunction>,
 ) {
-    let Some((target_package, target_name)) = extend_target_path(&extend_block.target, package)
-    else {
+    let Some(path) = nominal_target_path(&extend_block.target) else {
         return;
     };
-    if impl_target_is_generic(target_name, target_package.as_str(), registry) {
+    let Some((target_package, target_path)) = lookup_owner_path(path, package, registry) else {
+        return;
+    };
+    if impl_target_is_generic(&target_path, target_package.as_str(), registry) {
         return;
     }
     lower_block_members(
         target_package.as_str(),
-        target_name,
+        &target_path,
         &extend_block.members,
         def_file,
         registry,
@@ -208,21 +206,28 @@ fn lower_extend(
     );
 }
 
-/// Project an `extend` target into `(package, name)`. Inlined twin
-/// of `koja_typecheck::pipeline::collect::extend_target_path`; IR
-/// just skips shapes that typecheck already rejected.
-pub(crate) fn extend_target_path<'a>(
-    target: &'a TypeExpr,
+/// Resolve a nominal `impl`/`extend` target into its owning
+/// `(package, path)`. Twin of typecheck's `lookup_owner_path`: a
+/// same-package nested type wins over the `<package>.<rest>` reading.
+pub(crate) fn lookup_owner_path(
+    path: &[String],
     current_package: &str,
-) -> Option<(String, &'a str)> {
-    match target {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => match path.as_slice() {
-            [name] => Some((current_package.to_string(), name.as_str())),
-            [head @ .., last] if !head.is_empty() => Some((head.join("."), last.as_str())),
-            _ => None,
-        },
-        _ => None,
+    registry: &GlobalRegistry,
+) -> Option<(String, Vec<String>)> {
+    if registry
+        .lookup(&Identifier::new(current_package, path.to_vec()))
+        .is_some()
+    {
+        return Some((current_package.to_string(), path.to_vec()));
     }
+    if path.len() >= 2
+        && registry
+            .lookup(&Identifier::new(&path[0], path[1..].to_vec()))
+            .is_some()
+    {
+        return Some((path[0].clone(), path[1..].to_vec()));
+    }
+    None
 }
 
 /// Shared member-lowering loop for [`lower_impl`] and [`lower_extend`].
@@ -230,7 +235,7 @@ pub(crate) fn extend_target_path<'a>(
 /// type aliases are dropped.
 fn lower_block_members(
     target_package: &str,
-    target_name: &str,
+    target_path: &[String],
     members: &[ImplMember],
     def_file: Option<&Path>,
     registry: &GlobalRegistry,
@@ -241,10 +246,7 @@ fn lower_block_members(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let identifier = Identifier::new(
-            target_package,
-            vec![target_name.to_string(), function.name.clone()],
-        );
+        let identifier = Identifier::member(target_package, target_path, &function.name);
         if let Some(lowered) =
             lower_function_with_identifier(function, identifier, def_file, registry, output)
         {
@@ -253,28 +255,28 @@ fn lower_block_members(
     }
 }
 
-/// True when `target_name` resolves to a generic struct/enum.
+/// True when `target_path` resolves to a generic struct/enum.
 /// Methods on a generic target are specialized through
 /// [`crate::generics::instantiate`] when the receiver type is
 /// concrete; lowering them eagerly at the template would feed
 /// `TypeParam` into [`resolved_type_to_ir_type`] and panic.
-fn impl_target_is_generic(target_name: &str, package: &str, registry: &GlobalRegistry) -> bool {
-    let identifier = Identifier::new(package, vec![target_name.to_string()]);
+fn impl_target_is_generic(
+    target_path: &[String],
+    package: &str,
+    registry: &GlobalRegistry,
+) -> bool {
+    let identifier = Identifier::new(package, target_path.to_vec());
     registry
         .lookup(&identifier)
         .is_some_and(|(_, entry)| !entry.type_params.is_empty())
 }
 
-/// Bare head identifier from an impl block's target. `pub(crate)` so
+/// The dotted type path of an `impl`/`extend` target. `pub(crate)` so
 /// [`crate::generics`] reuses the same shape match when building the
-/// AST function index. Mirrors typecheck's
-/// `lift_signatures::impl_target_name` — both `impl X` and
-/// `impl X<...>` shapes register their methods under `[X, method_name]`.
-pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
+/// AST function index.
+pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
     match target {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } if path.len() == 1 => {
-            Some(path[0].as_str())
-        }
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.as_slice()),
         _ => None,
     }
 }

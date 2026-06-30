@@ -31,6 +31,7 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::span::Span;
 
+use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
 
 /// Pass 1 of collect: register every named decl (functions,
@@ -89,6 +90,113 @@ pub(crate) fn collect_file_decls(
             }
         }
     }
+}
+
+/// Validate every nested type declaration (`struct A.B … end`) once
+/// pass 1 has registered all types. A nested type's owner path must
+/// name a struct / enum / protocol in the **same package**, and a
+/// type nested under an enum must not shadow one of that enum's
+/// variants (variants aren't registry entries, so the
+/// duplicate-identifier check can't catch this — every other
+/// same-namespace collision falls out of the registry for free).
+pub(crate) fn validate_nested_types(
+    packages: &[CheckedPackage],
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for pkg in packages {
+        for file in &pkg.files {
+            for item in &file.items {
+                match item {
+                    Item::Struct(decl) if !decl.owner_path().is_empty() => {
+                        validate_nested_owner(
+                            &pkg.package,
+                            decl.owner_path(),
+                            decl.name(),
+                            decl.span,
+                            packages,
+                            registry,
+                            diagnostics,
+                        );
+                    }
+                    Item::Enum(decl) if !decl.owner_path().is_empty() => {
+                        validate_nested_owner(
+                            &pkg.package,
+                            decl.owner_path(),
+                            decl.name(),
+                            decl.span,
+                            packages,
+                            registry,
+                            diagnostics,
+                        );
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
+}
+
+fn validate_nested_owner(
+    package: &str,
+    owner_path: &[String],
+    leaf: &str,
+    span: Span,
+    packages: &[CheckedPackage],
+    registry: &GlobalRegistry,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let owner_name = owner_path.join(".");
+    let owner_identifier = Identifier::new(package, owner_path.to_vec());
+    let Some((_, entry)) = registry.lookup(&owner_identifier) else {
+        diagnostics.push(Diagnostic::error(
+            format!(
+                "nested type `{leaf}` must be declared under a type in the same \
+                 package; `{owner_name}` is not a known type in `{package}`"
+            ),
+            span,
+        ));
+        return;
+    };
+    match entry.kind {
+        GlobalKind::Struct(_) | GlobalKind::Protocol(_) => {}
+        GlobalKind::Enum(_) => {
+            if enum_has_variant(packages, package, owner_path, leaf) {
+                diagnostics.push(Diagnostic::error(
+                    format!("nested type `{leaf}` collides with a variant of `{owner_name}`"),
+                    span,
+                ));
+            }
+        }
+        _ => diagnostics.push(Diagnostic::error(
+            format!(
+                "nested type `{leaf}` cannot be declared under `{owner_name}` (a {})",
+                entry.kind.label(),
+            ),
+            span,
+        )),
+    }
+}
+
+/// Whether the enum declared at `(package, owner_path)` has a variant
+/// named `name`. Scans the AST because variant data isn't stamped into
+/// the registry until `lift_signatures`.
+fn enum_has_variant(
+    packages: &[CheckedPackage],
+    package: &str,
+    owner_path: &[String],
+    name: &str,
+) -> bool {
+    packages
+        .iter()
+        .filter(|pkg| pkg.package == package)
+        .flat_map(|pkg| &pkg.files)
+        .flat_map(|file| &file.items)
+        .filter_map(|item| match item {
+            Item::Enum(decl) if decl.path == owner_path => Some(decl),
+            _ => None,
+        })
+        .any(|decl| decl.variants.iter().any(|variant| variant.name == name))
 }
 
 /// Pass 2: register every `impl` and `extend` block. Runs after
@@ -216,7 +324,7 @@ fn register_struct(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_struct_feature_gaps(decl, diagnostics);
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
     let struct_id = match registry.insert_struct(identifier.clone(), decl.span, type_params) {
         InsertOutcome::Fresh(id) => Some(id),
@@ -240,8 +348,7 @@ fn register_struct(
         }
     };
     for function in &decl.functions {
-        let method_identifier =
-            Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+        let method_identifier = Identifier::member(package, &decl.path, &function.name);
         register_function_with_identifier(
             function,
             method_identifier,
@@ -265,7 +372,7 @@ fn register_enum(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_enum_feature_gaps(decl, diagnostics);
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
     let enum_id = match registry.insert_enum(identifier.clone(), decl.span, type_params) {
         InsertOutcome::Fresh(id) => Some(id),
@@ -283,8 +390,7 @@ fn register_enum(
         }
     };
     for function in &decl.functions {
-        let method_identifier =
-            Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+        let method_identifier = Identifier::member(package, &decl.path, &function.name);
         register_function_with_identifier(
             function,
             method_identifier,
@@ -310,17 +416,22 @@ fn register_impl(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_impl_member_feature_gaps(impl_block, diagnostics);
-    let Some(target_name) = simple_named_target(&impl_block.target) else {
+    let Some(target_path) = nominal_target_path(&impl_block.target) else {
         diagnostics.push(Diagnostic::error(
             "typecheck does not yet support generic impl targets".to_string(),
             type_expr_span(&impl_block.target),
         ));
         return;
     };
-    let target_identifier = Identifier::new(package, vec![target_name.to_string()]);
+    // Impls are same-package (orphan rule), so the whole dotted path is
+    // the target's path within `package`.
+    let target_identifier = Identifier::new(package, target_path.to_vec());
     let Some((target_id, entry)) = registry.lookup(&target_identifier) else {
         diagnostics.push(Diagnostic::error(
-            format!("typecheck cannot extend unknown type `{target_name}`"),
+            format!(
+                "typecheck cannot extend unknown type `{}`",
+                target_path.join(".")
+            ),
             type_expr_span(&impl_block.target),
         ));
         return;
@@ -329,7 +440,8 @@ fn register_impl(
         diagnostics.push(Diagnostic::error(
             format!(
                 "typecheck only supports `impl` on structs and enums \
-                 (`{target_name}` is a {})",
+                 (`{}` is a {})",
+                target_path.join("."),
                 entry.kind.label(),
             ),
             type_expr_span(&impl_block.target),
@@ -338,7 +450,7 @@ fn register_impl(
     }
     register_block_methods(
         package,
-        target_name,
+        target_path,
         target_id,
         &impl_block.members,
         registry,
@@ -357,36 +469,39 @@ fn register_extend(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_extend_member_feature_gaps(extend_block, diagnostics);
-    let Some((target_package, target_name)) = extend_target_path(&extend_block.target, package)
-    else {
+    let Some(path) = nominal_target_path(&extend_block.target) else {
         diagnostics.push(Diagnostic::error(
             "typecheck does not yet support generic or function `extend` targets".to_string(),
             type_expr_span(&extend_block.target),
         ));
         return;
     };
-    let target_identifier = Identifier::new(target_package.as_str(), vec![target_name.to_string()]);
-    let Some((target_id, entry)) = registry.lookup(&target_identifier) else {
+    let Some((target_id, target_package, target_path)) = lookup_owner_path(path, package, registry)
+    else {
         diagnostics.push(Diagnostic::error(
-            format!("typecheck cannot extend unknown type `{target_identifier}`"),
+            format!("typecheck cannot extend unknown type `{}`", path.join(".")),
             type_expr_span(&extend_block.target),
         ));
         return;
     };
-    if !matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
+    let entry_kind = &registry
+        .get(target_id)
+        .expect("lookup_owner_path returned a live id")
+        .kind;
+    if !matches!(entry_kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
         diagnostics.push(Diagnostic::error(
             format!(
                 "`extend` only supports structs and enums (`{}` is a {})",
-                target_identifier,
-                entry.kind.label(),
+                target_path.join("."),
+                entry_kind.label(),
             ),
             type_expr_span(&extend_block.target),
         ));
         return;
     }
     register_block_methods(
-        target_package.as_str(),
-        target_name,
+        &target_package,
+        &target_path,
         target_id,
         &extend_block.members,
         registry,
@@ -395,10 +510,11 @@ fn register_extend(
 }
 
 /// Shared method-registration loop for `impl` and `extend` bodies.
-/// Each `fn` registers under `<target_package>.<target_name>.<method>`.
+/// Each `fn` registers under `<target_package>.<target_path…>.<method>`,
+/// so methods on a nested type land in that type's namespace.
 fn register_block_methods(
     target_package: &str,
-    target_name: &str,
+    target_path: &[String],
     target_id: GlobalRegistryId,
     members: &[ImplMember],
     registry: &mut GlobalRegistry,
@@ -408,10 +524,7 @@ fn register_block_methods(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier = Identifier::new(
-            target_package,
-            vec![target_name.to_string(), function.name.clone()],
-        );
+        let method_identifier = Identifier::member(target_package, target_path, &function.name);
         register_function_with_identifier(
             function,
             method_identifier,
@@ -563,38 +676,33 @@ fn diagnose_constant_annotations(
     }
 }
 
-/// Pull the bare type name out of `impl Foo` / `impl Foo<...>` /
-/// `impl Foo.Bar` shapes, returning `None` for anything we don't
-/// support (dotted paths, function types, unions). Both
-/// `Named { path: [Foo] }` and `Generic { path: [Foo], args: [...] }`
-/// resolve to `"Foo"` — the type-args contribute to free-name
-/// extraction (impl `<T>`s) and to method registration is keyed only
-/// at `[Foo, method]` regardless of args.
-fn simple_named_target(target: &TypeExpr) -> Option<&str> {
+/// The dotted type path of an `impl` / `extend` target (`[Foo]`,
+/// `[Outer, Inner]`), or `None` for non-nominal shapes. Type-args
+/// don't affect keying.
+pub(crate) fn nominal_target_path(target: &TypeExpr) -> Option<&[String]> {
     match target {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } if path.len() == 1 => {
-            Some(path[0].as_str())
-        }
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.as_slice()),
         _ => None,
     }
 }
 
-/// Project an `extend Type` target into `(package, type_name)`.
-/// Single-segment paths resolve against `current_package`; dotted
-/// paths split at the tail. Returns `None` for shapes that can't be
-/// extend targets (functions, unions, `Self`, unit).
-pub(crate) fn extend_target_path<'a>(
-    target: &'a TypeExpr,
+/// Resolve a target `path` to its owning `(id, package, path)`. A
+/// same-package nested type (`Outer.Inner`) wins over the
+/// `<package>.<rest>` reading, matching type/value resolution.
+pub(crate) fn lookup_owner_path(
+    path: &[String],
     current_package: &str,
-) -> Option<(String, &'a str)> {
-    match target {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => match path.as_slice() {
-            [name] => Some((current_package.to_string(), name.as_str())),
-            [head @ .., last] if !head.is_empty() => Some((head.join("."), last.as_str())),
-            _ => None,
-        },
-        _ => None,
+    registry: &GlobalRegistry,
+) -> Option<(GlobalRegistryId, String, Vec<String>)> {
+    if let Some((id, _)) = registry.lookup(&Identifier::new(current_package, path.to_vec())) {
+        return Some((id, current_package.to_string(), path.to_vec()));
     }
+    if path.len() >= 2
+        && let Some((id, _)) = registry.lookup(&Identifier::new(&path[0], path[1..].to_vec()))
+    {
+        return Some((id, path[0].clone(), path[1..].to_vec()));
+    }
+    None
 }
 
 /// Project the AST `[TypeParam]` list down to the param-name `Vec`
@@ -624,9 +732,9 @@ fn type_expr_span(type_expr: &TypeExpr) -> Span {
 /// definition in the presence of these gaps so the surrounding
 /// program shape stays accurate.
 fn diagnose_struct_feature_gaps(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
-    diagnose_struct_annotations(&decl.name, &decl.annotations, diagnostics);
+    diagnose_struct_annotations(decl.name(), &decl.annotations, diagnostics);
     for field in &decl.fields {
-        diagnose_struct_field_gaps(&decl.name, field, diagnostics);
+        diagnose_struct_field_gaps(decl.name(), field, diagnostics);
     }
 }
 
@@ -680,13 +788,14 @@ fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>
             format!(
                 "typecheck does not yet support annotations on enum items \
                  (`@{}` on `{}`)",
-                annotation.name, decl.name,
+                annotation.name,
+                decl.name(),
             ),
             annotation.span,
         ));
     }
     for variant in &decl.variants {
-        diagnose_enum_variant_gaps(&decl.name, variant, diagnostics);
+        diagnose_enum_variant_gaps(decl.name(), variant, diagnostics);
     }
 }
 

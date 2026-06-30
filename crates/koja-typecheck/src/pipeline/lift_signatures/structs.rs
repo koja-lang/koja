@@ -24,12 +24,9 @@ pub(super) fn lift_struct(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     lift_struct_definition(decl, scope, diagnostics);
-    let struct_identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let struct_identifier = Identifier::new(scope.package, decl.path.clone());
     for function in &decl.functions {
-        let method_identifier = Identifier::new(
-            scope.package,
-            vec![decl.name.clone(), function.name.clone()],
-        );
+        let method_identifier = Identifier::member(scope.package, &decl.path, &function.name);
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -48,7 +45,7 @@ fn lift_struct_definition(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures: struct `{identifier}` missing from registry — \

@@ -25,8 +25,7 @@ use koja_ast::ast::{Diagnostic, File, Function, ImplMember, Item, Param, Stateme
 use koja_ast::identifier::{GlobalRegistryId, Identifier, ResolvedType};
 
 use crate::pipeline::aliases::collect_file_aliases;
-use crate::pipeline::collect::extend_target_path;
-use crate::pipeline::lift_signatures::impl_target_name;
+use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
 use crate::pipeline::local_scope::LocalScope;
 use crate::registry::{FunctionSignature, GlobalKind, GlobalRegistry};
 
@@ -54,16 +53,13 @@ pub(crate) fn resolve_file(
                 resolve_function(function, &identifier, None, None, &mut env, diagnostics);
             }
             Item::Struct(decl) => {
-                let enclosing_type_id = enclosing_type_id(env.package, &decl.name, env.registry);
+                let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
                 for function in &mut decl.functions {
-                    let identifier = Identifier::new(
-                        env.package,
-                        vec![decl.name.clone(), function.name.clone()],
-                    );
+                    let identifier = Identifier::member(env.package, &decl.path, &function.name);
                     resolve_function(
                         function,
                         &identifier,
-                        Some(&decl.name),
+                        Some(&decl.path),
                         enclosing_type_id,
                         &mut env,
                         diagnostics,
@@ -71,16 +67,13 @@ pub(crate) fn resolve_file(
                 }
             }
             Item::Enum(decl) => {
-                let enclosing_type_id = enclosing_type_id(env.package, &decl.name, env.registry);
+                let enclosing_type_id = enclosing_type_id(env.package, &decl.path, env.registry);
                 for function in &mut decl.functions {
-                    let identifier = Identifier::new(
-                        env.package,
-                        vec![decl.name.clone(), function.name.clone()],
-                    );
+                    let identifier = Identifier::member(env.package, &decl.path, &function.name);
                     resolve_function(
                         function,
                         &identifier,
-                        Some(&decl.name),
+                        Some(&decl.path),
                         enclosing_type_id,
                         &mut env,
                         diagnostics,
@@ -97,21 +90,19 @@ pub(crate) fn resolve_file(
                 // accepts (`impl X` and `impl X<...>`) so every param gets
                 // a `LocalId` stamped. IR lower panics on a missing one
                 // when mono later re-lowers a substituted copy of the body.
-                let Some(target_name) = impl_target_name(&impl_block.target) else {
+                let Some(target_path) = nominal_target_path(&impl_block.target) else {
                     continue;
                 };
-                let target_name = target_name.to_string();
-                let enclosing_type_id = enclosing_type_id(env.package, &target_name, env.registry);
+                let target_path = target_path.to_vec();
+                let enclosing_type_id = enclosing_type_id(env.package, &target_path, env.registry);
                 for member in &mut impl_block.members {
                     if let ImplMember::Function(function) = member {
-                        let identifier = Identifier::new(
-                            env.package,
-                            vec![target_name.clone(), function.name.clone()],
-                        );
+                        let identifier =
+                            Identifier::member(env.package, &target_path, &function.name);
                         resolve_function(
                             function,
                             &identifier,
-                            Some(&target_name),
+                            Some(&target_path),
                             enclosing_type_id,
                             &mut env,
                             diagnostics,
@@ -125,24 +116,27 @@ pub(crate) fn resolve_file(
                 // package `User` registers its methods under
                 // `Net.TCPSocket.*`, so the resolver has to anchor
                 // identifiers there too.
-                let Some((target_package, target_name)) =
-                    extend_target_path(&extend_block.target, env.package)
+                let Some(path) = nominal_target_path(&extend_block.target) else {
+                    continue;
+                };
+                let Some((_, target_package, target_path)) =
+                    lookup_owner_path(path, env.package, env.registry)
                 else {
                     continue;
                 };
                 let enclosing_type_id =
-                    enclosing_type_id(&target_package, target_name, env.registry);
-                let target_name_owned = target_name.to_string();
+                    enclosing_type_id(&target_package, &target_path, env.registry);
                 for member in &mut extend_block.members {
                     if let ImplMember::Function(function) = member {
-                        let identifier = Identifier::new(
+                        let identifier = Identifier::member(
                             target_package.as_str(),
-                            vec![target_name_owned.clone(), function.name.clone()],
+                            &target_path,
+                            &function.name,
                         );
                         resolve_function(
                             function,
                             &identifier,
-                            Some(&target_name_owned),
+                            Some(&target_path),
                             enclosing_type_id,
                             &mut env,
                             diagnostics,
@@ -170,17 +164,17 @@ pub(crate) fn resolve_file(
 /// — body resolution proceeds best-effort regardless.
 fn enclosing_type_id(
     package: &str,
-    name: &str,
+    path: &[String],
     registry: &GlobalRegistry,
 ) -> Option<GlobalRegistryId> {
-    let identifier = Identifier::new(package, vec![name.to_string()]);
+    let identifier = Identifier::new(package, path.to_vec());
     registry.lookup(&identifier).map(|(id, _)| id)
 }
 
 fn resolve_function(
     function: &mut Function,
     identifier: &Identifier,
-    enclosing_type: Option<&str>,
+    enclosing_type: Option<&[String]>,
     enclosing_type_id: Option<GlobalRegistryId>,
     env: &mut ResolverEnv<'_>,
     diagnostics: &mut Vec<Diagnostic>,
@@ -223,7 +217,7 @@ fn resolve_function(
 fn type_param_owners(
     identifier: &Identifier,
     function: &Function,
-    enclosing_type: Option<&str>,
+    enclosing_type: Option<&[String]>,
     registry: &GlobalRegistry,
 ) -> Vec<GlobalRegistryId> {
     let mut owners = Vec::new();
@@ -232,8 +226,8 @@ fn type_param_owners(
     {
         owners.push(fn_id);
     }
-    if let Some(name) = enclosing_type {
-        let receiver = Identifier::new(identifier.package(), vec![name.to_string()]);
+    if let Some(path) = enclosing_type {
+        let receiver = Identifier::new(identifier.package(), path.to_vec());
         if let Some((receiver_id, _)) = registry.lookup(&receiver) {
             owners.push(receiver_id);
         }

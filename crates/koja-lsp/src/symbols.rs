@@ -115,9 +115,9 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                 }
             }
             Item::Struct(s) => {
-                if matches(&s.name) {
+                if matches(s.name()) {
                     results.push(SymbolInformation {
-                        name: s.name.clone(),
+                        name: s.name().to_string(),
                         kind: SymbolKind::STRUCT,
                         tags: None,
                         deprecated: None,
@@ -139,15 +139,15 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                                 uri: uri.clone(),
                                 range: span_to_range(&f.span),
                             },
-                            container_name: Some(s.name.clone()),
+                            container_name: Some(s.name().to_string()),
                         });
                     }
                 }
             }
             Item::Enum(e) => {
-                if matches(&e.name) {
+                if matches(e.name()) {
                     results.push(SymbolInformation {
-                        name: e.name.clone(),
+                        name: e.name().to_string(),
                         kind: SymbolKind::ENUM,
                         tags: None,
                         deprecated: None,
@@ -169,7 +169,7 @@ fn collect_workspace_symbols(file: &File, query: &str, results: &mut Vec<SymbolI
                                 uri: uri.clone(),
                                 range: span_to_range(&f.span),
                             },
-                            container_name: Some(e.name.clone()),
+                            container_name: Some(e.name().to_string()),
                         });
                     }
                 }
@@ -277,7 +277,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                     s.functions.iter().map(function_symbol).collect();
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
-                    name: s.name.clone(),
+                    name: s.name().to_string(),
                     detail: type_params_detail(&s.type_params),
                     kind: SymbolKind::STRUCT,
                     tags: None,
@@ -315,7 +315,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
 
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
-                    name: e.name.clone(),
+                    name: e.name().to_string(),
                     detail: type_params_detail(&e.type_params),
                     kind: SymbolKind::ENUM,
                     tags: None,

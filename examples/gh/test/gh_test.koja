@@ -1,3 +1,5 @@
+alias Gh.GitHub.Repo
+alias Gh.GitHub.User
 alias JSON.Decoder
 alias JSON.Value
 

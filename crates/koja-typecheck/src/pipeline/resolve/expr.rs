@@ -23,7 +23,9 @@ use super::match_expr::resolve_match;
 use super::ops::{binary_type, resolve_equality_op_expr, unary_type};
 use super::process::{resolve_receive, resolve_spawn};
 use super::strings::resolve_string;
-use super::structs::{resolve_field_access, resolve_struct_construction};
+use super::structs::{
+    resolve_field_access, resolve_struct_construction, rewrite_dotted_struct_construction,
+};
 
 /// Default entry point: resolves `expr` with no expected-type hint
 /// from the surrounding context.
@@ -87,6 +89,9 @@ pub(super) fn resolve_expr_with_expected(
         expr.resolution = ty;
         return;
     }
+    // Rewrite `A.B { … }` to a struct construction when the path names
+    // a struct. A no-op for real enum variants.
+    rewrite_dotted_struct_construction(expr, resolver);
     let ty = match &mut expr.kind {
         ExprKind::Binary { op, left, right } => {
             resolve_expr(left, resolver, diagnostics);

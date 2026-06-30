@@ -15,7 +15,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // struct
 
-        let name = self.expect_type_ident();
+        let path = self.parse_decl_path();
         let type_params = self.parse_optional_type_params();
 
         self.skip_newlines();
@@ -36,7 +36,7 @@ impl Parser {
 
         Item::Struct(StructDecl {
             annotations,
-            name,
+            path,
             type_params,
             fields,
             functions,

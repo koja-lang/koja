@@ -85,7 +85,7 @@ fn equality_impl_target(block: &ImplBlock) -> Option<String> {
     if trait_name != EQUALITY_PROTOCOL {
         return None;
     }
-    type_expr_head(&block.target).map(str::to_string)
+    type_expr_path(&block.target)
 }
 
 fn type_expr_head(te: &TypeExpr) -> Option<&str> {
@@ -100,28 +100,38 @@ fn type_expr_head(te: &TypeExpr) -> Option<&str> {
     }
 }
 
+/// The target type's full dotted path (`Net.TCPSocket`,
+/// `Process.ExitSignal`), matched against a decl's
+/// [`StructDecl::path`] / [`EnumDecl::path`].
+fn type_expr_path(te: &TypeExpr) -> Option<String> {
+    match te {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.join(".")),
+        _ => None,
+    }
+}
+
 fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
-    !existing.iter().any(|n| n == &decl.name)
+    !existing.iter().any(|n| n == &decl.path.join("."))
 }
 
 /// Empty enums (no variants) are uninhabited — a `match self end`
 /// body with no arms is rejected by typecheck, and the type has no
 /// value to compare anyway. Skip synthesis.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
-    !decl.variants.is_empty() && !existing.iter().any(|n| n == &decl.name)
+    !decl.variants.is_empty() && !existing.iter().any(|n| n == &decl.path.join("."))
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
     let span = decl.span;
-    let target = self_target_type(&decl.name, &decl.type_params, span);
+    let target = self_target_type(&decl.path, &decl.type_params, span);
     let body = struct_eq_body(&decl.fields, span);
     equality_impl_block(target.clone(), body, span)
 }
 
 fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
     let span = decl.span;
-    let target = self_target_type(&decl.name, &decl.type_params, span);
-    let body = enum_eq_body(&decl.name, &decl.variants, span);
+    let target = self_target_type(&decl.path, &decl.type_params, span);
+    let body = enum_eq_body(&decl.path, &decl.variants, span);
     equality_impl_block(target.clone(), body, span)
 }
 
@@ -143,16 +153,19 @@ fn equality_impl_block(target: TypeExpr, body_expr: Expr, span: Span) -> Item {
 
 /// Mirrors the type's own generic params on the impl target so the
 /// impl monomorphizes alongside the type.
-fn self_target_type(name: &str, type_params: &[TypeParam], span: Span) -> TypeExpr {
+fn self_target_type(path: &[String], type_params: &[TypeParam], span: Span) -> TypeExpr {
     if type_params.is_empty() {
-        named_type(name, span)
+        TypeExpr::Named {
+            path: path.to_vec(),
+            span,
+        }
     } else {
         let args = type_params
             .iter()
             .map(|tp| named_type(&tp.name, span))
             .collect();
         TypeExpr::Generic {
-            path: vec![name.to_string()],
+            path: path.to_vec(),
             args,
             span,
         }
@@ -223,10 +236,10 @@ fn field_eq_call(name: &str, span: Span) -> Expr {
 /// on the receiver's variant; each arm's body is `match other …`
 /// that compares against the same variant and falls through to
 /// `false` for any mismatch.
-fn enum_eq_body(enum_name: &str, variants: &[EnumVariant], span: Span) -> Expr {
+fn enum_eq_body(enum_path: &[String], variants: &[EnumVariant], span: Span) -> Expr {
     let arms = variants
         .iter()
-        .map(|v| outer_variant_arm(enum_name, v, variants, span))
+        .map(|v| outer_variant_arm(enum_path, v, variants, span))
         .collect();
     match_expr(self_expr(span), arms, span)
 }
@@ -236,21 +249,21 @@ fn enum_eq_body(enum_name: &str, variants: &[EnumVariant], span: Span) -> Expr {
 /// comparison, falling through to `_ -> false` for every other
 /// variant.
 fn outer_variant_arm(
-    enum_name: &str,
+    enum_path: &[String],
     variant: &EnumVariant,
     all_variants: &[EnumVariant],
     span: Span,
 ) -> MatchArm {
     let (pattern, body) = match &variant.data {
         EnumVariantData::Unit => (
-            enum_unit_pattern(enum_name, &variant.name, span),
-            inner_match_for_unit(enum_name, &variant.name, all_variants, span),
+            enum_unit_pattern(enum_path, &variant.name, span),
+            inner_match_for_unit(enum_path, &variant.name, all_variants, span),
         ),
         EnumVariantData::Tuple(types) => {
             let l_bindings: Vec<String> = (0..types.len()).map(|i| format!("__l{i}")).collect();
-            let pattern = enum_tuple_pattern(enum_name, &variant.name, &l_bindings, span);
+            let pattern = enum_tuple_pattern(enum_path, &variant.name, &l_bindings, span);
             let body = inner_match_for_tuple(
-                enum_name,
+                enum_path,
                 &variant.name,
                 &l_bindings,
                 types.len(),
@@ -260,8 +273,8 @@ fn outer_variant_arm(
             (pattern, body)
         }
         EnumVariantData::Struct(fields) => {
-            let pattern = enum_struct_pattern(enum_name, &variant.name, fields, "__l_", span);
-            let body = inner_match_for_struct(enum_name, &variant.name, fields, all_variants, span);
+            let pattern = enum_struct_pattern(enum_path, &variant.name, fields, "__l_", span);
+            let body = inner_match_for_struct(enum_path, &variant.name, fields, all_variants, span);
             (pattern, body)
         }
     };
@@ -274,14 +287,14 @@ fn outer_variant_arm(
 }
 
 fn inner_match_for_unit(
-    enum_name: &str,
+    enum_path: &[String],
     variant_name: &str,
     all_variants: &[EnumVariant],
     span: Span,
 ) -> Expr {
     let arms = vec![
         MatchArm {
-            pattern: enum_unit_pattern(enum_name, variant_name, span),
+            pattern: enum_unit_pattern(enum_path, variant_name, span),
             guard: None,
             body: vec![Statement::Expr(bool_literal(true, span))],
             span,
@@ -292,7 +305,7 @@ fn inner_match_for_unit(
 }
 
 fn inner_match_for_tuple(
-    enum_name: &str,
+    enum_path: &[String],
     variant_name: &str,
     l_bindings: &[String],
     arity: usize,
@@ -300,7 +313,7 @@ fn inner_match_for_tuple(
     span: Span,
 ) -> Expr {
     let r_bindings: Vec<String> = (0..arity).map(|i| format!("__r{i}")).collect();
-    let pattern = enum_tuple_pattern(enum_name, variant_name, &r_bindings, span);
+    let pattern = enum_tuple_pattern(enum_path, variant_name, &r_bindings, span);
     let comparisons: Vec<Expr> = l_bindings
         .iter()
         .zip(r_bindings.iter())
@@ -322,13 +335,13 @@ fn inner_match_for_tuple(
 }
 
 fn inner_match_for_struct(
-    enum_name: &str,
+    enum_path: &[String],
     variant_name: &str,
     fields: &[StructField],
     all_variants: &[EnumVariant],
     span: Span,
 ) -> Expr {
-    let pattern = enum_struct_pattern(enum_name, variant_name, fields, "__r_", span);
+    let pattern = enum_struct_pattern(enum_path, variant_name, fields, "__r_", span);
     let comparisons: Vec<Expr> = fields
         .iter()
         .filter(|field| !is_opaque_type(&field.type_expr))
@@ -376,16 +389,16 @@ fn wildcard_false_arm(span: Span) -> MatchArm {
     }
 }
 
-fn enum_unit_pattern(enum_name: &str, variant_name: &str, span: Span) -> Pattern {
+fn enum_unit_pattern(enum_path: &[String], variant_name: &str, span: Span) -> Pattern {
     Pattern::EnumUnit {
-        type_path: vec![enum_name.to_string()],
+        type_path: enum_path.to_vec(),
         variant: variant_name.to_string(),
         span,
     }
 }
 
 fn enum_tuple_pattern(
-    enum_name: &str,
+    enum_path: &[String],
     variant_name: &str,
     bindings: &[String],
     span: Span,
@@ -399,7 +412,7 @@ fn enum_tuple_pattern(
         })
         .collect();
     Pattern::EnumTuple {
-        type_path: vec![enum_name.to_string()],
+        type_path: enum_path.to_vec(),
         variant: variant_name.to_string(),
         elements,
         span,
@@ -407,7 +420,7 @@ fn enum_tuple_pattern(
 }
 
 fn enum_struct_pattern(
-    enum_name: &str,
+    enum_path: &[String],
     variant_name: &str,
     fields: &[StructField],
     binding_prefix: &str,
@@ -426,7 +439,7 @@ fn enum_struct_pattern(
         })
         .collect();
     Pattern::EnumStruct {
-        type_path: vec![enum_name.to_string()],
+        type_path: enum_path.to_vec(),
         variant: variant_name.to_string(),
         fields: field_patterns,
         span,

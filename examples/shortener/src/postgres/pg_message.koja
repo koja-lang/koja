@@ -1,12 +1,14 @@
+alias Shortener.PgMessage.Backend as BackendMessage
+
 @doc """
 Postgres v3 wire-protocol message encoding and decoding.
 
 Encoding builds frames with binary literals and `<>` concatenation;
 decoding strips the 5-byte header and walks the body with the cursor
 helpers in `PgIO`. Only the message types the driver needs are
-modeled; everything else decodes to `BackendMessage.Other`.
+modeled; everything else decodes to `PgMessage.Backend.Other`.
 """
-enum BackendMessage
+enum PgMessage.Backend
   AuthenticationOk
   AuthenticationOther(Int)
   BackendKeyData

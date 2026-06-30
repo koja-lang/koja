@@ -15,7 +15,7 @@ use koja_ast::ast::{
 };
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 
-use crate::pipeline::collect::extend_target_path;
+use crate::pipeline::collect::{lookup_owner_path, nominal_target_path};
 use crate::pipeline::unify::{Substitution, substitute};
 use crate::registry::{
     Dispatch, GlobalKind, GlobalRegistry, InsertOutcome, ProtocolDefinition,
@@ -27,8 +27,7 @@ use super::ProtocolBodies;
 use super::SelfContext;
 use super::functions::lift_function_with_identifier;
 use super::types::{
-    TypeParamScope, dispatch_label, impl_target_name, render_resolved, resolve_type_expr,
-    type_expr_span,
+    TypeParamScope, dispatch_label, render_resolved, resolve_type_expr, type_expr_span,
 };
 
 /// Read-only data bundle threaded through trait-impl conformance.
@@ -49,7 +48,7 @@ struct ProtocolImplScope<'a> {
     protocol_subst: &'a Substitution,
     target: &'a ResolvedType,
     target_identifier: &'a Identifier,
-    target_name: &'a str,
+    target_path: &'a [String],
     /// User-supplied protocol type-args from `impl P<A, B, C> for T`,
     /// in source order. Used by default-method synthesis to
     /// substitute references to the protocol's type-params (`M`,
@@ -63,10 +62,10 @@ pub(super) fn lift_impl(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some(target_name) = impl_target_name(&impl_block.target).map(str::to_string) else {
+    let Some(target_path) = nominal_target_path(&impl_block.target).map(<[String]>::to_vec) else {
         return;
     };
-    let target_identifier = Identifier::new(scope.package, vec![target_name.clone()]);
+    let target_identifier = Identifier::new(scope.package, target_path.clone());
     if !matches!(
         scope
             .registry
@@ -101,10 +100,7 @@ pub(super) fn lift_impl(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier = Identifier::new(
-            scope.package,
-            vec![target_name.clone(), function.name.clone()],
-        );
+        let method_identifier = Identifier::member(scope.package, &target_path, &function.name);
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -126,7 +122,7 @@ pub(super) fn lift_impl(
         .0;
     verify_and_synthesize_trait_impl(
         impl_block,
-        &target_name,
+        &target_path,
         &target_identifier,
         &resolved,
         bodies,
@@ -150,13 +146,15 @@ pub(super) fn lift_extend(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let Some((target_package, target_name)) =
-        extend_target_path(&extend_block.target, scope.package)
+    let Some(path) = nominal_target_path(&extend_block.target) else {
+        return;
+    };
+    let Some((_, target_package, target_path)) =
+        lookup_owner_path(path, scope.package, scope.registry)
     else {
         return;
     };
-    let target_name = target_name.to_string();
-    let target_identifier = Identifier::new(target_package.as_str(), vec![target_name.clone()]);
+    let target_identifier = Identifier::new(target_package.as_str(), target_path.clone());
     if !matches!(
         scope
             .registry
@@ -172,10 +170,8 @@ pub(super) fn lift_extend(
         let ImplMember::Function(function) = member else {
             continue;
         };
-        let method_identifier = Identifier::new(
-            target_package.as_str(),
-            vec![target_name.clone(), function.name.clone()],
-        );
+        let method_identifier =
+            Identifier::member(target_package.as_str(), &target_path, &function.name);
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -367,7 +363,7 @@ fn record_target_conformance(
 
 fn verify_and_synthesize_trait_impl(
     impl_block: &mut ImplBlock,
-    target_name: &str,
+    target_path: &[String],
     target_identifier: &Identifier,
     resolved: &ResolvedImplHeads,
     bodies: &ProtocolBodies,
@@ -383,7 +379,8 @@ fn verify_and_synthesize_trait_impl(
         diagnostics.push(Diagnostic::error(
             format!(
                 "internal: protocol `{protocol_identifier}` has no lifted definition while \
-                 checking `impl ... for {target_name}`",
+                 checking `impl ... for {}`",
+                target_path.join("."),
             ),
             impl_block.span,
         ));
@@ -398,7 +395,7 @@ fn verify_and_synthesize_trait_impl(
         protocol_subst: &resolved.protocol_subst,
         target: &resolved.target,
         target_identifier,
-        target_name,
+        target_path,
         trait_expr: &trait_expr,
     };
     verify_protocol_conformance(
@@ -441,7 +438,7 @@ fn verify_and_synthesize_trait_impl(
 }
 
 /// Clone a default `ProtocolMethod` into the impl as a synthetic
-/// `Function`, register `<package>.<target_name>.<method_name>`, and
+/// `Function`, register `<package>.<target_path…>.<method_name>`, and
 /// lift its signature against the impl target.
 fn synthesize_default_method(
     impl_block: &mut ImplBlock,
@@ -461,10 +458,8 @@ fn synthesize_default_method(
         span: method.span,
     };
     substitute_protocol_type_params(&mut function, impl_scope, scope);
-    let method_identifier = Identifier::new(
-        impl_scope.package,
-        vec![impl_scope.target_name.to_string(), function.name.clone()],
-    );
+    let method_identifier =
+        Identifier::member(impl_scope.package, impl_scope.target_path, &function.name);
     let type_params: Vec<String> = function
         .type_params
         .iter()
@@ -792,9 +787,10 @@ fn verify_protocol_conformance(
         .collect();
     let ProtocolImplScope {
         protocol_identifier,
-        target_name,
+        target_path,
         ..
     } = impl_scope;
+    let target_label = target_path.join(".");
     for method in &definition.methods {
         match declared.get(method.name.as_str()) {
             Some(impl_function) => {
@@ -810,7 +806,7 @@ fn verify_protocol_conformance(
                 diagnostics.push(Diagnostic::error(
                     format!(
                         "missing method `{}` required by protocol `{protocol_identifier}` \
-                         (on `impl {protocol_identifier} for {target_name}`)",
+                         (on `impl {protocol_identifier} for {target_label}`)",
                         method.name,
                     ),
                     impl_block.span,
@@ -832,7 +828,7 @@ fn verify_protocol_conformance(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "method `{}` is not declared in protocol `{protocol_identifier}` \
-                     (on `impl {protocol_identifier} for {target_name}`)",
+                     (on `impl {protocol_identifier} for {target_label}`)",
                     function.name,
                 ),
                 function.span,
@@ -855,13 +851,10 @@ fn check_impl_method_signature(
         package,
         protocol_identifier,
         protocol_subst,
-        target_name,
+        target_path,
         ..
     } = impl_scope;
-    let method_identifier = Identifier::new(
-        package,
-        vec![target_name.to_string(), impl_function.name.clone()],
-    );
+    let method_identifier = Identifier::member(package, target_path, &impl_function.name);
     let Some((_, entry)) = registry.lookup(&method_identifier) else {
         return;
     };

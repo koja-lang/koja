@@ -15,7 +15,7 @@ dispatch, print, return a `StopReason` (exit code 0 or 1).
 src/
   app.koja     -- entry process: argv in, exit code out
   cli.koja     -- command dispatch and text rendering (pure)
-  github.koja  -- GitHub REST client: User / Repo / GitHub.fetch
+  github.koja  -- GitHub REST client: GitHub.User / GitHub.Repo / GitHub.fetch
   fields.koja  -- field access over decoded JSON.Value trees
 test/          -- offline tests against canned API payloads
 ```

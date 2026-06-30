@@ -30,12 +30,9 @@ pub(super) fn lift_enum(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     lift_enum_definition(decl, scope, diagnostics);
-    let enum_identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let enum_identifier = Identifier::new(scope.package, decl.path.clone());
     for function in &decl.functions {
-        let method_identifier = Identifier::new(
-            scope.package,
-            vec![decl.name.clone(), function.name.clone()],
-        );
+        let method_identifier = Identifier::member(scope.package, &decl.path, &function.name);
         lift_function_with_identifier(
             function,
             method_identifier,
@@ -54,7 +51,7 @@ fn lift_enum_definition(
     scope: &mut LiftScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    let identifier = Identifier::new(scope.package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
             "lift_signatures: enum `{identifier}` missing from registry — \

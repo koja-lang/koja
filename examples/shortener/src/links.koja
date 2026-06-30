@@ -1,3 +1,5 @@
+alias Shortener.Postgres.QueryResult
+
 @doc """
 A shortened link: its short `code`, the target `url`, when it was
 created, and how many times it has been visited.

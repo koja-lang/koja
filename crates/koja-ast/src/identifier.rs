@@ -29,6 +29,16 @@ impl Identifier {
         Self { package, path }
     }
 
+    /// Identifier for a member of the type at `owner_path` within
+    /// `package`: `owner_path ++ [member]`. Covers both a method on a
+    /// type (`Point` + `dist` → `Point.dist`) and a method on a nested
+    /// type (`Process.ExitSignal` + `format`).
+    pub fn member(package: impl Into<String>, owner_path: &[String], member: &str) -> Self {
+        let mut path = owner_path.to_vec();
+        path.push(member.to_string());
+        Self::new(package, path)
+    }
+
     pub fn package(&self) -> &str {
         &self.package
     }

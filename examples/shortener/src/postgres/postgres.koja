@@ -1,4 +1,7 @@
 alias Net.TCPSocket
+alias Shortener.PgMessage.Backend as BackendMessage
+alias Shortener.Postgres.QueryResult
+alias Shortener.Postgres.QueryState
 
 @doc """
 A live Postgres connection speaking the v3 simple-query protocol with
@@ -136,7 +139,7 @@ end
 The result of a successful query: column names, the rows (each a list
 of nullable text values), and the command tag (e.g. "INSERT 0 1").
 """
-struct QueryResult
+struct Postgres.QueryResult
   fields: List<String>
   rows: List<List<Option<String>>>
   tag: String
@@ -146,7 +149,7 @@ end
 Mutable-by-rebinding accumulator threaded through the read loop while a
 query's response stream is consumed.
 """
-struct QueryState
+struct Postgres.QueryState
   error: Option<String>
   fields: List<String>
   rows: List<List<Option<String>>>
