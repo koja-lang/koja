@@ -1,3 +1,6 @@
+alias Process.Step
+alias Process.StopReason
+
 struct FFI
   @extern "C" @link "ffi_helper"
   fn add_c(a: Int32, b: Int32) -> Int32

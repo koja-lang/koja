@@ -1,7 +1,7 @@
-alias Net.SocketError
+alias JSON.StringBuilder
+alias Net.Socket.Error as SocketError
 alias Net.TCPSocket
 alias Net.TLSError
-alias JSON.StringBuilder
 
 @doc """
 Sends a DELETE request to the given URL.

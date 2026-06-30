@@ -1,3 +1,5 @@
+alias File.Mode as FileMode
+
 struct FdTest
   @test "close returns Ok on valid fd"
   fn test_close_ok -> Result<Bool, String>

@@ -104,7 +104,7 @@ fn udp_loopback_send_and_recv_from() {
     let source = dedent(&format!(
         r#"
         alias Net.IPAddress
-        alias Net.SocketAddress
+        alias Net.Socket.Address as SocketAddress
         alias Net.UDPSocket
 
         fn main -> String

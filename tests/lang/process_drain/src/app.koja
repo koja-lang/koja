@@ -1,13 +1,17 @@
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
+
 struct App
 end
 
 enum AppMsg
   Ping
 end
-
 # A deliberately unresponsive process: it acknowledges `Shutdown` but keeps
 # running instead of stopping, so the SIGTERM drain's grace timer has to
 # force-kill it. Used by the native `lang_process_drain_hard_kill` test.
+
 impl Process<App, AppMsg, String> for App
   fn start(config: App) -> Result<Self, StopReason>
     IO.puts("started")

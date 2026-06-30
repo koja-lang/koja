@@ -38,20 +38,20 @@ const PACKAGE: &str = "TestApp";
 /// type referenced in this slice's spawn/receive surface; the full
 /// `process.koja` is pulled in via `AUTOIMPORT` after step 5.
 const PROCESS_STUB: &str = "
-enum Lifecycle
+enum Process.Lifecycle
   Shutdown
   Interrupt
   Reload
 end
 
-enum StopReason
+enum Process.StopReason
   Normal
   Shutdown
 end
 
-enum Step<S>
+enum Process.Step<S>
   Continue(S)
-  Done(StopReason)
+  Done(Process.StopReason)
 end
 
 struct ReplyTo<R>
@@ -62,23 +62,32 @@ struct Ref<M, R>
   id: Int
 end
 
-enum CallError
+enum Process.CallError
   Timeout
   ProcessDown
 end
 
 extend Ref<M, R>
   @intrinsic
-  fn call(self, msg: M, timeout: Int) -> Result<R, CallError>
+  fn call(self, msg: M, timeout: Int) -> Result<R, Process.CallError>
 
   @intrinsic
   fn cast(self, msg: M)
 end
 
 protocol Process<C, M, R>
-  fn start(config: C) -> Result<Self, StopReason>
-  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+  fn start(config: C) -> Result<Self, Process.StopReason>
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
 end
+";
+
+/// Aliases injected at the top of every fixture source so test bodies
+/// can spell the nested `Process.*` types with their bare leaf names.
+const PROCESS_ALIASES: &str = "\
+alias Process.CallError
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
 ";
 
 fn typecheck(source: &str) -> CheckedProgram {
@@ -110,7 +119,7 @@ fn parse_and_check(source: &str) -> Result<CheckedProgram, CheckFailure> {
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.koja"),
-        source: source.to_string(),
+        source: format!("{PROCESS_ALIASES}{source}"),
     });
     let parsed = parse_program(sources, ParseMode::File);
     check_program(parsed)
@@ -155,6 +164,19 @@ fn global_id(checked: &CheckedProgram, name: &str) -> koja_ast::identifier::Glob
         .lookup(&Identifier::new("Global", vec![name.to_string()]))
         .map(|(id, _)| id)
         .unwrap_or_else(|| panic!("`Global.{name}` missing from registry"))
+}
+
+/// Registry id for a nested `Global.Process.<name>` type (the cluster
+/// now lives under the `Process` owner rather than at `Global` root).
+fn process_id(checked: &CheckedProgram, name: &str) -> koja_ast::identifier::GlobalRegistryId {
+    checked
+        .registry
+        .lookup(&Identifier::new(
+            "Global",
+            vec!["Process".to_string(), name.to_string()],
+        ))
+        .map(|(id, _)| id)
+        .unwrap_or_else(|| panic!("`Global.Process.{name}` missing from registry"))
 }
 
 #[test]
@@ -285,7 +307,7 @@ fn receive_business_arm_resolves_with_typed_binding() {
     else {
         panic!("expected `StopReason`, got {resolved:?}");
     };
-    assert_eq!(*id, global_id(&checked, "StopReason"));
+    assert_eq!(*id, process_id(&checked, "StopReason"));
 
     // The bound `pair` should have a `local_id` stamped on the
     // typed-binding pattern.
@@ -327,7 +349,7 @@ fn receive_lifecycle_arm_resolves() {
     else {
         panic!("expected `StopReason`, got {resolved:?}");
     };
-    assert_eq!(*id, global_id(&checked, "StopReason"));
+    assert_eq!(*id, process_id(&checked, "StopReason"));
 }
 
 #[test]
@@ -412,7 +434,7 @@ fn receive_arms_join_under_same_lattice_as_match() {
     else {
         panic!("expected `StopReason`, got {resolved:?}");
     };
-    assert_eq!(*id, global_id(&checked, "StopReason"));
+    assert_eq!(*id, process_id(&checked, "StopReason"));
 }
 
 #[test]

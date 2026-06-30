@@ -2,6 +2,9 @@ alias HTTP.Parser
 alias HTTP.Status
 alias Net.TCPListener
 alias Net.TCPSocket
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
 
 const TICK_MS: Int = 10
 

@@ -1,3 +1,6 @@
+alias Process.Step
+alias Process.StopReason
+
 # Race regression: a kill landing while the victim runs on another
 # worker must never produce an illegal lifecycle edge — in particular
 # the shipped kill-vs-park race, where the victim's next receive park
@@ -42,14 +45,14 @@ fn wait_dead(r: Ref<String, Int>)
 end
 
 # Kill races the victim's spawn -> start -> first receive park.
-fn race_fresh_park()
+fn race_fresh_park
   r = spawn Victim.start(0)
   r.kill()
   wait_dead(r)
 end
 
 # Kill races a woken victim's handle -> re-park.
-fn race_repark()
+fn race_repark
   r = spawn Victim.start(0)
   r.cast("wake")
   r.kill()
@@ -70,7 +73,8 @@ end
 
 if Rt.koja_rt_sched_violations() == 0
   "kill park race: ok".print()
-else
+
   # The count and interleaving are in the KOJA_SCHED_TRACE=1 dump.
+else
   "kill park race: VIOLATIONS".print()
 end

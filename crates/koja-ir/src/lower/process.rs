@@ -437,9 +437,9 @@ impl ProcessBodyTypes {
         registry: &GlobalRegistry,
         output: &mut LowerOutput,
     ) -> Self {
-        let result_id = lookup_global(registry, "Result");
-        let stop_reason_id = lookup_global(registry, "StopReason");
-        let priority_id = lookup_global(registry, "Priority");
+        let result_id = lookup_global(registry, &["Result"]);
+        let stop_reason_id = lookup_global(registry, &["Process", "StopReason"]);
+        let priority_id = lookup_global(registry, &["Process", "Priority"]);
         let stop_reason_resolved = ResolvedType::leaf(Resolution::Global(stop_reason_id));
         let priority_resolved = ResolvedType::leaf(Resolution::Global(priority_id));
         let result_resolved = ResolvedType::Named {
@@ -474,7 +474,7 @@ fn priority_variant_tags(registry: &GlobalRegistry, priority_id: GlobalRegistryI
         ..
     }) = registry.get(priority_id)
     else {
-        panic!("IR lower: `Global.Priority` is not a stamped enum in the registry");
+        panic!("IR lower: `Global.Process.Priority` is not a stamped enum in the registry");
     };
     let tag_of = |name: &str| {
         definition
@@ -491,11 +491,17 @@ fn priority_variant_tags(registry: &GlobalRegistry, priority_id: GlobalRegistryI
     (high, low)
 }
 
-fn lookup_global(registry: &GlobalRegistry, name: &str) -> GlobalRegistryId {
+fn lookup_global(registry: &GlobalRegistry, path: &[&str]) -> GlobalRegistryId {
+    let identifier = Identifier::new("Global", path.iter().map(|s| s.to_string()).collect());
     registry
-        .lookup(&Identifier::new("Global", vec![name.to_string()]))
+        .lookup(&identifier)
         .map(|(id, _)| id)
-        .unwrap_or_else(|| panic!("IR lower: `Global.{name}` missing from registry"))
+        .unwrap_or_else(|| {
+            panic!(
+                "IR lower: `Global.{}` missing from registry",
+                path.join(".")
+            )
+        })
 }
 
 /// Mint (or reuse) the [`FunctionKind::SpawnWrapper`] thunk keyed by
@@ -1056,7 +1062,7 @@ fn receive_tag_for(payload: &ResolvedType, registry: &GlobalRegistry) -> Option<
 }
 
 fn is_lifecycle(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    matches_global(ty, registry, "Lifecycle", 0)
+    matches_global(ty, registry, &["Process", "Lifecycle"], 0)
 }
 
 fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
@@ -1072,10 +1078,15 @@ fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     }
     registry
         .get(*head)
-        .is_some_and(|entry| is_global_named(entry, "Pair"))
+        .is_some_and(|entry| is_global_named(entry, &["Pair"]))
 }
 
-fn matches_global(ty: &ResolvedType, registry: &GlobalRegistry, name: &str, arity: usize) -> bool {
+fn matches_global(
+    ty: &ResolvedType,
+    registry: &GlobalRegistry,
+    path: &[&str],
+    arity: usize,
+) -> bool {
     let ResolvedType::Named {
         resolution: Resolution::Global(id),
         type_args,
@@ -1088,9 +1099,15 @@ fn matches_global(ty: &ResolvedType, registry: &GlobalRegistry, name: &str, arit
     }
     registry
         .get(*id)
-        .is_some_and(|entry| is_global_named(entry, name))
+        .is_some_and(|entry| is_global_named(entry, path))
 }
 
-fn is_global_named(entry: &RegistryEntry, name: &str) -> bool {
-    entry.identifier.is_in_global() && entry.identifier.last() == name
+fn is_global_named(entry: &RegistryEntry, path: &[&str]) -> bool {
+    entry.identifier.is_in_global()
+        && entry
+            .identifier
+            .path()
+            .iter()
+            .map(String::as_str)
+            .eq(path.iter().copied())
 }

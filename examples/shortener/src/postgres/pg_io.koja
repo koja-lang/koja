@@ -1,4 +1,4 @@
-alias Net.SocketError
+alias Net.Socket.Error as SocketError
 alias Net.TCPSocket
 alias Net.TLSError
 

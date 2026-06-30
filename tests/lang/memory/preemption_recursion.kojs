@@ -1,3 +1,7 @@
+alias Process.Priority
+alias Process.Step
+alias Process.StopReason
+
 # Preemption via the function-entry yield check. `fib/1` is pure non-tail
 # recursion: no loop back-edge, no tail call, so the compiler-inserted
 # *entry* check is its only preemption point. The Low-priority burner

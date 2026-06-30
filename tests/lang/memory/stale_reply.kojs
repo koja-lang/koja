@@ -1,3 +1,6 @@
+alias Process.Step
+alias Process.StopReason
+
 # Regression: a reply that arrives after its call timed out must be
 # discarded by token correlation, not delivered to the next call. The
 # first call uses a 1ms timeout against a deliberately slow handler;
@@ -41,5 +44,6 @@ match r.call(2, 10000)
       reply.print()
     end
 
-  Result.Err(_) -> "stale reply: call failed".print()
+  Result.Err(_) ->
+    "stale reply: call failed".print()
 end

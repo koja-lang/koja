@@ -1,4 +1,7 @@
 alias Net.TCPListener
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
 
 struct App
 end
@@ -24,6 +27,7 @@ impl Process<App, AppMsg, String> for App
 
       Result.Ok(listener) ->
         IO.puts("listening")
+
         match listener.accept()
           Result.Ok(_) ->
             StopReason.Shutdown

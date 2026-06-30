@@ -538,16 +538,16 @@ pub(super) fn resolve_hash_eq<'ctx>(
 /// the same lookup path.
 fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
     Some(match key_ty {
-        IRType::Bool => global_primitive_symbol("Bool"),
-        IRType::Int8 => global_primitive_symbol("Int8"),
-        IRType::Int16 => global_primitive_symbol("Int16"),
-        IRType::Int32 => global_primitive_symbol("Int32"),
-        IRType::Int64 => global_primitive_symbol("Int"),
-        IRType::UInt8 => global_primitive_symbol("UInt8"),
-        IRType::UInt16 => global_primitive_symbol("UInt16"),
-        IRType::UInt32 => global_primitive_symbol("UInt32"),
-        IRType::UInt64 => global_primitive_symbol("UInt64"),
-        IRType::String => global_primitive_symbol("String"),
+        IRType::Bool => global_primitive_symbol(&["Bool"]),
+        IRType::Int8 => global_primitive_symbol(&["Int8"]),
+        IRType::Int16 => global_primitive_symbol(&["Int16"]),
+        IRType::Int32 => global_primitive_symbol(&["Int32"]),
+        IRType::Int64 => global_primitive_symbol(&["Int"]),
+        IRType::UInt8 => global_primitive_symbol(&["UInt8"]),
+        IRType::UInt16 => global_primitive_symbol(&["UInt16"]),
+        IRType::UInt32 => global_primitive_symbol(&["UInt32"]),
+        IRType::UInt64 => global_primitive_symbol(&["UInt64"]),
+        IRType::String => global_primitive_symbol(&["String"]),
         IRType::Struct(symbol) => symbol.clone(),
         _ => return None,
     })

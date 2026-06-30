@@ -1,5 +1,7 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
+alias Net.Socket.Address as SocketAddress
+alias Net.Socket.Error as SocketError
 
 # Self-signed test certificate (CN=localhost, 100-year expiry).
 # `koja test` always runs from the package root, so the relative

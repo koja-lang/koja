@@ -9,9 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Types can now be nested under an owning type and referenced by a qualified path (`Owner.Nested`, e.g. `struct GitHub.Repo` or `struct Process.ExitSignal`), including generic nested types, `impl`/`extend`/`alias` on them, and `Debug` rendering.
 - `koja.toml` now accepts a `bin` field under `[project]` to name the output binary independently of the package name. When omitted it defaults to the lowercased package name.
 - The `[project]` table accepts `authors`, `description`, and `license` metadata fields, though unused.
 - `koja shell` now properly loads project files when launched inside a project directory.
+
+### Changed
+
+- `.print()` and `Debug` now render structs and enum variants with their full type path (e.g. `Shape.Circle`, `Process.StopReason.Normal`) instead of just the leaf name.
+- **Breaking**: Several stdlib types moved into their owner's namespace and are no longer auto-imported under their bare names: use `Process.Priority`, `Process.StopReason`, `Process.ExitReason`, `Process.Step`, `Process.CallError`, `Process.Lifecycle`, `IO.Ready`, `File.Mode`, and `Net.Socket.Kind` / `Net.Socket.Address` / `Net.Socket.Error` / `Net.TCPServer.Config` / `Net.TCPServer.Msg` / `Net.TCPServer.Event`.
 
 ### Fixed
 

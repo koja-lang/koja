@@ -507,6 +507,9 @@ pub fn cmd_new(name: String) {
 
     let app_content = dedent(
         "
+        alias Process.Step
+        alias Process.StopReason
+
         fn greet(name: String) -> String
           \"Hello, #{name}!\"
         end

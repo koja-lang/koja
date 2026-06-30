@@ -1,5 +1,7 @@
 alias Greeter.Greeter
 alias Greeter.Greeter as G
+alias Process.Step
+alias Process.StopReason
 
 struct App
 end

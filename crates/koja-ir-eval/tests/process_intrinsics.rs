@@ -1,10 +1,10 @@
 //! `Ref` / `ReplyTo` intrinsic coverage under the cooperative scheduler:
 //! cast + call round-trips through a spawned process, the reply-token
-//! await, the `CallError.Timeout` / `CallError.ProcessDown` mappings, and
+//! await, the `Process.CallError.Timeout` / `Process.CallError.ProcessDown` mappings, and
 //! `send_after` timer delivery. Each fixture boots a real `Process` entry
 //! (`App`) as PID 1 via `Interpreter::run_program` and encodes its
-//! assertion in the exit code (`StopReason.Normal` → 0,
-//! `StopReason.Shutdown` → 1).
+//! assertion in the exit code (`Process.StopReason.Normal` → 0,
+//! `Process.StopReason.Shutdown` → 1).
 
 mod common;
 
@@ -32,17 +32,17 @@ const BANK: &str = "
     end
 
     impl Process<Int, Int, Int> for Bank
-      fn start(config: Int) -> Result<Bank, StopReason>
+      fn start(config: Int) -> Result<Bank, Process.StopReason>
         Result.Ok(Bank{balance: config})
       end
 
-      fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Bank>
+      fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Process.Step<Bank>
         total = self.balance + msg
         match from
           Option.Some(r) -> r.send(total)
           Option.None -> ()
         end
-        Step.Continue(Bank{balance: total})
+        Process.Step.Continue(Bank{balance: total})
       end
     end
     ";
@@ -53,12 +53,12 @@ const MUTE: &str = "
     end
 
     impl Process<Int, Int, Int> for Mute
-      fn start(config: Int) -> Result<Mute, StopReason>
+      fn start(config: Int) -> Result<Mute, Process.StopReason>
         Result.Ok(Mute{})
       end
 
-      fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Mute>
-        Step.Continue(self)
+      fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Process.Step<Mute>
+        Process.Step.Continue(self)
       end
     end
     ";
@@ -72,15 +72,15 @@ fn cast_then_call_round_trips_through_spawned_process() {
         end
 
         impl Process<(), (), ()> for App
-          fn start(config: ()) -> Result<App, StopReason>
+          fn start(config: ()) -> Result<App, Process.StopReason>
             Result.Ok(App{{}})
           end
 
-          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<App>
-            Step.Continue(self)
+          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<App>
+            Process.Step.Continue(self)
           end
 
-          fn run(self) -> StopReason
+          fn run(self) -> Process.StopReason
             bank = spawn Bank.start(0)
             bank.cast(10)
             bank.cast(5)
@@ -88,11 +88,11 @@ fn cast_then_call_round_trips_through_spawned_process() {
             match result
               Result.Ok(total) ->
                 if total == 115
-                  StopReason.Normal
+                  Process.StopReason.Normal
                 else
-                  StopReason.Shutdown
+                  Process.StopReason.Shutdown
                 end
-              Result.Err(_) -> StopReason.Shutdown
+              Result.Err(_) -> Process.StopReason.Shutdown
             end
           end
         end
@@ -114,23 +114,23 @@ fn call_to_silent_process_times_out() {
         end
 
         impl Process<(), (), ()> for App
-          fn start(config: ()) -> Result<App, StopReason>
+          fn start(config: ()) -> Result<App, Process.StopReason>
             Result.Ok(App{{}})
           end
 
-          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<App>
-            Step.Continue(self)
+          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<App>
+            Process.Step.Continue(self)
           end
 
-          fn run(self) -> StopReason
+          fn run(self) -> Process.StopReason
             worker = spawn Mute.start(0)
             result = worker.call(1, 25)
             match result
-              Result.Ok(_) -> StopReason.Normal
+              Result.Ok(_) -> Process.StopReason.Normal
               Result.Err(error) ->
                 match error
-                  CallError.Timeout -> StopReason.Shutdown
-                  CallError.ProcessDown -> StopReason.Normal
+                  Process.CallError.Timeout -> Process.StopReason.Shutdown
+                  Process.CallError.ProcessDown -> Process.StopReason.Normal
                 end
             end
           end
@@ -140,7 +140,7 @@ fn call_to_silent_process_times_out() {
     assert_eq!(
         run_app(&source),
         Value::Int(1),
-        "a call to a process that never replies should surface CallError.Timeout",
+        "a call to a process that never replies should surface Process.CallError.Timeout",
     );
 }
 
@@ -153,24 +153,24 @@ fn call_to_dead_process_reports_process_down() {
         end
 
         impl Process<(), (), ()> for App
-          fn start(config: ()) -> Result<App, StopReason>
+          fn start(config: ()) -> Result<App, Process.StopReason>
             Result.Ok(App{{}})
           end
 
-          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<App>
-            Step.Continue(self)
+          fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<App>
+            Process.Step.Continue(self)
           end
 
-          fn run(self) -> StopReason
+          fn run(self) -> Process.StopReason
             worker = spawn Mute.start(0)
             worker.kill()
             result = worker.call(1, 25)
             match result
-              Result.Ok(_) -> StopReason.Normal
+              Result.Ok(_) -> Process.StopReason.Normal
               Result.Err(error) ->
                 match error
-                  CallError.Timeout -> StopReason.Normal
-                  CallError.ProcessDown -> StopReason.Shutdown
+                  Process.CallError.Timeout -> Process.StopReason.Normal
+                  Process.CallError.ProcessDown -> Process.StopReason.Shutdown
                 end
             end
           end
@@ -180,7 +180,7 @@ fn call_to_dead_process_reports_process_down() {
     assert_eq!(
         run_app(&source),
         Value::Int(1),
-        "a call to a killed process should surface CallError.ProcessDown",
+        "a call to a killed process should surface Process.CallError.ProcessDown",
     );
 }
 
@@ -191,27 +191,27 @@ fn send_after_delivers_a_delayed_business_message() {
         end
 
         impl Process<(), Int, ()> for App
-          fn start(config: ()) -> Result<App, StopReason>
+          fn start(config: ()) -> Result<App, Process.StopReason>
             Result.Ok(App{})
           end
 
-          fn handle(self, msg: Int, from: Option<ReplyTo<()>>) -> Step<App>
-            Step.Continue(self)
+          fn handle(self, msg: Int, from: Option<ReplyTo<()>>) -> Process.Step<App>
+            Process.Step.Continue(self)
           end
 
-          fn run(self) -> StopReason
+          fn run(self) -> Process.StopReason
             me: Ref<Int, ()> = Ref.self_ref()
             me.send_after(42, 1)
             receive
               pair: Pair<Int, Option<ReplyTo<()>>> ->
                 if pair.first == 42
-                  StopReason.Normal
+                  Process.StopReason.Normal
                 else
-                  StopReason.Shutdown
+                  Process.StopReason.Shutdown
                 end
-              event: Lifecycle -> StopReason.Shutdown
+              event: Process.Lifecycle -> Process.StopReason.Shutdown
             after 1000
-              StopReason.Shutdown
+              Process.StopReason.Shutdown
             end
           end
         end

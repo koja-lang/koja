@@ -252,7 +252,7 @@ fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     else {
         return false;
     };
-    if !is_global_type(*head_id, registry, "Pair") {
+    if !is_global_type(*head_id, registry, &["Pair"]) {
         return false;
     }
     let [_msg, second] = type_args.as_slice() else {
@@ -265,7 +265,7 @@ fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     else {
         return false;
     };
-    if !is_global_type(*option_id, registry, "Option") {
+    if !is_global_type(*option_id, registry, &["Option"]) {
         return false;
     }
     let [option_inner] = option_args.as_slice() else {
@@ -278,17 +278,17 @@ fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     else {
         return false;
     };
-    is_global_type(*reply_id, registry, "ReplyTo") && reply_args.len() == 1
+    is_global_type(*reply_id, registry, &["ReplyTo"]) && reply_args.len() == 1
 }
 
 fn is_lifecycle(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
-    is_primitive_named(ty, registry, "Lifecycle")
+    is_primitive_named(ty, registry, &["Process", "Lifecycle"])
 }
 
 /// Like `is_primitive`, but admits both stub-shaped struct primitives
-/// and user-package `Global.<name>` enums (`Lifecycle` lives in
-/// `Global.process`, not the preloaded stub set).
-fn is_primitive_named(ty: &ResolvedType, registry: &GlobalRegistry, name: &str) -> bool {
+/// and user-package `Global.<path>` enums (`Process.Lifecycle` lives
+/// in `Global.process`, not the preloaded stub set).
+fn is_primitive_named(ty: &ResolvedType, registry: &GlobalRegistry, path: &[&str]) -> bool {
     let ResolvedType::Named {
         resolution: Resolution::Global(id),
         type_args,
@@ -299,14 +299,20 @@ fn is_primitive_named(ty: &ResolvedType, registry: &GlobalRegistry, name: &str) 
     if !type_args.is_empty() {
         return false;
     }
-    is_global_type(*id, registry, name)
+    is_global_type(*id, registry, path)
 }
 
-fn is_global_type(id: GlobalRegistryId, registry: &GlobalRegistry, name: &str) -> bool {
+fn is_global_type(id: GlobalRegistryId, registry: &GlobalRegistry, path: &[&str]) -> bool {
     let Some(entry) = registry.get(id) else {
         return false;
     };
-    entry.identifier.is_in_global() && entry.identifier.last() == name
+    entry.identifier.is_in_global()
+        && entry
+            .identifier
+            .path()
+            .iter()
+            .map(String::as_str)
+            .eq(path.iter().copied())
 }
 
 fn require_int_timeout(

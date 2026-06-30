@@ -53,12 +53,12 @@ struct TestEntry
 end
 
 impl Process<(), (), ()> for TestEntry
-  fn start(config: ()) -> Result<Self, StopReason>
+  fn start(config: ()) -> Result<Self, Process.StopReason>
     Result.Ok(TestEntry{})
   end
 
-  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>
-    Step.Continue(self)
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>
+    Process.Step.Continue(self)
   end
 end
 ";

@@ -1,3 +1,6 @@
+alias Process.Step
+alias Process.StopReason
+
 # Regression: heap messages still queued in a process's mailbox when
 # it is killed are reclaimed through the envelope drop glue. A killed
 # process can abandon the frame it was executing, so the threshold
@@ -24,7 +27,7 @@ impl Process<Int, String, Int> for Sink
   end
 end
 
-fn kill_with_backlog()
+fn kill_with_backlog
   r = spawn Sink.start(0)
   j = 0
 

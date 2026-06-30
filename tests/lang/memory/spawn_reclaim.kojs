@@ -1,3 +1,7 @@
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
+
 # Regression: a spawned process's heap-bearing config and state must
 # be fully reclaimed after a graceful shutdown. Covers the spawn-blob
 # drop glue (config transferred to the runtime), the spawn wrapper
@@ -29,8 +33,10 @@ impl Process<EchoConfig, Int, Int> for Echo
   end
 end
 
-fn spawn_once()
-  r = spawn Echo.start(EchoConfig{name: "n" <> "ame", tags: ["a" <> "b", "c" <> "d"]})
+fn spawn_once
+  r = spawn Echo.start(
+    EchoConfig{name: "n" <> "ame", tags: ["a" <> "b", "c" <> "d"]},
+  )
   _ = r.call(1, 5000)
   r.signal(Lifecycle.Shutdown)
 

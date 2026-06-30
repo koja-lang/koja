@@ -1,5 +1,5 @@
 //! Surface-level coverage for the auto-imported `Global.fd` source.
-//! Pins that `Fd`, `File`, and `FileMode` register, that the public
+//! Pins that `Fd`, `File`, and `File.Mode` register, that the public
 //! methods on each (`Fd.read` / `Fd.write` / `File.read` / etc.)
 //! show up in the registry, that the twelve `@extern "C"` shims
 //! register under the correct receiver, and that user code can
@@ -50,7 +50,7 @@ fn file_struct_and_public_methods_register() {
 #[test]
 fn file_mode_enum_registers() {
     let checked = typecheck("1\n");
-    assert_registered(&checked, &["FileMode"]);
+    assert_registered(&checked, &["File", "Mode"]);
 }
 
 #[test]
@@ -98,7 +98,7 @@ fn user_code_can_call_file_exists_predicate() {
 fn user_code_can_open_with_file_mode_match() {
     typecheck(&dedent(
         "
-        File.open(\"out.txt\", FileMode.Read)
+        File.open(\"out.txt\", File.Mode.Read)
         ",
     ));
 }

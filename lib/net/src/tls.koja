@@ -1,5 +1,6 @@
 alias Crypto.Certificate
 alias Crypto.PrivateKey
+alias Net.Socket.Error as SocketError
 
 const SSL_ERROR_SYSCALL: Int64 = 5
 const SSL_ERROR_WANT_READ: Int64 = 2

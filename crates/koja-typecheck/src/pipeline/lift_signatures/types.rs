@@ -284,7 +284,9 @@ pub(crate) fn resolve_path_to_global(
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
-    if let Some(target) = rewrite_through_aliases(scope.aliases, path) {
+    if let Some(target) =
+        rewrite_through_aliases(scope.aliases, path, scope.package, scope.registry)
+    {
         if let Some((id, _)) = scope.registry.lookup(&target) {
             return Some(id);
         }
@@ -358,7 +360,7 @@ pub(crate) fn resolve_bound_to_id(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
     let path = [bound.to_string()];
-    let aliased = rewrite_through_aliases(scope.aliases, &path)
+    let aliased = rewrite_through_aliases(scope.aliases, &path, scope.package, scope.registry)
         .and_then(|target| scope.registry.lookup(&target));
     let local = Identifier::new(scope.package, vec![bound.to_string()]);
     let global = Identifier::new("Global", vec![bound.to_string()]);

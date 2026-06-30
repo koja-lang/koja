@@ -64,15 +64,18 @@ pub fn mangled_method_name(
     receiver.derived(&suffix)
 }
 
-/// Mint the `IRSymbol` rooted at `Global.<receiver>` for a stdlib
-/// primitive receiver like `Bool`, `Int`, `String`. Stamped to the
-/// same shape the lift pass produces for the corresponding `impl
-/// <Receiver> { @intrinsic fn <method> }` decl in the `Global`
-/// package, so cross-crate callers (LLVM/eval intrinsic emitters)
-/// can look up `<Type>.hash` / `<Type>.eq` by `IRSymbol` without
+/// Mint the `IRSymbol` rooted at `Global.<path>` for a stdlib type a
+/// cross-crate caller knows by name — a primitive receiver like
+/// `["Bool"]` / `["String"]`, or a `Global` nested type like
+/// `["Process", "CallError"]`. Stamped to the same shape the lift
+/// pass produces for the corresponding decl in the `Global` package,
+/// so LLVM/eval intrinsic emitters can look symbols up without
 /// reaching into [`IRSymbol`]'s private constructors.
-pub fn global_primitive_symbol(receiver: &str) -> IRSymbol {
-    IRSymbol::from_identifier(&Identifier::new("Global", vec![receiver.to_string()]))
+pub fn global_primitive_symbol(path: &[&str]) -> IRSymbol {
+    IRSymbol::from_identifier(&Identifier::new(
+        "Global",
+        path.iter().map(|segment| segment.to_string()).collect(),
+    ))
 }
 
 /// Mint the [`IRSymbol`] of the `Debug.format` method on a struct

@@ -1,5 +1,5 @@
 //! Surface-level coverage for the auto-imported `Global.io` source.
-//! Pins that `IO` registers as a struct, that `IOReady` registers
+//! Pins that `IO` registers as a struct, that `IO.Ready` registers
 //! as an enum with three variants, that `STDIN` / `STDOUT` /
 //! `STDERR` register as module-level constants, that the public
 //! methods (`gets` / `puts` / `warn` / `write`) register, and that
@@ -35,7 +35,7 @@ fn io_struct_and_public_methods_register() {
 #[test]
 fn io_ready_enum_registers() {
     let checked = typecheck("1\n");
-    assert_registered(&checked, &["IOReady"]);
+    assert_registered(&checked, &["IO", "Ready"]);
 }
 
 #[test]

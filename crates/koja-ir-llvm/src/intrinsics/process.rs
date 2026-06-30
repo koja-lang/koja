@@ -245,7 +245,7 @@ fn emit_call<'ctx>(
     };
     let reply_ir_type = ok_payload_field_type(ctx, &result_symbol)?;
     let reply_llvm = value_basic_type(ctx, &reply_ir_type)?;
-    let call_error_symbol = global_primitive_symbol("CallError");
+    let call_error_symbol = global_primitive_symbol(&["Process", "CallError"]);
 
     let self_fn = declare_rt_self_extern(ctx);
     let caller_pid = ctx.call_basic(self_fn, &[], "caller_pid")?.into_int_value();

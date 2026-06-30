@@ -2,7 +2,7 @@
 Platform-agnostic lifecycle events. The runtime maps OS signals to these
 variants: `SIGTERM` → `Shutdown`, `SIGINT` → `Interrupt`, `SIGHUP` → `Reload`.
 """
-enum Lifecycle
+enum Process.Lifecycle
   Shutdown
   Interrupt
   Reload
@@ -12,7 +12,7 @@ end
 Why a process stopped intentionally. Returned from `handle` or
 `handle_signal` to terminate the process.
 """
-enum StopReason
+enum Process.StopReason
   Normal
   Shutdown
 end
@@ -20,7 +20,7 @@ end
 @doc """
 Scheduling priority for a process.
 """
-enum Priority
+enum Process.Priority
   High
   Low
   Normal
@@ -33,11 +33,11 @@ protocol ExitStatus
   fn code(self) -> Int
 end
 
-impl ExitStatus for StopReason
+impl ExitStatus for Process.StopReason
   fn code(self) -> Int
     match self
-      StopReason.Normal -> 0
-      StopReason.Shutdown -> 1
+      Process.StopReason.Normal -> 0
+      Process.StopReason.Shutdown -> 1
     end
   end
 end
@@ -46,7 +46,7 @@ end
 What a supervisor sees when a child process stops. Type-erased so
 supervisors can manage heterogeneous children.
 """
-enum ExitReason
+enum Process.ExitReason
   Normal
   Shutdown
   Crashed(String)
@@ -56,7 +56,7 @@ end
 Why a synchronous `Ref.call` failed. Distinguishes a timeout (process
 is alive but didn't reply in time) from a dead process.
 """
-enum CallError
+enum Process.CallError
   Timeout
   ProcessDown
 end
@@ -66,9 +66,9 @@ The control flow type for process message handlers. Each handler returns
 a `Step` to indicate whether the process should continue running with
 updated state or stop with a reason.
 """
-enum Step<S>
+enum Process.Step<S>
   Continue(S)
-  Done(StopReason)
+  Done(Process.StopReason)
 end
 
 @doc """
@@ -133,14 +133,14 @@ extend Ref<M, R>
   if the process is no longer running.
   """
   @intrinsic
-  fn call(self, msg: M, timeout: Int) -> Result<R, CallError>
+  fn call(self, msg: M, timeout: Int) -> Result<R, Process.CallError>
 
   @doc """
   Sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`).
   The signal is delivered to the process's `handle_signal` method.
   """
   @intrinsic
-  fn signal(self, event: Lifecycle)
+  fn signal(self, event: Process.Lifecycle)
 
   @doc """
   Immediately terminates the process. No signal is sent -- the process
@@ -176,23 +176,28 @@ protocol Process<C, M, R>
   child process context after spawn, before the receive loop begins.
   Return `Result.Err` to abort startup.
   """
-  fn start(config: C) -> Result<Self, StopReason>
+  fn start(config: C) -> Result<Self, Process.StopReason>
 
   @doc """
-  Handles a business message. Return `Step.Continue(self)` to keep running
-  with updated state, or `Step.Done(reason)` to stop the process.
+  Handles a business message. Return `Process.Step.Continue(self)` to keep
+  running with updated state, or `Process.Step.Done(reason)` to stop.
   """
-  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
+  fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
 
   @doc """
   Handles an OS lifecycle event (SIGTERM, SIGINT, SIGHUP). Default stops
   on Shutdown/Interrupt and continues on Reload.
   """
-  fn handle_signal(self, event: Lifecycle) -> Step<Self>
+  fn handle_signal(self, event: Process.Lifecycle) -> Process.Step<Self>
     match event
-      Lifecycle.Shutdown -> Step.Done(StopReason.Shutdown)
-      Lifecycle.Interrupt -> Step.Done(StopReason.Shutdown)
-      Lifecycle.Reload -> Step.Continue(self)
+      Process.Lifecycle.Shutdown ->
+        Process.Step.Done(Process.StopReason.Shutdown)
+
+      Process.Lifecycle.Interrupt ->
+        Process.Step.Done(Process.StopReason.Shutdown)
+
+      Process.Lifecycle.Reload ->
+        Process.Step.Continue(self)
     end
   end
 
@@ -201,8 +206,8 @@ protocol Process<C, M, R>
   after `start` succeeds, and schedules the process at that priority for
   the rest of its life. Defaults to `Normal`; override to raise or lower.
   """
-  fn priority(self) -> Priority
-    Priority.Normal
+  fn priority(self) -> Process.Priority
+    Process.Priority.Normal
   end
 
   @doc """
@@ -210,18 +215,18 @@ protocol Process<C, M, R>
   lifecycle events to `handle_signal`. Can be overridden for custom
   loop behavior.
   """
-  fn run(self) -> StopReason
+  fn run(self) -> Process.StopReason
     receive
       pair: Pair<M, Option<ReplyTo<R>>> ->
         match self.handle(pair.first, pair.second)
-          Step.Continue(next) -> next.run()
-          Step.Done(reason) -> reason
+          Process.Step.Continue(next) -> next.run()
+          Process.Step.Done(reason) -> reason
         end
 
-      event: Lifecycle ->
+      event: Process.Lifecycle ->
         match self.handle_signal(event)
-          Step.Continue(next) -> next.run()
-          Step.Done(reason) -> reason
+          Process.Step.Continue(next) -> next.run()
+          Process.Step.Done(reason) -> reason
         end
     end
   end
@@ -240,17 +245,17 @@ extend Task<R>
     spawn Task.start(Task{work: fun})
   end
 
-  fn await(reference: Ref<(), R>) -> Result<R, CallError>
+  fn await(reference: Ref<(), R>) -> Result<R, Process.CallError>
     reference.call((), 5000)
   end
 end
 
 impl Process<Task<R>, (), R> for Task<R>
-  fn start(config: Task<R>) -> Result<Self, StopReason>
+  fn start(config: Task<R>) -> Result<Self, Process.StopReason>
     Result.Ok(config)
   end
 
-  fn run(self) -> StopReason
+  fn run(self) -> Process.StopReason
     result = self.work()
 
     receive
@@ -260,14 +265,14 @@ impl Process<Task<R>, (), R> for Task<R>
           Option.None -> ()
         end
 
-        StopReason.Normal
+        Process.StopReason.Normal
 
-      event: Lifecycle ->
-        StopReason.Shutdown
+      event: Process.Lifecycle ->
+        Process.StopReason.Shutdown
     end
   end
 
-  fn handle(self, msg: (), from: Option<ReplyTo<R>>) -> Step<Self>
-    Step.Continue(self)
+  fn handle(self, msg: (), from: Option<ReplyTo<R>>) -> Process.Step<Self>
+    Process.Step.Continue(self)
   end
 end

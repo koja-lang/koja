@@ -40,31 +40,31 @@ const APP_NAME: &str = "alpha_process_test";
 /// stubs used by `koja-ir/tests/lower_process.rs` and
 /// `koja-typecheck/tests/process.rs`.
 const PROCESS_STUB: &str = "
-    enum Lifecycle
+    enum Process.Lifecycle
       Shutdown
       Interrupt
       Reload
     end
 
-    enum StopReason
+    enum Process.StopReason
       Normal
       Shutdown
     end
 
-    enum Priority
+    enum Process.Priority
       Low
       Normal
       High
     end
 
-    enum CallError
+    enum Process.CallError
       Timeout
       ProcessDown
     end
 
-    enum Step<S>
+    enum Process.Step<S>
       Continue(S)
-      Done(StopReason)
+      Done(Process.StopReason)
     end
 
     struct ReplyTo<R>
@@ -89,7 +89,7 @@ const PROCESS_STUB: &str = "
       fn cast(self, msg: M)
 
       @intrinsic
-      fn signal(self, event: Lifecycle)
+      fn signal(self, event: Process.Lifecycle)
 
       @intrinsic
       fn kill(self)
@@ -101,31 +101,41 @@ const PROCESS_STUB: &str = "
       fn send_after(self, msg: M, delay_ms: Int)
 
       @intrinsic
-      fn call(self, msg: M, timeout_ms: Int) -> Result<R, CallError>
+      fn call(self, msg: M, timeout_ms: Int) -> Result<R, Process.CallError>
     end
 
     protocol ExitStatus
       fn code(self) -> Int
     end
 
-    impl ExitStatus for StopReason
+    impl ExitStatus for Process.StopReason
       fn code(self) -> Int
         match self
-          StopReason.Normal -> 0
-          StopReason.Shutdown -> 1
+          Process.StopReason.Normal -> 0
+          Process.StopReason.Shutdown -> 1
         end
       end
     end
 
     protocol Process<C, M, R>
-      fn start(config: C) -> Result<Self, StopReason>
-      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
-      fn run(self) -> StopReason
-      fn priority(self) -> Priority
-        Priority.Normal
+      fn start(config: C) -> Result<Self, Process.StopReason>
+      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
+      fn run(self) -> Process.StopReason
+      fn priority(self) -> Process.Priority
+        Process.Priority.Normal
       end
     end
     ";
+
+/// Aliases injected at the top of every fixture's `TestApp` source so
+/// test bodies (and `TEST_ENTRY_SNIPPET`) can spell the nested
+/// `Process.*` types with their bare leaf names.
+const PROCESS_ALIASES: &str = "\
+    alias Process.CallError\n\
+    alias Process.Lifecycle\n\
+    alias Process.Priority\n\
+    alias Process.Step\n\
+    alias Process.StopReason\n\n";
 
 /// Synthetic Process state appended by [`lower`] so fixtures that
 /// only exercise spawn/receive emission still give `lower_program`
@@ -166,7 +176,7 @@ fn lower_process_entry(source: &str, state: &str) -> IRProgram {
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.koja"),
-        source: dedent(source),
+        source: format!("{PROCESS_ALIASES}{}", dedent(source)),
     });
     let parsed = parse_program(sources, ParseMode::File);
     let checked = check_program(parsed).unwrap_or_else(|failure| {
@@ -280,11 +290,14 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
     assert_contains(&ir_text, "define void @TestApp.Counter.__spawn_body(i64");
     assert_contains(
         &ir_text,
-        "call %\"Global.Result_$TestApp.Counter.Global.StopReason$\" @TestApp.Counter.start",
+        "call %\"Global.Result_$TestApp.Counter.Global.Process.StopReason$\" @TestApp.Counter.start",
     );
     assert_contains(&ir_text, "start_ok:");
     assert_contains(&ir_text, "start_err:");
-    assert_contains(&ir_text, "call %Global.StopReason @TestApp.Counter.run");
+    assert_contains(
+        &ir_text,
+        "call %Global.Process.StopReason @TestApp.Counter.run",
+    );
 }
 
 #[test]
@@ -644,7 +657,7 @@ fn process_entry_wrapper_body_calls_stopreason_code_on_both_paths() {
     );
     assert_contains(&ir_text, "start_ok:");
     assert_contains(&ir_text, "start_err:");
-    assert_contains(&ir_text, "call i64 @Global.StopReason.code");
+    assert_contains(&ir_text, "call i64 @Global.Process.StopReason.code");
 }
 
 #[test]

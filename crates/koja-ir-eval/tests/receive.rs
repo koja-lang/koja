@@ -36,6 +36,10 @@ fn run_entry(source: &str) -> Result<Value, RuntimeError> {
 fn entry_with_run(run_body: &str) -> String {
     format!(
         r#"
+        alias Process.Lifecycle
+        alias Process.Step
+        alias Process.StopReason
+
         struct App
         end
 

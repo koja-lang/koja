@@ -1,8 +1,8 @@
-alias Net.Socket
-alias Net.SocketError
-alias Net.SocketKind
-alias Net.SocketAddress
 alias Net.IPAddress
+alias Net.Socket
+alias Net.Socket.Address as SocketAddress
+alias Net.Socket.Error as SocketError
+alias Net.Socket.Kind as SocketKind
 alias Net.TCPListener
 alias Net.TCPSocket
 alias Net.UDPSocket

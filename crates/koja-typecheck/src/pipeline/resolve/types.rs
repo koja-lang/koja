@@ -51,7 +51,9 @@ pub(crate) fn lookup_type<'r>(
     type_path: &[String],
     scope: ResolutionScope<'r>,
 ) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
-    if let Some(target) = rewrite_through_aliases(scope.aliases, type_path) {
+    if let Some(target) =
+        rewrite_through_aliases(scope.aliases, type_path, scope.package, scope.registry)
+    {
         return scope.registry.lookup(&target);
     }
     if let Some(found) = scope

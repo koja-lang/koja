@@ -1,3 +1,7 @@
+alias Net.Socket.Address as SocketAddress
+alias Net.Socket.Error as SocketError
+alias Net.Socket.Kind as SocketKind
+
 @doc """
 A UDP socket for sending and receiving datagrams. UDP is connectionless --
 the same socket can send to and receive from any address. Use `bind` to

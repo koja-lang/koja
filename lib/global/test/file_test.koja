@@ -1,3 +1,5 @@
+alias File.Mode as FileMode
+
 struct FileTest
   @test "read /dev/null returns empty string"
   fn test_read_dev_null -> Result<Bool, String>
