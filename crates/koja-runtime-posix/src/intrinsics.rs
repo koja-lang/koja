@@ -10,7 +10,8 @@
 //!   newline.
 //! - [`__koja_panic`] — the runtime body of `Kernel.panic`.
 //!   Routes the message through the panic backtrace formatter
-//!   (`** (panic) <message>` + filtered stack), then aborts.
+//!   (`** (panic) <message>` + filtered stack), then unwinds the
+//!   crashing process to the trampoline's `catch_unwind`.
 //! - [`__koja_concat_bits`] / [`__koja_pack_bits`] — helpers for
 //!   the LLVM emitter's bit-packing paths; emitting the sub-byte
 //!   alignment logic is far cleaner in Rust than in LLVM IR.

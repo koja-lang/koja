@@ -392,10 +392,7 @@ pub(crate) fn build_spawn_future<'a, R: CallResolver>(
 }
 
 /// Render a crashed process body's diagnostic and capture its
-/// [`CrashInfo`]. The eval analog of native's `render_diagnostic`: a
-/// user `Kernel.panic` is a [`RuntimeError::Panicked`] whose message is
-/// already the panic text; any other escaping error is reported by its
-/// `Display`. Eval has no host backtrace to walk, so `backtrace` is empty.
+/// [`CrashInfo`]. Eval has no host stack to walk, so `backtrace` is empty.
 fn render_process_crash(error: &RuntimeError) -> CrashInfo {
     let message = match error {
         RuntimeError::Panicked { message } => message.clone(),

@@ -16,12 +16,10 @@ unsafe extern "C" {
 }
 
 /// The unwind payload a user-origin crash carries from its panic site up to
-/// the [`catch_unwind`](std::panic::catch_unwind) boundary at
-/// `process_trampoline`. Raised via [`std::panic::resume_unwind`] (which
-/// bypasses the global hook, so the diagnostic is rendered exactly once at
-/// the crash site), it ferries the structured capture across the compiled
-/// Koja frames so the trampoline can record `ExitReason::Crashed` and stage
-/// the watcher's `ExitSignal`.
+/// the `catch_unwind` boundary at `process_trampoline`, ferrying the crash
+/// capture across the compiled Koja frames so the trampoline can record
+/// `ExitReason::Crashed`. Raised via [`std::panic::resume_unwind`] to bypass
+/// the global hook, so the diagnostic renders exactly once at the crash site.
 pub(crate) struct UserCrash {
     pub crash_info: CrashInfo,
 }

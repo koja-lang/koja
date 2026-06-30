@@ -125,10 +125,9 @@ pub(crate) fn current_pid() -> Pid {
     CURRENT_PID.with(Cell::get)
 }
 
-/// Record that the currently-running process crashed, attaching its
-/// rendered [`CrashInfo`]. The eval analog of native's trampoline
-/// catch: the body still completes and `mark_dead_if_alive` fires on
-/// the resume, but the reason is now `Crashed` rather than `Normal`.
+/// Mark the currently-running process `Crashed` with its rendered
+/// [`CrashInfo`], so the `mark_dead_if_alive` on resume reports a crash
+/// rather than the default `Normal`.
 pub(crate) fn record_crash(crash_info: CrashInfo) {
     let pid = current_pid();
     with_table(|table| {
@@ -430,11 +429,8 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
         let taken = self.futures.borrow_mut().remove(&pid);
         if let Some(mut future) = taken {
             let mut context = Context::from_waker(std::task::Waker::noop());
-            // Contain an interpreter-level Rust panic to this one process,
-            // mirroring native's `catch_unwind` at the trampoline. User
-            // `Kernel.panic` surfaces as a `RuntimeError` the process body
-            // turns into a `Crashed` exit (see `build_spawn_future`); this
-            // boundary is the backstop for an unexpected host unwind.
+            // Backstop for an unexpected host unwind; a user `Kernel.panic` is
+            // a `RuntimeError`, not a Rust panic, so it never reaches here.
             let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 future.as_mut().poll(&mut context)
             }));

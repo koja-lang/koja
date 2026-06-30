@@ -249,12 +249,9 @@ impl<'ctx> EmitContext<'ctx> {
     /// whole koja call chain.
     ///
     /// `uwtable` emits the `.eh_frame` CFI a DWARF unwinder needs to pass
-    /// *through* a koja frame: a user crash raised in
-    /// [`crate::intrinsics::kernel`]'s `Kernel.panic` (runtime
-    /// `__koja_panic`) unwinds across the compiled body back to the
-    /// `catch_unwind` at the runtime's `process_trampoline`, containing the
-    /// crash to one process. Applied to every emitted body so any frame on a
-    /// crashing process's stack is walkable and unwindable.
+    /// *through* a koja frame, so a `Kernel.panic` unwind can cross the
+    /// compiled body to the `catch_unwind` at `process_trampoline` and contain
+    /// the crash to one process.
     pub(crate) fn set_frame_pointer(&self, llvm_function: FunctionValue<'ctx>) {
         let frame_pointer = self.context.create_string_attribute("frame-pointer", "all");
         llvm_function.add_attribute(AttributeLoc::Function, frame_pointer);
