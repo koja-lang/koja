@@ -18,7 +18,7 @@
 use std::io::{self, Write};
 
 use crate::memory;
-use crate::panic::{PanicOrigin, abort_with_diagnostic};
+use crate::panic::crash_unwind;
 use crate::util::{BLOCK_HEADER_SIZE, read_bit_length, string_payload_bytes, write_block_header};
 
 /// Concatenate two `Bits` values produced by the LLVM backend.
@@ -162,14 +162,16 @@ pub unsafe extern "C" fn __koja_pack_bits(
     }
 }
 
-/// Abort the process with a diagnostic message. Paired with the
+/// Crash the calling process with a diagnostic message. Paired with the
 /// LLVM backend's `Kernel.panic` emitter — the emitter passes the
 /// `String` payload pointer (8 bytes past the length header) and
-/// trails the call with `unreachable`, so this helper never has
-/// to return. Reads the `i64` bit length from `payload-8`, then
-/// routes the message through [`crate::panic::abort_with_diagnostic`]
-/// — printing `** (panic) <message>` followed by a filtered,
-/// symbolicated backtrace — before aborting.
+/// trails the call with `unreachable`, so this helper never returns
+/// normally. Reads the `i64` bit length from `payload-8`, then routes the
+/// message through [`crate::panic::crash_unwind`] — printing
+/// `** (panic) <message>` followed by a filtered, symbolicated backtrace —
+/// before unwinding the process to the `catch_unwind` at
+/// `process_trampoline`. `extern "C-unwind"` so the unwind may legally
+/// cross back into the compiled Koja frame that called it.
 ///
 /// # Safety
 ///
@@ -177,10 +179,10 @@ pub unsafe extern "C" fn __koja_pack_bits(
 /// (i.e. the byte right after the `i64 bit_length` header).
 /// Calling with any other pointer is undefined behavior.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn __koja_panic(payload: *const u8) -> ! {
+pub unsafe extern "C-unwind" fn __koja_panic(payload: *const u8) -> ! {
     let bytes = unsafe { string_payload_bytes(payload) };
     let message = String::from_utf8_lossy(bytes);
-    abort_with_diagnostic(PanicOrigin::User, &message);
+    crash_unwind(&message);
 }
 
 /// Print a `String`-flavored body value followed by a newline.

@@ -33,8 +33,8 @@ use std::time::{Duration, Instant};
 
 use koja_ir::IRSymbol;
 use koja_runtime_core::{
-    Clock, CooperativeDriver, Executor, ExitReason, Lifecycle, Message, MessageSource, Pid,
-    Priority, ProcessTable, Readiness, SignalSource, Tag, WaitTarget,
+    Clock, CooperativeDriver, CrashInfo, Executor, ExitReason, Lifecycle, Message, MessageSource,
+    Pid, Priority, ProcessTable, Readiness, SignalSource, Tag, WaitTarget,
 };
 
 use crate::interpreter::CallResolver;
@@ -123,6 +123,18 @@ pub(crate) fn install_runtime(core: CoreHandle) -> RuntimeGuard {
 /// The PID of the process the executor is currently resuming.
 pub(crate) fn current_pid() -> Pid {
     CURRENT_PID.with(Cell::get)
+}
+
+/// Record that the currently-running process crashed, attaching its
+/// rendered [`CrashInfo`]. The eval analog of native's trampoline
+/// catch: the body still completes and `mark_dead_if_alive` fires on
+/// the resume, but the reason is now `Crashed` rather than `Normal`.
+pub(crate) fn record_crash(crash_info: CrashInfo) {
+    let pid = current_pid();
+    with_table(|table| {
+        table.set_exit_reason(pid, ExitReason::Crashed);
+        table.set_crash_info(pid, crash_info);
+    });
 }
 
 /// Runs `f` against the installed core table. Panics if no runtime is
@@ -418,12 +430,26 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
         let taken = self.futures.borrow_mut().remove(&pid);
         if let Some(mut future) = taken {
             let mut context = Context::from_waker(std::task::Waker::noop());
-            match future.as_mut().poll(&mut context) {
-                Poll::Ready(()) => {
+            // Contain an interpreter-level Rust panic to this one process,
+            // mirroring native's `catch_unwind` at the trampoline. User
+            // `Kernel.panic` surfaces as a `RuntimeError` the process body
+            // turns into a `Crashed` exit (see `build_spawn_future`); this
+            // boundary is the backstop for an unexpected host unwind.
+            let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                future.as_mut().poll(&mut context)
+            }));
+            match poll {
+                Ok(Poll::Ready(())) => {
                     self.core.borrow_mut().mark_dead_if_alive(pid);
                 }
-                Poll::Pending => {
+                Ok(Poll::Pending) => {
                     self.futures.borrow_mut().insert(pid, future);
+                }
+                Err(_payload) => {
+                    self.core
+                        .borrow_mut()
+                        .set_exit_reason(pid, ExitReason::Crashed);
+                    self.core.borrow_mut().mark_dead_if_alive(pid);
                 }
             }
         }

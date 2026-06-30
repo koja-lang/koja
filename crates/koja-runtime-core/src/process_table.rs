@@ -62,6 +62,10 @@ pub struct ProcessControlBlock<X, M> {
     pub deadline: Option<Instant>,
     /// Routed message queues plus the one-shot reply slot.
     pub mailbox: Mailbox<M>,
+    /// The structured capture for a crash death, recorded at the unwind site
+    /// and read by [`ProcessTable::notify_exit`] when building the watcher's
+    /// `ExitSignal`. `None` unless the process died with `ExitReason::Crashed`.
+    crash_info: Option<CrashInfo>,
     /// Claim flag: `true` from the moment a driver activates this process
     /// until it has persisted the post-yield execution state. Gates pickup so no
     /// other worker resumes a stale frame in the publish-before-save window.
@@ -91,6 +95,7 @@ impl<X, M> ProcessControlBlock<X, M> {
             execution,
             deadline: None,
             mailbox: Mailbox::default(),
+            crash_info: None,
             on_cpu: false,
             priority: Priority::default(),
             reductions_left: Priority::default().budget(),
@@ -201,6 +206,19 @@ impl ExitReason {
             _ => Self::Normal,
         }
     }
+}
+
+/// The structured capture for a [`ExitReason::Crashed`] death: the panic
+/// message and a pre-rendered, human-readable backtrace. Carried *alongside*
+/// the `Copy` [`ExitReason`] discriminant (on the dying process's PCB) rather
+/// than inside it, so the reason stays cheap to read by value while the heavy
+/// strings travel only when a crash actually occurred. The monitor delivery
+/// path ([`ProcessTable::notify_exit`]) reads it to build the `ExitSignal`
+/// value a watcher receives.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CrashInfo {
+    pub message: String,
+    pub backtrace: String,
 }
 
 /// One slot in the table. `process` is `None` when the slot is free;
@@ -621,6 +639,23 @@ impl<X, M: Message> ProcessTable<X, M> {
         if let Some(process) = self.get_mut(pid) {
             process.exit_reason = reason;
         }
+    }
+
+    /// Records a crashing process's structured capture, to be read by
+    /// [`notify_exit`](Self::notify_exit) when it builds the watcher's
+    /// `ExitSignal`. Paired with `set_exit_reason(pid, ExitReason::Crashed)`
+    /// at the unwind site; a no-op for a stale PID.
+    pub fn set_crash_info(&mut self, pid: Pid, crash_info: CrashInfo) {
+        if let Some(process) = self.get_mut(pid) {
+            process.crash_info = Some(crash_info);
+        }
+    }
+
+    /// The crashing capture recorded for `pid`, if it died `Crashed`. Read on
+    /// the `-> Dead` edge to populate the watcher's `ExitSignal`.
+    pub fn crash_info(&self, pid: Pid) -> Option<&CrashInfo> {
+        self.get(pid)
+            .and_then(|process| process.crash_info.as_ref())
     }
 
     /// Fired from [`transition`](Self::transition) when a process goes `Dead`,

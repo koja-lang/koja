@@ -8,15 +8,15 @@
 use std::alloc;
 use std::cell::{Cell, RefCell, UnsafeCell};
 use std::ptr;
-use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, Ordering};
 use std::sync::{Condvar, LazyLock, Mutex, Once, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use koja_runtime_core::{
-    Clock, Driver, Executor, ExitReason, Lifecycle, Pid, Priority, ProcessTable, SignalSource,
-    slot_index,
+    Clock, CrashInfo, Driver, Executor, ExitReason, Lifecycle, Pid, Priority, ProcessTable,
+    SignalSource, slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, koja_seed_reductions, setvbuf};
@@ -89,7 +89,12 @@ fn send_lifecycle_to(pid: i64, variant: i64) {
 
 const STACK_SIZE: usize = 512 * 1024;
 
-pub(crate) type ProcessFn = extern "C" fn(*const u8);
+/// A compiled process body, entered on first switch. `extern "C-unwind"`
+/// because a user crash inside the body unwinds back through it to the
+/// [`catch_unwind`](std::panic::catch_unwind) at [`process_trampoline`];
+/// the calling convention is unchanged, only that an unwind may legally
+/// propagate across the call.
+pub(crate) type ProcessFn = extern "C-unwind" fn(*const u8);
 
 // ---------------------------------------------------------------------------
 // Platform-specific initial-frame layout constants
@@ -264,6 +269,19 @@ pub(crate) static WORK_AVAILABLE: Condvar = Condvar::new();
 /// workers and the reactor thread exit their loops and join.
 pub(crate) static SHUTDOWN: AtomicBool = AtomicBool::new(false);
 
+/// OS exit code to force when the runtime joins, or `-1` for "no override"
+/// (let `main` return its normal code). Set when the entry process (PID 1)
+/// crashes: a crash unwinds rather than returning a `StopReason`, so the
+/// normal exit-code plumbing (`__koja_exit_code` for programs, hardcoded `0`
+/// for scripts) would report success for a crashed program. [`koja_rt_main_done`]
+/// honours it after the driver loop joins.
+static ENTRY_EXIT_OVERRIDE: AtomicI32 = AtomicI32::new(-1);
+
+/// The OS exit code for an entry-process crash. Non-zero so a crashed
+/// program is observably a failure (mechanical check: PID 1 panic exits
+/// non-zero).
+const CRASH_EXIT_CODE: i32 = 1;
+
 /// Scheduling priority levels, mirroring `koja_runtime_core::Priority`
 /// (`Low`, `Normal`, `High`). One ready deque/injector per level.
 const READY_LEVELS: usize = 3;
@@ -377,9 +395,30 @@ unsafe extern "C" fn process_trampoline() {
         return;
     };
 
-    unsafe {
+    // Contain a user crash to this one process: a panicking body unwinds
+    // back to here (release-before-suspend guarantees no user code holds
+    // `SCHED` while unwinding), carrying its `UserCrash` payload. We record
+    // `Crashed` + the capture, then fall into the normal death path — the
+    // `Dead` edge runs drop glue and reclaims the stack as usual.
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         func(init_state);
+    }));
+    unsafe {
         fflush(ptr::null_mut());
+    }
+
+    if let Err(payload) = outcome {
+        let crash_info = payload
+            .downcast::<crate::panic::UserCrash>()
+            .map_or_else(|_| CrashInfo::default(), |boxed| boxed.crash_info);
+        let mut guard = SCHED.lock().unwrap();
+        guard.set_exit_reason(pid, ExitReason::Crashed);
+        guard.set_crash_info(pid, crash_info);
+        // A crashing entry process (PID 1) never returns a `StopReason`, so
+        // force a non-zero OS exit; `koja_rt_main_done` applies it on join.
+        if pid == guard.main_pid() {
+            ENTRY_EXIT_OVERRIDE.store(CRASH_EXIT_CODE, Ordering::SeqCst);
+        }
     }
 
     SCHED.lock().unwrap().mark_dead_if_alive(pid);
@@ -747,6 +786,16 @@ fn ensure_runtime_init() {
 pub extern "C" fn koja_rt_main_done() {
     ensure_runtime_init();
     NativeDriver.run();
+    // The entry process crashed: its body unwound instead of returning a
+    // `StopReason`, so override the host exit status with a non-zero code
+    // (flushing stdout first, since `process::exit` skips libc atexit
+    // buffer flushing). Normal exits fall through and `main` returns its
+    // own code.
+    let override_code = ENTRY_EXIT_OVERRIDE.load(Ordering::SeqCst);
+    if override_code >= 0 {
+        unsafe { fflush(ptr::null_mut()) };
+        std::process::exit(override_code);
+    }
 }
 
 /// Forces line-buffered stdout so output is visible immediately even when

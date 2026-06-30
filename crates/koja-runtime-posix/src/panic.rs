@@ -9,8 +9,21 @@ use std::ffi::{CStr, c_char};
 use std::io::Write;
 use std::path::Path;
 
+use koja_runtime_core::CrashInfo;
+
 unsafe extern "C" {
     static __koja_app_name: [c_char; 0];
+}
+
+/// The unwind payload a user-origin crash carries from its panic site up to
+/// the [`catch_unwind`](std::panic::catch_unwind) boundary at
+/// `process_trampoline`. Raised via [`std::panic::resume_unwind`] (which
+/// bypasses the global hook, so the diagnostic is rendered exactly once at
+/// the crash site), it ferries the structured capture across the compiled
+/// Koja frames so the trampoline can record `ExitReason::Crashed` and stage
+/// the watcher's `ExitSignal`.
+pub(crate) struct UserCrash {
+    pub crash_info: CrashInfo,
 }
 
 // ---------------------------------------------------------------------------
@@ -60,13 +73,18 @@ pub(crate) enum PanicOrigin {
 }
 
 /// Entry point called from compiled Koja code on panic. Prints the panic
-/// message and a filtered backtrace to stderr, then aborts the process.
+/// message and a filtered backtrace to stderr, then unwinds the crashing
+/// process to the [`catch_unwind`](std::panic::catch_unwind) boundary at
+/// `process_trampoline` (see [`crash_unwind`]).
+///
+/// `extern "C-unwind"` so the unwind may legally cross back into the
+/// compiled Koja frames that called it.
 ///
 /// # Safety
 ///
 /// `msg` must be a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) -> ! {
+pub unsafe extern "C-unwind" fn koja_panic_backtrace(msg: *const c_char) -> ! {
     let message = if msg.is_null() {
         "unknown panic".to_string()
     } else {
@@ -75,7 +93,18 @@ pub unsafe extern "C" fn koja_panic_backtrace(msg: *const c_char) -> ! {
             .into_owned()
     };
 
-    abort_with_diagnostic(PanicOrigin::User, &message);
+    crash_unwind(&message);
+}
+
+/// Render a user crash's diagnostic, then unwind the crashing process to the
+/// `catch_unwind` at `process_trampoline`. Uses [`std::panic::resume_unwind`]
+/// rather than `panic!` so the global hook (which renders + aborts runtime
+/// panics) is *not* invoked — the diagnostic prints exactly once here, with
+/// the crashing stack still live. Per-process containment: the unwind takes
+/// down one process, not the runtime.
+pub(crate) fn crash_unwind(message: &str) -> ! {
+    let crash_info = render_diagnostic(PanicOrigin::User, message);
+    std::panic::resume_unwind(Box::new(UserCrash { crash_info }));
 }
 
 /// Installs a process-global panic hook that routes every Rust panic — on
@@ -157,9 +186,22 @@ fn capture(origin: PanicOrigin) -> Vec<Frame> {
 }
 
 /// Prints `message` and a filtered backtrace to stderr in the Elixir-style
-/// koja format, then aborts the process. Captures the backtrace at the call
-/// site, so callers must invoke it with the panicking stack still live.
+/// koja format, then aborts the process. The terminal path for an internal
+/// runtime panic (via the global hook); user crashes render and *unwind*
+/// instead (see [`crash_unwind`]). Captures the backtrace at the call site,
+/// so callers must invoke it with the panicking stack still live.
 pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
+    render_diagnostic(origin, message);
+    std::process::abort();
+}
+
+/// Renders `message` plus a filtered, symbolicated backtrace to stderr in the
+/// Elixir-style koja format and returns the same capture structured as a
+/// [`CrashInfo`] (the plain-text rendering, ANSI-free, for a watcher's
+/// `ExitSignal`). Must run with the panicking stack still live so the
+/// backtrace is faithful; the caller decides whether to abort (runtime panic)
+/// or unwind (user crash) afterwards.
+pub(crate) fn render_diagnostic(origin: PanicOrigin, message: &str) -> CrashInfo {
     let c = if use_color() { &COLORS_ON } else { &COLORS_OFF };
 
     let app = app_name();
@@ -169,12 +211,12 @@ pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
         PanicOrigin::User => "panic",
     };
 
-    eprint!("{}", c.red);
-    eprintln!("** ({tag}) {message}");
-
     let cwd = std::env::current_dir().ok();
     let frames = capture(origin);
 
+    // Build the backtrace block once (color-free) for both the stderr render
+    // and the `CrashInfo` a watcher receives.
+    let mut backtrace = String::new();
     for frame in &frames {
         let display_file = format_file_path(&frame.file, cwd.as_deref(), frame.is_stdlib);
         let label = if frame.is_stdlib {
@@ -183,28 +225,34 @@ pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
             format!("({app})")
         };
         if frame.line > 0 {
-            eprintln!(
-                "    {label} {display_file}:{}: {}()",
+            backtrace.push_str(&format!(
+                "    {label} {display_file}:{}: {}()\n",
                 frame.line, frame.name
-            );
+            ));
         } else {
-            eprintln!("    {label} {display_file}: {}()", frame.name);
+            backtrace.push_str(&format!("    {label} {display_file}: {}()\n", frame.name));
         }
     }
-
     if frames.is_empty() {
-        eprintln!("    <no frames available — was the binary compiled with debug info?>");
+        backtrace
+            .push_str("    <no frames available — was the binary compiled with debug info?>\n");
     }
 
+    eprint!("{}", c.red);
+    eprintln!("** ({tag}) {message}");
+    eprint!("{backtrace}");
     if let Some(hint) = hint_for_panic(message) {
         eprintln!();
         eprintln!("    hint: {hint}");
     }
-
     eprint!("{}", c.reset);
     eprintln!();
     let _ = std::io::stderr().flush();
-    std::process::abort();
+
+    CrashInfo {
+        message: message.to_string(),
+        backtrace,
+    }
 }
 
 // ---------------------------------------------------------------------------
