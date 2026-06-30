@@ -31,24 +31,24 @@ Two of the three namespacing cases exist; this feature is the third:
 2. **A package namespaces types.** Qualified type paths already resolve and
    mangle: `Net.TCPSocket`, `JSON.Encoder`, with `alias Net.TCPSocket` /
    `alias JSON.Encoder as JSONEncoder` for a file-local shorthand.
-3. **Missing: a type namespaces a *type*** — `Owner.Nested`, where `Nested`
+3. **Missing: a type namespaces a _type_** — `Owner.Nested`, where `Nested`
    is a struct or enum. This feature, and (per the model below) it is the
    generalization of case (2)+variants, not a new construct beside them.
 
 Because (1) and (2) already exist, the machinery to extend is name
-resolution and mangling of *qualified paths*, not a greenfield namespace
+resolution and mangling of _qualified paths_, not a greenfield namespace
 system — the cost is incremental.
 
 ## Resolution model
 
-A variant *is* conceptually a nested member of its enum — the enum is a
+A variant _is_ conceptually a nested member of its enum — the enum is a
 pseudo type-union over its variants. So nested types do not fight with
 variants; they **generalize** what variants already are: members reached by a
 dotted path. The resolver already walks dotted paths and distinguishes
 `Package.Type` from `Enum.Variant`; nested types are simply a third member
 kind on the same machinery.
 
-**Unified dotted-path resolution.** A *namespace* is a package or any type
+**Unified dotted-path resolution.** A _namespace_ is a package or any type
 (struct, enum, protocol). A namespace holds members with names unique within
 it:
 
@@ -65,7 +65,7 @@ nested enum → variant) resolve by the same walk.
 There is **no enum-owner restriction and no special-case disambiguation.**
 The resolver always knows each segment's kind because it resolved the
 previous one. The PascalCase `Owner.Member` "ambiguity" (variant vs nested
-type) is only ever a *reader* question — answered the same way variants are
+type) is only ever a _reader_ question — answered the same way variants are
 today, by knowing what `Owner` is — never a resolver question. The single
 rule is the one variants already obey: **names are unique within a
 namespace** (a nested type may not collide with a variant or static fn of the
@@ -92,7 +92,7 @@ purely declaration, path resolution, mangling, and `Debug` name rendering.
 ## Declaration syntax
 
 - **Qualified-name top-level decl** (implemented) — `struct Process.ExitSignal
-  … end`. Works for any owner kind and attaches a nested type from outside the
+… end`. Works for any owner kind and attaches a nested type from outside the
   owner's body, exactly as `extend Type` adds methods from outside the body:
 
   ```koja

@@ -36,7 +36,7 @@ restart strategies.
 
 The types this doc introduces are namespaced under the type that owns them,
 completing Koja's existing "types are namespaces" rule — already true for
-static functions and FFI externs — for *nested type declarations*:
+static functions and FFI externs — for _nested type declarations_:
 
 - **`Process.Identifier`** (the type-erased process id; working-named `Pid`
   in earlier drafts), `Process.ExitSignal`, `Process.MonitorRef`,
@@ -57,19 +57,19 @@ namespaced form above.
 
 - **Distribution / clustering.** Pids and names are node-local. No remote
   supervision, no global (cross-node) registry.
-- **User-facing links / `trap_exit`.** Death *notification* is monitors;
-  death *containment* is the runtime kill-cascade. The two jobs OTP links
+- **User-facing links / `trap_exit`.** Death _notification_ is monitors;
+  death _containment_ is the runtime kill-cascade. The two jobs OTP links
   conflate are split, and neither is exposed as a bidirectional, surprise-
   propagating link. See [Why not links](#why-not-links).
 - **Message adapters.** No private `R -> M` translation shims. Processes
   agree on contracts; they do not adapt each other's payloads. See
   [The two reply patterns](#the-two-reply-patterns).
 - **Detached / orphan spawns.** There is no `spawn detached` and no
-  independent-spawn form: lifetime is controlled solely by *parent choice*
+  independent-spawn form: lifetime is controlled solely by _parent choice_
   (who runs the `spawn`). See
   [Lifetime is controlled by parent choice](#lifetime-is-controlled-by-parent-choice--no-detach).
 - **The `Registry` stdlib process and `shared_map`.** A3 follow-ons built
-  *on top of* the primitives here; out of scope.
+  _on top of_ the primitives here; out of scope.
 - **Hot code reload.** No.
 - **Behavior changes to the existing scheduler.** Supervision adds to the
   `notify_exit` seam; it does not redesign scheduling. The A1 oracles
@@ -101,13 +101,13 @@ A reply reaches a caller one of exactly two ways, and they have different
 contract obligations:
 
 1. **Synchronous `call` = request/response.** The reply rides the call
-   itself and is consumed *inline* by a one-shot, token-keyed, timed
+   itself and is consumed _inline_ by a one-shot, token-keyed, timed
    selective receive. It never enters `handle`. So request/response needs
    **no inbox admission** — `R` is simply the response type in the
    callee's contract. This is the common case and the reason `R` exists.
 
 2. **Asynchronous reply = a published callback.** If a caller wants to be
-   called back later, it must *publish a callback endpoint*: the reply
+   called back later, it must _publish a callback endpoint_: the reply
    message type must be a member of its own `M`. This is not a translation
    of the callee's output into the caller's vocabulary — it is the caller
    stating, in its own contract, that it accepts this inbound message.
@@ -169,7 +169,7 @@ Today a panic — user-level (`panic()`, `unwrap` on `None`) or internal —
 prints a diagnostic and `std::process::abort()`s the whole OS process
 ([panic.rs](../crates/koja-runtime-posix/src/panic.rs)), a deliberate choice
 so no unwind crosses the C-ABI or poisons the `SCHED` lock. Supervision
-requires the opposite for *user* faults: a crash must take down **one
+requires the opposite for _user_ faults: a crash must take down **one
 process**, not the runtime.
 
 ### Decision: per-process unwind, split by panic origin
@@ -198,7 +198,7 @@ sits at the trampoline frame the stack was initialized to land in.
 
 ### Crash visibility: always print, PID 1 exits
 
-Once a crash is process-local, an *unsupervised* crash no longer aborts.
+Once a crash is process-local, an _unsupervised_ crash no longer aborts.
 That risks a silent failure, which fights "errors are a feature." So:
 
 - **Every crash always prints** the existing Elixir-style backtrace to
@@ -248,7 +248,7 @@ future observability hook consume what the human renderer prints.
 
 ## 3. Monitors and `ExitSignal`
 
-Death *notification* is monitors, and only monitors (user-facing). A
+Death _notification_ is monitors, and only monitors (user-facing). A
 monitor is unidirectional, stackable, and yields a token for cancellation —
 strictly better than links for the "tell me when X dies" job.
 
@@ -298,7 +298,7 @@ one rule, three uses.
 ### Delivery: off-lock, deadlock-free
 
 `notify_exit(pid, reason)` already fires from `ProcessTable::transition` on
-every `* -> Dead` edge, *with the `SCHED` lock held*
+every `* -> Dead` edge, _with the `SCHED` lock held_
 ([process_table.rs](../crates/koja-runtime-core/src/process_table.rs)).
 Delivering an `ExitSignal` means enqueuing a message onto each monitor's
 mailbox and possibly waking it — which must **not** happen under the lock,
@@ -360,12 +360,12 @@ end
 
 "No orphans" is therefore a **language-wide guarantee by construction**, not
 a supervisor feature. Supervisors need no special spawn — they just `spawn`
-(cascade is automatic) and add monitors for the *restart* decision.
+(cascade is automatic) and add monitors for the _restart_ decision.
 
 ### Lifetime is controlled by parent choice — no detach
 
 There is deliberately **no `spawn detached` and no `spawn_child`**. The only
-knob on a process's lifetime is *who its parent is*, and a process's parent
+knob on a process's lifetime is _who its parent is_, and a process's parent
 is whoever ran its `spawn`. To make work that must outlive you, you do not
 detach it — you get a **longer-lived process to spawn it**, so that process
 owns it. Ownership is thus unspoofable (you cannot make something a child of
@@ -375,7 +375,7 @@ necessarily visible under an owner in the tree — there is no back door.
 The OTP idiom falls out directly: outliving, fire-and-forget work is routed
 through a long-lived host (a `Task.Supervisor`-style process that runs the
 spawn on your behalf). `Task.async(fn) |> await` is unaffected — the task is
-your child and you await it — but a *never-awaited* `Task.async` now dies
+your child and you await it — but a _never-awaited_ `Task.async` now dies
 with its spawner; to outlive it, hand it to a task host. (A stdlib task-host
 process is a small follow-on, not part of the core model.)
 
@@ -418,17 +418,17 @@ end
   `String`; an arbitrary key type would force the runtime to run Koja's
   `Hash`/`Equality` glue on arbitrary heap values and copy the key in
   (shared_map-style) — heavyweight machinery for what is meant to be a
-  *well-known singletons* facility (db pool, metrics collector). Arbitrary
+  _well-known singletons_ facility (db pool, metrics collector). Arbitrary
   and typed keys are the [stdlib `Registry`](#out-of-scope-a3)'s job (A3):
   a pure-Koja process holding a `Map<K, V>` keys on any `K: Hash + Equality`
   for free, and a `ServiceKey<M, R>` value can carry the contract type to
-  make lookup *sound* (no turbofish) — the A3 hook, not built here.
+  make lookup _sound_ (no turbofish) — the A3 hook, not built here.
 - **`whereis<M, R>` reconstructs a typed `Ref` from the stored `Pid` plus
   the caller's turbofish.** This is unsound in the same deliberate way as
   the fixed-`R` reply contract — there is no RTTI after monomorphization,
   so the runtime cannot verify the named process actually speaks `M`. It is
-  a *gentleman's agreement*, exactly like a typed client over a REST
-  endpoint. The `Option` return is the safety the type system *does*
+  a _gentleman's agreement_, exactly like a typed client over a REST
+  endpoint. The `Option` return is the safety the type system _does_
   enforce (absence is explicit). The sound alternative is the stdlib
   `ServiceKey` above.
 - **Auto-eviction:** `notify_exit` drops every name bound to the dying
@@ -482,10 +482,10 @@ end
 
 **Type erasure via the closure.** `child_spec` is monomorphized per
 implementing type, so each `Type.child_spec(cfg)` bakes the concrete
-`C` / `M` / `R` into a closure whose *type* is the erased `fn () -> Pid`. A
+`C` / `M` / `R` into a closure whose _type_ is the erased `fn () -> Pid`. A
 `List<ChildSpec>` is therefore homogeneous even though its children have
 different contracts — the closure is the eraser, and it is the only thing
-that *can* spawn the child (the supervisor never sees the type). The
+that _can_ spawn the child (the supervisor never sees the type). The
 captured `config` is an independent value (value semantics), so the closure
 is re-callable for every restart and yields fresh state each time — no
 `copy` keyword.
@@ -498,14 +498,14 @@ string the auto-derived `Debug` already emits** — not a new user-facing
 reflection feature. Override it for multiple children of the same type; ids
 must be unique within a supervisor.
 
-> Naming: the struct is `ChildSpec`; the *producer* is the protocol default
+> Naming: the struct is `ChildSpec`; the _producer_ is the protocol default
 > `child_spec`. (Resolves the name-vs-method conflict the archive flagged.)
 
 **Spawn ownership is automatic (§4).** The closure uses a plain `spawn`, and
 the supervisor always invokes that closure **from its own context** — at
 initial start and on every restart — so the new child is parented to the
 supervisor every time, with no special spawn form and no adopt race. This is
-the whole reason child specs are closures the supervisor *runs* rather than
+the whole reason child specs are closures the supervisor _runs_ rather than
 data it hands to the runtime: running the spawn is what establishes
 ownership.
 
@@ -514,12 +514,12 @@ ownership.
 `Process.start` returns `Result<Self, StopReason>`, and a body can also
 panic during `start`. The two are different signals:
 
-- **`start` returns `Err(StopReason)`** — an *intentional decline*. The
+- **`start` returns `Err(StopReason)`** — an _intentional decline_. The
   process exits with that `Normal` / `Shutdown` reason; under `Transient` /
   `Temporary` it is **not** restarted (a clean "don't run" path). Under
   `Permanent` it would restart-loop, so declining only makes sense for
   non-permanent children.
-- **`start` panics** — a *failure*. It exits `Crashed` (abnormal), so it is
+- **`start` panics** — a _failure_. It exits `Crashed` (abnormal), so it is
   restarted under `Permanent` / `Transient`, subject to intensity.
 
 Either way the child has already spawned (the supervisor holds its pid), so
