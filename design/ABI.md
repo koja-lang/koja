@@ -175,8 +175,35 @@ exit-notification seam). The compiler emits it in the process-body tail
 from the process's own `StopReason`, which maps by variant name to the
 wire code (`Normal` → 0, `Shutdown` → 1; out-of-range clamps to `Normal`
 via `koja_runtime_core::ExitReason::from_index`). A forced `kill` records
-`Killed` (2) directly in the runtime. The interpreter has no extern:
+`Killed` (2) directly in the runtime; a user crash records `Crashed` (3)
+via the crash-unwind path below. The interpreter has no extern:
 `koja-ir-eval` routes `ProcessExit` through `scheduler::process_exit`.
+
+## Crash unwind ABI
+
+A user `panic()` (`Kernel.panic` → runtime `__koja_panic`) is contained to
+the panicking process rather than aborting the OS process, which rests on two
+backend↔runtime contracts:
+
+- **The panic externs unwind.** `__koja_panic` and `koja_panic_backtrace` are
+  `extern "C-unwind"`, so the unwind they raise may legally propagate back
+  across the compiled Koja frames that called them, up to the runtime's
+  `catch_unwind` at `process_trampoline`. The `ProcessFn` typedef the
+  scheduler enters bodies through is `extern "C-unwind"` for the same reason.
+- **Process bodies carry unwind tables.** Every emitted Koja function gets the
+  async `uwtable` attribute so a DWARF unwinder can walk _through_ its frame;
+  without it the unwind cannot cross a Koja frame to reach the catch boundary.
+
+The caught unwind records `ExitReason::Crashed` (wire 3) plus a
+`CrashInfo { message, backtrace }` capture on the dying PCB; the diagnostic
+renders exactly once at the crash site (`resume_unwind` bypasses the global
+panic hook). A crashing PID 1 forces a non-zero OS exit.
+
+- Authoritative: `koja-runtime-posix/src/panic.rs` (`crash_unwind`,
+  `UserCrash`) and `src/scheduler.rs` (`process_trampoline`'s `catch_unwind`).
+- Mirror: `koja-ir-llvm/src/ctx.rs` (`set_frame_pointer` adds `uwtable`); the
+  interpreter contains a user crash as that process's `Crashed` death in
+  `koja-ir-eval` (`build_spawn_future` + `EvalExecutor::resume`).
 
 ## Runtime extern function signatures
 

@@ -43,13 +43,37 @@ impl ExitStatus for Process.StopReason
 end
 
 @doc """
-What a supervisor sees when a child process stops. Type-erased so
-supervisors can manage heterogeneous children.
+The panic message and backtrace captured when a process crashes.
+"""
+struct Process.CrashInfo
+  message: String
+  backtrace: String
+end
+
+@doc """
+Why a process stopped. The variant order is a wire contract shared with
+the runtime (`0=Normal`, `1=Shutdown`, `2=Killed`, `3=Crashed`).
 """
 enum Process.ExitReason
   Normal
   Shutdown
-  Crashed(String)
+  Killed
+  Crashed(Process.CrashInfo)
+end
+
+@doc """
+Identifies a single monitor.
+"""
+struct Process.MonitorRef
+  token: Int
+end
+
+@doc """
+Reports that the process `pid` stopped, and why.
+"""
+struct Process.ExitSignal
+  pid: Pid
+  reason: Process.ExitReason
 end
 
 @doc """
@@ -102,15 +126,20 @@ extend ReplyTo<R>
 end
 
 @doc """
+A process identifier.
+"""
+struct Pid
+  id: Int
+end
+
+@doc """
 A typed handle to a running process. `M` is the message type the process
 accepts, `R` is its reply type. Returned by `spawn`. At runtime this is
 a bare integer (the process pid).
 """
 struct Ref<M, R>
   id: Int
-end
 
-extend Ref<M, R>
   @doc """
   Returns a typed handle to the current process. Must be called from within
   a running process (inside `start`, `handle`, or `handle_signal`).
@@ -118,6 +147,13 @@ extend Ref<M, R>
   """
   @intrinsic
   fn self_ref -> Ref<M, R>
+
+  @doc """
+  Returns the process identifier for the given `Ref`.
+  """
+  fn pid(self) -> Pid
+    Pid{id: self.id}
+  end
 
   @doc """
   Sends a message to the process without waiting for a reply (fire and forget).
@@ -143,7 +179,7 @@ extend Ref<M, R>
   fn signal(self, event: Process.Lifecycle)
 
   @doc """
-  Immediately terminates the process. No signal is sent -- the process
+  Immediately terminates the process. No signal is sent. The process
   is destroyed without a chance to run cleanup.
   """
   @intrinsic

@@ -18,7 +18,7 @@ use koja_ir::{
     IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId,
 };
-use koja_runtime_core::{Driver, Readiness, Tag};
+use koja_runtime_core::{CrashInfo, Driver, Readiness, Tag};
 
 use crate::error::RuntimeError;
 use crate::externs;
@@ -385,8 +385,24 @@ pub(crate) fn build_spawn_future<'a, R: CallResolver>(
         )
     });
     Box::pin(async move {
-        let _ = execute_function(body_fn, vec![config], resolver).await;
+        if let Err(error) = execute_function(body_fn, vec![config], resolver).await {
+            scheduler::record_crash(render_process_crash(&error));
+        }
     })
+}
+
+/// Render a crashed process body's diagnostic and capture its
+/// [`CrashInfo`]. Eval has no host stack to walk, so `backtrace` is empty.
+fn render_process_crash(error: &RuntimeError) -> CrashInfo {
+    let message = match error {
+        RuntimeError::Panicked { message } => message.clone(),
+        other => other.to_string(),
+    };
+    eprintln!("** (panic) {message}");
+    CrashInfo {
+        backtrace: String::new(),
+        message,
+    }
 }
 
 /// Whether a process-entry config type is `List<String>` — the one

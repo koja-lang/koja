@@ -24,7 +24,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::panic::Location;
 use std::sync::Arc;
 
-use inkwell::attributes::AttributeLoc;
+use inkwell::attributes::{Attribute, AttributeLoc};
 use inkwell::basic_block::BasicBlock;
 use inkwell::builder::Builder;
 use inkwell::context::Context;
@@ -240,16 +240,25 @@ impl<'ctx> EmitContext<'ctx> {
         }
     }
 
-    /// Force a maintained frame pointer (`frame-pointer=all`) on
-    /// `llvm_function`. Without it LLVM stores `fp`/`lr` as ordinary
-    /// callee-saved registers but never repoints the frame-pointer
-    /// register, so the `fp`-chain unwinder `libc::backtrace` uses
-    /// walks straight past every koja frame — leaving panic backtraces
-    /// with only the runtime's own frames. Applied to every emitted
-    /// body so the whole koja call chain is walkable.
+    /// Force a maintained frame pointer (`frame-pointer=all`) and
+    /// asynchronous unwind tables (`uwtable`) on `llvm_function`.
+    ///
+    /// The frame pointer keeps the `fp`-chain unwinder `libc::backtrace`
+    /// uses from walking straight past koja frames (without it LLVM never
+    /// repoints the frame-pointer register), so panic backtraces show the
+    /// whole koja call chain.
+    ///
+    /// `uwtable` emits the `.eh_frame` CFI a DWARF unwinder needs to pass
+    /// *through* a koja frame, so a `Kernel.panic` unwind can cross the
+    /// compiled body to the `catch_unwind` at `process_trampoline` and contain
+    /// the crash to one process.
     pub(crate) fn set_frame_pointer(&self, llvm_function: FunctionValue<'ctx>) {
-        let attribute = self.context.create_string_attribute("frame-pointer", "all");
-        llvm_function.add_attribute(AttributeLoc::Function, attribute);
+        let frame_pointer = self.context.create_string_attribute("frame-pointer", "all");
+        llvm_function.add_attribute(AttributeLoc::Function, frame_pointer);
+        // `uwtable` kind with value 2 = async unwind tables (UWTableKind).
+        let uwtable_kind = Attribute::get_named_enum_kind_id("uwtable");
+        let uwtable = self.context.create_enum_attribute(uwtable_kind, 2);
+        llvm_function.add_attribute(AttributeLoc::Function, uwtable);
     }
 
     /// Stage the per-function [`TcoFrame`] for the body currently

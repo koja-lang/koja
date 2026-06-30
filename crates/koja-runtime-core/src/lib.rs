@@ -26,7 +26,7 @@ pub mod wire;
 pub use driver::CooperativeDriver;
 pub use mailbox::{Mailbox, WaitTarget};
 pub use process_table::{
-    ExitReason, Priority, ProcessControlBlock, ProcessState, ProcessTable, Reclaim,
+    CrashInfo, ExitReason, Priority, ProcessControlBlock, ProcessState, ProcessTable, Reclaim,
     ScheduleCounters, slot_index,
 };
 pub use protocol::{

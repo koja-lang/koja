@@ -62,6 +62,9 @@ pub struct ProcessControlBlock<X, M> {
     pub deadline: Option<Instant>,
     /// Routed message queues plus the one-shot reply slot.
     pub mailbox: Mailbox<M>,
+    /// Crash capture recorded at the unwind site; `None` unless the process
+    /// died with `ExitReason::Crashed`.
+    crash_info: Option<CrashInfo>,
     /// Claim flag: `true` from the moment a driver activates this process
     /// until it has persisted the post-yield execution state. Gates pickup so no
     /// other worker resumes a stale frame in the publish-before-save window.
@@ -91,6 +94,7 @@ impl<X, M> ProcessControlBlock<X, M> {
             execution,
             deadline: None,
             mailbox: Mailbox::default(),
+            crash_info: None,
             on_cpu: false,
             priority: Priority::default(),
             reductions_left: Priority::default().budget(),
@@ -201,6 +205,15 @@ impl ExitReason {
             _ => Self::Normal,
         }
     }
+}
+
+/// The panic message and pre-rendered backtrace for a [`ExitReason::Crashed`]
+/// death. Carried alongside the `Copy` `ExitReason` on the PCB rather than
+/// inside the discriminant, so the heavy strings travel only on an actual crash.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct CrashInfo {
+    pub message: String,
+    pub backtrace: String,
 }
 
 /// One slot in the table. `process` is `None` when the slot is free;
@@ -621,6 +634,21 @@ impl<X, M: Message> ProcessTable<X, M> {
         if let Some(process) = self.get_mut(pid) {
             process.exit_reason = reason;
         }
+    }
+
+    /// Records a crashing process's capture, paired with
+    /// `set_exit_reason(pid, ExitReason::Crashed)` at the unwind site. A no-op
+    /// for a stale PID.
+    pub fn set_crash_info(&mut self, pid: Pid, crash_info: CrashInfo) {
+        if let Some(process) = self.get_mut(pid) {
+            process.crash_info = Some(crash_info);
+        }
+    }
+
+    /// The crash capture recorded for `pid`, if it died `Crashed`.
+    pub fn crash_info(&self, pid: Pid) -> Option<&CrashInfo> {
+        self.get(pid)
+            .and_then(|process| process.crash_info.as_ref())
     }
 
     /// Fired from [`transition`](Self::transition) when a process goes `Dead`,
