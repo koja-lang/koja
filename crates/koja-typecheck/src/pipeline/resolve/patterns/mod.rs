@@ -40,7 +40,7 @@ use koja_ast::identifier::{Resolution, ResolvedType};
 use koja_ast::labels::pattern_span;
 
 use super::ctx::Resolver;
-use super::types::{display_resolution, is_primitive, peel_alias, types_equivalent};
+use super::types::{display_resolution, is_primitive, names_struct, peel_alias, types_equivalent};
 use crate::pipeline::lift_signatures::{TypeParamScope, resolve_type_expr};
 use crate::registry::{EnumDefinition, GlobalKind, GlobalRegistry};
 
@@ -81,6 +81,9 @@ pub(super) fn resolve_pattern(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> PatternCoverage {
+    // Mirror of the value-side rewrite: `A.B { … }` becomes a `Struct`
+    // pattern when the path names a struct.
+    rewrite_dotted_struct_pattern(pat, resolver);
     match pat {
         Pattern::Binding { local_id, name, .. } => {
             let id = resolver.scope.declare(name, subject_ty.clone());
@@ -231,6 +234,41 @@ pub(super) fn resolve_pattern(
             PatternCoverage::UnionMember(resolved)
         }
     }
+}
+
+/// Rewrite an `EnumStruct` pattern whose path names a struct into a
+/// `Struct` pattern. A no-op for real enum struct-variant patterns.
+fn rewrite_dotted_struct_pattern(pat: &mut Pattern, resolver: &Resolver<'_>) {
+    let Pattern::EnumStruct {
+        type_path,
+        variant,
+        span,
+        ..
+    } = pat
+    else {
+        return;
+    };
+    let mut full = type_path.clone();
+    full.push(variant.clone());
+    if !names_struct(&full, resolver.resolution_scope()) {
+        return;
+    }
+    let span = *span;
+    let Pattern::EnumStruct {
+        mut type_path,
+        variant,
+        fields,
+        ..
+    } = std::mem::replace(pat, Pattern::Wildcard { span })
+    else {
+        unreachable!("guarded by the match above");
+    };
+    type_path.push(variant);
+    *pat = Pattern::Struct {
+        type_path,
+        fields,
+        span,
+    };
 }
 
 /// True when `subject_ty` resolves to a primitive admitted as a

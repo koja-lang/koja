@@ -16,7 +16,7 @@ impl Parser {
         let start = self.current_span();
         self.advance(); // enum
 
-        let name = self.expect_type_ident();
+        let path = self.parse_decl_path();
         let type_params = self.parse_optional_type_params();
 
         self.skip_newlines();
@@ -37,7 +37,7 @@ impl Parser {
 
         Item::Enum(EnumDecl {
             annotations,
-            name,
+            path,
             type_params,
             variants,
             functions,

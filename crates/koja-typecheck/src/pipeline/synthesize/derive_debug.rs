@@ -116,7 +116,17 @@ fn debug_impl_target(block: &ImplBlock) -> Option<String> {
     if trait_name != DEBUG_PROTOCOL {
         return None;
     }
-    type_expr_head(&block.target).map(str::to_string)
+    type_expr_path(&block.target)
+}
+
+/// The target type's full dotted path (`Net.TCPSocket`,
+/// `Process.ExitSignal`), used to match an existing impl against a
+/// decl's [`StructDecl::path`] / [`EnumDecl::path`].
+fn type_expr_path(te: &TypeExpr) -> Option<String> {
+    match te {
+        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } => Some(path.join(".")),
+        _ => None,
+    }
 }
 
 fn type_expr_head(te: &TypeExpr) -> Option<&str> {
@@ -132,27 +142,27 @@ fn type_expr_head(te: &TypeExpr) -> Option<&str> {
 }
 
 fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
-    !existing.iter().any(|n| n == &decl.name)
+    !existing.iter().any(|n| n == &decl.path.join("."))
 }
 
 /// Empty enums (no variants) are uninhabited — a `match self end`
 /// body with no arms is rejected by typecheck, and there's no value
 /// to format anyway. Skip them.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
-    !decl.variants.is_empty() && !existing.iter().any(|n| n == &decl.name)
+    !decl.variants.is_empty() && !existing.iter().any(|n| n == &decl.path.join("."))
 }
 
 fn synthesize_struct_impl(decl: &StructDecl) -> Item {
     let span = decl.span;
-    let target = self_target_type(&decl.name, &decl.type_params, span);
-    let format_body = struct_format_body(&decl.name, &decl.fields, span);
+    let target = self_target_type(&decl.path, &decl.type_params, span);
+    let format_body = struct_format_body(&decl.path, &decl.fields, span);
     debug_impl_block(target, format_body, span)
 }
 
 fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
     let span = decl.span;
-    let target = self_target_type(&decl.name, &decl.type_params, span);
-    let format_body = enum_format_body(&decl.name, &decl.variants, span);
+    let target = self_target_type(&decl.path, &decl.type_params, span);
+    let format_body = enum_format_body(&decl.path, &decl.variants, span);
     debug_impl_block(target, format_body, span)
 }
 
@@ -179,16 +189,19 @@ fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
 /// Builds the `Target<Params>` type expression on the `impl ... for`
 /// side, mirroring the type's own generic parameters so the impl
 /// monomorphizes per concrete instantiation.
-fn self_target_type(name: &str, type_params: &[TypeParam], span: Span) -> TypeExpr {
+fn self_target_type(path: &[String], type_params: &[TypeParam], span: Span) -> TypeExpr {
     if type_params.is_empty() {
-        named_type(name, span)
+        TypeExpr::Named {
+            path: path.to_vec(),
+            span,
+        }
     } else {
         let args = type_params
             .iter()
             .map(|tp| named_type(&tp.name, span))
             .collect();
         TypeExpr::Generic {
-            path: vec![name.to_string()],
+            path: path.to_vec(),
             args,
             span,
         }
@@ -303,9 +316,10 @@ fn method_call_no_args(receiver: Expr, method: &str, span: Span) -> Expr {
 
 /// Builds the body for a struct's `format`:
 /// `"Name{field1: #{self.field1.format()}, field2: #{self.field2.format()}}"`.
-fn struct_format_body(name: &str, fields: &[StructField], span: Span) -> Expr {
+fn struct_format_body(path: &[String], fields: &[StructField], span: Span) -> Expr {
+    let surface = path.join(".");
     let mut parts: Vec<StringPart> = Vec::new();
-    parts.push(literal_part(format!("{name}{{"), span));
+    parts.push(literal_part(format!("{surface}{{"), span));
     for (idx, field) in fields.iter().enumerate() {
         if idx > 0 {
             parts.push(literal_part(", ".to_string(), span));
@@ -374,10 +388,10 @@ pub(super) fn is_opaque_type(te: &TypeExpr) -> bool {
 
 /// Builds the body for an enum's `format`:
 /// `match self <arms> end` where each arm renders one variant.
-fn enum_format_body(enum_name: &str, variants: &[EnumVariant], span: Span) -> Expr {
+fn enum_format_body(enum_path: &[String], variants: &[EnumVariant], span: Span) -> Expr {
     let arms = variants
         .iter()
-        .map(|v| variant_match_arm(enum_name, v, span))
+        .map(|v| variant_match_arm(enum_path, v, span))
         .collect();
     Expr::new(
         ExprKind::Match {
@@ -388,15 +402,17 @@ fn enum_format_body(enum_name: &str, variants: &[EnumVariant], span: Span) -> Ex
     )
 }
 
-fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> MatchArm {
+fn variant_match_arm(enum_path: &[String], variant: &EnumVariant, span: Span) -> MatchArm {
+    let type_path = enum_path.to_vec();
+    let display = format!("{}.{}", enum_path.join("."), variant.name);
     let (pattern, body_expr) = match &variant.data {
         EnumVariantData::Unit => (
             Pattern::EnumUnit {
-                type_path: vec![enum_name.to_string()],
+                type_path,
                 variant: variant.name.clone(),
                 span,
             },
-            unit_variant_body(&variant.name, span),
+            unit_variant_body(&display, span),
         ),
         EnumVariantData::Tuple(types) => {
             let bindings: Vec<String> = (0..types.len()).map(|i| format!("__v{i}")).collect();
@@ -410,12 +426,12 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
                 .collect();
             (
                 Pattern::EnumTuple {
-                    type_path: vec![enum_name.to_string()],
+                    type_path,
                     variant: variant.name.clone(),
                     elements,
                     span,
                 },
-                tuple_variant_body(&variant.name, &bindings, types, span),
+                tuple_variant_body(&display, &bindings, types, span),
             )
         }
         EnumVariantData::Struct(fields) => {
@@ -433,12 +449,12 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
                 .collect();
             (
                 Pattern::EnumStruct {
-                    type_path: vec![enum_name.to_string()],
+                    type_path,
                     variant: variant.name.clone(),
                     fields: field_patterns,
                     span,
                 },
-                struct_variant_body(&variant.name, fields, span),
+                struct_variant_body(&display, fields, span),
             )
         }
     };
@@ -450,20 +466,16 @@ fn variant_match_arm(enum_name: &str, variant: &EnumVariant, span: Span) -> Matc
     }
 }
 
-/// Body for a unit variant: just the variant name as a literal.
-fn unit_variant_body(variant_name: &str, span: Span) -> Expr {
-    string_expr(vec![literal_part(variant_name.to_string(), span)], span)
+/// Body for a unit variant: the variant's surface name (`Enum.Variant`)
+/// as a literal.
+fn unit_variant_body(label: &str, span: Span) -> Expr {
+    string_expr(vec![literal_part(label.to_string(), span)], span)
 }
 
-/// Body for a tuple variant: `"Name(#{__v0.format()}, #{__v1.format()})"`.
-fn tuple_variant_body(
-    variant_name: &str,
-    bindings: &[String],
-    types: &[TypeExpr],
-    span: Span,
-) -> Expr {
+/// Body for a tuple variant: `"Enum.Variant(#{__v0.format()}, …)"`.
+fn tuple_variant_body(label: &str, bindings: &[String], types: &[TypeExpr], span: Span) -> Expr {
     let mut parts: Vec<StringPart> = Vec::new();
-    parts.push(literal_part(format!("{variant_name}("), span));
+    parts.push(literal_part(format!("{label}("), span));
     for (idx, (binding, ty)) in bindings.iter().zip(types.iter()).enumerate() {
         if idx > 0 {
             parts.push(literal_part(", ".to_string(), span));
@@ -474,10 +486,10 @@ fn tuple_variant_body(
     string_expr(parts, span)
 }
 
-/// Body for a struct variant: `"Name{f1: #{f1.format()}, f2: #{f2.format()}}"`.
-fn struct_variant_body(variant_name: &str, fields: &[StructField], span: Span) -> Expr {
+/// Body for a struct variant: `"Enum.Variant{f1: #{f1.format()}, …}"`.
+fn struct_variant_body(label: &str, fields: &[StructField], span: Span) -> Expr {
     let mut parts: Vec<StringPart> = Vec::new();
-    parts.push(literal_part(format!("{variant_name}{{"), span));
+    parts.push(literal_part(format!("{label}{{"), span));
     for (idx, field) in fields.iter().enumerate() {
         if idx > 0 {
             parts.push(literal_part(", ".to_string(), span));

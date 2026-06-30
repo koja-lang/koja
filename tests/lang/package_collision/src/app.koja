@@ -1,7 +1,9 @@
 alias Alpha.Config as AlphaConfig
-alias Beta.Config as BetaConfig
 alias Alpha.Status as AlphaStatus
+alias Beta.Config as BetaConfig
 alias Beta.Status as BetaStatus
+alias Process.Step
+alias Process.StopReason
 
 struct App
 end

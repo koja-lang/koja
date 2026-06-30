@@ -4,7 +4,7 @@ when a watched file descriptor becomes ready. Used by infrastructure
 processes like `TCPListener`; most user code handles higher-level
 events like `TCPEvent` instead.
 """
-enum IOReady
+enum IO.Ready
   Read(Fd)
   Write(Fd)
   Error(Fd)

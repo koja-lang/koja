@@ -9,7 +9,7 @@ const API_ROOT: String = "https://api.github.com"
 A GitHub user profile, decoded from `GET /users/{login}`. Optional
 profile fields decode as `""` when the user has not set them.
 """
-struct User
+struct GitHub.User
   bio: String
   blog: String
   company: String
@@ -21,8 +21,8 @@ struct User
   name: String
   public_repos: Int
 
-  fn from_json(value: Value) -> User
-    User{
+  fn from_json(value: Value) -> GitHub.User
+    GitHub.User{
       bio: Fields.text(value, "bio"),
       blog: Fields.text(value, "blog"),
       company: Fields.text(value, "company"),
@@ -41,7 +41,7 @@ end
 A repository summary, decoded from the repository objects returned
 by `GET /repos/{owner}/{repo}` and `GET /users/{login}/repos`.
 """
-struct Repo
+struct GitHub.Repo
   description: String
   fork: Bool
   forks: Int
@@ -50,8 +50,8 @@ struct Repo
   stars: Int
   updated_at: String
 
-  fn from_json(value: Value) -> Repo
-    Repo{
+  fn from_json(value: Value) -> GitHub.Repo
+    GitHub.Repo{
       description: Fields.text(value, "description"),
       fork: Fields.flag(value, "fork"),
       forks: Fields.number(value, "forks_count"),
@@ -75,9 +75,9 @@ struct GitHub
   @doc """
   Fetches a repository by its `owner/name` path.
   """
-  fn repo(full_name: String) -> Result<Repo, String>
+  fn repo(full_name: String) -> Result<GitHub.Repo, String>
     match fetch("/repos/#{full_name}")
-      Result.Ok(value) -> Result.Ok(Repo.from_json(value))
+      Result.Ok(value) -> Result.Ok(GitHub.Repo.from_json(value))
       Result.Err(e) -> Result.Err(e)
     end
   end
@@ -85,7 +85,7 @@ struct GitHub
   @doc """
   Fetches a user's repositories, most recently updated first.
   """
-  fn repos(login: String) -> Result<List<Repo>, String>
+  fn repos(login: String) -> Result<List<GitHub.Repo>, String>
     value =
       match fetch("/users/#{login}/repos?sort=updated&per_page=20")
         Result.Ok(v) -> v
@@ -94,7 +94,7 @@ struct GitHub
 
     match value
       Value.Array(items) ->
-        Result.Ok(items.map(fn (item: Value) -> Repo Repo.from_json(item) end))
+        Result.Ok(items.map(fn (item: Value) -> GitHub.Repo GitHub.Repo.from_json(item) end))
       _ -> Result.Err("expected a JSON array of repositories")
     end
   end
@@ -102,9 +102,9 @@ struct GitHub
   @doc """
   Fetches a user profile by login.
   """
-  fn user(login: String) -> Result<User, String>
+  fn user(login: String) -> Result<GitHub.User, String>
     match fetch("/users/#{login}")
-      Result.Ok(value) -> Result.Ok(User.from_json(value))
+      Result.Ok(value) -> Result.Ok(GitHub.User.from_json(value))
       Result.Err(e) -> Result.Err(e)
     end
   end

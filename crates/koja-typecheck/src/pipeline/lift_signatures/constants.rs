@@ -336,7 +336,9 @@ fn lookup_constant_type_identifier(
     name: &str,
     scope: ResolutionScope<'_>,
 ) -> Identifier {
-    if let Some(target) = rewrite_through_aliases(scope.aliases, type_path) {
+    if let Some(target) =
+        rewrite_through_aliases(scope.aliases, type_path, scope.package, scope.registry)
+    {
         return target;
     }
     Identifier::new(scope.package, vec![name.to_string()])

@@ -38,26 +38,26 @@ const PACKAGE: &str = "TestApp";
 /// surrounding Rust; `lower` dedents it (along with the test
 /// source) before parsing.
 const PROCESS_STUB: &str = "
-    enum Lifecycle
+    enum Process.Lifecycle
       Shutdown
       Interrupt
       Reload
     end
 
-    enum StopReason
+    enum Process.StopReason
       Normal
       Shutdown
     end
 
-    enum Priority
+    enum Process.Priority
       Low
       Normal
       High
     end
 
-    enum Step<S>
+    enum Process.Step<S>
       Continue(S)
-      Done(StopReason)
+      Done(Process.StopReason)
     end
 
     struct ReplyTo<R>
@@ -72,24 +72,34 @@ const PROCESS_STUB: &str = "
       fn code(self) -> Int
     end
 
-    impl ExitStatus for StopReason
+    impl ExitStatus for Process.StopReason
       fn code(self) -> Int
         match self
-          StopReason.Normal -> 0
-          StopReason.Shutdown -> 1
+          Process.StopReason.Normal -> 0
+          Process.StopReason.Shutdown -> 1
         end
       end
     end
 
     protocol Process<C, M, R>
-      fn start(config: C) -> Result<Self, StopReason>
-      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Step<Self>
-      fn run(self) -> StopReason
-      fn priority(self) -> Priority
-        Priority.Normal
+      fn start(config: C) -> Result<Self, Process.StopReason>
+      fn handle(self, msg: M, from: Option<ReplyTo<R>>) -> Process.Step<Self>
+      fn run(self) -> Process.StopReason
+      fn priority(self) -> Process.Priority
+        Process.Priority.Normal
       end
     end
     ";
+
+/// Aliases injected at the top of every fixture's `TestApp` source so
+/// the test bodies (and `TEST_ENTRY_SNIPPET`) can spell the nested
+/// `Process.*` types with their bare leaf names, mirroring how real
+/// consumer code aliases the cluster.
+const PROCESS_ALIASES: &str = "\
+    alias Process.Lifecycle\n\
+    alias Process.Priority\n\
+    alias Process.Step\n\
+    alias Process.StopReason\n\n";
 
 /// Synthetic Process state appended by [`lower`] so fixtures that
 /// only exercise spawn/receive lowering still give `lower_program`
@@ -131,7 +141,7 @@ fn lower_process_entry(source: &str, state_name: &str) -> IRProgram {
     sources.push(SourceFile {
         package: PACKAGE.to_string(),
         path: PathBuf::from("test.koja"),
-        source: dedent(source),
+        source: format!("{PROCESS_ALIASES}{}", dedent(source)),
     });
     let parsed = parse_program(sources, ParseMode::File);
     let checked = check_program(parsed).unwrap_or_else(|failure| {
@@ -714,11 +724,11 @@ fn process_entry_lowers_to_process_entry_wrapper() {
         .any(|instruction| {
             matches!(
                 instruction,
-                IRInstruction::Call { callee, .. } if callee.mangled() == "Global.StopReason.code"
+                IRInstruction::Call { callee, .. } if callee.mangled() == "Global.Process.StopReason.code"
             )
         });
     assert!(
         routes_through_code,
-        "entry body should route both arms' StopReason through `Global.StopReason.code`",
+        "entry body should route both arms' StopReason through `Global.Process.StopReason.code`",
     );
 }

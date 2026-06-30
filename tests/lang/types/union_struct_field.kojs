@@ -1,3 +1,6 @@
+alias Process.Step
+alias Process.StopReason
+
 enum Sig
   Stop
 end

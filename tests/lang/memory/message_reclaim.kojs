@@ -1,3 +1,7 @@
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
+
 # Regression: heap message payloads are deep-copied at the send site,
 # delivered, consumed, and reclaimed — both for `cast` (fire-and-
 # forget) and `call` (request/reply) — and a send to an already-dead
@@ -33,7 +37,7 @@ fn wait_dead(r: Ref<String, Int>)
   end
 end
 
-fn deliver_once()
+fn deliver_once
   r = spawn Sink.start(0)
   r.cast("h" <> "ello")
   _ = r.call("w" <> "orld", 5000)
@@ -41,7 +45,7 @@ fn deliver_once()
   wait_dead(r)
 end
 
-fn dead_send_once()
+fn dead_send_once
   r = spawn Sink.start(0)
   r.kill()
   wait_dead(r)

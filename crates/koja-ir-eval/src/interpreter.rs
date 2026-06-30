@@ -884,10 +884,10 @@ fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R
     }
 }
 
-/// Mangled symbol of the kernel `IOReady` enum (`lib/global/src/io.koja`).
+/// Mangled symbol of the kernel `IO.Ready` enum (`lib/global/src/io.koja`).
 /// Non-generic, so its symbol is the bare package-qualified name — the
 /// same constant the `koja-ir` `deliver_io_ready` elaborate pass keys on.
-const IO_READY_SYMBOL: &str = "Global.IOReady";
+const IO_READY_SYMBOL: &str = "Global.IO.Ready";
 
 /// Materialize the `IOReady.{Read,Write,Error}(Fd)` value the reactor
 /// delivers to a `Fd.watch` owner. Built at send time (the driver's

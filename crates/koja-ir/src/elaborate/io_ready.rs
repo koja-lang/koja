@@ -28,9 +28,9 @@ use crate::types::{IRType, ValueId};
 
 use super::{find_enum, find_struct};
 
-/// Mangled symbol of the kernel `IOReady` enum (`global/src/io.koja`).
+/// Mangled symbol of the kernel `IO.Ready` enum (`global/src/io.koja`).
 /// Non-generic, so its symbol is the bare package-qualified name.
-const IO_READY_SYMBOL: &str = "Global.IOReady";
+const IO_READY_SYMBOL: &str = "Global.IO.Ready";
 
 /// `Option.None` variant name — resolves the None tag from the
 /// monomorphized decl instead of hard-coding the wire byte.

@@ -16,35 +16,62 @@
 use std::collections::BTreeMap;
 
 use koja_ast::ast::{AliasDecl, Diagnostic, Item};
-use koja_ast::identifier::Identifier;
+use koja_ast::identifier::{GlobalRegistryId, Identifier};
 
 use crate::program::CheckedPackage;
-use crate::registry::{GlobalKind, GlobalRegistry};
+use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
 
-/// If `path[0]` matches an alias's `local_name`, return the
-/// rewritten target [`Identifier`]: alias target's package + (alias
-/// target's tail segments concatenated with the user's remaining
-/// segments). Returns `None` when no alias binds `path[0]`.
+/// If `path[0]` matches an alias's `local_name`, resolve the alias's
+/// target through reference precedence (current package, head-as-
+/// package, then `Global`) and project the user's remaining segments
+/// onto it. Returns `None` when no alias binds `path[0]`, or when the
+/// target itself doesn't resolve (the validator reports the latter at
+/// the alias decl).
 ///
-/// Decoupled from `path.len()` so alias machinery doesn't move when
-/// nested types land — `O` (1 segment) and `O.Inner` (2 segments)
-/// both project naturally through `alias Some.Outer as O`. Today
-/// nested-target aliases simply fall through to "unknown type"
-/// because the registry has no multi-segment entries; once nested-
-/// type lifting lands they begin resolving without a code change
-/// here.
+/// Resolving the target with full precedence — rather than assuming
+/// segment 0 is the package — is what lets an alias name a current-
+/// package or `Global` nested type without spelling the package:
+/// `alias Process.StopReason as StopReason` binds
+/// `Global.Process.StopReason` from any package, mirroring how a bare
+/// `Process.StopReason` reference resolves.
 pub(crate) fn rewrite_through_aliases(
     aliases: &[AliasDecl],
     path: &[String],
+    package: &str,
+    registry: &GlobalRegistry,
 ) -> Option<Identifier> {
     let head = path.first()?;
     let alias = aliases.iter().find(|a| a.local_name == *head)?;
     if alias.path.len() < 2 {
         return None;
     }
-    let mut segments: Vec<String> = alias.path[1..].to_vec();
+    let (_, entry) = lookup_alias_target(&alias.path, package, registry)?;
+    let mut segments = entry.identifier.path().to_vec();
     segments.extend(path[1..].iter().cloned());
-    Some(Identifier::new(&alias.path[0], segments))
+    Some(Identifier::new(entry.identifier.package(), segments))
+}
+
+/// Resolve an alias's *target* path to its registry entry using the
+/// same precedence as ordinary type references: current package,
+/// then head-as-package, then `Global`. No alias rewriting (a target
+/// names a concrete type) and no single-segment primitive guard
+/// (targets are always qualified). Shared by [`rewrite_through_aliases`]
+/// and [`validate_file_aliases`] so use sites and the validator agree.
+fn lookup_alias_target<'r>(
+    target_path: &[String],
+    package: &str,
+    registry: &'r GlobalRegistry,
+) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
+    if let Some(hit) = registry.lookup(&Identifier::new(package, target_path.to_vec())) {
+        return Some(hit);
+    }
+    if target_path.len() >= 2
+        && let Some(hit) =
+            registry.lookup(&Identifier::new(&target_path[0], target_path[1..].to_vec()))
+    {
+        return Some(hit);
+    }
+    registry.lookup(&Identifier::new("Global", target_path.to_vec()))
 }
 
 /// Walk every file in `packages`, validating each [`AliasDecl`].
@@ -106,16 +133,23 @@ fn validate_file_aliases<'a>(
         if !check_path_length(alias, diagnostics) {
             continue;
         }
-        let Some(target) = build_target_identifier(alias) else {
+        let Some((_, entry)) = lookup_alias_target(&alias.path, package, registry) else {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "alias target `{}` is not a registered type",
+                    alias.path.join("."),
+                ),
+                alias.span,
+            ));
             continue;
         };
-        if !check_target_exists(alias, &target, registry, diagnostics) {
+        if !check_target_kind(alias, entry, diagnostics) {
             continue;
         }
         if !check_no_duplicate(alias, &mut seen_local_names, diagnostics) {
             continue;
         }
-        check_no_shadow(alias, &target, package, registry, diagnostics);
+        check_no_shadow(alias, &entry.identifier, package, registry, diagnostics);
     }
 }
 
@@ -133,27 +167,11 @@ fn check_path_length(alias: &AliasDecl, diagnostics: &mut Vec<Diagnostic>) -> bo
     false
 }
 
-fn build_target_identifier(alias: &AliasDecl) -> Option<Identifier> {
-    let (package, tail) = alias.path.split_first()?;
-    if tail.is_empty() {
-        return None;
-    }
-    Some(Identifier::new(package.as_str(), tail.to_vec()))
-}
-
-fn check_target_exists(
+fn check_target_kind(
     alias: &AliasDecl,
-    target: &Identifier,
-    registry: &GlobalRegistry,
+    entry: &RegistryEntry,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> bool {
-    let Some((_, entry)) = registry.lookup(target) else {
-        diagnostics.push(Diagnostic::error(
-            format!("alias target `{target}` is not a registered type"),
-            alias.span,
-        ));
-        return false;
-    };
     match entry.kind {
         GlobalKind::Enum(_)
         | GlobalKind::Protocol(_)

@@ -34,7 +34,7 @@ fn empty_struct() {
         ",
     );
     let s = first_struct(&src);
-    assert_eq!(s.name, "Empty");
+    assert_eq!(s.name(), "Empty");
     assert!(s.fields.is_empty());
     assert!(s.functions.is_empty());
     assert!(s.type_params.is_empty());

@@ -116,6 +116,8 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
         }
     }
 
+    collect::validate_nested_types(&packages, &registry, &mut diagnostics);
+
     aliases::validate_aliases(&packages, &registry, &mut diagnostics);
 
     lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);

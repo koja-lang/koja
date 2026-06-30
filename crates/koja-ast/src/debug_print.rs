@@ -148,7 +148,11 @@ impl<'a> Printer<'a> {
     }
 
     fn enum_decl(&mut self, e: &EnumDecl) {
-        let header = format!("EnumDecl {}{}", e.name, format_type_params(&e.type_params));
+        let header = format!(
+            "EnumDecl {}{}",
+            e.path.join("."),
+            format_type_params(&e.type_params)
+        );
         self.nested(&header, e.span, |p| {
             p.annotations(&e.annotations);
             if !e.variants.is_empty() {
@@ -305,7 +309,7 @@ impl<'a> Printer<'a> {
     fn struct_decl(&mut self, s: &StructDecl) {
         let header = format!(
             "StructDecl {}{}",
-            s.name,
+            s.path.join("."),
             format_type_params(&s.type_params)
         );
         self.nested(&header, s.span, |p| {

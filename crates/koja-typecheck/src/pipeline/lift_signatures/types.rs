@@ -284,7 +284,9 @@ pub(crate) fn resolve_path_to_global(
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
-    if let Some(target) = rewrite_through_aliases(scope.aliases, path) {
+    if let Some(target) =
+        rewrite_through_aliases(scope.aliases, path, scope.package, scope.registry)
+    {
         if let Some((id, _)) = scope.registry.lookup(&target) {
             return Some(id);
         }
@@ -346,24 +348,6 @@ pub(super) fn type_expr_span(type_expr: &TypeExpr) -> Span {
     }
 }
 
-/// Bare head identifier for an `impl` block's target type expression.
-/// Returns `Some("Bag")` for both `impl Bag` (`TypeExpr::Named`) and
-/// `impl Bag<T>` / `impl Bag<Int>` (`TypeExpr::Generic`); `None` for
-/// multi-segment paths and non-`Named`/`Generic` shapes. Methods on
-/// the impl block register under this head name — `collect`, `lift`,
-/// and `resolve` all share the same key.
-///
-/// `pub(crate)` so the resolve walker reuses the same shape match
-/// when stamping per-method `LocalId`s.
-pub(crate) fn impl_target_name(target: &TypeExpr) -> Option<&str> {
-    match target {
-        TypeExpr::Named { path, .. } | TypeExpr::Generic { path, .. } if path.len() == 1 => {
-            Some(path[0].as_str())
-        }
-        _ => None,
-    }
-}
-
 /// Resolve a `<T: Bound>` bound name to the protocol's registry id.
 /// Lookup order matches type-name resolution: file aliases first
 /// (so `<T: AliasedProtocol>` works), then `package`, then `Global`.
@@ -376,7 +360,7 @@ pub(crate) fn resolve_bound_to_id(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
     let path = [bound.to_string()];
-    let aliased = rewrite_through_aliases(scope.aliases, &path)
+    let aliased = rewrite_through_aliases(scope.aliases, &path, scope.package, scope.registry)
         .and_then(|target| scope.registry.lookup(&target));
     let local = Identifier::new(scope.package, vec![bound.to_string()]);
     let global = Identifier::new("Global", vec![bound.to_string()]);

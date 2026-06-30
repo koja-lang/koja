@@ -7,6 +7,13 @@ model, introduce the `copy` keyword, and unify the rules for tasks and actors.
 The original document remains valuable as exploration history. This document
 records the decisions that emerged from that exploration.
 
+> **Superseded (2026-06-29) by [../SUPERVISION.md](../SUPERVISION.md)** for
+> supervision, process discovery (`monitor` / `register` / `whereis`),
+> `ExitSignal`, and `child_spec`. That doc is the Phase 5 A2 destination;
+> where it disagrees with the exploration below (e.g. it keeps `Ref<M, R>`,
+> rejects message adapters, and adds per-process crash unwind + a runtime
+> kill-cascade), it wins. Everything here remains as design history.
+
 ---
 
 ## Key decision: no borrowing across spawn boundaries

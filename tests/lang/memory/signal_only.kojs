@@ -1,3 +1,7 @@
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
+
 # Regression: shutting down a process that never received a business
 # message must not crash. The receive arm's payload slot for the heap
 # message type (String here) is still zero-initialized when the

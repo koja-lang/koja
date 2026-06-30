@@ -1,6 +1,9 @@
+alias Process.Step
+alias Process.StopReason
 # Package-qualified calls to package-level functions in a dependency:
 # monomorphic, generic (type args inferred at the call site), nested,
 # and chained into a method on the returned value.
+
 struct App
 end
 

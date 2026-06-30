@@ -44,7 +44,7 @@ fn server_source(port: u16, ready_path: &str) -> String {
         alias Crypto.Certificate
         alias Crypto.PrivateKey
         alias Net.IPAddress
-        alias Net.SocketAddress
+        alias Net.Socket.Address as SocketAddress
         alias Net.TCPListener
         alias Net.TLSConfig
 
@@ -121,7 +121,7 @@ fn client_source(port: u16) -> String {
     dedent(&format!(
         r#"
         alias Net.IPAddress
-        alias Net.SocketAddress
+        alias Net.Socket.Address as SocketAddress
         alias Net.TCPSocket
         alias Net.TLSConfig
 

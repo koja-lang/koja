@@ -1,7 +1,10 @@
+alias Net.Socket.Address as SocketAddress
+alias Net.Socket.Kind as SocketKind
+
 @doc """
 The kind of socket: `Stream` (TCP) or `Datagram` (UDP).
 """
-enum SocketKind
+enum Socket.Kind
   Datagram
   Stream
 end
@@ -52,7 +55,7 @@ end
 @doc """
 An IP address paired with a port number.
 """
-struct SocketAddress
+struct Socket.Address
   ip: IPAddress
   port: Int
 end

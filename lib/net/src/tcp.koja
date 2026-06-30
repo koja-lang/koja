@@ -1,3 +1,14 @@
+alias IO.Ready as IOReady
+alias Net.Socket.Address as SocketAddress
+alias Net.Socket.Error as SocketError
+alias Net.Socket.Kind as SocketKind
+alias Net.TCPServer.Config as TCPServerConfig
+alias Net.TCPServer.Event as TCPEvent
+alias Net.TCPServer.Msg as TCPServerMsg
+alias Process.Lifecycle
+alias Process.Step
+alias Process.StopReason
+
 @doc """
 A TCP connection for reading and writing byte streams. Use `connect` to
 establish a client connection by hostname, or `connect_addr` to connect
@@ -307,7 +318,7 @@ end
 @doc """
 Events delivered to a process that spawns a `TCPServer`.
 """
-enum TCPEvent
+enum TCPServer.Event
   Connected(TCPSocket)
   Closed(Fd)
   Error(SocketError)
@@ -315,9 +326,9 @@ end
 
 @doc """
 Configuration for spawning a `TCPServer`.
-`owner` is the process that receives `TCPEvent` messages.
+`owner` is the process that receives `TCPServer.Event` messages.
 """
-struct TCPServerConfig
+struct TCPServer.Config
   port: Int
   owner: Ref<TCPEvent, String>
 end
@@ -338,7 +349,7 @@ struct TCPServer
   owner: Ref<TCPEvent, String>
 end
 
-enum TCPServerMsg
+enum TCPServer.Msg
   AcceptReady
 end
 

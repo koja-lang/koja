@@ -426,7 +426,7 @@ fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
     Some(DocEnum {
         doc: annotation_string(&e.annotations),
         functions,
-        name: e.name.clone(),
+        name: e.name().to_string(),
         variants,
     })
 }
@@ -519,7 +519,7 @@ fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
         doc: annotation_string(&s.annotations),
         fields,
         functions,
-        name: s.name.clone(),
+        name: s.name().to_string(),
         type_params: s.type_params.iter().map(|tp| tp.name.clone()).collect(),
     })
 }

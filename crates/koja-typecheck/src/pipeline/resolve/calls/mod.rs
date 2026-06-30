@@ -756,12 +756,13 @@ pub(super) fn emit_conflict(
 fn lookup_bare_callee<'a>(
     name: &str,
     package: &str,
-    enclosing_type: Option<&str>,
+    enclosing_type: Option<&[String]>,
     registry: &'a GlobalRegistry,
 ) -> Option<(GlobalRegistryId, &'a RegistryEntry)> {
     if let Some(enclosing) = enclosing_type {
-        let scoped = Identifier::new(package, vec![enclosing.to_string(), name.to_string()]);
-        if let Some(found) = registry.lookup(&scoped) {
+        let mut scoped_path = enclosing.to_vec();
+        scoped_path.push(name.to_string());
+        if let Some(found) = registry.lookup(&Identifier::new(package, scoped_path)) {
             return Some(found);
         }
     }

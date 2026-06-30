@@ -45,7 +45,7 @@ use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resoluti
 use koja_typecheck::{CheckedPackage, GlobalRegistry};
 
 use crate::lower::LowerOutput;
-use crate::lower::package::{extend_target_path, impl_target_name};
+use crate::lower::package::{lookup_owner_path, nominal_target_path};
 use crate::package::IRPackage;
 
 /// One discovered generic instantiation. Recorded by
@@ -188,36 +188,33 @@ fn index_item<'a>(
         }
         Item::Struct(decl) => {
             for function in &decl.functions {
-                let identifier =
-                    Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+                let identifier = Identifier::member(package, &decl.path, &function.name);
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Enum(decl) => {
             for function in &decl.functions {
-                let identifier =
-                    Identifier::new(package, vec![decl.name.clone(), function.name.clone()]);
+                let identifier = Identifier::member(package, &decl.path, &function.name);
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Impl(impl_block) => {
-            let Some(target_name) = impl_target_name(&impl_block.target) else {
+            let Some(target_path) = nominal_target_path(&impl_block.target) else {
                 return;
             };
             for member in &impl_block.members {
                 let ImplMember::Function(function) = member else {
                     continue;
                 };
-                let identifier = Identifier::new(
-                    package,
-                    vec![target_name.to_string(), function.name.clone()],
-                );
+                let identifier = Identifier::member(package, target_path, &function.name);
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }
         Item::Extend(extend_block) => {
-            let Some((target_package, target_name)) =
-                extend_target_path(&extend_block.target, package)
+            let Some(path) = nominal_target_path(&extend_block.target) else {
+                return;
+            };
+            let Some((target_package, target_path)) = lookup_owner_path(path, package, registry)
             else {
                 return;
             };
@@ -225,10 +222,7 @@ fn index_item<'a>(
                 let ImplMember::Function(function) = member else {
                     continue;
                 };
-                let identifier = Identifier::new(
-                    &target_package,
-                    vec![target_name.to_string(), function.name.clone()],
-                );
+                let identifier = Identifier::member(&target_package, &target_path, &function.name);
                 insert_function(map, registry, &identifier, function, def_file);
             }
         }

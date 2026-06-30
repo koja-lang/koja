@@ -50,7 +50,7 @@ pub(super) fn lower_struct_decl(
     if has_feature_gap(decl, &mut output.diagnostics) {
         return None;
     }
-    let identifier = Identifier::new(package, vec![decl.name.clone()]);
+    let identifier = Identifier::new(package, decl.path.clone());
     let entry = registry.lookup(&identifier).map(|(_, entry)| entry)?;
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         panic!(
@@ -270,14 +270,15 @@ fn has_feature_gap(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) -> bool
         diagnostics.push(Diagnostic::error(
             format!(
                 "IR does not yet lower annotations on struct items (`@{}` on `{}`)",
-                annotation.name, decl.name,
+                annotation.name,
+                decl.name(),
             ),
             annotation.span,
         ));
         gapped = true;
     }
     for field in &decl.fields {
-        if field_has_feature_gap(&decl.name, field, diagnostics) {
+        if field_has_feature_gap(decl.name(), field, diagnostics) {
             gapped = true;
         }
     }

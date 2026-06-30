@@ -33,6 +33,10 @@ unsafe extern "C" {
 /// running, so a missed readiness event hangs (and the test's channel
 /// timeout converts that into a failure).
 const WATCH_ENTRY: &str = r#"
+    alias IO.Ready as IOReady
+    alias Process.Step
+    alias Process.StopReason
+
     struct App
     end
 

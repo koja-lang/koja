@@ -1,3 +1,5 @@
+alias Net.Socket.Error as SocketError
+
 @doc """
 Why a socket operation failed. Variants name causes, not operations:
 the caller already knows which call failed, so these say why --
@@ -6,9 +8,9 @@ OS errno for causes outside the mapped set.
 
 Produced by `TCPSocket`, `TCPListener`, and `UDPSocket`. TLS-secured
 operations can additionally fail with `TLSError`; their signatures
-return the union `SocketError | TLSError`.
+return the union `Socket.Error | TLSError`.
 """
-enum SocketError
+enum Socket.Error
   AddressInUse
   BrokenPipe
   ConnectionAborted

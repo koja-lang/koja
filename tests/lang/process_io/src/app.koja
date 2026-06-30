@@ -1,14 +1,18 @@
+alias IO.Ready as IOReady
+alias Process.Step
+alias Process.StopReason
+
 struct App
 end
 
 enum AppMsg
   Tick
 end
-
 # Regression for `IOReady` union-message delivery: the entry process
 # watches STDIN for readability and must receive the reactor's readiness
 # event through its ordinary `handle` (tag-2 dispatch), not trap. The
 # test harness pre-fills STDIN so the fd is readable immediately.
+
 impl Process<App, AppMsg | IOReady, String> for App
   fn start(config: App) -> Result<Self, StopReason>
     stdin = Fd{descriptor: 0}
@@ -17,7 +21,9 @@ impl Process<App, AppMsg | IOReady, String> for App
     Result.Ok(config)
   end
 
-  fn handle(self, msg: AppMsg | IOReady, from: Option<ReplyTo<String>>) -> Step<Self>
+  fn handle(self, msg: AppMsg | IOReady, from: Option<ReplyTo<String>>)
+    -> Step<Self>
+
     match msg
       io: IOReady ->
         match io

@@ -7,7 +7,7 @@
 //! over in [`super::types`] alongside the other registry-backed
 //! type predicates.
 
-use koja_ast::ast::{Diagnostic, Expr, FieldInit};
+use koja_ast::ast::{Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit};
 use koja_ast::identifier::{
     GlobalRegistryId, Identifier, Resolution, ResolvedType, TypeParamIndex,
 };
@@ -20,7 +20,41 @@ use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
-use super::types::{display_resolution, lookup_type, peel_alias};
+use super::types::{display_resolution, lookup_type, names_struct, peel_alias};
+
+/// `A.B { … }` parses as a struct-shaped enum-variant construction. If
+/// the full path names a struct, rewrite it in place to a
+/// `StructConstruction` so [`resolve_struct_construction`] handles it.
+pub(super) fn rewrite_dotted_struct_construction(expr: &mut Expr, resolver: &Resolver<'_>) {
+    let ExprKind::EnumConstruction {
+        type_path,
+        variant,
+        data: EnumConstructionData::Struct(_),
+    } = &expr.kind
+    else {
+        return;
+    };
+    if !names_struct(&joined(type_path, variant), resolver.resolution_scope()) {
+        return;
+    }
+    let ExprKind::EnumConstruction {
+        mut type_path,
+        variant,
+        data: EnumConstructionData::Struct(fields),
+    } = std::mem::replace(&mut expr.kind, ExprKind::Self_ { local_id: None })
+    else {
+        unreachable!("guarded by the match above");
+    };
+    type_path.push(variant);
+    expr.kind = ExprKind::StructConstruction { type_path, fields };
+}
+
+/// `type_path ++ [variant]`.
+fn joined(type_path: &[String], variant: &str) -> Vec<String> {
+    let mut path = type_path.to_vec();
+    path.push(variant.to_string());
+    path
+}
 
 /// Resolve `Type{f1: e1, f2: e2}`. Validates the type path resolves
 /// to a registered struct, every declared field has exactly one init

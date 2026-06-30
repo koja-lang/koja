@@ -87,7 +87,7 @@ pub fn discover_tests(parsed: &ParsedProgram, project_name: &str, root: &Path) -
                     file: display_path.clone(),
                     fn_name: func.name.clone(),
                     line: func.span.start.line,
-                    struct_name: s.name.clone(),
+                    struct_name: s.name().to_string(),
                 });
             }
         }
@@ -243,24 +243,24 @@ pub fn generate_harness(tests: &[TestCase], opts: TestOptions) -> String {
     ));
     body.push_str("  end\n");
     body.push_str("  cond\n");
-    body.push_str("    failed > 0 -> StopReason.Shutdown\n");
-    body.push_str("    else -> StopReason.Normal\n");
+    body.push_str("    failed > 0 -> Process.StopReason.Shutdown\n");
+    body.push_str("    else -> Process.StopReason.Normal\n");
     body.push_str("  end\n");
 
     let mut source = String::new();
     source.push_str(&format!("struct {HARNESS_ENTRY}\nend\n\n"));
     source.push_str(&format!("impl Process<(), (), ()> for {HARNESS_ENTRY}\n"));
     source.push_str(&format!(
-        "  fn start(config: ()) -> Result<Self, StopReason>\n    \
+        "  fn start(config: ()) -> Result<Self, Process.StopReason>\n    \
            Result.Ok({HARNESS_ENTRY}{{}})\n  \
          end\n\n"
     ));
     source.push_str(
-        "  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Step<Self>\n    \
-           Step.Continue(self)\n  \
+        "  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>\n    \
+           Process.Step.Continue(self)\n  \
          end\n\n",
     );
-    source.push_str("  fn run(self) -> StopReason\n");
+    source.push_str("  fn run(self) -> Process.StopReason\n");
     source.push_str(&body);
     source.push_str("  end\nend\n");
 

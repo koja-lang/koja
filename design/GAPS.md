@@ -50,50 +50,37 @@ Full design in [TYPES.md](TYPES.md) "Iterator protocol redesign" section.
 
 ---
 
-## Nested types (`MyApp.Config`) deferred
+## Nested types: lexical (in-body) declaration deferred
 
-Declaring a `struct` or `enum` inside another `struct`/`enum` body, accessed
-via dotted syntax (`MyApp.Config`, `Lexer.Token`, `Json.Decoder`), is not
-supported. The struct/enum body parser in
-`koja-parser/src/decl.rs` only accepts fields and inline `fn` methods --
-nested type items would need to be allowed in the same loop. Collection in
-`koja-typecheck/src/collect.rs` would need to recurse into bodies and
-register nested decls under their dotted name.
+The qualified-name form is **implemented** — `struct Owner.Nested … end`
+declared at top level, with construction, patterns, type-position
+resolution, generics (`Owner.Nested<T>`), `extend`/`impl` on nested
+targets, aliases, mangling, and `Debug` surface-name rendering all working
+across both backends (design archived in
+[archive/20260630-NESTED-TYPES.md](archive/20260630-NESTED-TYPES.md)).
 
-The naming machinery is already friendly: `TypeIdentifier.name` is an
-opaque `String`, and `qualified_name()` / `mangle_name` preserve dots, so
-`name = "MyApp.Config"` flows through codegen registration with zero
-changes. Identity stays at `(package, name)` -- no `DefId` overhaul needed
-(unlike local-types-in-function-bodies).
+What remains deferred is the **lexical** sugar: declaring a type inside the
+owner's body rather than via a qualified top-level decl.
 
-The two real obstacles:
+```koja
+struct Supervisor
+  enum Strategy
+    OneForOne
+    OneForAll
+    RestForOne
+  end
+end
+```
 
-1. **`path.len() == 2` resolver assumption.**
-   `koja-typecheck/src/types.rs::resolve_type_expr_full` treats a 2-segment
-   path as `package.Type`. We'd need a third precedence rule for
-   `OuterType.NestedType` and a tie-break when both interpretations exist
-   (e.g. an aliased package whose name shadows a local type).
+It resolves to the same member as `enum Supervisor.Strategy … end`; it is
+purely a same-file convenience. The struct/enum body parser in
+`koja-parser/src/decl.rs` only accepts fields and inline `fn` methods, so
+nested type items would need to be allowed in that loop and hoisted to the
+owner's namespace during collection.
 
-2. **`Foo.Bar` ambiguity with enum variants.**
-   The parser sends both `Color.Red` (variant) and `MyApp.Config` (would-be
-   nested type) down the same enum-construction AST shape. Today
-   `koja-typecheck/src/expr.rs::infer_enum_construction` only succeeds if
-   the head is an enum; the fallback would need to also try resolving the
-   path as a nested type when followed by a struct literal or in type
-   position.
-
-Side bits: `classify_impl_target` in `check.rs` only handles
-`path.len() == 1`, so `impl MyApp.Config` would need a one-line extension.
-Bare `Config` resolving to `MyApp.Config` inside `impl MyApp` (the
-"implicit prefix" nicety) would add ~1-2 days of `CheckEnv` plumbing and
-can be deferred to a v2 by requiring fully-qualified names initially.
-
-**Cost estimate:** ~1-2 weeks for non-generic nested types; +1-2 more
-weeks for generics.
-
-**Why deferred:** much cheaper than local-types-in-function-bodies but
-still a sizeable feature; not a 1.0 blocker. Tracked here so the design
-analysis isn't lost.
+**Why deferred:** the qualified-name form already covers every use site
+(supervision coins its nested types that way); the lexical form is sugar,
+not a 1.0 blocker.
 
 ---
 

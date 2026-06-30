@@ -17,6 +17,9 @@ use koja_parser::ParseMode;
 /// code: 0 when the config is exactly `["alpha", "beta"]`, 1
 /// otherwise.
 const ARGV_ENTRY: &str = r#"
+    alias Process.Step
+    alias Process.StopReason
+
     struct ArgvEntry
       args: List<String>
     end

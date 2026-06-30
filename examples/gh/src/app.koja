@@ -1,3 +1,6 @@
+alias Process.Step
+alias Process.StopReason
+
 @doc """
 The entry process for a one-shot CLI: `start` captures argv, and the
 overridden `run` skips the receive loop entirely -- it dispatches the

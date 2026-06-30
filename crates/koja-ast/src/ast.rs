@@ -340,14 +340,32 @@ pub struct Constant {
 }
 
 /// An enum declaration: `enum Color ... end`.
+///
+/// `path` is the full lexical name: `["Color"]` for a top-level enum,
+/// `["Process", "ExitReason"]` for a nested one. The leaf is the
+/// enum's own name ([`Self::name`]); the preceding segments are the
+/// owning type path ([`Self::owner_path`]).
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub annotations: Vec<Annotation>,
-    pub name: String,
+    pub path: Vec<String>,
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
     pub functions: Vec<Function>,
     pub span: Span,
+}
+
+impl EnumDecl {
+    /// The enum's own (leaf) name — the last path segment.
+    pub fn name(&self) -> &str {
+        self.path.last().expect("enum path is non-empty")
+    }
+
+    /// The owning type path for a nested enum (everything before the
+    /// leaf); empty for a top-level enum.
+    pub fn owner_path(&self) -> &[String] {
+        &self.path[..self.path.len() - 1]
+    }
 }
 
 /// A single variant within an enum declaration.
@@ -462,14 +480,32 @@ pub enum Param {
 }
 
 /// A struct declaration: `struct Point ... end`.
+///
+/// `path` is the full lexical name: `["Point"]` for a top-level
+/// struct, `["Process", "ExitSignal"]` for a nested one. The leaf is
+/// the struct's own name ([`Self::name`]); the preceding segments are
+/// the owning type path ([`Self::owner_path`]).
 #[derive(Debug, Clone)]
 pub struct StructDecl {
     pub annotations: Vec<Annotation>,
-    pub name: String,
+    pub path: Vec<String>,
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructField>,
     pub functions: Vec<Function>,
     pub span: Span,
+}
+
+impl StructDecl {
+    /// The struct's own (leaf) name — the last path segment.
+    pub fn name(&self) -> &str {
+        self.path.last().expect("struct path is non-empty")
+    }
+
+    /// The owning type path for a nested struct (everything before the
+    /// leaf); empty for a top-level struct.
+    pub fn owner_path(&self) -> &[String] {
+        &self.path[..self.path.len() - 1]
+    }
 }
 
 /// A single field within a struct declaration.
