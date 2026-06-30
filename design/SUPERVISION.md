@@ -44,10 +44,10 @@ static functions and FFI externs — for _nested type declarations_:
 - `Supervisor.ChildSpec`, `Supervisor.RestartType`, `Supervisor.Shutdown`,
   `Supervisor.Strategy`.
 
-This requires the **nested type names** language feature — a prerequisite
-tracked in its own design doc, [NESTED-TYPES.md](NESTED-TYPES.md), that must
-land **before P2** (the first supervision types). The runtime work (P1
-crash-unwind) is independent and proceeds in parallel. Field and variable
+This requires the **nested type names** language feature — now implemented
+(design archived in
+[archive/20260630-NESTED-TYPES.md](archive/20260630-NESTED-TYPES.md)). The
+runtime work (P1 crash-unwind) is independent and proceeds in parallel. Field and variable
 names stay short (`pid`, not `identifier`); a per-file `alias
 Process.Identifier` keeps use sites terse. For brevity the sections below
 use the bare leaf name (`ExitSignal`, `ChildSpec`, …) — read them as the

@@ -2,7 +2,7 @@
 
 Let a struct/enum be declared in the namespace of an owning type, referenced
 as `Owner.Nested` — completing Koja's existing "types are namespaces" rule.
-This is a **prerequisite for [SUPERVISION.md](SUPERVISION.md)**: that work
+This is a **prerequisite for [SUPERVISION.md](../SUPERVISION.md)**: that work
 introduces ~10 related types (`Process.Identifier`, `Process.ExitSignal`,
 `Supervisor.ChildSpec`, …) that should group under their owner rather than
 flood the auto-imported `Global` package.
