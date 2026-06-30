@@ -429,7 +429,7 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
         let taken = self.futures.borrow_mut().remove(&pid);
         if let Some(mut future) = taken {
             let mut context = Context::from_waker(std::task::Waker::noop());
-            // Backstop for an unexpected host unwind; a user `Kernel.panic` is
+            // Backstop for an unexpected host unwind. A user `Kernel.panic` is
             // a `RuntimeError`, not a Rust panic, so it never reaches here.
             let poll = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 future.as_mut().poll(&mut context)

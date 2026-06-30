@@ -43,9 +43,7 @@ impl ExitStatus for Process.StopReason
 end
 
 @doc """
-The panic message and pre-rendered backtrace captured when a process
-crashes. Carried by `Process.ExitReason.Crashed` and delivered to
-monitors in a `Process.ExitSignal`.
+The panic message and backtrace captured when a process crashes.
 """
 struct Process.CrashInfo
   message: String
@@ -53,10 +51,8 @@ struct Process.CrashInfo
 end
 
 @doc """
-What a supervisor sees when a child process stops. Type-erased so
-supervisors can manage heterogeneous children. The variant order is a
-wire contract shared with the runtime (`0=Normal`, `1=Shutdown`,
-`2=Killed`, `3=Crashed`).
+Why a process stopped. The variant order is a wire contract shared with
+the runtime (`0=Normal`, `1=Shutdown`, `2=Killed`, `3=Crashed`).
 """
 enum Process.ExitReason
   Normal
@@ -66,19 +62,14 @@ enum Process.ExitReason
 end
 
 @doc """
-A handle returned by `Process.monitor`, passed to `Process.demonitor`
-to cancel the monitor. The token uniquely identifies the monitor among
-all of a process's monitors.
+Identifies a single monitor.
 """
 struct Process.MonitorRef
   token: Int
 end
 
 @doc """
-Delivered to a monitoring process when its target stops, for any reason.
-Pattern-match on `reason` to distinguish a normal stop from a crash. A
-process can only receive `ExitSignal` if it lists the type in its
-message union `M`.
+Reports that the process `pid` stopped, and why.
 """
 struct Process.ExitSignal
   pid: Pid
@@ -135,9 +126,7 @@ extend ReplyTo<R>
 end
 
 @doc """
-A type-erased process identity — the peer of `Ref<M, R>` that drops the
-message/reply types. Returned by `Ref.pid` and carried in
-`Process.ExitSignal`. At runtime this is a bare integer (the process pid).
+A process identifier.
 """
 struct Pid
   id: Int
@@ -150,9 +139,7 @@ a bare integer (the process pid).
 """
 struct Ref<M, R>
   id: Int
-end
 
-extend Ref<M, R>
   @doc """
   Returns a typed handle to the current process. Must be called from within
   a running process (inside `start`, `handle`, or `handle_signal`).
@@ -162,8 +149,7 @@ extend Ref<M, R>
   fn self_ref -> Ref<M, R>
 
   @doc """
-  Widens this typed handle to a type-erased `Pid`, discarding the
-  message and reply types. The process identity is unchanged.
+  Returns the process identifier for the given `Ref`.
   """
   fn pid(self) -> Pid
     Pid{id: self.id}
@@ -193,7 +179,7 @@ extend Ref<M, R>
   fn signal(self, event: Process.Lifecycle)
 
   @doc """
-  Immediately terminates the process. No signal is sent -- the process
+  Immediately terminates the process. No signal is sent. The process
   is destroyed without a chance to run cleanup.
   """
   @intrinsic
