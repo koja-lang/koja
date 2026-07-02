@@ -46,13 +46,14 @@ pub(super) async fn ref_dispatch<R: CallResolver>(
     }
 }
 
-pub(super) async fn reply_to_dispatch(
+pub(super) async fn reply_to_dispatch<R: CallResolver>(
     method: ReplyToMethod,
     function: &IRFunction,
     args: &[Value],
+    resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match method {
-        ReplyToMethod::Send => reply_send(function, args),
+        ReplyToMethod::Send => reply_send(function, args, resolver),
     }
 }
 
@@ -152,6 +153,9 @@ async fn call<R: CallResolver>(
 
     let caller = scheduler::current_pid();
     let token = scheduler::mint_token();
+    // Register interest before sending so a fast reply can't beat the caller
+    // to the awaited-token check (mirrors native's `koja_rt_call_token`).
+    scheduler::set_awaiting_reply(caller, token);
     scheduler::deliver(
         target,
         business(
@@ -169,6 +173,7 @@ async fn call<R: CallResolver>(
             // Correlate by token; a mismatch is a stale reply from an
             // earlier call that already timed out — discard and keep waiting.
             if reply.reply.map(|info| info.token) == Some(token) {
+                scheduler::clear_awaiting_reply(caller);
                 return Ok(helpers::result_value(
                     result_symbol.clone(),
                     Ok(reply.value),
@@ -177,6 +182,7 @@ async fn call<R: CallResolver>(
             continue;
         }
         if Instant::now() >= deadline {
+            scheduler::clear_awaiting_reply(caller);
             let variant = if scheduler::is_alive(target) {
                 "Timeout"
             } else {
@@ -192,21 +198,24 @@ async fn call<R: CallResolver>(
 
 // ----- ReplyTo methods ----------------------------------------------------
 
-/// `ReplyTo.send(self, reply)` — route `reply` to the originating caller's
-/// one-shot reply slot, stamped with `self`'s correlation token. Mirrors
-/// `emit_reply_send`.
-fn reply_send(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+/// `ReplyTo.send(self, reply) -> ReplyTo.Delivery` — route `reply` to the
+/// originating caller's one-shot reply slot, stamped with `self`'s correlation
+/// token. Returns `Delivery.Delivered` if the caller was still awaiting the
+/// reply, `Delivery.Expired` if it had moved on. Mirrors `emit_reply_send`.
+fn reply_send<R: CallResolver>(
+    function: &IRFunction,
+    args: &[Value],
+    resolver: &R,
+) -> Result<Value, RuntimeError> {
     let coords = reply_to_coords(function, args)?;
     let reply = nth(function, args, 1, "reply")?;
-    scheduler::deliver(
-        coords.caller_pid,
-        EvalMessage {
-            reply: Some(coords),
-            tag: Tag::Reply,
-            value: reply,
-        },
-    );
-    Ok(Value::Unit)
+    let delivery_symbol = helpers::enum_return_symbol(function, "ReplyTo.send")?;
+    let variant = if scheduler::reply(coords, reply) {
+        "Delivered"
+    } else {
+        "Expired"
+    };
+    helpers::unit_variant_value(&delivery_symbol, resolver, variant)
 }
 
 // ----- message materialization --------------------------------------------

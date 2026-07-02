@@ -77,7 +77,9 @@ pub(crate) async fn dispatch<R: CallResolver>(
         IRIntrinsicId::Parse(target) => parse::dispatch(target, function, args, resolver),
         IRIntrinsicId::Print => print::global_print(args),
         IRIntrinsicId::Ref(method) => process::ref_dispatch(method, function, args, resolver).await,
-        IRIntrinsicId::ReplyTo(method) => process::reply_to_dispatch(method, function, args).await,
+        IRIntrinsicId::ReplyTo(method) => {
+            process::reply_to_dispatch(method, function, args, resolver).await
+        }
         IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
         IRIntrinsicId::Socket(method) => socket::dispatch(method, function, args, resolver).await,
         IRIntrinsicId::String(method) => string::dispatch(method, function, args),

@@ -544,15 +544,16 @@ pub(crate) fn declare_rt_send_after_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Fun
 }
 
 /// Declare (or look up) `koja_rt_reply`. Signature:
-/// `void koja_rt_reply(i64 pid, i64 token, i8* msg_ptr, i64 msg_len,
+/// `i64 koja_rt_reply(i64 pid, i64 token, i8* msg_ptr, i64 msg_len,
 /// void(i8*)* drop_glue)`. Like `koja_rt_send` but the envelope is
 /// routed to the caller's one-shot reply slot, where
-/// `koja_rt_call_receive` correlates it by `token`; it never enters
-/// the receive queues.
+/// `koja_rt_call_receive` correlates it by `token`. It never enters
+/// the receive queues. Returns `0` when the reply was slotted for a
+/// still-waiting caller and `1` when the caller had already given up.
 pub(crate) fn declare_rt_reply_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
     let i64_ty = ctx.context.i64_type();
-    let signature = ctx.context.void_type().fn_type(
+    let signature = i64_ty.fn_type(
         &[
             i64_ty.into(),
             i64_ty.into(),

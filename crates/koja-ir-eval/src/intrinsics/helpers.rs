@@ -95,23 +95,34 @@ pub(super) fn err_variant_value<R: CallResolver>(
             ),
         });
     };
-    let error_decl =
+    unit_variant_value(error_symbol, resolver, variant_name)
+}
+
+/// Build a unit-variant value `<enum>.<variant>` directly, resolving the tag
+/// by name so the enum's declaration order isn't baked in. Used where an
+/// intrinsic returns a bare enum (e.g. `ReplyTo.send -> ReplyTo.Delivery`).
+pub(super) fn unit_variant_value<R: CallResolver>(
+    enum_symbol: &IRSymbol,
+    resolver: &R,
+    variant_name: &str,
+) -> Result<Value, RuntimeError> {
+    let decl =
         resolver
-            .enum_decl(error_symbol.mangled())
+            .enum_decl(enum_symbol.mangled())
             .ok_or_else(|| RuntimeError::TypeMismatch {
-                detail: format!("enum decl `{error_symbol}` not found in program"),
+                detail: format!("enum decl `{enum_symbol}` not found in program"),
             })?;
-    let variant = error_decl
+    let variant = decl
         .variants
         .iter()
         .find(|v| v.name == variant_name)
         .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("enum `{error_symbol}` has no variant named `{variant_name}`"),
+            detail: format!("enum `{enum_symbol}` has no variant named `{variant_name}`"),
         })?;
     Ok(Value::Enum {
         name: variant_name.into(),
         payload: EnumPayload::Unit,
-        symbol: error_symbol.clone(),
+        symbol: enum_symbol.clone(),
         tag: variant.tag,
     })
 }

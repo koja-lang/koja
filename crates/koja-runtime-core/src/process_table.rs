@@ -62,7 +62,12 @@ pub struct ProcessControlBlock<X, M> {
     pub deadline: Option<Instant>,
     /// Routed message queues plus the one-shot reply slot.
     pub mailbox: Mailbox<M>,
-    /// Crash capture recorded at the unwind site; `None` unless the process
+    /// Correlation token of the `Ref.call` this process is currently waiting
+    /// on a reply for, set when the token is minted and cleared when the call
+    /// completes. `ReplyTo.send` consults it to report whether the caller is
+    /// still listening (`Some(token)`) or has moved on (`None` / mismatch).
+    awaiting_reply: Option<i64>,
+    /// Crash capture recorded at the unwind site. `None` unless the process
     /// died with `ExitReason::Crashed`.
     crash_info: Option<CrashInfo>,
     /// Claim flag: `true` from the moment a driver activates this process
@@ -94,6 +99,7 @@ impl<X, M> ProcessControlBlock<X, M> {
             execution,
             deadline: None,
             mailbox: Mailbox::default(),
+            awaiting_reply: None,
             crash_info: None,
             on_cpu: false,
             priority: Priority::default(),
@@ -649,6 +655,31 @@ impl<X, M: Message> ProcessTable<X, M> {
     pub fn crash_info(&self, pid: Pid) -> Option<&CrashInfo> {
         self.get(pid)
             .and_then(|process| process.crash_info.as_ref())
+    }
+
+    /// Records that `pid` is now waiting on the reply for call `token`. Set
+    /// when the token is minted (before the request is sent) so a reply can
+    /// never race ahead of the caller registering its interest.
+    pub fn set_awaiting_reply(&mut self, pid: Pid, token: i64) {
+        if let Some(process) = self.get_mut(pid) {
+            process.awaiting_reply = Some(token);
+        }
+    }
+
+    /// Clears `pid`'s awaited-reply token once its call completes (reply
+    /// received or timed out). A no-op for a stale PID.
+    pub fn clear_awaiting_reply(&mut self, pid: Pid) {
+        if let Some(process) = self.get_mut(pid) {
+            process.awaiting_reply = None;
+        }
+    }
+
+    /// Whether `pid` is alive and still waiting on the reply for `token` —
+    /// the linearizable check `ReplyTo.send` makes under the lock to decide
+    /// `Delivery.Delivered` versus `Delivery.Expired`.
+    pub fn is_awaiting_reply(&self, pid: Pid, token: i64) -> bool {
+        self.is_alive(pid)
+            && self.get(pid).and_then(|process| process.awaiting_reply) == Some(token)
     }
 
     /// Fired from [`transition`](Self::transition) when a process goes `Dead`,

@@ -366,6 +366,31 @@ fn deliver_or_discard(pid: i64, envelope: Envelope) {
     drop(leftover);
 }
 
+/// `koja_rt_reply` status: the reply was slotted for a still-waiting caller.
+/// Mirrored as `Delivery.Delivered` by the `ReplyTo.send` emitter.
+const REPLY_DELIVERED: i64 = 0;
+/// `koja_rt_reply` status: the caller had already given up, so the reply was
+/// discarded. Mirrored as `Delivery.Expired`.
+const REPLY_EXPIRED: i64 = 1;
+
+/// Slots `envelope` for `pid` only if it is still awaiting `token`, checking
+/// and delivering under one lock hold so the answer is linearizable against
+/// the caller's timeout. Off-lock cleanup mirrors [`deliver_or_discard`].
+fn reply_or_expire(pid: i64, token: i64, envelope: Envelope) -> i64 {
+    let mut guard = SCHED.lock().unwrap();
+    if !guard.is_awaiting_reply(pid, token) {
+        drop(guard);
+        drop(envelope);
+        return REPLY_EXPIRED;
+    }
+    let leftover = guard.deliver(pid, envelope);
+    let woken = publish_ready(&mut guard);
+    drop(guard);
+    notify_workers(woken);
+    drop(leftover);
+    REPLY_DELIVERED
+}
+
 /// Prepares a fresh process stack so the first `koja_context_switch`
 /// into it will "return" to `entry`. Zeroes the initial frame and
 /// writes the trampoline address at the platform-specific return slot.
@@ -1000,12 +1025,15 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
 /// a stale reply can never collide with a later call's token.
 static CALL_TOKEN: AtomicI64 = AtomicI64::new(0);
 
-/// Mints a fresh correlation token for a `Ref.call`. The caller stamps
-/// it into the outgoing request's `ReplyTo` and then waits for it via
-/// [`koja_rt_call_receive`].
+/// Mints a fresh correlation token for a `Ref.call` and registers the caller
+/// as awaiting that reply *before* the request is sent, so a fast reply can't
+/// beat the caller to `ReplyTo.send`'s awaited-token check.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_call_token() -> i64 {
-    CALL_TOKEN.fetch_add(1, Ordering::Relaxed) + 1
+    let token = CALL_TOKEN.fetch_add(1, Ordering::Relaxed) + 1;
+    let pid = CURRENT_PID.with(|c| c.get());
+    SCHED.lock().unwrap().set_awaiting_reply(pid, token);
+    token
 }
 
 /// Blocks until the reply correlated with `token` lands in this
@@ -1034,6 +1062,7 @@ pub extern "C" fn koja_rt_call_receive(
                     if let Some(p) = guard.get_mut(pid) {
                         p.deadline = None;
                     }
+                    guard.clear_awaiting_reply(pid);
                     drop(guard);
                     deliver_envelope(envelope, out, out_cap);
                     return 0;
@@ -1044,6 +1073,7 @@ pub extern "C" fn koja_rt_call_receive(
                         if let Some(p) = guard.get_mut(pid) {
                             p.deadline = None;
                         }
+                        guard.clear_awaiting_reply(pid);
                         return -1;
                     }
                     guard.try_park(pid, WaitTarget::Reply, Some(deadline));
@@ -1094,12 +1124,10 @@ pub unsafe extern "C" fn koja_rt_send(
     deliver_or_discard(pid, envelope);
 }
 
-/// Sends a reply for the in-flight call identified by `token` back to
-/// the caller `pid`. Like [`koja_rt_send`] but the envelope is tagged
-/// `TAG_REPLY` and routed to the caller's one-shot reply slot, where
-/// `koja_rt_call_receive` correlates it by token; it never enters the
-/// receive queues. A stale occupant displaced from the slot is dropped
-/// here, releasing its payload.
+/// Sends a reply for the in-flight call `token` to the caller `pid`, tagged
+/// `TAG_REPLY` and routed to its one-shot reply slot (never the receive
+/// queues). Returns [`REPLY_DELIVERED`] if the caller was still awaiting the
+/// token, or [`REPLY_EXPIRED`] if it gave up first (the reply is dropped).
 ///
 /// # Safety
 /// `msg_ptr` must point to `msg_len` readable bytes.
@@ -1110,11 +1138,11 @@ pub unsafe extern "C" fn koja_rt_reply(
     msg_ptr: *const u8,
     msg_len: i64,
     drop_glue: Option<unsafe extern "C" fn(*mut u8)>,
-) {
+) -> i64 {
     let mut envelope =
         unsafe { Envelope::from_payload(TAG_REPLY, msg_ptr, msg_len as usize, drop_glue) };
     envelope.reply_token = token;
-    deliver_or_discard(pid, envelope);
+    reply_or_expire(pid, token, envelope)
 }
 
 /// Sends a lifecycle event to the given process, routed to its system

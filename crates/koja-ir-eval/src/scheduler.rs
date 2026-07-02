@@ -216,6 +216,41 @@ pub(crate) fn take_reply(pid: Pid) -> Option<EvalMessage> {
     with_table(|table| table.get_mut(pid).and_then(|pcb| pcb.mailbox.take_reply()))
 }
 
+/// Registers `pid` as awaiting the reply for `token` (`Ref.call`), so
+/// `reply` can tell whether the caller is still listening.
+pub(crate) fn set_awaiting_reply(pid: Pid, token: i64) {
+    with_table(|table| table.set_awaiting_reply(pid, token));
+}
+
+/// Clears `pid`'s awaited-reply token once its call completes.
+pub(crate) fn clear_awaiting_reply(pid: Pid) {
+    with_table(|table| table.clear_awaiting_reply(pid));
+}
+
+/// Routes `value` to `coords.caller_pid`'s reply slot if that process is
+/// still awaiting `coords.token`, returning whether it was delivered. A
+/// reply for a caller that already gave up is dropped here (`false`), the
+/// cooperative analog of native's `reply_or_expire`.
+pub(crate) fn reply(coords: ReplyInfo, value: Value) -> bool {
+    let caller = coords.caller_pid;
+    let token = coords.token;
+    with_table(|table| {
+        if !table.is_awaiting_reply(caller, token) {
+            return false;
+        }
+        let leftover = table.deliver(
+            caller,
+            EvalMessage {
+                reply: Some(coords),
+                tag: Tag::Reply,
+                value,
+            },
+        );
+        drop(leftover);
+        true
+    })
+}
+
 /// Terminates `pid` (`Ref.kill`), dropping any reclaimed resources here.
 pub(crate) fn kill(pid: Pid) {
     let reclaim = with_table(|table| table.kill(pid));

@@ -72,9 +72,14 @@ const PROCESS_STUB: &str = "
       token: Int
     end
 
+    enum ReplyTo.Delivery
+      Delivered
+      Expired
+    end
+
     extend ReplyTo<R>
       @intrinsic
-      fn send(self, reply: R)
+      fn send(self, reply: R) -> ReplyTo.Delivery
     end
 
     struct Ref<M, R>

@@ -496,9 +496,19 @@ fn emit_reply_send<'ctx>(
     let (reply_ptr, reply_len) = serialize_to_stack(ctx, "reply_msg", reply_llvm, reply_value)?;
     let drop_glue = payload_drop_glue(ctx, reply_ir_type)?;
 
+    let delivery_symbol = match &function.return_type {
+        IRType::Enum(symbol) => symbol.clone(),
+        other => {
+            return Err(LlvmError::Codegen(format!(
+                "LLVM emit: `ReplyTo.send` returns `{other:?}` (expected the \
+                 `ReplyTo.Delivery` enum) — IR seal invariant violation",
+            )));
+        }
+    };
+
     let reply_fn = declare_rt_reply_extern(ctx);
-    ctx.builder
-        .build_call(
+    let status = ctx
+        .call_basic(
             reply_fn,
             &[
                 pid.into(),
@@ -507,10 +517,66 @@ fn emit_reply_send<'ctx>(
                 reply_len.into(),
                 drop_glue.into(),
             ],
-            "",
-        )
+            "reply_status",
+        )?
+        .into_int_value();
+
+    let delivered_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "reply_delivered");
+    let expired_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "reply_expired");
+    let merge_bb = ctx.context.append_basic_block(llvm_function, "reply_merge");
+
+    let delivered_status = ctx.context.i64_type().const_int(0, false);
+    let delivered = ctx
+        .builder
+        .build_int_compare(IntPredicate::EQ, status, delivered_status, "reply_ok")
         .or_ice()?;
-    ctx.builder.build_return(None).or_ice().map(|_| ())
+    ctx.builder
+        .build_conditional_branch(delivered, delivered_bb, expired_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(delivered_bb);
+    let delivered_value = build_delivery(ctx, &delivery_symbol, "Delivered")?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
+    let delivered_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("emit_reply_send lost the delivered block before the merge phi");
+
+    ctx.builder.position_at_end(expired_bb);
+    let expired_value = build_delivery(ctx, &delivery_symbol, "Expired")?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
+    let expired_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("emit_reply_send lost the expired block before the merge phi");
+
+    ctx.builder.position_at_end(merge_bb);
+    let outer = ctx.enum_outer_type(delivery_symbol.mangled());
+    let phi = ctx.builder.build_phi(outer, "reply_delivery").or_ice()?;
+    phi.add_incoming(&[
+        (&delivered_value, delivered_block),
+        (&expired_value, expired_block),
+    ]);
+    ctx.builder
+        .build_return(Some(&phi.as_basic_value()))
+        .or_ice()
+        .map(|_| ())
+}
+
+/// Build a nullary `ReplyTo.Delivery` variant (`Delivered` / `Expired`),
+/// resolving its tag by name so the enum's declaration order isn't baked
+/// into codegen.
+fn build_delivery<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    delivery_symbol: &IRSymbol,
+    variant: &str,
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
+    let tag = ctx.layouts.enum_variant_tag(delivery_symbol, variant);
+    build_enum_value(ctx, delivery_symbol, tag, &[])
 }
 
 // ----- envelope construction ----------------------------------------------

@@ -23,10 +23,7 @@ impl Process<CounterConfig, CounterMsg, Int> for Counter
         new_count = self.count + 1
         "count: #{new_count}".print()
 
-        match from
-          Option.Some(r) -> r.send(new_count)
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, new_count)
 
         Step.Continue(Counter{count: new_count})
     end

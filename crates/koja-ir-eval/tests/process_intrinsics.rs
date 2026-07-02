@@ -38,10 +38,7 @@ const BANK: &str = "
 
       fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Process.Step<Bank>
         total = self.balance + msg
-        match from
-          Option.Some(r) -> r.send(total)
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, total)
         Process.Step.Continue(Bank{balance: total})
       end
     end
