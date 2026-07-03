@@ -1,38 +1,11 @@
-//! `Ref<M, R>` and `ReplyTo<R>` `@intrinsic` emitters. Single call
-//! site for the per-method `koja_rt_*` declares minted in
-//! [`crate::runtime`]; the matching runtime symbols live in
-//! `koja-runtime-posix/src/scheduler.rs`.
-//!
-//! Per-method dispatch:
-//!
-//! - [`emit_ref`] dispatches each [`RefMethod`] to its emitter:
-//!   - `SelfRef` → `koja_rt_self()` wrapped in the `Ref<M, R>`
-//!     struct shape.
-//!   - `Cast` → wrap `msg` in a `Pair<M, Option<ReplyTo<R>>>`
-//!     envelope with the second field set to `Option::None`,
-//!     then `koja_rt_send(pid, blob, sizeof(envelope))`. The
-//!     receive-side `pair: Pair<M, Option<ReplyTo<R>>> ->` arm
-//!     in the `Process.run` default body reads the same shape.
-//!   - `Signal` → `koja_rt_send_lifecycle(pid, variant)` reading
-//!     the `Lifecycle` enum tag byte.
-//!   - `Kill` → `koja_rt_kill(pid)`.
-//!   - `AliveQ` → `koja_rt_is_process_alive(pid) != 0` truncated
-//!     back down to `i1`.
-//!   - `SendAfter` → wrap `msg` in the same `Pair` envelope as
-//!     `Cast` (`Option::None` reply slot), then call
-//!     `koja_rt_send_after(pid, blob, sizeof(envelope), delay_ms)`.
-//!   - `Call` → mint a token via `koja_rt_call_token()`, wrap `msg`
-//!     in `Pair<M, Option::Some(ReplyTo { id: caller_pid, token })>`,
-//!     call `koja_rt_send`, then `koja_rt_call_receive(token,
-//!     timeout)`. Three-way dispatch on the result: `0` →
-//!     deserialize `R` → `Result.Ok(R)`; `-1` + target alive →
-//!     `Result.Err(CallError.Timeout)`; `-1` + target dead →
-//!     `Result.Err(CallError.ProcessDown)`.
-//! - [`emit_reply_to`] dispatches the single [`ReplyToMethod::Send`]
-//!   to a serializer + `koja_rt_reply`. The reply payload is the
-//!   bare `R` value (no `Pair` envelope), correlated to the
-//!   in-flight call by the `ReplyTo`'s token; the runtime routes it
-//!   to the caller's one-shot reply slot.
+//! `Ref<M, R>` and `ReplyTo<R>` `@intrinsic` emitters, each backed
+//! by a per-method `koja_rt_*` extern declared in [`crate::runtime`]
+//! and implemented in `koja-runtime-posix`. Message-bearing methods
+//! share the `Pair<M, Option<ReplyTo<R>>>` envelope shape the
+//! receive side reads, with the reply slot `None` for `cast` /
+//! `send_after` and `Some(ReplyTo { id, token })` for `call`. Reply
+//! payloads travel bare (no `Pair` envelope), correlated to the
+//! in-flight call by the `ReplyTo`'s token.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -87,7 +60,7 @@ pub(super) fn emit_reply_to<'ctx>(
 
 // ----- Ref method emitters -------------------------------------------------
 
-/// `Ref.self_ref() -> Ref<M, R>` — call `koja_rt_self()` and wrap
+/// `Ref.self_ref() -> Ref<M, R>`: call `koja_rt_self()` and wrap
 /// the returned pid in the `Ref` struct value the function's
 /// return type already specifies.
 fn emit_self_ref<'ctx>(
@@ -107,8 +80,8 @@ fn emit_self_ref<'ctx>(
         IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
         other => {
             return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Ref.self_ref` returns `{other:?}` (expected Struct) — \
-                 IR seal invariant violation",
+                "LLVM emit: `Ref.self_ref` returns `{other:?}`, expected Struct \
+                 (IR seal invariant violation)",
             )));
         }
     };
@@ -124,7 +97,7 @@ fn emit_self_ref<'ctx>(
         .map(|_| ())
 }
 
-/// `Ref.cast(self, msg: M)` — wrap `msg` in a `Pair<M, Option<
+/// `Ref.cast(self, msg: M)`: wrap `msg` in a `Pair<M, Option<
 /// ReplyTo<R>>>` envelope with the second field set to `Option::
 /// None`, then route through `koja_rt_send`. The receive-side
 /// `pair: Pair<M, Option<ReplyTo<R>>> ->` arm in the `Process.run`
@@ -161,7 +134,7 @@ fn emit_cast<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// `Ref.send_after(self, msg: M, delay_ms: Int)` — same `Pair<M,
+/// `Ref.send_after(self, msg: M, delay_ms: Int)`: same `Pair<M,
 /// Option<ReplyTo<R>>>` envelope as [`emit_cast`] (`Option::None`
 /// reply slot), routed through `koja_rt_send_after` with the
 /// trailing delay parameter.
@@ -205,14 +178,14 @@ fn emit_send_after<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// `Ref.call(self, msg: M, timeout: Int) -> Result<R, CallError>`
-/// — the synchronous request/reply primitive.
+/// `Ref.call(self, msg: M, timeout: Int) -> Result<R, CallError>`:
+/// the synchronous request/reply primitive.
 ///
 /// Mint a correlation token via `koja_rt_call_token()`, build a
 /// `Pair<M, Option<ReplyTo<R>>>` envelope with the second field set
 /// to `Option::Some(ReplyTo { id: caller_pid, token })`, `koja_rt_
 /// send` it to the target, then block on `koja_rt_call_receive(
-/// token, timeout)` — which waits on the caller's one-shot reply
+/// token, timeout)`, which waits on the caller's one-shot reply
 /// slot, discarding stale replies from earlier timed-out calls, and
 /// never touches queued business / lifecycle traffic (calls are
 /// atomic). Three-way dispatch on the result:
@@ -238,8 +211,8 @@ fn emit_call<'ctx>(
         IRType::Enum(symbol) => symbol.clone(),
         other => {
             return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `Ref.call` returns `{other:?}` (expected Enum) — \
-                 IR seal invariant violation",
+                "LLVM emit: `Ref.call` returns `{other:?}`, expected Enum \
+                 (IR seal invariant violation)",
             )));
         }
     };
@@ -391,7 +364,7 @@ fn emit_call<'ctx>(
         .map(|_| ())
 }
 
-/// `Ref.signal(self, event: Lifecycle)` — pull the lifecycle
+/// `Ref.signal(self, event: Lifecycle)`: pull the lifecycle
 /// variant byte (offset 0 of the enum's outer struct) and call
 /// `koja_rt_send_lifecycle(pid, variant)`. The runtime maps
 /// variant indices `0=Shutdown, 1=Interrupt, 2=Reload`, matching
@@ -429,7 +402,7 @@ fn emit_signal<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// `Ref.kill(self)` — drop the target process via `koja_rt_kill`.
+/// `Ref.kill(self)`: drop the target process via `koja_rt_kill`.
 fn emit_kill<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -446,7 +419,7 @@ fn emit_kill<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// `Ref.alive?(self) -> Bool` — compare
+/// `Ref.alive?(self) -> Bool`: compare
 /// `koja_rt_is_process_alive(pid)` against zero and return the
 /// `i1` result.
 fn emit_alive<'ctx>(
@@ -475,7 +448,7 @@ fn emit_alive<'ctx>(
 
 // ----- ReplyTo method emitters --------------------------------------------
 
-/// `ReplyTo.send(self, reply: R)` — serialize `reply` (bare `R`,
+/// `ReplyTo.send(self, reply: R)`: serialize `reply` (bare `R`,
 /// no `Pair` envelope) and route through `koja_rt_reply` to the
 /// originating caller, stamping the call's correlation token from
 /// `self`. The runtime parks the envelope in the caller's one-shot
@@ -500,8 +473,8 @@ fn emit_reply_send<'ctx>(
         IRType::Enum(symbol) => symbol.clone(),
         other => {
             return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `ReplyTo.send` returns `{other:?}` (expected the \
-                 `ReplyTo.Delivery` enum) — IR seal invariant violation",
+                "LLVM emit: `ReplyTo.send` returns `{other:?}`, expected the \
+                 `ReplyTo.Delivery` enum (IR seal invariant violation)",
             )));
         }
     };
@@ -597,18 +570,18 @@ const CALL_ERROR_TIMEOUT_TAG: u8 = 0;
 const CALL_ERROR_PROCESS_DOWN_TAG: u8 = 1;
 
 /// Synthesized LLVM type for the second field of a `Pair<M, Option
-/// <ReplyTo<R>>>` envelope. `R` has no LLVM-side influence —
+/// <ReplyTo<R>>>` envelope. `R` has no LLVM-side influence:
 /// `ReplyTo<R>` always lays out as `{ i64 id, i64 token }`, so
 /// `Option<ReplyTo<R>>` is `{ i8 tag, [7 x i8] padding, i64
 /// reply_id, i64 token }` = 24 bytes regardless of `R`. We pack it
 /// into `[3 x i64]` so the writer side doesn't need the
-/// receive-side's pre-emit Pair / Option registry lookup; binary
+/// receive-side's pre-emit Pair / Option registry lookup. Binary
 /// layout matches the receiver's typed load by construction.
 fn option_reply_to_payload_ty<'ctx>(ctx: &EmitContext<'ctx>) -> BasicTypeEnum<'ctx> {
     ctx.context.i64_type().array_type(3).into()
 }
 
-/// `[OPTION_NONE_TAG, 0, 0]` — the second-field bytes for an
+/// `[OPTION_NONE_TAG, 0, 0]`: the second-field bytes for an
 /// `Option::None` reply slot (`Ref.cast` / `Ref.send_after`).
 fn option_none_payload<'ctx>(ctx: &EmitContext<'ctx>) -> ArrayValue<'ctx> {
     let i64_ty = ctx.context.i64_type();
@@ -619,11 +592,11 @@ fn option_none_payload<'ctx>(ctx: &EmitContext<'ctx>) -> ArrayValue<'ctx> {
     ])
 }
 
-/// `[OPTION_SOME_TAG, reply_pid, token]` — the second-field bytes
+/// `[OPTION_SOME_TAG, reply_pid, token]`: the second-field bytes
 /// for an `Option::Some(ReplyTo { id: reply_pid, token })` reply
 /// slot (`Ref.call`). On little-endian hosts the tag byte sits in
 /// the low byte of the first `i64`, with the trailing 7 padding
-/// bytes zeroed; the reply pid and correlation token occupy the
+/// bytes zeroed, and the reply pid and correlation token occupy the
 /// next two. SSA-built because both are SSA results
 /// (`koja_rt_self()` / `koja_rt_call_token()`).
 fn option_some_payload<'ctx>(
@@ -692,8 +665,8 @@ fn build_pair_envelope_alloca<'ctx>(
 /// and return its address as the `void(i8*)*` value the `koja_rt_send`
 /// / `koja_rt_send_after` / `koja_rt_reply` / `koja_rt_spawn`
 /// `drop_glue` argument expects. Returns a null pointer when the
-/// payload owns no nested Koja heap (scalars, no-glue aggregates) —
-/// the runtime then frees only its own buffer on discard.
+/// payload owns no nested Koja heap (scalars, no-glue aggregates),
+/// in which case the runtime frees only its own buffer on discard.
 ///
 /// The runtime's discard path is type-erased (`fn(*mut u8)` over the
 /// payload bytes), an ABI the by-value `drop_T` can't satisfy. The
@@ -776,7 +749,7 @@ fn ok_payload_field_type(
         }
         other => Err(LlvmError::Codegen(format!(
             "LLVM emit: `Ref.call` return `{result_symbol}` Ok variant has unexpected \
-             payload `{other:?}` (expected single-field) — IR seal invariant violation",
+             payload `{other:?}`, expected single-field (IR seal invariant violation)",
         ))),
     }
 }
@@ -805,8 +778,8 @@ fn build_call_error_result<'ctx>(
 
 /// Pull the i64 pid out of the `self` parameter (always param #0
 /// for these methods). `Ref<M, R>` lays out as `{ i64 id }` and
-/// `ReplyTo<R>` as `{ i64 id, i64 token }`; the pid is field 0 of
-/// both.
+/// `ReplyTo<R>` as `{ i64 id, i64 token }`, so the pid is field 0
+/// of both.
 fn pid_from_self<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,
@@ -816,7 +789,7 @@ fn pid_from_self<'ctx>(
 }
 
 /// Pull the i64 correlation token out of a `ReplyTo<R>` `self`
-/// parameter (field 1; see [`pid_from_self`] for the layout).
+/// parameter (field 1, see [`pid_from_self`] for the layout).
 fn token_from_self<'ctx>(
     ctx: &EmitContext<'ctx>,
     llvm_function: FunctionValue<'ctx>,

@@ -1,10 +1,10 @@
 //! `@intrinsic` methods on `Socket` from
 //! [`koja/lib/net/src/net.koja`]:
 //!
-//! * `Socket.recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>`
-//!   — datagram receive; suspends until the fd is readable.
-//! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`
-//!   — synchronous `getaddrinfo` shim.
+//! * `Socket.recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>`:
+//!   datagram receive. Suspends until the fd is readable.
+//! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`:
+//!   synchronous `getaddrinfo` shim.
 //!
 //! Both bodies follow the same skeleton: call the runtime helper,
 //! branch on the null sentinel, build either `Result.Err` from
@@ -13,7 +13,7 @@
 //! ([`Layouts::struct_type`] / [`Layouts::struct_field_ir_type`] /
 //! [`Layouts::enum_variant_payload`]) and [`build_enum_value`] for
 //! the `Result.Ok` / `Result.Err` construction. The marshaling-in-LLVM
-//! shape is a pragmatic stopgap for the `Net` test surface; the two
+//! shape is a pragmatic stopgap for the `Net` test surface. The two
 //! intrinsics can be hoisted back into stdlib Koja with thinner
 //! runtime helpers once the surface stabilizes.
 //!
@@ -283,7 +283,7 @@ fn build_err<'ctx>(
 
 /// Append `ok` / `err` blocks to `llvm_function` and conditional-
 /// branch on `ptr == null`. The runtime helpers use null as the
-/// error sentinel; the err branch reads `koja_last_error()`, the ok
+/// error sentinel. The err branch reads `koja_last_error()`, the ok
 /// branch unpacks the heap buffer.
 fn branch_on_null<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -314,7 +314,7 @@ fn branch_on_null<'ctx>(
 
 /// `{ buf, len, cap }` `List<T>` SSA value. Both `len` and `cap`
 /// hold `count` here because the resolve buffer is sized exactly
-/// to its element count — there's no growth headroom to mark.
+/// to its element count, so there's no growth headroom to mark.
 fn build_list_struct<'ctx>(
     ctx: &EmitContext<'ctx>,
     buf: PointerValue<'ctx>,
@@ -436,7 +436,7 @@ fn resolve_pair_symbol(
 }
 
 /// Single-payload `Ok` extractor shared by both intrinsics. The
-/// IR seal pins `Result.Ok` to exactly one field; surfaces a
+/// IR seal pins `Result.Ok` to exactly one field. Surfaces a
 /// codegen error (not a panic) on shape violations so the failure
 /// mode is symmetric with the rest of the file.
 fn single_ok_payload(
@@ -455,7 +455,7 @@ fn single_ok_payload(
         }
         other => Err(LlvmError::Codegen(format!(
             "{intrinsic_label} on `{}` Ok variant has unexpected payload `{other:?}` \
-             (expected single-field) — IR seal invariant violation",
+             (expected single-field, IR seal invariant violation)",
             function.symbol,
         ))),
     }

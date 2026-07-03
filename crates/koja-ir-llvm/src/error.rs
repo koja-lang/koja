@@ -6,13 +6,13 @@ use std::panic::Location;
 use inkwell::builder::BuilderError;
 
 /// What can go wrong during [`crate::compile_program`]. Each variant
-/// is a short message; we don't try to match `koja_ast::Diagnostic`
+/// is a short message. We don't try to match `koja_ast::Diagnostic`
 /// shape because lowering errors here originate from inkwell or the
 /// system target machine, not from user source positions. If a
 /// caller needs richer context they can wrap the error themselves.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LlvmError {
-    /// Failed to emit LLVM IR for an IRProgram — e.g. a feature-gap
+    /// Failed to emit LLVM IR for an IRProgram, e.g. a feature-gap
     /// instruction or terminator was encountered.
     Codegen(String),
     /// Target machine setup failed or `write_to_file` rejected the
@@ -34,7 +34,7 @@ impl std::error::Error for LlvmError {}
 /// Lift an inkwell [`BuilderError`] into [`LlvmError::Codegen`]. A
 /// builder failure is always an internal compiler error (mispositioned
 /// builder, type mismatch we constructed), so the useful context is
-/// *where* — `#[track_caller]` stamps the message with the emission
+/// *where*: `#[track_caller]` stamps the message with the emission
 /// site's `file:line` instead of hand-written prose that goes stale.
 pub(crate) trait IceExt<T> {
     fn or_ice(self) -> Result<T, LlvmError>;

@@ -1,7 +1,7 @@
 //! Read-only methods built on a shared probe loop: `Map.get`,
 //! `Map.has?` / `Set.has?`, and `Map.remove` / `Set.remove`. The
 //! probe walks slots until it lands on a state-EMPTY (miss) or
-//! finds an OCCUPIED slot whose key compares equal; the per-method
+//! finds an OCCUPIED slot whose key compares equal. The per-method
 //! tails branch off the same `found_bb` / `not_found_bb` pair.
 
 use inkwell::IntPredicate;
@@ -42,10 +42,10 @@ struct ReadOnlyProbe<'ctx> {
 /// Reads `table.entries_ptr`, `table.states_ptr`, `table.capacity`
 /// (probe terminates on empty before touching `length`). Builder
 /// must be positioned at a predecessor block before calling
-/// (typically the entry block); on return the builder sits at an
+/// (typically the entry block). On return the builder sits at an
 /// unspecified location and the caller positions itself at the
 /// returned `found_bb` / `not_found_bb` blocks to emit the outcome.
-/// The `advance` edge wires itself; the caller does **not** need
+/// The `advance` edge wires itself. The caller does **not** need
 /// to mutate the returned `pidx_phi` directly (it's exposed so
 /// callers can attach extra incoming edges from custom entry-side
 /// branching, e.g. `put`'s resize-or-not phi).
@@ -190,7 +190,7 @@ pub(crate) fn emit_remove<'ctx>(
     let i8_ty = ctx.context.i8_type();
     let i64_ty = ctx.context.i64_type();
     // emit_remove keeps the manual 4-step extract because it needs
-    // `self_val` for the not-found return — `extract_table_fields`
+    // `self_val` for the not-found return, and `extract_table_fields`
     // discards the original struct. Copy-on-write: the found path
     // tombstones a fresh clone of the buffers, so the receiver's
     // table is never mutated in place through a shared binding.
@@ -216,8 +216,8 @@ pub(crate) fn emit_remove<'ctx>(
     let _ = (probe.pidx, probe.pidx_phi, probe.advance_bb);
 
     ctx.builder.position_at_end(probe.found_bb);
-    // The clone acquired this bucket's key (and value); tombstoning
-    // drops it from the table, so release that reference now —
+    // The clone acquired this bucket's key (and value). Tombstoning
+    // drops it from the table, so release that reference now,
     // otherwise the slot's payload leaks once the table is reclaimed.
     release_in_slot(ctx, layout.key_ty, probe.e_ptr)?;
     if let Some(value_ty) = layout.value_ty {
@@ -243,7 +243,7 @@ pub(crate) fn emit_remove<'ctx>(
     // Not found: nothing is removed, but `self` is borrowed and dropped
     // by the caller, so returning `self_val` would alias its buffers and
     // double-free (and would also leak the clone made above). Return the
-    // untouched clone instead — an independent copy the caller owns.
+    // untouched clone instead, an independent copy the caller owns.
     ctx.builder.position_at_end(probe.not_found_bb);
     let unchanged = build_table_struct(
         ctx,
@@ -304,7 +304,7 @@ pub(crate) fn emit_map_get<'ctx>(
     // Hand-out: the returned `Some` owns an independent reference, so
     // acquire the value (heap-leaf `rc++` / composite deep clone).
     // Otherwise the receiver's table and the returned value share one
-    // reference and both drop it — a double free once glue is active.
+    // reference and both drop it (a double free once glue is active).
     let owned = acquire_value(ctx, value_ty, val)?;
     let some = build_enum_value(ctx, option_symbol, OPTION_SOME_TAG, &[owned])?;
     ctx.builder.build_return(Some(&some)).or_ice().map(|_| ())?;

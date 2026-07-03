@@ -1,10 +1,10 @@
-//! Heap-object header layout — the codegen-side single source of
+//! Heap-object header layout: the codegen-side single source of
 //! truth for Koja's `[i64 rc][i64 bit_length][payload]` heap ABI.
 //!
 //! Every rc-managed leaf value (`String` / `Binary` / `Bits`) lives in
 //! a block shaped `[i64 rc][i64 bit_length][payload bytes][NUL?]`. The
 //! SSA pointer that flows through the IR addresses the **first payload
-//! byte**; the `i64 bit_length` sits [`LENGTH_OFFSET`] before it and
+//! byte**. The `i64 bit_length` sits [`LENGTH_OFFSET`] before it and
 //! the `i64 rc` sits [`HEADER_BYTES`] before it (at the block base).
 //! So `koja_rc_inc`/`koja_rc_dec` and `free` recover the base via
 //! `payload - HEADER_BYTES` ([`block_base`]) and a fresh `malloc`
@@ -13,12 +13,12 @@
 //! ## Reference counting (value-semantics baseline)
 //!
 //! `Clone` is an rc increment and `Drop` an rc decrement (freeing at
-//! zero) — `MEMORY-MODEL.md`'s value-semantics model, made cheap by
-//! sharing immutable blocks rather than deep-copying. The rc word is
-//! the **first** word of every rc-managed block (uniform across leaf
-//! and, later, collection/closure buffers), so one runtime primitive
-//! pair operating on the block base serves every type; the only
-//! per-type knowledge is the payload→base offset, which lives here.
+//! zero): the value-semantics model, made cheap by sharing immutable
+//! blocks rather than deep-copying. The rc word is the **first** word
+//! of every rc-managed block (uniform across leaf and, later,
+//! collection/closure buffers), so one runtime primitive pair
+//! operating on the block base serves every type. The only per-type
+//! knowledge is the payload→base offset, which lives here.
 //! Statically-allocated (rodata) literals carry a negative sentinel rc
 //! ([`RC_IMMORTAL`]) so inc/dec are no-ops and they never reach `free`.
 //!
@@ -28,11 +28,10 @@
 //! sealed, serializable handoff and the runtime is a leaf
 //! `staticlib`, so the ABI constants are mirrored there
 //! (`koja-runtime`'s `util::{BLOCK_HEADER_SIZE, LENGTH_OFFSET}` and the
-//! `rc < 0` immortal test). The two are an API contract kept in sync by
-//! convention, not a shared dependency. `koja/design/ABI.md` § Heap
-//! leaf blocks is the contract catalog; `koja-ir`'s `types.rs` doc
-//! comments are the authoritative human spec for which types are
-//! heap-backed.
+//! `rc < 0` immortal test). The two are the runtime heap ABI
+//! convention, kept in sync by hand rather than a shared dependency.
+//! `koja-ir`'s `types.rs` doc comments are the authoritative human
+//! spec for which types are heap-backed.
 
 use inkwell::values::{IntValue, PointerValue};
 use koja_ir::IRType;
@@ -41,18 +40,18 @@ use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 
 /// The leaf heap types backed by the single
-/// `[i64 rc][i64 bit_length][payload]` block this module describes —
+/// `[i64 rc][i64 bit_length][payload]` block this module describes:
 /// `String`, `Binary`, and `Bits`. These are the only types whose
-/// `Clone` / `Drop` glue is a direct rc inc / dec on the block base;
-/// composite heap is rewritten into per-type `clone_T` / `drop_T`
+/// `Clone` / `Drop` glue is a direct rc inc / dec on the block base.
+/// Composite heap is rewritten into per-type `clone_T` / `drop_T`
 /// calls upstream.
 pub(crate) fn is_heap_leaf(ty: &IRType) -> bool {
     matches!(ty, IRType::Binary | IRType::Bits | IRType::String)
 }
 
 /// Size in bytes of the length header that precedes every heap
-/// payload. The SSA pointer addresses the first payload byte; the
-/// `i64 bit_length` sits [`LENGTH_OFFSET`] before it; the `i64 rc`
+/// payload. The SSA pointer addresses the first payload byte. The
+/// `i64 bit_length` sits [`LENGTH_OFFSET`] before it and the `i64 rc`
 /// sits `HEADER_BYTES` before it (at the block base).
 ///
 /// API contract: MUST equal `koja-runtime`'s `util::BLOCK_HEADER_SIZE`.
@@ -65,23 +64,23 @@ pub(crate) const HEADER_BYTES: u64 = 16;
 /// API contract: MUST equal `koja-runtime`'s `util::LENGTH_OFFSET`.
 pub(crate) const LENGTH_OFFSET: u64 = 8;
 
-/// Sentinel rc stamped into statically-allocated (rodata) payloads —
+/// Sentinel rc stamped into statically-allocated (rodata) payloads:
 /// literals and `const`s. The runtime's `koja_rc_inc` / `koja_rc_dec`
 /// treat any `rc < 0` as immortal: inc/dec are no-ops and the block is
 /// never freed, so a literal payload never reaches `free` (it lives in
 /// rodata, not the heap).
 ///
-/// API contract: the runtime's immortal test is `rc < 0`; this is the
+/// API contract: the runtime's immortal test is `rc < 0`. This is the
 /// canonical negative value codegen writes.
 pub(crate) const RC_IMMORTAL: i64 = i64::MIN;
 
-/// `+HEADER_BYTES` as an `i64` constant — the payload offset from a
+/// `+HEADER_BYTES` as an `i64` constant: the payload offset from a
 /// block base.
 pub(crate) fn header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx> {
     ctx.context.i64_type().const_int(HEADER_BYTES, false)
 }
 
-/// `-HEADER_BYTES` as a signed `i64` constant — the block-base offset
+/// `-HEADER_BYTES` as a signed `i64` constant: the block-base offset
 /// from a payload pointer.
 pub(crate) fn neg_header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx> {
     ctx.context
@@ -91,14 +90,14 @@ pub(crate) fn neg_header_offset<'ctx>(ctx: &EmitContext<'ctx>) -> IntValue<'ctx>
 
 /// GEP from a payload pointer back to its block base: `payload -
 /// HEADER_BYTES`. This is the pointer to hand to `koja_rc_inc` /
-/// `koja_rc_dec` (the `i64 rc` word lives here); the `i64 bit_length`
+/// `koja_rc_dec` (the `i64 rc` word lives here). The `i64 bit_length`
 /// sits [`LENGTH_OFFSET`] after it.
 ///
 /// A null payload selects a null base rather than the wrapped
 /// `0 - HEADER_BYTES` address, so the (null-safe) runtime rc
 /// primitives no-op. Local slots are zero-initialized at `LocalDecl`,
-/// making "drop a never-written slot" a legal path — e.g. a `receive`
-/// arm's payload slot when a different arm matched.
+/// making "drop a never-written slot" a legal path (e.g. a `receive`
+/// arm's payload slot when a different arm matched).
 pub(crate) fn block_base<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
@@ -147,7 +146,7 @@ pub(crate) fn load_bit_length<'ctx>(
 /// Initialize a freshly-`malloc`'d leaf heap block: store `rc = 1` at
 /// the block base, the `bit_length` word [`LENGTH_OFFSET`] after it,
 /// and return the payload pointer (`base + HEADER_BYTES`). The single
-/// codegen site that stamps the `[i64 rc][i64 bit_length]` header —
+/// codegen site that stamps the `[i64 rc][i64 bit_length]` header:
 /// every inline block builder (`Concat`, clone, `CPtr`/`CString`)
 /// routes its header write through here so the rc word is never
 /// forgotten.

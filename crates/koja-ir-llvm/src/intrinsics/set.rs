@@ -1,6 +1,6 @@
-//! `Set<T>` family — heap-backed open-addressed hash table over
+//! `Set<T>` family: heap-backed open-addressed hash table over
 //! unique elements. Shares its struct layout with `Map` (see
-//! [`crate::types::hashtable_value_type`]); each `Entry` is a single
+//! [`crate::types::hashtable_value_type`]). Each `Entry` is a single
 //! `T` rather than a `(K, V)` pair, but the probe / resize / state
 //! machinery is identical.
 
@@ -41,7 +41,7 @@ pub(super) fn emit_set<'ctx>(
 }
 
 /// Resolve the element `T` for a `Set<T>` intrinsic. `new` carries
-/// it on the return type; every other method has `self: Set<T>` as
+/// it on the return type. Every other method has `self: Set<T>` as
 /// `params[0]`.
 fn element(method: SetMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
     let candidate = match method {

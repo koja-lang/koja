@@ -3,8 +3,8 @@
 //! emitting to LLVM via inkwell instead of stepping in-process.
 //!
 //! `emit_binary_op` / `emit_unary_op` peek the operand
-//! [`BasicValueEnum`] variant to pick the integer / float helper —
-//! typecheck guarantees both operands of a binary op agree on
+//! [`BasicValueEnum`] variant to pick the integer / float helper.
+//! Typecheck guarantees both operands of a binary op agree on
 //! numeric shape. Each shape gets its own helper so the per-shape
 //! match arms stay exhaustive over the operators that shape owns.
 //! Comparisons always return `i1` regardless of operand shape, so
@@ -40,8 +40,8 @@ pub(super) fn emit_binary_op<'ctx>(
 
 /// Integer arithmetic uses the wrapping `build_int_*` calls (no
 /// `nsw`/`nuw`) per Koja's two's-complement overflow contract.
-/// Comparisons use signed predicates — the seal pass admits `Int64`
-/// only today; threading signedness for `UInt*` is a follow-up.
+/// Comparisons use signed predicates. The seal pass admits `Int64`
+/// only today, and threading signedness for `UInt*` is a follow-up.
 /// Match-arm order tracks `IRBinOp`'s declaration order in
 /// [`koja_ir`].
 fn emit_int_binary_op<'ctx>(
@@ -81,8 +81,8 @@ fn emit_int_binary_op<'ctx>(
     Ok(result.into())
 }
 
-/// Float arithmetic + comparisons. `And` / `Or` reject — typecheck
-/// keeps Bool-only logic away from this seam. Comparisons use
+/// Float arithmetic + comparisons. `And` / `Or` reject because
+/// typecheck keeps Bool-only logic away from this seam. Comparisons use
 /// **ordered** predicates (`OEQ`/`OLT`/etc.) so `NaN`-on-either-side
 /// returns `false`, matching the `koja-ir-eval` interpreter
 /// and v1 codegen.
@@ -129,7 +129,7 @@ fn emit_float_binary_op<'ctx>(
             .or_ice()
             .map(Into::into),
         IRBinOp::And | IRBinOp::Or => Err(LlvmError::Codegen(format!(
-            "LLVM emit: `{op:?}` is Bool-only — float operands should never reach this \
+            "LLVM emit: `{op:?}` is Bool-only, float operands should never reach this \
              path (typecheck violation)",
         ))),
     }
@@ -185,7 +185,7 @@ pub(super) fn emit_numeric_widen<'ctx>(
 }
 
 /// Unary op dispatcher: `Neg` on float operands routes to
-/// `build_float_neg`; integer / `Bool` operands keep the int helper.
+/// `build_float_neg`, integer / `Bool` operands keep the int helper.
 pub(super) fn emit_unary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
     op: IRUnaryOp,
@@ -199,7 +199,7 @@ pub(super) fn emit_unary_op<'ctx>(
 }
 
 /// `Neg` wraps on `i64::MIN` (the eval interpreter's `checked_neg`
-/// trap is a known divergence). `Not` is `xor x, -1`; the seal pass
+/// trap is a known divergence). `Not` is `xor x, -1`. The seal pass
 /// only flows `Not` for `Bool`, so `i1` logical-not falls out for
 /// free.
 fn emit_int_unary_op<'ctx>(
@@ -216,8 +216,8 @@ fn emit_int_unary_op<'ctx>(
 }
 
 /// `strcmp(lhs, rhs)` then `icmp` the result against zero. Only
-/// `Eq` / `NotEq` admit string operands — typecheck doesn't admit
-/// ordering or arithmetic on strings.
+/// `Eq` / `NotEq` admit string operands, because typecheck doesn't
+/// admit ordering or arithmetic on strings.
 fn emit_string_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
     op: IRBinOp,
@@ -229,8 +229,8 @@ fn emit_string_binary_op<'ctx>(
         IRBinOp::NotEq => IntPredicate::NE,
         other => {
             return Err(LlvmError::Codegen(format!(
-                "LLVM emit: `{other:?}` is not defined for `String` operands — \
-                 typecheck violation",
+                "LLVM emit: `{other:?}` is not defined for `String` operands \
+                 (typecheck violation)",
             )));
         }
     };
@@ -246,7 +246,7 @@ fn emit_string_binary_op<'ctx>(
     Ok(result.into())
 }
 
-/// `Neg` is the only float-applicable unary; `Not` is Bool-only and
+/// `Neg` is the only float-applicable unary. `Not` is Bool-only and
 /// rejects (typecheck guarantees Bool operands never reach here).
 fn emit_float_unary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -260,7 +260,7 @@ fn emit_float_unary_op<'ctx>(
             .or_ice()
             .map(Into::into),
         IRUnaryOp::Not => Err(LlvmError::Codegen(
-            "LLVM emit: `not` is Bool-only — float operand should never reach this path \
+            "LLVM emit: `not` is Bool-only, float operand should never reach this path \
              (typecheck violation)"
                 .to_string(),
         )),

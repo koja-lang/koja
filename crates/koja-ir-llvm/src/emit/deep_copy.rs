@@ -1,4 +1,4 @@
-//! `IRInstruction::DeepCopy` emission — the process-boundary copy.
+//! `IRInstruction::DeepCopy` emission: the process-boundary copy.
 //! Mirrors [`super::clone::emit_clone`]'s type dispatch, but where
 //! clone shares heap blocks with an `rc++`, deep copy produces a
 //! value with no storage shared with the source (Koja's rc
@@ -8,19 +8,19 @@
 //! Buckets, keyed on the static [`IRType`]:
 //!
 //! - **Leaf heap** (`String` / `Binary` / `Bits`): runtime
-//!   `koja_heap_deep_copy` — fresh block, `rc = 1`, bytes copied
-//!   (immortal rodata blocks are shared as-is).
+//!   `koja_heap_deep_copy`, giving a fresh block, `rc = 1`, bytes
+//!   copied (immortal rodata blocks are shared as-is).
 //! - **Copy leaves** (`Bool`, the int / uint / float families, `Unit`,
 //!   raw `CPtr`) and **no-glue aggregates**: a register copy, exactly
 //!   like `Clone`'s.
 //! - **Closure** (`Function`): runtime `koja_closure_deep_copy`
 //!   dispatches through the env header's `copy_fn` glue
-//!   ([`koja_ir::FunctionKind::CopyClosureGlue`]); the fat pointer is
-//!   rebuilt around the fresh env.
+//!   ([`koja_ir::FunctionKind::CopyClosureGlue`]), and the fat pointer
+//!   is rebuilt around the fresh env.
 //! - **Heap composites** (`List` / `Map` / `Set` / `Indirect` and
-//!   heap-owning aggregates): unreachable — the `elaborate` sub-pass
-//!   rewrites them into a `Call @deep_copy_T`. One reaching here is a
-//!   lowering bug.
+//!   heap-owning aggregates): unreachable. The `elaborate` sub-pass
+//!   rewrites them into a `Call @deep_copy_T`, so one reaching here is
+//!   a lowering bug.
 
 use inkwell::values::{BasicValueEnum, PointerValue};
 use koja_ir::{IRType, ValueId};
@@ -59,7 +59,7 @@ pub(super) fn emit_deep_copy<'ctx>(
         | IRType::UInt64
         | IRType::Unit => lookup(values, source)?,
         // No-glue aggregates own no heap, so the register copy is
-        // already physically independent — same reasoning as `Clone`'s.
+        // already physically independent (same reasoning as `Clone`'s).
         IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => lookup(values, source)?,
         IRType::Function { .. } => {
             let closure_value = lookup(values, source)?;
@@ -73,7 +73,7 @@ pub(super) fn emit_deep_copy<'ctx>(
         }
         IRType::Indirect(_) | IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
             "LLVM emit: composite `IRInstruction::DeepCopy` of type {ty:?} reached the backend \
-             — the `elaborate` sub-pass must rewrite it into a `Call @deep_copy_T`",
+             (the `elaborate` sub-pass must rewrite it into a `Call @deep_copy_T`)",
         ),
     };
     values.insert(dest, result);

@@ -19,7 +19,7 @@ use super::heap_layout::{HEADER_BYTES, RC_IMMORTAL};
 /// [`EmitContext::load_const_cache`] so repeat references reuse a
 /// single materialization. The constant pool snapshot must have
 /// been attached before codegen (see
-/// [`crate::ctx::EmitContext::attach_constant_pool`]); a missing
+/// [`crate::ctx::EmitContext::attach_constant_pool`]). A missing
 /// pool is a compiler-bug surface.
 pub(super) fn emit_load_const<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -31,15 +31,15 @@ pub(super) fn emit_load_const<'ctx>(
     let pool = ctx.constant_pool.borrow();
     let pool = pool.as_ref().ok_or_else(|| {
         LlvmError::Codegen(
-            "LoadConst emitted without ConstantPoolSnapshot — compiler bug \
+            "LoadConst emitted without ConstantPoolSnapshot \
              (`attach_constant_pool` must precede codegen)"
                 .into(),
         )
     })?;
     let entry = pool.get(const_id).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "LoadConst references missing pooled constant `{const_id}` — IR seal invariant \
-             violated or pool attachment bug",
+            "LoadConst references missing pooled constant `{const_id}` (IR seal invariant \
+             violated or pool attachment bug)",
         ))
     })?;
     let materialized = emit_ir_constant_aggregate(ctx, entry)?;
@@ -55,7 +55,7 @@ pub(super) fn emit_load_const<'ctx>(
 /// reads) get a defined LLVM value rather than a lookup miss. The
 /// placeholder pairs with the matching `i8` slot minted in
 /// [`crate::function::function_signature`] /
-/// [`crate::layout::structs::define_struct_body`]; Unit values are
+/// [`crate::layout::structs::define_struct_body`]. Unit values are
 /// inert at runtime, so the byte itself is never observed.
 pub(super) fn emit_const_instruction<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -107,7 +107,7 @@ fn emit_const<'ctx>(
             .bool_type()
             .const_int(u64::from(*b), false)
             .into()),
-        // `const_float` always takes f64; the f32 type narrows on
+        // `const_float` always takes f64. The f32 type narrows on
         // its own (bit-exact since f32 widens losslessly).
         ConstValue::Float32(v) => Ok(ctx.context.f32_type().const_float(f64::from(*v)).into()),
         ConstValue::Float64(v) => Ok(ctx.context.f64_type().const_float(*v).into()),
@@ -138,7 +138,7 @@ fn emit_const<'ctx>(
 /// header + NUL-terminated bytes) and return the payload pointer.
 /// Intrinsic emitters that need to mint a literal error message
 /// (`Int.parse` / `Float.parse` etc.) call this to get a String SSA
-/// value compatible with the rest of the pipeline — same
+/// value compatible with the rest of the pipeline: the same
 /// shape every `ConstValue::String` materializes through.
 pub(crate) fn emit_string_literal_payload<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -156,13 +156,13 @@ pub(crate) fn emit_string_literal_payload<'ctx>(
 /// runtime helpers read `*(payload - LENGTH_OFFSET)` for the bit
 /// length without any layout translation.
 ///
-/// `with_nul` adds a trailing `\0` byte to the payload array — used
+/// `with_nul` adds a trailing `\0` byte to the payload array, used
 /// by `String` for libc compat. `Binary` and `Bits` pass `false`:
-/// no terminator. `bytes.len()` is the source-byte count; for
+/// no terminator. `bytes.len()` is the source-byte count. For
 /// `Bits` whose `bit_length` is a non-multiple of 8, the producer
 /// is responsible for zero-padding the trailing partial byte.
 ///
-/// `prefix` becomes `alpha_<prefix>.<n>` in the LLVM IR — purely
+/// `prefix` becomes `alpha_<prefix>.<n>` in the LLVM IR, purely
 /// cosmetic but helps reading raw IR (`str` / `bin` / `bits`).
 fn emit_const_payload<'ctx>(
     ctx: &EmitContext<'ctx>,

@@ -1,4 +1,4 @@
-//! `IRInstruction::Clone` emission — the acquisition half of the
+//! `IRInstruction::Clone` emission: the acquisition half of the
 //! value-semantics rc glue. Mirrors [`super::locals::emit_drop_value`]:
 //! both are value-keyed, type-dispatched, and bottom out in the
 //! runtime rc primitives.
@@ -13,14 +13,14 @@
 //!   The matching `Drop` decrements, freeing at zero.
 //! - **Copy leaves** (`Bool`, the int / uint / float families, `Unit`,
 //!   raw `CPtr`): a register copy. SSA values are immutable, so `dest`
-//!   simply re-binds the source value — no rc, no allocation.
+//!   simply re-binds the source value (no rc, no allocation).
 //! - **No-glue aggregates** (`Struct` / `Enum` / `Union` whose every
 //!   field is `Copy`): a register copy, exactly like the scalar
 //!   leaves. The `elaborate` IR sub-pass rewrites only the
 //!   *heap-owning* composites into a `Call` to a synthesized per-type
 //!   `clone_T`, so a scalar aggregate is all that survives to here.
 //! - **Closure** (`Function`): an `rc++` on the env block, aliasing
-//!   the same `{fn_ptr, env_ptr}` fat pointer — the env is shared like
+//!   the same `{fn_ptr, env_ptr}` fat pointer. The env is shared like
 //!   an immutable heap leaf. The matching `Drop` runs
 //!   `koja_closure_rc_dec` (capture release + free at zero).
 //! - **Heap composites** (`List` / `Map` / `Set` / `Indirect`):
@@ -47,7 +47,7 @@ pub(super) fn emit_clone<'ctx>(
     let result = match ty {
         // Share the immutable block: bump its rc and alias the same
         // payload pointer. The block base (rc word) is `payload -
-        // HEADER_BYTES`; the runtime skips immortal (rodata) blocks.
+        // HEADER_BYTES`. The runtime skips immortal (rodata) blocks.
         IRType::String | IRType::Binary | IRType::Bits => {
             let payload = lookup(values, source)?.into_pointer_value();
             let base = block_base(ctx, payload, &format!("{dest}.block_base"))?;
@@ -94,8 +94,8 @@ pub(super) fn emit_clone<'ctx>(
         // always carry glue and must have been rewritten. Reaching
         // here is a lowering bug.
         IRType::Indirect(_) | IRType::List(_) | IRType::Map { .. } | IRType::Set(_) => panic!(
-            "LLVM emit: composite `IRInstruction::Clone` of type {ty:?} reached the backend — \
-             the `elaborate` sub-pass must rewrite it into a `Call @clone_T`",
+            "LLVM emit: composite `IRInstruction::Clone` of type {ty:?} reached the backend \
+             (the `elaborate` sub-pass must rewrite it into a `Call @clone_T`)",
         ),
     };
     values.insert(dest, result);

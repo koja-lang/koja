@@ -1,7 +1,7 @@
 //! Bitwise intrinsics for `Global.{Int,Int8..32,UInt8..64}`. Six
 //! ops × eight integer types = 48 intrinsic ids dispatched here.
-//! All bodies are pure LLVM IR — `build_{and,or,xor,not}` for the
-//! logical ops; `build_left_shift` / `build_right_shift` for the
+//! All bodies are pure LLVM IR: `build_{and,or,xor,not}` for the
+//! logical ops, `build_left_shift` / `build_right_shift` for the
 //! shifts (right shift uses the signed flag pulled from the
 //! receiver's type so signed types arithmetic-shift and unsigned
 //! types logical-shift).
@@ -80,7 +80,7 @@ fn receiver_param<'ctx>(
         .into_int_value()
 }
 
-/// Read the second positional param — `other` for the binary ops
+/// Read the second positional param, `other` for the binary ops
 /// (`band`/`bor`/`bxor`).
 fn other_param<'ctx>(function: &IRFunction, llvm_function: FunctionValue<'ctx>) -> IntValue<'ctx> {
     llvm_function
@@ -95,7 +95,7 @@ fn other_param<'ctx>(function: &IRFunction, llvm_function: FunctionValue<'ctx>) 
 }
 
 /// Mint a same-width shift-count for `bsl` / `bsr`. The source
-/// signature types `n: Int` (Int64); LLVM requires the count to
+/// signature types `n: Int` (Int64). LLVM requires the count to
 /// match the operand's int type, so we truncate down to the
 /// receiver's native width. No-op when the receiver is already
 /// `Int64`.

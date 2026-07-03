@@ -1,4 +1,4 @@
-//! LLVM emission for `IRInstruction::BinaryConstruct` —
+//! LLVM emission for `IRInstruction::BinaryConstruct`, the
 //! `<<segments>>` literal lowering.
 //!
 //! Two emission shapes, picked per-segment:
@@ -6,12 +6,12 @@
 //! - **Byte-aligned** (`bit_offset % 8 == 0 && width % 8 == 0`):
 //!   pack inline. Integer / float segments run the byte-shift-loop
 //!   from v1's `emit_byte_packing` (high-byte-first for `Big`,
-//!   low-byte-first for `Little`); float segments first
+//!   low-byte-first for `Little`), with float segments first
 //!   bit-cast through their integer type. String segments
 //!   `memcpy` straight into the payload.
 //! - **Sub-byte**: call the `__koja_pack_bits` runtime
 //!   helper. Bit-shift loops on a per-byte boundary inside LLVM
-//!   IR are far messier than the same logic in Rust; the helper
+//!   IR are far messier than the same logic in Rust, so the helper
 //!   gives us a clean Rust home for it (mirroring how `Bits`
 //!   concat goes through `__koja_concat_bits`).
 //!
@@ -57,7 +57,7 @@ pub(super) fn emit_binary_construct<'ctx>(
 
     // Pre-zero the payload so trailing partial-byte bits and any
     // padding bits in sub-byte segments stay 0. The runtime
-    // `pack_bits` helper `or`s into the existing byte; pre-zeroing
+    // `pack_bits` helper `or`s into the existing byte, so pre-zeroing
     // ensures unused slots are clean. (Inline byte-aligned
     // segments overwrite their bytes directly, but pre-zeroing is
     // still cheap and keeps the contract uniform.)
@@ -80,7 +80,7 @@ pub(super) fn emit_binary_construct<'ctx>(
 }
 
 /// Pack a single segment into `payload` at its pre-computed
-/// `bit_offset`. Dispatches on the byte-alignment fast path; sub-
+/// `bit_offset`. Dispatches on the byte-alignment fast path. Sub-
 /// byte segments funnel through [`pack_bits_segment`] which calls
 /// the runtime helper with the segment's value coerced to `i64`.
 fn emit_segment<'ctx>(
@@ -146,7 +146,7 @@ fn emit_segment<'ctx>(
 }
 
 /// Byte-by-byte pack of an integer-coerced segment value. Mirrors
-/// v1's `emit_byte_packing` — for `num_bytes = width / 8`, write
+/// v1's `emit_byte_packing`: for `num_bytes = width / 8`, write
 /// each output byte from MSB-first (Big) or LSB-first (Little) by
 /// shifting the i64 right and truncating to `i8`.
 fn emit_byte_packed_int<'ctx>(
@@ -199,7 +199,7 @@ fn emit_byte_packed_int<'ctx>(
 /// Sub-byte segment: hand the i64-widened value, the bit `width`,
 /// and the absolute `bit_offset` to the runtime helper. Endianness
 /// is meaningless for non-byte-multiple widths in v1, so we only
-/// emit MSB-first; the helper writes the low `width` bits of
+/// emit MSB-first. The helper writes the low `width` bits of
 /// `value` left-to-right starting at `bit_offset`.
 fn pack_bits_segment<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -318,7 +318,7 @@ fn float_value_as_i64<'ctx>(
         return Ok(i64_bits);
     }
     Err(LlvmError::Codegen(format!(
-        "BinaryConstruct: unsupported float width {width} (expected 32 or 64) — \
-         seal invariant violation",
+        "BinaryConstruct: unsupported float width {width}, expected 32 or 64 \
+         (seal invariant violation)",
     )))
 }

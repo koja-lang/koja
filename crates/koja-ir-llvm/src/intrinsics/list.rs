@@ -1,7 +1,7 @@
-//! `List<T>` family — heap-backed dynamic array. Layout is
-//! `{ buf_ptr: i8*, len: i64, cap: i64 }`, passed by value; element
+//! `List<T>` family: heap-backed dynamic array. Layout is
+//! `{ buf_ptr: i8*, len: i64, cap: i64 }`, passed by value. Element
 //! storage lives off-heap behind `buf_ptr`. Methods malloc / realloc
-//! / memcpy via libc directly — no Rust-side runtime helpers.
+//! / memcpy via libc directly, no Rust-side runtime helpers.
 //!
 //! Element-size-parameterized: each method computes `elem_size` from
 //! the `IRType::List(_)` inner type carried on the function's
@@ -55,7 +55,7 @@ pub(super) fn emit_list<'ctx>(
 }
 
 /// Resolve the element `T` for a `List<T>` intrinsic. `new` carries
-/// it on the return type; every other method has `self: List<T>` as
+/// it on the return type. Every other method has `self: List<T>` as
 /// `params[0]` (or `params[1]` for `concat`'s `other`, but both
 /// share the same `T`).
 fn element(method: ListMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
@@ -134,7 +134,7 @@ fn emit_from_list<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     // `List<T>` is the `ListLiteral<T>` carrier, so this is value-wise an
-    // identity — but `self` is borrowed and the caller drops it, so the
+    // identity. But `self` is borrowed and the caller drops it, so the
     // result must own an independent buffer rather than alias `self`'s.
     let self_val = nth_list(function, llvm_function, 0, "self")?;
     let cloned = clone_list_value(ctx, function, llvm_function, ListMethod::FromList, self_val)?;
@@ -300,7 +300,7 @@ fn emit_pop<'ctx>(
     // Value semantics: the returned list must own an independent
     // buffer. Handing back `self_val` directly aliases the caller's
     // receiver slot, so both would free the same buffer at scope exit
-    // (double free). Clone into a fresh buffer instead — `len` is zero
+    // (double free). Clone into a fresh buffer instead. `len` is zero
     // on this branch, so this allocates an empty buffer and copies
     // nothing, mirroring the nonempty branch's `copy_buffer`.
     let empty_buf = copy_buffer(
@@ -402,7 +402,7 @@ fn emit_replace_at<'ctx>(
     )?;
     let elem_ptr = element_slot(ctx, new_buf, index, elem_size)?;
     // `copy_buffer` acquired every retained element, including the one
-    // at `index` we're about to overwrite — release that copy so the
+    // at `index` we're about to overwrite. Release that copy so the
     // incoming value (acquired next) is the slot's sole owner.
     release_in_slot(ctx, elem_ty, elem_ptr)?;
     let value = acquire_value(ctx, elem_ty, value)?;
@@ -590,9 +590,9 @@ fn emit_concat<'ctx>(
             "",
         )
         .or_ice()?;
-    // `copy_buffer` acquired `self`'s half; the `other` half was raw
-    // `memcpy`'d above, so acquire it too — the result owns independent
-    // references to every element.
+    // `copy_buffer` acquired `self`'s half. The `other` half was raw
+    // `memcpy`'d above, so acquire it too, giving the result
+    // independent references to every element.
     acquire_buffer(
         ctx,
         llvm_function,
@@ -614,7 +614,7 @@ fn emit_concat<'ctx>(
 /// new buffer owns independent references. Under value semantics every
 /// list mutator is copy-on-write: it builds a new buffer instead of
 /// touching `src`, so a binding shared by assignment is never
-/// observably changed through another alias — and balancing the
+/// observably changed through another alias, and balancing the
 /// refcount here is what stops the shared payloads from double-freeing
 /// once both the source and the copy are reclaimed by drop glue.
 #[allow(clippy::too_many_arguments)]
@@ -755,7 +755,7 @@ fn build_list_struct<'ctx>(
 /// Extract the IR symbol of an enum type from `ty`, surfacing a
 /// codegen-error (not a panic) if the slot turns out to be anything
 /// else. The intrinsic emitter only calls this when the lowering
-/// pass guarantees an enum-typed slot — the error is a defensive
+/// pass guarantees an enum-typed slot. The error is a defensive
 /// last line in case lowering / IR-seal invariants slip.
 fn expect_enum_symbol<'ty>(
     ty: &'ty IRType,
@@ -774,7 +774,7 @@ fn expect_enum_symbol<'ty>(
 /// Resolve the enum symbol stored at `field_index` of the struct
 /// referenced by `struct_ty`. Used by `List.pop` to recover the
 /// inner `Option<T>` symbol from its `Pair<Option<T>, List<T>>`
-/// return type — without this step, the intrinsic would have to
+/// return type. Without this step, the intrinsic would have to
 /// re-derive the symbol from mangled names, duplicating the
 /// lowering pass's mangling rules.
 fn struct_field_enum_symbol<'ctx>(

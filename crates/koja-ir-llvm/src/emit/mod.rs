@@ -1,5 +1,5 @@
 //! Per-block emission seams. Every IR block flows through exactly
-//! one of these; orchestrators choose between [`emit_block`] (the
+//! one of these. Orchestrators choose between [`emit_block`] (the
 //! convenient "instructions then terminator" path used by every
 //! non-`main` walker) and the [`emit_instructions`] +
 //! [`emit_terminator_default`] split (used by
@@ -72,7 +72,7 @@ pub(crate) use instruction::emit_instruction as emit_instruction_external;
 
 /// Per-function SSA index. The migration to [`BasicValueEnum`] (from
 /// `IntValue`) is what lets pointer-typed values (e.g. `IRType::String`
-/// payload pointers) flow alongside ints; op sites that need the int
+/// payload pointers) flow alongside ints. Op sites that need the int
 /// narrow at the seam through [`lookup_int`].
 pub(crate) type ValueMap<'ctx> = BTreeMap<ValueId, BasicValueEnum<'ctx>>;
 pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
@@ -88,7 +88,7 @@ pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 /// representation (see [`crate::types::ir_basic_type`]'s `Unit`
 /// arm), so we don't emit a phi and don't bind anything in the
 /// `ValueMap`. The slot stays in the vec so the per-edge arg list
-/// stays index-aligned with the target block's `params`; the
+/// stays index-aligned with the target block's `params`, and the
 /// terminator walk skips `None` slots without looking up the
 /// corresponding arg.
 pub(crate) type PhiMap<'ctx> = BTreeMap<IRBlockId, Vec<Option<PhiValue<'ctx>>>>;
@@ -103,12 +103,12 @@ pub(crate) type PhiMap<'ctx> = BTreeMap<IRBlockId, Vec<Option<PhiValue<'ctx>>>>;
 /// natural terminator and emit `unreachable` for those blocks (see
 /// [`emit_unreachable_terminator`]).
 ///
-/// Empty `blocks` returns an empty set; one-block functions return
+/// Empty `blocks` returns an empty set. One-block functions return
 /// `{blocks[0].id}`.
 ///
 /// Mirrors what `IRTerminator::Unreachable` would express more
 /// directly once it lands alongside `Kernel.panic` and the other
-/// `Never`-returning vocabulary; until then this CFG walk is the
+/// `Never`-returning vocabulary. Until then this CFG walk is the
 /// boundary's stand-in.
 pub(crate) fn reachable_blocks(blocks: &[IRBasicBlock]) -> HashSet<IRBlockId> {
     let mut reachable = HashSet::new();
@@ -136,7 +136,7 @@ pub(crate) fn reachable_blocks(blocks: &[IRBasicBlock]) -> HashSet<IRBlockId> {
 /// whose arm + `after` body blocks are reached through the
 /// dispatcher LLVM emits (see [`process::emit_receive`]). Counting
 /// those as successors keeps the [`reachable_blocks`] walk in
-/// agreement with what eventually executes — without it the arm
+/// agreement with what eventually executes. Without it the arm
 /// bodies look unreachable and the LLVM emitter caps them with
 /// `unreachable` instead of their natural body.
 fn block_successors(block: &IRBasicBlock) -> Vec<IRBlockId> {
@@ -169,8 +169,8 @@ fn terminator_successors(term: &IRTerminator) -> Vec<IRBlockId> {
 /// Position the builder at `block_id`'s LLVM block and emit a single
 /// `unreachable` instruction. Used as the substitute for the natural
 /// terminator when a block is structurally unreachable in the CFG
-/// (no incoming edges) — emitting the natural `Return` would read
-/// values that the lowering boundary never materialized.
+/// (no incoming edges), where emitting the natural `Return` would
+/// read values that the lowering boundary never materialized.
 pub(crate) fn emit_unreachable_terminator<'ctx>(
     ctx: &EmitContext<'ctx>,
     block_id: IRBlockId,
@@ -188,7 +188,7 @@ pub(crate) fn emit_unreachable_terminator<'ctx>(
 /// the entry-block walk.
 ///
 /// `phi_map` maps each IR block to its pre-emitted block-param
-/// phis (see [`declare_block_param_phis`]); the terminator walk
+/// phis (see [`declare_block_param_phis`]). The terminator walk
 /// hands successor phis the values flowing along this block's
 /// outgoing edges via `add_incoming`.
 pub(crate) fn emit_block<'ctx>(
@@ -201,7 +201,7 @@ pub(crate) fn emit_block<'ctx>(
     for instr in &block.instructions {
         emit_instruction_external(ctx, instr, values)?;
     }
-    // `IRInstruction::Receive` is a self-terminating instruction —
+    // `IRInstruction::Receive` is a self-terminating instruction:
     // the dispatcher in [`process::emit_receive`] ends the host
     // block with a `switch`/`br` into the arm body blocks before
     // the IR terminator (today: `Unreachable`) gets a chance to
@@ -224,8 +224,8 @@ pub(crate) fn emit_block<'ctx>(
 /// Each phi's `BasicValueEnum` is registered in `values` keyed by
 /// the IR `BlockParam.dest`, so subsequent block-body emission
 /// sees the param like any other operand. Phis for blocks with
-/// zero params don't get emitted (and don't need to — their entry
-/// signature is empty), but the block still appears in the
+/// zero params don't get emitted (and don't need to, since their
+/// entry signature is empty), but the block still appears in the
 /// returned [`PhiMap`] with an empty `Vec` so the terminator walk
 /// can index uniformly.
 pub(crate) fn declare_block_param_phis<'ctx>(
@@ -242,7 +242,7 @@ pub(crate) fn declare_block_param_phis<'ctx>(
             ctx.builder.position_at_end(llvm_block);
         }
         for (index, param) in block.params.iter().enumerate() {
-            // Unit-typed params have no LLVM representation — push a
+            // Unit-typed params have no LLVM representation. Push a
             // placeholder so the per-edge wiring later skips both
             // the phi and the corresponding arg without index drift.
             // Eval handles Unit BlockParams natively (`Value::Unit`);
@@ -262,12 +262,12 @@ pub(crate) fn declare_block_param_phis<'ctx>(
     Ok(phi_map)
 }
 
-/// Emit `block`'s instructions only; return a borrow of the block's
-/// terminator so the caller can emit it (or substitute a different
-/// one). The instruction walker mutates `values` in place — callers
-/// pass an owned map to avoid the borrow / aliasing complications a
-/// `&mut` would cause when interleaved with the returned terminator
-/// borrow.
+/// Emit `block`'s instructions only, returning a borrow of the
+/// block's terminator so the caller can emit it (or substitute a
+/// different one). The instruction walker mutates `values` in place.
+/// Callers pass an owned map to avoid the borrow / aliasing
+/// complications a `&mut` would cause when interleaved with the
+/// returned terminator borrow.
 pub(crate) fn emit_instructions<'ctx, 'block>(
     ctx: &EmitContext<'ctx>,
     block: &'block IRBasicBlock,
@@ -277,7 +277,7 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
     for instr in &block.instructions {
         emit_instruction_external(ctx, instr, &mut values)?;
     }
-    // Same self-terminating-Receive guard as [`emit_block`]; the
+    // Same self-terminating-Receive guard as [`emit_block`]. The
     // caller's terminator handling (today: `emit_main_return`)
     // checks for an already-capped block before running.
     Ok((values, &block.terminator))
@@ -288,11 +288,11 @@ pub(crate) fn emit_instructions<'ctx, 'block>(
 /// label %then, label %else`. After each branch, walk the target's
 /// pre-declared block-param phis and call `add_incoming` for every
 /// (phi, branch-arg) pair so the join values flow along this edge.
-/// Branch targets resolve through the caller-provided `block_map`;
-/// misses are a compiler bug (the seal pass guarantees every
+/// Branch targets resolve through the caller-provided `block_map`.
+/// Misses are a compiler bug (the seal pass guarantees every
 /// target is a registered IR block).
 ///
-/// `pred` is the IR block id that owns `terminator` — the
+/// `pred` is the IR block id that owns `terminator`: the
 /// "incoming block" we feed `add_incoming` for each successor's
 /// phis.
 pub(crate) fn emit_terminator_default<'ctx>(
@@ -356,7 +356,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
 /// [`EmitContext::tco_frame`] by
 /// [`crate::function::define_function`]. Reuses the already-
 /// allocated entry-block alloca so there's no per-iteration stack
-/// growth — the CFG just loops back through the same slots and
+/// growth. The CFG just loops back through the same slots and
 /// the body re-runs against fresh values.
 ///
 /// The body-slot zeroing restores the fresh-activation invariant
@@ -366,7 +366,7 @@ pub(crate) fn emit_terminator_default<'ctx>(
 /// at that iteration's exit, not as the stale released value.
 ///
 /// The seal pass guarantees `args.len()` matches the function's
-/// param arity; missing the TCO frame here is a compiler bug
+/// param arity. Missing the TCO frame here is a compiler bug
 /// (define_function should have staged it whenever any block in
 /// the function carries a `TailCall`).
 fn emit_tail_call<'ctx>(
@@ -376,14 +376,14 @@ fn emit_tail_call<'ctx>(
 ) -> Result<(), LlvmError> {
     let frame = ctx.tco_frame().unwrap_or_else(|| {
         panic!(
-            "LLVM emit: TailCall terminator emitted without a staged TCO frame — \
-             define_function ordering violation",
+            "LLVM emit: TailCall terminator emitted without a staged TCO frame \
+             (define_function ordering violation)",
         )
     });
     if args.len() != frame.param_slots.len() {
         panic!(
-            "LLVM emit: TailCall passes {} arg(s) but the function declares {} param(s) — \
-             seal invariant violation",
+            "LLVM emit: TailCall passes {} arg(s) but the function declares {} param(s) \
+             (seal invariant violation)",
             args.len(),
             frame.param_slots.len(),
         );
@@ -409,11 +409,11 @@ fn emit_tail_call<'ctx>(
 /// For each non-`None` phi, look up the matching branch arg's LLVM
 /// equivalent and hand it to the phi via `add_incoming`. `None`
 /// slots correspond to Unit-typed [`koja_ir::BlockParam`]s
-/// (no LLVM representation, no value-map binding); we skip the arg
-/// entirely without complaining when its lookup would fail.
+/// (no LLVM representation, no value-map binding), so we skip the
+/// arg entirely without complaining when its lookup would fail.
 ///
 /// The per-edge arity is checked at IR seal time, so a length
-/// mismatch here is a compiler bug — we panic with a clear message
+/// mismatch here is a compiler bug. We panic with a clear message
 /// rather than surfacing a `Codegen` error the caller would have to
 /// add a fallthrough for.
 fn wire_phi_incomings<'ctx>(
@@ -432,7 +432,7 @@ fn wire_phi_incomings<'ctx>(
     if phis.len() != target.args.len() {
         panic!(
             "LLVM emit: branch from {pred} to {} passes {} arg(s) but target has {} \
-             phi slot(s) — IR seal invariant violation",
+             phi slot(s) (IR seal invariant violation)",
             target.block,
             target.args.len(),
             phis.len(),
@@ -449,7 +449,7 @@ fn wire_phi_incomings<'ctx>(
             // Unit-typed BlockParam: no phi to wire, no LLVM value
             // for the arg to look up. The IR-level Const::Unit that
             // produced `arg` is structurally consistent at the
-            // IR boundary; LLVM just elides the whole pair.
+            // IR boundary. LLVM just elides the whole pair.
             continue;
         };
         let arg_value = lookup(values, *arg)?;

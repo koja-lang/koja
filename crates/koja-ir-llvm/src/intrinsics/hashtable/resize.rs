@@ -1,7 +1,7 @@
 //! Load-factor check + rehash machinery used by every write path.
 //! Both `Map.put` and `Set.insert` call [`emit_resize_if_needed`]
-//! before probing for a free slot — if the table is at 3/4 occupancy
-//! it grows by 2x and rehashes; otherwise the originals pass through
+//! before probing for a free slot. If the table is at 3/4 occupancy
+//! it grows by 2x and rehashes, otherwise the originals pass through
 //! the phi join unchanged.
 
 use inkwell::IntPredicate;
@@ -17,7 +17,7 @@ use super::{HashtableLayout, STATE_EMPTY, STATE_OCCUPIED};
 
 /// Emit the load-factor check, the resize-and-rehash path, and the
 /// resize-or-not phi join. Returns the live table snapshot for the
-/// probe block to consume — same `length` as the input (no insert
+/// probe block to consume: same `length` as the input (no insert
 /// has happened yet), but possibly swapped buffers and grown
 /// `capacity`. Builder ends positioned at the post-join block.
 pub(super) fn emit_resize_if_needed<'ctx>(
@@ -137,7 +137,7 @@ pub(super) fn emit_resize_if_needed<'ctx>(
 /// Rehash loop: for each `ri` in `0..old.capacity`, if the old
 /// state is OCCUPIED, hash the old key, linear-probe in the new
 /// buffer, memcpy the entry, mark new state OCCUPIED. Reads
-/// `key_ops.hash_fn` + `key_ops.key_basic_ty` — `eq_fn` is never
+/// `key_ops.hash_fn` + `key_ops.key_basic_ty`. `eq_fn` is never
 /// consulted because moving an already-bucketed key into a larger
 /// buffer can't collide with itself. Builder ends positioned at
 /// the rehash-done block (caller's next emission continues from

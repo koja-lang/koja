@@ -3,10 +3,10 @@
 //! carries a `DILocation` at the function's declaration line, so a
 //! runtime panic backtrace resolves frames to `file:line: name()`.
 //! Synthetic callables (glue, closures, wrappers, intrinsics) stay
-//! unattributed — they have no single source line to point at.
+//! unattributed, as they have no single source line to point at.
 //!
 //! Only the object-emitting `compile_*` paths construct a
-//! [`DebugInfo`]; the `emit_*_llvm_ir` snapshot paths leave it `None`
+//! [`DebugInfo`]. The `emit_*_llvm_ir` snapshot paths leave it `None`
 //! so their printed IR stays metadata-free and the golden snapshots
 //! don't churn.
 
@@ -104,9 +104,9 @@ impl<'ctx> DebugInfo<'ctx> {
             .create_debug_location(context, line, 1, subprogram.as_debug_info_scope(), None)
     }
 
-    /// Flush pending metadata. Must run before object emission — the
-    /// builder's own `Drop` finalizes too late (after `compile_*` has
-    /// already written the `.o`).
+    /// Flush pending metadata. Must run before object emission,
+    /// because the builder's own `Drop` finalizes too late (after
+    /// `compile_*` has already written the `.o`).
     pub(crate) fn finalize(&self) {
         self.builder.finalize();
     }

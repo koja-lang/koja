@@ -4,15 +4,15 @@
 //! `IRSymbol -> EnumLayout` registries, and the per-shape pre-emit
 //! submodules ([`structs`], [`enums`]) that mint LLVM types from
 //! sealed IR decls. `crate::emit` is reserved for IR-instruction
-//! lowering; type creation lives here.
+//! lowering. Type creation lives here.
 //!
-//! `TypeLayouts::new` runs once from [`crate::ctx::EmitContext::new`];
+//! `TypeLayouts::new` runs once from [`crate::ctx::EmitContext::new`].
 //! `pin_module_data_layout` then aligns the module's data layout
 //! with the host triple so `get_abi_size` / `get_abi_alignment`
 //! match what the object emitter eventually pins. Every panic in
 //! this file marks an invariant violation upstream (lower / merge
 //! produced a duplicate symbol, or pre-emit ordering missed a
-//! decl); none are recoverable.
+//! decl). None are recoverable.
 
 use std::cell::RefCell;
 use std::collections::BTreeMap;
@@ -34,14 +34,14 @@ pub(crate) mod unions;
 /// [`IRVariantTag`].0 so construction can recover the per-variant
 /// types in O(1). The outer `StructType` lives on the LLVM
 /// context's named-type table (minted in [`enums::declare_enum_type`])
-/// and is fetched by name via [`crate::ctx::EmitContext::enum_outer_type`];
-/// holding it here too would just duplicate that registry.
+/// and is fetched by name via [`crate::ctx::EmitContext::enum_outer_type`].
+/// Holding it here too would just duplicate that registry.
 pub(crate) struct EnumLayout<'ctx> {
     pub(crate) variants: Vec<VariantLayout<'ctx>>,
 }
 
 /// `complete` is `{ i8 tag, [pad x i8], payload }` (or `{ i8 }`
-/// for Unit); `payload` is the inner field struct, `None` for
+/// for Unit). `payload` is the inner field struct, `None` for
 /// Unit. See [`enums`] for layout details.
 pub(crate) struct VariantLayout<'ctx> {
     pub(crate) complete: StructType<'ctx>,
@@ -49,7 +49,7 @@ pub(crate) struct VariantLayout<'ctx> {
 }
 
 /// LLVM layout of a single union decl. `outer` is the
-/// `{ i8 tag, [N x i8] payload }` named struct; `payload_size`
+/// `{ i8 tag, [N x i8] payload }` named struct. `payload_size`
 /// is `N` (the byte width of the largest member, cached on
 /// [`koja_ir::IRUnionDecl::max_payload_size`]). See
 /// [`unions`] for layout details.
@@ -60,7 +60,7 @@ pub(crate) struct UnionLayout<'ctx> {
 
 /// Type-layout registry held as [`crate::ctx::EmitContext::layouts`].
 /// `target_data` is `pub(crate)` because [`enums::define_enum_bodies`]
-/// and [`crate::types`] consult it directly; the registries stay
+/// and [`crate::types`] consult it directly. The registries stay
 /// private behind accessors so `RefCell` borrows can't leak.
 pub(crate) struct TypeLayouts<'ctx> {
     pub(crate) target_data: TargetData,
@@ -75,8 +75,8 @@ pub(crate) struct TypeLayouts<'ctx> {
     /// IR-level variants (name + payload + tag) for every declared
     /// enum, indexed by the same symbol as `enum_layouts`. Retained
     /// post-layout so intrinsic emitters can resolve "the `Ok`
-    /// variant's first field of `Result_$R.E$` is `R`" — or look a
-    /// tag up by variant name — without reaching back into the
+    /// variant's first field of `Result_$R.E$` is `R`" (or look a
+    /// tag up by variant name) without reaching back into the
     /// program-level [`koja_ir::IREnumDecl`] registry. Mirrors
     /// `struct_fields` for struct-shaped data.
     enum_variants: RefCell<BTreeMap<IRSymbol, Vec<IREnumVariant>>>,
@@ -106,8 +106,8 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.struct_types.borrow_mut();
         if map.insert(symbol.clone(), ty).is_some() {
             panic!(
-                "LLVM emit: struct type `{symbol}` registered twice — \
-                 lower / merge invariant violation",
+                "LLVM emit: struct type `{symbol}` registered twice \
+                 (lower / merge invariant violation)",
             );
         }
     }
@@ -115,8 +115,8 @@ impl<'ctx> TypeLayouts<'ctx> {
     pub(crate) fn struct_type(&self, mangled: &str) -> StructType<'ctx> {
         *self.struct_types.borrow().get(mangled).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: struct type `{mangled}` not registered — \
-                     pre-emit ordering violation",
+                "LLVM emit: struct type `{mangled}` not registered \
+                     (pre-emit ordering violation)",
             )
         })
     }
@@ -125,27 +125,27 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.struct_fields.borrow_mut();
         if map.insert(symbol.clone(), fields).is_some() {
             panic!(
-                "LLVM emit: struct fields for `{symbol}` registered twice — \
-                 lower / merge invariant violation",
+                "LLVM emit: struct fields for `{symbol}` registered twice \
+                 (lower / merge invariant violation)",
             );
         }
     }
 
     /// IR type of `struct_symbol`'s field at `index`. Panics on
-    /// unregistered symbol / out-of-range index — both indicate a
+    /// unregistered symbol / out-of-range index: both indicate a
     /// pre-emit ordering or IR-seal violation upstream.
     pub(crate) fn struct_field_ir_type(&self, struct_symbol: &IRSymbol, index: usize) -> IRType {
         let map = self.struct_fields.borrow();
         let fields = map.get(struct_symbol).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: struct fields for `{struct_symbol}` not registered — \
-                 pre-emit ordering violation",
+                "LLVM emit: struct fields for `{struct_symbol}` not registered \
+                 (pre-emit ordering violation)",
             )
         });
         fields.get(index).cloned().unwrap_or_else(|| {
             panic!(
-                "LLVM emit: struct `{struct_symbol}` has no field at index {index} — \
-                 IR seal invariant violation",
+                "LLVM emit: struct `{struct_symbol}` has no field at index {index} \
+                 (IR seal invariant violation)",
             )
         })
     }
@@ -154,8 +154,8 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.enum_layouts.borrow_mut();
         if map.insert(symbol.clone(), layout).is_some() {
             panic!(
-                "LLVM emit: enum layout `{symbol}` registered twice — \
-                 lower / merge invariant violation",
+                "LLVM emit: enum layout `{symbol}` registered twice \
+                 (lower / merge invariant violation)",
             );
         }
     }
@@ -164,14 +164,14 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.enum_variants.borrow_mut();
         if map.insert(symbol.clone(), variants).is_some() {
             panic!(
-                "LLVM emit: enum variants for `{symbol}` registered twice — \
-                 lower / merge invariant violation",
+                "LLVM emit: enum variants for `{symbol}` registered twice \
+                 (lower / merge invariant violation)",
             );
         }
     }
 
     /// IR-level payload of `enum_symbol`'s variant at `tag`. Panics
-    /// on unregistered symbol / out-of-range tag — both indicate a
+    /// on unregistered symbol / out-of-range tag: both indicate a
     /// pre-emit ordering or IR-seal violation upstream.
     pub(crate) fn enum_variant_payload(
         &self,
@@ -181,8 +181,8 @@ impl<'ctx> TypeLayouts<'ctx> {
         let map = self.enum_variants.borrow();
         let variants = map.get(enum_symbol).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: enum variants for `{enum_symbol}` not registered — \
-                 pre-emit ordering violation",
+                "LLVM emit: enum variants for `{enum_symbol}` not registered \
+                 (pre-emit ordering violation)",
             )
         });
         variants
@@ -191,8 +191,8 @@ impl<'ctx> TypeLayouts<'ctx> {
             .map(|v| v.payload.clone())
             .unwrap_or_else(|| {
                 panic!(
-                    "LLVM emit: enum `{enum_symbol}` has no variant at tag {tag} — \
-                     IR seal invariant violation",
+                    "LLVM emit: enum `{enum_symbol}` has no variant at tag {tag} \
+                     (IR seal invariant violation)",
                 )
             })
     }
@@ -201,14 +201,14 @@ impl<'ctx> TypeLayouts<'ctx> {
     /// emitters target stdlib enum variants (e.g.
     /// `NumericConversionError.OutOfRange`) without hardcoding tags
     /// that silently break when the declaration order changes.
-    /// Panics on unregistered symbol / unknown variant — both
+    /// Panics on unregistered symbol / unknown variant: both
     /// indicate a pre-emit ordering or stdlib invariant violation.
     pub(crate) fn enum_variant_tag(&self, enum_symbol: &IRSymbol, name: &str) -> IRVariantTag {
         let map = self.enum_variants.borrow();
         let variants = map.get(enum_symbol).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: enum variants for `{enum_symbol}` not registered — \
-                 pre-emit ordering violation",
+                "LLVM emit: enum variants for `{enum_symbol}` not registered \
+                 (pre-emit ordering violation)",
             )
         });
         variants
@@ -230,8 +230,8 @@ impl<'ctx> TypeLayouts<'ctx> {
         let map = self.enum_layouts.borrow();
         let layout = map.get(mangled).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: enum layout `{mangled}` not registered — \
-                 pre-emit ordering violation",
+                "LLVM emit: enum layout `{mangled}` not registered \
+                 (pre-emit ordering violation)",
             )
         });
         f(layout)
@@ -248,8 +248,8 @@ impl<'ctx> TypeLayouts<'ctx> {
         self.with_enum_layout(mangled, |layout| {
             let variant = layout.variants.get(usize::from(tag.0)).unwrap_or_else(|| {
                 panic!(
-                    "LLVM emit: enum `{mangled}` has no variant at tag {tag} — \
-                     IR seal invariant violation",
+                    "LLVM emit: enum `{mangled}` has no variant at tag {tag} \
+                     (IR seal invariant violation)",
                 )
             });
             (variant.complete, variant.payload)
@@ -260,8 +260,8 @@ impl<'ctx> TypeLayouts<'ctx> {
         let mut map = self.union_layouts.borrow_mut();
         if map.insert(symbol.clone(), layout).is_some() {
             panic!(
-                "LLVM emit: union layout `{symbol}` registered twice — \
-                 lower / merge invariant violation",
+                "LLVM emit: union layout `{symbol}` registered twice \
+                 (lower / merge invariant violation)",
             );
         }
     }
@@ -273,8 +273,8 @@ impl<'ctx> TypeLayouts<'ctx> {
         let map = self.union_layouts.borrow();
         let layout = map.get(mangled).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: union layout `{mangled}` not registered — \
-                 pre-emit ordering violation",
+                "LLVM emit: union layout `{mangled}` not registered \
+                 (pre-emit ordering violation)",
             )
         });
         (layout.outer, layout.payload_size)

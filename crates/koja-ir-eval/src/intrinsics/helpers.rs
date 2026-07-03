@@ -179,7 +179,7 @@ pub(super) fn enum_return_symbol(
 /// Byte size of a primitive [`IRType`]. Used by `CPtr.alloc`,
 /// `CPtr.offset`, `CPtr.read`, `CPtr.write` to compute element-
 /// width offsets. Returns [`RuntimeError::Unsupported`] for non-
-/// primitive element types: eval can't allocate / step over a
+/// primitive element types. Eval can't allocate / step over a
 /// struct or list without a full size-and-align computation, and
 /// the LLVM backend covers those cases on `--backend=llvm`.
 pub(super) fn size_of_primitive(ty: &IRType, label: &str) -> Result<usize, RuntimeError> {

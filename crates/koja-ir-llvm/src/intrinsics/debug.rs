@@ -1,4 +1,4 @@
-//! `Debug.format` family — primitive `format(self) -> String`
+//! `Debug.format` family: primitive `format(self) -> String`
 //! intrinsics. Each receiver shape (`Int`/`IntN`/`UIntN`, `Float` /
 //! `Float32`, `Bool`) routes to a single runtime helper
 //! (`koja_format_*`) that returns a freshly-allocated Koja string
@@ -6,13 +6,13 @@
 //! so backend output stays byte-exact with the eval interpreter.
 //!
 //! Signed vs. unsigned widening: signed receivers (`Int`/`IntN`)
-//! sign-extend to `i64` and route through `koja_format_i64`;
+//! sign-extend to `i64` and route through `koja_format_i64`, while
 //! unsigned (`UIntN`) zero-extend to `i64` (`u64` ABI-wise) and
 //! route through `koja_format_u64`. `Bool` zero-extends through
 //! the same `i64`-shaped helper as the auto-print wrapper.
 //!
-//! `String.format` is intentionally absent — it ships a pure-Koja
-//! body in `lib/global/src/debug.koja`, not an intrinsic.
+//! `String.format` is intentionally absent, because it ships a
+//! pure-Koja body in `lib/global/src/debug.koja`, not an intrinsic.
 
 use inkwell::values::{BasicValueEnum, FunctionValue};
 use koja_ir::{DebugImpl, IRFunction, IntType};
@@ -119,7 +119,7 @@ fn format_via_f64<'ctx>(
 /// Sign- or zero-extend the integer receiver to the matching
 /// 64-bit ABI and route through `koja_format_i64` /
 /// `koja_format_u64`. The runtime side renders signed and unsigned
-/// values differently; the LLVM emitter picks the helper from
+/// values differently. The LLVM emitter picks the helper from
 /// [`IntType::is_signed`] so the rendered bytes match each
 /// receiver's source-level signedness.
 fn format_via_int<'ctx>(

@@ -1,4 +1,4 @@
-//! `@intrinsic Global.print(s: String) -> Unit` — synthesize a body
+//! `@intrinsic Global.print(s: String) -> Unit`: synthesize a body
 //! that calls into the existing `__koja_print_string` runtime
 //! helper. Same target the auto-print scaffolding uses for
 //! `IRType::String` trailings, so the runtime contract (read v1
@@ -29,8 +29,8 @@ pub(super) fn emit_global_print<'ctx>(
     );
     let payload = llvm_function.get_nth_param(0).unwrap_or_else(|| {
         panic!(
-            "intrinsic `{}` declared without a `String` payload param — \
-             signature/IR drift",
+            "intrinsic `{}` declared without a `String` payload param \
+             (signature/IR drift)",
             function.symbol,
         )
     });

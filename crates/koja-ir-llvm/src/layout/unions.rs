@@ -8,7 +8,7 @@
 //! = decl.max_payload_size`. Same opaque-then-define two-phase
 //! shape used for structs and enums so a union's member can
 //! itself be a struct / enum / nested union regardless of decl
-//! order. Members do **not** get distinct LLVM types — extraction
+//! order. Members do **not** get distinct LLVM types: extraction
 //! emits a `bitcast` from the payload buffer to the member's
 //! IRType-derived basic type at use sites.
 
@@ -21,8 +21,8 @@ use crate::layout::UnionLayout;
 /// Phase 1: mint the opaque struct type and register its layout
 /// handle so any later [`crate::types::ir_basic_type`] call (e.g.
 /// from a struct body that carries a union-typed field) can hand
-/// back the outer type. The body is still opaque at this point
-/// — pointer-shaped uses (alloca / GEP) work fine off the named
+/// back the outer type. The body is still opaque at this point.
+/// Pointer-shaped uses (alloca / GEP) work fine off the named
 /// type alone, and the body lands in [`define_union_body`] before
 /// any code that needs to load / store a payload runs.
 pub(crate) fn declare_union_type<'ctx>(ctx: &EmitContext<'ctx>, decl: &IRUnionDecl) {
@@ -50,8 +50,8 @@ fn lookup_named_struct<'ctx>(ctx: &EmitContext<'ctx>, symbol: &IRSymbol) -> Stru
         .get_struct_type(symbol.mangled())
         .unwrap_or_else(|| {
             panic!(
-                "LLVM emit: union outer struct `{symbol}` not declared — \
-                 declare_union_type ordering violation",
+                "LLVM emit: union outer struct `{symbol}` not declared \
+                 (declare_union_type ordering violation)",
             )
         })
 }

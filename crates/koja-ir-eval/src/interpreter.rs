@@ -63,7 +63,7 @@ impl Interpreter {
 
         // Boot PID 1 (the entry process) into a fresh cooperative core, then
         // hand the run loop to the shared `CooperativeDriver`. The entry's
-        // `StopReason`-derived exit code surfaces through `exit_cell`: the
+        // `StopReason`-derived exit code surfaces through `exit_cell`. The
         // process future has `Output = ()`, so it stashes its `Value` result
         // here for `run_program` to return once the driver tears down.
         let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));

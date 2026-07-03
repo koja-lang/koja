@@ -2,21 +2,21 @@
 //! hand back an owned `String` / `Binary` / `Bits` derived from a
 //! borrowed `self`. All three share the
 //! `[i64 rc][i64 bit_length][payload bytes][NUL?]` block layout (the
-//! SSA pointer addresses the first payload byte; the header sits
-//! before it — see [`crate::emit::heap_layout`]).
+//! SSA pointer addresses the first payload byte, and the header sits
+//! before it, see [`crate::emit::heap_layout`]).
 //!
 //! Two strategies, picked by whether the result block is layout-
 //! identical to the source:
 //!
 //! - [`share_heap_payload`]: rc-acquire the source's immutable block
 //!   and reinterpret the *same* payload pointer as the result type.
-//!   The cheap default — Koja blocks are immutable and value semantics
+//!   The cheap default: Koja blocks are immutable and value semantics
 //!   makes the sharing invisible, so a same-layout reinterpret
 //!   (`Binary` ↔ `Bits`, `String` → `Binary`) is just an `rc++`.
 //!   Mirrors [`crate::emit::clone`]'s heap-leaf arm.
 //! - [`copy_heap_payload`]: deep-copy the header + payload into a
 //!   fresh `rc = 1` block. Required only when the result block differs
-//!   from the source — `String`'s trailing libc NUL means
+//!   from the source: `String`'s trailing libc NUL means
 //!   `Binary.to_string` and `CString` mint a distinct allocation. This
 //!   is also the building block for the eventual "copy on process
 //!   boundary" work, where a value must be physically duplicated
@@ -32,12 +32,12 @@ use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::runtime::{declare_malloc_extern, declare_rc_inc_extern};
 
 /// rc-acquire `src_payload`'s block and return the same payload
-/// pointer — an owned share of the immutable block, no copy. For
+/// pointer, an owned share of the immutable block, no copy. For
 /// conversions whose source and result use the identical
 /// `[i64 rc][i64 bit_length][payload]` layout, so reinterpreting the
 /// pointer is sound: the matching `Drop` rc-decrements either alias
 /// and the block is freed once the last owner releases it. The block
-/// base (rc word) is `payload - HEADER_BYTES`; immortal (rodata)
+/// base (rc word) is `payload - HEADER_BYTES`. Immortal (rodata)
 /// blocks are no-ops in the runtime.
 pub(super) fn share_heap_payload<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -57,7 +57,7 @@ pub(super) fn share_heap_payload<'ctx>(
 /// trailing NUL, and return the **payload** pointer of the new block
 /// (matching the rest-of-pipeline convention where heap values are
 /// addressed at their first payload byte). The fresh block gets its
-/// own `rc = 1`; the source stays untouched.
+/// own `rc = 1`. The source stays untouched.
 ///
 /// Callers wire it into a wider control-flow shape when they want
 /// `Result.Ok(new_payload)` (`Binary.to_string`) vs a plain return.
@@ -72,7 +72,7 @@ pub(crate) fn copy_heap_payload<'ctx>(
     let i64_ty = ctx.context.i64_type();
     let three = i64_ty.const_int(3, false);
 
-    // The source's `bit_length` (at `payload - LENGTH_OFFSET`); the
+    // The source's `bit_length` (at `payload - LENGTH_OFFSET`). The
     // fresh block gets its own `rc = 1`, never the source's count.
     let bit_length = load_bit_length(ctx, src_payload, "copy_src")?;
     let byte_count = byte_count_from_bits(ctx, label, bit_length, ceil_byte_count, three)?;

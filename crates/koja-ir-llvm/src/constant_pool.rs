@@ -1,4 +1,4 @@
-//! Flat snapshot of every package's pooled compound constants —
+//! Flat snapshot of every package's pooled compound constants,
 //! flattened once at compile entry so [`EmitContext`] can resolve a
 //! [`koja_ir::IRInstruction::LoadConst`] without threading
 //! `&[IRPackage]` through [`crate::emit::emit_instruction`]. Keys use

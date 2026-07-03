@@ -1,7 +1,7 @@
 //! Local-slot emission: `LocalDecl`, `LocalRead`, `LocalWrite`, and
 //! the type-keyed `DropLocal` dispatcher. Heap payloads (`String`,
 //! `Binary`, `Bits`) free through their `payload-8` block-base
-//! header; closure-typed slots delegate to
+//! header. Closure-typed slots delegate to
 //! [`super::closures::emit_drop_closure_env`].
 
 use inkwell::values::BasicValueEnum;
@@ -22,13 +22,13 @@ use super::{ValueMap, closures, lookup};
 /// alloca is reused.
 ///
 /// The slot is zero-initialized *at the decl site* (not the hoisted
-/// alloca), so re-entering the declaring block — a loop body, a TCO
-/// iteration — restores the fresh-slot state. Exit drops therefore
+/// alloca), so re-entering the declaring block (a loop body, a TCO
+/// iteration) restores the fresh-slot state. Exit drops therefore
 /// always see either a live value or zero, and dropping zero is a
 /// no-op (null-safe rc primitives + null-propagating
-/// [`block_base`]). This is what makes "drop a slot the taken path
-/// never wrote" — e.g. the payload local of an untaken `receive`
-/// arm — safe.
+/// [`block_base`]). This is what makes it safe to "drop a slot the
+/// taken path never wrote", e.g. the payload local of an untaken
+/// `receive` arm.
 pub(super) fn emit_local_decl<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
@@ -50,8 +50,8 @@ pub(super) fn emit_local_decl<'ctx>(
 }
 
 /// Lower a `LocalRead` to an LLVM `load`. Pointer comes from the
-/// per-function slot table; load type comes from the IR's static
-/// type slot.
+/// per-function slot table, load type from the IR's static type
+/// slot.
 pub(super) fn emit_local_read<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
@@ -80,9 +80,10 @@ pub(super) fn emit_local_write<'ctx>(
 /// payload), so a single block-base GEP + `koja_rc_dec` covers all
 /// three: the rc is decremented and the block freed at zero (immortal
 /// rodata blocks are skipped by the runtime). `Function`-typed slots
-/// delegate to the closure drop helper; no-glue aggregate slots are a
-/// no-op. Collections / boxes panic loudly — they always carry glue
-/// and must have been rewritten to a `Call @drop_T` by `elaborate`.
+/// delegate to the closure drop helper, and no-glue aggregate slots
+/// are a no-op. Collections / boxes panic loudly, because they
+/// always carry glue and must have been rewritten to a
+/// `Call @drop_T` by `elaborate`.
 pub(super) fn emit_drop_local<'ctx>(
     ctx: &EmitContext<'ctx>,
     local: IRLocalId,
@@ -103,8 +104,8 @@ pub(super) fn emit_drop_local<'ctx>(
         // is all that survives as a bare `DropLocal` here.
         IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => Ok(()),
         _ => panic!(
-            "LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}` — \
-             collections / boxes always carry glue and must be rewritten to a `Call @drop_T`",
+            "LLVM emit: unsupported `IRInstruction::DropLocal` type {ty:?} for slot `{local}`. \
+             Collections / boxes always carry glue and must be rewritten to a `Call @drop_T`",
         ),
     }
 }
@@ -138,7 +139,7 @@ pub(super) fn emit_drop_value<'ctx>(
         IRType::Enum(_) | IRType::Struct(_) | IRType::Union { .. } => Ok(()),
         _ => panic!(
             "LLVM emit: unsupported `IRInstruction::DropValue` type {ty:?} for value \
-             `{value}` — collections / boxes always carry glue and must be rewritten to a \
+             `{value}`. Collections / boxes always carry glue and must be rewritten to a \
              `Call @drop_T`",
         ),
     }
@@ -146,7 +147,7 @@ pub(super) fn emit_drop_value<'ctx>(
 
 /// Emit a `koja_rc_dec` on the block base of a heap-leaf payload
 /// (`payload - HEADER_BYTES`). Shared by the slot- and value-keyed
-/// drop paths; `label` names the SSA temps for readable IR.
+/// drop paths. `label` names the SSA temps for readable IR.
 fn emit_rc_dec<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: inkwell::values::PointerValue<'ctx>,

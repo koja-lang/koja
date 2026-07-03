@@ -34,7 +34,7 @@ use super::{HashtableLayout, INITIAL_CAPACITY, STATE_OCCUPIED};
 /// [`extract_table_fields`], returned (possibly with swapped
 /// buffers and grown capacity) from a resize, or threaded by hand
 /// through multi-step write paths. `length` is invariant across
-/// the resize-or-not phi join — the bump-on-insert happens after
+/// the resize-or-not phi join. The bump-on-insert happens after
 /// probing, never inside the resize.
 pub(super) struct TableSnapshot<'ctx> {
     pub entries_ptr: PointerValue<'ctx>,
@@ -45,7 +45,7 @@ pub(super) struct TableSnapshot<'ctx> {
 
 /// K-side intrinsics resolved once per `Map` / `Set` method
 /// emission: the monomorphized `hash` / `eq` functions plus the
-/// LLVM basic type for `K`. Probe paths read all three; rehash
+/// LLVM basic type for `K`. Probe paths read all three, rehash
 /// only needs `hash_fn` + `key_basic_ty` because moving an
 /// already-bucketed key into a larger buffer doesn't compare
 /// against existing slots.
@@ -161,8 +161,8 @@ pub(super) fn call_malloc<'ctx>(
 /// Under value semantics every hashtable mutator clones the entries +
 /// states buffers before writing, so a binding shared by assignment is
 /// never mutated in place through another alias. After the `memcpy`s
-/// every occupied bucket is *acquired* — `rc++` a heap-leaf key/value,
-/// deep-clone a composite — so the copy owns independent references and
+/// every occupied bucket is *acquired* (`rc++` a heap-leaf key/value,
+/// deep-clone a composite), so the copy owns independent references and
 /// the shared payloads don't double-free once both tables are reclaimed
 /// by drop glue.
 pub(super) fn clone_table_buffers<'ctx>(
@@ -217,7 +217,7 @@ pub(super) fn clone_table_buffers<'ctx>(
 }
 
 /// Acquire the key (and, for `Map`, the value) of every occupied bucket
-/// in `table` — the per-element half of a copy-on-write clone. A no-op
+/// in `table`, the per-element half of a copy-on-write clone. A no-op
 /// walk when both key and value own no heap.
 fn acquire_occupied_entries<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -243,7 +243,7 @@ fn acquire_occupied_entries<'ctx>(
     )
 }
 
-/// Pointer to the value half of a `Map` bucket — `key_size` bytes past
+/// Pointer to the value half of a `Map` bucket, `key_size` bytes past
 /// the entry base (the key sits at offset 0).
 #[track_caller]
 pub(super) fn value_slot<'ctx>(
@@ -262,7 +262,7 @@ pub(super) fn value_slot<'ctx>(
 
 /// Emit `for slot in 0..capacity { if states[slot] == OCCUPIED { body } }`
 /// over a table's buckets. The straight-line `body` runs once into the
-/// per-occupied-bucket block; this helper owns the counter, the range
+/// per-occupied-bucket block. This helper owns the counter, the range
 /// guard, the occupancy test, and the back-edge. Shared by the
 /// copy-on-write element acquire here and the `Map` / `Set` clone /
 /// drop glue ([`crate::emit::collection_glue`]).
@@ -499,7 +499,7 @@ pub(super) fn ret_basic<'ctx>(
 /// `IRSymbol`, and per-struct impls follow the same shape with
 /// the struct's already-mangled symbol as the receiver root, so
 /// the lookup is a single index hit per side. Misses surface as
-/// a clean codegen error rather than panicking — the surface
+/// a clean codegen error rather than panicking. The surface
 /// language can declare a `Map<K, _>` over a `K` that doesn't
 /// implement `Hash`, so this branch must produce an actionable
 /// diagnostic.
@@ -533,7 +533,7 @@ pub(super) fn resolve_hash_eq<'ctx>(
 
 /// Mint the receiver `IRSymbol` for `<key_ty>.hash` / `<key_ty>.eq`
 /// lookups. Primitives root at `Global.<Type>` via the lift pass'
-/// convention; struct types reuse their already-mangled symbol so
+/// convention. Struct types reuse their already-mangled symbol so
 /// per-monomorphization impls (`MyApp.Pair_$Int.String$.hash`) hit
 /// the same lookup path.
 fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {

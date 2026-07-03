@@ -5,7 +5,7 @@
 //! `koja_float_parse`) that take a Koja string payload pointer and
 //! an out-pointer for the parsed scalar, returning a
 //! `koja-runtime` `parse_text` code: ok, invalid format, or out of
-//! range (a well-formed number that doesn't fit the target — an
+//! range (a well-formed number that doesn't fit the target: an
 //! overflowing integer, or a float magnitude that rounds to
 //! infinity). The intrinsic body allocates an entry-block out slot,
 //! calls the helper, switches on the code, and wraps the parsed
@@ -24,13 +24,13 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::numeric::build_conversion_error;
 use crate::runtime::{declare_float_parse_extern, declare_int_parse_extern};
 
-/// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
+/// `enum Result<T, E>` variant tag for `Ok(T)`: declaration order
 /// in `koja/lib/global/src/kernel.koja`.
 const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
-/// Return codes of the runtime parse helpers. ABI contract: MUST
-/// equal `koja-runtime`'s `parse_text::{PARSE_OK, PARSE_OUT_OF_RANGE}`
-/// (invalid format is the switch's default arm). See
-/// `koja/design/ABI.md` § Numeric parse helpers.
+/// Return codes of the runtime parse helpers, per the runtime's
+/// numeric parse helper ABI: they MUST equal `koja-runtime`'s
+/// `parse_text::{PARSE_OK, PARSE_OUT_OF_RANGE}` (invalid format is
+/// the switch's default arm).
 const PARSE_OK: u64 = 1;
 const PARSE_OUT_OF_RANGE: u64 = 2;
 

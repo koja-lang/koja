@@ -1,10 +1,10 @@
-//! Explicit numeric conversions out of the hub types — the inverse
+//! Explicit numeric conversions out of the hub types, the inverse
 //! direction of the implicit `NumericWiden` coercion.
 //!
 //! `Int.to_<width>(self) -> Result<W, NumericConversionError>` range-checks
-//! the `i64` receiver and truncates on success; `UInt64.to_int(self)
+//! the `i64` receiver and truncates on success. `UInt64.to_int(self)
 //! -> Result<Int, NumericConversionError>` accepts any bit pattern at or
-//! below `i64::MAX` (i.e. non-negative under a signed view);
+//! below `i64::MAX` (i.e. non-negative under a signed view).
 //! `Float.to_float32(self) -> Float32` is a total `fptrunc`.
 //!
 //! The checked conversions mint `NumericConversionError.OutOfRange` on the
@@ -23,7 +23,7 @@ use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
 use crate::error::{IceExt, LlvmError};
 
-/// `enum Result<T, E>` variant tags — declaration order in
+/// `enum Result<T, E>` variant tags: declaration order in
 /// `koja/lib/global/src/kernel.koja`.
 const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
 const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
@@ -174,7 +174,7 @@ fn conversion_error_symbol<'ctx>(
         .enum_variant_payload(result_symbol, RESULT_ERR_TAG);
     let IRVariantPayload::Tuple(types) = &payload else {
         return Err(LlvmError::Codegen(format!(
-            "`{result_symbol}`'s Err variant payload is not a tuple — stdlib invariant violation",
+            "`{result_symbol}`'s Err variant payload is not a tuple (stdlib invariant violation)",
         )));
     };
     match types.as_slice() {
@@ -202,7 +202,7 @@ fn checked_bounds(convert: NumericConvert) -> (i64, i64) {
             IntNarrowTarget::UInt64 => (0, i64::MAX),
         },
         // A `UInt64` bit pattern fits `Int` iff it is at most
-        // `i64::MAX` — i.e. non-negative under the signed view.
+        // `i64::MAX`, i.e. non-negative under the signed view.
         NumericConvert::UInt64ToInt => (0, i64::MAX),
     }
 }

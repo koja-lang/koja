@@ -2,7 +2,7 @@
 //! `icmp eq` emitter (eval flattens both to fixed-width integers).
 //! `Float` / `Float32` use `fcmp oeq` (ordered: `NaN == NaN` is
 //! false, matching IEEE 754 and source-level `==`). `String.eq`
-//! delegates to libc `strcmp`; string payloads carry a
+//! delegates to libc `strcmp`. String payloads carry a
 //! trailing NUL, so byte-sequence equality matches Koja's source-
 //! level `==` semantics.
 
@@ -100,9 +100,9 @@ fn nth_int<'ctx>(
     }
 }
 
-/// Ordered IEEE 754 equality — `NaN` operands always return `false`,
+/// Ordered IEEE 754 equality: `NaN` operands always return `false`,
 /// matching source-level `f == f`. Float32 / Float64 share the
-/// emitter; LLVM picks the width from the param's actual type.
+/// emitter, and LLVM picks the width from the param's actual type.
 fn emit_float_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

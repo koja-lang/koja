@@ -3,10 +3,10 @@
 //!
 //! Three-phase across all packages so an enum's tuple/struct payload
 //! can carry another struct or enum regardless of declaration
-//! order: [`declare_enum_type`] mints opaque placeholders for the
+//! order. [`declare_enum_type`] mints opaque placeholders for the
 //! outer + every variant's complete + every non-Unit variant's
-//! payload; [`define_enum_payload_bodies`] sets the variant payload
-//! bodies (no size queries, so opaque inner references are fine);
+//! payload. [`define_enum_payload_bodies`] sets the variant payload
+//! bodies (no size queries, so opaque inner references are fine).
 //! [`define_enum_completes_and_outer`] then sets the variant
 //! complete + outer bodies once every transitively-referenced
 //! payload is set.
@@ -14,8 +14,8 @@
 //! The complete + outer phase has a sub-ordering requirement of its
 //! own: a variant complete body sizes its padding from
 //! `get_abi_alignment(payload)`, and the outer body sizes itself
-//! from `max(get_abi_size(complete))` across variants — both
-//! returns 0/1 when the payload references an opaque inner enum
+//! from `max(get_abi_size(complete))` across variants. Both
+//! return 0/1 when the payload references an opaque inner enum
 //! outer. [`crate::program::compile_program`] walks `decl_order`
 //! (a topologically-sorted enum list) so every dependency's outer
 //! is already set when an enum's complete+outer phase runs.
@@ -27,9 +27,9 @@
 //!   `<enum>.<variant>.payload`.
 //! - **Per-variant complete**: `{ i8 tag, [pad x i8], payload }` for
 //!   non-Unit (`pad = align(payload) - 1` so the payload starts at
-//!   its natural alignment; `[0 x i8]` when align is 1, so the
-//!   payload always lives at field index 2 — the construction
-//!   emitter doesn't have to special-case the no-padding subcase).
+//!   its natural alignment, `[0 x i8]` when align is 1). The
+//!   payload always lives at field index 2, so the construction
+//!   emitter doesn't have to special-case the no-padding subcase.
 //!   `{ i8 tag }` for Unit. Name: `<enum>.<variant>`.
 //! - **Outer**: `{ [count x iN] }` where `N = max_align * 8` and
 //!   `count * max_align >= max_complete_size` (rounded up). The
@@ -76,10 +76,10 @@ pub(crate) fn define_enum_payload_bodies<'ctx>(
 
 /// Set every variant's complete body and the enum's outer chunk
 /// body, then register the variant layouts. Must run after every
-/// transitively-referenced enum's outer body has been set —
-/// `get_abi_alignment` on a variant payload that names an opaque
-/// enum outer returns 1 instead of the real alignment, which would
-/// collapse the padding and outer chunk count. The caller
+/// transitively-referenced enum's outer body has been set,
+/// otherwise `get_abi_alignment` on a variant payload that names an
+/// opaque enum outer returns 1 instead of the real alignment, which
+/// would collapse the padding and outer chunk count. The caller
 /// ([`crate::program::compile_program`]) drives this in
 /// topological dependency order.
 pub(crate) fn define_enum_completes_and_outer<'ctx>(
@@ -213,8 +213,8 @@ fn define_outer_body<'ctx>(
 fn lookup_named_struct<'ctx>(ctx: &EmitContext<'ctx>, name: &str) -> StructType<'ctx> {
     ctx.context.get_struct_type(name).unwrap_or_else(|| {
         panic!(
-            "LLVM emit: named struct `{name}` not declared — \
-             declare_enum_type ordering violation",
+            "LLVM emit: named struct `{name}` not declared \
+             (declare_enum_type ordering violation)",
         )
     })
 }

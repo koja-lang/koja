@@ -1,5 +1,5 @@
 //! `Concat` emission. `String` and `Binary` byte-align and inline a
-//! `malloc + memcpy + memcpy + (NUL)` shape; `Bits` defers to the
+//! `malloc + memcpy + memcpy + (NUL)` shape. `Bits` defers to the
 //! `__koja_concat_bits` runtime helper because sub-byte
 //! alignment is far cleaner in Rust than LLVM IR.
 
@@ -13,7 +13,7 @@ use crate::runtime::{declare_concat_bits_extern, declare_malloc_extern};
 use super::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 
 /// Lower an `IRInstruction::Concat` to its per-kind shape. `String`
-/// and `Binary` both byte-align — the common shape is `malloc(8 +
+/// and `Binary` both byte-align: the common shape is `malloc(8 +
 /// total_bytes [+1])` + two `memcpy`s + (String only) trailing
 /// `\0`. `Bits` defers to the `__koja_concat_bits` runtime
 /// helper.
@@ -100,7 +100,7 @@ fn emit_byte_aligned_concat<'ctx>(
 
 /// Load a heap payload's `i64 bit_length` (the word at `payload -
 /// LENGTH_OFFSET`) plus its derived `bit_length >> 3` byte count.
-/// Shared between the lhs / rhs sides of [`emit_byte_aligned_concat`];
+/// Shared between the lhs / rhs sides of [`emit_byte_aligned_concat`].
 /// `prefix` is just for LLVM SSA-name readability.
 fn bits_and_bytes<'ctx>(
     ctx: &EmitContext<'ctx>,

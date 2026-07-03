@@ -1,7 +1,7 @@
 //! LLVM emit for `IRInstruction::Spawn` / `IRInstruction::Receive`
 //! and the [`FunctionKind::SpawnWrapper`] / [`FunctionKind::ProcessEntryWrapper`]
-//! bodies. The mailbox surface lives in `koja-runtime-posix/src/scheduler.rs`;
-//! this module is the sole call site for the `koja_rt_*` declares
+//! bodies. The mailbox surface lives in `koja-runtime-posix/src/scheduler.rs`.
+//! This module is the sole call site for the `koja_rt_*` declares
 //! minted in [`crate::runtime`].
 //!
 //! The three pieces snap together as follows:
@@ -9,9 +9,9 @@
 //! - The lowerer mints a `FunctionKind::SpawnWrapper { state }`
 //!   shim per state cell (deduped), whose IR body is a single call
 //!   into the IR-synthesized `<state>.__spawn_body` that carries the
-//!   real semantics — `start`, the `Result` match, the `run` chain —
+//!   real semantics (`start`, the `Result` match, the `run` chain)
 //!   under normal ownership lowering. The shim declaration's IR
-//!   signature is ignored at LLVM declare time —
+//!   signature is ignored at LLVM declare time:
 //!   [`crate::function::function_signature`] hard-codes a
 //!   `void wrapper(i8*)` shape so the symbol is callable through
 //!   `koja_rt_spawn`'s `ProcessFn` typedef.
@@ -31,7 +31,7 @@
 //!   `after` is present), inspects the envelope's tag byte,
 //!   deserializes the payload into the arm's payload local, and
 //!   branches into the matching arm body block. The host block
-//!   ends with the dispatch — its IR-level
+//!   ends with the dispatch, so its IR-level
 //!   [`koja_ir::IRTerminator::Unreachable`] terminator is
 //!   then a no-op (handled by the already-terminated guard in
 //!   [`super::emit_block`]).
@@ -61,7 +61,7 @@ use super::{ValueMap, lookup};
 
 /// Synthesize the body of a [`koja_ir::FunctionKind::SpawnWrapper`]
 /// function. The LLVM declaration is the scheduler's `void(i8*)`
-/// `ProcessFn` shape; everything semantic (`start`, the `Result`
+/// `ProcessFn` shape. Everything semantic (`start`, the `Result`
 /// match, the `run` chain, ownership) lives in the IR-synthesized
 /// `<state>.__spawn_body` named by the wrapper's IR `Call`. This
 /// emitter only adapts the ABI:
@@ -151,7 +151,7 @@ fn emit_wrapper_shim<'ctx>(
     Ok(body_call.try_as_basic_value().basic())
 }
 
-/// The process-body symbol named by the wrapper shim's IR `Call` —
+/// The process-body symbol named by the wrapper shim's IR `Call`:
 /// the single source of truth linking shim to body (no name
 /// re-derivation in the backend).
 fn wrapper_body_callee(function: &IRFunction) -> Result<&IRSymbol, LlvmError> {
@@ -165,8 +165,8 @@ fn wrapper_body_callee(function: &IRFunction) -> Result<&IRSymbol, LlvmError> {
         })
         .ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "LLVM emit: wrapper `{}` IR body carries no process-body call — lower \
-                 invariant violation",
+                "LLVM emit: wrapper `{}` IR body carries no process-body call (lower \
+                 invariant violation)",
                 function.symbol,
             ))
         })
@@ -348,12 +348,12 @@ pub(super) fn emit_yield_check(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
 /// `koja_rt_receive_timeout` when `after` is present) to copy the next
 /// message's payload into it (the runtime strips the tag header and
 /// frees the transport buffer), then branches into the arm whose tag
-/// matches the returned wire tag. The host block ends with the dispatch
-/// — its IR `Unreachable` terminator is a no-op once the
+/// matches the returned wire tag. The host block ends with the
+/// dispatch, so its IR `Unreachable` terminator is a no-op once the
 /// `super::emit_block` already-terminated guard kicks in.
 ///
 /// `dest` and `result_type` come from the IR for symmetry with
-/// other instruction emitters; the host block never reads `dest`
+/// other instruction emitters. The host block never reads `dest`
 /// because dispatch always exits via an arm, so we don't bind
 /// anything in `values` for it. Each arm body branches to the
 /// `receive_merge` block declared by the lowerer, which is the SSA
@@ -386,7 +386,7 @@ pub(super) fn emit_receive<'ctx>(
 /// into. Sized to the widest arm payload and 8-aligned (an `i64` array,
 /// since every Koja value type is at most 8-aligned), so one slot
 /// serves whichever arm matches. Returns the slot pointer and its byte
-/// capacity; the runtime clamps the copy to that capacity.
+/// capacity. The runtime clamps the copy to that capacity.
 fn build_payload_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
     arms: &[ReceiveArm],
@@ -470,8 +470,8 @@ fn timeout_tag_branch<'ctx>(
 /// the payload-load logic without re-emitting it at every comparison
 /// site.
 ///
-/// Tags that no arm declares fall through to an `unreachable` —
-/// the typecheck seal admits only declared shapes, so a runtime
+/// Tags that no arm declares fall through to an `unreachable`.
+/// The typecheck seal admits only declared shapes, so a runtime
 /// envelope with an unknown tag indicates a runtime/wire-protocol
 /// bug.
 fn dispatch_arms<'ctx>(
@@ -541,8 +541,8 @@ fn deserialize_payload_into_local<'ctx>(
 // ----- shared serializer ---------------------------------------------------
 
 /// Stack-allocate `value` in the entry block, return the pointer
-/// (already `i8*`-shaped — opaque pointers in modern LLVM IR mean
-/// no bitcast is required) and the type's ABI byte size as `i64`.
+/// (already `i8*`-shaped, since opaque pointers in modern LLVM IR
+/// mean no bitcast is required) and the type's ABI byte size as `i64`.
 /// Used by the spawn / send paths (in this module and the
 /// `Ref` / `ReplyTo` intrinsic emitters in
 /// [`crate::intrinsics::process`]) to pass typed values across
