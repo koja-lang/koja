@@ -1835,7 +1835,7 @@ back = cs.to_string()
 cs.free()
 ```
 
-`String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies the bytes back into an Koja `String`. The original string is unaffected by either conversion.
+`String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies the bytes back into a Koja `String`. The original string is unaffected by either conversion.
 
 ### Passing Pointers to C
 

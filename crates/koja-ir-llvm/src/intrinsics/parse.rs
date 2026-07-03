@@ -2,7 +2,7 @@
 //! and `Float.parse(input: String) -> Result<Float, NumericConversionError>`.
 //!
 //! Both delegate to runtime helpers (`koja_int_parse` /
-//! `koja_float_parse`) that take an Koja string payload pointer and
+//! `koja_float_parse`) that take a Koja string payload pointer and
 //! an out-pointer for the parsed scalar, returning a
 //! `koja-runtime` `parse_text` code: ok, invalid format, or out of
 //! range (a well-formed number that doesn't fit the target — an

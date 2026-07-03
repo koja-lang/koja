@@ -1,4 +1,4 @@
-//! `List<T>` family — heap-backed dynamic array. Eval stores elements
+//! `List<T>` family: heap-backed dynamic array. Eval stores elements
 //! in `Rc<RefCell<Vec<Value>>>`, but under value semantics every
 //! mutator (`append`, `concat`, `pop`, `replace_at`) is
 //! copy-on-write: it clones the receiver's backing vec into a fresh
@@ -7,7 +7,7 @@
 //!
 //! `get` and `pop` materialize `Option<T>` / `Pair<Option<T>, List<T>>`
 //! values directly. The receiver symbol for the option / pair shape
-//! flows from `function.return_type`; the inner Option symbol for
+//! flows from `function.return_type`. The inner Option symbol for
 //! `pop` is resolved off Pair's struct decl through the resolver,
 //! so neither path fabricates an [`IRSymbol`] from a string.
 
@@ -171,7 +171,7 @@ fn struct_return_symbol(function: &IRFunction, label: &str) -> Result<IRSymbol, 
 }
 
 /// Resolve `Pair<Option<T>, List<T>>`'s `first` field type to the
-/// `Option<T>` symbol via the resolver — keeps `IRSymbol` opaque
+/// `Option<T>` symbol via the resolver. Keeps `IRSymbol` opaque
 /// (no string-mangled fabrication).
 fn pair_first_option_symbol<R: CallResolver>(
     pair_symbol: &IRSymbol,
@@ -182,8 +182,8 @@ fn pair_first_option_symbol<R: CallResolver>(
             .struct_decl(pair_symbol.mangled())
             .ok_or_else(|| RuntimeError::Unsupported {
                 detail: format!(
-                    "List.pop: Pair struct `{pair_symbol}` missing from IR — \
-                 seal invariant violation",
+                    "List.pop: Pair struct `{pair_symbol}` missing from IR \
+                 (seal invariant violation)",
                 ),
             })?;
     let first = decl

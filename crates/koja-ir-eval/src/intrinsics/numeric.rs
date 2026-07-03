@@ -1,9 +1,9 @@
-//! Explicit numeric conversions out of the hub types — the eval
+//! Explicit numeric conversions out of the hub types, the eval
 //! mirror of the LLVM backend's `intrinsics/numeric.rs`.
 //!
 //! All sized integers live as canonical `Value::Int(i64)` here, so
 //! a successful narrowing is just a bounds check (no representation
-//! change); `Float.to_float32` converts the variant. The checked
+//! change). `Float.to_float32` converts the variant. The checked
 //! conversions mint `NumericConversionError.OutOfRange` on failure,
 //! recovering the error enum's symbol from the `Result` return
 //! type's `Err` variant payload via the resolver.
@@ -24,7 +24,7 @@ pub(super) fn dispatch<R: CallResolver>(
     if matches!(convert, NumericConvert::FloatToFloat32) {
         let [Value::Float64(v)] = args else {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("Float.to_float32 expects a single Float receiver; got {args:?}"),
+                detail: format!("Float.to_float32 expects a single Float receiver, got {args:?}"),
             });
         };
         return Ok(Value::Float32(*v as f32));
@@ -32,7 +32,7 @@ pub(super) fn dispatch<R: CallResolver>(
 
     let [Value::Int(v)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("{convert:?} expects a single integer receiver; got {args:?}"),
+            detail: format!("{convert:?} expects a single integer receiver, got {args:?}"),
         });
     };
     let result_symbol = helpers::enum_return_symbol(function, &format!("{convert:?}"))?;
@@ -49,7 +49,7 @@ pub(super) fn dispatch<R: CallResolver>(
     Ok(helpers::result_value(result_symbol, converted))
 }
 
-/// Inclusive bounds the receiver must satisfy — mirrors the LLVM
+/// Inclusive bounds the receiver must satisfy. Mirrors the LLVM
 /// emitter's `checked_bounds`.
 fn checked_bounds(convert: NumericConvert) -> (i64, i64) {
     match convert {
@@ -65,7 +65,7 @@ fn checked_bounds(convert: NumericConvert) -> (i64, i64) {
             IntNarrowTarget::UInt64 => (0, i64::MAX),
         },
         // A `UInt64` bit pattern fits `Int` iff it is at most
-        // `i64::MAX` — i.e. non-negative under the signed view.
+        // `i64::MAX`, i.e. non-negative under the signed view.
         NumericConvert::UInt64ToInt => (0, i64::MAX),
     }
 }

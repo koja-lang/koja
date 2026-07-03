@@ -8,11 +8,11 @@
 //! The pointer-returning calls (`koja_cwd`, `koja_get_env`,
 //! `koja_hostname`) hand back a runtime-allocated payload that
 //! `CPtr<UInt8>.to_cstring` walks. Eval just round-trips the raw
-//! pointer through [`crate::value::Value::CPtr`]; the runtime side
+//! pointer through [`crate::value::Value::CPtr`]. The runtime side
 //! owns the storage layout.
 //!
 //! `koja_get_env` returns a null pointer when the requested variable
-//! is unset, matching the runtime's contract — `System.get_env`'s
+//! is unset, matching the runtime's contract: `System.get_env`'s
 //! `ptr.null?()` check then yields `Option.None` without any
 //! eval-side branching.
 

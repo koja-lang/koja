@@ -530,7 +530,7 @@ See [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) for the destination architect
 - **Backend protocol (today, implicit)**: codegen backends are crates that take a sealed `IRProgram` and produce target output. The LLVM backend is `koja-ir-llvm`; the interpreter is `koja-ir-eval`. Both follow the same pattern, which is the de facto protocol -- not yet a formal `CodeEmitter` trait on either side. Other backends become possible: Cranelift, direct WASM emission, C emission, alternative interpreters with debug affordances.
 - **Compiler pipeline**: `Source → raw AST → sealed AST → sealed IRProgram → [backend crate] → output`. The AST carries `Resolution` and `resolved_type` annotations on every relevant node after typechecking -- there is no separate TypedAST struct. Lowering happens once; backends only handle "emit a function call" and "emit a branch," not "figure out how closures capture variables."
 - **Build-time selection**: `koja run --backend={interpreter,llvm}` selects the run backend; `build` is always LLVM. One backend per build. A future WASM backend slots in as a third variant; the rest of the pipeline does not change.
-- **Remaining**: formalize `CodeEmitter` as an Koja-side protocol once self-hosting begins; publish `koja-ir` + the backend protocol as packages so third parties can build custom backends; per-package incremental caching of `lower_package`; the `--emit-package` / `--emit-ir` artifacts.
+- **Remaining**: formalize `CodeEmitter` as a Koja-side protocol once self-hosting begins; publish `koja-ir` + the backend protocol as packages so third parties can build custom backends; per-package incremental caching of `lower_package`; the `--emit-package` / `--emit-ir` artifacts.
 
 ### Literal protocols
 

@@ -1,26 +1,26 @@
 //! `Binary.*` and `Bits.to_binary` family.
 //!
-//! - `Binary.at(self, index: Int) -> Option<Int>` — O(1) byte read;
-//!   out-of-bounds indices return `None`.
-//! - `Binary.byte_size(self) -> Int` — `bytes.len()`.
-//! - `Binary.ptr(self) -> CPtr<UInt8>` — copies the byte payload
+//! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
+//!   Out-of-bounds indices return `None`.
+//! - `Binary.byte_size(self) -> Int`: `bytes.len()`.
+//! - `Binary.ptr(self) -> CPtr<UInt8>`: copies the byte payload
 //!   into a fresh rc-prefixed block (see [`crate::abi`]) so the
-//!   caller can hand it to C code; the caller owns the block.
+//!   caller can hand it to C code. The caller owns the block.
 //!   Mirrors the LLVM backend's shape: `Binary` is itself
 //!   heap-backed there, so `.ptr()` just hands out the existing
-//!   payload offset — eval has to copy because `Value::Binary`'s
+//!   payload offset. Eval has to copy because `Value::Binary`'s
 //!   `Rc<Vec<u8>>` gives no stable address guarantee, but the
 //!   *observable* C-side shape is identical.
-//! - `Binary.slice(self, range: Range) -> Binary` — copies the
-//!   inclusive byte range `[start, stop]`; endpoints clamp to the
+//! - `Binary.slice(self, range: Range) -> Binary`: copies the
+//!   inclusive byte range `[start, stop]`. Endpoints clamp to the
 //!   binary's bounds.
-//! - `Binary.to_bits(self) -> Bits` — zero-cost widening; reuses
+//! - `Binary.to_bits(self) -> Bits`: zero-cost widening. Reuses
 //!   the existing byte vec with `bit_length = bytes.len() * 8`.
-//! - `Binary.to_string(self) -> Result<String, String>` —
+//! - `Binary.to_string(self) -> Result<String, String>`:
 //!   UTF-8 validate the bytes and materialize the `Result` enum
 //!   via the receiver symbol on `function.return_type`.
-//! - `Bits.to_binary(self) -> Result<Binary, String>` — require
-//!   byte-aligned bit_length and return `Ok(Binary)`; else
+//! - `Bits.to_binary(self) -> Result<Binary, String>`: require
+//!   byte-aligned bit_length and return `Ok(Binary)`, else
 //!   `Err(reason)`.
 
 use koja_ir::{BinaryMethod, BitsMethod, IRFunction};
@@ -59,7 +59,7 @@ fn at(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Binary(bytes), Value::Int(index)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.at expects (Binary, Int) arguments; got {} arg(s): {args:?}",
+                "Binary.at expects (Binary, Int) arguments, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -76,7 +76,7 @@ fn slice(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Binary(bytes), Value::Struct { fields, .. }] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.slice expects (Binary, Range) arguments; got {} arg(s): {args:?}",
+                "Binary.slice expects (Binary, Range) arguments, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -96,7 +96,7 @@ fn byte_size(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Binary(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.byte_size expects a single Binary argument; got {} arg(s): {args:?}",
+                "Binary.byte_size expects a single Binary argument, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -108,7 +108,7 @@ fn ptr_(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Binary(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.ptr expects a single Binary argument; got {} arg(s): {args:?}",
+                "Binary.ptr expects a single Binary argument, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -120,7 +120,7 @@ fn to_bits(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Binary(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.to_bits expects a single Binary argument; got {} arg(s): {args:?}",
+                "Binary.to_bits expects a single Binary argument, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -136,7 +136,7 @@ fn to_string(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErro
     let [Value::Binary(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Binary.to_string expects a single Binary argument; got {} arg(s): {args:?}",
+                "Binary.to_string expects a single Binary argument, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -156,7 +156,7 @@ fn bits_to_binary(function: &IRFunction, args: &[Value]) -> Result<Value, Runtim
     let [Value::Bits { bytes, bit_length }] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Bits.to_binary expects a single Bits argument; got {} arg(s): {args:?}",
+                "Bits.to_binary expects a single Bits argument, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -166,8 +166,8 @@ fn bits_to_binary(function: &IRFunction, args: &[Value]) -> Result<Value, Runtim
         Ok(Value::Binary(bytes.clone()))
     } else {
         Err(Value::string(format!(
-            "Bits.to_binary: bit_length {bit_length} is not a multiple of 8 — payload \
-             has a trailing partial byte"
+            "Bits.to_binary: bit_length {bit_length} is not a multiple of 8 (payload \
+             has a trailing partial byte)"
         )))
     };
     Ok(helpers::result_value(result_symbol, parsed))

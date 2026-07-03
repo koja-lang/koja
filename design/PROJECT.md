@@ -1,6 +1,6 @@
 # Project Layout: Build Artifacts, Dependencies, and Execution Contexts
 
-Design notes for how an Koja project organizes itself on disk: where
+Design notes for how a Koja project organizes itself on disk: where
 source, dependencies, and tool-generated artifacts live; how builds
 profile differently from how they scope; how `koja test` slots into the
 profile/scope model; and how script execution (`.kojs`) handles the

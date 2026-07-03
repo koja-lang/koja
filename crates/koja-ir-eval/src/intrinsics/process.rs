@@ -1,9 +1,9 @@
 //! `Ref<M, R>` and `ReplyTo<R>` `@intrinsic` methods, implemented over
 //! the cooperative scheduler core (`koja-runtime-core`) that
 //! `koja-ir-eval` drives. Each method mirrors the LLVM backend's
-//! `koja_rt_*` emitter in `koja-ir-llvm/src/intrinsics/process.rs` — same
+//! `koja_rt_*` emitter in `koja-ir-llvm/src/intrinsics/process.rs` (same
 //! `Pair<M, Option<ReplyTo<R>>>` envelope shape, same reply-token
-//! correlation, same `CallError` mapping — but trafficking typed
+//! correlation, same `CallError` mapping), but traffics typed
 //! [`Value`]s through the core mailbox instead of serialized bytes.
 //!
 //! Only [`Ref.call`](RefMethod::Call) suspends: it parks on the caller's
@@ -24,7 +24,7 @@ use crate::interpreter::CallResolver;
 use crate::scheduler::{self, EvalMessage, ReplyInfo, YieldOnce};
 use crate::value::Value;
 
-/// `Option<T>::Some` tag (declaration order; v1 convention shared with
+/// `Option<T>::Some` tag (declaration order, v1 convention shared with
 /// [`helpers`]). Used to recover the `ReplyTo` payload type from an
 /// `Option<ReplyTo<R>>` decl when materializing a delivered call.
 const SOME_TAG: IRVariantTag = IRVariantTag(0);
@@ -59,7 +59,7 @@ pub(super) async fn reply_to_dispatch<R: CallResolver>(
 
 // ----- Ref methods --------------------------------------------------------
 
-/// `Ref.self_ref() -> Ref<M, R>` — wrap the running process's PID in the
+/// `Ref.self_ref() -> Ref<M, R>`: wrap the running process's PID in the
 /// `Ref` struct the return type names (`{ id }`).
 fn self_ref(function: &IRFunction) -> Result<Value, RuntimeError> {
     let IRType::Struct(symbol) = &function.return_type else {
@@ -76,7 +76,7 @@ fn self_ref(function: &IRFunction) -> Result<Value, RuntimeError> {
     })
 }
 
-/// `Ref.cast(self, msg)` — fire-and-forget: deliver `msg` as a business
+/// `Ref.cast(self, msg)`: fire-and-forget, delivering `msg` as a business
 /// message with an empty (`None`) reply slot.
 fn cast(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let pid = pid_from_ref(function, args)?;
@@ -85,7 +85,7 @@ fn cast(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Unit)
 }
 
-/// `Ref.send_after(self, msg, delay_ms)` — schedule `msg` as a business
+/// `Ref.send_after(self, msg, delay_ms)`: schedule `msg` as a business
 /// message fired after `delay_ms` (clamped non-negative), `None` reply slot.
 fn send_after(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let pid = pid_from_ref(function, args)?;
@@ -96,7 +96,7 @@ fn send_after(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErr
     Ok(Value::Unit)
 }
 
-/// `Ref.signal(self, event)` — deliver a lifecycle signal carrying the
+/// `Ref.signal(self, event)`: deliver a lifecycle signal carrying the
 /// event's variant index (Shutdown=0, Interrupt=1, Reload=2), routed to
 /// the target's system queue.
 fn signal(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
@@ -120,26 +120,26 @@ fn signal(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> 
     Ok(Value::Unit)
 }
 
-/// `Ref.kill(self)` — terminate the target immediately, no signal.
+/// `Ref.kill(self)`: terminate the target immediately, no signal.
 fn kill(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let pid = pid_from_ref(function, args)?;
     scheduler::kill(pid);
     Ok(Value::Unit)
 }
 
-/// `Ref.alive?(self) -> Bool` — whether the target is still running.
+/// `Ref.alive?(self) -> Bool`: whether the target is still running.
 fn alive(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let pid = pid_from_ref(function, args)?;
     Ok(Value::Bool(scheduler::is_alive(pid)))
 }
 
-/// `Ref.call(self, msg, timeout) -> Result<R, CallError>` — the
+/// `Ref.call(self, msg, timeout) -> Result<R, CallError>`: the
 /// synchronous request/reply primitive and the only suspending method.
 ///
 /// Mint a token, deliver `msg` as a business message carrying the caller's
 /// `ReplyTo` coordinates, then park on the caller's reply slot and yield.
 /// On resume, match the reply token (discarding stale replies from earlier
-/// timed-out calls); on deadline, map to `CallError.Timeout` (target alive)
+/// timed-out calls). On deadline, map to `CallError.Timeout` (target alive)
 /// or `CallError.ProcessDown` (target gone). Mirrors `emit_call`.
 async fn call<R: CallResolver>(
     function: &IRFunction,
@@ -170,8 +170,8 @@ async fn call<R: CallResolver>(
     let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(0) as u64);
     loop {
         if let Some(reply) = scheduler::take_reply(caller) {
-            // Correlate by token; a mismatch is a stale reply from an
-            // earlier call that already timed out — discard and keep waiting.
+            // Correlate by token. A mismatch is a stale reply from an
+            // earlier call that already timed out, so discard and keep waiting.
             if reply.reply.map(|info| info.token) == Some(token) {
                 scheduler::clear_awaiting_reply(caller);
                 return Ok(helpers::result_value(
@@ -198,7 +198,7 @@ async fn call<R: CallResolver>(
 
 // ----- ReplyTo methods ----------------------------------------------------
 
-/// `ReplyTo.send(self, reply) -> ReplyTo.Delivery` — route `reply` to the
+/// `ReplyTo.send(self, reply) -> ReplyTo.Delivery`: route `reply` to the
 /// originating caller's one-shot reply slot, stamped with `self`'s correlation
 /// token. Returns `Delivery.Delivered` if the caller was still awaiting the
 /// reply, `Delivery.Expired` if it had moved on. Mirrors `emit_reply_send`.
@@ -222,11 +222,11 @@ fn reply_send<R: CallResolver>(
 
 /// Build the `Pair<M, Option<ReplyTo<R>>>` value a delivered business
 /// message binds into a receive arm's payload local. The receiver's arm
-/// `payload_type` names the `Pair`; its second field names the
-/// `Option<ReplyTo<R>>` and (for a call) the `Some` variant names the
-/// `ReplyTo` struct — so the whole shape is recovered from the decls,
+/// `payload_type` names the `Pair`, its second field names the
+/// `Option<ReplyTo<R>>`, and (for a call) the `Some` variant names the
+/// `ReplyTo` struct, so the whole shape is recovered from the decls,
 /// mirroring the LLVM receive-side typed load. A `None` reply slot is a
-/// cast / timer fire; `Some` carries the caller's `ReplyTo` coordinates.
+/// cast / timer fire. `Some` carries the caller's `ReplyTo` coordinates.
 pub(crate) fn build_business_payload<R: CallResolver>(
     pair_type: &IRType,
     message: EvalMessage,
@@ -234,17 +234,17 @@ pub(crate) fn build_business_payload<R: CallResolver>(
 ) -> Value {
     let IRType::Struct(pair_symbol) = pair_type else {
         panic!(
-            "interpreter: business receive arm payload `{pair_type:?}` is not a `Pair` struct — \
-             seal invariant violation"
+            "interpreter: business receive arm payload `{pair_type:?}` is not a `Pair` struct \
+             (seal invariant violation)"
         );
     };
     let pair_decl = resolver.struct_decl(pair_symbol.mangled()).unwrap_or_else(|| {
-        panic!("interpreter: `Pair` struct `{pair_symbol}` missing from IR — seal invariant violation")
+        panic!("interpreter: `Pair` struct `{pair_symbol}` missing from IR (seal invariant violation)")
     });
     let IRType::Enum(option_symbol) = reply_field_type(pair_decl, pair_symbol) else {
         panic!(
-            "interpreter: `Pair` `{pair_symbol}` second field is not an `Option` enum — \
-             seal invariant violation"
+            "interpreter: `Pair` `{pair_symbol}` second field is not an `Option` enum \
+             (seal invariant violation)"
         );
     };
     let reply_to = message.reply.map(|info| Value::Struct {
@@ -260,7 +260,7 @@ pub(crate) fn build_business_payload<R: CallResolver>(
     }
 }
 
-/// The `Pair`'s second (reply) field type — the `Option<ReplyTo<R>>`.
+/// The `Pair`'s second (reply) field type, the `Option<ReplyTo<R>>`.
 fn reply_field_type<'a>(
     pair_decl: &'a koja_ir::IRStructDecl,
     pair_symbol: &IRSymbol,
@@ -271,8 +271,8 @@ fn reply_field_type<'a>(
         .map(|field| &field.ir_type)
         .unwrap_or_else(|| {
             panic!(
-                "interpreter: `Pair` struct `{pair_symbol}` has no second (reply) field — \
-                 seal invariant violation"
+                "interpreter: `Pair` struct `{pair_symbol}` has no second (reply) field \
+                 (seal invariant violation)"
             )
         })
 }
@@ -281,25 +281,25 @@ fn reply_field_type<'a>(
 /// enum decl's `Some` payload.
 fn reply_to_symbol<R: CallResolver>(option_symbol: &IRSymbol, resolver: &R) -> IRSymbol {
     let option_decl = resolver.enum_decl(option_symbol.mangled()).unwrap_or_else(|| {
-        panic!("interpreter: `Option` enum `{option_symbol}` missing from IR — seal invariant violation")
+        panic!("interpreter: `Option` enum `{option_symbol}` missing from IR (seal invariant violation)")
     });
     let some = option_decl
         .variants
         .iter()
         .find(|variant| variant.tag == SOME_TAG)
         .unwrap_or_else(|| {
-            panic!("interpreter: `Option` `{option_symbol}` has no `Some` variant — seal invariant violation")
+            panic!("interpreter: `Option` `{option_symbol}` has no `Some` variant (seal invariant violation)")
         });
     match &some.payload {
         IRVariantPayload::Tuple(types) => match types.as_slice() {
             [IRType::Struct(symbol)] => symbol.clone(),
             other => panic!(
-                "interpreter: `Option.Some` payload `{other:?}` is not a single `ReplyTo` struct — \
-                 seal invariant violation"
+                "interpreter: `Option.Some` payload `{other:?}` is not a single `ReplyTo` struct \
+                 (seal invariant violation)"
             ),
         },
         other => panic!(
-            "interpreter: `Option.Some` payload `{other:?}` is not a tuple — seal invariant violation"
+            "interpreter: `Option.Some` payload `{other:?}` is not a tuple (seal invariant violation)"
         ),
     }
 }

@@ -1,25 +1,23 @@
 //! Eval's cooperative implementation of the `koja-runtime-core`
-//! scheduler protocol — the second implementor after the native
+//! scheduler protocol, the second implementor after the native
 //! `koja-runtime-posix` adapter.
 //!
 //! The defining asymmetry with native: eval's [`Executor`] **is** the
 //! interpreter. A process is an `async` interpreter future owned here in
-//! [`EvalExecutor`]; [`resume`](EvalExecutor::resume) polls it until it
-//! next awaits (a `receive` park) or completes. Because the suspended
+//! [`EvalExecutor`], and [`resume`](EvalExecutor::resume) polls it until
+//! it next awaits (a `receive` park) or completes. Because the suspended
 //! state lives inside the boxed future rather than a saved stack pointer,
-//! the protocol's `Execution` and `Continuation` are both `()` — there is
+//! the protocol's `Execution` and `Continuation` are both `()`. There is
 //! nothing for the driver to marshal across the resume, which is exactly
 //! the [`CooperativeDriver`]'s `Continuation = ()` contract.
 //!
-//! The run loop itself is the shared [`CooperativeDriver`]; this module
+//! The run loop itself is the shared [`CooperativeDriver`]. This module
 //! supplies the capabilities behind it. The running process reaches back
-//! into the core table through thread-locals — [`CORE`] (the installed
-//! table, the cooperative analog of native's global `SCHED`) and
-//! [`CURRENT_PID`] (set around each [`resume`](EvalExecutor::resume),
-//! mirroring native's per-worker `CURRENT_PID`) — so `receive` and
-//! `spawn` need no parameter threading through the interpreter. `spawn`
-//! requests are staged in [`PENDING_SPAWNS`] and fulfilled by the
-//! executor (which holds the program) right after the spawning resume.
+//! into the core table through the [`CORE`] and [`CURRENT_PID`]
+//! thread-locals, so `receive` and `spawn` need no parameter threading
+//! through the interpreter. `spawn` requests are staged in
+//! [`PENDING_SPAWNS`] and fulfilled by the executor (which holds the
+//! program) right after the spawning resume.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -47,7 +45,7 @@ pub(crate) type EvalTable = ProcessTable<(), EvalMessage>;
 
 /// Shared owner of the core table. The driver loop and the per-process
 /// await points (which park / peek the mailbox) all reach the table
-/// through this handle; the borrow is held only across single core
+/// through this handle. The borrow is held only across single core
 /// operations, never across a `resume`.
 pub(crate) type CoreHandle = Rc<RefCell<EvalTable>>;
 
@@ -66,15 +64,15 @@ pub(crate) type EvalDriver<'a, R> =
 thread_local! {
     /// The core table for the in-flight `run_program`, installed for the
     /// duration of the run. The cooperative analog of native's global
-    /// `SCHED`; per-thread so parallel test runs stay isolated.
+    /// `SCHED`, per-thread so parallel test runs stay isolated.
     static CORE: RefCell<Option<CoreHandle>> = const { RefCell::new(None) };
     /// The PID the executor is currently resuming, set around each
     /// `resume`. Mirrors native's per-worker `CURRENT_PID`.
     static CURRENT_PID: Cell<Pid> = const { Cell::new(0) };
     /// Reductions the resuming process may still spend before a `YieldCheck`
     /// forces it to yield. Seeded from the PCB's budget on each resume so the
-    /// per-check decrement is a plain `Cell` write, never a table borrow —
-    /// the cooperative analog of native's `REDUCTIONS_LEFT`.
+    /// per-check decrement is a plain `Cell` write, never a table borrow.
+    /// The cooperative analog of native's `REDUCTIONS_LEFT`.
     static REDUCTIONS_LEFT: Cell<u32> = const { Cell::new(0) };
     /// `spawn` requests raised during a resume, drained and fulfilled by
     /// the executor before the driver claims the next process.
@@ -137,7 +135,7 @@ pub(crate) fn record_crash(crash_info: CrashInfo) {
 }
 
 /// Runs `f` against the installed core table. Panics if no runtime is
-/// installed — `receive` / `spawn` only run inside a driven process.
+/// installed, since `receive` / `spawn` only run inside a driven process.
 fn with_table<T>(f: impl FnOnce(&mut EvalTable) -> T) -> T {
     CORE.with(|slot| {
         let guard = slot.borrow();
@@ -168,14 +166,14 @@ pub(crate) fn park_receive(pid: Pid, deadline: Option<Instant>) {
 
 /// Parks `pid` as `Blocked` on its one-shot reply slot, with an optional
 /// timeout deadline. Used by `Ref.call` so only a reply delivery (not
-/// queued business/lifecycle traffic) wakes the caller — calls are atomic.
+/// queued business/lifecycle traffic) wakes the caller. Calls are atomic.
 pub(crate) fn park_reply(pid: Pid, deadline: Option<Instant>) {
     with_table(|table| table.try_park(pid, WaitTarget::Reply, deadline));
 }
 
 /// Parks `pid` as `WaitingIO` for the reactor (`io_block`). Returns
-/// whether the park took (a refused park means a kill landed mid-run, and
-/// the caller must not arm the fd — there is no waiter to wake).
+/// whether the park took. A refused park means a kill landed mid-run, and
+/// the caller must not arm the fd because there is no waiter to wake.
 pub(crate) fn park_io(pid: Pid) -> bool {
     with_table(|table| table.try_park_io(pid))
 }
@@ -188,7 +186,7 @@ pub(crate) fn runtime_installed() -> bool {
     CORE.with(|slot| slot.borrow().is_some())
 }
 
-/// Illegal state-transition count for the installed cooperative core —
+/// Illegal state-transition count for the installed cooperative core,
 /// eval's analog of the native `koja_rt_sched_violations` oracle. Reads
 /// eval's own `ProcessTable` (not the native `SCHED`, which never runs
 /// under eval) so the kill/park race fixtures actually exercise the
@@ -264,8 +262,7 @@ pub(crate) fn is_alive(pid: Pid) -> bool {
 
 /// Sets the currently-resuming process's scheduling priority from a
 /// `Priority` variant index (0=Low, 1=Normal, 2=High). The cooperative
-/// analog of native's `koja_rt_set_priority`; reads [`current_pid`] and
-/// retargets it on the installed core table.
+/// analog of native's `koja_rt_set_priority`.
 pub(crate) fn set_priority(level: i64) {
     let pid = current_pid();
     with_table(|table| table.set_priority(pid, Priority::from_index(level)));
@@ -273,7 +270,7 @@ pub(crate) fn set_priority(level: i64) {
 
 /// Records the currently-resuming process's exit reason from a wire code
 /// (0=Normal, 1=Shutdown, ...). The cooperative analog of native's
-/// `koja_rt_process_exit`; runs in the process-body tail just before the
+/// `koja_rt_process_exit`. Runs in the process-body tail just before the
 /// process completes, so the reason is set when `mark_dead_if_alive` fires.
 pub(crate) fn process_exit(reason: i64) {
     let pid = current_pid();
@@ -283,7 +280,7 @@ pub(crate) fn process_exit(reason: i64) {
 /// The SIGTERM drain grace window, from `KOJA_GRACE_MS` (default 30s, to
 /// match Kubernetes' `terminationGracePeriodSeconds`). After this elapses,
 /// the driver force-kills any straggler. Read here so the core driver stays
-/// env-free; the native adapter has its own copy.
+/// env-free. The native adapter has its own copy.
 pub(crate) fn grace_period() -> Duration {
     const DEFAULT_GRACE_MS: u64 = 30_000;
     let millis = std::env::var("KOJA_GRACE_MS")
@@ -326,8 +323,8 @@ pub(crate) fn mint_token() -> i64 {
 }
 
 /// Allocates a child PCB and stages its `spawn` request. The PID is
-/// returned immediately (for the `Ref` the spawning process produces);
-/// the child's future is installed by the executor after this resume.
+/// returned immediately (for the `Ref` the spawning process produces).
+/// The child's future is installed by the executor after this resume.
 pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
     // Refuse new processes once draining (SIGTERM seen): the program is
     // shutting down. The invalid pid 0 makes the returned `Ref` behave like
@@ -347,7 +344,7 @@ pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
 }
 
 /// A mailbox message carrying a typed [`Value`] (vs. the native byte
-/// `Envelope`). `tag` is the routing class; `reply` carries the call/reply
+/// `Envelope`). `tag` is the routing class. `reply` carries the call/reply
 /// correlation coordinates when present.
 pub(crate) struct EvalMessage {
     /// The routing class (business / lifecycle / reply / IO-ready).
@@ -379,9 +376,9 @@ impl Message for EvalMessage {
 }
 
 /// Yields control back to the driver exactly once. The caller parks
-/// itself in the table first; the first poll then returns `Pending` (the
-/// driver won't re-resume a `Blocked` process), and the next poll — which
-/// only happens after a delivery or deadline promotes the process —
+/// itself in the table first. The first poll then returns `Pending` (the
+/// driver won't re-resume a `Blocked` process), and the next poll, which
+/// only happens after a delivery or deadline promotes the process,
 /// returns `Ready`. The receive loop re-checks the mailbox after each.
 pub(crate) struct YieldOnce {
     yielded: bool,
@@ -426,7 +423,7 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
     }
 
     /// Register a process's body. The entry future is installed here by
-    /// `run_program`; children are installed by [`install_pending_spawns`].
+    /// `run_program`. Children are installed by [`install_pending_spawns`].
     pub(crate) fn install_future(&self, pid: Pid, future: ProcessFuture<'a>) {
         self.futures.borrow_mut().insert(pid, future);
     }
@@ -507,7 +504,7 @@ impl<R: CallResolver> MessageSource<EvalMessage> for EvalExecutor<'_, R> {
 }
 
 /// Monotonic time for receive deadlines and timer firing. Eval shares the
-/// host clock with native — same instant the LLVM backend would observe.
+/// host clock with native, the same instant the LLVM backend would observe.
 pub(crate) struct EvalClock;
 
 impl Clock for EvalClock {
@@ -517,15 +514,14 @@ impl Clock for EvalClock {
 }
 
 /// OS lifecycle signals. Reuses the process-wide latching handlers shared
-/// with the native scheduler ([`koja_runtime::signals`]); the driver
+/// with the native scheduler ([`koja_runtime::signals`]). The driver
 /// drains these into `Lifecycle` messages for the entry process.
 ///
 /// Handlers are always installed (so a SIGTERM latches rather than killing
 /// the host), but the latched flags are only **drained** when the program
 /// actually has a `Lifecycle`-arm `receive` (`drain_lifecycle`). The flags
 /// are process-global, so an eval run that ignores them must not consume
-/// them out from under a concurrent run that wants them — the in-process
-/// analog of native's per-process signal state.
+/// them out from under a concurrent run that wants them.
 pub(crate) struct EvalSignals {
     drain_lifecycle: bool,
 }
@@ -553,7 +549,7 @@ impl SignalSource for EvalSignals {
 }
 
 /// Maps a drained signal's variant index (SIGTERM=0, SIGINT=1, SIGHUP=2)
-/// to its [`Lifecycle`] event; see `koja/design/ABI.md`.
+/// to its [`Lifecycle`] event, matching the runtime's wire encoding.
 fn lifecycle_from_index(index: i64) -> Option<Lifecycle> {
     match index {
         0 => Some(Lifecycle::Shutdown),
@@ -565,8 +561,8 @@ fn lifecycle_from_index(index: i64) -> Option<Lifecycle> {
 
 /// Drive `future` to completion on the current thread, parking between
 /// polls. The synchronous entry seams ([`crate::interpreter`]'s
-/// `run_function` / `run_script`) use this to run a non-process body —
-/// which never parks — to its value; the driver loop polls process
+/// `run_function` / `run_script`) use this to run a non-process body
+/// (which never parks) to its value. The driver loop polls process
 /// futures directly rather than through here.
 pub(crate) fn block_on<F: Future>(future: F) -> F::Output {
     let mut future = Box::pin(future);

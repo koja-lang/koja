@@ -52,7 +52,7 @@ extend CPtr<UInt8>
   fn to_binary(self, len: Int) -> Binary
 
   @doc """
-  Reinterprets this pointer as an Koja `String`. The pointer must already
+  Reinterprets this pointer as a Koja `String`. The pointer must already
   point to a valid length-prefixed Koja string payload (as allocated by
   the runtime). This is a zero-cost operation.
   """

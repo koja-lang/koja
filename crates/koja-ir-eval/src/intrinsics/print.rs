@@ -1,4 +1,4 @@
-//! `@intrinsic Global.print(s: String) -> Unit` — write the string
+//! `@intrinsic Global.print(s: String) -> Unit`: write the string
 //! to stdout with a trailing newline. Matches the LLVM-side
 //! [`__koja_print_string`] runtime contract byte-for-byte so
 //! both backends produce identical stdout for `print(...)` calls.
@@ -14,7 +14,7 @@ pub(super) fn global_print(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::String(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Global.print expects a single String argument; got {} arg(s): {args:?}",
+                "Global.print expects a single String argument, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });

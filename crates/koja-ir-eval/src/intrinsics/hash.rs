@@ -1,9 +1,9 @@
-//! Eval handlers for the `Hash` intrinsic family — `Bool` and the
+//! Eval handlers for the `Hash` intrinsic family: `Bool` and the
 //! 8 integer cells (flattened to [`Value::Int(i64)`]) feed their
 //! native bit pattern through SplitMix64. `String` walks each byte
 //! of the UTF-8 payload through FNV-1a (offset basis
 //! `0xcbf29ce484222325`, prime `0x100000001b3`) so eval and native
-//! produce byte-identical hash codes for the same input — see the
+//! produce byte-identical hash codes for the same input. See the
 //! LLVM-side [`crate::intrinsics::hash::emit_string_hash`] for the
 //! IR-level twin.
 
@@ -19,7 +19,7 @@ pub(super) fn dispatch(impl_: HashImpl, args: &[Value]) -> Result<Value, Runtime
     let [arg] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Hash.hash ({impl_:?}) expects 1 argument; got {} arg(s): {args:?}",
+                "Hash.hash ({impl_:?}) expects 1 argument, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -31,7 +31,7 @@ pub(super) fn dispatch(impl_: HashImpl, args: &[Value]) -> Result<Value, Runtime
         (_, other) => {
             return Err(RuntimeError::TypeMismatch {
                 detail: format!(
-                    "Hash.hash ({impl_:?}) expects an operand matching the impl cell; \
+                    "Hash.hash ({impl_:?}) expects an operand matching the impl cell, \
                      got {other:?}",
                 ),
             });
@@ -49,7 +49,7 @@ fn fnv1a(bytes: &[u8]) -> u64 {
     hash
 }
 
-/// SplitMix64 — the same constants the LLVM emitter inlines so eval
+/// SplitMix64: the same constants the LLVM emitter inlines so eval
 /// and native produce byte-identical hashes for the same input.
 fn splitmix64(value: u64) -> u64 {
     let mut z = value.wrapping_add(0x9E3779B97F4A7C15);

@@ -7,7 +7,7 @@
 //! the receiver type matters: signed types use arithmetic shift
 //! (sign-extend, native `i64 >> n`), unsigned types use logical
 //! shift (cast through `u64 >> n`). [`IntType::is_signed`] supplies
-//! the answer; the typed dispatch payload threads it through
+//! the answer. The typed dispatch payload threads it through
 //! without re-parsing strings.
 
 use koja_ir::{BitOp, IntType};
@@ -15,8 +15,8 @@ use koja_ir::{BitOp, IntType};
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-/// Run a bitwise intrinsic. `ty` selects right-shift signedness;
-/// every other op is width-agnostic on the eval `Value::Int(i64)`
+/// Run a bitwise intrinsic. `ty` selects right-shift signedness.
+/// Every other op is width-agnostic on the eval `Value::Int(i64)`
 /// representation.
 pub(super) fn dispatch(ty: IntType, op: BitOp, args: &[Value]) -> Result<Value, RuntimeError> {
     let lhs = arg_int(args, 0, op)?;
@@ -26,7 +26,7 @@ pub(super) fn dispatch(ty: IntType, op: BitOp, args: &[Value]) -> Result<Value, 
         BitOp::Bor => lhs | arg_int(args, 1, op)?,
         BitOp::Bsl => {
             let n = arg_int(args, 1, op)?;
-            // Cast to u32 for the Rust shift; out-of-range counts
+            // Cast to u32 for the Rust shift. Out-of-range counts
             // are undefined in LLVM and saturate-to-zero in this
             // interpreter (panics worse than mismatched semantics).
             lhs.wrapping_shl(n as u32)

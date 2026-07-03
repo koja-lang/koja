@@ -5,7 +5,7 @@
 //! on this crate (its `#[link]` attributes do the work).
 //!
 //! Argument shapes mirror the Koja declarations one-for-one (every
-//! Koja-side `Int64` arrives here as `i64`; every Koja-side
+//! Koja-side `Int64` arrives here as `i64`, every Koja-side
 //! `CPtr<UInt8>` as `*mut u8`). Where the actual C signature uses a
 //! narrower or differently-qualified type (`int` returns, `*mut u32`
 //! out-params, `const` pointers) we declare the extern with the

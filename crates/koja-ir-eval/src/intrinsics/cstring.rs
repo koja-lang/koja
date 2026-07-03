@@ -1,7 +1,7 @@
-//! `CString.to_string(self) -> String` — copies the bytes pointed
+//! `CString.to_string(self) -> String`: copies the bytes pointed
 //! at by the CString's `ptr: CPtr<UInt8>` (with byte length carried
 //! by the sibling `len: Int` field) into a fresh Koja `String`.
-//! The CString's underlying buffer is left untouched — callers
+//! The CString's underlying buffer is left untouched. Callers
 //! free it explicitly via `CString.free`.
 
 use std::slice;
@@ -12,13 +12,13 @@ use crate::value::Value;
 pub(super) fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Struct { fields, .. }] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CString.to_string expects a single CString struct; got {args:?}"),
+            detail: format!("CString.to_string expects a single CString struct, got {args:?}"),
         });
     };
     let [Value::CPtr(ptr), Value::Int(len)] = fields.as_slice() else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "CString.to_string: receiver fields must be `(CPtr<UInt8>, Int)`; got {fields:?}",
+                "CString.to_string: receiver fields must be `(CPtr<UInt8>, Int)`, got {fields:?}",
             ),
         });
     };
@@ -28,7 +28,7 @@ pub(super) fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
-            detail: "CString.to_string(ptr=null, len>0) is undefined behavior; refusing to copy"
+            detail: "CString.to_string(ptr=null, len>0) is undefined behavior, refusing to copy"
                 .to_string(),
         });
     }

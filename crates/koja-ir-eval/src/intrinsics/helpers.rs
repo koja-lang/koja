@@ -1,4 +1,4 @@
-//! Cross-intrinsic helpers — shared shapes that several `intrinsics/`
+//! Cross-intrinsic helpers: shared shapes that several `intrinsics/`
 //! handlers reach for. Lifted out to keep `option_value` /
 //! `result_value` / `size_of_primitive` from drifting across
 //! sibling modules.
@@ -9,20 +9,20 @@ use crate::error::RuntimeError;
 use crate::interpreter::CallResolver;
 use crate::value::{EnumPayload, Value};
 
-/// `Option<T>::Some` carries the only tuple-payload variant; v1
+/// `Option<T>::Some` carries the only tuple-payload variant, and v1
 /// monotonically assigns tag `0`. The `option_value` helper bakes
 /// that in so callers don't have to fish through the enum decl for
 /// each invocation.
 const SOME_TAG: IRVariantTag = IRVariantTag(0);
 const NONE_TAG: IRVariantTag = IRVariantTag(1);
 
-/// `Result<T, E>::Ok` carries the value; `::Err` carries the error.
+/// `Result<T, E>::Ok` carries the value and `::Err` carries the error.
 /// Same v1 convention as `Option`'s `Some` / `None`.
 const OK_TAG: IRVariantTag = IRVariantTag(0);
 const ERR_TAG: IRVariantTag = IRVariantTag(1);
 
 /// Construct an `Option<T>` value over `symbol`. `Some(value)` lands
-/// as a tuple-payload variant; `None` is a unit variant.
+/// as a tuple-payload variant. `None` is a unit variant.
 pub(super) fn option_value(symbol: IRSymbol, value: Option<Value>) -> Value {
     match value {
         Some(v) => Value::Enum {
@@ -128,7 +128,7 @@ pub(super) fn unit_variant_value<R: CallResolver>(
 }
 
 /// The single `Ok` payload type of a `Result` enum decl. The IR
-/// seal pins `Result.Ok` to exactly one tuple field; shape
+/// seal pins `Result.Ok` to exactly one tuple field. Shape
 /// violations surface as errors (not panics) because the intrinsic
 /// dispatch seam can't rely on seal.
 pub(super) fn single_ok_payload<R: CallResolver>(
@@ -179,7 +179,7 @@ pub(super) fn enum_return_symbol(
 /// Byte size of a primitive [`IRType`]. Used by `CPtr.alloc`,
 /// `CPtr.offset`, `CPtr.read`, `CPtr.write` to compute element-
 /// width offsets. Returns [`RuntimeError::Unsupported`] for non-
-/// primitive element types — eval can't allocate / step over a
+/// primitive element types: eval can't allocate / step over a
 /// struct or list without a full size-and-align computation, and
 /// the LLVM backend covers those cases on `--backend=llvm`.
 pub(super) fn size_of_primitive(ty: &IRType, label: &str) -> Result<usize, RuntimeError> {
@@ -192,7 +192,7 @@ pub(super) fn size_of_primitive(ty: &IRType, label: &str) -> Result<usize, Runti
         other => Err(RuntimeError::Unsupported {
             detail: format!(
                 "{label}: eval can only allocate / offset / read / write \
-                 primitive `CPtr<T>` element types; got `T = {other:?}`. \
+                 primitive `CPtr<T>` element types, got `T = {other:?}`. \
                  Use `--backend=llvm` for non-primitive pointee types.",
             ),
         }),

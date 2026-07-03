@@ -1,10 +1,10 @@
-//! `Map<K, V>` family — heap-backed associative container. Eval
+//! `Map<K, V>` family: heap-backed associative container. Eval
 //! stores entries in `Rc<RefCell<Vec<(Value, Value)>>>`, but under
 //! value semantics every mutator (`put`, `remove`) is
 //! copy-on-write: it clones the receiver's entry vec into a fresh
 //! `Rc` before mutating, so a shared binding is never observably
 //! mutated through another alias. A linear probe over the entry vec
-//! gives the right semantics — the LLVM backend's open-addressing
+//! gives the right semantics. The LLVM backend's open-addressing
 //! hash table is purely a perf detail that's invisible at the Koja
 //! level.
 //!

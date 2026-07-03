@@ -1,9 +1,9 @@
 //! Per-backend dispatch table for `@extern "C"` function bodies on
 //! the eval interpreter side. Mirrors [`crate::intrinsics`] in
-//! shape: each registered extern is keyed by its C symbol name —
+//! shape: each registered extern is keyed by its C symbol name,
 //! the same string the LLVM backend declares the function under
 //! ([`koja_ir::IRExternAttrs::link_name`] when present, or
-//! [`koja_ir::IRSymbol::last_segment`] otherwise) — and routed
+//! [`koja_ir::IRSymbol::last_segment`] otherwise), and routed
 //! to a hand-written handler that calls into `koja-runtime` (or
 //! libc) over the same C ABI symbol the LLVM backend would.
 //!

@@ -1,8 +1,8 @@
 //! Per-backend dispatch table for `@intrinsic` function bodies on
 //! the eval interpreter side. Mirrors the LLVM backend's
-//! `intrinsics/` shape — each registered intrinsic is keyed by its
+//! `intrinsics/` shape: each registered intrinsic is keyed by its
 //! [`koja_ir::FunctionKind::Intrinsic`] payload (an
-//! [`IRIntrinsicId`] -- a typed enum the lift pass mints from the
+//! [`IRIntrinsicId`], a typed enum the lift pass mints from the
 //! function's identifier path) and routed via an exhaustive `match`
 //! to a hand-written handler.
 //!
@@ -39,9 +39,9 @@ mod string;
 pub(crate) use process::build_business_payload;
 
 /// Run the registered intrinsic `id` against `args`. `function` is
-/// the calling [`IRFunction`] — handlers that mint typed return
+/// the calling [`IRFunction`]: handlers that mint typed return
 /// values (`Option<T>`, `Result<T, E>`, `Pair<...>`) read the
-/// receiver symbol from `function.return_type`; pointer-typed
+/// receiver symbol from `function.return_type`, and pointer-typed
 /// intrinsics (`CPtr.alloc`, `CPtr.offset`, …) read the element
 /// type from `function.params[0].ty` / `function.return_type` to
 /// compute `size_of::<T>()`. `resolver` is consulted when a

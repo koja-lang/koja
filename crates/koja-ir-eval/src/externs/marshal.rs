@@ -26,7 +26,7 @@ use crate::value::Value;
 pub(super) fn type_mismatch(name: &str, signature: &str, args: &[Value]) -> RuntimeError {
     RuntimeError::TypeMismatch {
         detail: format!(
-            "{name} expects {signature}; got {} arg(s): {args:?}",
+            "{name} expects {signature}, got {} arg(s): {args:?}",
             args.len(),
         ),
     }
@@ -41,7 +41,7 @@ macro_rules! c_type {
 }
 
 /// Koja ABI token + `&Value` → raw C argument. Expands inside a
-/// handler; a shape mismatch early-returns the handler's uniform
+/// handler. A shape mismatch early-returns the handler's uniform
 /// [`type_mismatch`](super::marshal::type_mismatch) error.
 macro_rules! unmarshal_arg {
     (CPtr, $value:expr, $symbol:expr, $signature:expr, $args:expr) => {

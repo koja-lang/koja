@@ -2,7 +2,7 @@
 //! `[i64 rc][i64 bit_length][payload…]` backs every Koja `String` /
 //! `Binary` payload that crosses the C boundary. This module is the
 //! single eval-side owner of the layout constants and the
-//! alloc/copy/free helpers — `intrinsics/binary.rs` (`Binary.ptr`),
+//! alloc/copy/free helpers: `intrinsics/binary.rs` (`Binary.ptr`),
 //! `intrinsics/cptr.rs` (`CPtr.to_string`), and
 //! `intrinsics/socket.rs` (resolve / recv_from buffers) all marshal
 //! through here.
@@ -36,7 +36,7 @@ unsafe extern "C" {
 /// Mirrors the runtime's `alloc_koja_string`: the payload is
 /// nul-terminated past `data.len()` so C consumers that walk to the
 /// terminator (e.g. `koja_socket_send_to`) stay in bounds, and empty
-/// inputs still get a real, non-null allocation — the same shape the
+/// inputs still get a real, non-null allocation, the same shape the
 /// runtime hands out.
 pub(crate) fn alloc_block(data: &[u8]) -> *mut u8 {
     let base = unsafe { koja_alloc(BLOCK_HEADER_SIZE + data.len() + 1) };

@@ -1,6 +1,6 @@
 //! Externs declared in `lib/net/src/tls.koja` (`@link "ssl:..."`).
 //!
-//! Direct calls into BoringSSL's libssl C ABI — the same archives
+//! Direct calls into BoringSSL's libssl C ABI, the same archives
 //! [`crate::externs::crypto`] links via `boring-sys`. Every symbol
 //! is a pure pass-through, so the whole surface rides
 //! [`super::marshal::pass_through_externs!`].
@@ -14,7 +14,7 @@
 //! Blocking-fd note: eval sockets are blocking (see
 //! [`crate::externs::net`]), so `SSL_connect` / `SSL_accept` /
 //! `SSL_read` / `SSL_write` block until the operation completes and
-//! never surface `SSL_ERROR_WANT_READ` / `WANT_WRITE` — the
+//! never surface `SSL_ERROR_WANT_READ` / `WANT_WRITE`. The
 //! stdlib's `fd.block(...)` retry path simply never runs under
 //! eval.
 
