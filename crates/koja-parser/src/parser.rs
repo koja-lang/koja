@@ -157,7 +157,7 @@ impl Parser {
             items.push(parse_one(self));
             if self.pos == before {
                 self.error(
-                    format!("unexpected token {:?}", self.peek()),
+                    format!("unexpected token {}", self.peek()),
                     self.current_span(),
                 );
                 self.advance();
@@ -198,7 +198,7 @@ impl Parser {
             self.advance()
         } else {
             let span = self.current_span();
-            let message = format!("expected {kind:?}, found {:?}", self.peek());
+            let message = format!("expected {kind}, found {}", self.peek());
             let hint = match kind {
                 TokenKind::End => Some("every 'fn', 'if', 'while', 'loop', 'for', and 'struct' must be closed with 'end'".into()),
                 _ => None,
@@ -225,7 +225,7 @@ impl Parser {
             self.pending_token = Some(TokenKind::Gt);
         } else {
             let span = self.current_span();
-            self.error(format!("expected >, found {:?}", self.peek()), span);
+            self.error(format!("expected `>`, found {}", self.peek()), span);
         }
     }
 
@@ -237,10 +237,7 @@ impl Parser {
             }
             _ => {
                 let span = self.current_span();
-                self.error(
-                    format!("expected identifier, found {:?}", self.peek()),
-                    span,
-                );
+                self.error(format!("expected identifier, found {}", self.peek()), span);
                 self.advance();
                 ERROR_IDENT.to_string()
             }
@@ -256,7 +253,7 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error(
-                    format!("expected type identifier, found {:?}", self.peek()),
+                    format!("expected type identifier, found {}", self.peek()),
                     span,
                 );
                 self.advance();
@@ -446,7 +443,7 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error(
-                    format!("unexpected token at top level: {:?}", self.peek()),
+                    format!("unexpected token at top level: {}", self.peek()),
                     span,
                 );
                 self.advance();

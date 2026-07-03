@@ -109,7 +109,7 @@ impl Parser {
                         let span = self.current_span();
                         self.error(
                             format!(
-                                "expected number after '-' in pattern, found {:?}",
+                                "expected number after `-` in pattern, found {}",
                                 self.peek()
                             ),
                             span,
@@ -120,7 +120,7 @@ impl Parser {
             }
             _ => {
                 let span = self.current_span();
-                self.error(format!("expected pattern, found {:?}", self.peek()), span);
+                self.error(format!("expected pattern, found {}", self.peek()), span);
                 self.advance();
                 Pattern::Wildcard { span }
             }

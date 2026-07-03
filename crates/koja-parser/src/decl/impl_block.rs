@@ -68,7 +68,7 @@ impl Parser {
                     let span = self.current_span();
                     self.error(
                         format!(
-                            "expected function or type alias in block body, found {:?}",
+                            "expected function or type alias in block body, found {}",
                             self.peek()
                         ),
                         span,

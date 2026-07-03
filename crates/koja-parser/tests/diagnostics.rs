@@ -173,3 +173,105 @@ fn diagnostic_messages_are_non_empty() {
         assert!(!diag.message.is_empty());
     }
 }
+
+#[test]
+fn unclosed_paren_renders_both_tokens_readably() {
+    let result = parse_failing("fn foo(");
+    assert_message_contains(&result, "expected `)`, found end of file");
+}
+
+#[test]
+fn missing_end_renders_keyword_and_keeps_hint() {
+    let src = dedent(
+        "
+        fn foo
+          1
+        ",
+    );
+    let result = parse_failing(&src);
+    assert_message_contains(&result, "keyword `end`");
+    assert_hint_contains(&result, "must be closed with 'end'");
+}
+
+#[test]
+fn lowercase_struct_name_includes_found_identifier() {
+    let src = dedent(
+        "
+        struct point
+        end
+        ",
+    );
+    let result = parse_failing(&src);
+    assert_message_contains(
+        &result,
+        "expected type identifier, found identifier `point`",
+    );
+}
+
+#[test]
+fn keyword_as_function_name_renders_keyword() {
+    let src = dedent(
+        "
+        fn match(x: Int)
+        end
+        ",
+    );
+    let result = parse_failing(&src);
+    assert_message_contains(&result, "expected identifier, found keyword `match`");
+}
+
+#[test]
+fn unclosed_generic_renders_expected_gt() {
+    let src = dedent(
+        "
+        fn f(x: List<Int)
+        end
+        ",
+    );
+    let result = parse_failing(&src);
+    assert_message_contains(&result, "expected `>`, found `)`");
+}
+
+#[test]
+fn stray_token_at_top_level_renders_lexeme() {
+    let result = parse_failing("}\n");
+    assert_message_contains(&result, "unexpected token at top level: `}`");
+}
+
+#[test]
+fn diagnostics_never_leak_debug_token_names() {
+    // Guard against a `{:?}` regression: none of the internal enum
+    // variant names may appear in any message across these fixtures.
+    let sources = [
+        "fn foo(",
+        "fn foo\n  1\n",
+        "struct point\nend\n",
+        "fn match(x: Int)\nend\n",
+        "fn f(x: List<Int)\nend\n",
+        "}\n",
+        "const = 1\n",
+        "fn run\n  x = match\nend\n",
+    ];
+    let debug_names = [
+        "EndOfFile",
+        "Newline",
+        "RParen",
+        "LParen",
+        "RBrace",
+        "LBrace",
+        "TypeIdent",
+        "Ident(",
+        "IntLit",
+    ];
+    for src in sources {
+        let result = parse_failing(src);
+        for message in common::error_messages(&result) {
+            for name in debug_names {
+                assert!(
+                    !message.contains(name),
+                    "debug token name `{name}` leaked into message: {message}",
+                );
+            }
+        }
+    }
+}

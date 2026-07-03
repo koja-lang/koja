@@ -51,7 +51,7 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error(
-                    format!("expected type expression, found {:?}", self.peek()),
+                    format!("expected type expression, found {}", self.peek()),
                     span,
                 );
                 self.advance();

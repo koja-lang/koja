@@ -85,7 +85,7 @@ impl Parser {
             stmts.push(self.parse_statement());
             if self.pos == before {
                 self.error(
-                    format!("unexpected token {:?}", self.peek()),
+                    format!("unexpected token {}", self.peek()),
                     self.current_span(),
                 );
                 self.advance();

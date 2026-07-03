@@ -23,7 +23,7 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error(
-                    format!("expected constant name, found {:?}", self.peek()),
+                    format!("expected constant name, found {}", self.peek()),
                     span,
                 );
                 self.advance();

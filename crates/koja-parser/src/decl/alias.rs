@@ -75,7 +75,7 @@ impl Parser {
 
         if !matches!(self.peek(), TokenKind::TypeIdent(_)) {
             self.error(
-                format!("expected package path in alias, found {:?}", self.peek()),
+                format!("expected package path in alias, found {}", self.peek()),
                 self.current_span(),
             );
             return path;
