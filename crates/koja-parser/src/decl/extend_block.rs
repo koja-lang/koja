@@ -1,5 +1,5 @@
 //! `extend Type ... end` attaches inherent methods to `Type`.
-//! Members share `impl`'s grammar; bodies are parsed via
+//! Members share `impl`'s grammar. Bodies are parsed via
 //! [`Parser::parse_impl_members`].
 
 use koja_ast::ast::{ExtendBlock, Item};

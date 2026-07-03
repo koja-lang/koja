@@ -16,7 +16,7 @@
 //!
 //! - `Some` / `None` use [`Pattern::Constructor`] shorthand so
 //!   resolve looks the variant up on the subject's enum
-//!   (`Global.Option<T>`); a user-defined `Option<T>` in the same
+//!   (`Global.Option<T>`). A user-defined `Option<T>` in the same
 //!   package can't shadow it.
 //! - Slot ids are per-function-unique (`__it_0`, `__it_1`, …) so
 //!   nested / sibling fors don't collide via the reassignment-
@@ -25,7 +25,7 @@
 //!   surrounding `while` resolves under (it pushes a
 //!   `loop_break_seen` slot) and IR-lower targets at the
 //!   `while_exit` block.
-//! - Only statement-position fors are rewritten; expression-
+//! - Only statement-position fors are rewritten. Expression-
 //!   position fors fall through to resolve's feature-gap diagnostic.
 
 use koja_ast::ast::{Arg, BinOp, Expr, ExprKind, LValue, Literal, MatchArm, Pattern, Statement};

@@ -5,7 +5,7 @@
 //! pattern shapes in payload / field positions (literals, nested
 //! enums, nested structs, or-alternatives), `Or` (alternatives
 //! restricted to literal / EnumUnit, no bindings), and
-//! `Constructor` shorthand (`Some(x)`, `None`, `Ok(x)`, ...) —
+//! `Constructor` shorthand (`Some(x)`, `None`, `Ok(x)`, ...).
 //! `Constructor` rewrites in place to the corresponding `EnumTuple`
 //! / `EnumUnit` after looking the variant up on the subject's enum,
 //! so seal / generics-substitute / lowering never see the shape.
@@ -16,15 +16,15 @@
 //!
 //! # Module layout
 //!
-//! - [`constructor`] — `Some(x)` / `None` / `Ok(x)` shorthand,
+//! - [`constructor`]: `Some(x)` / `None` / `Ok(x)` shorthand,
 //!   rewritten in place to its qualified form.
-//! - [`enums`] — `EnumUnit` / `EnumTuple` / `EnumStruct` shapes,
+//! - [`enums`]: `EnumUnit` / `EnumTuple` / `EnumStruct` shapes,
 //!   plus the shared enum-lookup / generic-substitution helpers.
-//! - [`structs`] — plain-struct destructure and the field-pattern
+//! - [`structs`]: plain-struct destructure and the field-pattern
 //!   walker shared with struct-shaped enum variants.
-//! - [`or_pattern`] — `A | B | C` alternatives with intra-or-pattern
+//! - [`or_pattern`]: `A | B | C` alternatives with intra-or-pattern
 //!   reachability warnings.
-//! - [`literals`] — literal-vs-subject type checking and the
+//! - [`literals`]: literal-vs-subject type checking and the
 //!   canonical literal-string representation used by the cross-arm
 //!   reachability machinery.
 
@@ -58,19 +58,19 @@ pub(super) struct VariantWitness {
 /// catch-all-or-exhaustiveness rule in
 /// [`super::match_expr::resolve_match`].
 pub(super) enum PatternCoverage {
-    /// Wildcard / binding — admits every value of the subject.
+    /// Wildcard / binding: admits every value of the subject.
     CatchAll,
-    /// `EnumUnit` / `EnumTuple` (or an `Or` of those) — admits the
-    /// listed variant tags. Exhaustiveness uses every witness;
+    /// `EnumUnit` / `EnumTuple` (or an `Or` of those): admits the
+    /// listed variant tags. Exhaustiveness uses every witness,
     /// reachability uses only the `full` ones.
     Variants(Vec<VariantWitness>),
-    /// `TypedBinding` matched against a union subject — admits
+    /// `TypedBinding` matched against a union subject: admits
     /// values whose runtime tag corresponds to `member`. Drives
     /// union exhaustiveness in [`super::match_expr::resolve_match`].
     UnionMember(ResolvedType),
     /// Literal patterns and `Or`s of literals. The arm fires for a
     /// specific runtime value but does not contribute to enum
-    /// exhaustiveness; primitive subjects use the strict
+    /// exhaustiveness. Primitive subjects use the strict
     /// catch-all-required rule.
     Other,
 }
@@ -274,7 +274,7 @@ fn rewrite_dotted_struct_pattern(pat: &mut Pattern, resolver: &Resolver<'_>) {
 /// True when `subject_ty` resolves to a primitive admitted as a
 /// literal-comparable subject (`Bool` / `Int` / `Float` / `String`).
 /// Patterns made entirely of catch-alls bypass this check at the
-/// `resolve_match` level — any subject type is fine when the only
+/// `resolve_match` level. Any subject type is fine when the only
 /// patterns are wildcards / bindings.
 pub(super) fn is_match_subject_primitive(
     subject_ty: &ResolvedType,

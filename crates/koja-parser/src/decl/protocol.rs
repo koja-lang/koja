@@ -49,7 +49,7 @@ impl Parser {
                     let span = self.current_span();
                     self.error(
                         format!(
-                            "expected function signature in protocol, found {:?}",
+                            "expected function signature in protocol, found {}",
                             self.peek()
                         ),
                         span,

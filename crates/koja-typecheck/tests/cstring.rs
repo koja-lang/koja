@@ -1,7 +1,7 @@
 //! Surface-level coverage for the auto-imported `Global.cstring`
 //! source. Pins the `CString` struct's two fields (`ptr: CPtr<UInt8>`,
 //! `len: Int`), the `free` body, and the
-//! `@intrinsic to_string` declaration — all reachable from user
+//! `@intrinsic to_string` declaration, all reachable from user
 //! code that round-trips through `CPtr<UInt8>.to_cstring`.
 
 use koja_ast::identifier::Identifier;
@@ -28,7 +28,7 @@ fn cstring_struct_and_methods_register() {
 }
 
 // Call-site coverage for `CString{ptr, len}` / `to_cstring` /
-// `to_string` is intentionally not pinned here — every shape that
+// `to_string` is intentionally not pinned here: every shape that
 // would exercise it requires producing a `CPtr<UInt8>` from user
 // code, which trips the deferred typed-local / return-bound
 // bidirectional inference seam ("cannot infer type parameter `T`

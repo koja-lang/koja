@@ -32,14 +32,14 @@ pub(super) fn lift_function_with_identifier(
 ) {
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         // Collect rejected this function (e.g. `self` receiver on a
-        // top-level fn, collision); nothing to stamp a signature on.
+        // top-level fn, collision). Nothing to stamp a signature on.
         return;
     };
     // A duplicate function declaration in the same package is
-    // already diagnosed by `collect`; the registry keeps the first
+    // already diagnosed by `collect`. The registry keeps the first
     // entry. If we still see a second function for this identifier,
-    // its signature has already been stamped by the first walk —
-    // skip to avoid tripping `set_signature`'s panic-on-double-set
+    // its signature has already been stamped by the first walk.
+    // Skip to avoid tripping `set_signature`'s panic-on-double-set
     // invariant.
     if matches!(entry.kind, GlobalKind::Function(Some(_))) {
         return;
@@ -100,7 +100,7 @@ pub(super) fn lift_function_with_identifier(
 /// Pull the concrete pinning args off a `SelfContext::Receiver` whose
 /// `self_override` is fully resolved. Returns the impl block target's
 /// `type_args` only when every entry is concrete (no `TypeParam`
-/// references); a generic-pinned `impl Bag<T>` stays empty here so
+/// references). A generic-pinned `impl Bag<T>` stays empty here so
 /// downstream lower paths skip the impl-args mangling shortcut and
 /// fall through to receiver-driven monomorphization. Inline / trait
 /// / top-level lifts return empty unconditionally.
@@ -118,7 +118,7 @@ fn concrete_impl_args(self_context: SelfContext<'_>) -> Vec<ResolvedType> {
     type_args.clone()
 }
 
-/// True when `ty` contains no `Resolution::TypeParam` references —
+/// True when `ty` contains no `Resolution::TypeParam` references:
 /// either a fully-concrete `Named { resolution: Global, .. }` (with
 /// concrete `type_args` recursively) or a function type whose
 /// params and return are both concrete. Used by
@@ -139,7 +139,7 @@ fn is_concrete_type(ty: &ResolvedType) -> bool {
 
 /// Override the declared return type for compiler-known divergent
 /// functions. `Global.Kernel.panic` is declared `-> Unit` in the
-/// shared stdlib source for v1 back-compat (v1 has no `Never`); the new pipeline
+/// shared stdlib source for v1 back-compat (v1 has no `Never`). The new pipeline
 /// rewrites it to `Never` here so match arms that end in
 /// `Kernel.panic(...)` skip the arm-tail join lattice and let
 /// `Option.unwrap` / `Result.unwrap` typecheck cleanly.
@@ -161,19 +161,19 @@ fn is_kernel_panic(identifier: &Identifier) -> bool {
 /// Validate a function's resolved signature against the FFI rules.
 /// Run after the signature is in hand (so validation works against
 /// `ResolvedType`s, not raw `TypeExpr`s) but before stamping it onto
-/// the registry — emitting diagnostics here keeps every path through
+/// the registry. Emitting diagnostics here keeps every path through
 /// typecheck honest. Stamping the signature anyway preserves
 /// downstream invariants (call sites can still see a `Function(Some(_))`
 /// entry, so resolve doesn't double-error on every call).
 ///
 /// Rules:
 ///
-/// - `@extern "C"` and `@intrinsic` are mutually exclusive — both
+/// - `@extern "C"` and `@intrinsic` are mutually exclusive: both
 ///   describe bodyless functions but with different semantics
 ///   (FFI-linked vs compiler-synthesized).
 /// - `@extern "C"` functions cannot have a body (the FFI symbol is
 ///   the implementation).
-/// - `@extern "C"` functions cannot take a `self` receiver — they
+/// - `@extern "C"` functions cannot take a `self` receiver: they
 ///   are top-level FFI declarations, not methods.
 /// - Every parameter and the return type must name an FFI-admissible
 ///   primitive: `Bool`, `Unit`, `Int8..UInt64`, `Float32`, `Float64`,
@@ -195,7 +195,7 @@ fn validate_extern_c_signature(
     if function.body.is_some() {
         diagnostics.push(Diagnostic::error(
             format!(
-                "`@extern \"C\"` functions cannot have a body — the C symbol is the \
+                "`@extern \"C\"` functions cannot have a body: the C symbol is the \
                  implementation (on `{identifier}`)"
             ),
             function.span,
@@ -229,7 +229,7 @@ fn validate_extern_c_signature(
             diagnostics.push(Diagnostic::error(
                 format!(
                     "`@extern \"C\"` parameter `{name}` has type `{}`, which is not \
-                     an FFI-admissible C type — admit only `Bool`, `Unit`, \
+                     an FFI-admissible C type. Admit only `Bool`, `Unit`, \
                      `Int8`..`UInt64`, `Float32`, `Float64`, or `CPtr<T>` \
                      (on `{identifier}`)",
                     type_expr_label(type_expr),
@@ -246,8 +246,8 @@ fn validate_extern_c_signature(
             .unwrap_or(function.span);
         diagnostics.push(Diagnostic::error(
             format!(
-                "`@extern \"C\"` return type is not an FFI-admissible C type — \
-                 admit only `Bool`, `Unit`, `Int8`..`UInt64`, `Float32`, \
+                "`@extern \"C\"` return type is not an FFI-admissible C type. \
+                 Admit only `Bool`, `Unit`, `Int8`..`UInt64`, `Float32`, \
                  `Float64`, or `CPtr<T>` (on `{identifier}`)"
             ),
             span,
@@ -280,7 +280,7 @@ fn is_ffi_admissible_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool 
 }
 
 /// Best-effort surface label for a [`TypeExpr`] in diagnostics. Picks
-/// the head identifier — close enough for FFI rejection messaging,
+/// the head identifier, close enough for FFI rejection messaging,
 /// where the user just needs a clue which type they wrote that we
 /// rejected (full pretty-printing lives in `koja-fmt`).
 fn type_expr_label(ty: &TypeExpr) -> String {
@@ -310,7 +310,7 @@ fn type_expr_span(ty: &TypeExpr) -> Span {
 /// being lifted. Innermost first: the function's own id (only when
 /// it declares its own params) over the enclosing receiver's id
 /// (always pushed for method contexts so `Self` resolves through
-/// the scope walker — the type-param name lookup naturally returns
+/// the scope walker: the type-param name lookup naturally returns
 /// `None` for non-generic owners). Top-level non-generic fns
 /// produce an empty stack.
 ///
@@ -339,7 +339,7 @@ fn type_param_owners(
         let Some((receiver_id, _)) = registry.lookup(receiver_identifier) else {
             panic!(
                 "lift_signatures: enclosing receiver `{receiver_identifier}` missing from \
-                 registry while building type-param scope on `{identifier}` — collect \
+                 registry while building type-param scope on `{identifier}`: collect \
                  invariant violation",
             );
         };
@@ -381,7 +381,7 @@ fn lift_param(
                     let Some((receiver_id, _)) = scope.registry.lookup(receiver_identifier) else {
                         panic!(
                             "lift_signatures: enclosing receiver `{receiver_identifier}` \
-                             missing from registry while lifting `self` on `{identifier}` — \
+                             missing from registry while lifting `self` on `{identifier}`: \
                              collect invariant violation",
                         );
                     };

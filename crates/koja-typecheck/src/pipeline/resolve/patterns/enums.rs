@@ -87,7 +87,7 @@ pub(super) fn resolve_enum_tuple_pattern(
     // Exhaustiveness sees the variant covered regardless of `full`.
     // Joint nested exhaustiveness (`Some(A)` + `Some(B)` + `None`
     // covering `Option<AB>` when `A` / `B` partition the inner enum)
-    // is still TODO — would need a Maranget-style coverage matrix.
+    // is still TODO. It would need a Maranget-style coverage matrix.
     PatternCoverage::Variants(vec![VariantWitness {
         full,
         tag: metadata.variant_index,

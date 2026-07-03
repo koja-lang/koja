@@ -1,10 +1,10 @@
-//! Phase 2 typecheck coverage for type-parameter bounds —
+//! Phase 2 typecheck coverage for type-parameter bounds:
 //! parsing/lifting `<T: P>`, multi-bound `<T: P1 & P2>`, bound name
 //! resolution, and call-site verification through
 //! [`koja_typecheck::pipeline::resolve::types::verify_bounds`].
 //!
-//! Bound *dispatch* — calling a bound's method on a value typed as
-//! the bounded param — lives in `bounded_dispatch.rs`. This file is
+//! Bound *dispatch* (calling a bound's method on a value typed as
+//! the bounded param) lives in `bounded_dispatch.rs`. This file is
 //! about the bound itself: that the registry remembers it, that
 //! call-site inference enforces it, and that the diagnostic shape
 //! matches LANGUAGE.md §10.
@@ -182,7 +182,7 @@ fn call_site_with_implemented_bound_succeeds() {
 
 #[test]
 fn call_site_with_partial_multi_bound_diagnoses_missing_protocol() {
-    // `Point` implements `Greeter` but not `Shower`; the
+    // `Point` implements `Greeter` but not `Shower`. The
     // verify_bounds walk should still emit one diagnostic for the
     // missing `Shower` impl even though `Greeter` is satisfied.
     let source = "
@@ -223,7 +223,7 @@ fn call_site_with_partial_multi_bound_diagnoses_missing_protocol() {
         !messages
             .iter()
             .any(|m| m.contains("does not implement protocol `Greeter`")),
-        "did not expect a Greeter diagnostic — Point implements Greeter; got {messages:?}",
+        "did not expect a Greeter diagnostic (Point implements Greeter); got {messages:?}",
     );
 }
 
@@ -232,7 +232,7 @@ fn call_site_threading_bounded_param_into_bounded_call_skips_head_check() {
     // `outer<U: Greeter>(u: U)` calls `inner<T: Greeter>(value: T)`
     // with `u`, threading a bounded type-param into another
     // generic. `verify_bounds` skips the head check on
-    // `Resolution::TypeParam` substitutions — the bound is
+    // `Resolution::TypeParam` substitutions. The bound is
     // enforced at `outer`'s caller, where the concrete type lands.
     let source = "
         protocol Greeter

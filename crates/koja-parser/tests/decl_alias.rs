@@ -1,5 +1,5 @@
 //! Coverage for `alias Pkg.Type` and `type Name = TypeExpr`
-//! declarations. (Package names are PascalCase — `JSON`, `Net`,
+//! declarations. (Package names are PascalCase: `JSON`, `Net`,
 //! `HTTP`, etc.)
 //!
 //! Pins:

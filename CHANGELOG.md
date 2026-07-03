@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Parse errors now describe tokens as they appear in source (``expected `)`, found end of file``) instead of internal compiler names (`expected RParen, found EndOfFile`).
 - A `panic()` in a spawned process is now contained to that process — the runtime prints the crash and keeps running, while a panic in the main process still exits non-zero.
 - `ReplyTo.send` now returns `ReplyTo.Delivery` (`Delivered`/`Expired`), reporting `Expired` when the caller already gave up on the reply; the result is advisory and handlers may ignore it.
 - `.print()` and `Debug` now render structs and enum variants with their full type path (e.g. `Shape.Circle`, `Process.StopReason.Normal`) instead of just the leaf name.

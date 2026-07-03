@@ -1,7 +1,7 @@
 //! Registry-backed [`ResolvedType`] predicates and rendering used
 //! across the resolve sub-pass.
 //!
-//! "Primitive" here means a preloaded `Global.<name>` stdlib stub; see
+//! "Primitive" here means a preloaded `Global.<name>` stdlib stub, see
 //! [`GlobalRegistry::with_stdlib_stubs`]. Constructors for those
 //! [`ResolvedType`]s live on the registry itself
 //! ([`GlobalRegistry::primitive`]) since both `lift_signatures` and
@@ -18,7 +18,7 @@ use crate::pipeline::unify::Substitution;
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
 
 /// Whether `path` resolves to a registered struct. Lets the resolver
-/// tell a nested struct from a struct-shaped enum variant — they parse
+/// tell a nested struct from a struct-shaped enum variant, since they parse
 /// to the same node.
 pub(super) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool {
     matches!(
@@ -42,10 +42,10 @@ pub(super) fn names_struct(path: &[String], scope: ResolutionScope<'_>) -> bool 
 /// [`super::super::lift_signatures::types::resolve_path_to_global`]:
 /// alias rewrite first, then `<package>.<segments…>`, then for
 /// multi-segment paths only the head-as-package interpretation
-/// (`<path[0]>.<path[1..]>` — what `alias`-rewrite would
+/// (`<path[0]>.<path[1..]>`, what `alias`-rewrite would
 /// construct), and finally `Global.<segments…>`. Mismatches
-/// return `None` (no diagnostic); callers convert to errors with
-/// their own message — they have the kind context (struct vs enum
+/// return `None` (no diagnostic). Callers convert to errors with
+/// their own message, since they have the kind context (struct vs enum
 /// vs static call).
 pub(crate) fn lookup_type<'r>(
     type_path: &[String],
@@ -93,9 +93,9 @@ pub(crate) fn is_primitive(ty: &ResolvedType, registry: &GlobalRegistry, name: &
 }
 
 /// Does `ty` admit `+`, `-`, `*`, `/`? Used by binary-arithmetic
-/// and compound-assign; mirrors the operand rule at
+/// and compound-assign, mirrors the operand rule at
 /// [`super::ops::binary_type`]'s `Add | Div | Mul | Sub` arm.
-/// Accepts every numeric primitive; cross-width pairing is rejected
+/// Accepts every numeric primitive. Cross-width pairing is rejected
 /// at the binary-op site, not here.
 pub(super) fn is_arithmetic_type(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     const NUMERIC: &[&str] = &[
@@ -135,7 +135,7 @@ pub(crate) fn canonical_union(
 /// Follow `Named { Global(id) }` through `GlobalKind::TypeAlias`
 /// expansions, returning the underlying type. Bare and non-alias
 /// types pass through unchanged. Cycles are bounded by a small
-/// recursion cap — `lift_type_aliases` rejects cycles up front, so
+/// recursion cap. `lift_type_aliases` rejects cycles up front, so
 /// hitting the cap here is a registry invariant violation.
 pub(crate) fn peel_alias(ty: &ResolvedType, registry: &GlobalRegistry) -> ResolvedType {
     peel_alias_capped(ty, registry, 32)
@@ -164,7 +164,7 @@ fn peel_alias_capped(ty: &ResolvedType, registry: &GlobalRegistry, fuel: usize) 
 /// Two resolved types interchangeable at struct-field / call-arg /
 /// return-type / type-parameter-binding / arm-join checks. Strict
 /// structural equality plus the `Int ≡ Int64` and `Float ≡ Float64`
-/// aliases applied recursively at every leaf — so
+/// aliases applied recursively at every leaf, so
 /// `Result<Int, String>` and `Result<Int64, String>` are equivalent,
 /// `fn (Int) -> Int64` and `fn (Int64) -> Int` are equivalent, etc.
 ///
@@ -173,14 +173,14 @@ fn peel_alias_capped(ty: &ResolvedType, registry: &GlobalRegistry, fuel: usize) 
 /// track to become an `Int8 | Int16 | Int32 | Int64` union, and
 /// `Float` likewise. Today the registry keeps `Int` and `Int64` as
 /// distinct `Identifier`s (so they remain distinct ids when one
-/// becomes the union and the other its member); this function
+/// becomes the union and the other its member). This function
 /// papers over that with a hardcoded pair check. When unions land
 /// the alias arm generalizes to a registry-backed
-/// "is `a` a member of `b`'s union (or vice versa)?" check; every
+/// "is `a` a member of `b`'s union (or vice versa)?" check, and every
 /// caller of `types_equivalent` keeps working unchanged.
 ///
 /// Wider numeric coercion (`Int → Int32` etc.) is a separate
-/// concept — that's literal-fit coercion at type-equality sites,
+/// concept: that's literal-fit coercion at type-equality sites,
 /// handled by [`super::coercion::check_compatible`].
 pub(crate) fn types_equivalent(
     a: &ResolvedType,
@@ -316,14 +316,14 @@ pub(super) fn display_resolution(ty: &ResolvedType, registry: &GlobalRegistry) -
 /// Walk an inference substitution and emit one diagnostic per
 /// inferred concrete type that fails to satisfy a bound on the
 /// corresponding generic param. Substitution slots that are still
-/// `None` (phantom) are skipped — the caller already emits a
+/// `None` (phantom) are skipped, the caller already emits a
 /// "cannot infer" diagnostic for those. Inferred [`Resolution::TypeParam`]
 /// substitutions (the bounded param being threaded into another
-/// generic call) skip the head check; the bound is enforced where
+/// generic call) skip the head check. The bound is enforced where
 /// the outer call's caller resolves.
 ///
 /// Wording follows LANGUAGE.md §10's bound-enforcement message
-/// verbatim — keep this surface stable across slices that re-use it.
+/// verbatim. Keep this surface stable across slices that re-use it.
 pub(super) fn verify_bounds(
     callee: Callee<'_>,
     subst: &Substitution,

@@ -49,7 +49,7 @@ fn cptr_uint8_concrete_impl_methods_register() {
 // inference seam ("cannot infer type parameter `T` of `Global.CPtr`
 // from the supplied arguments"). The dispatch path itself is still
 // reachable through autoimported `cstring.koja` callers (whose
-// `free` / `to_binary` calls land on the `CPtr<UInt8>` impl) — and
+// `free` / `to_binary` calls land on the `CPtr<UInt8>` impl), and
 // will round-trip end-to-end once the typed-local seam unblocks
 // `Random.bytes`-style call sites.
 
@@ -88,7 +88,7 @@ fn cptr_int32_write_rejects_non_literal_int_value() {
     // post-substitute arg validator runs `check_compatible`, which
     // coerces a literal but rejects a non-literal `Int` value. The
     // diagnostic flips from "T cannot be both" to a cleaner
-    // "argument expects `Int32`, got `Int`" — pin the new wording.
+    // "argument expects `Int32`, got `Int`". Pin the new wording.
     let failure = typecheck_fail(&dedent(
         "
         x: Int = 5

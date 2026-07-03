@@ -603,7 +603,7 @@ impl<'a> Printer<'a> {
     ///
     /// Flattens the left-recursive MethodCall tree into a root expression
     /// and a list of `.method(args)` segments. When the chain fits on one
-    /// line it stays inline; otherwise each call breaks onto its own line
+    /// line it stays inline. Otherwise each call breaks onto its own line
     /// indented 2 from the root.
     fn method_chain_to_doc(&mut self, expr: &Expr) -> Doc {
         let mut calls: Vec<(&str, &[Arg])> = Vec::new();
@@ -622,7 +622,7 @@ impl<'a> Printer<'a> {
 
         let root_doc = self.expr_to_doc(current);
 
-        // Glue the first call to a simple root; break it for call-rooted chains.
+        // Glue the first call to a simple root, break it for call-rooted chains.
         let anchor = if is_simple_chain_root(current) {
             let (first_method, first_args) = calls.remove(0);
             concat(vec![

@@ -35,12 +35,12 @@ use super::types::{
 ///
 /// `protocol_subst` maps the protocol's type-param slots to concrete
 /// types so conformance can compare apples to apples: slot 0 (`Self`)
-/// is the impl's resolved target type; slots 1..N are the type-args
+/// is the impl's resolved target type, slots 1..N are the type-args
 /// the user wrote on `trait_expr` (`Eq<String>` → `[String]`).
 #[derive(Clone, Copy)]
 struct ProtocolImplScope<'a> {
     package: &'a str,
-    /// Registry id for the protocol — needed by default-method
+    /// Registry id for the protocol, needed by default-method
     /// synthesis to recover the protocol's type-param names from
     /// [`crate::registry::GlobalRegistry::type_params`].
     protocol_id: GlobalRegistryId,
@@ -73,7 +73,7 @@ pub(super) fn lift_impl(
             .map(|(_, e)| &e.kind),
         Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
     ) {
-        // Collect already diagnosed; nothing was registered.
+        // Collect already diagnosed. Nothing was registered.
         return;
     }
     // Resolve the impl target's type expression up front so method
@@ -84,7 +84,7 @@ pub(super) fn lift_impl(
     // generic targets like `impl Bag<T>` the resolved target is
     // `Bag<TypeParam(Bag, 0)>`, which is identical to the
     // `concrete_self_type` shape the receiver fallback would
-    // build — keeping the override always-on simplifies the
+    // build. Keeping the override always-on simplifies the
     // method-lift loop without changing behavior for the common
     // generic-aliased case.
     let resolved_target = resolve_impl_target(impl_block, &target_identifier, scope);
@@ -207,7 +207,7 @@ struct ResolvedImplHeads {
 /// to the global Int id.
 ///
 /// Diagnostics from the inner [`resolve_type_expr`] are silenced
-/// here — they fire again as part of normal lift via the same
+/// here: they fire again as part of normal lift via the same
 /// scope, and we only want one copy on the user's screen.
 fn resolve_impl_target(
     impl_block: &ImplBlock,
@@ -261,7 +261,7 @@ fn resolve_protocol_impl_heads(
     // Scope rooted at the target struct/enum: `T` in `Bag<T>`
     // resolves to `TypeParam(Bag, 0)`, matching how an inline
     // method on `struct Bag<T>` would resolve `T`. The impl's free
-    // type-params alias the receiver's slots; we don't allocate a
+    // type-params alias the receiver's slots. We don't allocate a
     // separate impl-anchored scope.
     let owners = impl_target_owners(target_identifier, scope.registry);
     let type_params = TypeParamScope::new(&owners);
@@ -303,7 +303,7 @@ fn resolve_protocol_impl_heads(
         .type_params(protocol_id)
         .map(<[String]>::len)
         .unwrap_or(0);
-    // Slot 0 is the implicit `Self`; only slots 1..N are user-declared.
+    // Slot 0 is the implicit `Self`. Only slots 1..N are user-declared.
     let expected_user_args = protocol_arity.saturating_sub(1);
     if protocol_args.len() != expected_user_args {
         diagnostics.push(Diagnostic::error(
@@ -465,7 +465,7 @@ fn synthesize_default_method(
         .iter()
         .map(|p| p.name.clone())
         .collect();
-    // Synthesized protocol-default methods are always public — the
+    // Synthesized protocol-default methods are always public: the
     // protocol itself declared them, and `ProtocolMethod` doesn't
     // carry a `Visibility` field at the AST level. They register
     // under the target type's name like any other method.
@@ -497,7 +497,7 @@ fn synthesize_default_method(
 /// reference to a protocol type-param (`M`, `R`, …) into the
 /// concrete `TypeExpr` the impl pinned. The substitution covers
 /// param signatures, the return type, and every `TypeExpr` inside
-/// the body — match arms' typed-binding patterns,
+/// the body: match arms' typed-binding patterns,
 /// `pair: Pair<M, Option<ReplyTo<R>>>` receive-arm payloads, let-
 /// binding annotations, closures, and so on.
 ///
@@ -516,8 +516,8 @@ fn substitute_protocol_type_params(
     let Some(protocol_param_names) = scope.registry.type_params(impl_scope.protocol_id) else {
         return;
     };
-    // Slot 0 is the implicit `Self` (handled by `self_override`);
-    // user-declared params start at slot 1 and pair off with the
+    // Slot 0 is the implicit `Self` (handled by `self_override`).
+    // User-declared params start at slot 1 and pair off with the
     // user's `trait_expr` args.
     let user_param_names: &[String] = if protocol_param_names.is_empty() {
         return;
@@ -566,7 +566,7 @@ fn substitute_named_in_type_expr(type_expr: &mut TypeExpr, from: &str, to: &Type
         TypeExpr::Named { .. } | TypeExpr::Self_ { .. } | TypeExpr::Unit { .. } => {}
         TypeExpr::Generic { path, args, .. } => {
             // A bare `M<...>` would still need rewriting if `from`
-            // equals `path[0]` and `to` is itself a Generic — but
+            // equals `path[0]` and `to` is itself a Generic, but
             // protocol type-params are uniformly used as zero-arg
             // names, so the realistic case is just to recurse.
             let _ = path;

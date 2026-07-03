@@ -3,7 +3,7 @@
 //! Enum bodies share the function/field-interleave shape with
 //! `struct`: variant declarations can be intermixed with inline
 //! `fn` / `priv fn` / `@annotation fn` definitions. Variants come in
-//! three shapes — Unit (`Color`), Tuple (`Rect(Int, Int)`), and
+//! three shapes: Unit (`Color`), Tuple (`Rect(Int, Int)`), and
 //! Struct (`Pixel { x: Int, y: Int }`).
 
 use koja_ast::ast::{Annotation, EnumDecl, EnumVariant, EnumVariantData, Item};

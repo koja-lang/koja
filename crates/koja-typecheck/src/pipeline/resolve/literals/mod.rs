@@ -2,7 +2,7 @@
 //!
 //! Today's surface: list literals (`[a, b, c]`), map literals
 //! (`["k": v, ...]`), and binary literals (`<<...>>`). Each
-//! per-shape resolver lives in its own file; the carrier-protocol
+//! per-shape resolver lives in its own file. The carrier-protocol
 //! mechanics that list and map share (the
 //! `<carrier>.<from_method>(<canonical-literal>)` synthesis when
 //! the surrounding hint demands a non-default conformer) live in
@@ -10,9 +10,9 @@
 //! "hint-or-floor-or-diagnose" walk shared between list elements
 //! and map keys/values) lives in [`axis`].
 //!
-//! Future literal-protocol families — `IntLiteral<T>` for `123`,
+//! Future literal-protocol families (`IntLiteral<T>` for `123`,
 //! `FloatLiteral<T>` for `1.0`, `BinaryLiteral<T>` for `<<...>>`
-//! once it grows a protocol — slot in here as new files. Each one
+//! once it grows a protocol) slot in here as new files. Each one
 //! provides its own `CarrierSpec` plus literal-shape work
 //! (taking the inner kind apart, inferring per-axis types when
 //! relevant) and forwards through `dispatch_via_carrier` for the

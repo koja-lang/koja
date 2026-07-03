@@ -3,7 +3,7 @@
 //! These tests pin the contract: condition must be `Bool`, body
 //! statements resolve under the same rules as anywhere else, and
 //! the surface expression resolves to the join of every reaching
-//! arm tail (with `Never` as the lattice bottom — divergent arms
+//! arm tail (with `Never` as the lattice bottom: divergent arms
 //! contribute `Never` and don't constrain the join).
 //!
 //! `if` without `else` keeps statement-shape `Unit` typing.

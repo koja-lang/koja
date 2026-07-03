@@ -1,4 +1,4 @@
-//! Surface-level coverage for the `Debug` protocol — registration of
+//! Surface-level coverage for the `Debug` protocol: registration of
 //! the protocol itself, the primitive `@intrinsic` impls, the
 //! universal-Debug fallback that lets `T.format()` resolve on bare
 //! type parameters, and the hand-written stdlib container impls.
@@ -74,7 +74,7 @@ fn binary_and_bits_have_debug_impls() {
 fn generic_container_debug_impls_register_format_method() {
     // Hand-written impls live in
     // `lib/global/src/debug_containers.koja`. Each one stamps a
-    // `<Type>.format` entry in the registry; calling it requires
+    // `<Type>.format` entry in the registry. Calling it requires
     // monomorphization (covered in `koja-ir/tests`).
     let checked = typecheck("1\n");
     for ty in ["List", "Map", "Option", "Pair", "Result", "Set"] {

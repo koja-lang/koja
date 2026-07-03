@@ -121,12 +121,12 @@ pub(super) fn resolve_enum_construction(
 /// Infer concrete `type_args` for a generic enum construction by
 /// unifying each declared payload element's template against the
 /// resolved type of the supplied value. Unit variants enter with no
-/// payload pairs and rely entirely on bidirectional fallback —
-/// emits one diagnostic per [`Conflict`] and one per phantom param.
+/// payload pairs and rely entirely on bidirectional fallback.
+/// Emits one diagnostic per [`Conflict`] and one per phantom param.
 /// Shape-mismatched constructions skip inference and let
 /// [`validate_variant_payload`] surface the shape diagnostic.
 ///
-/// `expected` is the bidirectional fallback — slots that payload-
+/// `expected` is the bidirectional fallback: slots that payload-
 /// driven inference can't pin (a `Result.Err(e)` whose `T` only
 /// the surrounding context knows, or a unit `Maybe.None`) get
 /// filled from the surrounding expected type before the "cannot
@@ -272,7 +272,7 @@ fn bare_walk_construction_data(
 /// Resolve payload sub-expressions, threading declared field types
 /// into the struct-variant arm so `Option.None` / `[]` / nested
 /// struct-literals in field positions get a usable expected hint.
-/// Tuple variants still bare-walk — a positional-arg version of the
+/// Tuple variants still bare-walk. A positional-arg version of the
 /// same hint plumbing is a follow-on.
 fn walk_construction_data_with_variant(
     data: &mut EnumConstructionData,
@@ -289,7 +289,7 @@ fn walk_construction_data_with_variant(
 }
 
 /// Per-shape validation. Each arm picks the right validator based on
-/// the variant's declared `data` shape; mismatched shapes (e.g.
+/// the variant's declared `data` shape. Mismatched shapes (e.g.
 /// `Color.Red(42)` for a unit variant) produce one shape-mismatch
 /// diagnostic and let the inner exprs keep their already-resolved
 /// types.

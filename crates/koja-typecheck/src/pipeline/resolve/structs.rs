@@ -1,7 +1,7 @@
 //! Struct-literal construction and field-access resolution. Owns
 //! `validate_named_fields` (the shared name/type-checked field-init
 //! walk used by both struct construction and struct-variant
-//! construction) — structs own the "named field layout" concept,
+//! construction). Structs own the "named field layout" concept,
 //! and [`super::enums`] imports it rather than duplicating. The
 //! cross-cutting `lookup_type` registry helper lives one module
 //! over in [`super::types`] alongside the other registry-backed
@@ -101,7 +101,7 @@ pub(super) fn resolve_struct_construction(
     let Some(definition) = definition else {
         panic!(
             "typecheck: struct entry `{}` reached struct-literal validation \
-             without a stamped definition — every struct (including stdlib stubs) \
+             without a stamped definition: every struct (including stdlib stubs) \
              carries `Struct(Some(_))` after preload",
             struct_entry.identifier,
         );
@@ -165,7 +165,7 @@ pub(super) fn resolve_struct_construction(
     }
 }
 
-/// Resolve every field-init expression with no expected hint —
+/// Resolve every field-init expression with no expected hint, a
 /// fallback for paths where the struct itself failed to resolve.
 /// Keeps the seal pass walking a populated tree.
 fn bare_walk_fields(
@@ -259,7 +259,7 @@ fn canonical_struct_template(struct_id: GlobalRegistryId, arity: usize) -> Resol
 /// unifying each declared field's template type against the resolved
 /// type of its corresponding field-init value. `seeded` is the
 /// substitution after any bidirectional fill from the surrounding
-/// expected type; payload-driven unification adds to it without
+/// expected type. Payload-driven unification adds to it without
 /// overriding existing bindings. Emits one diagnostic per
 /// [`Conflict`] (T inferred to two distinct types) and one per
 /// phantom param (no field nor outer hint constrains it).
@@ -312,14 +312,14 @@ fn emit_conflict(
 
 /// Validate a [`FieldInit`] list against a declared
 /// [`ResolvedStructField`] roster. Shared by struct literal
-/// construction and enum struct-variant construction — both share
+/// construction and enum struct-variant construction. Both share
 /// the same shape and the same diagnostic surface (unknown field,
 /// duplicate initialization, missing field, wrong-typed init).
 ///
 /// `owner_label` is the prefix used in diagnostics
 /// (`MyApp.MyStruct` for structs, `MyApp.MyEnum.MyVariant` for
 /// enum struct variants). Each `FieldInit.value` must already have
-/// `resolution` populated (either resolved or `Unresolved`); inits
+/// `resolution` populated (either resolved or `Unresolved`). Inits
 /// with unresolved values skip the type-equality check (their own
 /// upstream diagnostic already fired).
 pub(super) fn validate_named_fields(
@@ -448,7 +448,7 @@ pub(super) fn resolve_field_access(
     let GlobalKind::Struct(Some(definition)) = &entry.kind else {
         diagnostics.push(Diagnostic::error(
             format!(
-                "field access requires a struct receiver; got `{}` ({})",
+                "field access requires a struct receiver, got `{}` ({})",
                 entry.identifier,
                 entry.kind.label(),
             ),
@@ -466,7 +466,7 @@ pub(super) fn resolve_field_access(
     // Substitute the field's declared type through the receiver's
     // type-args so `self.item` on `Bag<Int>` types as `Int`, not
     // `TypeParam(Bag, 0)`. For non-generic structs `type_args` is
-    // empty and substitution is a no-op; for generic-but-aliased
+    // empty and substitution is a no-op. For generic-but-aliased
     // receivers (`self: Bag<TypeParam(Bag, 0)>` inside an inherent
     // method on `struct Bag<T>`) the field type's `TypeParam`
     // round-trips back to itself.
@@ -475,7 +475,7 @@ pub(super) fn resolve_field_access(
 }
 
 /// `Global.<name>` types whose values are produced exclusively by
-/// literals, intrinsics, or arithmetic — never by struct-literal
+/// literals, intrinsics, or arithmetic, never by struct-literal
 /// syntax. The list mirrors the preloaded primitive stubs in
 /// [`crate::registry::GlobalRegistry::with_stdlib_stubs`].
 fn is_unconstructable_primitive(identifier: &Identifier) -> bool {

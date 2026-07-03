@@ -1,12 +1,12 @@
 //! Enum lifting: stamp the [`crate::registry::EnumDefinition`] from
 //! the AST `EnumDecl` and lift inline static / instance method
-//! signatures. Mirrors [`super::structs::lift_struct`] — every payload
+//! signatures. Mirrors [`super::structs::lift_struct`]: every payload
 //! `TypeExpr` resolves through the same [`super::types::resolve_type_expr`]
 //! used for struct fields and function params.
 //!
 //! Empty `Tuple()` and `Struct {}` payloads diagnose here so the IR
 //! and LLVM layers never see an empty non-`Unit` payload. The `Unit`
-//! variant shape (`Red`) is the canonical "no payload" form; an
+//! variant shape (`Red`) is the canonical "no payload" form. An
 //! empty tuple or struct is a parse-shape that doesn't carry useful
 //! information beyond what `Unit` already captures.
 
@@ -54,12 +54,12 @@ fn lift_enum_definition(
     let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
-            "lift_signatures: enum `{identifier}` missing from registry — \
+            "lift_signatures: enum `{identifier}` missing from registry: \
              collect invariant violation",
         );
     };
     if matches!(entry.kind, GlobalKind::Enum(Some(_))) {
-        // Duplicate decl is already diagnosed by `collect`; the
+        // Duplicate decl is already diagnosed by `collect`. The
         // first one stamped its definition. Skip to avoid tripping
         // `set_enum_definition`'s panic-on-double-set invariant.
         return;
@@ -79,8 +79,8 @@ fn lift_enum_definition(
                 if fields.is_empty() {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "typecheck does not support empty struct variants — \
-                             use `{}` (a unit variant) instead of `{} {{}}`",
+                            "typecheck does not support empty struct variants. \
+                             Use `{}` (a unit variant) instead of `{} {{}}`",
                             variant.name, variant.name,
                         ),
                         variant.span,
@@ -105,8 +105,8 @@ fn lift_enum_definition(
                 if types.is_empty() {
                     diagnostics.push(Diagnostic::error(
                         format!(
-                            "typecheck does not support empty tuple variants — \
-                             use `{}` (a unit variant) instead of `{}()`",
+                            "typecheck does not support empty tuple variants. \
+                             Use `{}` (a unit variant) instead of `{}()`",
                             variant.name, variant.name,
                         ),
                         variant.span,

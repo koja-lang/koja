@@ -11,11 +11,11 @@ One entry point:
 pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailure>;
 ```
 
-Success arm is **always sealed** — every relevant `Expr.resolution` fully
+Success arm is **always sealed**: every relevant `Expr.resolution` fully
 populated into the registry, every `Resolution` either
 `Global(GlobalRegistryId)` or `Unresolved` (only for nodes the seal contract
 excludes). The `seal_ast` invariant check runs as the last sub-pass of
-`check_program` and panics on violation; seal failures are compiler bugs, not
+`check_program` and panics on violation. Seal failures are compiler bugs, not
 recoverable conditions.
 
 Type identity flows through `Expr.resolution`, a registry-pointing
@@ -44,18 +44,18 @@ The order is forced by data dependencies, not preference. Each pass is a
 single function (`pub(crate)`) called by `program::check_program`.
 
 Script-mode files (top-level expressions, no surrounding `fn`) keep their
-statements on `File.body`. There is no synthetic `fn main` wrapper —
+statements on `File.body`. There is no synthetic `fn main` wrapper:
 `resolve` and `seal` walk `File.body` directly, and the IR layer's
 `lower_script` consumes that shape. Project-mode files leave `File.body` as
-`None`; their work lives in `File.items[Function]`.
+`None`. Their work lives in `File.items[Function]`.
 
 Future sub-passes land in this orchestration when the work they do becomes
-load-bearing — `strip_cfg` for `@cfg`-driven pruning, `synthesize` between
+load-bearing: `strip_cfg` for `@cfg`-driven pruning, `synthesize` between
 `collect` and `lift_signatures` for protocol defaults, `check` between
 `resolve` and `seal` for compatibility validation beyond what `resolve`
 enforces inline, and `annotate` between `check` and `seal` for coercion
 emission. They aren't in the pipeline yet because there's nothing for them
-to do — no-op pass-throughs would be dead architecture.
+to do. No-op pass-throughs would be dead architecture.
 
 ## Coverage today
 

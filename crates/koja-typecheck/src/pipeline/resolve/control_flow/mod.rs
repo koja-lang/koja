@@ -3,14 +3,14 @@
 //!
 //! `if`, `cond`, and ternary are value-producing when every reaching
 //! arm tail type joins. The join is strict equality (no coercion)
-//! with `Never` as the lattice bottom (`T ∪ Never = T`); divergent
+//! with `Never` as the lattice bottom (`T ∪ Never = T`). Divergent
 //! arms (bodies that end in `return`) contribute `Never` and so
 //! don't constrain the join.
 //!
-//! `unless` and `while` stay Unit-typed — loops are statement-shaped.
+//! `unless` and `while` stay Unit-typed. Loops are statement-shaped.
 //!
-//! `for` lives in [`crate::pipeline::synthesize::for_desugar`];
-//! resolve never sees a statement-position `for`.
+//! `for` lives in [`crate::pipeline::synthesize::for_desugar`].
+//! Resolve never sees a statement-position `for`.
 //!
 //! [`body_tail_type`], [`join_arm_tails`], and
 //! [`require_bool_condition`] are also consumed by
@@ -39,9 +39,9 @@ pub(super) fn resolve_if(
     require_bool_condition("if", condition, resolver.registry, diagnostics);
     resolve_body_with_expected(then_body, expected, resolver, diagnostics);
     let Some(else_body) = else_body else {
-        // No-`else` `if` is statement-shaped — there's no else-arm
+        // No-`else` `if` is statement-shaped: there's no else-arm
         // to join, so the surface expression is `Unit`. Matches the
-        // pre-block-params behavior; future "if-as-expression"
+        // pre-block-params behavior. Future "if-as-expression"
         // ergonomics that admit `if cond then 1 end` (Optional-typed
         // implicit None) is a separate slice.
         return resolver.registry.primitive("Unit");
@@ -64,7 +64,7 @@ pub(super) fn resolve_if(
 /// bottom), but the arms are expressions rather than statement
 /// bodies so we read `expr.resolution` directly instead of routing
 /// through `body_tail_type`. The parser disallows nested ternaries
-/// — `a ? b ? c : d : e` is a parse error — so we only ever join
+/// (`a ? b ? c : d : e` is a parse error), so we only ever join
 /// two arms here.
 pub(super) fn resolve_ternary(
     condition: &mut Expr,
@@ -108,7 +108,7 @@ pub(super) fn resolve_unless(
 /// equality join of every arm tail type plus the else-body tail.
 /// Mirrors v1's `cond` join (treating `Never` as bottom). Missing
 /// `else_body` defaults to a Unit sink so a `cond` without an else
-/// joins to `Unit` regardless of the arm tails — but the parser
+/// joins to `Unit` regardless of the arm tails, but the parser
 /// requires `else`, so this branch is defensive.
 pub(super) fn resolve_cond(
     arms: &mut [CondArm],
@@ -139,8 +139,8 @@ pub(super) fn resolve_cond(
     join_arm_tails("cond", &tails, span, resolver.registry, diagnostics)
 }
 
-/// Resolve a `while cond ... end` loop. Condition must be `Bool`;
-/// the body resolves under the same scope as anywhere else, with
+/// Resolve a `while cond ... end` loop. Condition must be `Bool`.
+/// The body resolves under the same scope as anywhere else, with
 /// `loop_depth` bumped and a fresh `loop_break_seen` slot pushed
 /// so any inner `break` is gated to this loop and doesn't bleed
 /// up to an outer enclosing loop. Result type is always `Unit`:
@@ -278,8 +278,8 @@ pub(super) fn join_arm_tails(
 }
 
 /// Compute a body's tail type. A body that contains any
-/// `Statement::Return` is `Never` (the body diverges); otherwise
-/// the trailing statement's type — `Statement::Expr` contributes
+/// `Statement::Return` is `Never` (the body diverges), otherwise
+/// the trailing statement's type: `Statement::Expr` contributes
 /// its resolved type, every other statement kind contributes `Unit`
 /// (assignments / breaks have no value), and an empty body is
 /// `Unit` too.
@@ -298,7 +298,7 @@ fn is_never(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
 }
 
 /// Diagnose a non-Bool condition. Skips the check when the
-/// condition itself failed to resolve — its own diagnostic is
+/// condition itself failed to resolve, since its own diagnostic is
 /// already in flight.
 pub(super) fn require_bool_condition(
     keyword: &str,

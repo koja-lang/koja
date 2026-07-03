@@ -1,7 +1,7 @@
 //! `struct Name<...> ... end`.
 //!
 //! Struct bodies interleave field declarations with inline `fn`,
-//! `priv fn`, and `@annotated fn` method definitions; the
+//! `priv fn`, and `@annotated fn` method definitions. The
 //! [`Parser::parse_type_body_function`] helper is shared with
 //! `enum` and `impl` bodies which have the same three-way split.
 

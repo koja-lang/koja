@@ -2,7 +2,7 @@
 //!
 //! Function types lift to [`ResolvedType::Anonymous`] with an
 //! [`AnonymousKind::Function`] payload carrying each parameter's
-//! resolved type; the return type recurses through the same lifter.
+//! resolved type. The return type recurses through the same lifter.
 //! These tests pin the surface for higher-order signatures
 //! (`fn (T) -> U` parameters and returns) and cover the stdlib shape
 //! that powers `list.map` / `list.filter`.
@@ -62,8 +62,8 @@ fn function_type_param_lifts_to_anonymous_function() {
 
 #[test]
 fn function_type_returning_function_type_nests() {
-    // Pin the lifter on a function-of-function return annotation;
-    // closure-value bodies arrive in a later slice, so this fixture
+    // Pin the lifter on a function-of-function return annotation.
+    // Closure-value bodies arrive in a later slice, so this fixture
     // is annotation-only with an `@intrinsic` declaration.
     let source = "
         @intrinsic
@@ -87,7 +87,7 @@ fn function_type_returning_function_type_nests() {
 
 #[test]
 fn dotted_type_in_signature_lifts_to_qualified_global() {
-    // `fn touch(crypto: Crypto.SHA256) -> Crypto.SHA256` — without
+    // `fn touch(crypto: Crypto.SHA256) -> Crypto.SHA256`, without
     // an `alias` line. The lifter should walk the dotted path
     // through `resolve_path_to_global` and produce a
     // `Resolution::Global(Crypto.SHA256)` leaf for both the

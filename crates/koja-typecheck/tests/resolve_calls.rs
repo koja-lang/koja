@@ -240,7 +240,7 @@ fn wrong_kind_callee_diagnoses() {
 #[test]
 fn non_ident_callee_diagnoses() {
     // `(42)()` parses as Call { callee: Group { Literal } }. The
-    // resolve_call arm pattern-matches on `ExprKind::Ident`; the
+    // resolve_call arm pattern-matches on `ExprKind::Ident`. The
     // Group falls through to the non-Ident diagnose path.
     let failure = typecheck_fail("(42)()\n");
     let messages = diagnostic_messages(&failure);

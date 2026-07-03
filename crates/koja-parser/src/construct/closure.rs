@@ -67,9 +67,9 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error_with_hint(
-                    format!("expected closure parameter, found {:?}", self.peek()),
-                    "closure parameters are named (`x` or `x: Int`) or `_`; \
-                     destructuring is not supported"
+                    format!("expected closure parameter, found {}", self.peek()),
+                    "closure parameters are named (`x` or `x: Int`) or `_`. \
+                     Destructuring is not supported"
                         .into(),
                     span,
                 );
@@ -83,7 +83,7 @@ impl Parser {
     }
 
     /// Reinterpret the LHS of a short-closure arrow as its parameter
-    /// list. `x -> ...` → `[x]`; `_ -> ...` → wildcard; `(x) -> ...`
+    /// list. `x -> ...` → `[x]`, `_ -> ...` → wildcard, and `(x) -> ...`
     /// → unwrap the Group and recurse. Anything else is a syntax
     /// error.
     pub(crate) fn expr_to_closure_params(&mut self, expr: &Expr, span: Span) -> Vec<ClosureParam> {

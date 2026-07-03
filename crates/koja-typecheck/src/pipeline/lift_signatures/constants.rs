@@ -3,10 +3,10 @@
 //! `Expr.resolution` slot in the value subtree, and register the
 //! [`crate::registry::ConstantDefinition`] on the constant entry.
 //!
-//! The constant value surface is intentionally narrow — literals,
+//! The constant value surface is intentionally narrow: literals,
 //! negated numerics, unit enum variants, and structs of literals.
 //! Resolve never visits these expressions (the walker explicitly
-//! skips `Item::Constant`); lift owns the entire resolution. That
+//! skips `Item::Constant`). Lift owns the entire resolution. That
 //! keeps the constant slice self-contained and lets seal verify
 //! `Constant(Some(_))` without re-walking the AST.
 
@@ -33,7 +33,7 @@ pub(super) fn lift_constant(
     let identifier = Identifier::new(scope.package, vec![constant.name.clone()]);
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
-            "lift_signatures: constant `{identifier}` missing from registry — \
+            "lift_signatures: constant `{identifier}` missing from registry: \
              collect invariant violation",
         );
     };
@@ -77,14 +77,14 @@ pub(super) fn lift_constant(
 
 /// Walk the RHS, validate it's an allowed constant shape, stamp each
 /// node's `resolution`, and yield the inferred type. `expected` is
-/// the resolved annotation (if any) — propagated to children for
+/// the resolved annotation (if any), propagated to children for
 /// per-field type checking. When the inferred head and `expected`
 /// disagree, the literal-coercion path is consulted before falling
 /// through to a strict mismatch diagnostic.
 ///
 /// `scope` is the read-only [`ResolutionScope`] for the file the
 /// constant is declared in (alias slice + current package +
-/// registry). The constant value walk never mutates the registry —
+/// registry). The constant value walk never mutates the registry:
 /// definition stamping happens once at the [`lift_constant`] entry
 /// point after this returns, so `&` is the right shape here.
 fn resolve_constant_value(
@@ -232,7 +232,7 @@ fn enum_variant_type(
     if !matches!(resolved.data, ResolvedVariantData::Unit) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "constant enum values must reference a unit variant — `{name}.{variant}` \
+                "constant enum values must reference a unit variant, but `{name}.{variant}` \
                  carries a payload",
             ),
             span,
@@ -326,11 +326,11 @@ fn validate_struct_fields(
 /// Project a constant value's `type_path` (the full dotted path
 /// the user wrote on `Foo.Variant{...}` / `Foo{...}`) onto a
 /// registered [`Identifier`] under the constant scope's lookup
-/// rules: an alias-bound head wins; otherwise fall back to the
+/// rules: an alias-bound head wins, otherwise fall back to the
 /// current package. Constant value resolution today only accepts
 /// single-segment heads, so multi-segment alias targets simply
-/// won't resolve until nested-type lifting lands — same fall-through
-/// behavior as `resolve_named` in [`super::types`].
+/// won't resolve until nested-type lifting lands (same fall-through
+/// behavior as `resolve_named` in [`super::types`]).
 fn lookup_constant_type_identifier(
     type_path: &[String],
     name: &str,

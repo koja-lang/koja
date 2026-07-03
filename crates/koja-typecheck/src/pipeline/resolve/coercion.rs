@@ -11,7 +11,7 @@
 //! its compile-time value fits the target's range. `Int` ≡ `Int64`
 //! and `Float` ≡ `Float64` are still handled by
 //! [`super::types::types_equivalent`] (an alias hit returns
-//! [`Compatible::Strict`] before the literal-fit path runs); only
+//! [`Compatible::Strict`] before the literal-fit path runs), so only
 //! the narrower / unsigned widths exercise this module.
 //!
 //! Non-literal sized numeric *values* get the inverse treatment:
@@ -26,7 +26,7 @@
 //! `UnaryOp::Neg(Literal::Int)` shape and folded to a single
 //! `i128` value at typecheck so the same fit-check covers both
 //! positive and negative literals uniformly. Hex / binary literals
-//! (`0xFF`, `0b1010`) parse to positive integers — the bit-pattern
+//! (`0xFF`, `0b1010`) parse to positive integers, the bit-pattern
 //! escape hatch for unsigned targets where `-1: UInt8` is rejected.
 
 use koja_ast::ast::{Expr, ExprKind, Literal, UnaryOp};
@@ -38,17 +38,17 @@ use crate::registry::GlobalRegistry;
 
 /// Outcome of comparing an actual expression's resolved type
 /// against an expected type with coercion considered. The arms map
-/// 1:1 to caller behavior at each check site: `Strict` proceeds;
+/// 1:1 to caller behavior at each check site: `Strict` proceeds,
 /// `Coerced` stamps `expr.literal_coercion` via
-/// [`coercion_target_mut`] (so IR-lower picks up the width);
+/// [`coercion_target_mut`] (so IR-lower picks up the width),
 /// `NumericWiden` / `UnionWiden` stamp `expr.coercion` via
-/// [`coercion_annotation_mut`]; `OutOfRange` emits a precise
-/// narrow-int diagnostic; `Incompatible` falls through to the
+/// [`coercion_annotation_mut`], `OutOfRange` emits a precise
+/// narrow-int diagnostic, and `Incompatible` falls through to the
 /// existing type-mismatch diagnostic. Check sites share the arm
 /// handling through [`check_compatible_stamping`].
 #[derive(Debug)]
 pub(crate) enum Compatible {
-    /// `types_equivalent` already accepts the pair — no coercion
+    /// `types_equivalent` already accepts the pair, no coercion
     /// needed.
     Strict,
     /// The actual expression is a numeric literal whose value fits
@@ -56,7 +56,7 @@ pub(crate) enum Compatible {
     /// [`coercion_target_mut`] and proceeds.
     Coerced(NumericLiteralWidth),
     /// The actual expression is a sized numeric value flowing into
-    /// its hub type — any of `Int8` / `Int16` / `Int32` / `UInt8` /
+    /// its hub type: any of `Int8` / `Int16` / `Int32` / `UInt8` /
     /// `UInt16` / `UInt32` into `Int`, or `Float32` into `Float`.
     /// Caller stamps `expr.coercion =
     /// Some(Coercion::NumericWiden(target))` so IR lowering emits a
@@ -68,7 +68,7 @@ pub(crate) enum Compatible {
     /// Some(Coercion::UnionWiden(target))` so IR lowering emits a
     /// `UnionWrap` against the target union shape. `target` is the
     /// (possibly aliased) union expected type as declared at the
-    /// slot — preserved verbatim so diagnostics and downstream IR
+    /// slot, preserved verbatim so diagnostics and downstream IR
     /// see the user's name when an alias was used.
     UnionWiden { target: ResolvedType },
     /// The actual expression is a numeric literal whose value does
@@ -136,7 +136,7 @@ pub(crate) fn check_compatible_stamping(
 /// Mutable handle to the AST node that owns the coercion annotation
 /// for `expr`. Peels through [`ExprKind::Group`] so a coercion
 /// recorded on `(1)` lands on the inner literal where the IR
-/// lowerer will read it; bare literals stamp on themselves;
+/// lowerer will read it. Bare literals stamp on themselves, and
 /// `Unary { Neg, .. }` stamps on the outer unary so the negated-
 /// literal fold finds it on the materialized expression.
 pub(crate) fn coercion_target_mut(expr: &mut Expr) -> &mut Option<LiteralCoercion> {
@@ -158,12 +158,12 @@ pub(crate) fn coercion_annotation_mut(expr: &mut Expr) -> &mut Option<Coercion> 
     }
 }
 
-/// Recognize an integer literal expression — bare or
-/// `UnaryOp::Neg`-wrapped — and return its compile-time value as
+/// Recognize an integer literal expression (bare or
+/// `UnaryOp::Neg`-wrapped) and return its compile-time value as
 /// `i128`. Returns `None` for any other shape, so callers can
 /// distinguish "non-literal source" from "out-of-range literal."
 /// Hex (`0xFF`) and binary (`0b1010`) literals parse to positive
-/// integers; the only path to a negative value is the
+/// integers. The only path to a negative value is the
 /// `UnaryOp::Neg(Literal::Int(decimal))` shape.
 pub fn evaluate_int_literal(expr: &Expr) -> Option<i128> {
     match &expr.kind {
@@ -282,7 +282,7 @@ pub fn narrow_numeric_target(
 /// Decide compatibility of an actual expression flowing into a
 /// slot whose declared type is `expected_ty`. The `actual_ty`
 /// argument is the resolved type of the source expression
-/// (typically `expr.resolution`); the `expr` argument is the AST
+/// (typically `expr.resolution`), and the `expr` argument is the AST
 /// node so the literal-shape inspection can read the unwrapped
 /// integer / float value.
 pub(crate) fn check_compatible(
@@ -339,10 +339,10 @@ pub(crate) fn check_compatible(
 }
 
 /// Hub-only lossless numeric widening: a sized integer value flows
-/// into an `Int` slot (`Int8` / `Int16` / `Int32` sign-extend;
+/// into an `Int` slot (`Int8` / `Int16` / `Int32` sign-extend,
 /// `UInt8` / `UInt16` / `UInt32` zero-extend), and `Float32` flows
 /// into a `Float` slot. Sideways widening (`Int8 -> Int16`) and
-/// `UInt64 -> Int` (doesn't fit) are deliberately excluded — every
+/// `UInt64 -> Int` (doesn't fit) are deliberately excluded: every
 /// source type has exactly one implicit target, so a future
 /// overload-resolution rule only ever needs "exact match beats
 /// widened match."
@@ -364,8 +364,8 @@ fn widens_to_hub(
     false
 }
 
-/// Parse a numeric literal's source text — decimal, hex (`0xFF`),
-/// or binary (`0b1010`), with `_` separators stripped — into a
+/// Parse a numeric literal's source text (decimal, hex (`0xFF`),
+/// or binary (`0b1010`), with `_` separators stripped) into a
 /// signed `i128`. Returns `None` on overflow or malformed input.
 pub(crate) fn parse_int_literal_text(text: &str) -> Option<i128> {
     let cleaned: String = text.chars().filter(|c| *c != '_').collect();

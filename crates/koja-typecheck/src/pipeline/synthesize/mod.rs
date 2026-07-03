@@ -7,8 +7,8 @@
 //!   new `impl Debug for T` / `impl Equality for T` blocks land
 //!   before name binding sees them.
 //! - [`synthesize_program`] runs **post-lift** and only mutates
-//!   function bodies — today: the `for` loop desugar in
-//!   [`for_desugar`]. Item-introducing rewrites can't live here
+//!   function bodies (today: the `for` loop desugar in
+//!   [`for_desugar`]). Item-introducing rewrites can't live here
 //!   without re-running collect / lift on the new items.
 
 pub(crate) mod derive_debug;
@@ -21,7 +21,7 @@ use crate::program::CheckedPackage;
 
 /// Apply every body-mutating synthesizer to every fn body across
 /// `packages`. Item-introducing synthesizers (e.g.
-/// [`derive_debug::derive_debug`]) run earlier in the pipeline; see
+/// [`derive_debug::derive_debug`]) run earlier in the pipeline. See
 /// the module-level doc.
 pub(crate) fn synthesize_program(packages: &mut [CheckedPackage]) {
     for pkg in packages.iter_mut() {

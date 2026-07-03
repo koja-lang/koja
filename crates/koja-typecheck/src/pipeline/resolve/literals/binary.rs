@@ -8,14 +8,14 @@
 //!   primitive width: `Int8`/`UInt16`/.../`Float32`/`Float64`), or
 //!   the bare-segment default of 8 bits when neither is given.
 //! - Validate the value type against the segment's modifier:
-//!   `String`-typed values type as a string segment (no `::N`); the
+//!   `String`-typed values type as a string segment (no `::N`), the
 //!   `Float32`/`Float64` type-annotation route forces a Float
-//!   segment; everything else is an integer segment.
-//! - Sum widths to a `total_bits`; pick `Global.Binary` (when
+//!   segment, and everything else is an integer segment.
+//! - Sum widths to a `total_bits`, then pick `Global.Binary` (when
 //!   byte-aligned) or `Global.Bits` (otherwise) as the result type.
 //!
 //! Feature gaps surface as a diagnostic and leave the literal at
-//! [`ResolvedType::unresolved`] so seal won't run; the segments are
+//! [`ResolvedType::unresolved`] so seal won't run. The segments are
 //! still walked so any inner errors get reported in the same pass.
 
 use koja_ast::ast::{
@@ -32,7 +32,7 @@ use crate::registry::GlobalRegistry;
 /// Per-segment kind decided from the AST modifiers and the
 /// resolved value type. The IR lowering layer re-derives the same
 /// shape from the AST during
-/// [`koja_ir::lower::binary_literal`] — typecheck only needs
+/// [`koja_ir::lower::binary_literal`]. Typecheck only needs
 /// to know that the value type is admissible and to count bits.
 /// Carrying the kind alongside the bit width lets the typecheck
 /// pass return one structured result per segment without committing
@@ -43,8 +43,8 @@ enum SegmentKind {
     String,
 }
 
-/// Signedness of an integer binary segment — `UInt8`-style /
-/// `::N` / bare segments are unsigned; `Int8`-style segments are
+/// Signedness of an integer binary segment: `UInt8`-style /
+/// `::N` / bare segments are unsigned, `Int8`-style segments are
 /// signed. Used to pick the literal range when overflow-checking
 /// a constant-int segment value.
 #[derive(Clone, Copy)]
@@ -57,7 +57,7 @@ enum IntSign {
 /// total bit count (`byte_length * 8` for strings, the explicit
 /// `::N` for sized integers, the type-annotation width for floats /
 /// typed-integer forms, or `8` for an unmodified integer segment).
-/// `kind` is kept for future binary-pattern reuse — pattern
+/// `kind` is kept for future binary-pattern reuse: pattern
 /// resolution will need to know the kind to decide what shape of
 /// bound variable to mint, and the typecheck-side classifier is
 /// the single canonical place that decides.
@@ -158,7 +158,7 @@ fn resolve_segment(
             return None;
         }
         // `::N` only validly applies to integer-typed values today.
-        // Float segments use `: Float32` / `: Float64`; string
+        // Float segments use `: Float32` / `: Float64`, and string
         // segments don't carry a size. Reject loud mismatches so a
         // misuse like `1.0 :: 16` doesn't silently coerce.
         if !is_primitive(&segment.value.resolution, registry, "Int") {
@@ -280,7 +280,7 @@ fn literal_fits_int_segment(
 
 /// Recover the byte length of a string-literal segment (no
 /// interpolations). Returns `None` for non-string and interpolated
-/// strings — interpolation in binary segments is a feature gap
+/// strings, since interpolation in binary segments is a feature gap
 /// (and the same is true everywhere else interpolation appears).
 fn string_segment_byte_length(segment: &BinarySegment) -> Option<u64> {
     let ExprKind::String { parts, .. } = &segment.value.kind else {

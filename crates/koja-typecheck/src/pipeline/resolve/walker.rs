@@ -10,7 +10,7 @@
 //! re-running resolution. Script-mode `file.body` runs against its
 //! own top-level scope (no params).
 //!
-//! Statement-level dispatch lives in [`super::statements`]; expression
+//! Statement-level dispatch lives in [`super::statements`], expression
 //! dispatch in [`super::expr`]. Both take a [`Resolver`] context that
 //! bundles the in-scope package, the global registry, and the
 //! per-function [`LocalScope`] so identifier resolution can stamp
@@ -81,7 +81,7 @@ pub(crate) fn resolve_file(
                 }
             }
             // Lift's constants pass already resolved each `Constant.value`
-            // (literals + struct/enum-of-literals only — no idents in
+            // (literals + struct/enum-of-literals only, no idents in
             // scope inside a constant). Walker skips them so seal's
             // assertions are the next thing they hit.
             Item::Constant(_) => {}
@@ -160,8 +160,8 @@ pub(crate) fn resolve_file(
 /// the bare name `name`. Used by [`resolve_file`] to capture the
 /// enclosing type's id once per decl / impl block (rather than
 /// once per method) so the resolver can anchor `priv fn`
-/// type-private checks. `None` when collect dropped the type
-/// — body resolution proceeds best-effort regardless.
+/// type-private checks. `None` when collect dropped the type.
+/// Body resolution proceeds best-effort regardless.
 fn enclosing_type_id(
     package: &str,
     path: &[String],
@@ -237,7 +237,7 @@ fn type_param_owners(
 
 /// Pull the lifted signature for `identifier` out of the registry, or
 /// return `None` if `collect` rejected the function or `lift_signatures`
-/// hasn't stamped one (both are diagnosed upstream — body resolution
+/// hasn't stamped one (both are diagnosed upstream, body resolution
 /// is best-effort but quiet here).
 fn lifted_signature<'a>(
     identifier: &Identifier,
@@ -253,7 +253,7 @@ fn lifted_signature<'a>(
 /// Pre-populate `scope` with the function's params (each a fresh
 /// [`LocalId`]) and stamp the freshly-minted ids back onto the AST
 /// `Param.local_id` slots so IR lower can read them later. Param
-/// order in `function.params` matches `signature.params`; lift
+/// order in `function.params` matches `signature.params`. Lift
 /// guarantees this even on rejected `Param::Self_` outside an `impl`
 /// (an `Unresolved`-typed `ResolvedParam` is still emitted).
 ///
@@ -346,7 +346,7 @@ pub(super) fn resolve_statement_with_expected(
 /// Walk every statement in `body`, resolving the trailing
 /// `Statement::Expr` (if any) with `expected` as a downward type
 /// hint. Non-trailing statements always resolve without an
-/// expected-type hint — only the value-producing tail matters for
+/// expected-type hint. Only the value-producing tail matters for
 /// bidirectional inference.
 pub(super) fn resolve_body_with_expected(
     body: &mut [Statement],

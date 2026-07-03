@@ -1,5 +1,5 @@
 //! Lift-signatures sub-pass: resolve `TypeExpr`s and stamp lifted
-//! payloads onto the registry — `FunctionSignature` for functions,
+//! payloads onto the registry: `FunctionSignature` for functions,
 //! `StructDefinition` for structs, `ProtocolDefinition` for protocols.
 //!
 //! Runs after `collect` (each named decl has its `*(None)` slot) and
@@ -7,7 +7,7 @@
 //! dispatch see lifted metadata).
 //!
 //! Trait impls (`impl Foo for Bar`) get conformance-checked here:
-//! declared method sigs must match the protocol; protocol methods
+//! declared method sigs must match the protocol. Protocol methods
 //! with default bodies that the impl omits are synthesized into the
 //! impl's `members` (cloned body, `self` typed as the impl target).
 //! Default bodies live in a per-invocation [`ProtocolBodies`] sidecar
@@ -45,7 +45,7 @@ use types::resolve_bound_to_id;
 /// **Do not grow this struct.** It exists to bundle the four
 /// pieces every lifter needs to (a) look names up under the file's
 /// alias rules and (b) write lifted payloads onto the registry.
-/// `diagnostics` lives outside on purpose — see the doc on
+/// `diagnostics` lives outside on purpose. See the doc on
 /// [`ResolutionScope`] for the rationale.
 ///
 /// Use [`Self::resolution_scope`] to drop into read-only type
@@ -62,7 +62,7 @@ impl<'a> LiftScope<'a> {
     /// Reborrow this lift scope as the read-only [`ResolutionScope`]
     /// expected by [`resolve_type_expr`] and friends. The aliases
     /// and package projections naturally outlive `&self` (their
-    /// fields are `&'a`); the registry reborrow is `&'_`-scoped to
+    /// fields are `&'a`). The registry reborrow is `&'_`-scoped to
     /// the call so subsequent `&mut self.registry` writes typecheck.
     pub(super) fn resolution_scope(&self) -> ResolutionScope<'_> {
         ResolutionScope {
@@ -86,13 +86,13 @@ pub(super) type ProtocolBodies = HashMap<GlobalRegistryId, HashMap<String, Proto
 ///
 /// `self_override` is the trait-impl target hook. When `None`,
 /// `self` types as
-/// [`super::types::concrete_self_type`] of the receiver — the
+/// [`super::types::concrete_self_type`] of the receiver, the
 /// inline / inherent path. When `Some`, `self` types as the
 /// resolved target verbatim. For a generic-target impl like
 /// `impl P for Bag<T>` the override is `Bag<TypeParam(Bag, 0)>`,
 /// which equals `concrete_self_type(Bag)`, so the two paths
 /// converge. The override only diverges when the impl pins
-/// concrete args (e.g. `impl P for Bag<Int>`); pinning `self` to
+/// concrete args (e.g. `impl P for Bag<Int>`). Pinning `self` to
 /// `Bag<Int>` is what lets call-site dispatch diagnose
 /// `Bag<String>.render()` as a domain miss.
 #[derive(Clone, Copy)]
@@ -129,10 +129,10 @@ pub(crate) fn lift_signatures(
         }
     }
     // Pass 1b: resolve `<T: Bound>` bound names against the now-fully-
-    // populated protocol set; stamp resolved ids onto every decl's
+    // populated protocol set. Stamp resolved ids onto every decl's
     // `RegistryEntry.type_param_bounds`. Runs after protocol lift so
     // bound names can refer to protocols declared anywhere in the
-    // program; runs before struct / enum / function lift so their
+    // program. Runs before struct / enum / function lift so their
     // method signatures can already enforce bounds (slice 2.3). Each
     // file's bounds resolve against its own aliases so an aliased
     // protocol name can be used as a bound (`<T: AliasedProtocol>`).
@@ -144,7 +144,7 @@ pub(crate) fn lift_signatures(
     // inside `lift_type_aliases`.
     type_aliases::lift_type_aliases(packages, registry, diagnostics);
     // Pass 1c: structs, enums, top-level functions. Order doesn't
-    // matter inside this pass — every signature resolution either
+    // matter inside this pass: every signature resolution either
     // hits a protocol (already lifted) or another struct/enum
     // (already registered with type_params at collect).
     for pkg in packages.iter() {
@@ -179,7 +179,7 @@ pub(crate) fn lift_signatures(
     // constant value resolver can look up struct field layouts and
     // enum variant rosters when validating struct-of-literals and
     // unit-enum-variant RHSs. Mutable iteration mutates each
-    // `Constant.value` Expr's `resolution` slots as it walks; the
+    // `Constant.value` Expr's `resolution` slots as it walks. The
     // final stamped definition clones the resolved Expr into the
     // registry so IR lower never has to re-walk file items.
     for pkg in packages.iter_mut() {
@@ -314,10 +314,10 @@ fn resolve_protocol_bounds(
         return;
     };
     // Protocols register with `["Self", ...declared]`. Slot 0 is
-    // unbounded — the user-declared bounds line up at slots 1..N.
+    // unbounded: the user-declared bounds line up at slots 1..N.
     // Skip any user-declared `Self` so the bounds vec aligns with
     // the type_params list `register_protocol` built (`Self` is
-    // synthetic and a reserved name; the diagnostic for re-using it
+    // synthetic and a reserved name. The diagnostic for re-using it
     // already fired during collect).
     let user_params: Vec<_> = decl
         .type_params

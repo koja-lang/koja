@@ -28,8 +28,8 @@ use crate::parse;
 #[derive(Clone, Debug)]
 pub struct SourceFile {
     /// The package this file belongs to. For project files this is the
-    /// declared project name; for stdlib files this is `"Global"`; for
-    /// single-file eval / run paths this is the file stem.
+    /// declared project name. For stdlib files it is `"Global"`, and
+    /// for single-file eval / run paths it is the file stem.
     pub package: String,
     /// Filesystem path (or a synthetic identifier like `<Global.io>` for
     /// embedded sources). Used for diagnostic attribution and as a
@@ -79,7 +79,7 @@ pub fn parse_file(source: SourceFile, mode: ParseMode) -> ParsedFile {
 
 /// All parsed files in one program.
 ///
-/// `files` is keyed by `path` (each file's stable identity); `order`
+/// `files` is keyed by `path` (each file's stable identity). `order`
 /// preserves the input order so downstream stages walk files
 /// deterministically (today's convention: stdlib first, then project
 /// files in scan order).

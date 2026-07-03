@@ -1,9 +1,9 @@
-//! Top-level `type X = T` aliases — the surface companion to the
+//! Top-level `type X = T` aliases, the surface companion to the
 //! file-level `alias` slice (which lives in `tests/aliases.rs` and
 //! covers cross-package re-exports).
 //!
 //! `type X = T` registers `X` as a [`crate::registry::GlobalKind::TypeAlias`]
-//! entry in the current package; resolution at use sites returns a
+//! entry in the current package. Resolution at use sites returns a
 //! `ResolvedType::Named { resolution, .. }` that points at the alias
 //! identifier so diagnostics keep the user's name. Equivalence
 //! peels through the alias when comparing types, so `Pet` ≡
@@ -13,7 +13,7 @@
 //!
 //! - Alias to a union resolves at a use site (param / return / let
 //!   slot) and accepts every member as a widening source.
-//! - Alias display name round-trips through diagnostics — a
+//! - Alias display name round-trips through diagnostics: a
 //!   mismatch reports the alias, not the expanded union.
 //! - Aliases are reachable cross-package (the registry promotes
 //!   them to package-global entries).
@@ -108,7 +108,7 @@ fn type_alias_to_union_resolves_at_use_site() {
 #[test]
 fn type_alias_widens_member_at_call_site() {
     // Passing a bare `Cat` into a `Pet` slot widens through the
-    // alias's underlying union — `check_compatible` peels the
+    // alias's underlying union: `check_compatible` peels the
     // alias before checking member-of-union, so the alias is
     // semantically transparent to coercion.
     let source = "
@@ -211,7 +211,7 @@ fn type_alias_member_typed_binding_arms_resolve() {
 #[test]
 fn type_alias_match_missing_member_diagnoses() {
     // Exhaustiveness names the missing member by its surface type
-    // (here `Dog`) — alias peeling threads through the missing-
+    // (here `Dog`): alias peeling threads through the missing-
     // member walk, so the user sees a member of the union, not the
     // alias name "Pet".
     let source = "
@@ -270,7 +270,7 @@ fn self_referential_type_alias_diagnoses_cycle() {
 
 #[test]
 fn type_alias_is_visible_cross_package() {
-    // `pets.koja` declares `type Pet = Cat | Dog`; `app.koja` in a
+    // `pets.koja` declares `type Pet = Cat | Dog`. `app.koja` in a
     // sibling package brings `Pets.Pet` and `Pets.Cat` into scope
     // via `alias` and uses the alias as a type. The registry
     // promotes `type` aliases to package-global entries so the

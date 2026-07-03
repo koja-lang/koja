@@ -135,8 +135,8 @@ fn package_dot_type_with_braces_parses_as_enum_construction() {
     // `Pkg.Point { x: 1, y: 2 }` is syntactically ambiguous between
     // a package-qualified struct construction and a `Pkg::Point`
     // enum-variant struct construction. The parser commits to the
-    // enum shape unconditionally and lets later resolution decide;
-    // this test pins that behavior so a refactor doesn't silently
+    // enum shape unconditionally and lets later resolution decide.
+    // This test pins that behavior so a refactor doesn't silently
     // flip it.
     let src = dedent(
         "

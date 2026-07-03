@@ -5,10 +5,10 @@
 //! entry count, then one indented `<id> <kind> <qualified_name> @<span>`
 //! row per entry, ordered by id so AST `<id>` references line up
 //! one-to-one with rows here. Function entries render their signature
-//! inline (`fn (p: Global.Int) -> Global.Int`); unlifted functions
+//! inline (`fn (p: Global.Int) -> Global.Int`). Unlifted functions
 //! render as `fn <unlifted>`.
 //!
-//! Always trailing-newline-terminated; empty registries render just
+//! Always trailing-newline-terminated. Empty registries render just
 //! the header.
 
 use std::fmt::Write as _;

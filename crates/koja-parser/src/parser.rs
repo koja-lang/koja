@@ -7,8 +7,7 @@ use koja_lexer::{LexResult, lex};
 
 /// Sentinel name emitted in place of a missing identifier so the
 /// parser can keep building an AST after a diagnostic. Downstream
-/// passes treat this as opaque text and never resolve it; it shows
-/// up only inside error-recovery paths.
+/// passes treat this as opaque text and never resolve it.
 pub(crate) const ERROR_IDENT: &str = "<error>";
 
 /// Selects the top-level grammar accepted by the parser.
@@ -21,7 +20,7 @@ pub(crate) const ERROR_IDENT: &str = "<error>";
 /// `ParseMode::Script` additionally accepts top-level statements (bare
 /// expressions, assignments, etc.) interleaved with declarations.
 /// Statements collect into `File.body = Some(...)` and stay there
-/// through typecheck; downstream passes (`koja-ir::lower_script`)
+/// through typecheck. Downstream passes (`koja-ir::lower_script`)
 /// consume the body directly. There is no synthetic `fn main` wrapper.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ParseMode {
@@ -32,8 +31,8 @@ pub enum ParseMode {
 
 impl ParseMode {
     /// Selects the parse mode for a source file by extension: `.kojs`
-    /// scripts allow top-level statements ([`ParseMode::Script`]);
-    /// `.koja` modules and everything else are declaration-only
+    /// scripts allow top-level statements ([`ParseMode::Script`]),
+    /// while `.koja` modules and everything else are declaration-only
     /// compilation units ([`ParseMode::File`]). Mirrors the CLI's
     /// source-shape dispatch so `check`, `format`, and the LSP agree on
     /// how a file is parsed.
@@ -58,9 +57,7 @@ pub(crate) struct Parser {
     pub(crate) pending_token: Option<TokenKind>,
 }
 
-/// Snapshot of `Parser` state for speculative parsing. Captured by
-/// [`Parser::save_pos`] before a tentative read and restored via
-/// [`Parser::restore_pos`] when the speculation aborts. Restoring
+/// Snapshot of `Parser` state for speculative parsing. Restoring
 /// also truncates any diagnostics emitted during the discarded
 /// branch.
 #[derive(Clone, Copy)]
@@ -160,7 +157,7 @@ impl Parser {
             items.push(parse_one(self));
             if self.pos == before {
                 self.error(
-                    format!("unexpected token {:?}", self.peek()),
+                    format!("unexpected token {}", self.peek()),
                     self.current_span(),
                 );
                 self.advance();
@@ -171,19 +168,10 @@ impl Parser {
     }
 
     /// Parse a comma-separated sequence of items terminated by
-    /// `terminator`. The opening delimiter must already be consumed
-    /// by the caller; this helper:
-    ///
-    /// - skips newlines before the first item
-    /// - returns `Vec::new()` immediately if the terminator is
-    ///   already in front of us (empty sequence)
-    /// - tolerates a trailing comma before the terminator
-    /// - skips newlines between items
-    ///
-    /// The terminator itself is **not** consumed — the caller still
-    /// owns the `expect(&terminator)` (or equivalent) that closes
-    /// the construct, because some constructs want to attach a
-    /// custom error to the missing terminator.
+    /// `terminator`, tolerating newlines around items and a trailing
+    /// comma. The opening delimiter must already be consumed, and the
+    /// terminator is left unconsumed so callers can attach a custom
+    /// error to the `expect` that closes the construct.
     pub(crate) fn comma_separated<T>(
         &mut self,
         terminator: &TokenKind,
@@ -210,7 +198,7 @@ impl Parser {
             self.advance()
         } else {
             let span = self.current_span();
-            let message = format!("expected {kind:?}, found {:?}", self.peek());
+            let message = format!("expected {kind}, found {}", self.peek());
             let hint = match kind {
                 TokenKind::End => Some("every 'fn', 'if', 'while', 'loop', 'for', and 'struct' must be closed with 'end'".into()),
                 _ => None,
@@ -237,7 +225,7 @@ impl Parser {
             self.pending_token = Some(TokenKind::Gt);
         } else {
             let span = self.current_span();
-            self.error(format!("expected >, found {:?}", self.peek()), span);
+            self.error(format!("expected `>`, found {}", self.peek()), span);
         }
     }
 
@@ -249,17 +237,13 @@ impl Parser {
             }
             _ => {
                 let span = self.current_span();
-                self.error(
-                    format!("expected identifier, found {:?}", self.peek()),
-                    span,
-                );
+                self.error(format!("expected identifier, found {}", self.peek()), span);
                 self.advance();
                 ERROR_IDENT.to_string()
             }
         }
     }
 
-    /// Accept a TypeIdent token and return its name.
     pub(crate) fn expect_type_ident(&mut self) -> String {
         match self.peek().clone() {
             TokenKind::TypeIdent(name) => {
@@ -269,7 +253,7 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error(
-                    format!("expected type identifier, found {:?}", self.peek()),
+                    format!("expected type identifier, found {}", self.peek()),
                     span,
                 );
                 self.advance();
@@ -280,7 +264,7 @@ impl Parser {
 
     /// Parse a possibly-dotted declaration name (`A`, or `A.B.C` for a
     /// nested type) into its full path. The last segment is the
-    /// declared type's leaf name; any preceding segments are the
+    /// declared type's leaf name. Any preceding segments are the
     /// owning type path.
     pub(crate) fn parse_decl_path(&mut self) -> Vec<String> {
         let mut segments = vec![self.expect_type_ident()];
@@ -398,17 +382,14 @@ impl Parser {
         }
     }
 
-    /// Returns `true` when the current token (and, for `fn`, the
-    /// following one) starts a top-level declaration as opposed to a
-    /// statement. Used by `ParseMode::Script` to dispatch between
-    /// `parse_item` and `parse_statement` at the top level.
+    /// Whether the current token starts a top-level declaration rather
+    /// than a statement, for script-mode dispatch.
     ///
     /// `fn` is ambiguous: `fn name(...) ... end` is a function item,
-    /// `fn(x) -> x + 1` is a closure expression. The disambiguator is
-    /// the token immediately after `fn` -- an identifier means item,
-    /// `(` means closure expression. The `@` annotation prefix is
-    /// treated as an item starter because the only legal followers are
-    /// declaration keywords (struct/enum/fn/...).
+    /// `fn(x) -> x + 1` is a closure expression, so the token after
+    /// `fn` decides (identifier means item, `(` means closure). The
+    /// `@` annotation prefix counts as an item starter because the
+    /// only legal followers are declaration keywords.
     pub(crate) fn at_top_level_item_starter(&self) -> bool {
         match self.peek() {
             TokenKind::Alias
@@ -429,7 +410,7 @@ impl Parser {
     /// Parse a single top-level item. Annotations (`@name [value]`)
     /// are read once up front so the dispatch table below is flat:
     /// every declaration kind gets the (possibly empty) annotation
-    /// list directly. `impl` and `alias` decline annotations — if
+    /// list directly. `impl` and `alias` decline annotations. If
     /// any are present we route to the "annotation must be followed
     /// by a declaration" diagnostic instead.
     fn parse_item(&mut self) -> Option<Item> {
@@ -462,7 +443,7 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error(
-                    format!("unexpected token at top level: {:?}", self.peek()),
+                    format!("unexpected token at top level: {}", self.peek()),
                     span,
                 );
                 self.advance();

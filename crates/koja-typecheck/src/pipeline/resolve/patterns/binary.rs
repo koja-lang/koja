@@ -6,7 +6,7 @@
 //! width, and registers binding names into the arm's local scope so
 //! the match-arm body can reference them.
 //!
-//! Pairs with [`super::super::literals::binary`] — they share the
+//! Pairs with [`super::super::literals::binary`]. They share the
 //! "compute per-segment bit width" arithmetic but disagree on what
 //! the segment's value represents (an expression to evaluate vs a
 //! pattern element to bind / test against).
@@ -26,8 +26,8 @@
 //! - Sized (`x::N` without annotation) and bare (`x`): `Int`
 //!   (`Int64`).
 //!
-//! Sign-extension at extraction time is the LLVM emit phase's job;
-//! typecheck just propagates the `signed`/`unsigned` modifier into
+//! Sign-extension at extraction time is the LLVM emit phase's job.
+//! Typecheck just propagates the `signed`/`unsigned` modifier into
 //! the IR via the segment's `signedness` field.
 
 use koja_ast::ast::{
@@ -42,7 +42,7 @@ use super::super::types::{display_resolution, is_primitive};
 use super::PatternCoverage;
 
 /// Resolve a `<<segments>>` pattern against `subject_ty`. Returns
-/// [`PatternCoverage::Other`] — binary patterns never satisfy the
+/// [`PatternCoverage::Other`]. Binary patterns never satisfy the
 /// catch-all rule, so the match driver requires a separate
 /// wildcard arm for exhaustiveness (matching v1's behavior).
 pub(super) fn resolve_binary_pattern(
@@ -57,7 +57,7 @@ pub(super) fn resolve_binary_pattern(
     if subject_ty.is_resolved() && !(is_binary_subject || is_bits_subject) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "binary pattern requires `Binary` or `Bits` subject; got `{}`",
+                "binary pattern requires `Binary` or `Bits` subject, got `{}`",
                 display_resolution(subject_ty, resolver.registry),
             ),
             span,
@@ -327,7 +327,7 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
 }
 
 /// Sized bindings (`x::N`) and bare bindings type as `Int`
-/// (i64); type-annotated bindings (`x: Int8` / `x: UInt16` / …)
+/// (i64), while type-annotated bindings (`x: Int8` / `x: UInt16` / …)
 /// use the annotated primitive. The greedy-tail family (`x:
 /// Binary` / `x: Bits`) is handled separately in
 /// [`check_greedy_tail`].
@@ -346,7 +346,7 @@ fn resolve_binding_type(
 /// Range-check an integer literal segment against its declared
 /// bit width, honoring the `signed` / `unsigned` modifier. Ported
 /// from v1's `check_literal_overflow`. Silently no-ops for widths
-/// outside the 1..=64 supported range — `segment_fixed_width`
+/// outside the 1..=64 supported range. `segment_fixed_width`
 /// already rejects 0, and bit widths >64 are gated by other rules.
 fn check_literal_overflow(
     kind: &ExprKind,
@@ -402,7 +402,7 @@ fn check_literal_overflow(
 }
 
 /// `signed` / `unsigned` / `big` / `little` modifiers require a
-/// `::N` size or a primitive type annotation — bare segments
+/// `::N` size or a primitive type annotation. Bare segments
 /// don't carry enough shape for the modifier to mean anything.
 /// V1 has the same rule.
 fn check_orphan_modifiers(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic>) {
@@ -420,7 +420,7 @@ fn check_orphan_modifiers(segment: &BinarySegment, diagnostics: &mut Vec<Diagnos
     }
 }
 
-/// True when `ann` is a bare `Binary` / `Bits` primitive name —
+/// True when `ann` is a bare `Binary` / `Bits` primitive name,
 /// the only two annotations that admit greedy tails.
 fn is_binary_or_bits_annotation(ann: &TypeExpr) -> bool {
     let TypeExpr::Named { path, .. } = ann else {
@@ -432,7 +432,7 @@ fn is_binary_or_bits_annotation(ann: &TypeExpr) -> bool {
 
 /// Recover the byte length of a string-literal segment (no
 /// interpolation). Returns `None` for non-string and interpolated
-/// strings — interpolation in binary patterns isn't supported.
+/// strings, since interpolation in binary patterns isn't supported.
 fn string_segment_byte_length(segment: &BinarySegment) -> Option<u64> {
     let ExprKind::String { parts, .. } = &segment.value.kind else {
         return None;

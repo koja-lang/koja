@@ -1,8 +1,8 @@
 //! Pure utility functions for the formatter.
 //!
-//! Everything here is stateless -- no comment cursor, no `&mut self`. These
+//! Everything here is stateless: no comment cursor, no `&mut self`. These
 //! convert AST fragments (types, patterns, literals, imports, annotations)
-//! into `Doc` nodes, and provide span / text-length helpers used by the
+//! into `Doc` nodes, and provide span and text-length helpers used by the
 //! printer and expression modules.
 
 use crate::doc::*;
@@ -115,8 +115,8 @@ pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
 }
 
 /// Formats a list of annotations, preserving the stacked/inline layout.
-/// Annotations on the same line are joined with a space; annotations on
-/// separate lines are joined with hardlines.
+/// Annotations on the same line are joined with a space, annotations on
+/// separate lines with hardlines.
 pub(super) fn annotations_to_doc(annotations: &[Annotation]) -> Option<Doc> {
     if annotations.is_empty() {
         return None;
@@ -359,9 +359,8 @@ pub(super) fn field_pattern_to_doc(fp: &FieldPattern) -> Doc {
 }
 
 /// Shared `Type{f1, f2, ...}` rendering for both enum-struct variant
-/// patterns and plain struct patterns. `prefix` is the qualified head
-/// (e.g. `"Shape.Rect"` or `"Point"`); `fields` are the listed field
-/// patterns.
+/// patterns and plain struct patterns. `prefix` is the qualified head,
+/// e.g. `"Shape.Rect"` or `"Point"`.
 fn struct_pattern_to_doc(prefix: &str, fields: &[FieldPattern]) -> Doc {
     let field_docs: Vec<Doc> = fields.iter().map(field_pattern_to_doc).collect();
     group(concat(vec![
@@ -434,8 +433,8 @@ pub(super) fn is_block_expr(expr: &Expr) -> bool {
     )
 }
 
-/// Returns `true` if the expression is a single-statement closure —
-/// one that the closure printer lays out inline when it fits (e.g.
+/// Returns `true` if the expression is a single-statement closure, which
+/// the closure printer lays out inline when it fits (e.g.
 /// `fn (x: Int) -> Int x * 2 end`). Assignments to such a closure stay
 /// on one line rather than forcing a break after `=`.
 pub(super) fn is_inline_closure(expr: &Expr) -> bool {
@@ -546,12 +545,8 @@ fn pattern_text_len(pattern: &Pattern) -> usize {
 }
 
 /// Exact single-line rendered width of a pattern. Patterns are pure
-/// `Doc`s (no comment cursor), so we can render one to measure its flat
-/// width and use it as the arm-head length when predicting whether a
-/// single-expression body would overflow. This is exact for every
-/// pattern shape, avoiding the per-kind estimation drift that
-/// `pattern_text_len` (used only for the coarse or-pattern check)
-/// carries.
+/// `Doc`s (no comment cursor), so rendering one flat measures its width
+/// without the per-kind estimation drift of `pattern_text_len`.
 pub(super) fn pattern_rendered_len(pattern: &Pattern) -> usize {
     render(&pattern_to_doc(pattern), u32::MAX).chars().count()
 }
@@ -793,7 +788,7 @@ pub(super) fn escape_string_literal(s: &str) -> String {
 ///
 /// Unlike [`escape_string_literal`], we leave `\n` as a raw newline (the
 /// whole point of multiline literals) and we don't escape `"` (a single
-/// quote inside `"""..."""` is harmless; only the closing `"""` matters).
+/// quote inside `"""..."""` is harmless, only the closing `"""` matters).
 /// We do escape `\\`, `\r`, `\t`, and `#{` so the formatted output
 /// re-parses to the same `String` value.
 pub(super) fn escape_multiline_literal(s: &str) -> String {

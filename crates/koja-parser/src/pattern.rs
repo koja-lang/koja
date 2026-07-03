@@ -109,7 +109,7 @@ impl Parser {
                         let span = self.current_span();
                         self.error(
                             format!(
-                                "expected number after '-' in pattern, found {:?}",
+                                "expected number after `-` in pattern, found {}",
                                 self.peek()
                             ),
                             span,
@@ -120,7 +120,7 @@ impl Parser {
             }
             _ => {
                 let span = self.current_span();
-                self.error(format!("expected pattern, found {:?}", self.peek()), span);
+                self.error(format!("expected pattern, found {}", self.peek()), span);
                 self.advance();
                 Pattern::Wildcard { span }
             }
@@ -129,8 +129,8 @@ impl Parser {
 
     /// Parse a quoted or triple-quoted string literal in pattern
     /// position. Reuses [`Self::parse_string_expr`] so multiline
-    /// dedenting matches expression-position literals exactly;
-    /// interpolation has no meaning in a pattern and is diagnosed.
+    /// dedenting matches expression-position literals exactly.
+    /// Interpolation has no meaning in a pattern and is diagnosed.
     fn parse_string_pattern(&mut self, multiline: bool) -> Pattern {
         let start = self.current_span();
         let expr = self.parse_string_expr(multiline);
@@ -327,12 +327,9 @@ impl Parser {
         let name = self.expect_ident();
         if self.eat(&TokenKind::Colon).is_none() {
             let span = self.current_span();
-            self.error(
-                format!(
-                    "expected `:` after field name `{}` in struct pattern -- \
-                     write `{}: {}` to bind under the field name, or omit the field entirely",
-                    name, name, name
-                ),
+            self.error_with_hint(
+                format!("expected `:` after field name `{name}` in struct pattern"),
+                format!("write `{name}: {name}` to bind under the field name, or omit the field entirely"),
                 span,
             );
         }

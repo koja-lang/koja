@@ -1,6 +1,6 @@
 //! Coverage for `impl Protocol for Type` blocks (protocol
-//! conformance). Inherent methods now live in `extend Type` blocks;
-//! see `decl_extend.rs`.
+//! conformance). Inherent methods now live in `extend Type` blocks.
+//! See `decl_extend.rs`.
 //!
 //! Pins:
 //! - `for` is required: bare `impl Type` is rejected with a migration
@@ -122,7 +122,7 @@ fn bare_impl_emits_migration_diagnostic() {
     let result = parse_failing(&src);
     assert_message_contains(
         &result,
-        "bare `impl Type` is not supported; use `extend Type` for inherent methods",
+        "bare `impl Type` is not supported. Use `extend Type` for inherent methods",
     );
     // The hint should mention both the replacement keyword and the
     // protocol-impl form so a confused user can self-correct

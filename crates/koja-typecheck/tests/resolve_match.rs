@@ -2,7 +2,7 @@
 //!
 //! - subject + arm bodies resolve under the same rules as anywhere else
 //! - the surface expression's type is the join of every reaching arm tail
-//!   (with `Never` as the lattice bottom — divergent arms don't constrain it)
+//!   (with `Never` as the lattice bottom: divergent arms don't constrain it)
 //! - a wildcard / binding catch-all is required, except for enum subjects
 //!   with full structural variant coverage and `Bool` subjects with both
 //!   `true` and `false` literal coverage
@@ -15,7 +15,7 @@
 //!   resolve each named field against the declared roster, accept any
 //!   nested pattern shape (wildcard / binding / literal / nested
 //!   struct / nested enum / or-alternatives), and stamp a `LocalId`
-//!   on every binding; omitted fields are implicit wildcards. The arm
+//!   on every binding. Omitted fields are implicit wildcards. The arm
 //!   counts as a catch-all only when every listed field's own
 //!   coverage is catch-all
 //! - constructor shorthand (`Some(x)` / `None` against an enum subject)
@@ -594,7 +594,7 @@ fn match_struct_destructure_unknown_field_diagnoses() {
 
 #[test]
 fn match_struct_destructure_literal_field_resolves() {
-    // Inverted from the old "non-binding field diagnoses" — literal
+    // Inverted from the old "non-binding field diagnoses": literal
     // patterns inside struct fields are accepted post Phase 4
     // follow-on. The arm's coverage is `Other` (not `CatchAll`) so
     // the outer match needs an explicit catch-all to typecheck.
@@ -633,7 +633,7 @@ fn match_struct_destructure_literal_field_resolves() {
 
 #[test]
 fn match_struct_partial_omitted_fields_match_anything() {
-    // `Point{x: 5}` lists only `x`; `y` is an implicit wildcard.
+    // `Point{x: 5}` lists only `x`, so `y` is an implicit wildcard.
     // The empty `Point{}` arm is the explicit full catch-all.
     let source = "
         struct Point
@@ -682,8 +682,8 @@ fn match_nested_struct_inside_enum_tuple_resolves() {
 
 #[test]
 fn match_enum_tuple_literal_payload_resolves() {
-    // String + int literal payloads inside enum tuple patterns —
-    // mirrors the `nested_enum_pattern_literal` lang golden's
+    // String + int literal payloads inside enum tuple patterns.
+    // Mirrors the `nested_enum_pattern_literal` lang golden's
     // outer/inner discrimination shape.
     let source = "
         enum TokenKind
@@ -709,7 +709,7 @@ fn match_enum_tuple_literal_payload_resolves() {
 #[test]
 fn match_enum_tuple_with_literal_payload_still_satisfies_variant_coverage() {
     // `Option.Some(5)` narrows but still records `Some` as covered
-    // for exhaustiveness — joint nested coverage stays TODO.
+    // for exhaustiveness. Joint nested coverage stays TODO.
     let source = "
         fn classify(op: Option<Int>) -> Int
           match op
@@ -832,7 +832,7 @@ fn match_some_binding_then_narrow_some_warns_unreachable() {
 #[test]
 fn match_distinct_some_literal_payloads_do_not_warn_unreachable() {
     // `Some(1)` and `Some(2)` narrow on disjoint primitive
-    // literals — neither should shadow the other.
+    // literals. Neither should shadow the other.
     let source = "
         fn classify(op: Option<Int>) -> Int
           match op
@@ -856,7 +856,7 @@ fn match_distinct_some_literal_payloads_do_not_warn_unreachable() {
 #[test]
 fn match_enum_tuple_with_bindings_only_still_covers_variant() {
     // `Option.Some(x)` with a plain binding does cover every
-    // Some — bindings are catch-alls. The match is exhaustive
+    // Some, since bindings are catch-alls. The match is exhaustive
     // without an extra catch-all arm.
     let source = "
         fn classify(op: Option<Int>) -> Int
@@ -1419,7 +1419,7 @@ fn match_typed_binding_against_non_union_diagnoses() {
     // precise diagnostic naming the actual subject type rather than
     // the legacy "feature gap" stub the resolver carried
     // before unions landed. The companion missing-binding error
-    // for `p` falls out of the failed declaration; both diagnostics
+    // for `p` falls out of the failed declaration. Both diagnostics
     // are pinned so a future binding-rescue rewrite still flags the
     // narrowing site directly.
     let source = "

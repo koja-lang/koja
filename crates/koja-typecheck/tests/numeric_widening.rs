@@ -2,7 +2,7 @@
 //!
 //! The rule: `Int8` / `Int16` / `Int32` / `UInt8` / `UInt16` /
 //! `UInt32` widen implicitly to `Int`, and `Float32` widens to
-//! `Float` — at every value-flow site (call args, struct fields,
+//! `Float`, at every value-flow site (call args, struct fields,
 //! enum payloads, returns, annotated bindings). Everything else
 //! stays strict:
 //!
@@ -254,8 +254,8 @@ fn binary_operators_do_not_promote() {
 
 #[test]
 fn generic_inference_binds_the_actual_sized_type() {
-    // `identity(small)` infers `T = Int32` — no widen during
-    // unification — so the result still flows into an `Int32` slot.
+    // `identity(small)` infers `T = Int32` (no widen during
+    // unification), so the result still flows into an `Int32` slot.
     let source = "
         fn identity<T>(x: T) -> T
           x
@@ -273,7 +273,7 @@ fn generic_inference_binds_the_actual_sized_type() {
 
 #[test]
 fn generic_inference_does_not_widen_to_unify() {
-    // First arg binds `T = Int32`; the `Int` second arg must not
+    // First arg binds `T = Int32`. The `Int` second arg must not
     // narrow (and `T` must not re-widen) to make the call fit.
     let source = "
         fn same<T>(a: T, b: T) -> T
@@ -289,7 +289,7 @@ fn generic_inference_does_not_widen_to_unify() {
 
 #[test]
 fn widening_does_not_chain_into_union_membership() {
-    // `Int32` widens to `Int`, but not to `Int | String` — the
+    // `Int32` widens to `Int`, but not to `Int | String`. The
     // union arm only accepts exact members.
     let source = "
         fn want_either(v: Int | String) -> Int

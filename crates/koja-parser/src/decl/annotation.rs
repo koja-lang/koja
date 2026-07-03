@@ -1,7 +1,7 @@
 //! `@name [value]` decorators on declarations.
 //!
 //! A declaration may be preceded by zero or more annotations. Each
-//! is `@name` optionally followed by a single value — `false`, a
+//! is `@name` optionally followed by a single value: `false`, a
 //! quoted string, or a triple-quoted string. Other shapes (numbers,
 //! identifiers, structured values) are not currently part of the
 //! surface.

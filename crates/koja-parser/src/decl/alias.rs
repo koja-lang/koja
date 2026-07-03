@@ -1,9 +1,9 @@
 //! Type aliases. Two surface forms:
 //!
-//! - `type Name = TypeExpr` — a local rename for a type expression.
+//! - `type Name = TypeExpr`: a local rename for a type expression.
 //!   Lives both at the top level (as an `Item::TypeAlias`) and inside
 //!   `impl` bodies (as an `ImplMember::TypeAlias`).
-//! - `alias Pkg.Type [as LocalName]` — import a foreign-package
+//! - `alias Pkg.Type [as LocalName]`: import a foreign-package
 //!   type into the current scope, optionally renaming it. Package
 //!   names are PascalCase (e.g. `Net`, `HTTP`, `JSON`) and the path
 //!   must end with a `TypeIdent` segment.
@@ -52,12 +52,12 @@ impl Parser {
     }
 
     /// Two-phase alias path parser. Phase 1 absorbs any number of
-    /// leading `Ident.` qualifiers — never canonical, since
-    /// packages are PascalCase, but accepted as a recovery path so
-    /// the resolver can later flag the source rather than the
+    /// leading `Ident.` qualifiers. These are never canonical, since
+    /// packages are PascalCase, but are accepted as a recovery path
+    /// so the resolver can later flag the source rather than the
     /// parser bailing out. Phase 2 then consumes one-or-more
     /// `TypeIdent` segments separated by `.`. The path must end on
-    /// a `TypeIdent`; anything else lands a diagnostic and
+    /// a `TypeIdent`. Anything else lands a diagnostic and
     /// short-circuits.
     fn parse_alias_path(&mut self) -> Vec<String> {
         let mut path = Vec::new();
@@ -75,7 +75,7 @@ impl Parser {
 
         if !matches!(self.peek(), TokenKind::TypeIdent(_)) {
             self.error(
-                format!("expected package path in alias, found {:?}", self.peek()),
+                format!("expected package path in alias, found {}", self.peek()),
                 self.current_span(),
             );
             return path;

@@ -2,8 +2,8 @@
 //!
 //! Patterns appear in `match` arms, `for` loops, and destructuring
 //! assignments. Each test exercises a representative source shape
-//! and asserts the resulting AST variant; combined this pins which
-//! syntactic shape maps to which pattern node.
+//! and asserts the resulting AST variant. Combined, the tests pin
+//! which syntactic shape maps to which pattern node.
 
 use koja_ast::ast::{Expr, ExprKind, Item, Literal, Pattern, Statement};
 use koja_ast::util::dedent;

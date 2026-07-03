@@ -1,6 +1,6 @@
 //! Or-pattern resolution: `A | B | C`. Alternatives are restricted
 //! to literal / `EnumUnit` (no bindings) so coverage attribution
-//! stays straightforward — every alternative reports its own
+//! stays straightforward: every alternative reports its own
 //! [`PatternCoverage`] and the whole or-pattern reports the
 //! union.
 //!
@@ -95,10 +95,10 @@ pub(super) fn resolve_or_pattern(
                 }
             }
             PatternCoverage::CatchAll | PatternCoverage::UnionMember(_) => {
-                // CatchAll only reachable via an unhandled future shape;
-                // the single-test guard above already rejects bindings /
+                // CatchAll only reachable via an unhandled future shape.
+                // The single-test guard above already rejects bindings /
                 // wildcards inside or-patterns. UnionMember inside an
-                // or-pattern isn't a v1 surface — collapse to Other so
+                // or-pattern isn't a v1 surface. Collapse to Other so
                 // the outer match runs its "non-exhaustive" rule.
                 all_literal = false;
                 all_enum_units = false;

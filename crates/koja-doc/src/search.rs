@@ -7,7 +7,7 @@
 //! its kind, owning package, URL, and brief.
 //!
 //! We hand-roll the JSON encoding to avoid an extra workspace
-//! dependency on `serde_json` — the payload shape is fixed and
+//! dependency on `serde_json`. The payload shape is fixed and
 //! the only escaping concern is doc-string content.
 
 use crate::extract::{DocPackage, DocProject};
@@ -119,10 +119,9 @@ fn method_entry(pkg: &DocPackage, owner: &str, f: &crate::extract::DocFunction) 
     }
 }
 
-/// Mirror of [`crate::render::filters::brief`] for use outside an
-/// Askama template context — the search payload doesn't render
-/// through a template, so we re-derive the first-sentence brief
-/// for items that have a doc string.
+/// Mirror of [`crate::render::filters::brief`]. The search payload
+/// doesn't render through a template, so we re-derive the
+/// first-sentence brief here.
 fn brief(doc: &Option<String>) -> String {
     let Some(doc) = doc else {
         return String::new();

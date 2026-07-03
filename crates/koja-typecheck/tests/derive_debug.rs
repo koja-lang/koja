@@ -1,6 +1,6 @@
 //! Coverage for the `derive_debug` synthesizer in
 //! [`koja_typecheck::pipeline::synthesize::derive_debug`]. Each
-//! test pins one body shape — struct with primitive fields, enum
+//! test pins one body shape: struct with primitive fields, enum
 //! with mixed variant data, opaque-typed fields rendering as
 //! `"..."`, and the package-wide existing-impl scan that suppresses
 //! synthesis when a hand-written impl is in another file of the
@@ -81,9 +81,9 @@ fn is_interpolation(part: &StringPart) -> bool {
 
 #[test]
 fn struct_with_primitive_fields_synthesizes_field_format_chain() {
-    // `Point{x: <fmt>, y: <fmt>}` — alternating literal / interpolation
+    // `Point{x: <fmt>, y: <fmt>}`: alternating literal / interpolation
     // parts with the right separators. The interpolation expressions
-    // wrap each `self.field` in a `format()` MethodCall; we just
+    // wrap each `self.field` in a `format()` MethodCall. We just
     // assert the part shape here, and the IR tests pin the lowered
     // Concat chain.
     let source = "
@@ -112,7 +112,7 @@ fn struct_with_primitive_fields_synthesizes_field_format_chain() {
 
 #[test]
 fn opaque_field_types_render_as_dotdotdot_placeholder() {
-    // `Binary` is on the synthesizer's opaque list — its field
+    // `Binary` is on the synthesizer's opaque list, so its field
     // renders as a literal `"..."` rather than an interpolated
     // `self.field.format()` call. This keeps the synthesizer total
     // even before `Debug for Binary` lands as a real impl.
@@ -136,7 +136,7 @@ fn opaque_field_types_render_as_dotdotdot_placeholder() {
 
 #[test]
 fn enum_synthesizes_match_body_with_per_variant_arms() {
-    // `Shape.format` is a match over the variants; each arm is
+    // `Shape.format` is a match over the variants. Each arm is
     // a Statement::Expr around a string expression. Pin that the
     // arm count matches and that one arm is a literal-only body
     // (the unit variant).
@@ -192,7 +192,7 @@ fn enum_synthesizes_match_body_with_per_variant_arms() {
 #[test]
 fn generic_struct_synthesizes_full_body_for_universal_debug_dispatch() {
     // Generic types get the same field-walking body as concrete
-    // ones; the universal-Debug fallback resolves `A.format()` /
+    // ones. The universal-Debug fallback resolves `A.format()` /
     // `B.format()` on bare type parameters at typecheck, and
     // monomorphization picks the concrete impl post-IR.
     let source = "

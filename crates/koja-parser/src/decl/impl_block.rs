@@ -16,7 +16,7 @@ impl Parser {
         let first_type = self.parse_type_expr();
         if self.eat(&TokenKind::For).is_none() {
             self.error_with_hint(
-                "bare `impl Type` is not supported; use `extend Type` for inherent methods"
+                "bare `impl Type` is not supported. Use `extend Type` for inherent methods"
                     .to_string(),
                 "replace `impl` with `extend`. `impl` is reserved for protocol \
                  implementations: `impl Protocol for Type`. If you meant to implement a \
@@ -68,7 +68,7 @@ impl Parser {
                     let span = self.current_span();
                     self.error(
                         format!(
-                            "expected function or type alias in block body, found {:?}",
+                            "expected function or type alias in block body, found {}",
                             self.peek()
                         ),
                         span,
