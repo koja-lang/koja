@@ -4,7 +4,7 @@
 //! [`resolve_bounded_method_call`], stamping the protocol method's
 //! return type and validating arg arities against the protocol's
 //! `non_self_params`. Mono later substitutes through to a concrete
-//! receiver — that side lives in `koja-ir` tests.
+//! receiver. That side lives in `koja-ir` tests.
 
 use koja_ast::ast::{Expr, ExprKind, File, Function, Item, Statement};
 use koja_ast::identifier::Identifier;
@@ -96,12 +96,12 @@ fn bounded_method_call_resolves_protocol_return_type() {
 
 #[test]
 fn bounded_method_call_with_no_bound_diagnoses() {
-    // `T` has no bound; calling `value.greet()` is an error rather
+    // `T` has no bound, so calling `value.greet()` is an error rather
     // than a silent dispatch failure. The universal-`Debug` fallback
     // augments every type parameter's bound list with the universal
     // protocols ([`registry::UNIVERSAL_PROTOCOLS`]), so the
     // diagnostic surface is `no bound provides it` (Debug is in
-    // scope; greet is not on Debug) rather than the older
+    // scope, greet is not on Debug) rather than the older
     // `no bounds declared` shape.
     let source = "
         fn show<T>(value: T) -> String
@@ -121,7 +121,7 @@ fn bounded_method_call_with_no_bound_diagnoses() {
 
 #[test]
 fn bounded_method_call_with_unrelated_bound_diagnoses() {
-    // `T: Greeter` does not provide `unrelated_method`; the call
+    // `T: Greeter` does not provide `unrelated_method`. The call
     // site fails with a "no bound provides it" diagnostic rather
     // than silently mapping to a wrong method.
     let source = "
@@ -147,7 +147,7 @@ fn bounded_method_call_with_unrelated_bound_diagnoses() {
 #[test]
 fn bounded_method_call_with_static_bound_method_diagnoses() {
     // Static methods on a bound protocol cannot be called through
-    // a value of the bounded type-param — the receiver is a value,
+    // a value of the bounded type-param: the receiver is a value,
     // not a type. This is the "use the protocol name to dispatch"
     // diagnostic.
     let source = "
@@ -173,7 +173,7 @@ fn bounded_method_call_with_static_bound_method_diagnoses() {
 #[test]
 fn bounded_method_call_protocol_method_lifted_with_signature() {
     // Sanity: the registry actually carries a lifted protocol method
-    // signature for `Greeter.greet` — that's what
+    // signature for `Greeter.greet`. That's what
     // `resolve_bounded_method_call` looks up via `collect_bound_providers`.
     let source = "
         protocol Greeter

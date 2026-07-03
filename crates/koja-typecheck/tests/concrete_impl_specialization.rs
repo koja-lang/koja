@@ -2,7 +2,7 @@
 //! blocks (Slice 2.9). Koja's "extend"-style model: an `impl` on a
 //! concrete instantiation (`impl Render for Bag<Int>`, `impl Bag<Int> { ... }`)
 //! adds methods to the concrete domain only. Specialized and
-//! generic impls must not define overlapping method names — that's
+//! generic impls must not define overlapping method names. That's
 //! a hard error.
 //!
 //! Adjacent coverage:
@@ -18,7 +18,7 @@
 //! collision check is keyed by `[target_head, method_name]`, so
 //! two `impl Render for Bag<Int>` and `impl Render for Bag<String>`
 //! specializations both register `Bag.render` and are detected as
-//! collisions even though their domains are disjoint — the
+//! collisions even though their domains are disjoint. The
 //! existing diagnostic surface treats this as a shared-method
 //! conflict, which is the conservative choice for now.
 
@@ -118,7 +118,7 @@ fn disjoint_method_names_on_specialized_and_generic_targets_coexist() {
 #[test]
 fn duplicate_inherent_method_across_impls_diagnoses() {
     // `impl Bag<Int> { fn render }` and `impl Bag<T> { fn render }`
-    // both register `[Bag, render]` — the registry rejects the
+    // both register `[Bag, render]`. The registry rejects the
     // second insertion (collision keyed by target head + method
     // name).
     let source = "
@@ -155,7 +155,7 @@ fn distinct_concrete_specializations_share_method_name_diagnose_collision() {
     // both register `[Bag, render]`. Domains are disjoint, but the
     // current registry keying flags this as a method-name
     // collision. The conservative choice while specialization
-    // domains aren't structurally indexed yet — see
+    // domains aren't structurally indexed yet. See
     // `StructDefinition`'s `conformances` doc for the transitional
     // note.
     let source = "

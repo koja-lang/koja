@@ -16,7 +16,7 @@ pub enum Doc {
     IfBreak(Box<Doc>, Box<Doc>),
 }
 
-/// The empty document; produces no output.
+/// The empty document.
 pub fn nil() -> Doc {
     Doc::Nil
 }
@@ -134,7 +134,7 @@ fn emit_newline(out: &mut String, col: &mut u32, ind: u32) {
 ///
 /// Each item carries any separator as a *trailing* suffix (e.g. `", "` or
 /// `" and "`), so a break lands on a fresh line at the fill indent with no
-/// stray leading space; the dangling trailing separator is removed by the
+/// stray leading space. The dangling trailing separator is removed by the
 /// final per-line `trim_end`.
 fn render_fill(out: &mut String, col: &mut u32, ind: u32, items: &[Doc], width: u32) {
     for (i, item) in items.iter().enumerate() {

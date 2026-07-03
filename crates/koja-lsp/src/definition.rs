@@ -67,11 +67,8 @@ impl Backend {
         }
 
         // Variable: jump to its declaring local span via the per-doc
-        // index (the symbol carries the local's name; we look up the
-        // local id by matching the bare-identifier expression at the
-        // cursor in a future revision, but for the v1 cut we surface
-        // the local's span directly when the symbol classifies as a
-        // Variable known to the index).
+        // index, matched by surface name (the symbol doesn't carry a
+        // local id).
         if let SymbolInfo::Variable { name, .. } = &symbol
             && let Some(span) = find_local_span_by_name(state, name)
         {
@@ -182,7 +179,7 @@ fn file_contains_span(file: &File, span: &Span) -> bool {
 
 /// Linear scan of the per-document local index for the first entry
 /// whose name matches. The classify-by-name path doesn't carry a
-/// [`LocalId`], so we look up by surface name; per-file indices stay
+/// [`LocalId`], so we look up by surface name. Per-file indices stay
 /// small enough that the scan is unmeasurable.
 fn find_local_span_by_name(state: &DocumentState, name: &str) -> Option<Span> {
     state

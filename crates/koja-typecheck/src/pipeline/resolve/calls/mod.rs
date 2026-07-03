@@ -4,11 +4,11 @@
 //!
 //! # Module layout
 //!
-//! - [`methods`] — receiver classification (`Static` / `Instance` /
+//! - [`methods`]: receiver classification (`Static` / `Instance` /
 //!   `Bounded`), dual-scope (receiver + method) type-arg inference,
 //!   and the small lookup / diagnostic-shape helpers re-used by
 //!   [`resolve_method_call`].
-//! - [`bounded`] — `t.m(args)` against a type-param receiver:
+//! - [`bounded`]: `t.m(args)` against a type-param receiver,
 //!   protocol-method lookup against the type-param's bounds list,
 //!   ambiguity / not-found diagnostics, and arg validation against
 //!   the protocol's signature.
@@ -54,7 +54,7 @@ use super::types::{display_resolution, lookup_type};
 /// `type_args` output vec, the surrounding expected return type
 /// (when bidirectional inference applies), and the call's span (for
 /// diagnostics). Inputs (receiver / method / args / sig) and the
-/// resolver/diagnostics env stay as separate params — these three
+/// resolver/diagnostics env stay as separate params, these three
 /// just happen to always move as a group.
 pub(super) struct CallSite<'a> {
     pub(super) out_type_args: &'a mut Vec<ResolvedType>,
@@ -120,7 +120,7 @@ pub(super) fn resolve_call(
     let sig = match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig.clone(),
         GlobalKind::Function(None) => panic!(
-            "resolve_call: function `{}` has no lifted signature — \
+            "resolve_call: function `{}` has no lifted signature: \
              lift_signatures must run before resolve",
             entry.identifier,
         ),
@@ -292,7 +292,7 @@ pub(super) fn resolve_method_call_expr(
 /// Stamp `expr.kind` as `Call { callee: Ident("Pkg.f", Global(fn_id)), args }`
 /// in place, preserving any inferred `type_args`, so IR lower's
 /// existing bare-call path handles a package-qualified call without
-/// further branching. The receiver `Ident` is discarded — it named a
+/// further branching. The receiver `Ident` is discarded, it named a
 /// package, not a value.
 fn rewrite_method_call_to_package_call(expr: &mut Expr, fn_id: GlobalRegistryId) {
     let span = expr.span;
@@ -542,8 +542,8 @@ pub(super) fn resolve_method_call(
         resolver.registry,
         diagnostics,
     );
-    // Static dispatch's receiver.resolution starts as a bare leaf;
-    // stitch in the inferred type_args so IR lower can read them
+    // Static dispatch's receiver.resolution starts as a bare leaf.
+    // Stitch in the inferred type_args so IR lower can read them
     // (instance dispatch already carries the value's full type).
     if matches!(method_receiver, MethodReceiver::Static { .. })
         && !receiver_args_inferred.is_empty()
@@ -558,7 +558,7 @@ pub(super) fn resolve_method_call(
     // full `ResolvedType` matches the method's substituted `self`
     // type. Trait impls on concrete instantiations (e.g.
     // `impl Show for Bag<Int>`) lift `self` as `Bag<Int>`, so calls
-    // on `Bag<String>` resolve the lookup but fail this check —
+    // on `Bag<String>` resolve the lookup but fail this check,
     // matching the design where every impl block adds methods to a
     // specific domain rather than overriding a more-general one.
     if matches!(method_receiver, MethodReceiver::Instance { .. })
@@ -641,7 +641,7 @@ fn try_field_callable(
 
 /// Drive call-site type inference for a generic callee. Tries a
 /// speculative pre-seed (`fill_from_expected` → per-arg unify on a
-/// scratch); on success the pre-seeded substitution wins so
+/// scratch). On success the pre-seeded substitution wins so
 /// `x: Int32 = identity(42)` keeps `T = Int32` via `literal_widens_into`.
 /// On any conflict (e.g. outer expected `Unit` vs `identity(1) : Int`)
 /// the fallback runs the original arg-first / advisory-fill order so
@@ -745,7 +745,7 @@ pub(super) fn emit_conflict(
 /// Resolve a bare call `name(...)`: prioritize the enclosing
 /// scope, then fall through to the package scope. Inside a
 /// struct/enum method, `Package.Enclosing.name` wins over
-/// `Package.name` when both exist; the escape hatch for callers
+/// `Package.name` when both exist. The escape hatch for callers
 /// who want the package-level function in the conflict case is
 /// to fully qualify (`Global.name()`), which goes through path-
 /// call resolution and never reaches this helper. Free functions
@@ -772,7 +772,7 @@ fn lookup_bare_callee<'a>(
 /// Try to resolve `recv.method(args)` as a package-qualified
 /// function call (`Pkg.f(args)`, e.g. `HTTP.get(url)`). Applies only
 /// when the receiver is a bare identifier that names no local and no
-/// type in scope — locals and type receivers always win. Returns
+/// type in scope, since locals and type receivers always win. Returns
 /// `None` to fall through to method dispatch when the head doesn't
 /// name a package with declarations, so existing diagnostics cover
 /// unknown receivers.
@@ -808,7 +808,7 @@ fn try_package_function_call(
     let signature = match &entry.kind {
         GlobalKind::Function(Some(sig)) => sig.clone(),
         GlobalKind::Function(None) => panic!(
-            "try_package_function_call: function `{}` has no lifted signature — \
+            "try_package_function_call: function `{}` has no lifted signature: \
              lift_signatures must run before resolve",
             entry.identifier,
         ),
@@ -830,7 +830,7 @@ fn try_package_function_call(
 }
 
 /// Enforce the callee's [`VisibilityScope`] at the call site.
-/// Mismatches push a diagnostic on `diagnostics`; resolution still
+/// Mismatches push a diagnostic on `diagnostics`, but resolution still
 /// proceeds so callers see exactly one error per offending call
 /// site and downstream passes (seal, IR lower) walk a populated
 /// tree.
@@ -890,8 +890,8 @@ fn check_callee_visibility(
 
 /// Pure visibility decision: does a callee with `scope` allow a
 /// call from `caller_package` while resolving a method on
-/// `caller_type_id`? `Public` is always reachable; `PackagePrivate`
-/// requires `callee_package == caller_package`; `TypePrivate(owner)`
+/// `caller_type_id`? `Public` is always reachable. `PackagePrivate`
+/// requires `callee_package == caller_package`. `TypePrivate(owner)`
 /// requires `caller_type_id == Some(owner)` (same-type, across all
 /// inherent and protocol-impl blocks, since they share one id).
 fn callee_is_visible(
@@ -949,7 +949,7 @@ fn resolve_non_closure_args(
 /// with the substituted param type as the expected hint so closure
 /// param/return slots inherit any type-args inferred from the
 /// non-closure args. Move marking for non-closure args happened in
-/// the first pass; closure args resolve to fresh function-pointer
+/// the first pass. Closure args resolve to fresh function-pointer
 /// rvalues (a `Copy` shape) so the second pass adds nothing here.
 fn resolve_closure_args(
     args: &mut [Arg],
@@ -998,7 +998,7 @@ fn substitute_params(params: &[ResolvedParam], subst: &Substitution) -> Vec<Reso
 /// use the callee's fully-qualified [`Identifier`]. Per-position
 /// equivalence runs through [`check_compatible`] so a numeric
 /// literal flowing into a narrow-int / narrow-float param coerces
-/// when its compile-time value fits the param's range; the
+/// when its compile-time value fits the param's range. The
 /// resulting coercion stamps onto the arg's [`Expr::literal_coercion`]
 /// for IR lower to consume.
 fn validate_arg_signature(
@@ -1187,9 +1187,9 @@ fn validate_local_call_signature(
 
 #[cfg(test)]
 mod tests {
-    //! Unit coverage for [`callee_is_visible`] — the pure half of the
+    //! Unit coverage for [`callee_is_visible`], the pure half of the
     //! `priv fn` enforcement. Integration coverage lives in
-    //! `tests/visibility.rs`; the cases here pin the decision matrix
+    //! `tests/visibility.rs`. The cases here pin the decision matrix
     //! at the smallest possible API surface, including the
     //! cross-package `PackagePrivate` rejection path that surface
     //! syntax can't currently reach (`Pkg.fn(args)` doesn't resolve to
@@ -1238,7 +1238,7 @@ mod tests {
 
         assert!(callee_is_visible(scope, "A", "A", Some(foo)));
         // Cross-package same-owner is irrelevant: type-private is
-        // anchored on identity, not package — but a type id is
+        // anchored on identity, not package, but a type id is
         // unique across the program so this can't actually occur.
         assert!(callee_is_visible(scope, "A", "B", Some(foo)));
 

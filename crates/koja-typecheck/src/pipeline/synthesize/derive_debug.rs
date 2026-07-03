@@ -5,8 +5,8 @@
 //! Synthesized impls are indistinguishable from user-written code, so
 //! the rest of typecheck (collect / lift / resolve / seal) needs no
 //! special-casing. Runs as a **pre-collect** pass in
-//! [`crate::check_program`] so the new items land before name binding;
-//! the pipeline's main `synthesize` step (today: `for_desugar`)
+//! [`crate::check_program`] so the new items land before name binding.
+//! The pipeline's main `synthesize` step (today: `for_desugar`)
 //! runs after lift and only touches function bodies, so it can't
 //! introduce items.
 //!
@@ -14,9 +14,9 @@
 //!
 //! Generic types (`Pair<A, B>`, `Container<T>`, …) get the same full
 //! body as concrete ones. Field interpolations call `.format()` on
-//! bare type parameters (`A.format()`); the typechecker resolves
+//! bare type parameters (`A.format()`). The typechecker resolves
 //! those through the universal-`Debug` fallback in
-//! [`crate::pipeline::resolve::calls::bounded`] — every concrete
+//! [`crate::pipeline::resolve::calls::bounded`]: every concrete
 //! monomorphization either has a synthesized `Debug` impl (user
 //! types) or a hand-written stdlib impl (`List<T>`, `Map<K, V>`,
 //! `Set<T>`, `Option<T>`, `Result<T, E>`, `Pair<A, B>`), so the call
@@ -145,7 +145,7 @@ fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
     !existing.iter().any(|n| n == &decl.path.join("."))
 }
 
-/// Empty enums (no variants) are uninhabited — a `match self end`
+/// Empty enums (no variants) are uninhabited: a `match self end`
 /// body with no arms is rejected by typecheck, and there's no value
 /// to format anyway. Skip them.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
@@ -167,11 +167,11 @@ fn synthesize_enum_impl(decl: &EnumDecl) -> Item {
 }
 
 /// Builds the full `impl Debug for T` block carrying all three
-/// methods (`format`, `print`, `inspect`). `format_body` is supplied;
+/// methods (`format`, `print`, `inspect`). `format_body` is supplied.
 /// `print` and `inspect` come from [`print_function`] /
 /// [`inspect_function`] and inline the same bodies the `Debug`
-/// protocol declares as defaults in `lib/global/src/debug.koja` —
-/// resolve doesn't yet pull protocol default bodies into impls
+/// protocol declares as defaults in `lib/global/src/debug.koja`.
+/// Resolve doesn't yet pull protocol default bodies into impls
 /// that omit them, so we inline them at synthesis time.
 fn debug_impl_block(target: TypeExpr, format_body: Expr, span: Span) -> Item {
     Item::Impl(ImplBlock {
@@ -358,7 +358,7 @@ fn field_format_part(field_name: &str, field_type: &TypeExpr, span: Span) -> Str
 ///   `Bits`).
 /// - Anything that isn't a plain named or generic type
 ///   ([`TypeExpr::Function`], [`TypeExpr::Self_`], [`TypeExpr::Union`],
-///   [`TypeExpr::Unit`]) — functions / unions / etc. don't carry
+///   [`TypeExpr::Unit`]): functions / unions / etc. don't carry
 ///   `format` and there's no syntactic `Self.format()` recursion
 ///   contract.
 ///
@@ -367,7 +367,7 @@ fn field_format_part(field_name: &str, field_type: &TypeExpr, span: Span) -> Str
 /// synthesized impl, so `.format()` always resolves after
 /// monomorphization.
 ///
-/// Shared with [`super::derive_equality`] — both synthesizers bail
+/// Shared with [`super::derive_equality`]: both synthesizers bail
 /// on the same shapes (no `Debug` / `Equality` impl available).
 pub(super) fn is_opaque_type(te: &TypeExpr) -> bool {
     match te {
@@ -528,7 +528,7 @@ fn literal_part(value: String, span: Span) -> StringPart {
 /// Wraps an expression in a `format()` method call before splicing
 /// into a string literal. The `.format()` wrap means IR-lower's
 /// interpolation handler sees an already-`String`-typed value per
-/// part — no per-part type dispatch needed at lower time.
+/// part (no per-part type dispatch needed at lower time).
 fn interpolation_part(expr: Expr, span: Span) -> StringPart {
     let formatted = Expr::new(
         ExprKind::MethodCall {

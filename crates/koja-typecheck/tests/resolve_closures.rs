@@ -3,8 +3,8 @@
 //! Pins the resolver's behavior on the closure surface that drives
 //! the higher-order stdlib (`list.map`/`filter`, `option.then`,
 //! `result.map`): block (`fn x -> body end`) and short (`x -> body`)
-//! forms; explicit param annotations vs context-driven inference;
-//! capture of outer locals; nested closures; and "value-of-fn-type"
+//! forms, explicit param annotations vs context-driven inference,
+//! capture of outer locals, nested closures, and "value-of-fn-type"
 //! storage in a local binding.
 
 use koja_ast::ast::{ClosureParam, Expr, ExprKind, Function, Item, Statement};
@@ -121,7 +121,7 @@ fn short_closure_with_unannotated_param_uses_context() {
 #[test]
 fn closure_captures_outer_local_with_local_resolution() {
     // The body's reference to outer `factor` resolves to
-    // `Resolution::Local(<factor's local id>)`; capture analysis at
+    // `Resolution::Local(<factor's local id>)`. Capture analysis at
     // IR time will derive the capture set from this.
     let source = "
         fn make_scaler -> Int
@@ -251,7 +251,7 @@ fn closure_param_local_ids_stamped_for_seal() {
 fn block_closure_return_annotation_threads_to_trailing_expr() {
     // `Result.Ok(v)` in a closure whose return type is annotated
     // `Result<Int, Int>` must let the `E` slot fill from the
-    // surrounding annotation — without the return-hint plumbing
+    // surrounding annotation. Without the return-hint plumbing
     // used to fire "cannot infer type parameter `E` of
     // `Global.Result` from the supplied `Ok` payload" inside
     // `result.then`-style higher-order callers.

@@ -37,9 +37,9 @@ fn check_multi_file(files: &[(&str, &str)]) -> Result<CheckedProgram, CheckFailu
 #[test]
 fn alias_to_global_struct_resolves_locally() {
     // `Global.List` is reachable as bare `List` everywhere via the
-    // primitive lookup fallthrough; aliasing it under its real name
+    // primitive lookup fallthrough. Aliasing it under its real name
     // should still work (it's a no-op alias-wise, but should not
-    // diagnose since the alias target == the existing binding —
+    // diagnose since the alias target == the existing binding, the
     // redundant-self-alias carve-out applies).
     typecheck_file(
         "alias Global.List as MyList\n\
@@ -124,7 +124,7 @@ fn alias_multi_segment_target_falls_through_when_unregistered() {
     // validates structurally (path length >= 2 passes) but errors at
     // "type not registered" until nested-type lifting populates
     // multi-segment targets in the registry. Pinned so the alias
-    // helper stays load-bearing for the eventual nested-type slice —
+    // helper stays load-bearing for the eventual nested-type slice:
     // the helper resolves both `O` (1 segment) and `O.Inner` (2)
     // without code movement once the registry carries those entries.
     let failure = typecheck_file_fail(
@@ -207,7 +207,7 @@ fn alias_to_self_is_redundant_but_not_shadow() {
 
 #[test]
 fn alias_is_file_private() {
-    // `a.koja` defines an alias; `b.koja` (sister file in the same
+    // `a.koja` defines an alias. `b.koja` (sister file in the same
     // package) tries to use the alias's local name. Aliases are
     // file-private, so `b.koja` should fail to resolve `Hasher`.
     let result = check_multi_file(&[
@@ -236,7 +236,7 @@ fn dotted_static_call_resolves_without_alias() {
     // Bare dotted static dispatch: `Crypto.SHA256.digest(...)` with
     // no `alias` line. Pre-PR-B this hit the
     // "typecheck does not yet support dotted type names"
-    // gate; post-PR-B `classify_receiver` walks the FieldAccess
+    // gate. Post-PR-B `classify_receiver` walks the FieldAccess
     // chain and `lookup_type` finds the qualified entry directly.
     let checked =
         typecheck_file("fn run(data: Binary) -> Binary\n  Crypto.SHA256.digest(data)\nend\n");
@@ -250,7 +250,7 @@ fn dotted_static_call_resolves_without_alias() {
 #[test]
 fn dotted_type_in_signature_resolves_without_alias() {
     // Dotted type in a parameter position: `crypto: Crypto.SHA256`
-    // with no `alias` line. Same gate as the static call above —
+    // with no `alias` line. Same gate as the static call above:
     // `resolve_named` walks the path through `resolve_path_to_global`
     // and finds `Crypto.SHA256` directly. Body just borrows the
     // value, so the receiver is exercised purely as a type
@@ -288,7 +288,7 @@ fn dotted_static_call_unknown_path_diagnoses() {
 
 #[test]
 fn type_param_shadows_alias_inside_function() {
-    // File-level `alias Crypto.SHA256 as T` is well-formed — `T` is
+    // File-level `alias Crypto.SHA256 as T` is well-formed: `T` is
     // not a current-package or `Global` binding. Inside a function
     // declaring its own `<T>`, the type parameter shadows the alias
     // by lexical scope (the lookup order in `resolve_named` checks

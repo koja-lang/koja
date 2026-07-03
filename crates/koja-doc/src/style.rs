@@ -1,7 +1,7 @@
 //! Static assets shipped alongside generated documentation:
 //! the HexDocs-inspired stylesheet and the hand-rolled fuzzy
 //! search bundle. Both are embedded at compile time so the doc
-//! generator stays a self-contained library — the driver writes
+//! generator stays a self-contained library. The driver writes
 //! them to disk verbatim during the `write_doc_files` pass.
 
 /// Stylesheet linked from every page (root + per-package).

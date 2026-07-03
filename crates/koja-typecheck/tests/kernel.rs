@@ -7,7 +7,7 @@
 //! them without the autoimport raising diagnostics.
 //!
 //! `Random` lives in `random.koja` and is auto-imported alongside
-//! the rest of the stdlib; surface coverage for it lives in
+//! the rest of the stdlib. Surface coverage for it lives in
 //! [`random`].
 
 use koja_ast::ast::Statement;

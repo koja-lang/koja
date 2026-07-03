@@ -1,7 +1,7 @@
 //! Struct lifting: stamp the [`crate::registry::StructDefinition`]
 //! from the AST `StructDecl` and lift inline static / instance method
 //! signatures. Generic structs (`struct Pair<T, U>`) collect their
-//! `type_params` here; field types resolve against a scope that maps
+//! `type_params` here. Field types resolve against a scope that maps
 //! each name to a [`koja_ast::identifier::Resolution::TypeParam`].
 //! Inline method bodies see no type-param scope yet (out of scope
 //! until the generic-functions slice).
@@ -48,19 +48,19 @@ fn lift_struct_definition(
     let identifier = Identifier::new(scope.package, decl.path.clone());
     let Some((id, entry)) = scope.registry.lookup(&identifier) else {
         panic!(
-            "lift_signatures: struct `{identifier}` missing from registry — \
+            "lift_signatures: struct `{identifier}` missing from registry: \
              collect invariant violation",
         );
     };
     if matches!(entry.kind, GlobalKind::Struct(Some(_))) {
-        // Duplicate decl is already diagnosed by `collect`; the
+        // Duplicate decl is already diagnosed by `collect`. The
         // first one stamped its definition. Skip to avoid tripping
         // `set_struct_definition`'s panic-on-double-set invariant.
         return;
     }
 
     // Param names live on the registry entry (stamped at collect
-    // time); resolve through the chained scope rooted at this id.
+    // time). Resolve through the chained scope rooted at this id.
     let owners = if decl.type_params.is_empty() {
         Vec::new()
     } else {

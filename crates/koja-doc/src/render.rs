@@ -56,7 +56,7 @@ pub struct PackageRef<'a> {
     /// Origin tier label used as the package chip text on the
     /// root-roster page (`"project"` / `"dependency"` / `"stdlib"`).
     pub kind_label: &'static str,
-    /// Count of documentable items in the package — drives the
+    /// Count of documentable items in the package. Drives the
     /// brief on the root-roster row ("123 items").
     pub item_count: usize,
     /// `"s"` when `item_count != 1` so the template can produce
@@ -193,7 +193,7 @@ fn dep_stats(project: &DocProject) -> (usize, &'static str, usize, &'static str)
 
 const EMPTY_ITEMS: &[DocItem] = &[];
 
-/// Render the top-level `doc/index.html` — the package roster.
+/// Render the top-level `doc/index.html`, the package roster.
 pub fn render_root_index(project: &DocProject) -> String {
     let (dep_count, dep_plural, stdlib_count, stdlib_plural) = dep_stats(project);
     let tmpl = RootIndexTemplate {
@@ -211,7 +211,7 @@ pub fn render_root_index(project: &DocProject) -> String {
     tmpl.render().expect("failed to render root index template")
 }
 
-/// Render `doc/<Pkg>/index.html` — a single package's overview.
+/// Render `doc/<Pkg>/index.html`, a single package's overview.
 pub fn render_package_index(pkg: &DocPackage, project: &DocProject) -> String {
     let tmpl = PackageIndexTemplate {
         active_item: None,

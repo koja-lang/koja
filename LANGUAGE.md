@@ -121,7 +121,7 @@ x /= 4
 
 ### Assignment and Value Semantics
 
-Every binding holds an independent value. Assignment copies; the original stays usable:
+Every binding holds an independent value. Assignment copies, and the original stays usable:
 
 ```koja
 p1 = Point{x: 1, y: 2}
@@ -166,7 +166,7 @@ end
 
 Functions without a return type return `()`. Parameters require explicit types. Return type annotation is required if the function returns a value.
 
-A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml` — there is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Most functions are declared inside `impl` blocks on a struct or enum; see [Impl Functions](#impl-functions) and [Static Functions](#static-functions).
+A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml`. There is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Most functions are declared inside `impl` blocks on a struct or enum. See [Impl Functions](#impl-functions) and [Static Functions](#static-functions).
 
 ### Private Functions
 
@@ -222,7 +222,7 @@ fn describe(c: Config) -> String
 end
 ```
 
-There is no parameter-passing modifier: every parameter is a value. (Earlier releases had a `move` keyword; it has been removed, since value semantics make it meaningless.)
+There is no parameter-passing modifier: every parameter is a value. (Earlier releases had a `move` keyword. It has been removed, since value semantics make it meaningless.)
 
 ---
 
@@ -314,11 +314,11 @@ Nested ternaries are disallowed.
 | `Bits`    | Arbitrary bit sequence                    |
 | `()`      | Unit type (empty value)                   |
 
-All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit; `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
+All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
 
 ### Numeric Widening
 
-Sized numeric values widen implicitly into their hub type, and only into their hub type. `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, and `UInt32` widen to `Int` (signed sources sign-extend, unsigned sources zero-extend); `Float32` widens to `Float`. The conversion is always lossless.
+Sized numeric values widen implicitly into their hub type, and only into their hub type. `Int8`, `Int16`, `Int32`, `UInt8`, `UInt16`, and `UInt32` widen to `Int` (signed sources sign-extend, unsigned sources zero-extend). `Float32` widens to `Float`. The conversion is always lossless.
 
 ```koja
 fn count(n: Int) -> Int
@@ -326,15 +326,15 @@ fn count(n: Int) -> Int
 end
 
 small: Int32 = -7
-count(small)        # Int32 widens to Int; value stays -7
+count(small)        # Int32 widens to Int, value stays -7
 ```
 
 Widening applies wherever a value flows into a typed slot: call arguments, struct fields, enum payloads, return values, annotated bindings, and constant initializers. It does **not** apply to:
 
-- **Binary operators** -- operands must be the same width. `Int32 + Int` is an error; widen explicitly first.
+- **Binary operators** -- operands must be the same width. `Int32 + Int` is an error. Widen explicitly first.
 - **Sideways conversions** -- `Int8` does not widen to `Int16`, `UInt8` does not widen to `UInt16`. Each source type has exactly one implicit target.
 - **`UInt64`** -- it does not fit in `Int`. Use the checked `to_int` method.
-- **Generic inference** -- `T` binds to the actual type; `identity(small)` infers `T = Int32`, not `Int`.
+- **Generic inference** -- `T` binds to the actual type. `identity(small)` infers `T = Int32`, not `Int`.
 - **Narrowing or cross-category conversion** -- `Int` never implicitly becomes `Int32`, and ints never become floats.
 
 The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each returning `Result<TargetType, NumericConversionError>` -- `Result.Err(NumericConversionError.OutOfRange)` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` is total (rounds to the nearest representable value):
@@ -464,7 +464,7 @@ c = c.increment()   # rebind to the returned value
 
 #### Extend Blocks
 
-`extend` blocks attach additional inherent functions to an existing type, analogous to Swift extensions. Use `extend` for adding functions from outside the type's own declaration; `impl` is reserved for protocol conformance (`impl Protocol for Type`).
+`extend` blocks attach additional inherent functions to an existing type, analogous to Swift extensions. Use `extend` for adding functions from outside the type's own declaration. `impl` is reserved for protocol conformance (`impl Protocol for Type`).
 
 ```koja
 extend Point
@@ -476,7 +476,7 @@ extend Point
 end
 ```
 
-Methods declared in an `extend` block have ambient visibility — they're callable from any package that can name the target type. Collisions on the same method name across `extend` blocks targeting the same type are a compile error.
+Methods declared in an `extend` block have ambient visibility. They're callable from any package that can name the target type. Collisions on the same method name across `extend` blocks targeting the same type are a compile error.
 
 #### Static Functions
 
@@ -750,7 +750,7 @@ Variable bindings inside OR patterns are disallowed.
 
 ### `cond`
 
-Multi-branch conditional. Koja has no `else if`; `cond` is the idiomatic way to chain conditions. Requires an `else` arm:
+Multi-branch conditional. Koja has no `else if`, so `cond` is the idiomatic way to chain conditions. Requires an `else` arm:
 
 ```koja
 fn classify(n: Int32) -> String
@@ -844,11 +844,11 @@ Koja uses value semantics: every binding, parameter, return, and field is an ind
 ### Rules
 
 1. Assignment copies. The source remains usable.
-2. Function and closure parameters are passed by value; the caller's binding survives the call.
+2. Function and closure parameters are passed by value. The caller's binding survives the call.
 3. There is no aliasing: mutating one binding never affects another.
 4. A value is usable for as long as it is in scope.
 
-> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting — blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector: there are no pauses and no background collector. See the README for production-readiness status.
+> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting. Blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector: there are no pauses and no background collector. See the README for production-readiness status.
 
 ### Copy Cost
 
@@ -912,7 +912,7 @@ end
 
 The compiler validates completeness (all protocol functions must be implemented) and signature compatibility. `priv fn` helpers are allowed in impl blocks. `@doc` annotations are supported on protocol declarations.
 
-`Self` inside a protocol declaration is syntactic sugar for an implicit first type parameter on the protocol — the slot every conforming type fills in via `impl Protocol for ConcreteType`. Methods that mention `Self` in their signature (return type, non-receiver param) treat it as that synthetic param; in an `impl Protocol for ConcreteType` block, the synthetic param resolves to `ConcreteType` and the method's `Self` ends up typed as the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) are appended after the synthetic `Self` slot. The name `Self` is reserved on protocols — it cannot also be declared explicitly.
+`Self` inside a protocol declaration is syntactic sugar for an implicit first type parameter on the protocol. It is the slot every conforming type fills in via `impl Protocol for ConcreteType`. Methods that mention `Self` in their signature (return type, non-receiver param) treat it as that synthetic param. In an `impl Protocol for ConcreteType` block, the synthetic param resolves to `ConcreteType` and the method's `Self` ends up typed as the concrete implementer. User-declared protocol type parameters (e.g. `protocol Eq<T>`) are appended after the synthetic `Self` slot. The name `Self` is reserved on protocols and cannot also be declared explicitly.
 
 ### Trait Bounds
 
@@ -1150,7 +1150,7 @@ end
 
 ### `Ref<M, R>`
 
-`spawn` returns a typed handle to the running process. `M` is the message type the process accepts; `R` is the reply type.
+`spawn` returns a typed handle to the running process. `M` is the message type the process accepts, and `R` is the reply type.
 
 ```koja
 struct Ref<M, R>
@@ -1165,9 +1165,9 @@ Operations on a process handle:
 - `signal(event: Lifecycle)` -- sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
 - `kill()` -- immediately terminates the process. No signal is sent.
 - `alive?() -> Bool` -- returns `true` if the process is still running.
-- `send_after(msg: M, delay_ms: Int)` -- schedules `msg` for delivery after `delay_ms` milliseconds. The message is copied immediately; delivery happens asynchronously when the timer fires. Useful for periodic ticks and timeouts inside a process loop.
+- `send_after(msg: M, delay_ms: Int)` -- schedules `msg` for delivery after `delay_ms` milliseconds. The message is copied immediately. Delivery happens asynchronously when the timer fires. Useful for periodic ticks and timeouts inside a process loop.
 
-`Ref.self_ref()` returns a typed handle to the current process. It must be called from within a running process (inside `start`, `handle`, or `handle_signal`); the type parameters are inferred from the binding's annotation:
+`Ref.self_ref()` returns a typed handle to the current process. It must be called from within a running process (inside `start`, `handle`, or `handle_signal`). The type parameters are inferred from the binding's annotation:
 
 ```koja
 me: Ref<TickMsg, String> = Ref.self_ref()
@@ -1239,7 +1239,7 @@ The following types and functions are available in every module.
 
 ### Built-in Functions
 
-> **Note:** Koja uses value semantics — every binding, parameter,
+> **Note:** Koja uses value semantics. Every binding, parameter,
 > return, and field is an independent value. Assigning or passing a
 > value already yields an independent copy (cheaply, via reference-
 > counted copy-on-write under the hood), so there is no `clone()`:
@@ -1251,7 +1251,7 @@ Core runtime operations.
 
 #### `Kernel.exit(code: Int)`
 
-Terminates the process immediately with the given exit code. `0` indicates success; any non-zero value indicates failure.
+Terminates the process immediately with the given exit code. `0` indicates success, and any non-zero value indicates failure.
 
 ```koja
 Kernel.exit(0)
@@ -1325,7 +1325,7 @@ p.first.print()    # 10
 p.second.print()   # hello
 ```
 
-Generic struct literals like `Pair{first: x, second: y}` infer their type parameters from the field values when each field's expected type-param appears in at least one field. A type annotation on the binding (`p: Pair<Int, String> = ...`) is only required when no positional field uniquely binds a parameter — for example, a struct that only mentions some of its parameters in its fields' types.
+Generic struct literals like `Pair{first: x, second: y}` infer their type parameters from the field values when each field's expected type-param appears in at least one field. A type annotation on the binding (`p: Pair<Int, String> = ...`) is only required when no positional field uniquely binds a parameter, for example a struct that only mentions some of its parameters in its fields' types.
 
 ### `Range`
 
@@ -1360,7 +1360,7 @@ list.get(0).unwrap().print()  # 10
 list.empty?().print()   # false
 ```
 
-`append` returns a new list with the element added (rebind with `list = list.append(x)`); the original is unchanged. `get` returns `Option<T>` (`None` for out-of-bounds).
+`append` returns a new list with the element added (rebind with `list = list.append(x)`). The original is unchanged. `get` returns `Option<T>` (`None` for out-of-bounds).
 
 Functions:
 
@@ -1528,7 +1528,7 @@ Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns t
 
 #### Functions
 
-- `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1); prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
+- `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
 - `byte_size(self) -> Int` -- returns the number of bytes.
 - `ptr(self) -> CPtr<UInt8>` -- returns a raw pointer to the underlying byte data. Useful for passing binary data to C FFI functions.
 - `slice(self, range: Range) -> Binary` -- copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
@@ -1659,7 +1659,7 @@ protocol Hash
 end
 ```
 
-Required for keys in `Map<K, V>` and elements in `Set<T>`. Implemented for all numeric types, `Bool`, and `String`. Integers use SplitMix64; strings use FNV-1a.
+Required for keys in `Map<K, V>` and elements in `Set<T>`. Implemented for all numeric types, `Bool`, and `String`. Integers use SplitMix64, and strings use FNV-1a.
 
 ### `Bitwise` Protocol
 
@@ -1690,11 +1690,11 @@ flags.bor(0b0001).print()   # 11 (0b1011)
 protocol Debug
   fn format(self) -> String
   fn print(self)                # default: IO.puts(self.format())
-  fn inspect(self) -> Self # default: self.print(); self
+  fn inspect(self) -> Self # default: prints, then returns self
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`); the receiver stays live and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, `Binary`, `Bits`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free; custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`). The receiver stays live and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, `Binary`, `Bits`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
 
 `Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 

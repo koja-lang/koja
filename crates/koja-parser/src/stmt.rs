@@ -165,10 +165,6 @@ fn try_expr_to_lvalue(expr: &Expr) -> Option<LValue> {
     }
 }
 
-/// Token-to-`CompoundOp` table. Mirrors [`crate::expr::token_to_binop`]:
-/// keeps the dispatch flat and lets the assignment-statement
-/// branch gate on `is_some()` without spelling out the four arms
-/// twice.
 fn token_to_compound_op(kind: &TokenKind) -> Option<CompoundOp> {
     match kind {
         TokenKind::PlusEq => Some(CompoundOp::Add),

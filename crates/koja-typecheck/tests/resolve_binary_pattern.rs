@@ -2,7 +2,7 @@
 //! ([`Pattern::Binary`]).
 //!
 //! Pairs with the binary literal coverage in
-//! `resolve_binary_literal.rs` — the resolve layer shares its
+//! `resolve_binary_literal.rs`: the resolve layer shares its
 //! per-segment width arithmetic with the literal side, but the
 //! pattern side is responsible for registering bindings into the
 //! arm scope and rejecting shapes that don't lower cleanly

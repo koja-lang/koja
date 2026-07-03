@@ -11,8 +11,8 @@
 //! entered scope.
 //!
 //! Captured idents inside the body resolve to [`Resolution::Local`]
-//! pointing at the outer scope's [`LocalId`] — no special "capture"
-//! marker — and the type table makes that id's
+//! pointing at the outer scope's [`LocalId`] (no special "capture"
+//! marker), and the type table makes that id's
 //! [`ResolvedType`] visible everywhere the body is later walked.
 //!
 //! Param types come from the explicit annotation when present,
@@ -85,7 +85,7 @@ pub(super) fn resolve_closure(
 }
 
 /// Resolve a short closure (`x -> body_expr`). Single-expression
-/// body; otherwise mirrors [`resolve_closure`].
+/// body, otherwise mirrors [`resolve_closure`].
 pub(super) fn resolve_short_closure(
     params: &mut [ClosureParam],
     body: &mut Expr,
@@ -119,7 +119,7 @@ pub(super) fn resolve_short_closure(
 }
 
 /// Compute each closure param's declared type. Annotation wins over
-/// context; both missing diagnoses and substitutes
+/// context. Both missing diagnoses and substitutes
 /// [`ResolvedType::Unresolved`].
 fn bind_closure_params(
     params: &[ClosureParam],
@@ -211,9 +211,9 @@ fn declare_closure_params(
     }
 }
 
-/// Pick the closure's return type. Explicit annotation wins; else
-/// the body's trailing expression; else the expected return from
-/// context; else [`ResolvedType::Unresolved`].
+/// Pick the closure's return type. Explicit annotation wins, else
+/// the body's trailing expression, else the expected return from
+/// context, else [`ResolvedType::Unresolved`].
 fn closure_return_type(
     annotation: Option<ResolvedType>,
     body_return: Option<ResolvedType>,

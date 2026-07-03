@@ -1,7 +1,7 @@
 //! `const NAME [: T] = expr` at the module level.
 //!
 //! Constant names may be either `Ident` (lowercase) or `TypeIdent`
-//! (PascalCase) — both shapes are accepted at the syntax layer.
+//! (PascalCase). Both shapes are accepted at the syntax layer.
 //! Anything else lands a guiding diagnostic and proceeds with an
 //! error sentinel so later phases can still walk the rest of the
 //! file.

@@ -25,7 +25,7 @@ pub(super) fn lift_protocol(
     let (id, already_lifted) = match scope.registry.lookup(&identifier) {
         Some((id, entry)) => (id, matches!(entry.kind, GlobalKind::Protocol(Some(_)))),
         None => panic!(
-            "lift_signatures: protocol `{identifier}` missing from registry — \
+            "lift_signatures: protocol `{identifier}` missing from registry: \
              collect invariant violation",
         ),
     };

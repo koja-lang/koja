@@ -3,11 +3,10 @@
 //!
 //! A `DocProject` is a roster of [`DocPackage`]s sorted with the
 //! user's own package first, then path dependencies, then stdlib,
-//! alphabetical within each tier. Every kind of doc item lives
-//! under exactly one package — there's no cross-package
-//! flattening — so the renderer can emit a clean
-//! `doc/<Pkg>/<Item>.html` tree and the sidebar dropdown can
-//! pivot between packages without ambiguity.
+//! alphabetical within each tier. Every doc item lives under
+//! exactly one package with no cross-package flattening, so the
+//! renderer can emit a clean `doc/<Pkg>/<Item>.html` tree and the
+//! sidebar dropdown can pivot between packages without ambiguity.
 
 use koja_ast::ast::{
     AnnotationValue, EnumDecl, ExtendBlock, File, Function, ImplMember, Item, Param, ProtocolDecl,
@@ -165,11 +164,9 @@ impl DocPackage {
 /// [`Self::packages`] to emit one subdir per package.
 #[derive(Debug)]
 pub struct DocProject {
-    /// Bare name of the user's own package — used as the default
+    /// Bare name of the user's own package, used as the default
     /// landing page and to highlight the project entry in the
-    /// sidebar dropdown. Always matches one of `packages[i].name`
-    /// once the driver has called `extract_items` for at least one
-    /// project source. May be empty when running in loose-file
+    /// sidebar dropdown. May be empty when running in loose-file
     /// mode with no `koja.toml`.
     pub project_package: String,
     pub packages: Vec<DocPackage>,
@@ -186,10 +183,8 @@ impl DocProject {
     }
 
     /// Find-or-create the [`DocPackage`] for `name`. New packages
-    /// adopt the supplied `kind`; if the package already exists
-    /// the existing kind is preserved (first caller wins). This is
-    /// the only way new packages get added to the project — every
-    /// `extract_items` call routes through here.
+    /// adopt the supplied `kind`. If the package already exists
+    /// the existing kind is preserved (first caller wins).
     pub fn ensure_package(&mut self, name: &str, kind: PackageKind) -> &mut DocPackage {
         if let Some(idx) = self.packages.iter().position(|p| p.name == name) {
             return &mut self.packages[idx];
@@ -206,12 +201,10 @@ impl DocProject {
 }
 
 /// Extract documentation items from a parsed file into `package`
-/// inside `project`. Items with `@doc false` are excluded; private
-/// top-level functions and `extend`-block methods are excluded.
-/// `extend Type` blocks queue their methods on the current package's
-/// `pending_extends` -- `finalize_project` distributes them to the
-/// target package's struct/enum rosters once every file has been
-/// ingested. `impl Protocol for Type` blocks do not contribute
+/// inside `project`. Items with `@doc false` and private functions
+/// are excluded. `extend Type` blocks queue their methods on the
+/// current package's `pending_extends` for [`finalize_project`] to
+/// distribute. `impl Protocol for Type` blocks contribute no
 /// documentation surface beyond the protocol's own declaration.
 pub fn extract_items(file: &File, project: &mut DocProject, package: &str, kind: PackageKind) {
     let pkg = project.ensure_package(package, kind);
@@ -371,7 +364,7 @@ fn annotation_string(annotations: &[koja_ast::ast::Annotation]) -> Option<String
 }
 
 /// Build a [`PendingExtend`] from an `extend Type` block. Path
-/// interpretation mirrors typecheck/IR's `extend_target_path`;
+/// interpretation mirrors typecheck/IR's `extend_target_path`,
 /// inlined so `koja-doc` doesn't need a typecheck dep.
 fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<PendingExtend> {
     let path = match &ext.target {

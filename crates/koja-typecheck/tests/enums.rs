@@ -188,7 +188,7 @@ fn tuple_variant_with_user_struct_payload_resolves_through_registry() {
 }
 
 // ---------------------------------------------------------------------------
-// Construction — Unit
+// Construction: Unit
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -240,7 +240,7 @@ fn unit_variant_with_payload_supplied_diagnoses_shape_mismatch() {
 }
 
 // ---------------------------------------------------------------------------
-// Construction — Tuple
+// Construction: Tuple
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -312,7 +312,7 @@ fn tuple_variant_argument_type_mismatch_diagnoses() {
 }
 
 // ---------------------------------------------------------------------------
-// Construction — Struct
+// Construction: Struct
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -423,7 +423,7 @@ fn shape_mismatch_struct_supplied_to_tuple_variant_diagnoses() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative — unknown enum / variant
+// Negative: unknown enum / variant
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -463,7 +463,7 @@ fn unknown_variant_in_construction_diagnoses() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative — feature gaps
+// Negative: feature gaps
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -502,7 +502,7 @@ fn default_field_on_struct_variant_diagnoses_feature_gap() {
 }
 
 // `Tag()` and `Tag {}` (empty tuple/struct variants) are rejected
-// by the parser before typecheck sees them — `parse_type_expr` at
+// by the parser before typecheck sees them: `parse_type_expr` at
 // the empty `()` / `parse_struct_field` at the empty `{}` produce
 // parse-side diagnostics that surface from `parse_program`, so
 // the typecheck-layer defense-in-depth check in
@@ -578,7 +578,7 @@ fn impl_block_on_enum_admits_static_methods() {
 }
 
 // ---------------------------------------------------------------------------
-// Generics — definition, lift, construction inference
+// Generics: definition, lift, construction inference
 // ---------------------------------------------------------------------------
 
 #[test]

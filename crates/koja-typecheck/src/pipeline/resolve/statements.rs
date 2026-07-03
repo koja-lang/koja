@@ -3,7 +3,7 @@
 //! Covers `Statement::Assignment` (declaration + same-type
 //! reassignment + multi-segment field write) and
 //! `Statement::CompoundAssign` (`x += rhs`, reassignment-only on
-//! an arithmetic local; supports field-path targets like `p.x += 1`).
+//! an arithmetic local, supports field-path targets like `p.x += 1`).
 //! Pattern destructuring still surfaces as a feature-gap diagnostic
 //! here so later passes never see that shape.
 //!
@@ -12,16 +12,16 @@
 //!
 //! - **Declaration / reassignment** (`segments.len() == 1`):
 //!   - First write of a name: optional type annotation must match the
-//!     rhs (or infer from rhs); insert into the scope; stamp the
+//!     rhs (or infer from rhs), insert into the scope, and stamp the
 //!     target `LValue`'s implied [`Resolution::Local`] via the AST
 //!     `Expr` shape produced for `target` lookup. If the bare name
 //!     matches a package-level
 //!     [`crate::registry::GlobalKind::Constant`] entry, assignment
-//!     is rejected — constants are immutable and cannot share an
+//!     is rejected: constants are immutable and cannot share an
 //!     assignment LHS with locals.
 //!   - Subsequent write of an existing name: type annotation is a
-//!     feature gap (only legal on first decl); rhs type must equal
-//!     the existing local's type; the existing [`LocalId`] stays put.
+//!     feature gap (only legal on first decl). Rhs type must equal
+//!     the existing local's type, and the existing [`LocalId`] stays put.
 //!
 //! - **Field write** (`segments.len() >= 2`): the head segment must
 //!   resolve to a declared local (`self` included). Each subsequent
@@ -84,7 +84,7 @@ pub(super) fn resolve_assignment(
 
     // Resolve the annotation up front so it can flow into the rhs as
     // an expected type. Bidirectional inference uses this to drive
-    // shapes like `result: List<T> = List.new()` — the annotation's
+    // shapes like `result: List<T> = List.new()`, where the annotation's
     // `T` constrains `List.new`'s otherwise-unconstrained type param.
     let expected_ty: Option<ResolvedType> = type_annotation.and_then(|annotation| {
         let resolved = resolve_type_expr(
@@ -114,14 +114,14 @@ pub(super) fn resolve_assignment(
                 return;
             }
             if !value_ty.is_resolved() {
-                // The rhs already triggered its own diagnostic — stay
+                // The rhs already triggered its own diagnostic. Stay
                 // quiet to avoid piling on with a type-mismatch.
                 return;
             }
             if value_ty != existing_ty {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "cannot reassign `{name}` from `{}` to `{}` — local types are fixed at \
+                        "cannot reassign `{name}` from `{}` to `{}`: local types are fixed at \
                          declaration",
                         display_resolution(&existing_ty, resolver.registry),
                         display_resolution(&value_ty, resolver.registry),
@@ -135,7 +135,7 @@ pub(super) fn resolve_assignment(
             if assigns_to_package_constant(&name, resolver) {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "cannot assign to `{name}` — package-level constants are immutable and \
+                        "cannot assign to `{name}`: package-level constants are immutable and \
                          cannot be reassigned like a local",
                     ),
                     span,
@@ -168,7 +168,7 @@ pub(super) fn resolve_assignment(
                 None => {
                     if !value_ty.is_resolved() {
                         // Without an annotation we can only infer
-                        // from the rhs; if that failed, leave the
+                        // from the rhs. If that failed, leave the
                         // local out of scope so later references
                         // diagnose as unknown rather than as a typed
                         // hole.
@@ -183,12 +183,12 @@ pub(super) fn resolve_assignment(
 
     // Stamp the target so IR lower can read the LocalId without
     // re-walking scope. Single-segment is the only shape that reaches
-    // here — multi-segment field writes routed to
+    // here. Multi-segment field writes routed to
     // `resolve_field_assignment` above and bailed early.
     lvalue.local_id = Some(local_id);
 }
 
-/// Resolve a `target op= value` statement. Reassignment-only — the
+/// Resolve a `target op= value` statement. Reassignment-only: the
 /// target (or its leaf field, on a multi-segment path) must already
 /// resolve to an arithmetic type (`Int` or `Float`), and the rhs
 /// must match. On success, stamps `target.local_id` (the head local)
@@ -211,7 +211,7 @@ pub(super) fn resolve_compound_assignment(
         if assigns_to_package_constant(&name, resolver) {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "cannot apply `{op_label}=` to `{name}` — package-level constants are \
+                    "cannot apply `{op_label}=` to `{name}`: package-level constants are \
                      immutable",
                 ),
                 span,
@@ -252,7 +252,7 @@ pub(super) fn resolve_compound_assignment(
 
     let value_ty = value.resolution.clone();
     if !value_ty.is_resolved() {
-        // The rhs already triggered its own diagnostic — stay quiet
+        // The rhs already triggered its own diagnostic. Stay quiet
         // to avoid piling on with a type-mismatch.
         return;
     }
@@ -273,8 +273,8 @@ pub(super) fn resolve_compound_assignment(
 }
 
 /// Resolve a multi-segment `local.field1.field2 = value` assignment.
-/// The head segment must name a declared local (`self` included);
-/// each subsequent segment projects through a struct field roster
+/// The head segment must name a declared local (`self` included).
+/// Each subsequent segment projects through a struct field roster
 /// while substituting the receiver's type-args
 /// at every step. On success, the rhs validates against the leaf
 /// field type and the head local's `LocalId` is stamped on
@@ -288,11 +288,9 @@ fn resolve_field_assignment(
 ) {
     let head_name = lvalue.segments[0].clone();
     let Some(head) = resolve_head_local(&head_name, lvalue.span, resolver, diagnostics) else {
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "cannot assign to `{}` — `{head_name}` is not a declared local",
-                format_lvalue(lvalue),
-            ),
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("cannot assign to `{}`", format_lvalue(lvalue)),
+            format!("`{head_name}` is not a declared local"),
             span,
         ));
         return;
@@ -355,7 +353,7 @@ fn resolve_head_local(
 
 /// Always permits a `self.<field> = …` write. Under value semantics
 /// `self` is an independent local value, so reassigning a field
-/// produces a new value the method returns (`self -> Self`); there is
+/// produces a new value the method returns (`self -> Self`). There is
 /// no borrowed/owned distinction to gate on.
 fn require_self_mutable(
     _head_name: &str,
@@ -385,7 +383,7 @@ fn walk_field_segments(
         else {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "cannot project field `{segment}` on `{}` — field assignment requires \
+                    "cannot project field `{segment}` on `{}`: field assignment requires \
                      a struct receiver",
                     display_resolution(&current_ty, resolver.registry),
                 ),
@@ -398,7 +396,7 @@ fn walk_field_segments(
         let GlobalKind::Struct(Some(definition)) = &entry.kind else {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "cannot project field `{segment}` on `{}` ({}) — field assignment \
+                    "cannot project field `{segment}` on `{}` ({}): field assignment \
                      requires a struct receiver",
                     entry.identifier,
                     entry.kind.label(),

@@ -1,6 +1,6 @@
 //! Human-readable rendering of pipeline types for hover and
 //! completion. Mirrors `display_resolution` in `koja-typecheck`
-//! (today private); duplicated here as a small local printer rather
+//! (today private), duplicated here as a small local printer rather
 //! than promoting the upstream helper.
 
 use koja_ast::identifier::{AnonymousKind, Resolution, ResolvedType};

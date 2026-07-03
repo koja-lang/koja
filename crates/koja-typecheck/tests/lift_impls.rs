@@ -116,7 +116,7 @@ fn default_body_does_not_synthesize_when_impl_overrides() {
         ";
 
     let checked = typecheck(&dedent(source));
-    // Exactly one `label` method should be on the impl members — no
+    // Exactly one `label` method should be on the impl members, no
     // duplicate from synthesis.
     let pkg = checked
         .packages

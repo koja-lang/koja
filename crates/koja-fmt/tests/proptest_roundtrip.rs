@@ -8,7 +8,7 @@
 //! - `corpus_canonical`: every `.koja` file under `lib/` (the standard
 //!   library) must already be in canonical form: `format(src) == src`
 //!   byte-for-byte. Test fixtures under `tests/lang/` are not held to this
-//!   bar — they may intentionally exercise non-canonical input.
+//!   bar and may intentionally exercise non-canonical input.
 //! - The `proptest!` block exercises the formatter with random inputs,
 //!   asserting that it never panics and that any successfully-formatted
 //!   output is itself parseable and idempotent.

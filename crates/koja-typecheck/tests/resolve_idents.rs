@@ -1,7 +1,7 @@
 //! Typecheck coverage for bare-identifier resolution.
 //!
-//! Local-binding success-path coverage lives in `tests/locals.rs`;
-//! this file pins the resolver's edge cases — currently just the
+//! Local-binding success-path coverage lives in `tests/locals.rs`.
+//! This file pins the resolver's edge cases, currently just the
 //! "unknown identifier" diagnostic for an unbound name.
 
 use koja_ast::util::dedent;

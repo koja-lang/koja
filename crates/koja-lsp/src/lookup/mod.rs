@@ -581,7 +581,7 @@ mod tests {
             package: PACKAGE,
             locals: &locals,
         };
-        // Cursor on the `greet` name (line 1, col 5 — between `f`/`n` and parens).
+        // Cursor on the `greet` name (line 1, col 5, between `fn` and parens).
         let info = find_symbol_at(file, 1, 5, &ctx).expect("symbol at cursor");
         assert!(matches!(info, SymbolInfo::Function { ref name } if name == "greet"));
     }
@@ -609,7 +609,7 @@ mod tests {
         let _ = check_program(parsed).expect("check passes");
 
         // Rebuild parsed for the LocalIndex (check_program consumes its
-        // input; mirror diagnostics.rs::rebuild_parsed_from_checked).
+        // input, mirroring diagnostics.rs::rebuild_parsed_from_checked).
         let mut sources = koja_stdlib::autoimport_sources();
         sources.extend(koja_stdlib::qualified_sources());
         sources.push(SourceFile {

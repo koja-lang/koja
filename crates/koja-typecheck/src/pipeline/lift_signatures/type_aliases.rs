@@ -6,7 +6,7 @@
 //! lift (so their signatures can reference aliases).
 //!
 //! Cycle detection runs as a follow-up sweep: walk each alias's
-//! expansion through the registry; a visit count exceeding the
+//! expansion through the registry. A visit count exceeding the
 //! number of registered aliases means we hit a cycle. Each cycle
 //! diagnoses once and the offending alias's expansion is rewritten
 //! to [`ResolvedType::unresolved`] so downstream peels short-circuit
@@ -103,7 +103,7 @@ fn diagnose_alias_cycles(
 }
 
 /// Walk `id`'s expansion, returning true iff we revisit `id`. Only
-/// traverses `Named { Global(other_alias) }` heads — aliases form
+/// traverses `Named { Global(other_alias) }` heads: aliases form
 /// the cycle structure. Generic args, function param/ret types, and
 /// union members are walked recursively.
 fn expansion_cycles(

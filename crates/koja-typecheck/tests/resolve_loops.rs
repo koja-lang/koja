@@ -41,7 +41,7 @@ fn script_body(checked: &CheckedProgram) -> &[Statement] {
 }
 
 /// `Enumeration<Int>` fixture using stdlib `Option<Int>`. `get`
-/// returns `Some(...)` unconditionally — the desugar's `__idx <
+/// returns `Some(...)` unconditionally. The desugar's `__idx <
 /// __len` guard ensures it's only called for valid indices, and a
 /// literal `None` branch needs return-type back-propagation into
 /// unit-variant inference (orthogonal feature gap).
@@ -89,8 +89,8 @@ fn never_type(checked: &CheckedProgram) -> ResolvedType {
     primitive_type(checked, "Never")
 }
 
-/// Trailing `loop`'s body's first/only `Statement::Expr` payload —
-/// the nested-break test runs against this to inspect an inner
+/// Trailing `loop`'s body's first/only `Statement::Expr` payload.
+/// The nested-break test runs against this to inspect an inner
 /// loop's resolution.
 fn trailing_loop_inner_expr(checked: &CheckedProgram) -> Expr {
     let trailing = trailing_resolution_expr(checked);
@@ -146,7 +146,7 @@ fn while_with_int_condition_diagnoses() {
 #[test]
 fn while_body_assignment_propagates_local_type() {
     // Mutable bindings inside the body must resolve through the
-    // same `LocalScope::declare` path as anywhere else; subsequent
+    // same `LocalScope::declare` path as anywhere else. Subsequent
     // reads see the same `LocalId`.
     let source = "
         i = 0
@@ -160,7 +160,7 @@ fn while_body_assignment_propagates_local_type() {
     let checked = typecheck(&dedent(source));
     let body = script_body(&checked);
     let int_ty = primitive_type(&checked, "Int");
-    // Trailing `sum` reads the body-mutated local — its resolution
+    // Trailing `sum` reads the body-mutated local. Its resolution
     // is `Int`, proving the body's writes propagated.
     let trailing = body.last().expect("missing trailing");
     let Statement::Expr(expr) = trailing else {
@@ -194,7 +194,7 @@ fn with_fixture(body: &str) -> String {
 #[test]
 fn for_over_enumerable_resolves_to_unit_and_binds_int() {
     // The Some-arm binds `x: Int`, so the body's `sum + x`
-    // typechecks; trailing `sum` proves the binding flowed.
+    // typechecks. Trailing `sum` proves the binding flowed.
     let source = with_fixture(
         "
         c = Counter{start: 10, finish: 13}
@@ -272,7 +272,7 @@ fn for_over_struct_without_length_diagnoses() {
 
 #[test]
 fn for_with_get_returning_non_enum_diagnoses() {
-    // `get` returns `Int`; the desugar's `match` constructor
+    // `get` returns `Int`, but the desugar's `match` constructor
     // shorthand needs an enum subject.
     let source = "
         struct Bad
@@ -306,7 +306,7 @@ fn for_with_get_returning_non_enum_diagnoses() {
 
 #[test]
 fn for_with_get_returning_wrong_enum_diagnoses_missing_some_none() {
-    // The desugar matches `Some` / `None` on the subject enum; an
+    // The desugar matches `Some` / `None` on the subject enum. An
     // enum without those variants (here `Present` / `Absent`)
     // flunks the constructor-shorthand variant lookup.
     let source = "
@@ -361,7 +361,7 @@ fn loop_with_no_break_resolves_to_never() {
 
 #[test]
 fn loop_with_break_resolves_to_unit() {
-    // A reachable `break` flips the loop's type to `Unit` — the
+    // A reachable `break` flips the loop's type to `Unit`, the
     // value the loop yields when control exits at the break.
     let source = "
         loop
@@ -412,7 +412,7 @@ fn fn_int_loop_with_break_diagnoses_unit_int_mismatch() {
 #[test]
 fn break_inside_while_typechecks() {
     // `while` also bumps `loop_depth`, so a break in its body is
-    // admitted; `while` keeps its `Unit` return type regardless.
+    // admitted. `while` keeps its `Unit` return type regardless.
     let source = "
         while true
           break
@@ -426,7 +426,7 @@ fn break_inside_while_typechecks() {
 fn nested_break_marks_only_inner_loop() {
     // `loop loop break end end`: the inner loop's break flips the
     // *inner* `loop_break_seen` slot, so the inner loop resolves
-    // `Unit` and the outer loop's slot stays `false` — outer
+    // `Unit` and the outer loop's slot stays `false`, so the outer
     // resolves `Never`.
     let source = "
         loop
@@ -443,7 +443,7 @@ fn nested_break_marks_only_inner_loop() {
 
 #[test]
 fn break_outside_loop_diagnoses() {
-    // `break` at function-body top level — no enclosing loop, so
+    // `break` at function-body top level has no enclosing loop, so
     // `loop_depth == 0` triggers the diagnostic.
     let source = "
         break
@@ -460,7 +460,7 @@ fn break_outside_loop_diagnoses() {
 fn break_inside_closure_inside_loop_diagnoses_and_outer_loop_stays_never() {
     // A `break` inside a closure body must reference a loop *inside*
     // the closure. The closure boundary resets `loop_depth` to 0, so
-    // this break diagnoses; the outer loop's `loop_break_seen` slot
+    // this break diagnoses. The outer loop's `loop_break_seen` slot
     // is untouched, so the outer loop still resolves `Never`. Pins
     // both the gate and the closure-boundary reset.
     let source = "

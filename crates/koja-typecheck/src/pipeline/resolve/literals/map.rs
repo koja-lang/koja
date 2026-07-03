@@ -12,10 +12,10 @@
 //!   X<K, V>` in the registry: the outer expression is rewritten
 //!   in-place into a synthesized `X.from_map(["k": v, ...])`
 //!   method call. The inner literal keeps `ExprKind::Map` and
-//!   stamps `Map<K, V>`; the outer rewritten node stamps `X<K, V>`
+//!   stamps `Map<K, V>`, the outer rewritten node stamps `X<K, V>`
 //!   and dispatches through the normal method-call resolver.
 //!
-//! Carrier mechanics live in [`super::carrier`]; this file only
+//! Carrier mechanics live in [`super::carrier`]. This file only
 //! owns map-literal-specific work (entry-take, key/value-type
 //! inference).
 

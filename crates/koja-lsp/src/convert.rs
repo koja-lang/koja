@@ -6,9 +6,9 @@ use tower_lsp_server::ls_types::*;
 
 use koja_ast::span::Span;
 
-/// Converts an Koja compiler [`Span`] to an LSP [`Range`].
+/// Converts a Koja compiler [`Span`] to an LSP [`Range`].
 ///
-/// Koja spans are 1-indexed; LSP ranges are 0-indexed.
+/// Koja spans are 1-indexed, LSP ranges are 0-indexed.
 pub(crate) fn span_to_range(span: &Span) -> Range {
     Range {
         start: Position::new(

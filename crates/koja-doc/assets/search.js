@@ -1,4 +1,4 @@
-// Fuzzy search for the doc sidebar. Loaded by every page; reads
+// Fuzzy search for the doc sidebar. Loaded by every page. Reads
 // the per-page `data-root-prefix` attribute on `#doc-search` to
 // route results back to the right relative root, then fetches
 // `<root>/search-index.json` once and matches client-side.

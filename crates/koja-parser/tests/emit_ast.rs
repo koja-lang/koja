@@ -99,7 +99,7 @@ end
     let out = format_snippet(source);
     // Assertion strategy: check stable structural anchors rather than
     // the entire blob. Exact span numbers are validated by the simpler
-    // tests above; this one verifies the shape of each item, the
+    // tests above. This one verifies the shape of each item, the
     // nested `cond`, pattern matching, etc.
     let must_contain = [
         "File TestApp \"/tmp/demo.koja\"",

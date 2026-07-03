@@ -2,7 +2,7 @@
 //! `Global.ListLiteral<T>`, so `[a, b, c]` with an expected type of
 //! `Set<T>` is rewritten in-place at resolve time into a
 //! `Set.from_list([a, b, c])` method call. The inner literal keeps
-//! `ExprKind::List` and stamps `List<T>`; the outer rewritten node
+//! `ExprKind::List` and stamps `List<T>`. The outer rewritten node
 //! stamps `Set<T>` and dispatches through the normal method-call
 //! resolver.
 

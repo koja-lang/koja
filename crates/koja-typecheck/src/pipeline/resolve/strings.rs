@@ -10,7 +10,7 @@ use super::expr::resolve_expr;
 
 const FORMAT_METHOD: &str = "format";
 
-/// Resolve a string literal — pure or interpolated. Both shapes type
+/// Resolve a string literal, pure or interpolated. Both shapes type
 /// as `Global.String`. Each interpolation is resolved, and any part
 /// whose inner expression isn't already `String`-typed is wrapped in
 /// a `.format()` call so IR-lower sees a `String` value per part.
@@ -32,7 +32,7 @@ pub(super) fn resolve_string(
     string_type
 }
 
-/// Resolve `expr`; if the result isn't already `String`, swap it
+/// Resolve `expr`. If the result isn't already `String`, swap it
 /// for a synthetic `expr.format()` MethodCall and dispatch through
 /// the normal method-call resolver. Mirrors the in-place AST rewrite
 /// pattern used by [`super::literals::carrier::dispatch_via_carrier`].

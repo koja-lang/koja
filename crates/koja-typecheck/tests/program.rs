@@ -31,7 +31,7 @@ fn main_body(checked: &CheckedProgram) -> &[Statement] {
         .expect("file is missing `fn main`");
     main.body
         .as_deref()
-        .expect("`fn main` has no body — extern fn cannot be the entry point")
+        .expect("`fn main` has no body: extern fn cannot be the entry point")
 }
 
 #[test]
@@ -88,8 +88,8 @@ fn fn_main_two_plus_two_typechecks_to_int() {
 #[test]
 fn intrinsic_fn_typechecks_without_body_and_lifts_signature() {
     // Bodyless `@intrinsic` decls flow through collect /
-    // lift_signatures / resolve / seal exactly like regular fns;
-    // the only surface-level difference is `function.body == None`
+    // lift_signatures / resolve / seal exactly like regular fns.
+    // The only surface-level difference is `function.body == None`
     // and the parser refusing to consume a body. The registry
     // still ends up with a `Function(Some(_))` entry once
     // `lift_signatures` runs, so call-site resolution finds the

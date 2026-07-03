@@ -1,15 +1,15 @@
 //! Seal sub-pass: assert every relevant [`Resolution`] /
 //! [`koja_ast::identifier::ResolvedType`] annotation is populated.
-//! Panics on violation per [`COMPILER-NORTHSTAR.md`] — seal failures
+//! Panics on violation per [`COMPILER-NORTHSTAR.md`]: seal failures
 //! are upstream compiler bugs, not user errors.
 //!
 //! # Module layout
 //!
-//! - [`statements`] — assignment / compound-assign target checks
+//! - [`statements`]: assignment / compound-assign target checks
 //!   plus per-statement recursion into [`expressions::seal_expr`].
-//! - [`expressions`] — every [`ExprKind`] arm's resolution invariants
+//! - [`expressions`]: every [`ExprKind`] arm's resolution invariants
 //!   plus the `Call`-callee carve-out.
-//! - [`patterns`] — match-pattern shape checks ([`Wildcard`] /
+//! - [`patterns`]: match-pattern shape checks ([`Wildcard`] /
 //!   [`Literal`] / [`Binding`] / [`EnumUnit`] / [`EnumTuple`] /
 //!   [`EnumStruct`] / [`Or`] / [`Struct`]).
 //!
@@ -48,7 +48,7 @@ use crate::registry::{GlobalKind, GlobalRegistry};
 ///
 /// Generic decl bodies (functions with their own type params, plus
 /// inline `fn` items on generic struct/enum decls and impl-block
-/// methods on generic targets) are skipped — their bodies still
+/// methods on generic targets) are skipped: their bodies still
 /// carry [`Resolution::TypeParam`] leaves until IR's monomorphization
 /// substitutes through and re-lowers a concrete copy. The IR pipeline
 /// drops generic templates before seal-equivalent invariants apply
@@ -119,7 +119,7 @@ fn seal_file(file: &File, package: &str, registry: &GlobalRegistry) {
     }
     if let Some(body) = file.body.as_ref() {
         // Script-mode files keep their top-level statements on
-        // `file.body`; downstream passes consume them directly. Seal
+        // `file.body`. Downstream passes consume them directly. Seal
         // the same statement-tree invariants function bodies satisfy.
         for stmt in body {
             seal_statement(stmt);
@@ -154,7 +154,7 @@ fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) 
     let Some((_, entry)) = registry.lookup(&identifier) else {
         seal_panic(
             &format!(
-                "constant `{identifier}` missing from registry — collect/lift invariant violation",
+                "constant `{identifier}` missing from registry: collect/lift invariant violation",
             ),
             constant.span,
         );
@@ -163,14 +163,14 @@ fn seal_constant(constant: &Constant, package: &str, registry: &GlobalRegistry) 
         GlobalKind::Constant(Some(_)) => {}
         GlobalKind::Constant(None) => seal_panic(
             &format!(
-                "constant `{identifier}` reached seal without a stamped definition — \
+                "constant `{identifier}` reached seal without a stamped definition: \
                  lift_signatures::constants invariant violation",
             ),
             constant.span,
         ),
         other => seal_panic(
             &format!(
-                "registry entry for `{identifier}` is `{}`, expected `constant` — \
+                "registry entry for `{identifier}` is `{}`, expected `constant`: \
                  collect/lift invariant violation",
                 other.label(),
             ),
@@ -190,8 +190,8 @@ fn seal_function(function: &Function) {
 }
 
 /// Walk `ty` and assert no `Resolution::TypeParam` leaf escapes into
-/// runtime-value position. Concrete `type_args` are fine — and
-/// expected for monomorphizable construction sites — so this only
+/// runtime-value position. Concrete `type_args` are fine (and
+/// expected for monomorphizable construction sites), so this only
 /// rejects the `TypeParam` head.
 pub(super) fn seal_no_type_param(ty: &ResolvedType, span: Span) {
     match ty {

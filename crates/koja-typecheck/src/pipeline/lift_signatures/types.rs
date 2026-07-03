@@ -19,7 +19,7 @@ use crate::registry::{Dispatch, GlobalKind, GlobalRegistry};
 /// `ResolvedType`: the file's alias slice (file-private), the
 /// current package (same-package lookups), and the global registry
 /// (everything else). `diagnostics` lives outside on purpose so
-/// every emit site is honest; if you find yourself wanting to add
+/// every emit site is honest. If you find yourself wanting to add
 /// a `&mut` field here, you want a different abstraction (likely a
 /// separate sink arg, or lift the work out of resolve).
 ///
@@ -38,11 +38,11 @@ pub(crate) struct ResolutionScope<'a> {
 /// Innermost first (e.g. `[fn_id, struct_id]` for an inline method
 /// on a generic struct). [`Self::lookup`] walks the stack and yields
 /// the first `(owner, index)` whose entry registers a matching param
-/// name. Names live on the [`GlobalRegistry`] entry — the scope is
+/// name. Names live on the [`GlobalRegistry`] entry: the scope is
 /// just the chain.
 ///
 /// Empty scope (`TypeParamScope::default()`) is the right value
-/// outside any generic-decl body; lookups against it always return
+/// outside any generic-decl body. Lookups against it always return
 /// `None` so resolve falls through to global lookup.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct TypeParamScope<'a> {
@@ -69,7 +69,7 @@ impl<'a> TypeParamScope<'a> {
     }
 
     /// Walk innermost-out and return the first owner whose kind owns
-    /// a `Self` (protocols, structs, enums). Functions are skipped —
+    /// a `Self` (protocols, structs, enums). Functions are skipped:
     /// `Self` inside a top-level / inline `fn` looks past it to the
     /// enclosing receiver.
     pub(crate) fn self_owner(&self) -> &'a [GlobalRegistryId] {
@@ -79,12 +79,12 @@ impl<'a> TypeParamScope<'a> {
 
 /// Resolve a [`TypeExpr`] against the registry. Single-segment
 /// `TypeExpr::Named` matching the surrounding scope resolves to
-/// [`Resolution::TypeParam`]; otherwise [`rewrite_through_aliases`]
+/// [`Resolution::TypeParam`]. Otherwise [`rewrite_through_aliases`]
 /// gets first crack (so an `alias`-bound name resolves to its
 /// target package), then we fall back to a preloaded `Global.<name>`
 /// stub or a same-package struct/enum. `TypeExpr::Generic` recurses
 /// into its args. `type_params` is empty outside generic-decl bodies
-/// (see [`TypeParamScope::default`]); `scope` carries the file's
+/// (see [`TypeParamScope::default`]). `scope` carries the file's
 /// alias slice + current package + registry (see
 /// [`ResolutionScope`]).
 pub(crate) fn resolve_type_expr(
@@ -130,11 +130,11 @@ pub(crate) fn resolve_type_expr(
 /// Resolve a bare `Self` type-expression. Walks the scope from
 /// innermost outward and dispatches by owner kind: a protocol owner
 /// resolves to its implicit slot-0 type-param (protocols register
-/// with `["Self", ...declared]`); a struct/enum owner resolves to
+/// with `["Self", ...declared]`). A struct/enum owner resolves to
 /// the type itself with each of its type-params projected as
 /// [`Resolution::TypeParam`] anchors so `fn make() -> Self` on
-/// `struct Pair<T, U>` reads as `Pair<T, U>`. Functions are skipped
-/// — `Self` inside a generic `fn` looks past the fn to its
+/// `struct Pair<T, U>` reads as `Pair<T, U>`. Functions are skipped:
+/// `Self` inside a generic `fn` looks past the fn to its
 /// enclosing struct/enum/impl.
 fn resolve_self(
     span: Span,
@@ -198,15 +198,15 @@ pub(crate) fn concrete_self_type(
 }
 
 /// Resolve `Path<args...>`. Path resolution mirrors [`resolve_named`]
-/// for the head — type-param scope wins, then file aliases, then
+/// for the head: type-param scope wins, then file aliases, then
 /// the same-package / `Global` fallthrough. Type args lower
 /// recursively through the same scope. A type param shadows a
-/// global of the same name; `T<args>` is an error because type
+/// global of the same name. `T<args>` is an error because type
 /// params are arity-0. Aliases resolve straight to their target
 /// `Identifier`, sidestepping the dotted-path "no nested types"
 /// gate so `alias Some.Outer as O` followed by `O<Int>` works as
-/// soon as the registry carries the target — no movement here when
-/// nested-type lifting lands.
+/// soon as the registry carries the target (no movement here when
+/// nested-type lifting lands).
 fn resolve_generic(
     path: &[String],
     args: &[TypeExpr],
@@ -269,14 +269,14 @@ fn resolve_named(
 /// 3. For multi-segment paths only: the head-as-package
 ///    interpretation (`<path[0]>.<path[1..]>`), so dotted names
 ///    like `Crypto.SHA256` resolve to the entry registered as
-///    `Identifier { package: "Crypto", path: ["SHA256"] }` — i.e.
+///    `Identifier { package: "Crypto", path: ["SHA256"] }`, i.e.
 ///    the same identifier the alias-rewrite path constructs from
 ///    `alias Crypto.SHA256 as Hasher`.
 /// 4. The `Global.<segments…>` interpretation (stdlib stubs +
 ///    primitive types).
 ///
 /// Multi-segment paths are accepted everywhere a single-segment
-/// path is — `HTTP.Headers` resolves identically to `Headers` one
+/// path is: `HTTP.Headers` resolves identically to `Headers` one
 /// segment shallower, just against a different identifier shape.
 pub(crate) fn resolve_path_to_global(
     path: &[String],
@@ -309,7 +309,7 @@ pub(crate) fn resolve_path_to_global(
     let candidate = Identifier::new("Global", path.to_vec());
     if let Some((id, entry)) = scope.registry.lookup(&candidate) {
         // Single-segment fallthrough into `Global.<name>` is reserved
-        // for the stdlib primitive stubs (`Int`, `String`, …) — those
+        // for the stdlib primitive stubs (`Int`, `String`, …): those
         // are the only `Global.*` entries a user-facing type
         // expression can name without qualifying further. Multi-
         // segment paths bypass this guard because the qualification
@@ -317,7 +317,7 @@ pub(crate) fn resolve_path_to_global(
         if path.len() == 1 && !entry.identifier.is_in_global() {
             diagnostics.push(Diagnostic::error(
                 format!(
-                    "typecheck only recognizes `Global.*` primitive type names; got `{}`",
+                    "typecheck only recognizes `Global.*` primitive type names, got `{}`",
                     path[0],
                 ),
                 span,

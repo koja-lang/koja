@@ -1,15 +1,15 @@
 //! `spawn` / `receive` expression resolution.
 //!
-//! `spawn Type.start(config)` — validates that the inner expression
+//! `spawn Type.start(config)`: validates that the inner expression
 //! is a static `start` call on a struct/enum that implements
 //! `Process<C, M, R>`. The spawn site's resolved type is
 //! `Global.Ref<M, R>`, picked off the impl's recorded protocol args.
 //!
-//! `receive arms after timeout body end` — each arm's pattern
+//! `receive arms after timeout body end`: each arm's pattern
 //! must be a [`Pattern::TypedBinding`] whose annotation resolves to
 //! either a business envelope (`Pair<M, Option<ReplyTo<R>>>`) or
 //! a lifecycle event (`Lifecycle`). Arms self-discriminate by their
-//! envelope type, so no surface union plumbing is needed; v1's
+//! envelope type, so no surface union plumbing is needed. V1's
 //! `process_msg_type` envelope hint is unnecessary because
 //! every arm carries the type explicitly. Arm bodies + the optional
 //! `after` body join under the same lattice as `match` / `cond`.
@@ -82,10 +82,9 @@ pub(super) fn resolve_spawn(
             .get(target_id)
             .map(|entry| entry.identifier.to_string())
             .unwrap_or_else(|| "<unknown>".to_string());
-        diagnostics.push(Diagnostic::error(
-            format!(
-                "`{target_label}` does not implement `Process` — `spawn` requires a `Process` impl"
-            ),
+        diagnostics.push(Diagnostic::error_with_hint(
+            format!("`{target_label}` does not implement `Process`"),
+            "`spawn` requires a `Process` impl",
             span,
         ));
         return ResolvedType::unresolved();
@@ -159,9 +158,9 @@ pub(super) fn resolve_receive(
             body_tail_type(after_body, resolver.registry),
         ));
     } else if !after_body.is_empty() {
-        // Parser pairs `after` with the body; an empty timeout but a
+        // Parser pairs `after` with the body, so an empty timeout but a
         // populated body means the parser saw something unexpected.
-        // Stay quiet — the parser already diagnosed.
+        // Stay quiet, the parser already diagnosed.
         let _ = after_present;
     }
 
@@ -242,7 +241,7 @@ fn bind_receive_pattern(
 }
 
 /// `Pair<_, Option<ReplyTo<_>>>`. Walks the head id and inner shape
-/// without caring what `M` / `R` resolve to — every concrete `M` /
+/// without caring what `M` / `R` resolve to. Every concrete `M` /
 /// `R` is admissible at the receive site.
 fn is_business_envelope(ty: &ResolvedType, registry: &GlobalRegistry) -> bool {
     let ResolvedType::Named {

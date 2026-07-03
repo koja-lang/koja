@@ -148,7 +148,7 @@ impl Parser {
     /// Parse a `{ name: expr, ... }` block of named field
     /// initializers, shared between struct construction and the
     /// struct-shape enum variant. The opening `{` must already be
-    /// consumed; this consumes through the matching `}`. A trailing
+    /// consumed. This consumes through the matching `}`. A trailing
     /// comma is tolerated and an empty body produces an empty
     /// `Vec`.
     fn parse_field_init_block(&mut self) -> Vec<FieldInit> {

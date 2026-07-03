@@ -24,9 +24,9 @@ use super::types::{display_resolution, is_primitive};
 ///
 /// Skips the check when:
 /// - The declared return is `Unit`. The body's last value is discarded
-///   and the function returns `()`; arbitrary trailing types are fine.
+///   and the function returns `()`, so arbitrary trailing types are fine.
 /// - The declared return is `<unresolved>`. The annotation already
-///   triggered its own diagnostic upstream; piling on with a return
+///   triggered its own diagnostic upstream, and piling on with a return
 ///   mismatch only adds noise.
 /// - Body is `None` (extern / intrinsic). Those declarations aren't
 ///   typechecked here.
@@ -69,8 +69,8 @@ pub(super) fn check_return_type(
     };
     let actual = trailing.resolution.clone();
     if !actual.is_resolved() {
-        // Trailing expression already triggered its own diagnostic;
-        // skip to avoid pile-on noise.
+        // Trailing expression already triggered its own diagnostic.
+        // Skip to avoid pile-on noise.
         return;
     }
     // `Never` is the lattice bottom: a body that diverges (e.g. its

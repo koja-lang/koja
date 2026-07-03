@@ -1,9 +1,9 @@
 //! Collect sub-pass: register a canonical [`Identifier`] for every
-//! globally-named decl. Pure registration — signature resolution
+//! globally-named decl. Pure registration: signature resolution
 //! lives in [`super::lift_signatures`].
 //!
 //! Path encoding follows the [`Identifier`] convention: top-level
-//! functions register at `path = ["name"]`; static methods on
+//! functions register at `path = ["name"]`. Static methods on
 //! `Point` (declared inline in the struct body or in an `impl`
 //! block) register at `path = ["Point", "name"]`. Both forms
 //! produce the same registry entry so call resolution can't tell
@@ -13,13 +13,13 @@
 //! [`super::super::program::check_program`]: pass 1
 //! ([`collect_file_decls`]) registers `Item::Function`, `Item::Struct`,
 //! `Item::Enum`, `Item::Protocol`, `Item::Constant`, and
-//! `Item::TypeAlias` (including each `decl.functions[i]`); pass 2
+//! `Item::TypeAlias` (including each `decl.functions[i]`). Pass 2
 //! ([`collect_file_impls`]) registers `Item::Impl`. Each pass runs
-//! across every file in every package before the next starts —
-//! that makes `impl Foo` order-independent relative to its target,
+//! across every file in every package before the next starts.
+//! That makes `impl Foo` order-independent relative to its target,
 //! regardless of which file (or which package) declared `Foo`.
 //!
-//! `alias Pkg.Type` is accepted as a no-op at collect;
+//! `alias Pkg.Type` is accepted as a no-op at collect.
 //! [`super::aliases::validate_aliases`] runs immediately after to
 //! enforce path-len / target-exists / no-shadow rules.
 
@@ -37,7 +37,7 @@ use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope
 /// Pass 1 of collect: register every named decl (functions,
 /// structs, enums, protocols, constants, type aliases) so that
 /// downstream impl blocks have a fully-populated registry to look
-/// up against. Skips impl blocks; pass 2 handles those once every
+/// up against. Skips impl blocks. Pass 2 handles those once every
 /// file's types are in the registry.
 pub(crate) fn collect_file_decls(
     file: &File,
@@ -73,13 +73,13 @@ pub(crate) fn collect_file_decls(
                 register_constant(constant, package, registry, diagnostics);
             }
             // `alias Pkg.Type [as Local]` doesn't introduce a new
-            // global identifier — it binds a file-private local name
+            // global identifier: it binds a file-private local name
             // to an existing one. Validation runs in
-            // [`super::aliases::validate_aliases`]; collect just
+            // [`super::aliases::validate_aliases`]. Collect just
             // skips it here.
             Item::Alias(_) => {}
             // `type X = ...` is a package-wide global like a struct or
-            // constant — it lives in the registry as a TypeAlias entry
+            // constant: it lives in the registry as a TypeAlias entry
             // so cross-file (same package) and cross-package (`Pkg.X`)
             // lookups go through the same machinery. The RHS
             // `ResolvedType` is stamped later by lift's
@@ -97,7 +97,7 @@ pub(crate) fn collect_file_decls(
 /// name a struct / enum / protocol in the **same package**, and a
 /// type nested under an enum must not shadow one of that enum's
 /// variants (variants aren't registry entries, so the
-/// duplicate-identifier check can't catch this — every other
+/// duplicate-identifier check can't catch this. Every other
 /// same-namespace collision falls out of the registry for free).
 pub(crate) fn validate_nested_types(
     packages: &[CheckedPackage],
@@ -221,7 +221,7 @@ pub(crate) fn collect_file_impls(
 
 /// Whether the registration site (top-level vs inside a `struct` /
 /// `impl` body) accepts a `self` receiver. Lift_signatures carries a
-/// richer struct-aware variant; collect only needs to know "is `self`
+/// richer struct-aware variant. Collect only needs to know "is `self`
 /// allowed here?" so a flat enum suffices.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum SelfContext {
@@ -239,7 +239,7 @@ enum SelfContext {
 /// or `impl` body scopes to that type), or `None` for top-level
 /// functions (which scope to their package). Together with the
 /// function's surface `Visibility` it picks one of the three
-/// [`VisibilityScope`] variants — see [`function_visibility_scope`].
+/// [`VisibilityScope`] variants. See [`function_visibility_scope`].
 fn register_function_with_identifier(
     function: &Function,
     identifier: Identifier,
@@ -271,10 +271,10 @@ fn register_function_with_identifier(
 
 /// Map the surface `(Visibility, owner_type)` pair to the
 /// typecheck-internal [`VisibilityScope`]. Public functions get the
-/// `Public` variant regardless of owner; `priv fn` declared inside a
-/// type body becomes [`VisibilityScope::TypePrivate`]; a top-level
+/// `Public` variant regardless of owner. `priv fn` declared inside a
+/// type body becomes [`VisibilityScope::TypePrivate`]. A top-level
 /// `priv fn` becomes [`VisibilityScope::PackagePrivate`]. The owner
-/// id is the type the method belongs to — even an inherent or
+/// id is the type the method belongs to: even an inherent or
 /// protocol-impl method on `Foo` carries `Foo`'s id, so cross-impl
 /// calls within the same type all share one scope.
 fn function_visibility_scope(
@@ -289,7 +289,7 @@ fn function_visibility_scope(
 }
 
 /// Reject a `self` receiver only when registration is happening
-/// outside a struct/impl context (top-level functions); inside a
+/// outside a struct/impl context (top-level functions). Inside a
 /// struct or `impl Type` block, `self` is the receiver for an
 /// instance method and lift_signatures will lift it to a real
 /// parameter typed by the enclosing struct.
@@ -339,7 +339,7 @@ fn register_struct(
                 decl.span,
             ));
             // Still register inline methods even on collision: the
-            // duplicate decl is itself diagnosed; methods declared
+            // duplicate decl is itself diagnosed, and methods declared
             // under the duplicate would otherwise dangle. Re-look up
             // the existing entry's id so methods scope their
             // visibility against whatever struct already owns the
@@ -405,9 +405,9 @@ fn register_enum(
 /// Register every method declared in an `impl Trait for Type` block
 /// under `(package, [type_name, fn_name])`. Conformance facts
 /// (`target : protocol`) are recorded at lift time onto the target's
-/// struct/enum definition; duplicate `impl P for T` blocks surface
+/// struct/enum definition. Duplicate `impl P for T` blocks surface
 /// there. The impl's `package` is the package the block lives in,
-/// which (for now) also has to be where `Type` is declared — cross-
+/// which (for now) also has to be where `Type` is declared. Cross-
 /// package protocol impls are not yet supported.
 fn register_impl(
     impl_block: &ImplBlock,
@@ -539,7 +539,7 @@ fn register_block_methods(
 /// Register a protocol decl. Stamps `type_params` as
 /// `["Self", ...user_declared]` so `Self` lives at index 0 and
 /// resolves through the same machinery as user-declared params.
-/// Reserves the literal `"Self"` — a user-declared param named
+/// Reserves the literal `"Self"`: a user-declared param named
 /// `Self` would shadow the implicit slot, so we diagnose and
 /// register without it.
 fn register_protocol(
@@ -580,7 +580,7 @@ fn register_protocol(
 }
 
 /// Register a package-level `const NAME = expr` declaration. Stamps
-/// the constant in the `Constant(None)` state — `lift_signatures`
+/// the constant in the `Constant(None)` state. `lift_signatures`
 /// resolves the optional type annotation + RHS expression and stamps
 /// the [`crate::registry::ConstantDefinition`] later. Constants
 /// occupy the same identifier namespace as functions / structs /
@@ -611,7 +611,7 @@ fn register_constant(
 
 /// Register a `type X = ...` alias with the package-qualified
 /// identifier `<package>.<name>`. Only flag unsupported annotations
-/// here; the RHS `TypeExpr` is resolved later by lift's
+/// here. The RHS `TypeExpr` is resolved later by lift's
 /// `lift_type_aliases` pass and the resulting `ResolvedType` is
 /// stamped via `set_type_alias_definition`.
 fn register_type_alias(
@@ -706,7 +706,7 @@ pub(crate) fn lookup_owner_path(
 }
 
 /// Project the AST `[TypeParam]` list down to the param-name `Vec`
-/// the registry stores. Bounds are not stamped here — `lift_signatures`
+/// the registry stores. Bounds are not stamped here. `lift_signatures`
 /// resolves bound names against registered protocols once every
 /// protocol id exists, then writes them through
 /// [`crate::registry::GlobalRegistry::set_type_param_bounds`].
@@ -728,7 +728,7 @@ fn type_expr_span(type_expr: &TypeExpr) -> Span {
 /// Diagnose every feature gap on a struct decl up front so collect
 /// is the single seam covering them. The struct still registers (so
 /// downstream `resolve` finds it for diagnostic-friendly error
-/// messages); lift_signatures stamps a permissive "best effort"
+/// messages). lift_signatures stamps a permissive "best effort"
 /// definition in the presence of these gaps so the surrounding
 /// program shape stays accurate.
 fn diagnose_struct_feature_gaps(decl: &StructDecl, diagnostics: &mut Vec<Diagnostic>) {
@@ -776,8 +776,8 @@ fn diagnose_struct_field_gaps(
 }
 
 /// Diagnose every feature gap on an enum decl up front so collect is
-/// the single seam covering them. Mirrors [`diagnose_struct_feature_gaps`]
-/// — the decl still registers in the presence of any gap so resolve
+/// the single seam covering them. Mirrors [`diagnose_struct_feature_gaps`]:
+/// the decl still registers in the presence of any gap so resolve
 /// sees a populated registry.
 fn diagnose_enum_feature_gaps(decl: &EnumDecl, diagnostics: &mut Vec<Diagnostic>) {
     for annotation in &decl.annotations {
@@ -821,7 +821,7 @@ fn diagnose_enum_variant_gaps(
 
 /// Diagnose the only impl-block member shape we don't yet support:
 /// `type Alias = ...`. `Function` members flow through normal
-/// registration in [`register_impl`]; this pass surfaces a diagnostic
+/// registration in [`register_impl`]. This pass surfaces a diagnostic
 /// for every other shape so the user sees one error per offending
 /// member rather than a single block-level message.
 fn diagnose_impl_member_feature_gaps(impl_block: &ImplBlock, diagnostics: &mut Vec<Diagnostic>) {

@@ -5,12 +5,12 @@
 //! an optional `after` timeout block). The shared shape is:
 //!
 //! - one or more arms, each terminated by a newline that separates
-//!   it from the next;
+//!   it from the next
 //! - bodies that may run across multiple statements until the
 //!   "looks like a new arm" heuristic ([`Parser::looks_like_new_arm`])
-//!   fires;
+//!   fires
 //! - a stuck-progress error recovery loop so a malformed arm doesn't
-//!   wedge the whole block.
+//!   wedge the whole block
 //!
 //! `cond` arms swap the leading `pattern` for an arbitrary expression
 //! and require a trailing `else -> body`.
