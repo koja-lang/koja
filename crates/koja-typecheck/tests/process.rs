@@ -10,18 +10,18 @@
 //!   (`Pair<M, Option<ReplyTo<R>>>`) or `Lifecycle`. Arm bodies +
 //!   the `after` body join under the same lattice as `match`.
 //! - `receive after timeout body end` requires `Int` for the
-//!   timeout (no arrow on the `after` clause; body follows directly).
+//!   timeout (no arrow on the `after` clause, body follows directly).
 //! - The receive arm binding stamps a `LocalId` on the typed
 //!   binding so IR lower can reach it.
 //!
-//! `Global.process` is not yet in `AUTOIMPORT`; tests prepend
+//! `Global.process` is not yet in `AUTOIMPORT`. Tests prepend
 //! a minimal stub that declares the surface this slice cares about
 //! (`Lifecycle`, `StopReason`, `Step`, `ReplyTo`, `Ref`, and the
 //! `Process<C, M, R>` protocol) until step 5 of the
 //! concurrency plan flips the autoimport switch on the
 //! full `process.koja`. The full file pulls in shapes the new pipeline
 //! pipeline doesn't support yet (`self.work()` field-as-callee in
-//! `Task<R>::run`); the stub keeps us focused on the spawn/receive
+//! `Task<R>::run`). The stub keeps us focused on the spawn/receive
 //! surface this slice owns.
 
 use std::path::PathBuf;
@@ -35,7 +35,7 @@ use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
 const PACKAGE: &str = "TestApp";
 
 /// Minimal stub of `process.koja`. Provides every
-/// type referenced in this slice's spawn/receive surface; the full
+/// type referenced in this slice's spawn/receive surface. The full
 /// `process.koja` is pulled in via `AUTOIMPORT` after step 5.
 const PROCESS_STUB: &str = "
 enum Process.Lifecycle
@@ -240,7 +240,7 @@ fn spawn_start_resolves_to_ref_of_msg_and_reply() {
 
 #[test]
 fn spawn_inner_must_be_method_call_to_start() {
-    // `spawn 1` is a shape error — there's nothing to spawn.
+    // `spawn 1` is a shape error, there's nothing to spawn.
     let source = "
         fn main
           spawn 1
@@ -259,7 +259,7 @@ fn spawn_inner_must_be_method_call_to_start() {
 #[test]
 fn spawn_receiver_without_process_impl_diagnoses() {
     // `Bag` declares a `start` method but does not implement
-    // `Process` — `spawn Bag.start(config)` must be rejected.
+    // `Process`, so `spawn Bag.start(config)` must be rejected.
     let source = "
         struct Bag
           n: Int
@@ -289,7 +289,7 @@ fn spawn_receiver_without_process_impl_diagnoses() {
 fn receive_business_arm_resolves_with_typed_binding() {
     // The arm pattern's typed-binding annotation is the arm subject
     // type. `pair: Pair<Int, Option<ReplyTo<String>>>` is a business
-    // envelope; the body sees `pair` as that type.
+    // envelope. The body sees `pair` as that type.
     let source = "
         fn main -> StopReason
           receive
@@ -355,7 +355,7 @@ fn receive_lifecycle_arm_resolves() {
 #[test]
 fn receive_arm_without_typed_binding_diagnoses() {
     // A regular `match`-style binding is not allowed in a receive
-    // arm — the arm needs the type annotation to discriminate.
+    // arm. The arm needs the type annotation to discriminate.
     let source = "
         fn main -> StopReason
           receive
@@ -415,8 +415,8 @@ fn receive_after_timeout_must_be_int() {
 
 #[test]
 fn receive_arms_join_under_same_lattice_as_match() {
-    // Business arm yields `StopReason`; lifecycle arm also yields
-    // `StopReason`; the join is `StopReason`.
+    // Business arm yields `StopReason`, lifecycle arm also yields
+    // `StopReason`. The join is `StopReason`.
     let source = "
         fn main -> StopReason
           receive
@@ -439,7 +439,7 @@ fn receive_arms_join_under_same_lattice_as_match() {
 
 #[test]
 fn receive_with_inconsistent_arm_tails_diagnoses() {
-    // Business arm yields `StopReason`; lifecycle arm yields `Int`.
+    // Business arm yields `StopReason`, lifecycle arm yields `Int`.
     // The join must fail with the same message shape `match` uses.
     let source = "
         fn main -> StopReason
@@ -461,7 +461,7 @@ fn receive_with_inconsistent_arm_tails_diagnoses() {
 fn ref_call_accepts_union_member_arg() {
     // `impl Process<_, MsgA | MsgB, _>` makes `spawn`'s return
     // `Ref<MsgA | MsgB, _>`. Calling `.call(MsgA.Ping(...))` must
-    // accept — the receiver's slot already pre-binds `M → MsgA |
+    // accept: the receiver's slot already pre-binds `M → MsgA |
     // MsgB`, and the arg-driven unification of `M → MsgA` is a
     // union-member compatibility, not a conflict.
     let source = "
@@ -496,7 +496,7 @@ fn ref_call_accepts_union_member_arg() {
           p.call(MsgB.Pong(42), 5000)
         end
         ";
-    // `typecheck` panics on any diagnostic; reaching this point
+    // `typecheck` panics on any diagnostic. Reaching this point
     // means the union-member acceptance fired and the program
     // checked cleanly.
     let _checked = typecheck(&dedent(source));
@@ -506,7 +506,7 @@ fn ref_call_accepts_union_member_arg() {
 fn ref_call_rejects_non_member_arg() {
     // Negative pin: arg outside the declared union still produces
     // the operand-conflict diagnostic. The union-member relaxation
-    // is one-direction-only — random outsider types are not OK.
+    // is one-direction-only. Random outsider types are not OK.
     let source = "
         enum MsgA
           Ping(String)

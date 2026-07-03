@@ -32,7 +32,7 @@ pub(super) struct Printer<'a> {
     pub(super) comments: CommentCursor<'a>,
 }
 
-/// A single script top-level element — either a declaration or a
+/// A single script top-level element, either a declaration or a
 /// statement. Used by [`Printer::print_script`] to merge `file.items`
 /// and `file.body` back into source order.
 enum TopLevel<'a> {
@@ -57,8 +57,8 @@ impl TopLevel<'_> {
 
     /// Whether this element forces blank-line separation from its
     /// neighbors. Multi-line declarations and block statements read
-    /// better with surrounding blank lines; single-line `const`/`alias`
-    /// declarations flow with adjacent statements.
+    /// better with surrounding blank lines, while single-line
+    /// `const`/`alias` declarations flow with adjacent statements.
     fn is_block(&self) -> bool {
         match self {
             TopLevel::Item(item) => !matches!(
@@ -71,7 +71,6 @@ impl TopLevel<'_> {
 }
 
 impl<'a> Printer<'a> {
-    /// Creates a new printer with a comment cursor over the file's comments.
     fn new(comments: &'a [Comment]) -> Self {
         Self {
             comments: CommentCursor::new(comments),
@@ -79,7 +78,7 @@ impl<'a> Printer<'a> {
     }
 
     /// Formats an entire file. `.kojs` scripts carry top-level
-    /// statements in `file.body`; those interleave with declarations and
+    /// statements in `file.body`. Those interleave with declarations and
     /// need the script-aware renderer. `.koja` modules leave `body` as
     /// `None` and route through the declaration-only module renderer.
     fn print_file(&mut self, file: &File) -> Doc {
@@ -203,7 +202,6 @@ impl<'a> Printer<'a> {
         concat(parts)
     }
 
-    /// Dispatches a top-level item to its specific formatter.
     fn item_to_doc(&mut self, item: &Item) -> Doc {
         match item {
             Item::Struct(s) => self.struct_to_doc(s),
@@ -361,9 +359,9 @@ impl<'a> Printer<'a> {
     /// Formats a `fn` declaration (annotation, signature, body, `end`).
     ///
     /// `indent_cols` is the column the declaration starts at (0 at the top
-    /// level, 2 inside a type body), used to detect — from the actually
-    /// rendered signature — whether it wraps across lines, in which case a
-    /// blank line separates it from the body.
+    /// level, 2 inside a type body), used to detect from the rendered
+    /// signature whether it wraps across lines, in which case a blank
+    /// line separates it from the body.
     fn function_to_doc(&mut self, f: &Function, indent_cols: u32) -> Doc {
         let mut parts = Vec::new();
 
@@ -626,7 +624,7 @@ impl<'a> Printer<'a> {
                 };
                 let value_doc = self.expr_to_doc(value);
                 if is_inline_closure(value) {
-                    // Stay inline when the closure fits; break after `=`
+                    // Stay inline when the closure fits, breaking after `=`
                     // (soft line) only when it overflows the line width.
                     group(concat(vec![
                         lhs,
@@ -723,7 +721,8 @@ impl<'a> Printer<'a> {
         let next_trailing_line = self.comments.peek_before(block_end);
         let (mut trailing, _) = self.comments.drain_before(block_end);
         if !trailing.is_empty() {
-            trailing.pop(); // drop the final hardline; the block's own newline before `end` provides it
+            // Drop the final hardline. The block's own newline before `end` provides it.
+            trailing.pop();
             parts.push(hardline());
             if let Some(cl) = next_trailing_line
                 && cl > prev_end + 1

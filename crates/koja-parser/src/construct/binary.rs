@@ -25,7 +25,7 @@ impl Parser {
 
     /// Parse the `segment, segment, ..., >>` body shared between the
     /// binary literal expression and the binary pattern. Assumes
-    /// the opening `<<` has already been consumed; this consumes
+    /// the opening `<<` has already been consumed. This consumes
     /// through (and including) the closing `>>`.
     pub(crate) fn parse_binary_segments(&mut self) -> Vec<BinarySegment> {
         let segments = self.comma_separated(&TokenKind::GtGt, Self::parse_binary_segment);

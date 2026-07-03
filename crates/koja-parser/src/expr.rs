@@ -393,10 +393,7 @@ impl Parser {
 
             _ => {
                 let span = self.current_span();
-                self.error(
-                    format!("expected expression, found {:?}", self.peek()),
-                    span,
-                );
+                self.error(format!("expected expression, found {}", self.peek()), span);
                 self.advance();
                 Expr::new(
                     ExprKind::Literal {
@@ -460,7 +457,7 @@ impl Parser {
             }
             _ => {
                 self.error(
-                    format!("expected literal, found {:?}", self.peek()),
+                    format!("expected literal, found {}", self.peek()),
                     self.current_span(),
                 );
                 Literal::Unit

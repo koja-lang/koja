@@ -8,14 +8,14 @@ use crate::registry::GlobalKind;
 
 use super::ctx::Resolver;
 
-/// Resolve a bare identifier expression. Locals win first; package-
+/// Resolve a bare identifier expression. Locals win first. Package-
 /// level constants resolve through a global lookup so an
 /// `EARTH_RADIUS` reference at a use site stamps `Resolution::Global`
 /// and returns the constant's stamped type. Non-generic functions
 /// also resolve here as first-class values: the bare name lifts to
 /// an [`AnonymousKind::Function`] type so call-site code (the
 /// fn-as-value adapter in IR lower) can wrap them in a closure value.
-/// Generic functions diagnose — first-class references would need an
+/// Generic functions diagnose, since first-class references would need an
 /// inference site that doesn't exist for a bare ident. (The static-
 /// method receiver and `Type.method(...)` call paths each handle
 /// struct-name resolution directly so they don't go through this
@@ -68,13 +68,13 @@ pub(super) fn resolve_ident(
 /// Resolve a `self` keyword expression. `self` is bound by the
 /// enclosing instance method's `Param::Self_`, which the walker
 /// seeds into the [`Resolver`]'s [`LocalScope`] under the name
-/// `"self"`; a hit returns the receiver's struct type and stamps the
+/// `"self"`. A hit returns the receiver's struct type and stamps the
 /// AST node's `local_id` slot so IR lower can read the slot through
 /// the same `LocalRead` path body-declared locals use. A miss surfaces
-/// as a diagnostic — `self` outside an instance method is invalid.
+/// as a diagnostic: `self` outside an instance method is invalid.
 ///
 /// Note: `expr.resolution` keeps the receiver's *struct type* (not a
-/// `Resolution::Local`); the `local_id` slot is the binding info,
+/// `Resolution::Local`). The `local_id` slot is the binding info,
 /// the resolution slot is the static type. Same split as `ExprKind::Ident`,
 /// where the inner `resolution` names the binding and the outer
 /// `expr.resolution` carries the type.

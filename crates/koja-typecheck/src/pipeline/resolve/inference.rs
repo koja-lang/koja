@@ -5,7 +5,7 @@
 //!   routing conflicts through a caller-supplied closure so each site can
 //!   fold conflicts into its own diagnostic shape.
 //! - [`fill_from_expected`] tries to unify a template against a hint
-//!   without ever overriding existing bindings — the expected type is
+//!   without ever overriding existing bindings. The expected type is
 //!   advisory, never authoritative.
 //! - [`finalize_inference`] surfaces phantom-param diagnostics and
 //!   bound-check diagnostics for every callee scope in one pass.
@@ -76,7 +76,7 @@ pub(super) fn unify_pairs<'a, T, I, F>(
 
 /// Try to fill empty slots of `subst` by unifying `template` against
 /// `actual` (an expected type from the surrounding context). On any
-/// conflict the attempt is discarded — already-bound slots stay
+/// conflict the attempt is discarded, already-bound slots stay
 /// authoritative. Use for bidirectional return-type / element-type /
 /// payload-type hints.
 pub(super) fn fill_from_expected(
@@ -97,9 +97,9 @@ pub(super) fn fill_from_expected(
 /// Surface phantom-param + bound-check diagnostics for every callee
 /// scope in `callees`. Each callee whose owner is in `subst` walks
 /// its slots: every `None` slot emits the per-context "cannot infer"
-/// message; every filled slot is bound-checked against the callee's
+/// message, and every filled slot is bound-checked against the callee's
 /// declared bounds via [`verify_bounds`]. Out-of-scope callees skip
-/// silently — the substitution doesn't own them.
+/// silently, since the substitution doesn't own them.
 pub(super) fn finalize_inference(
     callees: &[Callee<'_>],
     subst: &Substitution,

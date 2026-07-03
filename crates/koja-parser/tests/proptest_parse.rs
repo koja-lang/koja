@@ -7,7 +7,7 @@
 //!   diagnostic messages are non-empty, and that parsing is deterministic.
 //!
 //! The fixture walker is duplicated across the layer-1 proptest files
-//! (lex/parse/fmt) intentionally — once we add a fourth site this should
+//! (lex/parse/fmt) intentionally. Once we add a fourth site this should
 //! move to a shared `koja-test-support` dev-only crate.
 
 use std::fs;

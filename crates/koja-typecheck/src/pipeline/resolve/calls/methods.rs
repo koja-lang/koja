@@ -22,10 +22,10 @@ use crate::registry::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
 
-/// Inputs to [`infer_method_call_type_args`] — bundles the two
+/// Inputs to [`infer_method_call_type_args`]. Bundles the two
 /// [`Callee`]s in play (the method and its enclosing type), the
 /// receiver's full resolved type (instance dispatch carries the
-/// real value; static dispatch supplies an `Unresolved` placeholder
+/// real value, static dispatch supplies an `Unresolved` placeholder
 /// that the inference branch ignores), and the explicit param slice
 /// (sig.params minus `self` for instance dispatch). The
 /// substituted-param return still walks the full `sig.params`.
@@ -47,8 +47,8 @@ pub(super) struct MethodInferenceTarget<'a> {
 }
 
 /// Receiver classification for method-call dispatch. `Static` and
-/// `Instance` capture the receiver's struct id; `Bounded` captures
-/// the type-param's `(owner, index)` for bounded dispatch — the
+/// `Instance` capture the receiver's struct id. `Bounded` captures
+/// the type-param's `(owner, index)` for bounded dispatch, since the
 /// concrete struct id only emerges post-monomorphization.
 #[derive(Clone, Copy)]
 pub(super) enum MethodReceiver {
@@ -91,13 +91,13 @@ impl MethodReceiver {
 ///
 /// - Bare `Ident` naming a same-package or `Global` type
 ///   (`Color.foo()`).
-/// - `EnumConstruction` with `Unit` data and TypeIdent segments —
+/// - `EnumConstruction` with `Unit` data and TypeIdent segments,
 ///   the parser shape for `Pkg.Type.method(...)` because
 ///   `Pkg.Type` reads as a unit-variant construction until the
 ///   trailing method call disambiguates it. This is the parser
 ///   shape for both `Crypto.SHA256.digest(...)` and
 ///   `HTTP.Headers.new()`.
-/// - `FieldAccess` chain over `Ident`s — covers paths whose tail
+/// - `FieldAccess` chain over `Ident`s: covers paths whose tail
 ///   segment is a lowercase ident before a dotted method (rare, but
 ///   semantically equivalent and cheap to support alongside the
 ///   other shapes).
@@ -183,13 +183,13 @@ pub(super) fn classify_receiver(
 /// - `Some(["Color"])` for bare `Ident("Color")`.
 /// - `Some(["Crypto", "SHA256"])` for the parser's
 ///   `EnumConstruction { type_path: ["Crypto"], variant: "SHA256",
-///   data: Unit }` shape — what `Crypto.SHA256.digest(...)` and
+///   data: Unit }` shape, what `Crypto.SHA256.digest(...)` and
 ///   `HTTP.Headers.new()` parse to before disambiguation.
 /// - `Some(["HTTP", "Headers"])` for an `Ident`-rooted
 ///   `FieldAccess` chain `FieldAccess { receiver: Ident("HTTP"),
 ///   field: "Headers" }`.
 /// - `None` for everything else (value receivers, parenthesized
-///   expressions, calls, etc.) — those flow through the
+///   expressions, calls, etc.). Those flow through the
 ///   instance-dispatch path.
 fn static_receiver_path(kind: &ExprKind) -> Option<Vec<String>> {
     match kind {
@@ -231,7 +231,7 @@ fn walk_dotted_path(kind: &ExprKind, out: &mut Vec<String>) -> Option<()> {
 /// so the IR lowering's existing `Ident`-based static-receiver
 /// path lands on a familiar shape regardless of whether the parser
 /// produced an `Ident`, an `EnumConstruction`, or a `FieldAccess`
-/// chain. The synthesized name is display-only; downstream type
+/// chain. The synthesized name is display-only. Downstream type
 /// checks read the `Global(struct_id)` resolution off the inner
 /// node and the leaf [`ResolvedType`] off the outer `Expr`.
 fn rewrite_to_static_ident(receiver: &mut Expr, path: &[String], struct_id: GlobalRegistryId) {
@@ -245,13 +245,13 @@ fn rewrite_to_static_ident(receiver: &mut Expr, path: &[String], struct_id: Glob
 /// Method-call inference. Splits the substitution into two owners:
 /// the method's own type-param scope and the receiver's. The receiver
 /// scope is seeded by the receiver value's resolved `type_args` (for
-/// instance dispatch); the method scope is populated from the
+/// instance dispatch). The method scope is populated from the
 /// arg/param walk just like [`super::infer_call_type_args`].
 /// `out_type_args` receives the method-scope substitution (the
 /// receiver scope is already on the receiver's [`ResolvedType`] and
 /// surfaces through the IR's existing struct/enum mangling).
 /// Trait-impl free type-params alias the receiver's slots, so a
-/// single `receiver_subst` is enough — there's no separate impl
+/// single `receiver_subst` is enough, there's no separate impl
 /// scope.
 /// Outputs of [`infer_method_call_type_args`] that the caller writes
 /// back onto the AST + receiver shape: the method's own substituted
@@ -391,7 +391,7 @@ pub(super) fn function_signature(entry: &RegistryEntry) -> Result<&FunctionSigna
     match &entry.kind {
         GlobalKind::Function(Some(sig)) => Ok(sig),
         GlobalKind::Function(None) => panic!(
-            "resolve method call: function `{}` has no lifted signature — \
+            "resolve method call: function `{}` has no lifted signature: \
              lift_signatures must run before resolve",
             entry.identifier,
         ),
@@ -431,12 +431,12 @@ pub(super) fn dispatch_mismatch_message(
 ) -> String {
     match receiver {
         MethodReceiver::Static { .. } => format!(
-            "cannot call instance method `{}` as a static method — call it on a value of `{}` \
+            "cannot call instance method `{}` as a static method. Call it on a value of `{}` \
              instead",
             method_entry.identifier, struct_entry.identifier,
         ),
         MethodReceiver::Instance { .. } => format!(
-            "cannot call static method `{}` on a value — call it as `{}.{method}(...)` \
+            "cannot call static method `{}` on a value. Call it as `{}.{method}(...)` \
              instead",
             method_entry.identifier, struct_entry.identifier,
         ),

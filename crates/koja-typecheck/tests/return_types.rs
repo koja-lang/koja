@@ -92,7 +92,7 @@ fn trailing_assignment_with_non_unit_return_diagnoses() {
 #[test]
 fn upstream_unresolved_trailing_expr_does_not_pile_on() {
     // The trailing expression fails to resolve (`undefined`) which
-    // emits its own diagnostic; the return-type check should stay
+    // emits its own diagnostic. The return-type check should stay
     // quiet so the user doesn't see a redundant mismatch.
     let source = "
         fn answer -> Int

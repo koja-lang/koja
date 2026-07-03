@@ -78,7 +78,7 @@ fn script_mode_accepts_mixed_items_and_statements() {
 
 #[test]
 fn script_mode_disambiguates_fn_item_from_closure_expr() {
-    // `fn(...) -> ... end` is a block-form closure expression; the
+    // `fn(...) -> ... end` is a block-form closure expression. The
     // disambiguator must treat `Fn` followed by `LParen` as an
     // expression starter, not as `fn name(...)` (which requires
     // `Fn` followed by an identifier).

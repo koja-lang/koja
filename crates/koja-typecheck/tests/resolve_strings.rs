@@ -2,7 +2,7 @@
 //! interpolated strings both resolve to `Global.String`. The
 //! resolver wraps non-`String` interpolation expressions in a
 //! synthetic `.format()` MethodCall so IR-lower sees a `String`
-//! per part; `String`-typed expressions are left bare to avoid the
+//! per part. `String`-typed expressions are left bare to avoid the
 //! quote-adding behavior of `String.format`.
 
 use koja_ast::ast::{Expr, ExprKind, Function, Item, Statement, StringPart};

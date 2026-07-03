@@ -2,11 +2,11 @@
 //! the shared field-pattern walker re-used by struct-shaped enum
 //! variants ([`super::enums::resolve_enum_struct_pattern`]).
 //!
-//! Field positions accept any pattern shape — wildcards, bindings,
+//! Field positions accept any pattern shape: wildcards, bindings,
 //! literals, nested structs, nested enums, or-alternatives. Coverage
 //! is `PatternCoverage::CatchAll` only when every *listed* field's
 //! own coverage is catch-all (omitted fields are implicit
-//! wildcards); otherwise `PatternCoverage::Other`. IR lowering picks
+//! wildcards), otherwise `PatternCoverage::Other`. IR lowering picks
 //! up the field bindings and any chained literal checks via
 //! [`super::super::super::lower::patterns`].
 

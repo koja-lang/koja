@@ -1,11 +1,11 @@
-//! Phase 2 typecheck coverage for *generic protocols* — the
+//! Phase 2 typecheck coverage for *generic protocols*, the
 //! `protocol Eq<T>` shape: declaring user type-params on a protocol,
 //! threading them through method signatures, recording per-impl
 //! type-args on the target's `conformances` map, and verifying
 //! impl heads match the protocol's arity.
 //!
 //! Single-bound enforcement and bounded dispatch live in `bounds.rs` /
-//! `bounded_dispatch.rs`; struct-side concrete-impl shape coverage
+//! `bounded_dispatch.rs`. Struct-side concrete-impl shape coverage
 //! lives in `structs.rs`. This file pins the protocol-side surface.
 
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
@@ -29,7 +29,7 @@ fn protocol_id(checked: &CheckedProgram, name: &str) -> koja_ast::identifier::Gl
 
 #[test]
 fn single_param_generic_protocol_lifts_with_self_then_user_params() {
-    // The registry's `type_params` for a protocol is `[Self, T, ...]` —
+    // The registry's `type_params` for a protocol is `[Self, T, ...]`:
     // Self at slot 0 (synthetic), then user-declared params in
     // declaration order. `lift_protocol` resolves the method's
     // signature under a `TypeParamScope` rooted at the protocol id
@@ -96,7 +96,7 @@ fn multi_param_generic_protocol_assigns_distinct_indices_in_order() {
 
 #[test]
 fn protocol_self_param_name_is_reserved() {
-    // `Self` is a synthetic slot-0 type param; the user may not
+    // `Self` is a synthetic slot-0 type param. The user may not
     // re-declare it.
     let source = "
         protocol Bad<Self>
@@ -114,7 +114,7 @@ fn protocol_self_param_name_is_reserved() {
 
 #[test]
 fn impl_records_protocol_args_on_target_conformances() {
-    // `impl Match<String> for User` — the conformance recorded on
+    // `impl Match<String> for User`: the conformance recorded on
     // `User`'s `StructDefinition` carries `[String]` as the protocol
     // type-args. `verify_bounds` consumes this directly via
     // `lookup_conformance`.
@@ -187,7 +187,7 @@ fn impl_with_wrong_protocol_arity_diagnoses() {
 #[test]
 fn duplicate_impl_for_same_protocol_diagnoses() {
     // Two `impl Match<String> for User` blocks both record `User`
-    // as conforming to `Match` — `record_conformance` rejects the
+    // as conforming to `Match`. `record_conformance` rejects the
     // second.
     let source = "
         protocol Match<T>
@@ -223,7 +223,7 @@ fn duplicate_impl_for_same_protocol_diagnoses() {
 
 #[test]
 fn generic_target_impls_generic_protocol_with_matching_param() {
-    // `impl Match<T> for User<T>` — the impl's free `T` aliases
+    // `impl Match<T> for User<T>`: the impl's free `T` aliases
     // `User`'s slot-0 type param (Cleanup #1 anchoring), so the
     // protocol method's `other: T` resolves under that anchor and
     // every `Bag{...}.matches(...)` call substitutes consistently.

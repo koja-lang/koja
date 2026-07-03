@@ -19,8 +19,8 @@ pub(super) fn seal_expr(expr: &Expr) {
     // The callee position of a `Call` is the one carve-out: function
     // names aren't first-class values yet, so the outer callee
     // `Expr.resolution` stays `Unresolved`. Every other position must
-    // carry a fully-resolved type that doesn't leak `TypeParam` —
-    // those are decl-side annotations and have no business on a
+    // carry a fully-resolved type that doesn't leak `TypeParam`.
+    // Those are decl-side annotations and have no business on a
     // construction-site value.
     if !expr.resolution.is_resolved() {
         seal_panic("expression missing resolution", expr.span);
@@ -83,7 +83,7 @@ pub(super) fn seal_expr(expr: &Expr) {
         },
         ExprKind::FieldAccess { receiver, .. } => seal_expr(receiver),
         // `synthesize` rewrites statement-position fors and
-        // resolve diagnoses expression-position fors; seal should
+        // resolve diagnoses expression-position fors. Seal should
         // never see one.
         ExprKind::For { .. } => seal_panic(
             "typecheck seal saw an `ExprKind::For` after synthesize",
@@ -232,7 +232,7 @@ pub(super) fn seal_expr(expr: &Expr) {
 /// Receive arms always carry a typed-binding pattern with `local_id`
 /// stamped by resolve. Validate the shape, then walk the body. The
 /// pattern's annotation `TypeExpr` does not need a separate
-/// type-param check — the `local_id`'s scope-recorded
+/// type-param check: the `local_id`'s scope-recorded
 /// `ResolvedType` rides through the body's `Resolution::Local`
 /// references and is checked there.
 fn seal_receive_arm(arm: &MatchArm) {
@@ -276,7 +276,7 @@ fn seal_receive_arm(arm: &MatchArm) {
 /// resolve so IR lower can find the binding without re-walking. The
 /// AST type-expr annotation, if any, is enforced via the closure's
 /// outer `Expr.resolution` (an `AnonymousKind::Function` with each
-/// param's resolved type) — already checked by the top-level
+/// param's resolved type), already checked by the top-level
 /// `seal_no_type_param` walk.
 fn seal_closure_params(params: &[ClosureParam], outer: &Expr) {
     for param in params {
@@ -295,10 +295,10 @@ fn seal_closure_params(params: &[ClosureParam], outer: &Expr) {
 }
 
 /// Seal the callee of a `Call`. Two shapes are accepted:
-/// - Bare `Ident { Global(_) | Local(_) }` — the outer
-///   `Expr.resolution` stays `Unresolved`; resolve carve-out for
-///   "function names aren't values yet".
-/// - `FieldAccess` with a fn-typed `Expr.resolution` — produced by
+/// - Bare `Ident { Global(_) | Local(_) }`: the outer
+///   `Expr.resolution` stays `Unresolved` (resolve carve-out for
+///   "function names aren't values yet").
+/// - `FieldAccess` with a fn-typed `Expr.resolution`: produced by
 ///   the field-as-callable rewrite in `resolve_method_call_expr`.
 fn seal_call_callee(callee: &Expr) {
     match &callee.kind {

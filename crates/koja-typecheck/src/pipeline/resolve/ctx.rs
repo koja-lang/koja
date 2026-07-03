@@ -29,7 +29,7 @@ impl<'a> ResolverEnv<'a> {
     /// freshly-constructed local scope. `enclosing_type_id` is the
     /// receiver type's [`GlobalRegistryId`] when the function is a
     /// method on a known type (parallel to `enclosing_type`'s
-    /// name); `None` for top-level fns and file bodies. It anchors
+    /// name), `None` for top-level fns and file bodies. It anchors
     /// the `priv fn` type-private visibility check.
     pub(super) fn make_resolver<'b>(
         &'b mut self,
@@ -60,20 +60,20 @@ impl<'a> ResolverEnv<'a> {
 /// `scope` is the per-function locals map (every walker may bind
 /// new ids and look existing ones up). User-visible sinks (like
 /// diagnostics) stay positional so call signatures advertise that
-/// they emit; literal-fit coercions stamp directly onto the AST
+/// they emit. Literal-fit coercions stamp directly onto the AST
 /// node (`Expr.literal_coercion`) so no resolver-level sink is
 /// needed.
 ///
-/// `enclosing_type` is the owner type's full path — `["DateTime"]`
+/// `enclosing_type` is the owner type's full path: `["DateTime"]`
 /// for a method on `Global.DateTime`, `["Process", "ExitSignal"]`
 /// for a method on a nested type, `None` for top-level free
 /// functions and file bodies. It encodes the
 /// language's bare-call lookup rule: **prioritize your enclosing
 /// scope, then fall back to package scope**. So inside
 /// `System.cwd`, bare `koja_cwd()` resolves to the sibling
-/// `Global.System.koja_cwd` first; only if no sibling matches
+/// `Global.System.koja_cwd` first. Only if no sibling matches
 /// does the resolver consult `Global.koja_cwd`. Conflicts are
-/// resolved in favor of the enclosing scope; the escape hatch
+/// resolved in favor of the enclosing scope. The escape hatch
 /// for callers who really want the package-level function is to
 /// fully qualify (`Global.koja_cwd()`), which goes through path-
 /// call resolution and bypasses bare lookup entirely. The same
@@ -83,13 +83,13 @@ impl<'a> ResolverEnv<'a> {
 /// Pure data bundle by convention: no `impl` block. Helpers reach
 /// for fields directly (`resolver.registry`, `resolver.scope`) so
 /// each callee is honest about what it actually uses. The one
-/// exception is [`Self::resolution_scope`] — bundling the three
+/// exception is [`Self::resolution_scope`]: bundling the three
 /// type-resolution inputs in one place keeps every
 /// `resolve_type_expr` / `lookup_type` call short and rules out
 /// "passed `package` from one resolver and `aliases` from
 /// another" mismatches at the call site.
 pub(super) struct Resolver<'a> {
-    /// Return type of the innermost enclosing function-shape — the
+    /// Return type of the innermost enclosing function-shape: the
     /// outer `fn` initially, swapped to a closure's return when its
     /// body resolves and restored on the way out. Threaded into
     /// every `Statement::Return`'s value as the bidirectional hint
@@ -102,7 +102,7 @@ pub(super) struct Resolver<'a> {
     /// Registry id of the enclosing type when the resolver is
     /// walking a method body, parallel to `enclosing_type`'s name.
     /// `None` for top-level functions and the file body. Anchors
-    /// the `priv fn` type-private check — a `TypePrivate(owner)`
+    /// the `priv fn` type-private check: a `TypePrivate(owner)`
     /// callee is only callable when this equals `Some(owner)`.
     pub enclosing_type_id: Option<GlobalRegistryId>,
     /// In-scope alias roster for the current file, validated by
@@ -114,7 +114,7 @@ pub(super) struct Resolver<'a> {
     /// the `break` gate when a break targets the innermost loop.
     /// `resolve_loop` consults the popped slot to decide whether
     /// the loop expression types as `Unit` (saw break) or `Never`
-    /// (no break — divergent). Closure boundaries replace this
+    /// (no break, divergent). Closure boundaries replace this
     /// stack with an empty one and restore on exit so an inner
     /// `break` can never mark an outer-function loop.
     pub loop_break_seen: Vec<bool>,
@@ -126,10 +126,10 @@ pub(super) struct Resolver<'a> {
     pub package: &'a str,
     pub registry: &'a GlobalRegistry,
     pub scope: &'a mut LocalScope,
-    /// Owner chain that any in-body type annotation resolves against
-    /// — innermost first (function's own id when it declares
+    /// Owner chain that any in-body type annotation resolves against,
+    /// innermost first (function's own id when it declares
     /// type-params, then receiver). Mirrors
-    /// `lift_signatures::functions::type_param_owners`; populated
+    /// `lift_signatures::functions::type_param_owners`, populated
     /// once per [`make_resolver`] call so statement-level helpers
     /// can pass it straight to [`crate::pipeline::lift_signatures::TypeParamScope::new`]
     /// without rebuilding the chain.
@@ -142,8 +142,8 @@ impl<'a> Resolver<'a> {
     /// off to `resolve_type_expr` / `lookup_type`. Returns a scope
     /// tied to the resolver's own lifetime `'a` (not `&self`'s
     /// lifetime), so callers can hold the scope across subsequent
-    /// `&mut resolver` calls without tripping the borrow checker —
-    /// the inner field reborrows are always valid for `'a`.
+    /// `&mut resolver` calls without tripping the borrow checker.
+    /// The inner field reborrows are always valid for `'a`.
     pub(super) fn resolution_scope(&self) -> ResolutionScope<'a> {
         ResolutionScope {
             aliases: self.file_aliases,
@@ -153,13 +153,13 @@ impl<'a> Resolver<'a> {
     }
 }
 
-/// Registry-side metadata for one inference target — bundled so
+/// Registry-side metadata for one inference target, bundled so
 /// the call / struct / enum inference helpers stay under the
 /// `too_many_arguments` threshold without inventing a
 /// `(registry, diagnostics)` pair. Holds borrowed views of the
 /// [`crate::registry::RegistryEntry`]'s identifier (`label`) and
 /// `type_params`, plus its [`GlobalRegistryId`] (the substitution
-/// owner). Method-call inference uses two side by side — one for
+/// owner). Method-call inference uses two side by side: one for
 /// the method, one for the enclosing type.
 #[derive(Clone, Copy)]
 pub(super) struct Callee<'a> {

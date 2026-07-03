@@ -13,25 +13,25 @@
 //!
 //! # Module layout
 //!
-//! - [`walker`] — top-down traversal: `resolve_file` → `resolve_function`
+//! - [`walker`]: top-down traversal, `resolve_file` → `resolve_function`
 //!   → `resolve_statement`.
-//! - [`statements`] — statement-level shapes: assignment decl /
+//! - [`statements`]: statement-level shapes, assignment decl /
 //!   reassignment.
-//! - [`expr`] — expression dispatch: `resolve_expr`.
-//! - [`calls`] — bare and method-style call resolution.
-//! - [`structs`] — struct-literal construction and field access.
-//! - [`idents`] — bare identifier and `self` resolution.
-//! - [`literals`] — literal-shaped expressions: list, map, binary.
+//! - [`expr`]: expression dispatch, `resolve_expr`.
+//! - [`calls`]: bare and method-style call resolution.
+//! - [`structs`]: struct-literal construction and field access.
+//! - [`idents`]: bare identifier and `self` resolution.
+//! - [`literals`]: literal-shaped expressions (list, map, binary).
 //!   Shares carrier-protocol mechanics across protocol-aware
 //!   literal families.
-//! - [`strings`] — string literal resolution.
-//! - [`control_flow`] — `if` / `unless` (Unit-typed; value-producing
+//! - [`strings`]: string literal resolution.
+//! - [`control_flow`]: `if` / `unless` (Unit-typed, value-producing
 //!   forms land with locals).
-//! - [`ops`] — literal, binary, and unary type rules.
-//! - [`return_type`] — trailing-expression-vs-declared-return checking.
-//! - [`types`] — registry-backed [`ResolvedType`] predicates and
+//! - [`ops`]: literal, binary, and unary type rules.
+//! - [`return_type`]: trailing-expression-vs-declared-return checking.
+//! - [`types`]: registry-backed [`ResolvedType`] predicates and
 //!   diagnostic rendering.
-//! - [`ctx`] — `Resolver`: the package + registry + scope bundle
+//! - [`ctx`]: `Resolver`, the package + registry + scope bundle
 //!   threaded through every recursion.
 //!
 //! [`Resolution::Local`]: koja_ast::identifier::Resolution::Local

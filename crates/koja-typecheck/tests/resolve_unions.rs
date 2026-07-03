@@ -1,4 +1,4 @@
-//! Typecheck pins for the union slice — the `A | B`, `type X = A | B`,
+//! Typecheck pins for the union slice: the `A | B`, `type X = A | B`,
 //! and `p: T -> ...` triple. Together they exercise:
 //!
 //! - **Lift**: `TypeExpr::Union` resolves to a canonical
@@ -18,10 +18,10 @@
 //!   error instead of falling through to "unknown method".
 //! - **Match exhaustiveness**: typed-binding arms over a union
 //!   subject either cover every member or surface a precise
-//!   missing-member diagnostic; a duplicate member arm warns as
-//!   unreachable; pointing a typed-binding at a non-union surfaces
+//!   missing-member diagnostic. A duplicate member arm warns as
+//!   unreachable. Pointing a typed-binding at a non-union surfaces
 //!   the narrowing-site diagnostic.
-//! - **Display**: alias names round-trip in diagnostics — a
+//! - **Display**: alias names round-trip in diagnostics: a
 //!   `type Pet = Cat | Dog` mismatch reports `Pet`, not the expanded
 //!   `Cat | Dog`.
 
@@ -65,7 +65,7 @@ fn union_member_order_is_canonical() {
     // `Comment | Post` and `Post | Comment` resolve to the same
     // canonical union, so passing a `Post | Comment` value into a
     // slot declared `Comment | Post` typechecks without any extra
-    // coercion (no `Compatible::UnionWiden` needed — equality alone
+    // coercion (no `Compatible::UnionWiden` needed, equality alone
     // suffices). Pinned so a future canonicalization regression
     // surfaces as a clean test failure.
     let source = "
@@ -88,7 +88,7 @@ fn union_member_order_is_canonical() {
 
 #[test]
 fn union_member_dedup_collapses_repeats() {
-    // `A | A | B` canonicalizes to `A | B` — the duplicate member
+    // `A | A | B` canonicalizes to `A | B`. The duplicate member
     // is folded out at lift time. A return position annotated
     // `A | B` accepts a function whose RHS annotation is `A | A | B`.
     let source = "
@@ -111,7 +111,7 @@ fn union_member_dedup_collapses_repeats() {
 
 #[test]
 fn nested_union_in_signature_typechecks() {
-    // `(A | B) | C` is the parser's intermediate shape; the lifter
+    // `(A | B) | C` is the parser's intermediate shape. The lifter
     // canonicalizes the nested members into a single flat
     // `{ A, B, C }` member set. A round trip through a function
     // signature confirms the lifted shape stays well-formed.
@@ -241,7 +241,7 @@ fn non_member_into_union_diagnoses() {
 
 #[test]
 fn field_access_on_union_diagnoses() {
-    // `v.title` where `v: Post | Comment` is illegal — typecheck
+    // `v.title` where `v: Post | Comment` is illegal: typecheck
     // forces the user to discriminate via `match` first. Pinned so
     // a future naive auto-narrow doesn't silently fall back to
     // "unknown field".
@@ -313,7 +313,7 @@ fn method_call_on_union_diagnoses() {
 fn typed_binding_arm_resolves_with_member_type() {
     // Inside the arm body, `p` has type `Post`, so `p.title`
     // resolves cleanly. Each arm's pattern stamps the local on the
-    // match scope; the body sees only the narrowed member type.
+    // match scope. The body sees only the narrowed member type.
     let source = "
         struct Post
           title: String
@@ -400,7 +400,7 @@ fn typed_binding_duplicate_member_warns_unreachable() {
 
 #[test]
 fn typed_binding_not_in_union_diagnoses() {
-    // Typed-binding arms only narrow over union subjects; using one
+    // Typed-binding arms only narrow over union subjects. Using one
     // against a primitive surfaces a precise narrowing diagnostic.
     let source = "
         struct Post

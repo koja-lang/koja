@@ -1,6 +1,6 @@
 //! Synthesizes `impl Equality for T` for every user-defined struct /
 //! enum that doesn't already have one. Mirrors
-//! [`super::derive_debug`] — runs **pre-collect**, mutates
+//! [`super::derive_debug`]: runs **pre-collect**, mutates
 //! `file.items` by appending the synthetic impl block.
 //!
 //! Body shapes:
@@ -8,10 +8,10 @@
 //! - Struct: `self.f1.eq(other.f1) and self.f2.eq(other.f2) and …`,
 //!   or `true` when the struct has no fields. Opaque field types
 //!   (mirroring [`super::derive_debug::is_opaque_type`]) are
-//!   skipped — same conservative bail as `Debug`'s `"..."`
+//!   skipped: same conservative bail as `Debug`'s `"..."`
 //!   placeholder.
 //! - Enum: nested match. Outer arm dispatches on `self`, inner arm
-//!   on `other`; matching variants compare payload-wise, mismatches
+//!   on `other`. Matching variants compare payload-wise, mismatches
 //!   fall through to `false`. Unit-only enums collapse to
 //!   `match self … _ -> false end`.
 //! - Generic types route field / payload `.eq()` calls through the
@@ -114,7 +114,7 @@ fn needs_struct_derive(decl: &StructDecl, existing: &[String]) -> bool {
     !existing.iter().any(|n| n == &decl.path.join("."))
 }
 
-/// Empty enums (no variants) are uninhabited — a `match self end`
+/// Empty enums (no variants) are uninhabited: a `match self end`
 /// body with no arms is rejected by typecheck, and the type has no
 /// value to compare anyway. Skip synthesis.
 fn needs_enum_derive(decl: &EnumDecl, existing: &[String]) -> bool {
@@ -212,7 +212,7 @@ fn eq_function(other_type: TypeExpr, body_expr: Expr, span: Span) -> Function {
 /// Conjoins `self.f1.eq(other.f1) and self.f2.eq(other.f2) and …`.
 /// Returns `true` for fieldless structs and treats opaque-typed
 /// fields (mirroring [`super::derive_debug::is_opaque_type`]) as
-/// trivially equal — same conservative skip `Debug` uses with its
+/// trivially equal: same conservative skip `Debug` uses with its
 /// `"..."` placeholder. A struct that's all-opaque collapses to
 /// `true`.
 fn struct_eq_body(fields: &[StructField], span: Span) -> Expr {
@@ -233,7 +233,7 @@ fn field_eq_call(name: &str, span: Span) -> Expr {
 }
 
 /// Builds the body for an enum's `eq`: outer `match self` dispatches
-/// on the receiver's variant; each arm's body is `match other …`
+/// on the receiver's variant. Each arm's body is `match other …`
 /// that compares against the same variant and falls through to
 /// `false` for any mismatch.
 fn enum_eq_body(enum_path: &[String], variants: &[EnumVariant], span: Span) -> Expr {

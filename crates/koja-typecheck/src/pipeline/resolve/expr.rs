@@ -38,7 +38,7 @@ pub(super) fn resolve_expr(
 }
 
 /// Resolve `expr` with an optional expected-type hint. Closure
-/// expressions consume the hint (param-from-context inference); all
+/// expressions consume the hint (param-from-context inference), all
 /// other shapes ignore it.
 pub(super) fn resolve_expr_with_expected(
     expr: &mut Expr,
@@ -51,7 +51,7 @@ pub(super) fn resolve_expr_with_expected(
     // `s: Set<Int> = [1, 2]` becomes `Set.from_list([1, 2])` post-
     // resolve). The main `match &mut expr.kind` below holds a
     // borrow on `expr.kind`, which forbids replacing the kind from
-    // inside an arm; lifting these two cases out lets their
+    // inside an arm. Lifting these two cases out lets their
     // resolvers take `&mut Expr` and mutate the kind freely.
     if matches!(expr.kind, ExprKind::List { .. }) {
         let ty = resolve_list_literal(expr, expected, resolver, diagnostics);
@@ -74,8 +74,8 @@ pub(super) fn resolve_expr_with_expected(
         return;
     }
     // `==` / `!=` on user struct / enum operands rewrites to
-    // `lhs.eq(rhs)` (or `not lhs.eq(rhs)`) before re-resolving;
-    // primitive operands stay on the [`binary_type`] fast path.
+    // `lhs.eq(rhs)` (or `not lhs.eq(rhs)`) before re-resolving.
+    // Primitive operands stay on the [`binary_type`] fast path.
     // Same outer-expr-rewrite shape as List / Map / MethodCall
     // above.
     if matches!(
@@ -229,7 +229,7 @@ pub(super) fn resolve_expr_with_expected(
             resolve_while(condition, body, resolver, diagnostics)
         }
         // Statement-position `for` is rewritten by `synthesize`
-        // before resolve runs; reaching here means expression
+        // before resolve runs. Reaching here means expression
         // position, which the pipeline does not yet support yet.
         ExprKind::For { .. } => {
             diagnostics.push(Diagnostic::error(
@@ -242,7 +242,7 @@ pub(super) fn resolve_expr_with_expected(
         }
         // Unsupported shapes diagnose and leave the expression
         // unresolved. Seal runs only on the success path, so an
-        // `Unresolved` leaf here is harmless — diagnostics is non-empty
+        // `Unresolved` leaf here is harmless: diagnostics is non-empty
         // and `check_program` returns early.
         other => {
             diagnostics.push(Diagnostic::error(

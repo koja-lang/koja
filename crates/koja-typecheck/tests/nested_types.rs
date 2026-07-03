@@ -1,7 +1,7 @@
 //! Typecheck coverage for nested type names (`Owner.Nested`): the
 //! parser emits the same struct-shaped node for a nested-struct
 //! construction (`Outer.Inner{...}`) and a struct-variant
-//! construction (`Shape.Rect{...}`); resolve disambiguates by kind,
+//! construction (`Shape.Rect{...}`). Resolve disambiguates by kind,
 //! rewriting the former to a `StructConstruction` / `Struct` pattern
 //! in place. These tests pin that both readings keep working and that
 //! `Owner.Nested` resolves in type position.

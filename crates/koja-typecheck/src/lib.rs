@@ -5,20 +5,20 @@
 //! Single public entry point: [`check_program`]. It runs every
 //! sub-pass internally and returns a sealed [`CheckedProgram`] on
 //! success or a [`CheckFailure`] on failure. Diagnostics flow through
-//! the shared `koja_ast::ast::Diagnostic` vocabulary; seal violations
+//! the shared `koja_ast::ast::Diagnostic` vocabulary. Seal violations
 //! panic (compiler bugs, not user errors).
 //!
-//! Project-mode files keep their function items on `File.items`;
-//! script-mode files keep their top-level statements on `File.body`.
-//! Both shapes share the same sub-passes — there is no synthetic
+//! Project-mode files keep their function items on `File.items`.
+//! Script-mode files keep their top-level statements on `File.body`.
+//! Both shapes share the same sub-passes. There is no synthetic
 //! `fn main` wrapper.
 //!
 //! # Module layout
 //!
-//! - [`error`] — user-actionable failure type ([`CheckFailure`]).
-//! - [`pipeline`] — sub-passes (collect, lift_signatures, resolve, seal).
-//! - [`program`] — public entry point and program-level types.
-//! - [`registry`] — [`GlobalRegistry`] of decls + diagnostic-friendly
+//! - [`error`]: user-actionable failure type ([`CheckFailure`]).
+//! - [`pipeline`]: sub-passes (collect, lift_signatures, resolve, seal).
+//! - [`program`]: public entry point and program-level types.
+//! - [`registry`]: [`GlobalRegistry`] of decls + diagnostic-friendly
 //!   [`format_registry`] rendering.
 
 mod error;

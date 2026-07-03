@@ -63,7 +63,7 @@ impl DocumentState {
 ///
 /// The stdlib bundle is split into autoimport and qualified halves so
 /// the diagnostics pipeline can selectively skip the package the user
-/// is currently editing — opening `lib/global/src/foo.koja` must not
+/// is currently editing. Opening `lib/global/src/foo.koja` must not
 /// double-bundle the embedded `Global.*` modules alongside the
 /// on-disk siblings. Mirrors
 /// [`koja_driver::pipeline::bundle_many_with_autoimport`]'s
@@ -89,7 +89,7 @@ impl std::fmt::Debug for DocumentState {
 
 impl Backend {
     /// Creates a new backend, pre-loading the stdlib sources.
-    /// The sources are parsed fresh on every diagnostic run; caching
+    /// The sources are parsed fresh on every diagnostic run. Caching
     /// them as `SourceFile`s avoids re-reading the embedded strings on
     /// every keystroke while keeping each parse independent.
     pub fn new(client: Client) -> Self {

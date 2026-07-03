@@ -11,7 +11,7 @@
 //! each `(parsed_file, package_name, kind)` tuple, then
 //! [`finalize_project`] once, then the various `render_*` calls
 //! to produce HTML. [`search::search_index_json`] produces the
-//! search payload; [`style::CSS`] / [`style::SEARCH_JS`] expose
+//! search payload. [`style::CSS`] and [`style::SEARCH_JS`] expose
 //! the static assets that ship alongside the HTML.
 
 mod extract;

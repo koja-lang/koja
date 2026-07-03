@@ -1,7 +1,7 @@
 //! Looping expressions: `for`, `loop`, `while`.
 //!
 //! `for pattern in iterable ... end` desugars to a loop in later
-//! phases. `loop` is unbounded; `while condition ... end` is the
+//! phases. `loop` is unbounded, and `while condition ... end` is the
 //! conditioned form. All three share the same single-block body
 //! shape terminated by `end`.
 

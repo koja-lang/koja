@@ -1,7 +1,7 @@
 //! String-literal construction: triple-quoted multiline indentation,
 //! interpolation, and escape handling all the way through the parser
 //! into the AST. The dedent contract (closing-quote column is the
-//! indent oracle; leading newline stripped; trailing newline trimmed)
+//! indent oracle, leading newline stripped, trailing newline trimmed)
 //! lives in `construct/string.rs` and is exercised here end-to-end.
 
 use koja_ast::ast::{Expr, ExprKind, Statement, StringPart};

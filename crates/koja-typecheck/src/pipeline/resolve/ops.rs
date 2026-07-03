@@ -3,13 +3,13 @@
 //! Every helper is registry-backed: outputs flow through
 //! [`GlobalRegistry::primitive`] so primitive identity stays
 //! single-sourced. On a type mismatch we emit a diagnostic and return
-//! [`ResolvedType::unresolved`]; resolve never aborts mid-walk, so a
+//! [`ResolvedType::unresolved`]. Resolve never aborts mid-walk, so a
 //! follow-on type rule sees `<unresolved>` operands and stays quiet
 //! ([`super::types::is_primitive`] short-circuits on those).
 //!
 //! Numeric arms (arithmetic + comparison) accept any two operands
 //! [`super::types::types_equivalent`] considers compatible. Today
-//! that's `Int ≡ Int64` and `Float ≡ Float64` — the alias rule that
+//! that's `Int ≡ Int64` and `Float ≡ Float64`, the alias rule that
 //! stands in for future union-membership: `Int` is on track to
 //! become a `Int8 | Int16 | Int32 | Int64` union with `Int64` as
 //! one of its members, at which point this same predicate keeps
@@ -18,7 +18,7 @@
 //! Comparison arms additionally reuse [`super::coercion::check_compatible`]
 //! so a default `Int` / `Float` literal paired with a sized-numeric
 //! operand (`Int32 == 0`, `fd: Int32 >= 0`) picks up the matching
-//! [`LiteralCoercion`] — same plumbing the four existing coercion
+//! [`LiteralCoercion`], the same plumbing the four existing coercion
 //! sites use, just invoked at one more site.
 
 use koja_ast::ast::{Arg, BinOp, Diagnostic, Expr, ExprKind, UnaryOp};
@@ -36,11 +36,11 @@ use crate::registry::GlobalRegistry;
 const EQ_METHOD: &str = "eq";
 
 /// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
-/// Int/Float widths, String) stay on the [`binary_type`] fast path
-/// — IR-lower emits `icmp eq` / `fcmp oeq` / `strcmp` directly.
+/// Int/Float widths, String) stay on the [`binary_type`] fast path.
+/// IR-lower emits `icmp eq` / `fcmp oeq` / `strcmp` directly.
 /// User struct / enum operands rewrite to `lhs.eq(rhs)` (wrapped in
 /// `not …` for `!=`) and re-resolve through the normal method-call
-/// path; `derive_equality` guarantees an `Equality` impl is present
+/// path. `derive_equality` guarantees an `Equality` impl is present
 /// for every user type by the time resolve runs.
 pub(super) fn resolve_equality_op_expr(
     expr: &mut Expr,
@@ -86,7 +86,7 @@ pub(super) fn resolve_equality_op_expr(
 
 /// True when both operands are primitive-equality-eligible. Keeps
 /// `Bool ==`, every integer / float width, and `String ==` on the
-/// `icmp` / `strcmp` fast path; everything else routes through
+/// `icmp` / `strcmp` fast path. Everything else routes through
 /// method-call dispatch.
 fn eligible_for_primitive_equality(left: &Expr, right: &Expr, registry: &GlobalRegistry) -> bool {
     is_primitive_equality_eligible(&left.resolution, registry)
@@ -103,7 +103,7 @@ fn is_primitive_equality_eligible(ty: &ResolvedType, registry: &GlobalRegistry) 
 
 /// Stand-in `Expr` used during the [`std::mem::replace`] swap when
 /// rewriting `lhs == rhs` to a method call. The placeholder is
-/// dropped on the next line, so its shape never reaches resolve —
+/// dropped on the next line, so its shape never reaches resolve.
 /// `Unit` literal is the cheapest legal option.
 fn placeholder_expr(span: Span) -> Expr {
     Expr::new(
@@ -158,11 +158,11 @@ pub(super) fn binary_type(
         BinOp::Eq | BinOp::NotEq => {
             // String operands flow through the same operator so
             // `match` arms with string-literal patterns can desugar
-            // to the same equality chain; LLVM emit routes the
+            // to the same equality chain. LLVM emit routes the
             // `IRType::String` case through `strcmp`. The numeric
             // path covers both `Int ≡ Int64` / `Float ≡ Float64`
             // alias mixes and sized-numeric vs default-literal pairs
-            // (`Int32 == 0`, `fd >= 0`) — the latter stamps the
+            // (`Int32 == 0`, `fd >= 0`). The latter stamps the
             // matching [`LiteralCoercion`] on the literal side.
             let bool_match = both(&left.resolution, &right.resolution, registry, "Bool");
             let string_match = both(&left.resolution, &right.resolution, registry, "String");
@@ -199,8 +199,8 @@ pub(super) fn binary_type(
         }
         BinOp::Concat => {
             // `<>` requires both operands to share a heap-payload
-            // type — `String`, `Binary`, or `Bits`. Cross-type
-            // concat (e.g. `String <> Binary`) is rejected; the
+            // type: `String`, `Binary`, or `Bits`. Cross-type
+            // concat (e.g. `String <> Binary`) is rejected. The
             // user must convert through a stdlib helper. Result
             // type matches operands.
             if both(&left.resolution, &right.resolution, registry, "String") {
@@ -240,7 +240,7 @@ pub(super) fn unary_type(
             } else {
                 diagnostics.push(Diagnostic::error(
                     format!(
-                        "unary `-` requires a signed Int or Float operand; got `{}`",
+                        "unary `-` requires a signed Int or Float operand, got `{}`",
                         display_resolution(ty, registry),
                     ),
                     span,
@@ -272,10 +272,10 @@ fn both(lhs: &ResolvedType, rhs: &ResolvedType, registry: &GlobalRegistry, name:
 /// Compatibility-aware variant of [`both`] for numeric primitives.
 /// Returns true when both operands are members of the same numeric
 /// union per [`types_equivalent`]. Today the only such unions are
-/// the alias pairs `Int = {Int, Int64}` and `Float = {Float, Float64}`;
-/// when `Int` becomes a real union over `Int8 | Int16 | Int32 | Int64`
+/// the alias pairs `Int = {Int, Int64}` and `Float = {Float, Float64}`.
+/// When `Int` becomes a real union over `Int8 | Int16 | Int32 | Int64`
 /// (see `LANGUAGE.md` primitives table) this same predicate keeps
-/// working — the membership check generalizes inside `types_equivalent`,
+/// working. The membership check generalizes inside `types_equivalent`,
 /// not here.
 ///
 /// Sized numeric primitives (`Int8` … `UInt64`, `Float32`) are not
@@ -296,7 +296,7 @@ fn both_aliased(
 /// Equality / comparison numeric-operand rule. Accepts:
 ///
 /// - Both operands alias-equivalent to `Int` (covers `Int ↔ Int64`
-///   mixes — the typical FFI-result-vs-literal case).
+///   mixes, the typical FFI-result-vs-literal case).
 /// - Both operands alias-equivalent to `Float` (analogous).
 /// - Both operands are the SAME sized-numeric primitive (`UInt8 ==
 ///   UInt8`, `Int32 < Int32`, etc). Same-type sized comparison is a
@@ -307,12 +307,12 @@ fn both_aliased(
 /// - One sized-numeric operand (`Int8` … `UInt64`, `Float32`) paired
 ///   with a default `Int` / `Float` literal whose value fits the
 ///   sized type's range. The literal AST node is stamped with the
-///   matching [`LiteralCoercion`] via [`coercion_target_mut`] — same
+///   matching [`LiteralCoercion`] via [`coercion_target_mut`], the same
 ///   plumbing struct-field / call-arg / return / enum-payload /
 ///   const-init sites use, just invoked at one more site.
 ///
 /// Rejects everything else (`Bool` / `String` operands have their
-/// own arms in [`binary_type`]; user types fall through to the
+/// own arms in [`binary_type`]. User types fall through to the
 /// type-mismatch diagnostic).
 fn numeric_comparison_compatible(
     left: &mut Expr,
@@ -349,7 +349,7 @@ const SIZED_NUMERIC: &[&str] = &[
 ];
 
 /// Primitive name when `lhs` and `rhs` resolve to the same sized
-/// numeric; `None` otherwise.
+/// numeric, `None` otherwise.
 fn same_sized_numeric_name(
     lhs: &ResolvedType,
     rhs: &ResolvedType,
@@ -371,7 +371,7 @@ fn signed_numeric_name(ty: &ResolvedType, registry: &GlobalRegistry) -> Option<&
         .copied()
 }
 
-/// Arithmetic-operand rule — arithmetic counterpart of
+/// Arithmetic-operand rule: arithmetic counterpart of
 /// [`numeric_comparison_compatible`]. Returns the result type for
 /// `Int`/`Float` alias pairs, same-sized numerics, and sized +
 /// default-literal mixes (literal node stamped with `LiteralCoercion`).
@@ -405,8 +405,8 @@ fn numeric_arithmetic_result(
 
 /// Try to stamp a literal-width [`LiteralCoercion`] on `actual` so
 /// it flows into the sized `target_ty` slot. Returns `true` on
-/// successful coercion; `false` for non-sized targets, non-literal
-/// sources, or out-of-range values — comparison sites fall back to
+/// successful coercion, `false` for non-sized targets, non-literal
+/// sources, or out-of-range values. Comparison sites fall back to
 /// the type-mismatch diagnostic in those cases. Out-of-range
 /// diagnostics are deferred to the caller's mismatch path: a
 /// dedicated narrow-int diagnostic at binary-op sites would conflate

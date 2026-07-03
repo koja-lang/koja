@@ -2,11 +2,11 @@
 //! (`Int`/`Bool`/`Unit`/`Float`/`String`) into the [`GlobalRegistry`]
 //! before user decls are collected.
 //!
-//! Stubs are temporary scaffolding — once the real stdlib compiles as
+//! Stubs are temporary scaffolding: once the real stdlib compiles as
 //! a package they land through `collect`. These assertions stay valid
 //! post-cutover because stubs and real entries share the same shape
 //! (`Global.<name>` struct with an empty `StructDefinition` in the
-//! registry; user-declared structs may add fields and conformances).
+//! registry, user-declared structs may add fields and conformances).
 //!
 //! `typecheck_file` prepends [`koja_stdlib::AUTOIMPORT`], so
 //! protocols defined there (e.g. `Bitwise`) legitimately land

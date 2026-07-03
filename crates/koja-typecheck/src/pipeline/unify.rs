@@ -9,8 +9,8 @@
 //! value (`Unresolved` for slots still unfilled).
 //!
 //! Method calls are the dual-scope case (receiver scope + method
-//! scope); every other call site uses a single scope. The substitution
-//! routes by the leaf's `(owner, index)` automatically — callers don't
+//! scope). Every other call site uses a single scope. The substitution
+//! routes by the leaf's `(owner, index)` automatically. Callers don't
 //! pass an explicit owner.
 
 use koja_ast::identifier::{
@@ -41,7 +41,7 @@ struct Scope {
 }
 
 /// Inference state for one or more owner scopes. Bare-call / struct /
-/// enum sites construct a single-scope substitution; method calls
+/// enum sites construct a single-scope substitution. Method calls
 /// construct a dual-scope one (receiver + method). Pattern and impl
 /// sites that already know their type-args build one with [`from_args`].
 ///
@@ -52,7 +52,7 @@ pub struct Substitution {
 }
 
 impl Substitution {
-    /// Empty substitution — every `set` is a no-op, every `get` returns
+    /// Empty substitution: every `set` is a no-op, every `get` returns
     /// `None`. Used when a callee has no type params at all.
     pub(crate) fn empty() -> Self {
         Self { scopes: Vec::new() }
@@ -69,7 +69,7 @@ impl Substitution {
     }
 
     /// Build a dual-scope substitution (receiver + method) with the
-    /// given arities. The first scope is `receiver`; the second is
+    /// given arities. The first scope is `receiver`, the second is
     /// `method`. Order matters for [`into_args`]/[`args`] callers that
     /// extract by position.
     pub(crate) fn dual(
@@ -118,7 +118,7 @@ impl Substitution {
 
     /// Set a slot. Returns `Err(Conflict)` if the slot was already
     /// filled with a value that isn't [`types_equivalent`] to `value`
-    /// AND isn't a union containing `value` as a member; `Ok(())` on a
+    /// AND isn't a union containing `value` as a member. `Ok(())` on a
     /// fresh fill or a compatible re-fill. Out-of-scope owners and
     /// out-of-range indices are silent no-ops.
     ///
@@ -127,9 +127,9 @@ impl Substitution {
     /// driven bind of `T → Int64` followed by an expected-type fill
     /// of `T → Int` must not roll back the entire substitution and
     /// strand sibling slots (`E` etc.) unbound, since `Int` and
-    /// `Int64` are the same type. Today that's the alias rule;
-    /// when `Int` becomes a union over its sized variants the same
-    /// predicate generalizes — `T → Int64` then `T → Int` still
+    /// `Int64` are the same type. Today that's the alias rule.
+    /// When `Int` becomes a union over its sized variants the same
+    /// predicate generalizes: `T → Int64` then `T → Int` still
     /// resolves cleanly because `Int64` is a member of the `Int`
     /// union.
     ///
@@ -140,7 +140,7 @@ impl Substitution {
     /// rather than rejecting the call as a "cannot be both" conflict.
     /// One-direction-only: if a narrower slot value would be widened
     /// by a later union arrival, that's a `fill_from_expected` story,
-    /// not this one — leave it for the (rarer) flow-inference case.
+    /// not this one. Leave it for the (rarer) flow-inference case.
     pub(crate) fn set(
         &mut self,
         owner: GlobalRegistryId,
@@ -181,7 +181,7 @@ impl Substitution {
     }
 
     /// Read-only view of `owner`'s slots. Panics if `owner` isn't in
-    /// scope — call [`owns`] first when in doubt.
+    /// scope. Call [`owns`] first when in doubt.
     ///
     /// [`owns`]: Substitution::owns
     pub(crate) fn slots(&self, owner: GlobalRegistryId) -> &[Option<ResolvedType>] {
@@ -212,15 +212,15 @@ impl Substitution {
 }
 
 /// True when `prev` is a `ResolvedType::Union` whose members include
-/// a type equivalent to `value`. Asymmetric: `Union ⊇ {value}` only —
-/// the symmetric "value is a union containing prev" case would widen
+/// a type equivalent to `value`. Asymmetric: `Union ⊇ {value}` only.
+/// The symmetric "value is a union containing prev" case would widen
 /// an already-filled narrower slot and belongs to the
 /// `fill_from_expected` flow, not the per-arg unification path.
 ///
 /// Used by [`Substitution::set`] to accept a method-arg unification
 /// like `Ref<MsgA | MsgB, _>.call(MsgA.Ping(...))`: the receiver
-/// scope pre-binds `M → MsgA | MsgB`; the arg drives a unify of
-/// `M → MsgA`; without this rule the per-slot compatibility check
+/// scope pre-binds `M → MsgA | MsgB`, and the arg drives a unify of
+/// `M → MsgA`. Without this rule the per-slot compatibility check
 /// would surface a spurious "cannot be both" diagnostic.
 /// True when `prev` is a sized numeric primitive (`Int8`/`Int32`/...,
 /// `UInt8`/..., `Float32`) and `value` is the default literal type for
@@ -237,7 +237,7 @@ impl Substitution {
 ///     "argument expects `Int32`, got `Int`" diagnostic
 ///
 /// The pre-existing "cannot be both X and Y" diagnostic was wrong for
-/// these sites — the slot's type is authoritative once seeded, not
+/// these sites: the slot's type is authoritative once seeded, not
 /// "in conflict with" a literal's default type.
 fn literal_widens_into(
     prev: &ResolvedType,
@@ -275,7 +275,7 @@ fn union_contains(prev: &ResolvedType, value: &ResolvedType, registry: &GlobalRe
 /// Walk `template` against `actual` and populate `subst` with every
 /// inferred binding. Structural disagreement (e.g. `Pair` template vs
 /// `Int` actual, mismatched arities, owner-out-of-scope `TypeParam`)
-/// silently skips — the caller substitutes `subst` into the template
+/// silently skips. The caller substitutes `subst` into the template
 /// and re-checks downstream, surfacing a clearer diagnostic on the
 /// post-substitution shape. `Resolution::Unresolved` actuals are
 /// silently accepted (upstream already diagnosed).

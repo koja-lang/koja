@@ -7,8 +7,8 @@
 //! per-construction-site validation diagnostics (unknown / extra /
 //! missing / duplicate / wrong-typed field, non-struct receiver).
 //!
-//! Static methods are tested in *both* declaration forms — inline in
-//! the struct body and in an `impl` block — to pin that the two
+//! Static methods are tested in *both* declaration forms (inline in
+//! the struct body and in an `impl` block) to pin that the two
 //! surface forms produce identical registry entries and resolution
 //! shape.
 
@@ -304,7 +304,7 @@ fn nested_field_access_resolves_through_inner_struct() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative — feature gaps
+// Negative: feature gaps
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -344,7 +344,7 @@ fn default_field_value_diagnoses_feature_gap() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative — construction validation
+// Negative: construction validation
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -464,7 +464,7 @@ fn wrong_field_type_in_construction_diagnoses() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative — field access validation
+// Negative: field access validation
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -575,7 +575,7 @@ fn impl_block_static_method_registers_under_qualified_identifier() {
 fn impl_block_before_struct_in_file_still_registers_methods() {
     // Two-pass collect: pass 1 registers `struct Point`, pass 2
     // registers methods inside `extend Point`. Source order between
-    // the two declarations doesn't matter — matches the language
+    // the two declarations doesn't matter. Matches the language
     // rule "all top-level decls visible everywhere".
     let source = "
         extend Point
@@ -654,7 +654,7 @@ fn static_method_call_resolves_to_method_return_type() {
 
 #[test]
 fn static_method_with_args_validates_arity_and_types() {
-    // Bodies don't reference parameter names — the locals slice
+    // Bodies don't reference parameter names. The locals slice
     // hasn't landed yet. The signature still pins arity/types so
     // the call site goes through the validation we want to test.
     let source = "
@@ -1046,7 +1046,7 @@ fn generic_protocol_impl_with_wrong_concrete_arg_diagnoses() {
 
 #[test]
 fn generic_target_impl_anchors_self_at_receiver_id() {
-    // `impl Render for Bag<T>` — the impl block's free type-param
+    // `impl Render for Bag<T>`: the impl block's free type-param
     // `T` aliases the receiver struct's slot-0 anchor. This pins:
     //   - `self: Bag<T>` resolves to `Bag<TypeParam(Bag, 0)>`,
     //     identical to an inline `fn render(self)` on `struct Bag<T>`,
@@ -1121,7 +1121,7 @@ fn generic_target_impl_method_call_resolves_concrete_receiver() {
     // through the substituted return type into the AST). Slice 2.8
     // anchored `T` at the impl entry rather than the receiver
     // struct, so the inference step has to substitute via the impl
-    // owner — not just the struct owner.
+    // owner, not just the struct owner.
     let source = "
         protocol Render
           fn render(self) -> Int
@@ -1150,7 +1150,7 @@ fn generic_target_impl_method_returning_free_param_substitutes() {
     // Hard case: the impl method returns the impl's *own* free
     // type-param `T`. Slice 2.8 anchored `T` at the impl entry, so
     // the call-site inference step must substitute the impl owner
-    // when computing the return type — otherwise the result leaks a
+    // when computing the return type. Otherwise the result leaks a
     // `TypeParam(impl_id, 0)` into the call site's resolution and
     // seal panics.
     let source = "
@@ -1179,8 +1179,8 @@ fn generic_target_impl_method_returning_free_param_substitutes() {
 #[test]
 fn trait_impl_on_concrete_target_args_dispatches_only_for_matching_receiver() {
     // "Extend"-style domain check: `impl Render for Bag<Int>`
-    // adds `render` to `Bag<Int>` only. Calls on `Bag<Int>` succeed;
-    // calls on `Bag<String>` fail at the receiver-type check rather
+    // adds `render` to `Bag<Int>` only. Calls on `Bag<Int>` succeed.
+    // Calls on `Bag<String>` fail at the receiver-type check rather
     // than dispatching incorrectly.
     let source = "
         protocol Render
@@ -1239,7 +1239,7 @@ fn trait_impl_on_concrete_target_args_diagnoses_mismatched_receiver() {
 
 #[test]
 fn general_and_specialized_trait_impls_collide_on_shared_method_name() {
-    // Both impls want `[Bag, render]` — collision detected at
+    // Both impls want `[Bag, render]`: collision detected at
     // method registration. This is the cornerstone of the
     // "extend"-style design: any two impl blocks that define the
     // same method name on the same type head are a hard error,
@@ -1319,7 +1319,7 @@ fn impl_on_unknown_type_diagnoses() {
 }
 
 // ---------------------------------------------------------------------------
-// Generics — definition, lift, construction inference
+// Generics: definition, lift, construction inference
 // ---------------------------------------------------------------------------
 
 #[test]

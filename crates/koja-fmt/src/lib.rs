@@ -9,7 +9,7 @@ use koja_parser::ParseMode;
 pub enum FormatResult {
     /// Successfully formatted source code.
     Ok(String),
-    /// The source could not be parsed; contains the parse diagnostics.
+    /// The source could not be parsed. Carries the parse diagnostics.
     ParseErrors(Vec<Diagnostic>),
 }
 
@@ -652,8 +652,8 @@ mod tests {
     #[test]
     fn match_long_single_expr_body_breaks_all_arms() {
         // One arm's single-expression body overflows the page width, so
-        // every sibling arm body is pushed onto its own line with blank
-        // lines between arms -- not just the long one.
+        // every sibling arm body (not just the long one) is pushed onto
+        // its own line with blank lines between arms.
         assert_fmt(
             r#"
             fn pick(x: Option<Int>) -> String

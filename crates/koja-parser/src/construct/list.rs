@@ -114,7 +114,7 @@ impl Parser {
         }
 
         // Otherwise it's a list literal. The first element is
-        // already parsed; route the tail through `comma_separated`
+        // already parsed. Route the tail through `comma_separated`
         // by manually consuming the comma that should follow it.
         let mut elements = vec![first];
         if self.eat(&TokenKind::Comma).is_some() {

@@ -1,11 +1,11 @@
 //! `@doc` annotations are pure metadata for `koja-doc` / `koja-fmt`.
-//! The typechecker neither honors nor enforces them; it only needs
+//! The typechecker neither honors nor enforces them. It only needs
 //! to stop rejecting them as a feature gap on the decl shapes that
 //! historically diagnosed every annotation. Other annotation names
 //! (`@derive`, `@spec`, …) still raise the existing message.
 //!
 //! Top-level functions and impl-block functions silently accept any
-//! annotation today, so they aren't covered here — there's nothing to
+//! annotation today, so they aren't covered here. There's nothing to
 //! relax. Trait-impl methods (`impl P for T`) carry their docs on the
 //! parent protocol's method, so they're also not exercised.
 
@@ -18,7 +18,7 @@ use common::{
 };
 
 // ---------------------------------------------------------------------------
-// Positive — `@doc "..."` accepted on every relaxed shape
+// Positive: `@doc "..."` accepted on every relaxed shape
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -101,7 +101,7 @@ fn doc_false_on_constant_is_accepted() {
 }
 
 // ---------------------------------------------------------------------------
-// Positive — `@doc false` accepted on every relaxed shape
+// Positive: `@doc false` accepted on every relaxed shape
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -151,7 +151,7 @@ fn doc_false_on_protocol_method_is_accepted() {
 }
 
 // ---------------------------------------------------------------------------
-// Negative — non-`@doc` annotations still raise the feature-gap message
+// Negative: non-`@doc` annotations still raise the feature-gap message
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -256,7 +256,7 @@ fn non_doc_annotation_on_constant_still_diagnoses() {
 }
 
 // ---------------------------------------------------------------------------
-// Mixed — `@doc` paired with another annotation: the other one still fires
+// Mixed: `@doc` paired with another annotation, the other one still fires
 // ---------------------------------------------------------------------------
 
 #[test]

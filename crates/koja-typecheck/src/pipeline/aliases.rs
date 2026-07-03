@@ -2,14 +2,14 @@
 //! path-rewrite helper.
 //!
 //! Aliases bind a single `local_name` to a target [`Identifier`].
-//! Use sites may project further segments through that head; this
+//! Use sites may project further segments through that head. This
 //! module's [`rewrite_through_aliases`] does the projection so the
 //! lift / resolve passes call one helper regardless of path depth.
 //!
 //! Validation runs once between [`super::collect`] and
 //! [`super::lift_signatures`] so every signature site sees a
 //! validated alias roster. Diagnostics fire at the alias decl
-//! itself; alias *use* sites that don't resolve fall through to the
+//! itself. Alias *use* sites that don't resolve fall through to the
 //! same "type not registered" diagnostic any other unknown name
 //! would produce.
 
@@ -28,8 +28,8 @@ use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
 /// target itself doesn't resolve (the validator reports the latter at
 /// the alias decl).
 ///
-/// Resolving the target with full precedence — rather than assuming
-/// segment 0 is the package — is what lets an alias name a current-
+/// Resolving the target with full precedence (rather than assuming
+/// segment 0 is the package) is what lets an alias name a current-
 /// package or `Global` nested type without spelling the package:
 /// `alias Process.StopReason as StopReason` binds
 /// `Global.Process.StopReason` from any package, mirroring how a bare
@@ -83,13 +83,13 @@ fn lookup_alias_target<'r>(
 /// Five checks per alias, each emitting one diagnostic and
 /// continuing so the user sees every alias problem in one pass:
 ///
-/// 1. Path length `>= 2` — alias targets must be qualified.
+/// 1. Path length `>= 2`: alias targets must be qualified.
 /// 2. Target identifier exists and names a struct, enum, or
 ///    protocol (not a function or constant).
 /// 3. Local name not already used by another alias in this file.
 /// 4. Local name doesn't shadow a current-package decl, *unless*
 ///    the alias's target is that very same identifier (redundant
-///    self-alias is allowed; the alias and the existing binding
+///    self-alias is allowed, since the alias and the existing binding
 ///    resolve to the same id).
 /// 5. Same shadow check against `Global`.
 pub(crate) fn validate_aliases(
@@ -215,7 +215,7 @@ fn check_no_duplicate(
 }
 
 /// Reject any alias whose `local_name` collides with an existing
-/// binding in the current package or `Global` — the pipeline treats
+/// binding in the current package or `Global`. The pipeline treats
 /// shadowing as a hard error. Carve-out: when the colliding
 /// identifier *is* the alias target, the alias is redundant but
 /// not a shadow (resolves to the same id). Allow it.
@@ -243,7 +243,7 @@ fn check_no_shadow(
         }
         diagnostics.push(Diagnostic::error_with_hint(
             format!(
-                "alias `{}` would shadow existing {} `{}` -- the pipeline rejects shadowing",
+                "alias `{}` would shadow existing {} `{}` (the pipeline rejects shadowing)",
                 alias.local_name,
                 entry.kind.label(),
                 entry.identifier,

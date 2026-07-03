@@ -14,7 +14,7 @@
 //! diagnostics: arm-after-catch-all, duplicate enum variant or
 //! literal across arms, and overlapping alternatives within a
 //! single or-pattern. Warnings ride the `CheckedProgram`'s success
-//! path; they do not gate IR lowering.
+//! path, they do not gate IR lowering.
 //!
 //! `Bool` subjects relax the catch-all rule: if both `true` and
 //! `false` literal arms appear (directly or as or-pattern
@@ -39,7 +39,7 @@ use crate::registry::{EnumDefinition, GlobalRegistry};
 
 /// Rolling accumulators of "what coverage has fired so far" used to
 /// flag arm-after-arm redundancy. `variants` drives exhaustiveness
-/// (every witness tag); `full_variants` drives reachability (only
+/// (every witness tag), `full_variants` drives reachability (only
 /// witnesses whose inner pattern was itself a catch-all).
 #[derive(Default)]
 struct SeenCoverage {
@@ -155,7 +155,9 @@ pub(super) fn resolve_match(
             let subject_label = display_resolution(&subject_ty, resolver.registry);
             diagnostics.push(Diagnostic::error_with_hint(
                 "match must include a wildcard `_` or binding catch-all arm",
-                format!("the subject has type `{subject_label}`; add a catch-all `_ -> ...` arm"),
+                format!(
+                    "the subject has type `{subject_label}`, so add a catch-all `_ -> ...` arm"
+                ),
                 span,
             ));
         }
@@ -215,7 +217,7 @@ fn diagnose_missing_union_members(
 /// Emit warning-severity reachability diagnostics for one arm.
 /// Walks the catch-all-already-fired check first, then duplicate-
 /// variant / duplicate-literal coverage against the rolling
-/// accumulators. Does not mutate the accumulators — the caller
+/// accumulators. Does not mutate the accumulators. The caller
 /// updates them after this returns so the warning is keyed on the
 /// state the arm actually saw.
 fn check_arm_reachability(
@@ -236,7 +238,7 @@ fn check_arm_reachability(
     match coverage {
         PatternCoverage::CatchAll => {}
         PatternCoverage::Variants(witnesses) => {
-            // Only `full` witnesses shadow sibling arms — narrowing
+            // Only `full` witnesses shadow sibling arms. Narrowing
             // patterns share the outer tag without subsuming each
             // other.
             if !witnesses.is_empty()

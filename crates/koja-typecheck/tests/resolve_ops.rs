@@ -1,5 +1,5 @@
 //! Typecheck coverage for boolean and comparison operators
-//! (`and`/`or`/`not`/`== != < > <= >=`) — pairs with
+//! (`and`/`or`/`not`/`== != < > <= >=`). Pairs with
 //! `pipeline::resolve::ops` in src. Mirrors `program_script.rs`: parse
 //! and check a tiny script body, then inspect the trailing
 //! expression's `resolution`. Error paths assert a diagnostic on
@@ -102,7 +102,7 @@ fn bool_equality_is_allowed() {
 #[test]
 fn int_type_helper_still_references_int() {
     // Sanity check that both `int_type` and `bool_type` correspond to
-    // the stubs the resolver emits; catches reverse-index breakage.
+    // the stubs the resolver emits. Catches reverse-index breakage.
     let checked = typecheck("1 + 1\n");
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
     assert_ne!(int_type(&checked), bool_type(&checked));
@@ -245,7 +245,7 @@ fn mixed_int_float_arith_diagnoses() {
 // ------------------------------------------------------------------
 // `Int ≡ Int64` / `Float ≡ Float64` aliases at binary-op sites.
 // Today the registry keeps these as distinct primitives papered over
-// by `types_equivalent` (LANGUAGE.md primitives table); future Koja
+// by `types_equivalent` (LANGUAGE.md primitives table). Future Koja
 // will promote `Int` to a real union over its sized variants. Both
 // arithmetic and comparison must accept the alias mix today so FFI
 // signatures returning `Int64` (or anything user-spelled as `Int64`)
@@ -301,7 +301,7 @@ fn float_alias_comparison_resolves_to_bool() {
 // Same-sized-numeric comparison. Stdlib byte-walking (`String.bytes`,
 // `Binary.byte_at`, hash digest comparisons) needs `UInt8 == UInt8`
 // without a detour through `Int`. The rule extends naturally to every
-// other sized numeric — same predicate, no per-type arms.
+// other sized numeric: same predicate, no per-type arms.
 // ------------------------------------------------------------------
 
 fn use_sized_pair(sized: &str, op_expr: &str) -> String {
@@ -342,8 +342,8 @@ fn cross_sized_numeric_eq_is_rejected() {
 }
 
 // ------------------------------------------------------------------
-// Same-sized-numeric arithmetic. Same predicate as comparison —
-// every sized numeric admits `+ - * / %` with its peer; cross-width
+// Same-sized-numeric arithmetic. Same predicate as comparison:
+// every sized numeric admits `+ - * / %` with its peer. Cross-width
 // arithmetic (`Int32 + Int64`) is rejected so the user must convert
 // explicitly. `Int32 + IntLiteral` widens the literal to `Int32`.
 // ------------------------------------------------------------------
@@ -351,7 +351,7 @@ fn cross_sized_numeric_eq_is_rejected() {
 #[test]
 fn same_sized_numeric_arith_resolves_to_operand_type() {
     // Int64 / Float64 take the alias path (collapse to Int / Float
-    // via `types_equivalent`); test the genuinely sized variants
+    // via `types_equivalent`). Test the genuinely sized variants
     // here. `same_sized_numeric_eq_resolves_to_bool` above covers
     // the full set on the comparison side.
     for sized in [

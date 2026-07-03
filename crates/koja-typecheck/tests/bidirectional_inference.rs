@@ -16,7 +16,7 @@
 //!   slots from expected before the "cannot infer" diagnostic fires.
 //!
 //! The kernel.koja `Option.map` / `Result.map` shapes are the real-
-//! world driver; these tests recreate them in a hermetic fixture so
+//! world driver. These tests recreate them in a hermetic fixture so
 //! a failure points squarely at the bidirectional plumbing.
 
 use koja_ast::util::dedent;
@@ -186,7 +186,7 @@ fn return_value_inherits_function_return_type() {
 
 #[test]
 fn return_inside_closure_uses_closure_return_type_not_outer_fn() {
-    // The outer `fn` returns `Maybe<Int>`; the inner closure returns
+    // The outer `fn` returns `Maybe<Int>`, the inner closure returns
     // `Maybe<String>`. The closure's `return Maybe.None` must pin the
     // unit variant against `Maybe<String>` (the closure's return),
     // not the outer fn's `Maybe<Int>`.
@@ -299,11 +299,11 @@ fn generic_return_hint_widens_int_literal_arg_to_int8() {
 fn generic_return_hint_unrelated_to_arg_type_still_errors() {
     use common::typecheck_script_fail as typecheck_fail;
 
-    // `identity(42)` returns `Int`; annotating it as `String` must
+    // `identity(42)` returns `Int`, so annotating it as `String` must
     // still surface a diagnostic. The exact message may shift between
     // call-site (`T cannot be both`) and use-site (`expected String,
-    // got Int`) depending on the speculative-pre-seed fallback path;
-    // either is acceptable as long as SOME diagnostic fires.
+    // got Int`) depending on the speculative-pre-seed fallback path.
+    // Either is acceptable as long as SOME diagnostic fires.
     let source = "
         fn identity<T>(x: T) -> T
           x
@@ -397,7 +397,7 @@ fn option_none_in_enum_struct_variant_field_infers_from_declared_type() {
 fn generic_return_hint_inside_unit_body_does_not_widen_unrelated_call() {
     // Regression for the trailing-`identity(1)` case in a Unit-typed
     // script body: the outer expected hint is `Unit`, but `T = Int`
-    // from the arg must win — the speculative pre-seed would set
+    // from the arg must win. The speculative pre-seed would set
     // `T = Unit` then conflict on the arg unify, so the fallback path
     // runs and the call types as `Int`.
     let source = "

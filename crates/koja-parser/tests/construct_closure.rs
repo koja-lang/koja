@@ -109,8 +109,8 @@ fn closure_with_inferred_params() {
     }
 }
 
-/// Destructured params were removed from the grammar; re-introduce
-/// if anonymous tuples ever land. Until then `(a, b)` in param
+/// Destructured params were removed from the grammar. Re-introduce
+/// them if anonymous tuples ever land. Until then `(a, b)` in param
 /// position diagnoses with a pointer at named params.
 #[test]
 fn closure_with_destructured_param_is_diagnosed() {
@@ -125,7 +125,7 @@ fn closure_with_destructured_param_is_diagnosed() {
     );
     let result = parse_failing(&src);
     assert_message_contains(&result, "expected closure parameter");
-    assert_hint_contains(&result, "destructuring is not supported");
+    assert_hint_contains(&result, "Destructuring is not supported");
 }
 
 #[test]

@@ -1,5 +1,5 @@
 //! Pattern-shape seal checks. Supported patterns are leaves
-//! (wildcards, literals, bindings — which must carry a stamped
+//! (wildcards, literals, bindings, which must carry a stamped
 //! `LocalId`) plus the structural shapes resolve admits
 //! (`EnumUnit` / `EnumTuple` / `EnumStruct` / `Or` / `Struct`).
 //! Every other shape is a feature-gap diagnostic in resolve and
@@ -124,7 +124,7 @@ pub(super) fn seal_pattern(pattern: &Pattern) {
 
 /// Binary-pattern segments come in three shapes after resolve:
 /// literals (int / negated int / string), the discard wildcard
-/// `_`, and identifier bindings — the last of which must carry a
+/// `_`, and identifier bindings, the last of which must carry a
 /// `Resolution::Local` on the value expression (the resolver
 /// stamps the local id in place of the parser's default
 /// `Resolution::Unresolved`). Everything else is unreachable here

@@ -1,7 +1,7 @@
 //! Global registry of every uniquely-named declaration, keyed by
 //! [`GlobalRegistryId`] and reverse-indexed by [`Identifier`]. The
-//! registry is the authoritative gate enforcing identifier uniqueness;
-//! insert sites emit the "already defined" diagnostic when an insert
+//! registry is the authoritative gate enforcing identifier uniqueness.
+//! Insert sites emit the "already defined" diagnostic when an insert
 //! returns [`InsertOutcome::Collision`].
 //!
 //! Today only top-level structs, enums, functions, and protocols
@@ -9,7 +9,7 @@
 //! as the surrounding pipeline migrates onto path-based
 //! [`Identifier`]s.
 //!
-//! Ids are assigned sequentially (monotonic `u32` counter); a future
+//! Ids are assigned sequentially (monotonic `u32` counter). A future
 //! parallel-cache story will swap in content-addressable hashing
 //! without changing the public surface.
 //!
@@ -19,11 +19,11 @@
 //! `Option<FunctionSignature>`: `None` is the "collected but not yet
 //! lifted" state, `Some(sig)` the "lifted" state reached after
 //! `lift_signatures` runs. The variant-carried design makes illegal
-//! states unrepresentable — non-function entries literally cannot
+//! states unrepresentable: non-function entries literally cannot
 //! carry a signature.
 //!
 //! Registry rendering for `koja check --emit-ast` lives in the
-//! [`format`] submodule; it's a separate concern from the data + insert
+//! [`format`] submodule. It's a separate concern from the data + insert
 //! API (different audience: diagnostic rendering vs pipeline work).
 
 use std::collections::{BTreeMap, HashMap};
@@ -60,7 +60,7 @@ pub use format::format_registry;
 /// like inherent / inline methods, and the conformance fact
 /// (`T : P`) lives on `T`'s [`StructDefinition`] /
 /// [`EnumDefinition`] `conformances` field. This keeps the
-/// receiver entry self-contained for IR — see
+/// receiver entry self-contained for IR. See
 /// [`StructDefinition::conformances`] for the full rationale.
 #[derive(Clone, Debug)]
 pub enum GlobalKind {
@@ -73,7 +73,7 @@ pub enum GlobalKind {
     /// other lifecycle-payload variants: `None` after collect,
     /// `Some(expansion)` after `lift_type_aliases` resolves the RHS.
     /// The expansion is the canonical [`ResolvedType`] the alias
-    /// stands for; for the surface-aliasing case
+    /// stands for. For the surface-aliasing case
     /// (`type Pet = Cat | Dog | Fish`) that's typically a
     /// canonical [`ResolvedType::Union`], but any `ResolvedType`
     /// shape is permissible.
@@ -97,7 +97,7 @@ impl GlobalKind {
 /// [`GlobalKind`], source span (used for "already defined here"
 /// diagnostic notes), and any generic-decl param names declared on
 /// it. `type_params` is stamped at collect time directly from the
-/// AST so [`GlobalRegistry::type_params`] is queryable mid-lift —
+/// AST so [`GlobalRegistry::type_params`] is queryable mid-lift,
 /// before [`StructDefinition`] / [`EnumDefinition`] / signature
 /// payloads are stamped.
 ///
@@ -105,13 +105,13 @@ impl GlobalKind {
 /// indexing). Each inner `Vec<GlobalRegistryId>` holds the protocol ids
 /// from a `<T: P1 & P2>` bound, in source order. Empty inner vec means
 /// the param is unbounded. Default at collect time is one empty inner
-/// vec per param; lift's bounds-resolve sub-pass replaces it with the
+/// vec per param. Lift's bounds-resolve sub-pass replaces it with the
 /// resolved protocol ids via [`GlobalRegistry::set_type_param_bounds`].
 ///
 /// `visibility` carries the `priv fn` enforcement scope as a
-/// [`VisibilityScope`] — see that enum for the three-case
+/// [`VisibilityScope`]. See that enum for the three-case
 /// rationale. Non-function entries (structs, enums, protocols,
-/// constants, type aliases) all carry `Public`; visibility isn't
+/// constants, type aliases) all carry `Public`. Visibility isn't
 /// a language concern for them.
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
@@ -126,17 +126,17 @@ pub struct RegistryEntry {
 /// Typecheck-internal projection of the AST [`koja_ast::ast::Visibility`]
 /// plus the contextual scope where a `priv fn` was declared. Encoded as
 /// a single enum so illegal states (public-with-owner, private-with-no-
-/// scope) are unrepresentable — the surface keyword and its declaration
+/// scope) are unrepresentable. The surface keyword and its declaration
 /// position together pick exactly one variant.
 ///
-/// - `Public` (default): no restriction; the call resolves wherever
+/// - `Public` (default): no restriction. The call resolves wherever
 ///   the name is reachable.
 /// - `PackagePrivate`: top-level `priv fn`. Callable from any file
-///   in the same package; the package name lives on the entry's
+///   in the same package. The package name lives on the entry's
 ///   [`Identifier`] so it doesn't need to be repeated here.
 /// - `TypePrivate(type_id)`: `priv fn` declared inside a `struct` /
 ///   `enum` / `impl` body. Callable only from other methods on the
-///   same target type — including across inherent and protocol-impl
+///   same target type, including across inherent and protocol-impl
 ///   blocks, since they all register at `[type, method]` and share
 ///   one owner id.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,8 +170,8 @@ impl GlobalRegistry {
     /// Seed a fresh registry with stdlib primitive stubs: scalar /
     /// FFI-width primitives plus `String` / `Binary` / `Bits`. All
     /// under the `Global` package so resolve never special-cases
-    /// them. `CPtr<T>` and `Option<T>` are *not* stubbed here —
-    /// they're defined in autoimported `Global.cptr` / `Global.kernel`
+    /// them. `CPtr<T>` and `Option<T>` are *not* stubbed here.
+    /// They're defined in autoimported `Global.cptr` / `Global.kernel`
     /// sources and land through `collect` like any other user decl.
     ///
     /// Each primitive lands as `Struct(Some(empty_def))`: zero
@@ -228,8 +228,8 @@ impl GlobalRegistry {
     /// Register a function in the `Function(None)` state. The
     /// signature is stamped in later by [`Self::set_signature`].
     /// `type_params` carries the function's own declared generic
-    /// params (not the enclosing struct/impl's; chained scopes are
-    /// rebuilt at resolve time).
+    /// params (not the enclosing struct/impl's). Chained scopes are
+    /// rebuilt at resolve time.
     ///
     /// `visibility` captures the `priv fn` enforcement scope as a
     /// [`VisibilityScope`]: `Public` for default `fn`, or the
@@ -290,8 +290,8 @@ impl GlobalRegistry {
     /// Register a `type X = ...` alias in the `TypeAlias(None)`
     /// state. The expansion is stamped in later by
     /// [`Self::set_type_alias_definition`]. Aliases don't take
-    /// generic params today, so callers always pass an empty vec —
-    /// generic aliases are tracked as a future language extension
+    /// generic params today, so callers always pass an empty vec.
+    /// Generic aliases are tracked as a future language extension
     /// in the v1-parity plan.
     pub fn insert_type_alias(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
         self.insert(
@@ -307,7 +307,7 @@ impl GlobalRegistry {
     /// unless the entry's kind is exactly `Enum(None)`.
     pub fn set_enum_definition(&mut self, id: GlobalRegistryId, definition: EnumDefinition) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_enum_definition on missing registry id {id} — collect invariant violation")
+            panic!("set_enum_definition on missing registry id {id}: collect invariant violation")
         });
         match &entry.kind {
             GlobalKind::Enum(None) => {
@@ -315,14 +315,14 @@ impl GlobalRegistry {
             }
             GlobalKind::Enum(Some(_)) => {
                 panic!(
-                    "set_enum_definition called twice on `{}` — lift_signatures must stamp \
+                    "set_enum_definition called twice on `{}`: lift_signatures must stamp \
                      each enum exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_enum_definition called on non-enum entry `{}` ({}) — \
+                    "set_enum_definition called on non-enum entry `{}` ({}): \
                      only Enum entries carry definitions",
                     entry.identifier,
                     other.label(),
@@ -334,7 +334,7 @@ impl GlobalRegistry {
     /// Record `target_id` as conforming to `protocol_id` with the
     /// user-written `protocol_args` (e.g. `[String]` for
     /// `impl Eq<String> for User`). Returns the previously-recorded
-    /// args if `target` already conformed to `protocol` — the
+    /// args if `target` already conformed to `protocol`. The
     /// caller emits a "duplicate `impl P for T`" diagnostic.
     /// Panics unless `target_id` names a struct or enum with a
     /// stamped definition (lift orders enum/struct definition
@@ -347,7 +347,7 @@ impl GlobalRegistry {
     ) -> Option<Vec<ResolvedType>> {
         let entry = self.entries.get_mut(&target_id).unwrap_or_else(|| {
             panic!(
-                "record_conformance on missing registry id {target_id} — \
+                "record_conformance on missing registry id {target_id}: \
                  lift invariant violation",
             )
         });
@@ -355,7 +355,7 @@ impl GlobalRegistry {
             GlobalKind::Struct(Some(def)) => &mut def.conformances,
             GlobalKind::Enum(Some(def)) => &mut def.conformances,
             other => panic!(
-                "record_conformance on `{}` ({}) — only stamped struct/enum entries \
+                "record_conformance on `{}` ({}): only stamped struct/enum entries \
                  accept conformances",
                 entry.identifier,
                 other.label(),
@@ -371,9 +371,9 @@ impl GlobalRegistry {
     /// Whether `target_id` conforms to `protocol_id`. Returns the
     /// user-written protocol args (e.g. `[String]` for
     /// `Eq<String>`) when present, else `None`. O(1) HashMap
-    /// lookup on the target's conformance index — IR's bounded
+    /// lookup on the target's conformance index. IR's bounded
     /// dispatch never reaches this path (it goes straight to
-    /// `[target, method_name]`); typecheck uses it for
+    /// `[target, method_name]`). Typecheck uses it for
     /// bound enforcement.
     pub fn lookup_conformance(
         &self,
@@ -398,7 +398,7 @@ impl GlobalRegistry {
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_protocol_definition on missing registry id {id} — collect invariant violation"
+                "set_protocol_definition on missing registry id {id}: collect invariant violation"
             )
         });
         match &entry.kind {
@@ -407,14 +407,14 @@ impl GlobalRegistry {
             }
             GlobalKind::Protocol(Some(_)) => {
                 panic!(
-                    "set_protocol_definition called twice on `{}` — lift_signatures must stamp \
+                    "set_protocol_definition called twice on `{}`: lift_signatures must stamp \
                      each protocol exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_protocol_definition called on non-protocol entry `{}` ({}) — \
+                    "set_protocol_definition called on non-protocol entry `{}` ({}): \
                      only Protocol entries carry definitions",
                     entry.identifier,
                     other.label(),
@@ -427,9 +427,7 @@ impl GlobalRegistry {
     /// unless the entry's kind is exactly `Struct(None)`.
     pub fn set_struct_definition(&mut self, id: GlobalRegistryId, definition: StructDefinition) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!(
-                "set_struct_definition on missing registry id {id} — collect invariant violation"
-            )
+            panic!("set_struct_definition on missing registry id {id}: collect invariant violation")
         });
         match &entry.kind {
             GlobalKind::Struct(None) => {
@@ -437,14 +435,14 @@ impl GlobalRegistry {
             }
             GlobalKind::Struct(Some(_)) => {
                 panic!(
-                    "set_struct_definition called twice on `{}` — lift_signatures must stamp \
+                    "set_struct_definition called twice on `{}`: lift_signatures must stamp \
                      each struct exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_struct_definition called on non-struct entry `{}` ({}) — \
+                    "set_struct_definition called on non-struct entry `{}` ({}): \
                      only Struct entries carry definitions",
                     entry.identifier,
                     other.label(),
@@ -495,7 +493,7 @@ impl GlobalRegistry {
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_constant_definition on missing registry id {id} — collect invariant violation"
+                "set_constant_definition on missing registry id {id}: collect invariant violation"
             )
         });
         match &entry.kind {
@@ -504,14 +502,14 @@ impl GlobalRegistry {
             }
             GlobalKind::Constant(Some(_)) => {
                 panic!(
-                    "set_constant_definition called twice on `{}` — lift_signatures must stamp \
+                    "set_constant_definition called twice on `{}`: lift_signatures must stamp \
                      each constant exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_constant_definition called on non-constant entry `{}` ({}) — \
+                    "set_constant_definition called on non-constant entry `{}` ({}): \
                      only Constant entries carry definitions",
                     entry.identifier,
                     other.label(),
@@ -525,7 +523,7 @@ impl GlobalRegistry {
     pub fn set_type_alias_definition(&mut self, id: GlobalRegistryId, expansion: ResolvedType) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_type_alias_definition on missing registry id {id} — \
+                "set_type_alias_definition on missing registry id {id}: \
                  collect invariant violation"
             )
         });
@@ -535,14 +533,14 @@ impl GlobalRegistry {
             }
             GlobalKind::TypeAlias(Some(_)) => {
                 panic!(
-                    "set_type_alias_definition called twice on `{}` — \
+                    "set_type_alias_definition called twice on `{}`: \
                      lift_type_aliases must stamp each alias exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_type_alias_definition called on non-alias entry `{}` ({}) — \
+                    "set_type_alias_definition called on non-alias entry `{}` ({}): \
                      only TypeAlias entries carry expansions",
                     entry.identifier,
                     other.label(),
@@ -567,7 +565,7 @@ impl GlobalRegistry {
     /// stamp state. Used by `lift_type_aliases`'s cycle sweep to
     /// rewrite cycling aliases to `ResolvedType::unresolved` so
     /// downstream peels short-circuit cleanly. Panics if `id` is
-    /// not a `TypeAlias` entry — only the cycle pass should call
+    /// not a `TypeAlias` entry. Only the cycle pass should call
     /// this.
     pub fn set_type_alias_definition_force(
         &mut self,
@@ -576,7 +574,7 @@ impl GlobalRegistry {
     ) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
             panic!(
-                "set_type_alias_definition_force on missing registry id {id} — \
+                "set_type_alias_definition_force on missing registry id {id}: \
                  lift invariant violation"
             )
         });
@@ -585,7 +583,7 @@ impl GlobalRegistry {
                 entry.kind = GlobalKind::TypeAlias(Some(expansion));
             }
             other => panic!(
-                "set_type_alias_definition_force called on non-alias entry `{}` ({}) — \
+                "set_type_alias_definition_force called on non-alias entry `{}` ({}): \
                  only TypeAlias entries support force-stamp",
                 entry.identifier,
                 other.label(),
@@ -597,7 +595,7 @@ impl GlobalRegistry {
     /// the entry's kind is exactly `Function(None)`.
     pub fn set_signature(&mut self, id: GlobalRegistryId, signature: FunctionSignature) {
         let entry = self.entries.get_mut(&id).unwrap_or_else(|| {
-            panic!("set_signature on missing registry id {id} — collect invariant violation")
+            panic!("set_signature on missing registry id {id}: collect invariant violation")
         });
         match &entry.kind {
             GlobalKind::Function(None) => {
@@ -605,14 +603,14 @@ impl GlobalRegistry {
             }
             GlobalKind::Function(Some(_)) => {
                 panic!(
-                    "set_signature called twice on `{}` — lift_signatures must stamp each \
+                    "set_signature called twice on `{}`: lift_signatures must stamp each \
                      function exactly once",
                     entry.identifier,
                 );
             }
             other => {
                 panic!(
-                    "set_signature called on non-function entry `{}` ({}) — \
+                    "set_signature called on non-function entry `{}` ({}): \
                      only Function entries carry signatures",
                     entry.identifier,
                     other.label(),
@@ -635,8 +633,8 @@ impl GlobalRegistry {
     }
 
     /// Build a leaf [`ResolvedType`] pointing at the preloaded
-    /// `Global.<name>` stdlib stub. Panics if the stub is missing —
-    /// preload is a [`Self::with_stdlib_stubs`] invariant.
+    /// `Global.<name>` stdlib stub. Panics if the stub is missing.
+    /// Preload is a [`Self::with_stdlib_stubs`] invariant.
     ///
     /// Cross-pipeline helper: `lift_signatures` calls it when
     /// synthesizing parameter / return types from `TypeExpr::Unit`
@@ -649,14 +647,14 @@ impl GlobalRegistry {
         let ident = Identifier::new("Global", vec![name.to_string()]);
         let (id, _) = self.lookup(&ident).unwrap_or_else(|| {
             panic!(
-                "stdlib stub `Global.{name}` missing from registry — \
+                "stdlib stub `Global.{name}` missing from registry: \
                  pipeline must seed it via `GlobalRegistry::with_stdlib_stubs`",
             )
         });
         ResolvedType::leaf(Resolution::Global(id))
     }
 
-    /// Build the [`ResolvedType`] for a primitive literal — the
+    /// Build the [`ResolvedType`] for a primitive literal: the
     /// `Literal` variants map one-to-one onto preloaded stdlib
     /// stubs (`Bool`, `Float`, `Int`, `String`, `Unit`). Convenience
     /// wrapper over [`Self::primitive`] used by the resolve pass
@@ -676,7 +674,7 @@ impl GlobalRegistry {
 
     /// Render the name of a type parameter by its anchored
     /// `(owner, index)`. `None` when `owner` is unknown or `index`
-    /// is out of range (compiler bug — index should have come from
+    /// is out of range (compiler bug: index should have come from
     /// a [`Resolution::TypeParam`] anchored to the same owner).
     pub fn type_param_name(&self, owner: GlobalRegistryId, index: TypeParamIndex) -> Option<&str> {
         self.get(owner)?
@@ -686,7 +684,7 @@ impl GlobalRegistry {
     }
 
     /// Slice of generic-decl param names declared on `owner`. `None`
-    /// when `owner` is unknown; a known owner with no generics
+    /// when `owner` is unknown. A known owner with no generics
     /// returns `Some(&[])`. Used by
     /// [`crate::pipeline::lift_signatures::types::TypeParamScope::lookup`]
     /// to walk a chained scope and turn a name into
@@ -697,8 +695,8 @@ impl GlobalRegistry {
 
     /// Slice of resolved bounds on `owner`'s generic-decl params,
     /// parallel to [`Self::type_params`] (same length, same indexing).
-    /// Inner vec is the `&`-composed protocol-id list for that param;
-    /// empty means unbounded. `None` when `owner` is unknown.
+    /// Inner vec is the `&`-composed protocol-id list for that param.
+    /// Empty means unbounded. `None` when `owner` is unknown.
     pub fn type_param_bounds(&self, owner: GlobalRegistryId) -> Option<&[Vec<GlobalRegistryId>]> {
         self.get(owner)
             .map(|entry| entry.type_param_bounds.as_slice())
@@ -729,7 +727,7 @@ impl GlobalRegistry {
     }
 
     /// Iterate every entry. `HashMap` iteration is not stable across
-    /// runs; callers needing a deterministic order sort by id (matches
+    /// runs. Callers needing a deterministic order sort by id (matches
     /// declaration order) or by `entry.identifier.qualified_name()`.
     pub fn iter(&self) -> impl Iterator<Item = (GlobalRegistryId, &RegistryEntry)> {
         self.entries.iter().map(|(id, entry)| (*id, entry))
@@ -757,7 +755,7 @@ impl GlobalRegistry {
 
     /// Resolve [`UNIVERSAL_PROTOCOLS`] to their `GlobalRegistryId`s.
     /// A name that isn't registered yet (e.g. before `Global.debug`
-    /// has been collected) is silently skipped — callers should only
+    /// has been collected) is silently skipped. Callers should only
     /// observe a non-empty list once the stdlib has loaded. Order
     /// follows the source-order of [`UNIVERSAL_PROTOCOLS`].
     pub fn universal_protocol_ids(&self) -> Vec<GlobalRegistryId> {
@@ -771,13 +769,13 @@ impl GlobalRegistry {
     }
 }
 
-/// Protocols that every type implicitly satisfies — the synthesizer
+/// Protocols that every type implicitly satisfies: the synthesizer
 /// or hand-written stdlib impls guarantee an impl for every concrete
 /// monomorphization, so a bare type-parameter `T.format()` /
 /// `T.eq(other)` resolves as if `T: Debug` / `T: Equality` were
 /// declared. `Hash` joins this list once it's auto-derived too.
 /// (`Clone` was removed when value semantics made explicit
-/// duplication unnecessary — every value is already independent.)
+/// duplication unnecessary: every value is already independent.)
 pub const UNIVERSAL_PROTOCOLS: &[&str] = &["Debug", "Equality"];
 
 /// Seed a primitive struct stub under `Global.<name>` with an empty
@@ -794,7 +792,7 @@ fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<St
     let id = match outcome {
         InsertOutcome::Fresh(id) => id,
         InsertOutcome::Collision { existing } => panic!(
-            "stdlib stub `Global.{name}` collided on preload with `{}` — \
+            "stdlib stub `Global.{name}` collided on preload with `{}`: \
              registry was not empty",
             existing.identifier,
         ),

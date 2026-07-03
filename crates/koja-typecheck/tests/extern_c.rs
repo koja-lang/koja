@@ -3,7 +3,7 @@
 //! `@intrinsic` mutex, no `self` receiver, and parameter / return
 //! types restricted to the explicit-width numeric primitives,
 //! `Bool`, `Unit`, or `CPtr<T>`. `@link` annotations are pure
-//! linker metadata and pass through silently — the IR layer
+//! linker metadata and pass through silently. The IR layer
 //! consumes them via `AnnotationKind::Link`.
 
 use koja_ast::identifier::Identifier;

@@ -7,7 +7,7 @@
 //!   character boundaries), is always EOF-terminated, and is deterministic.
 //!
 //! The fixture walker is duplicated across the layer-1 proptest files
-//! (lex/parse/fmt) intentionally — once we add a fourth site this should
+//! (lex/parse/fmt) intentionally. Once we add a fourth site this should
 //! move to a shared `koja-test-support` dev-only crate.
 
 use std::fs;
@@ -165,7 +165,7 @@ proptest! {
 /// is latent rather than active. Remove `#[ignore]` once the cursor tracks
 /// byte offset alongside its char index.
 #[test]
-#[ignore = "lexer offset is char-indexed; see comment"]
+#[ignore = "lexer offset is char-indexed, see comment"]
 fn lexer_offset_should_be_byte_indexed() {
     let source = "\u{00A1}";
     let result = lex(source);

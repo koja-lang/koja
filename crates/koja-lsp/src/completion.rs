@@ -89,7 +89,7 @@ impl Backend {
 
 /// Add completion items for a type's methods (and, for instance
 /// dispatch, its fields). `type_id` identifies the receiver's type in
-/// the type registry; `is_static` switches between static (`Type.x`)
+/// the type registry. `is_static` switches between static (`Type.x`)
 /// and instance (`value.x`) dispatch.
 fn add_dot_completions(
     type_id: GlobalRegistryId,
@@ -242,7 +242,7 @@ fn type_params_detail(params: &[String]) -> Option<String> {
     }
 }
 
-/// Today's [`FunctionSignature`] doesn't carry visibility; we
+/// Today's [`FunctionSignature`] doesn't carry visibility, so we
 /// always treat it as public. Kept as a tiny helper so adding it later
 /// is a one-line change.
 fn visibility_for(_sig: &koja_typecheck::FunctionSignature) -> Visibility {

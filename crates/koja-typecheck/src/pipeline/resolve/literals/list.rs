@@ -1,5 +1,5 @@
 //! `[a, b, c]` resolution. The literal's *value type* is always
-//! `List<T>` — the surrounding context picks which
+//! `List<T>`. The surrounding context picks which
 //! `ListLiteral<T>` conformer the value flows into:
 //!
 //! - No hint, or hint is `List<T>`: the literal stays
@@ -10,13 +10,13 @@
 //! - Hint is some `X<T>` that has an `impl ListLiteral<T> for X<T>`
 //!   in the registry: the outer expression is rewritten in-place
 //!   into a synthesized `X.from_list([a, b, c])` method call. The
-//!   inner literal keeps `ExprKind::List` and stamps `List<T>`;
+//!   inner literal keeps `ExprKind::List` and stamps `List<T>`,
 //!   the outer rewritten node stamps `X<T>` and dispatches through
 //!   the normal method-call resolver.
 //!
-//! This keeps IR lower a pure translator — it only ever sees a
+//! This keeps IR lower a pure translator: it only ever sees a
 //! `ExprKind::List` whose resolution is `List<T>`. The carrier
-//! mechanics live in [`super::carrier`]; this file only owns
+//! mechanics live in [`super::carrier`]. This file only owns
 //! list-literal-specific work (axis-take, element-type inference).
 
 use koja_ast::ast::{Diagnostic, Expr, ExprKind};
@@ -53,7 +53,7 @@ pub(in super::super) fn resolve_list_literal(
     // Short-circuit when the literal has already been resolved. The
     // `from_list` synthesis stamps `inner.resolution = List<T>` on
     // the inner literal before handing the synthesized `MethodCall`
-    // to the method-call resolver; arg resolution then re-enters
+    // to the method-call resolver. Arg resolution then re-enters
     // this function with `expected = List<T>` from the `from_list`
     // signature, and the unbound `T` would drop the element-type
     // hint and re-diagnose an empty `[]` literal as having no
@@ -84,7 +84,7 @@ pub(in super::super) fn resolve_list_literal(
         diagnostics,
     ) else {
         // Restore so the AST shape stays consistent for the
-        // diagnostic-report path; `expr.resolution` ends up
+        // diagnostic-report path. `expr.resolution` ends up
         // `Unresolved`, which seal never sees because diagnostics
         // are non-empty.
         expr.kind = ExprKind::List { elements };
@@ -123,7 +123,7 @@ fn first_axis_hint(expected: Option<&ResolvedType>) -> Option<ResolvedType> {
 
 /// Pull the elements vec out of `expr.kind` so the caller can
 /// rebuild the kind into a different shape (or restore it). Panics
-/// if `expr.kind` isn't `List` — every call site has matched on
+/// if `expr.kind` isn't `List`, but every call site has matched on
 /// `ExprKind::List` already.
 fn take_elements(kind: &mut ExprKind) -> Vec<Expr> {
     let stub = ExprKind::List {

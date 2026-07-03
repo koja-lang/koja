@@ -9,7 +9,7 @@
 //! - Source fixtures should be spelled with `koja_ast::util::dedent`
 //!   so they line up with surrounding test code.
 //! - Happy-path tests call [`parse_clean`] / [`parse_clean_script`]
-//!   which panic on any diagnostic — the assertion stays at the
+//!   which panic on any diagnostic. The assertion stays at the
 //!   call site and the AST returns ready to inspect.
 //! - Negative tests collect [`error_messages`] and use
 //!   `.iter().any(|m| m.contains(...))` rather than exact equality

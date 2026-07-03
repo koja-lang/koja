@@ -1,6 +1,6 @@
 //! Coverage for map-literal resolution. `["k": v, ...]` keeps its
 //! `ExprKind::Map` shape on the sealed AST with `expr.resolution =
-//! Map<K, V>` for the inferred entry types; the desugar to
+//! Map<K, V>` for the inferred entry types. The desugar to
 //! `Map.new().put(k1, v1).put(k2, v2)` happens at IR-lower time.
 //! These tests confirm the literal's shape, the per-entry
 //! resolutions, and the bidirectional `Map<K, V>` hint flow.

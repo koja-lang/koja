@@ -127,7 +127,7 @@ fn project_mode_file_keeps_body_none() {
 
 #[test]
 fn script_seal_accepts_body_populated_file() {
-    // `check_program` runs `seal_ast` on the success branch; reaching
+    // `check_program` runs `seal_ast` on the success branch. Reaching
     // `Ok(_)` here means the post-flip seal accepted a populated
     // `File.body`. A regression to the pre-flip behaviour would
     // surface as a panic during `check_program`.

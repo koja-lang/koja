@@ -1,8 +1,8 @@
 //! Numeric-literal coercion at the six type-equality sites plus
 //! const initializers. A literal flowing into a sized target
-//! coerces when its compile-time value fits the target's range;
-//! out-of-range / sign-mismatch cases produce precise narrow-int
-//! diagnostics; non-literal sources still type-check strictly.
+//! coerces when its compile-time value fits the target's range.
+//! Out-of-range / sign-mismatch cases produce precise narrow-int
+//! diagnostics. Non-literal sources still type-check strictly.
 
 use koja_ast::util::dedent;
 
@@ -254,7 +254,7 @@ fn alias_float_accepts_arbitrary_value() {
 
 // ------------------------------------------------------------------
 // Float round-trip representability: `Float32` accepts a literal iff
-// `f64 → f32 → f64` round-trips equal. `0.5` does; `0.1` does not
+// `f64 → f32 → f64` round-trips equal. `0.5` does, `0.1` does not
 // (the closest f32 differs from the parsed f64).
 // ------------------------------------------------------------------
 
@@ -292,7 +292,7 @@ fn float32_rejects_non_representable_literal() {
 // ------------------------------------------------------------------
 // Sign mismatch: a `String` flowing into `Int8` still produces the
 // pre-existing type-mismatch diagnostic, not the narrow-int range
-// one — coercion only kicks in for numeric literal sources.
+// one. Coercion only kicks in for numeric literal sources.
 // ------------------------------------------------------------------
 
 #[test]
@@ -317,7 +317,7 @@ fn non_numeric_source_keeps_strict_type_mismatch() {
 // ------------------------------------------------------------------
 // Pattern-literal site (`patterns/literals.rs::check_literal_matches_subject`).
 // A literal pattern matched against a sized-numeric subject coerces
-// when its value fits the subject's range; out-of-range literals
+// when its value fits the subject's range. Out-of-range literals
 // produce a precise narrow-int diagnostic instead of the generic
 // "type does not match subject type" one.
 // ------------------------------------------------------------------
@@ -449,7 +449,7 @@ fn binary_gt_float32_with_float_literal_fits() {
 // ------------------------------------------------------------------
 // Comparison-site alias-mix: a sized-numeric operand against a value
 // of the aliased default type should typecheck without coercion. This
-// is the `Substitution::set` cascade case under the hood — `T` binds
+// is the `Substitution::set` cascade case under the hood: `T` binds
 // to `Int64` from the payload and the expected-type fill picks `Int`,
 // which `types_equivalent` accepts as the same type.
 // ------------------------------------------------------------------
@@ -472,8 +472,8 @@ fn binary_gte_int64_with_int_literal_aliases() {
 
 #[test]
 fn result_ok_payload_int64_unifies_with_expected_int() {
-    // Function declares `Result<Int, String>`; payload binding T sees
-    // `Int64`; the bidirectional fill must find `E = String` even
+    // Function declares `Result<Int, String>`, payload binding T sees
+    // `Int64`. The bidirectional fill must find `E = String` even
     // though `T` was bound to `Int64` and the template says `Int`.
     let source = "
         @extern \"C\"

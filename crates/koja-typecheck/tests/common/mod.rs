@@ -9,19 +9,19 @@
 //! `parse_program → check_program` against a single in-memory source
 //! file, so we expose:
 //!
-//! - [`PACKAGE`] — the package name every test source registers under.
-//! - [`typecheck_file`] / [`typecheck_file_fail`] — happy and failure
-//!   shorthands for `ParseMode::File` (the most common shape — a
+//! - [`PACKAGE`]: the package name every test source registers under.
+//! - [`typecheck_file`] / [`typecheck_file_fail`]: happy and failure
+//!   shorthands for `ParseMode::File` (the most common shape, a
 //!   source containing `fn main` and friends).
-//! - [`typecheck_script`] / [`typecheck_script_fail`] — same shape
+//! - [`typecheck_script`] / [`typecheck_script_fail`]: same shape
 //!   for `ParseMode::Script` (top-level statements).
-//! - [`typecheck`] / [`typecheck_fail`] / [`parse_and_check`] — the
-//!   raw `(source, mode)` versions that the shorthands route through;
+//! - [`typecheck`] / [`typecheck_fail`] / [`parse_and_check`]: the
+//!   raw `(source, mode)` versions that the shorthands route through,
 //!   exposed so tests covering both modes don't need a per-mode shim.
-//! - [`diagnostic_messages`] — flatten a [`CheckFailure`] to its raw
+//! - [`diagnostic_messages`]: flatten a [`CheckFailure`] to its raw
 //!   message strings for the `.contains(...)` assertions every
 //!   negative test ends in.
-//! - [`warning_messages`] — flatten a [`CheckedProgram`]'s success-
+//! - [`warning_messages`]: flatten a [`CheckedProgram`]'s success-
 //!   path diagnostics to message strings so tests asserting on
 //!   warning-severity output (Phase 5 reachability) can compare
 //!   against the raw text.

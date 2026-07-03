@@ -6,7 +6,7 @@
 //! emits not-found / ambiguity), validates args against the
 //! protocol method's signature with `Self → t`, and returns the
 //! substituted return type. The receiver's `Resolution::TypeParam`
-//! stays put; IR-side substitution rewrites it into a concrete
+//! stays put. IR-side substitution rewrites it into a concrete
 //! type post-mono and the regular `[concrete_target, method_name]`
 //! lookup picks up the impl method.
 
@@ -90,8 +90,8 @@ pub(super) fn resolve_bounded_method_call(
             .collect();
         diagnostics.push(Diagnostic::error(
             format!(
-                "ambiguous method `{method}` on type parameter `{param_name}` \
-                 — provided by both `{}` and `{}` in bounds",
+                "ambiguous method `{method}` on type parameter `{param_name}`: \
+                 provided by both `{}` and `{}` in bounds",
                 labels[0], labels[1],
             ),
             call_span,
@@ -103,7 +103,7 @@ pub(super) fn resolve_bounded_method_call(
         diagnostics.push(Diagnostic::error(
             format!(
                 "cannot call static method `{method}` of bound protocol on a value of \
-                 type parameter `{param_name}` — use the protocol name to dispatch",
+                 type parameter `{param_name}`. Use the protocol name to dispatch",
             ),
             call_span,
         ));
@@ -133,7 +133,7 @@ pub(super) fn resolve_bounded_method_call(
 }
 
 /// Build the `ResolvedType` for the bare type-parameter `T` at
-/// `(owner, index)` — the receiver type a bounded-method call
+/// `(owner, index)`, the receiver type a bounded-method call
 /// dispatches on. Used to fill the protocol's implicit `Self` slot.
 fn type_param_ref(owner: GlobalRegistryId, index: TypeParamIndex) -> ResolvedType {
     ResolvedType::Named {

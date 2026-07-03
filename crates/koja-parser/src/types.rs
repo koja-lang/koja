@@ -1,7 +1,7 @@
 //! Type-expression parser. Handles the eight surface shapes:
 //!
 //! - `Int`, `String` (`Named` with a single segment)
-//! - `Pkg.Type` (`Named` with a dotted path; packages are PascalCase)
+//! - `Pkg.Type` (`Named` with a dotted path, packages are PascalCase)
 //! - `List<Int>`, `Pkg.Container<T>` (`Generic`)
 //! - `()` (`Unit`)
 //! - `fn (A, B) -> C` (`Function`)
@@ -9,7 +9,7 @@
 //! - `A | B | C` (`Union`)
 //!
 //! Lowercase primitive aliases (`bool`, `i32`, …) used to be
-//! accepted as a backwards-compatible bridge; they were removed
+//! accepted as a backwards-compatible bridge. They were removed
 //! once the canonical PascalCase forms (`Bool`, `Int32`) landed in
 //! stdlib and project sources alike.
 
@@ -51,7 +51,7 @@ impl Parser {
             _ => {
                 let span = self.current_span();
                 self.error(
-                    format!("expected type expression, found {:?}", self.peek()),
+                    format!("expected type expression, found {}", self.peek()),
                     span,
                 );
                 self.advance();
@@ -102,9 +102,6 @@ impl Parser {
     /// leading `Ident.` for legacy / mistaken inputs so the
     /// resolver can produce a "package names are PascalCase"
     /// diagnostic later instead of bailing here.
-    ///
-    /// Wraps the resulting path in `Generic` if a `<...>` argument
-    /// list follows; otherwise returns `Named`.
     fn parse_dotted_type_path(&mut self) -> TypeExpr {
         let start = self.current_span();
         let mut path = Vec::new();

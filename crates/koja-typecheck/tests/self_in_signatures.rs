@@ -1,7 +1,7 @@
 //! Phase 2 typecheck coverage for `Self` in protocol method
 //! signatures and impl-block contexts.
 //!
-//! `Self` is a synthetic slot-0 type-param on every protocol — the
+//! `Self` is a synthetic slot-0 type-param on every protocol: the
 //! protocol's lifted method signatures resolve `Self` to
 //! `Resolution::TypeParam { owner: protocol_id, index: 0 }`. Inside
 //! struct/enum/impl contexts the same `Self` keyword resolves to
@@ -30,7 +30,7 @@ fn lookup_id(
 
 #[test]
 fn self_in_protocol_return_resolves_to_protocol_slot_zero_typeparam() {
-    // `protocol Builder { fn make() -> Self end }` — the lifted
+    // `protocol Builder { fn make() -> Self end }`: the lifted
     // method's `return_type` carries `TypeParam { owner: Builder,
     // index: 0 }`. Slot 0 is reserved for the synthetic `Self`.
     let source = "
@@ -148,7 +148,7 @@ fn self_in_inherent_method_return_resolves_to_enclosing_struct() {
 fn self_in_trait_impl_method_resolves_to_concrete_target() {
     // For `impl Equal for User { fn equals(self, other: Self) ... end }`,
     // the impl-method's `other: Self` lifts as `User` (not the
-    // protocol's TypeParam) — `SelfContext::Receiver` carries the
+    // protocol's TypeParam). `SelfContext::Receiver` carries the
     // concrete target as `self_override` so the impl-side method's
     // `Self` resolves to its concrete type domain.
     let source = "
@@ -228,7 +228,7 @@ fn self_in_protocol_method_substitutes_through_call_site_to_concrete() {
 #[test]
 fn self_in_generic_struct_method_carries_struct_type_args() {
     // For `struct Bag<T> { fn snapshot(self) -> Self end }`, `Self`
-    // is `Bag<TypeParam(Bag, 0)>` — same shape as the receiver's
+    // is `Bag<TypeParam(Bag, 0)>`, the same shape as the receiver's
     // self type. Mono substitutes the type-arg through to a
     // concrete `Bag<Int>` etc.
     let source = "

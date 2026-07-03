@@ -6,7 +6,7 @@
 //! `BinaryLiteral<T>`) shares the same carrier-rewrite shape:
 //!
 //! - The literal has a *default* canonical type (e.g. `List<T>`).
-//!   That's what the literal "really is" — the value flowing out of
+//!   That's what the literal "really is": the value flowing out of
 //!   the literal node is always an instance of the default carrier.
 //! - When the surrounding context expects some *other* conformer
 //!   `X` of the literal's protocol, the AST is rewritten in-place
@@ -16,17 +16,17 @@
 //!   resolver so generic inference + arity checks all flow the
 //!   same way.
 //!
-//! [`CarrierSpec`] captures the protocol's identifying strings;
+//! [`CarrierSpec`] captures the protocol's identifying strings.
 //! [`pick_carrier`] decides which branch fires based on the
-//! expected-type hint; [`dispatch_via_carrier`] performs the
+//! expected-type hint. [`dispatch_via_carrier`] performs the
 //! AST-rewrite-or-restore step. Per-shape resolvers
 //! ([`super::list`], [`super::map`]) plug their literal-specific
 //! axis-inference into this spine.
 //!
 //! Protocol id resolution is registry-backed: a missing
 //! `Global.<protocol_name>` autoimport silently falls through to
-//! the default carrier. That's the only graceful-degradation point
-//! — a missing default-carrier autoimport is a hard diagnostic.
+//! the default carrier. That's the only graceful-degradation point:
+//! a missing default-carrier autoimport is a hard diagnostic.
 
 use koja_ast::ast::{Arg, Diagnostic, Expr, ExprKind};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
@@ -137,7 +137,7 @@ pub(super) struct Dispatch<'a> {
 /// `inner_kind` / `inner_resolution` describe the canonical inner
 /// literal (e.g. `ExprKind::List { ... }` with resolution
 /// `List<T>`). The caller has already inferred the axis types and
-/// built both halves; this function just decides where they land.
+/// built both halves. This function just decides where they land.
 pub(super) fn dispatch_via_carrier(
     expr: &mut Expr,
     inner_kind: ExprKind,

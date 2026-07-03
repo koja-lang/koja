@@ -159,10 +159,10 @@ fn push_package_files(
             }
             // Mirror [`koja_driver::pipeline::push_package_sources`]: files
             // whose stem starts with `alpha_` are pipeline-only sources
-            // delivered exclusively through the curated autoimport set
-            // (their declarations would land out-of-order if pulled
-            // from disk — e.g. `debug_containers` references
-            // `Pair`/`Option`/`Result` and must come after `kernel`).
+            // delivered exclusively through the curated autoimport set.
+            // Their declarations would land out-of-order if pulled from
+            // disk, e.g. `debug_containers` references
+            // `Pair`/`Option`/`Result` and must come after `kernel`.
             if is_alpha_only_path(&file_path) {
                 continue;
             }
@@ -202,7 +202,7 @@ impl Backend {
     /// LSP diagnostics for the active document.
     ///
     /// The bundle (stdlib + siblings + active buffer) is parsed and
-    /// checked from scratch on every call; we accept that cost for
+    /// checked from scratch on every call. We accept that cost for
     /// simplicity and revisit only if real-world latency complains.
     pub(crate) async fn diagnose(&self, uri: Uri, text: &str, version: Option<i32>) {
         let active_path = uri_to_path(uri.as_str())
@@ -323,8 +323,8 @@ impl Backend {
     }
 }
 
-/// Clone stdlib sources, dropping any entries owned by `active_package`
-/// — those modules come from the user's on-disk project (or the active
+/// Clone stdlib sources, dropping any entries owned by `active_package`.
+/// Those modules come from the user's on-disk project (or the active
 /// buffer) and a second definition would collide at registry seal time.
 fn filter_stdlib(src: &[SourceFile], active_package: &str) -> Vec<SourceFile> {
     src.iter()
@@ -380,15 +380,14 @@ fn collect_parse_diagnostics(parsed: &ParsedProgram, active_path: &Path) -> Vec<
 /// Forward all check-phase diagnostics to the active URI. Today's
 /// `KojaDiagnostic` carries only a [`Span`] (no file path), so the
 /// LSP can't yet split a multi-file bundle's diagnostics across
-/// per-URI streams; users see every check-phase error attributed to
-/// whichever file last triggered `diagnose`. Acceptable for v1
-/// alongside the big-bang flip; revisit when diagnostics learn to
-/// carry their owning path.
+/// per-URI streams. Users see every check-phase error attributed to
+/// whichever file last triggered `diagnose`. Revisit when diagnostics
+/// learn to carry their owning path.
 fn filter_diags(diags: &[KojaDiagnostic], _active_path: &Path) -> Vec<KojaDiagnostic> {
     diags.to_vec()
 }
 
-/// Converts an Koja compiler diagnostic to an LSP diagnostic.
+/// Converts a Koja compiler diagnostic to an LSP diagnostic.
 fn to_lsp_diagnostic(d: &KojaDiagnostic) -> Diagnostic {
     let severity = match d.severity {
         KojaSeverity::Error => DiagnosticSeverity::ERROR,

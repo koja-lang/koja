@@ -3,12 +3,12 @@
 //! [`crate::check_program`] returns `Result<CheckedProgram,
 //! CheckFailure>`. The failure variant carries:
 //!
-//! - `diagnostics` — typecheck-emitted diagnostics. Parse-emitted
-//!   diagnostics live on `partial.iter().flat_map(|f| &f.diagnostics)`;
-//!   when the parser already produced error-severity diagnostics,
+//! - `diagnostics`: typecheck-emitted diagnostics. Parse-emitted
+//!   diagnostics live on `partial.iter().flat_map(|f| &f.diagnostics)`.
+//!   When the parser already produced error-severity diagnostics,
 //!   typecheck halts early and `diagnostics` is empty.
-//! - `partial` — best-effort reconstructed [`ParsedProgram`]. **Not
-//!   sealed** — its annotations are whatever resolve managed to
+//! - `partial`: best-effort reconstructed [`ParsedProgram`]. **Not
+//!   sealed**: its annotations are whatever resolve managed to
 //!   stamp before halting. LSPs and `koja check` consume this
 //!   for partial diagnostics rendering.
 //!

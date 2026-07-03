@@ -1,6 +1,6 @@
 //! Coverage for list-literal resolution. `[a, b, c]` keeps its
 //! `ExprKind::List` shape on the sealed AST with `expr.resolution =
-//! List<T>` for the inferred element type; the desugar to a
+//! List<T>` for the inferred element type. The desugar to a
 //! `List.new().append(...)` chain happens at IR-lower time. These
 //! tests confirm the literal's shape, the per-element resolutions,
 //! and the bidirectional `List<T>` hint flow.
