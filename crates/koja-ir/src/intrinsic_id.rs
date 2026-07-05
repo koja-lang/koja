@@ -69,8 +69,8 @@ pub enum IRIntrinsicId {
     Set(SetMethod),
     /// `@intrinsic` methods on `Socket` from
     /// [`koja/lib/net/src/net.koja`]. Both methods bridge into the
-    /// runtime's `koja_socket_*` C ABI (`recv_from` → mailbox-driven
-    /// recv with sender address, `resolve` → blocking
+    /// runtime's `koja_socket_*` C ABI (`recv_from` -> mailbox-driven
+    /// recv with sender address, `resolve` -> blocking
     /// `getaddrinfo`). Wrapped in an enum so adding sibling methods
     /// (e.g. `send_to_async`) is a variant-add rather than a shape
     /// change.
@@ -322,7 +322,7 @@ impl IRIntrinsicId {
     /// Map a function's canonical identifier to its dispatch slot.
     /// Returns `None` if no registered backend handles the
     /// `(receiver, method)` pair — lift surfaces a diagnostic so
-    /// typo'd `@intrinsic` decls fail at parse → check time, not
+    /// typo'd `@intrinsic` decls fail at parse -> check time, not
     /// at codegen.
     ///
     /// Strips the package prefix and walks the remaining path. All

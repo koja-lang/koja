@@ -4,7 +4,7 @@
 //! dispatcher routes to.
 //!
 //! Closure values are `{fn_ptr, env_ptr}` fat pointers (see
-//! [`crate::types::closure_fat_ptr_type`]); closure-kind bodies
+//! [`crate::types::closure_fat_ptr_type`]). Closure-kind bodies
 //! declare an extra `env_ptr` parameter at LLVM position 0 (see
 //! [`crate::function::declare_function`]). Active closure bodies
 //! stash their env pointer + env-struct type on
@@ -48,7 +48,7 @@ pub(super) fn emit_make_closure<'ctx>(
     let body_fn = ctx.declared_function(body).unwrap_or_else(|| {
         panic!(
             "LLVM emit: closure body `{}` not registered in declared-functions \
-             index — declaration order or seal violation",
+             index (declaration order or seal violation)",
             body.mangled(),
         )
     });
@@ -133,7 +133,7 @@ pub(super) fn emit_call_closure<'ctx>(
 
 /// Read a single captured value from the active closure body's env
 /// block. `LoadCapture` is only valid inside a `FunctionKind::Closure`
-/// body (seal-enforced); a missing closure frame is a compiler bug
+/// body (seal-enforced), so a missing closure frame is a compiler bug
 /// rather than a recoverable codegen error.
 pub(super) fn emit_load_capture<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -144,7 +144,7 @@ pub(super) fn emit_load_capture<'ctx>(
         env_ptr,
         env_struct,
     } = ctx.closure_frame().unwrap_or_else(|| {
-        panic!("LLVM emit: LoadCapture outside a closure body — seal invariant violation")
+        panic!("LLVM emit: LoadCapture outside a closure body (seal invariant violation)")
     });
     let slot_ptr = ctx
         .builder
@@ -165,7 +165,7 @@ pub(super) fn emit_load_capture<'ctx>(
 /// [`declare_closure_rc_dec_extern`]. The runtime handles the null
 /// (captureless adapter) and immortal cases, and at zero runs the
 /// env header's capture-release glue
-/// ([`koja_ir::FunctionKind::DropClosureGlue`]) before freeing — so a
+/// ([`koja_ir::FunctionKind::DropClosureGlue`]) before freeing, so a
 /// closure capturing heap values releases them transitively. Shared
 /// by the slot-keyed ([`emit_drop_closure_env`]) and value-keyed
 /// (`emit_drop_value`) closure drop paths.
@@ -199,7 +199,7 @@ pub(super) fn emit_drop_closure_env<'ctx>(
 /// process boundary:
 ///
 /// 1. malloc a block the size of the env struct and `memcpy` the
-///    whole source env over it — header (`drop_fn` / `copy_fn`) and
+///    whole source env over it: header (`drop_fn` / `copy_fn`) and
 ///    `Copy` captures land correct as-is;
 /// 2. reset the fresh block's rc to 1 (the source's count came along
 ///    in the copy);
@@ -219,8 +219,8 @@ pub(crate) fn emit_copy_closure_glue_body<'ctx>(
         .get_nth_param(0)
         .unwrap_or_else(|| {
             panic!(
-                "LLVM emit: env deep-copy glue `{symbol}` declared no env parameter — \
-                 declare_function ABI invariant violation",
+                "LLVM emit: env deep-copy glue `{symbol}` declared no env parameter \
+                 (declare_function ABI invariant violation)",
             )
         })
         .into_pointer_value();
@@ -384,8 +384,8 @@ fn build_closure_fat_pointer<'ctx>(
 /// Recover the [`IRType`] surface a closure-call argument was lowered
 /// from, given its LLVM `BasicValueEnum`. The [`closure_body_signature`]
 /// helper rebuilds the indirect-call signature from these and we
-/// only need enough fidelity that `ir_basic_type` round-trips —
-/// integer width is preserved from the LLVM int width; floats /
+/// only need enough fidelity that `ir_basic_type` round-trips.
+/// Integer width is preserved from the LLVM int width, and floats /
 /// pointers / aggregates pick a representative `IRType` whose LLVM
 /// translation matches the value's type.
 fn ir_type_for_basic_value(value: BasicValueEnum<'_>) -> IRType {

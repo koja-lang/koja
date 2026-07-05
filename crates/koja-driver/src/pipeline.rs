@@ -1,6 +1,6 @@
 //! `koja {check,shell,build,run,eval,test}` subcommand handlers.
 //!
-//! Drives the compiler pipeline (`koja-typecheck → koja-ir →
+//! Drives the compiler pipeline (`koja-typecheck -> koja-ir ->
 //! koja-ir-eval` / `koja-ir-llvm`) for every command that touches
 //! a source file or project.
 //!
@@ -42,17 +42,17 @@
 //! Only `run` has a backend dimension — it accepts
 //! `--backend={interpreter,llvm}` (see [`Backend`]):
 //!
-//! - `run` defaults to [`Backend::Interpreter`]: lower → run via
+//! - `run` defaults to [`Backend::Interpreter`]: lower -> run via
 //!   [`Interpreter::run_script`] (scripts, exit 0; the trailing
 //!   expression's value is discarded — user code calls
 //!   `IO.puts` / `value.print()` explicitly for output) or
 //!   [`Interpreter::run_program`] (projects; the Process entry's
 //!   exit code becomes the driver's exit status). Fast feedback,
 //!   no link step.
-//! - `run --backend=llvm`: lower → [`koja_ir_llvm::compile_script`]
-//!   / [`koja_ir_llvm::compile_program`] → link → exec the binary
-//!   → forward its exit code.
-//! - `build` is always LLVM: lower → compile → link → keep the
+//! - `run --backend=llvm`: lower -> [`koja_ir_llvm::compile_script`]
+//!   / [`koja_ir_llvm::compile_program`] -> link -> exec the binary
+//!   -> forward its exit code.
+//! - `build` is always LLVM: lower -> compile -> link -> keep the
 //!   binary at the output path. The interpreter has no codegen
 //!   surface, so `build` carries no backend flag.
 //! - `check` and `shell` have no backend dimension.
@@ -141,12 +141,12 @@ enum SourceShape {
 /// Categorize the user's input into an [`SourceShape`].
 ///
 /// With a file argument: canonicalize, then dispatch on the
-/// extension (`.kojs` → [`SourceShape::Script`], `.koja` →
-/// [`SourceShape::Program`], anything else → unrecognized-extension
+/// extension (`.kojs` -> [`SourceShape::Script`], `.koja` ->
+/// [`SourceShape::Program`], anything else -> unrecognized-extension
 /// error).
 ///
 /// With no file argument: read `koja.toml` from the current
-/// directory. `Some` → [`SourceShape::Project`], `None` →
+/// directory. `Some` -> [`SourceShape::Project`], `None` ->
 /// "missing koja.toml" error.
 ///
 /// Errors are returned as `Err(message)`; callers print them with
@@ -300,8 +300,8 @@ fn into_source_file(loaded: LoadedSource) -> SourceFile {
 /// `.kojs` script (or a project) on disk. LLVM is the only backend
 /// that emits object files, so `build` has no backend dimension.
 ///
-/// For a `.kojs` argument: parse Script → check → [`lower_script`] →
-/// [`koja_ir_llvm::compile_script`] → link. The script body becomes
+/// For a `.kojs` argument: parse Script -> check -> [`lower_script`] ->
+/// [`koja_ir_llvm::compile_script`] -> link. The script body becomes
 /// `main`'s body, so executing the binary prints the script's
 /// trailing value and exits 0 (via the temporary auto-print wrapper
 /// in `koja-runtime-posix/src/intrinsics.rs`; goes away with
@@ -323,14 +323,14 @@ pub fn cmd_build(file: Option<String>, output: Option<String>, release: bool, em
 /// backend.
 ///
 /// `--backend` defaults to [`Backend::Interpreter`]. Scripts:
-/// parse Script → check → [`lower_script`] →
+/// parse Script -> check -> [`lower_script`] ->
 /// [`Interpreter::run_script`]; exit 0 on success, 1 on any
-/// pipeline failure. Projects: collect → parse → check →
-/// [`lower_program`] → [`Interpreter::run_program`] (with `args`
+/// pipeline failure. Projects: collect -> parse -> check ->
+/// [`lower_program`] -> [`Interpreter::run_program`] (with `args`
 /// as the argv-shaped config); the Process entry's exit code
 /// becomes the driver's exit status. [`Backend::Llvm`] takes the
-/// compiled path: lower → compile → link → exec the binary
-/// (forwarding `args`) → forward its exit code; script binaries
+/// compiled path: lower -> compile -> link -> exec the binary
+/// (forwarding `args`) -> forward its exit code; script binaries
 /// are temp files removed after the run.
 pub fn cmd_run(file: Option<String>, backend: Backend, release: bool, args: Vec<String>) {
     let mode = resolve_source_shape(file.as_deref()).unwrap_or_else(|err| bail_resolve_error(err));
@@ -511,7 +511,7 @@ fn bundle_many_with_autoimport(
 }
 
 /// Read a source file and drive it through the script-mode
-/// pipeline (`parse → check → lower_script`). Returns the sealed
+/// pipeline (`parse -> check -> lower_script`). Returns the sealed
 /// [`IRScript`] on success; bails the process on any pipeline
 /// failure. `cmd_run` and `cmd_build` use this for the `.kojs`
 /// path.
@@ -938,7 +938,7 @@ fn run_project_compiled(config: &ProjectConfig, root: &Path, release: bool, args
     }
 }
 
-/// Drive the full project pipeline (collect → parse → check →
+/// Drive the full project pipeline (collect -> parse -> check ->
 /// `lower_program`) and return the sealed [`IRProgram`]. Bails the
 /// process with a formatted error on any failure.
 fn build_project_program(config: &ProjectConfig, root: &Path) -> IRProgram {

@@ -4,12 +4,12 @@
 //! file. The directory form (`tests/common/mod.rs`) keeps Cargo from
 //! picking this up as a test target itself.
 //!
-//! Every eval test shape is a `parse → check → lower → run` chain
+//! Every eval test shape is a `parse -> check -> lower -> run` chain
 //! against a single in-memory source file, so we expose:
 //!
 //! - [`PACKAGE`] — the default package every test source registers
 //!   under (`"TestApp"`).
-//! - [`typecheck`] / [`typecheck_in`] — `parse_program → check_program`
+//! - [`typecheck`] / [`typecheck_in`] — `parse_program -> check_program`
 //!   shorthands, parameterized by `ParseMode` (and optionally
 //!   package name for tests that want to target `Global` directly).
 //! - [`evaluate_program`] — `ParseMode::File` + `lower_program`

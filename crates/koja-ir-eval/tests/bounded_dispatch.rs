@@ -1,7 +1,7 @@
 //! Runtime coverage for Slice 2.10 — bounded dispatch through a
 //! generic function with a protocol-bound type-param.
 //!
-//! `parse → check → lower → run` for fixtures where the trailing
+//! `parse -> check -> lower -> run` for fixtures where the trailing
 //! expression / `main` calls a generic function with a `<T: P>`
 //! bound on its type-param, and the body invokes a method declared
 //! by `P`. Mono substitutes `T` with the concrete struct/enum at

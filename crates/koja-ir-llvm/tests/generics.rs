@@ -4,12 +4,12 @@
 //! [`koja_ir::generics::instantiate`] reaches LLVM as a
 //! distinct named type carrying the mangled `_$arg.arg$` symbol:
 //!
-//! - `Pair<Int, String>` → `%TestApp.Pair_$Int64.String$ = type { i64, ptr }`
-//! - `Box<T>.Of(...)` → outer / complete / payload types keyed at
+//! - `Pair<Int, String>` -> `%TestApp.Pair_$Int64.String$ = type { i64, ptr }`
+//! - `Box<T>.Of(...)` -> outer / complete / payload types keyed at
 //!   `%TestApp.Box_$Int64$` (with the `.Of` / `.Of.payload` suffixes
 //!   each variant carries on the non-generic path).
-//! - Distinct `(template, args)` pairs → distinct LLVM types.
-//! - Nested generics (`Pair<Box<Int>, String>`) → both inner and
+//! - Distinct `(template, args)` pairs -> distinct LLVM types.
+//! - Nested generics (`Pair<Box<Int>, String>`) -> both inner and
 //!   outer surface as named types, with the outer's first slot
 //!   referencing the inner by name.
 //!

@@ -2,7 +2,7 @@
 //! `lib/net/src/error.koja`.
 //!
 //! Eval reuses the runtime's `koja_socket_*` symbols (sockaddr building,
-//! last-error recording) over **non-blocking** fds — the runtime creates
+//! last-error recording) over **non-blocking** fds: the runtime creates
 //! them non-blocking and eval keeps them that way. Because the native
 //! blocking entry points (`accept` / `send_to`) park via the *native*
 //! reactor on `EAGAIN`, which eval cannot drive, eval waits for readiness
@@ -15,8 +15,8 @@
 //!   non-blocking listener reports its `-2` "nothing pending" itself).
 //! - `connect` is the one path that cannot pre-wait (the fd is not
 //!   writable until the handshake is initiated), so it flips the fd to
-//!   blocking for the duration of the native call — a bounded,
-//!   one-time setup wait — then restores non-blocking for subsequent I/O.
+//!   blocking for the duration of the native call (a bounded, one-time
+//!   setup wait), then restores non-blocking for subsequent I/O.
 //! - `create` / `bind` / `listen` / `setsockopt_reuse` and the last-error
 //!   readers pass straight through.
 
@@ -58,8 +58,8 @@ pass_through_externs! {
     socket_setsockopt_reuse => fn koja_socket_setsockopt_reuse(fd: Int32) -> Int64;
 }
 
-/// `koja_socket_create(kind)` — a fresh non-blocking socket (the native
-/// symbol already sets `O_NONBLOCK`; eval keeps it).
+/// `koja_socket_create(kind)`: a fresh non-blocking socket (the native
+/// symbol already sets `O_NONBLOCK`, eval keeps it).
 pub(super) fn socket_create(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(sock_type)] = args else {
         return Err(type_mismatch("koja_socket_create", "(kind: Int64)", args));
@@ -68,14 +68,14 @@ pub(super) fn socket_create(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(i64::from(fd)))
 }
 
-/// `koja_socket_accept(fd)` — wait for the listener to be readable (a
+/// `koja_socket_accept(fd)`: wait for the listener to be readable (a
 /// pending connection), then delegate to the native blocking accept, which
 /// now completes on its first syscall.
 pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(fd)] = args else {
         return Err(type_mismatch("koja_socket_accept", "(fd: Int32)", args));
     };
-    // Interrupted by a signal, not readiness — return the native -1 sentinel.
+    // Interrupted by a signal, not readiness: return the native -1 sentinel.
     if reactor::io_block(*fd as i32, Interest::Readable).await {
         return Ok(Value::Int(i64::from(-1i32)));
     }
@@ -83,7 +83,7 @@ pub(super) async fn socket_accept(args: &[Value]) -> Result<Value, RuntimeError>
     Ok(Value::Int(i64::from(client)))
 }
 
-/// `koja_socket_try_accept(fd)` — native non-blocking accept; returns the
+/// `koja_socket_try_accept(fd)`: native non-blocking accept. Returns the
 /// client fd, `-2` when nothing is pending, or `-1` on error.
 pub(super) fn socket_try_accept(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(fd)] = args else {
@@ -93,7 +93,7 @@ pub(super) fn socket_try_accept(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(i64::from(client)))
 }
 
-/// `koja_socket_connect(fd, ip, port)` — the one path that cannot pre-wait
+/// `koja_socket_connect(fd, ip, port)`: the one path that cannot pre-wait
 /// for readiness (the fd is not writable until the handshake starts).
 /// Flip the fd to blocking so the native connect waits in the kernel
 /// instead of parking via the native reactor, then restore non-blocking
@@ -113,7 +113,7 @@ pub(super) fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(result))
 }
 
-/// `koja_socket_send_to(fd, data, ip, port)` — wait for the socket to be
+/// `koja_socket_send_to(fd, data, ip, port)`: wait for the socket to be
 /// writable, then delegate to the native sender.
 pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError> {
     let [
@@ -129,7 +129,7 @@ pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError
             args,
         ));
     };
-    // Interrupted by a signal — return the native -1 sentinel.
+    // Interrupted by a signal: return the native -1 sentinel.
     if reactor::io_block(*fd as i32, Interest::Writable).await {
         return Ok(Value::Int(-1));
     }

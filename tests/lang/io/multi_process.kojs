@@ -18,18 +18,12 @@ impl Process<Ponger, PingMsg, String> for Ponger
   fn handle(self, msg: PingMsg, from: Option<ReplyTo<String>>) -> Step<Self>
     match msg
       PingMsg.Ping(name) ->
-        match from
-          Option.Some(r) -> r.send("pong #{name}")
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, "pong #{name}")
 
         Step.Continue(self)
 
       PingMsg.Stop ->
-        match from
-          Option.Some(r) -> r.send("bye")
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, "bye")
 
         Step.Done(StopReason.Normal)
     end
@@ -68,18 +62,12 @@ impl Process<Coordinator, CoordMsg, String> for Coordinator
           Result.Err(_) -> "stop: failed".print()
         end
 
-        match from
-          Option.Some(r) -> r.send("done")
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, "done")
 
         Step.Continue(self)
 
       CoordMsg.Done ->
-        match from
-          Option.Some(r) -> r.send("shutting down")
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, "shutting down")
 
         Step.Done(StopReason.Normal)
     end

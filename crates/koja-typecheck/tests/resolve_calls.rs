@@ -1,6 +1,6 @@
 //! Typecheck coverage for call resolution: bare-identifier
 //! `f(args)` calls. Exercises the full
-//! `collect → lift_signatures → resolve → seal` path on zero-arg,
+//! `collect -> lift_signatures -> resolve -> seal` path on zero-arg,
 //! arg-taking, arity-mismatched, type-mismatched, unknown,
 //! non-identifier, and wrong-kind callees, plus return-type
 //! propagation through arithmetic.

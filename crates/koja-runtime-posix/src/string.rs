@@ -11,7 +11,7 @@ use crate::util::{BITS_PER_BYTE, alloc_binary, alloc_koja_string, read_bit_lengt
 
 /// Decodes a NUL-terminated C string pointer into a string. Every Koja
 /// `String` is valid UTF-8 by construction, so the borrowed path is taken
-/// for all well-formed input; the lossy fallback exists only so malformed
+/// for all well-formed input. The lossy fallback exists only so malformed
 /// bytes degrade to replacement characters instead of panicking across the
 /// C-ABI.
 ///
@@ -24,7 +24,7 @@ unsafe fn cstr_str<'a>(ptr: *const u8) -> Cow<'a, str> {
 
 /// Attempts to parse a NUL-terminated string as a 64-bit float.
 /// Returns a [`crate::parse_text`] code (`PARSE_OK` writes the
-/// value through `out`); see [`parse_float_text`] for the
+/// value through `out`). See [`parse_float_text`] for the
 /// classification rules.
 ///
 /// # Safety
@@ -76,7 +76,7 @@ pub unsafe extern "C" fn koja_format_binary(ptr: *const u8, is_bits: i64) -> *co
 
 /// Attempts to parse a NUL-terminated string as a 64-bit signed integer.
 /// Returns a [`crate::parse_text`] code (`PARSE_OK` writes the
-/// value through `out`); see [`parse_int_text`] for the
+/// value through `out`). See [`parse_int_text`] for the
 /// classification rules.
 ///
 /// # Safety

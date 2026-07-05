@@ -1,9 +1,9 @@
 //! Pure operator math: take already-resolved [`Value`] operands and
 //! return the [`Value`] produced by an [`IRBinOp`] / [`IRUnaryOp`].
-//! No frame, no IR walking, no resolver — every input is concrete.
+//! No frame, no IR walking, no resolver: every input is concrete.
 //!
 //! Errors surface as [`RuntimeError::TypeMismatch`] (mismatched
-//! widths / shapes — guarded against by typecheck but kept defensive
+//! widths / shapes, guarded against by typecheck but kept defensive
 //! here) and the arithmetic overflow / division-by-zero variants.
 //!
 //! The dispatcher [`apply_binary_op`] fans out to one helper per
@@ -12,7 +12,7 @@
 //! helper stays exhaustive over the operators it owns and panics
 //! with `unreachable!` if the dispatch ever drifts. Numeric shape
 //! (`Int` vs `Float32` / `Float64`) is decided at the
-//! `apply_binary_op` seam by peeking the operand variants — typecheck
+//! `apply_binary_op` seam by peeking the operand variants. Typecheck
 //! guarantees both sides agree, including width.
 
 use std::ops::{Add, Div, Mul, Rem, Sub};
@@ -75,7 +75,7 @@ fn apply_int_arith(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, Runtime
 fn apply_bool_logic(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let (Value::Bool(a), Value::Bool(b)) = (&lhs, &rhs) else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("{op:?} expects two Bool operands; got {lhs} and {rhs}"),
+            detail: format!("{op:?} expects two Bool operands, got {lhs} and {rhs}"),
         });
     };
     let result = match op {
@@ -89,7 +89,7 @@ fn apply_bool_logic(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, Runtim
 fn apply_equality(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let equal = match (&lhs, &rhs) {
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        // IEEE 754: `NaN == NaN` is false; `Float64::partial_cmp`
+        // IEEE 754: `NaN == NaN` is false. `Float64::partial_cmp`
         // routes through the `==` operator on `f64` which already
         // honours that. Same for `Float32`.
         (Value::Float32(a), Value::Float32(b)) => a == b,
@@ -99,7 +99,7 @@ fn apply_equality(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeE
         (Value::Unit, Value::Unit) => true,
         _ => {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("{op:?} requires operands of the same type; got {lhs} and {rhs}"),
+                detail: format!("{op:?} requires operands of the same type, got {lhs} and {rhs}"),
             });
         }
     };
@@ -173,7 +173,7 @@ fn require_ints(op: IRBinOp, lhs: &Value, rhs: &Value) -> Result<(i64, i64), Run
     match (lhs, rhs) {
         (Value::Int(a), Value::Int(b)) => Ok((*a, *b)),
         _ => Err(RuntimeError::TypeMismatch {
-            detail: format!("{op:?} expects two Int operands; got {lhs} and {rhs}"),
+            detail: format!("{op:?} expects two Int operands, got {lhs} and {rhs}"),
         }),
     }
 }
@@ -191,7 +191,7 @@ fn require_floats(op: IRBinOp, lhs: &Value, rhs: &Value) -> Result<Floats, Runti
         (Value::Float64(a), Value::Float64(b)) => Ok(Floats::F64(*a, *b)),
         _ => Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "{op:?} expects two Float operands of the same width; got {lhs} and {rhs}"
+                "{op:?} expects two Float operands of the same width, got {lhs} and {rhs}"
             ),
         }),
     }
@@ -201,7 +201,7 @@ pub(crate) fn apply_unary_op(op: IRUnaryOp, operand: Value) -> Result<Value, Run
     match op {
         IRUnaryOp::Neg => match operand {
             // IEEE 754 negation never traps (every float has a
-            // representable negative); diverges from the int arm's
+            // representable negative). Diverges from the int arm's
             // `i64::MIN` overflow check.
             Value::Float32(v) => Ok(Value::Float32(-v)),
             Value::Float64(v) => Ok(Value::Float64(-v)),
@@ -210,13 +210,13 @@ pub(crate) fn apply_unary_op(op: IRUnaryOp, operand: Value) -> Result<Value, Run
                 .map(Value::Int)
                 .ok_or(RuntimeError::UnaryIntegerOverflow { op, operand: n }),
             other => Err(RuntimeError::TypeMismatch {
-                detail: format!("unary `-` expects an Int or Float operand; got {other}"),
+                detail: format!("unary `-` expects an Int or Float operand, got {other}"),
             }),
         },
         IRUnaryOp::Not => match operand {
             Value::Bool(b) => Ok(Value::Bool(!b)),
             other => Err(RuntimeError::TypeMismatch {
-                detail: format!("`not` expects a Bool operand; got {other}"),
+                detail: format!("`not` expects a Bool operand, got {other}"),
             }),
         },
     }

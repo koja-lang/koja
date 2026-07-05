@@ -2,12 +2,12 @@
 //! and `Float.parse(input: String) -> Result<Float, NumericConversionError>`.
 //!
 //! Both trim leading / trailing whitespace and hand the rest to
-//! [`koja_runtime::parse_text`] — the same classification the LLVM
+//! [`koja_runtime::parse_text`], the same classification the LLVM
 //! backend's runtime helpers use, so the two backends can't drift
 //! on what counts as `InvalidFormat` vs `OutOfRange` (a well-formed
 //! number that doesn't fit: an overflowing integer, or a float
 //! magnitude that rounds to infinity). The Result enum's symbol
-//! comes from `function.return_type`; the error variant tag is
+//! comes from `function.return_type`. The error variant tag is
 //! resolved by name via `helpers::err_variant_value`.
 
 use koja_ir::{IRFunction, ParseTarget};
@@ -28,7 +28,7 @@ pub(super) fn dispatch<R: CallResolver>(
         [Value::String(bytes)] => bytes.as_slice(),
         _ => {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("{target:?}.parse expects a single String argument; got {args:?}"),
+                detail: format!("{target:?}.parse expects a single String argument, got {args:?}"),
             });
         }
     };
@@ -41,7 +41,7 @@ pub(super) fn dispatch<R: CallResolver>(
                 ParseTarget::Float => parse_float_text(trimmed).map(Value::Float64),
             }
         }
-        // A Koja `String` is valid UTF-8 by construction; treat a
+        // A Koja `String` is valid UTF-8 by construction, so treat a
         // malformed payload as unparseable rather than erroring.
         Err(_) => ParseOutcome::InvalidFormat,
     };

@@ -13,8 +13,8 @@
 //!
 //! # Module layout
 //!
-//! - [`walker`]: top-down traversal, `resolve_file` → `resolve_function`
-//!   → `resolve_statement`.
+//! - [`walker`]: top-down traversal, `resolve_file` -> `resolve_function`
+//!   -> `resolve_statement`.
 //! - [`statements`]: statement-level shapes, assignment decl /
 //!   reassignment.
 //! - [`expr`]: expression dispatch, `resolve_expr`.

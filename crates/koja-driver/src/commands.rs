@@ -155,7 +155,7 @@ fn discover_project_doc_inputs(project_only: bool) -> (Vec<DocInput>, String) {
     let (config, cwd) = load_project_or_exit(&[
         "error: no source file specified and no koja.toml found",
         "Usage: koja doc <file.koja ...> [-o output_dir]",
-        "  or:  create an koja.toml in the current directory",
+        "  or:  create a koja.toml in the current directory",
     ]);
 
     let loaded = ProjectLoader::new(&config, &cwd)
@@ -411,7 +411,7 @@ fn project_format_paths() -> Vec<String> {
     let (config, cwd) = load_project_or_exit(&[
         "error: no files specified and no koja.toml found",
         "Usage: koja format [files...] [--check] [--write]",
-        "  or:  create an koja.toml in the current directory",
+        "  or:  create a koja.toml in the current directory",
     ]);
 
     let roots = config.src.iter().chain(config.test.iter());

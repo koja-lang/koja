@@ -7,8 +7,8 @@
 //! `.format()` so the inner expr is already `String`-typed by the
 //! time we see it).
 //!
-//! This file pins the part-count → concat-count contract (N parts
-//! → N-1 concats) and the concat-kind invariant (always
+//! This file pins the part-count -> concat-count contract (N parts
+//! -> N-1 concats) and the concat-kind invariant (always
 //! `ConcatKind::String` regardless of how the part was sourced).
 
 use koja_ast::util::dedent;
@@ -72,7 +72,7 @@ fn three_part_interpolation_emits_two_string_concats() {
 #[test]
 fn five_part_interpolation_emits_four_string_concats() {
     // Two interleaved interpolations between three literal segments
-    // → 5 parts → 4 concats.
+    // -> 5 parts -> 4 concats.
     let source = "
         x = 1
         y = 2

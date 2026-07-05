@@ -22,10 +22,7 @@ impl Process<CalcConfig, CalcMsg, Int> for Calc
         sum = a + b
         "calc: #{sum}".print()
 
-        match from
-          Option.Some(reply) -> reply.send(sum)
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, sum)
 
         Step.Continue(self)
     end

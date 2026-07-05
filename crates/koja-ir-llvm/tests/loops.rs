@@ -29,8 +29,8 @@ fn while_emits_header_body_exit_blocks_and_back_edge() {
     assert_contains(&ir_text, "while_header");
     assert_contains(&ir_text, "while_body");
     assert_contains(&ir_text, "while_exit");
-    // Header terminates with a conditional branch (cond=true → body,
-    // cond=false → exit).
+    // Header terminates with a conditional branch (cond=true -> body,
+    // cond=false -> exit).
     assert_contains(&ir_text, "br i1");
 }
 

@@ -1,8 +1,8 @@
 //! Koja compiler CLI entry point.
 //!
 //! Parses the top-level subcommand and dispatches each one through
-//! either [`pipeline`] (the compiler pipeline: `koja-typecheck →
-//! koja-ir → koja-ir-llvm` / `koja-ir-eval`) or
+//! either [`pipeline`] (the compiler pipeline: `koja-typecheck ->
+//! koja-ir -> koja-ir-llvm` / `koja-ir-eval`) or
 //! [`commands`] (frontend / filesystem tooling: `parse`, `lex`,
 //! `format`, `doc`, `new`).
 //!

@@ -1,12 +1,12 @@
 //! The scheduler's timing structure: a single hashed timing wheel plus
-//! an overflow heap, unifying the two previously-separate concerns —
-//! delayed message delivery (`send_after`) and receive/call deadline
-//! promotion — into one keyspace keyed by fire instant.
+//! an overflow heap, unifying the two previously-separate concerns
+//! (delayed `send_after` message delivery and receive/call deadline
+//! promotion) into one keyspace keyed by fire instant.
 //!
 //! ## Why a wheel
 //!
 //! Arming and disarming a timer is `O(1)` (an index + a list push)
-//! instead of the `O(log n)` of a binary heap; firing is "drain a few
+//! instead of the `O(log n)` of a binary heap. Firing is "drain a few
 //! buckets" bounded by how many timers actually expire, not by `log n`.
 //! At process scale (every `call` arms a deadline, periodic tasks
 //! re-arm) that constant matters.
@@ -24,12 +24,12 @@
 //!
 //! Bucketing is by *tick* (millisecond granularity), but every drain
 //! re-checks the exact `fire_at <= now`, so firing precision matches the
-//! old heap exactly — the ticks only decide distribution and cursor
+//! old heap exactly. The ticks only decide distribution and cursor
 //! stepping, never whether an entry is due. The load-bearing invariant:
 //! each [`TimerWheel::drain_due`] scans buckets from the old cursor tick
 //! through `tick(now)` inclusive (capped at one full rotation), so any
 //! entry whose `fire_at <= now` is visited before the cursor passes its
-//! bucket — nothing is stranded behind the cursor for a rotation.
+//! bucket. Nothing is stranded behind the cursor for a rotation.
 
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
@@ -40,8 +40,8 @@ use crate::protocol::Pid;
 /// Bucket resolution. Sub-tick precision is recovered by the exact
 /// `fire_at` re-check on drain.
 const WHEEL_TICK: Duration = Duration::from_millis(1);
-/// Number of buckets; the wheel covers `WHEEL_SLOTS * WHEEL_TICK`
-/// (~4 s) before an entry falls to the overflow heap.
+/// The wheel covers `WHEEL_SLOTS * WHEEL_TICK` (~4 s) before an entry
+/// falls to the overflow heap.
 const WHEEL_SLOTS: u64 = 4096;
 /// `WHEEL_TICK` in nanoseconds, so tick math is a `u64` divide rather
 /// than a 128-bit one.
@@ -51,7 +51,7 @@ const BITMAP_WORDS: usize = (WHEEL_SLOTS / 64) as usize;
 
 /// A pending delayed message (`send_after`), surfaced by
 /// [`TimerWheel::drain_due`] for the driver to deliver. The message is
-/// staged at schedule time, so firing is just a delivery; an
+/// staged at schedule time, so firing is just a delivery. An
 /// undeliverable entry reclaims its payload by dropping it.
 pub struct TimerEntry<M> {
     pub envelope: M,
@@ -62,15 +62,15 @@ pub struct TimerEntry<M> {
 enum WheelKind<M> {
     /// Deliver a staged envelope to `pid`.
     Deliver(M),
-    /// Promote `pid` (a receive/call deadline expired); `fire_at` is the
+    /// Promote `pid` (a receive/call deadline expired). `fire_at` is the
     /// recorded deadline the table re-validates against.
     Promote,
 }
 
-/// One scheduled entry. Bucketed at insert time by its fire tick; fired
-/// when the exact `fire_at <= now`. Ordered by `(fire_at, seq)` for the
-/// overflow heap — `seq` is unique, so the order is total and `Eq` holds
-/// only between an entry and itself.
+/// One scheduled entry. Bucketed at insert time by its fire tick and
+/// fired when the exact `fire_at <= now`. Ordered by `(fire_at, seq)`
+/// for the overflow heap. `seq` is unique, so the order is total and
+/// `Eq` holds only between an entry and itself.
 struct WheelEntry<M> {
     fire_at: Instant,
     kind: WheelKind<M>,
@@ -102,7 +102,7 @@ impl<M> Ord for WheelEntry<M> {
 pub enum Due<M> {
     /// Deliver `envelope` to `target_pid`.
     Deliver { envelope: M, target_pid: Pid },
-    /// Promote the waiter `pid` whose deadline `fire_at` expired; the
+    /// Promote the waiter `pid` whose deadline `fire_at` expired. The
     /// table re-validates it is still blocked on that deadline.
     Promote { pid: Pid, fire_at: Instant },
 }
@@ -122,7 +122,7 @@ pub struct TimerWheel<M> {
     pending: usize,
     /// Monotonic tie-breaker for stable ordering.
     seq: u64,
-    /// The wheel buckets; grown to [`WHEEL_SLOTS`] on first insert.
+    /// The wheel buckets, grown to [`WHEEL_SLOTS`] on first insert.
     slots: Vec<Vec<WheelEntry<M>>>,
 }
 
@@ -175,8 +175,8 @@ impl<M> TimerWheel<M> {
     }
 
     /// Removes and returns every entry due at `now`, soonest first.
-    /// Promote entries surface for the table to re-validate; deliver
-    /// entries surface for the driver to route.
+    /// Promote entries surface for the table to re-validate, and
+    /// deliver entries surface for the driver to route.
     pub fn drain_due(&mut self, now: Instant) -> Vec<Due<M>> {
         let Some(base) = self.base else {
             return Vec::new();
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn entry_earlier_than_base_still_fires() {
-        // First insert fixes the base far in the future; a later, sooner
+        // First insert fixes the base far in the future. A later, sooner
         // entry must still fire on the exact fire_at check.
         let mut wheel: TimerWheel<()> = TimerWheel::new();
         let now = Instant::now();
@@ -368,7 +368,7 @@ mod tests {
     fn same_tick_entry_is_not_fired_early() {
         // Sub-tick precision: an entry later within the cursor's own tick
         // must wait for the exact fire_at rather than firing when the tick
-        // is first entered — and must still fire (not be stranded behind
+        // is first entered, and must still fire (not be stranded behind
         // the cursor) on the next drain once the instant passes.
         let mut wheel: TimerWheel<()> = TimerWheel::new();
         let base = Instant::now();

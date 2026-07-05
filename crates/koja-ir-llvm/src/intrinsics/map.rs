@@ -1,9 +1,9 @@
-//! `Map<K, V>` family — heap-backed open-addressed hash table.
+//! `Map<K, V>` family: heap-backed open-addressed hash table.
 //! Layout matches [`crate::types::hashtable_value_type`]:
 //! `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`.
 //! Entries live off-heap behind `entries_ptr` as a flat
 //! `[Entry; capacity]` where each `Entry` is a `(K, V)` pair laid out
-//! by ABI; `states_ptr` is `[u8; capacity]` (`0` empty / `1`
+//! by ABI. `states_ptr` is `[u8; capacity]` (`0` empty / `1`
 //! occupied / `2` tombstone). Both buffers malloc on `new`, realloc
 //! on resize, and free on drop.
 
@@ -47,7 +47,7 @@ pub(super) fn emit_map<'ctx>(
 }
 
 /// Resolve `(K, V)` for a `Map<K, V>` intrinsic. `new` carries them
-/// on the return type; every other method has `self: Map<K, V>` as
+/// on the return type. Every other method has `self: Map<K, V>` as
 /// `params[0]`.
 fn key_value(method: MapMethod, function: &IRFunction) -> Result<(&IRType, &IRType), LlvmError> {
     let candidate = match method {

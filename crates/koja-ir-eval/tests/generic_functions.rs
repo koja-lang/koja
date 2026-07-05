@@ -1,5 +1,5 @@
 //! End-to-end runtime coverage for the generics slice's function
-//! arm. Every fixture here drives `parse → check → lower → run` and
+//! arm. Every fixture here drives `parse -> check -> lower -> run` and
 //! observes the trailing [`Value`] — green tests pin that the
 //! monomorphization closure pass produces functions the interpreter
 //! can dispatch by mangled symbol without any generics-aware code

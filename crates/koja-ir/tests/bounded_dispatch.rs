@@ -85,7 +85,7 @@ fn bounded_dispatch_monomorphizes_show_at_concrete_arg() {
 
 #[test]
 fn bounded_dispatch_distinct_concrete_args_mint_distinct_show_decls() {
-    // Two structs implementing the same protocol → two distinct
+    // Two structs implementing the same protocol -> two distinct
     // mono'd `show` functions, one per receiver type. Confirms that
     // each call's receiver substitution flows independently through
     // the worklist.

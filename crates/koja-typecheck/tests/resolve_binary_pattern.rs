@@ -180,8 +180,8 @@ fn float_extract_diagnoses() {
 
 #[test]
 fn unaligned_binary_tail_diagnoses() {
-    // `tag::3` + `rest: Binary` has a 3-bit fixed prefix → not
-    // byte-aligned → reject.
+    // `tag::3` + `rest: Binary` has a 3-bit fixed prefix -> not
+    // byte-aligned -> reject.
     let failure = typecheck_fail(&dedent(
         "
         data = <<0::3, 0::5>>

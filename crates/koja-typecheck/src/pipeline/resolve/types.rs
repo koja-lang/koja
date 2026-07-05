@@ -179,7 +179,7 @@ fn peel_alias_capped(ty: &ResolvedType, registry: &GlobalRegistry, fuel: usize) 
 /// "is `a` a member of `b`'s union (or vice versa)?" check, and every
 /// caller of `types_equivalent` keeps working unchanged.
 ///
-/// Wider numeric coercion (`Int → Int32` etc.) is a separate
+/// Wider numeric coercion (`Int -> Int32` etc.) is a separate
 /// concept: that's literal-fit coercion at type-equality sites,
 /// handled by [`super::coercion::check_compatible`].
 pub(crate) fn types_equivalent(

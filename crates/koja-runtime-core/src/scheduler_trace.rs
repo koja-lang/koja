@@ -22,7 +22,7 @@ pub enum TraceEvent {
     Delivered,
     /// A dead process's slot was reclaimed.
     Freed,
-    /// A kill found the target `on_cpu`; reclaim deferred to its worker.
+    /// A kill found the target `on_cpu`, deferring reclaim to its worker.
     KillDeferred,
     /// A park was refused because a kill already marked the target `Dead`.
     ParkRefused,

@@ -97,17 +97,17 @@ pub unsafe extern "C-unwind" fn koja_panic_backtrace(msg: *const c_char) -> ! {
 /// Render a user crash's diagnostic, then unwind the crashing process to the
 /// `catch_unwind` at `process_trampoline`. Uses [`std::panic::resume_unwind`]
 /// rather than `panic!` so the global hook (which renders + aborts runtime
-/// panics) is *not* invoked — the diagnostic prints exactly once here, with
-/// the crashing stack still live. Per-process containment: the unwind takes
-/// down one process, not the runtime.
+/// panics) is *not* invoked and the diagnostic prints exactly once here,
+/// with the crashing stack still live. Per-process containment: the unwind
+/// takes down one process, not the runtime.
 pub(crate) fn crash_unwind(message: &str) -> ! {
     let crash_info = render_diagnostic(PanicOrigin::User, message);
     std::panic::resume_unwind(Box::new(UserCrash { crash_info }));
 }
 
-/// Installs a process-global panic hook that routes every Rust panic — on
-/// any thread, from any site (`unwrap`, `expect`, `assert!`, allocation
-/// failure, a poisoned `SCHED` lock) — through the same diagnostic-and-abort
+/// Installs a process-global panic hook that routes every Rust panic, on
+/// any thread and from any site (`unwrap`, `expect`, `assert!`, allocation
+/// failure, a poisoned `SCHED` lock), through the same diagnostic-and-abort
 /// path as user panics. The hook runs before unwinding with the stack
 /// intact, so the backtrace is faithful and no unwind ever crosses the
 /// C-ABI or poisons a lock (the first panic aborts immediately, so the
@@ -185,7 +185,7 @@ fn capture(origin: PanicOrigin) -> Vec<Frame> {
 
 /// Prints `message` and a filtered backtrace to stderr in the Elixir-style
 /// koja format, then aborts the process. The terminal path for an internal
-/// runtime panic (via the global hook); user crashes render and *unwind*
+/// runtime panic (via the global hook). User crashes render and *unwind*
 /// instead (see [`crash_unwind`]). Captures the backtrace at the call site,
 /// so callers must invoke it with the panicking stack still live.
 pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
@@ -197,7 +197,7 @@ pub(crate) fn abort_with_diagnostic(origin: PanicOrigin, message: &str) -> ! {
 /// Elixir-style koja format and returns the same capture structured as a
 /// [`CrashInfo`] (the plain-text rendering, ANSI-free, for a watcher's
 /// `ExitSignal`). Must run with the panicking stack still live so the
-/// backtrace is faithful; the caller decides whether to abort (runtime panic)
+/// backtrace is faithful. The caller decides whether to abort (runtime panic)
 /// or unwind (user crash) afterwards.
 pub(crate) fn render_diagnostic(origin: PanicOrigin, message: &str) -> CrashInfo {
     let c = if use_color() { &COLORS_ON } else { &COLORS_OFF };
@@ -233,7 +233,7 @@ pub(crate) fn render_diagnostic(origin: PanicOrigin, message: &str) -> CrashInfo
     }
     if frames.is_empty() {
         backtrace
-            .push_str("    <no frames available — was the binary compiled with debug info?>\n");
+            .push_str("    <no frames available (was the binary compiled with debug info?)>\n");
     }
 
     eprint!("{}", c.red);
@@ -257,7 +257,7 @@ pub(crate) fn render_diagnostic(origin: PanicOrigin, message: &str) -> CrashInfo
 // Frame filtering
 // ---------------------------------------------------------------------------
 
-/// True for any Rust frame originating in a runtime crate — `koja_runtime`
+/// True for any Rust frame originating in a runtime crate: `koja_runtime`
 /// (this staticlib's lib name), `koja_runtime_core`, or a future
 /// `koja_runtime_*`. Bare `koja_runtime` prefix is safe: lowered Koja
 /// symbols never carry it (they demangle from `<pkg>.<name>`).
@@ -278,8 +278,9 @@ fn should_skip_frame(name: &str, origin: PanicOrigin) -> bool {
         return true;
     }
 
-    // Internal runtime panics keep the runtime frames — they are the stack
-    // worth seeing. User panics hide them to surface only user Koja code.
+    // Internal runtime panics keep the runtime frames, since they are the
+    // stack worth seeing. User panics hide them to surface only user Koja
+    // code.
     if origin == PanicOrigin::Runtime && (name.starts_with("koja_rt_") || is_runtime_frame(name)) {
         return false;
     }
@@ -307,7 +308,7 @@ fn should_skip_frame(name: &str, origin: PanicOrigin) -> bool {
 
 fn is_stdlib_frame(file_path: &str) -> bool {
     // DWARF reconstructs parentless virtual paths (e.g. the stdlib's
-    // `<Global.option>`) with a `./` directory prefix; strip it so the
+    // `<Global.option>`) with a `./` directory prefix. Strip it so the
     // `<…>` marker is still recognized.
     let path = file_path.strip_prefix("./").unwrap_or(file_path);
     path.is_empty()

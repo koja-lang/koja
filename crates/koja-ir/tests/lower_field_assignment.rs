@@ -3,13 +3,13 @@
 //!
 //! Walks the rebuild chain pinned by the lowerer and asserts:
 //!
-//! - Single-segment assigns continue to lower as `LocalRead → BinaryOp
-//!   → LocalWrite` (regression guard for the dispatch added by
+//! - Single-segment assigns continue to lower as `LocalRead -> BinaryOp
+//!   -> LocalWrite` (regression guard for the dispatch added by
 //!   [`lower_assignment`]).
-//! - `p.x = v` lowers to `LocalRead → FieldSet → LocalWrite` with the
+//! - `p.x = v` lowers to `LocalRead -> FieldSet -> LocalWrite` with the
 //!   field index, type, and struct symbol pinned.
-//! - Depth-N (`a.b.c = v`) chains `LocalRead → FieldGet → FieldSet →
-//!   FieldSet → LocalWrite` — one `FieldGet` per non-leaf segment,
+//! - Depth-N (`a.b.c = v`) chains `LocalRead -> FieldGet -> FieldSet ->
+//!   FieldSet -> LocalWrite` — one `FieldGet` per non-leaf segment,
 //!   one `FieldSet` per segment, walked back up.
 //! - Compound assignment on a field path (`p.x += 1`) reads the leaf
 //!   via `FieldGet`, combines through `BinaryOp`, then walks back up

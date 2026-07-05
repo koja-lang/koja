@@ -72,7 +72,7 @@ fn unit_only_enum_emits_outer_blob_and_per_variant_complete_types() {
 
     assert_main_shape(&ir_text);
     // Outer blob: every variant is Unit so max_align == 1, max_size == 1
-    // → `{ [1 x i8] }`.
+    // -> `{ [1 x i8] }`.
     assert_contains(&ir_text, "%TestApp.Color = type { [1 x i8] }");
     // Per-variant complete: Unit variants carry only the tag.
     assert_contains(&ir_text, "%TestApp.Color.Red = type { i8 }");

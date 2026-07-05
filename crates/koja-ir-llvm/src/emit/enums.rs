@@ -25,7 +25,7 @@ use super::{ValueMap, lookup};
 /// Materialize an enum-variant literal: resolve `payload` operands
 /// against `values`, then delegate to [`build_enum_value`] for the
 /// alloca/GEP/load dance. Tuple operands keep their declaration
-/// order; struct operands are re-keyed into field-index order so
+/// order. Struct operands are re-keyed into field-index order so
 /// the helper sees one positional shape.
 pub(super) fn emit_enum_construct<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -50,7 +50,7 @@ pub(super) fn emit_enum_construct<'ctx>(
 /// must either be absent (`payload_values` empty) or be a tuple /
 /// struct whose arity matches `payload_values.len()`. The helper
 /// allocas the outer chunk-array struct, GEPs through the variant's
-/// `complete` (tag at field 0, payload at field 2 — see
+/// `complete` (tag at field 0, payload at field 2, see
 /// [`crate::layout::enums`]), writes each payload field, and loads
 /// the populated outer back out.
 pub(crate) fn build_enum_value<'ctx>(
@@ -76,11 +76,11 @@ pub(crate) fn build_enum_value<'ctx>(
         (None, true) => {}
         (Some(_), true) => panic!(
             "LLVM emit: enum `{ty}` variant at tag {tag} declares a payload but \
-             build_enum_value was called with no payload values — caller mismatch",
+             build_enum_value was called with no payload values (caller mismatch)",
         ),
         (None, false) => panic!(
             "LLVM emit: enum `{ty}` variant at tag {tag} is Unit but build_enum_value \
-             was called with {} payload value(s) — caller mismatch",
+             was called with {} payload value(s) (caller mismatch)",
             boxed_values.len(),
         ),
     }
@@ -107,8 +107,8 @@ fn resolve_struct_payload<'ctx>(
         });
         if slot.replace(value).is_some() {
             panic!(
-                "LLVM emit: struct payload field {} written twice — IR seal \
-                 invariant violation",
+                "LLVM emit: struct payload field {} written twice (IR seal \
+                 invariant violation)",
                 field.index,
             );
         }
@@ -119,7 +119,7 @@ fn resolve_struct_payload<'ctx>(
         .map(|(i, slot)| {
             slot.ok_or_else(|| {
                 LlvmError::Codegen(format!(
-                    "struct payload missing field at index {i} — IR seal invariant violation",
+                    "struct payload missing field at index {i} (IR seal invariant violation)",
                 ))
             })
         })
@@ -131,7 +131,7 @@ fn resolve_struct_payload<'ctx>(
 /// it as `i8`. `EnumTagGet` is gated by the typecheck-resolve walk
 /// to operate only on enum-typed receivers, so the tag slot always
 /// exists at field 0 of the variant's complete struct (every
-/// variant's complete struct shares the same `i8` tag prefix —
+/// variant's complete struct shares the same `i8` tag prefix, so
 /// any variant works for the GEP type).
 pub(super) fn emit_enum_tag_get<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -175,14 +175,14 @@ pub(super) fn emit_enum_payload_field_get<'ctx>(
     let declared_ty = declared_slot_type(&declared_payload, payload_index).unwrap_or_else(|| {
         panic!(
             "LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` payload index \
-             {payload_index} out of range — IR seal invariant violation",
+             {payload_index} out of range (IR seal invariant violation)",
         )
     });
     let (complete, payload_struct) = ctx.layouts.enum_variant_types(ty.mangled(), tag);
     let Some(payload_struct) = payload_struct else {
         panic!(
             "LLVM emit: EnumPayloadFieldGet on `{ty}.{tag}` but the variant declares \
-             no payload — IR seal invariant violation",
+             no payload (IR seal invariant violation)",
         );
     };
     let payload_ptr = build_payload_gep(ctx, ty, complete, alloca)?;
@@ -223,7 +223,7 @@ fn declared_slot_type(payload: &IRVariantPayload, index: u32) -> Option<IRType> 
     }
 }
 
-/// Walk the variant's declared payload slot types; for each
+/// Walk the variant's declared payload slot types. For each
 /// [`IRType::Indirect`] slot, box the matching incoming value via
 /// [`emit_box_value`] so the store hits a ptr slot rather than the
 /// raw value.

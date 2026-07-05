@@ -210,8 +210,8 @@ fn struct_pattern_nested_falls_through_to_partial_then_catch_all() {
 #[test]
 fn struct_pattern_nested_extracts_inner_struct_via_chained_bind() {
     // The full binding arm exercises the chained-bind path:
-    // EnumPayloadFieldGet (Option.Some payload) → FieldGet
-    // (Point.x and Point.y) → LocalWrite per field.
+    // EnumPayloadFieldGet (Option.Some payload) -> FieldGet
+    // (Point.x and Point.y) -> LocalWrite per field.
     let source = "
         struct Point
           x: Int

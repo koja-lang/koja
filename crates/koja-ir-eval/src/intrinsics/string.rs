@@ -2,7 +2,7 @@
 //! through Rust's `str` primitives so semantics match v1 byte-for-
 //! byte. `to_cstring` allocates a null-terminated `malloc` copy of
 //! the receiver and bundles the pointer + byte length into a
-//! [`Value::Struct`] matching the `CString` decl — callers free it
+//! [`Value::Struct`] matching the `CString` decl. Callers free it
 //! through `CString.free` (which routes to `CPtr.free`).
 
 use std::ptr;
@@ -126,7 +126,7 @@ fn expect_string_bytes<'a>(
 
 /// Borrow a String arg as `&str`. Surfaces a clean
 /// [`RuntimeError::Unsupported`] when the payload isn't valid
-/// UTF-8 — codepoint-walking methods (`length`, `get`, `slice`)
+/// UTF-8: codepoint-walking methods (`length`, `get`, `slice`)
 /// can't behave sensibly without it. Byte-oriented methods
 /// (`byte_length`, `to_binary`, `to_cstring`) read raw bytes via
 /// [`expect_string_bytes`] instead.
@@ -155,7 +155,7 @@ fn expect_int(args: &[Value], index: usize, label: &str) -> Result<i64, RuntimeE
 }
 
 /// Extract `(start, stop)` from a `Range { start: Int, stop: Int }`
-/// struct value — typecheck guarantees the Range shape (two `Int`
+/// struct value. Typecheck guarantees the Range shape (two `Int`
 /// fields in source order) before we reach here.
 fn expect_range(args: &[Value], index: usize, label: &str) -> Result<(i64, i64), RuntimeError> {
     match expect_arg(args, index, label)? {

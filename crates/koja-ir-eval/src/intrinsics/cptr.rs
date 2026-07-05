@@ -1,4 +1,4 @@
-//! `CPtr<T>` family — `alloc`, `free`, `null`, `null?`, `offset`,
+//! `CPtr<T>` family: `alloc`, `free`, `null`, `null?`, `offset`,
 //! `read`, `to_binary`, `to_string`, `write`.
 //!
 //! Eval now backs `CPtr<T>` with a real raw pointer ([`Value::CPtr`])
@@ -13,7 +13,7 @@
 //!
 //! `to_string` / `to_binary` are the receiver-typed methods on
 //! `CPtr<UInt8>`: `to_string` reads the rc-prefixed block ABI (see
-//! [`crate::abi`]) and frees the source block; `to_binary`
+//! [`crate::abi`]) and frees the source block. `to_binary`
 //! byte-copies `len` bytes into a fresh `Value::Binary` (the caller
 //! retains ownership of the source pointer per the stdlib
 //! docstring).
@@ -54,7 +54,7 @@ pub(super) fn dispatch(
 fn alloc(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Int(count)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.alloc expects a single Int argument; got {args:?}"),
+            detail: format!("CPtr.alloc expects a single Int argument, got {args:?}"),
         });
     };
     let element_size = pointee_size(&function.return_type, "CPtr.alloc")?;
@@ -77,7 +77,7 @@ fn alloc(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
 fn free_(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.free expects a single CPtr argument; got {args:?}"),
+            detail: format!("CPtr.free expects a single CPtr argument, got {args:?}"),
         });
     };
     if !ptr.is_null() {
@@ -93,7 +93,7 @@ fn null() -> Result<Value, RuntimeError> {
 fn null_q(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.null? expects a single CPtr argument; got {args:?}"),
+            detail: format!("CPtr.null? expects a single CPtr argument, got {args:?}"),
         });
     };
     Ok(Value::Bool(ptr.is_null()))
@@ -102,7 +102,7 @@ fn null_q(args: &[Value]) -> Result<Value, RuntimeError> {
 fn offset(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr), Value::Int(n)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.offset expects (CPtr<T>, Int); got {args:?}"),
+            detail: format!("CPtr.offset expects (CPtr<T>, Int), got {args:?}"),
         });
     };
     let element_size = receiver_pointee_size(function, "CPtr.offset")?;
@@ -113,12 +113,12 @@ fn offset(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> 
 fn read(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.read expects a single CPtr argument; got {args:?}"),
+            detail: format!("CPtr.read expects a single CPtr argument, got {args:?}"),
         });
     };
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
-            detail: "CPtr.read(null) is undefined behavior; refusing to dereference".to_string(),
+            detail: "CPtr.read(null) is undefined behavior, refusing to dereference".to_string(),
         });
     }
     read_primitive(*ptr, &function.return_type, "CPtr.read")
@@ -127,12 +127,12 @@ fn read(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
 fn write(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr), value] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.write expects (CPtr<T>, T); got {args:?}"),
+            detail: format!("CPtr.write expects (CPtr<T>, T), got {args:?}"),
         });
     };
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
-            detail: "CPtr.write(null, _) is undefined behavior; refusing to dereference"
+            detail: "CPtr.write(null, _) is undefined behavior, refusing to dereference"
                 .to_string(),
         });
     }
@@ -144,7 +144,7 @@ fn write(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
 fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr), Value::Int(len)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.to_binary expects (CPtr<UInt8>, Int); got {args:?}"),
+            detail: format!("CPtr.to_binary expects (CPtr<UInt8>, Int), got {args:?}"),
         });
     };
     let len = (*len).max(0) as usize;
@@ -153,7 +153,7 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
-            detail: "CPtr.to_binary(null, len > 0) is undefined behavior; refusing to copy"
+            detail: "CPtr.to_binary(null, len > 0) is undefined behavior, refusing to copy"
                 .to_string(),
         });
     }
@@ -164,12 +164,12 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
 fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::CPtr(ptr)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.to_string expects a single CPtr<UInt8> argument; got {args:?}"),
+            detail: format!("CPtr.to_string expects a single CPtr<UInt8> argument, got {args:?}"),
         });
     };
     if ptr.is_null() {
         return Err(RuntimeError::Unsupported {
-            detail: "CPtr.to_string(null) is undefined behavior; refusing to dereference"
+            detail: "CPtr.to_string(null) is undefined behavior, refusing to dereference"
                 .to_string(),
         });
     }
@@ -177,8 +177,8 @@ fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
     if bit_length < 0 {
         return Err(RuntimeError::Unsupported {
             detail: format!(
-                "CPtr.to_string: source header carries negative bit_length {bit_length}; \
-                 buffer does not look like an Koja string payload"
+                "CPtr.to_string: source header carries negative bit_length {bit_length} \
+                 (buffer does not look like a Koja string payload)"
             ),
         });
     }
@@ -205,7 +205,7 @@ fn receiver_pointee_ty<'a>(
         .params
         .first()
         .ok_or_else(|| RuntimeError::TypeMismatch {
-            detail: format!("{label} expected a self parameter — IR shape carries none"),
+            detail: format!("{label} expected a self parameter (IR shape carries none)"),
         })?;
     match &receiver.ty {
         IRType::CPtr(inner) => Ok(inner.as_ref()),
@@ -237,15 +237,15 @@ fn read_primitive(ptr: *mut u8, ty: &IRType, label: &str) -> Result<Value, Runti
         IRType::UInt16 => Value::Int(unsafe { (ptr as *const u16).read_unaligned() } as i64),
         IRType::UInt32 => Value::Int(unsafe { (ptr as *const u32).read_unaligned() } as i64),
         IRType::UInt64 => {
-            // `u64::MAX` round-trips through `Value::Int(i64)` as `-1`;
-            // this mirrors `materialize_const`'s `UInt64 -> Int64`
+            // `u64::MAX` round-trips through `Value::Int(i64)` as `-1`,
+            // mirroring `materialize_const`'s `UInt64 -> Int64`
             // cast (eval doesn't carry a distinct unsigned variant).
             let v = unsafe { (ptr as *const u64).read_unaligned() };
             Value::Int(v as i64)
         }
         other => {
             return Err(RuntimeError::Unsupported {
-                detail: format!("{label}: cannot read `T = {other:?}` — primitive types only",),
+                detail: format!("{label}: cannot read `T = {other:?}` (primitive types only)",),
             });
         }
     };
@@ -284,8 +284,8 @@ fn write_primitive(
         (other_ty, other_v) => {
             return Err(RuntimeError::Unsupported {
                 detail: format!(
-                    "{label}: cannot write `{other_v}` as `T = {other_ty:?}` — primitive \
-                     types only",
+                    "{label}: cannot write `{other_v}` as `T = {other_ty:?}` (primitive \
+                     types only)",
                 ),
             });
         }

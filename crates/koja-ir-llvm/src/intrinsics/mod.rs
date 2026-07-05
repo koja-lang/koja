@@ -1,8 +1,8 @@
 //! Per-backend dispatch table for `@intrinsic` function bodies.
 //! Mirrors the eval interpreter's [`koja_ir_eval::intrinsics`]
-//! shape — each registered intrinsic is keyed by its
+//! shape: each registered intrinsic is keyed by its
 //! [`koja_ir::FunctionKind::Intrinsic`] payload (an
-//! [`IRIntrinsicId`] -- a typed enum the lift pass mints from the
+//! [`IRIntrinsicId`], a typed enum the lift pass mints from the
 //! function's identifier path) and routed via an exhaustive `match`
 //! to a hand-written emitter that synthesizes the LLVM body.
 //!
@@ -45,7 +45,7 @@ mod string;
 pub(crate) use hashtable::occupied_loop;
 
 /// Synthesize the body of an `@intrinsic` function. Forwards each
-/// variant to its hand-written emitter; each emitter receives the
+/// variant to its hand-written emitter. Each emitter receives the
 /// inner enum directly (no string-sniffing).
 pub(crate) fn emit_intrinsic_body<'ctx>(
     ctx: &EmitContext<'ctx>,

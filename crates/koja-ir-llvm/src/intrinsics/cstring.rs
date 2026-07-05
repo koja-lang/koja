@@ -1,8 +1,8 @@
-//! `CString.to_string(self) -> String` — copy the `len` bytes of the
+//! `CString.to_string(self) -> String`: copy the `len` bytes of the
 //! `CString { ptr, len }` struct payload into a fresh
 //! `[i64 rc][i64 bit_length][len bytes][NUL]` Koja string block
-//! (`rc = 1`, trailing NUL for libc compat — `String.length`/equality
-//! rely on the terminator). Caller retains ownership of `self`; the
+//! (`rc = 1`, trailing NUL for libc compat, `String.length`/equality
+//! rely on the terminator). Caller retains ownership of `self`. The
 //! produced `String` is a fresh owned heap allocation, freed by the
 //! surrounding drop pipeline at end of scope.
 

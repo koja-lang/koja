@@ -106,21 +106,33 @@ struct ReplyTo<R>
   token: Int
 end
 
+@doc """
+Whether a reply reached the caller. `Expired` means the caller already gave
+up on its `call` (timed out or moved on), so no one was left waiting.
+"""
+enum ReplyTo.Delivery
+  Delivered
+  Expired
+end
+
 extend ReplyTo<R>
   @doc """
   Sends a reply of type `R` to the caller that initiated a synchronous call.
+  Returns `Delivery.Expired` if the caller already gave up, `Delivery.Delivered`
+  otherwise. The result is advisory and most handlers ignore it.
   """
   @intrinsic
-  fn send(self, reply: R)
+  fn send(self, reply: R) -> ReplyTo.Delivery
 
   @doc """
-  Sends `value` to the caller if `from` is present, does nothing otherwise.
-  Convenience helper for process handlers.
+  Replies to the caller if one is present. Returns `Option.None` when there was
+  no caller, otherwise `Option.Some` of the delivery outcome. Most handlers
+  ignore the result.
   """
-  fn reply(from: Option<ReplyTo<R>>, value: R)
+  fn reply(from: Option<ReplyTo<R>>, value: R) -> Option<ReplyTo.Delivery>
     match from
-      Option.Some(r) -> r.send(value)
-      Option.None -> ()
+      Option.Some(r) -> Option.Some(r.send(value))
+      Option.None -> Option.None
     end
   end
 end
@@ -296,10 +308,7 @@ impl Process<Task<R>, (), R> for Task<R>
 
     receive
       pair: Pair<(), Option<ReplyTo<R>>> ->
-        match pair.second
-          Option.Some(reply_to) -> reply_to.send(result)
-          Option.None -> ()
-        end
+        ReplyTo.reply(pair.second, result)
 
         Process.StopReason.Normal
 

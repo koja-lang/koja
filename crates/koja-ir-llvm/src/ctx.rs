@@ -4,13 +4,13 @@
 //! per-function slot table, and a handle on the type-layout
 //! registry [`crate::layout::TypeLayouts`].
 //!
-//! Deliberately a passive bundle — no business logic. Every
+//! Deliberately a passive bundle with no business logic. Every
 //! orchestration concern (program / script entry, function emission,
 //! main-wrapper synthesis, instruction-level emission) lives in its
 //! own module and takes `&EmitContext` as a parameter, so this struct
 //! never grows into a god object. Type-layout machinery (struct +
 //! enum registries, host `TargetData`) lives in [`crate::layout`]
-//! and is accessed through the [`Self::layouts`] field; emission
+//! and is accessed through the [`Self::layouts`] field. Emission
 //! call sites that need it go through `ctx.layouts.<method>(…)`
 //! so the layered design stays visible at every reference.
 //!
@@ -42,7 +42,7 @@ use crate::error::{IceExt, LlvmError};
 use crate::layout::TypeLayouts;
 
 /// Fields are `pub(crate)` so sibling emission modules can borrow
-/// them directly; outside the crate the bundle is opaque.
+/// them directly. Outside the crate the bundle is opaque.
 pub(crate) struct EmitContext<'ctx> {
     pub(crate) builder: Builder<'ctx>,
     pub(crate) context: &'ctx Context,
@@ -51,31 +51,31 @@ pub(crate) struct EmitContext<'ctx> {
     /// the host [`inkwell::targets::TargetData`] used by the enum
     /// layout computation. See [`crate::layout`].
     pub(crate) layouts: TypeLayouts<'ctx>,
-    /// Counter for `alpha_<prefix>.<n>` global names — strings,
+    /// Counter for `alpha_<prefix>.<n>` global names: strings,
     /// binary, bits constants all share a single sequence so each
     /// emitted global symbol is unique. `Cell<u32>` because emission
-    /// walks `&EmitContext` immutably; mirrors v1's
+    /// walks `&EmitContext` immutably. Mirrors v1's
     /// `string_const.<n>` pattern in `koja-codegen`.
     payload_counter: Cell<u32>,
     /// Per-function local-variable slot map: `IRLocalId ->
     /// PointerValue` (the LLVM `alloca` materializing the slot).
-    /// Populated as `LocalDecl` instructions emit; consumed by
+    /// Populated as `LocalDecl` instructions emit, consumed by
     /// `LocalRead` / `LocalWrite` to recover the stack pointer for
     /// `load` / `store`. Reset between functions through
-    /// [`Self::reset_locals`] — slot identity is per-function.
+    /// [`Self::reset_locals`] since slot identity is per-function.
     local_slots: RefCell<HashMap<IRLocalId, PointerValue<'ctx>>>,
     /// Merged `IRPackage::constants` from the input program / script.
     /// Set by [`Self::attach_constant_pool`] before any instruction
-    /// emission; [`IRInstruction::LoadConst`] requires it.
+    /// emission. [`IRInstruction::LoadConst`] requires it.
     pub(crate) constant_pool: RefCell<Option<Arc<ConstantPoolSnapshot>>>,
-    /// One LLVM SSA value per pooled constant [`IRSymbol`] — first
+    /// One LLVM SSA value per pooled constant [`IRSymbol`]: first
     /// `LoadConst` materializes (enum / struct aggregate or string
-    /// global); later references reuse the cached handle.
+    /// global), later references reuse the cached handle.
     pub(crate) load_const_cache: RefCell<BTreeMap<IRSymbol, BasicValueEnum<'ctx>>>,
     /// `IRSymbol -> FunctionValue` index populated at function
     /// declare time. Decouples call-site resolution from the LLVM
-    /// symbol name — `@extern "C"` declarations may declare under a
-    /// `link_name` alias (`fn cosf` → `@cos`), so `module.get_function`
+    /// symbol name. `@extern "C"` declarations may declare under a
+    /// `link_name` alias (`fn cosf` -> `@cos`), so `module.get_function`
     /// keyed at the IR's mangled name would miss. Instruction
     /// emission goes through [`Self::declared_function`] /
     /// [`Self::register_declared_function`] instead.
@@ -83,11 +83,11 @@ pub(crate) struct EmitContext<'ctx> {
     /// Per-function closure-emit frame, set while a
     /// `FunctionKind::Closure` body is being defined and cleared
     /// when it returns. `LoadCapture` reads `env_ptr` + `env_struct`
-    /// to GEP its slot; non-closure bodies see `None`.
+    /// to GEP its slot. Non-closure bodies see `None`.
     closure_frame: RefCell<Option<ClosureFrame<'ctx>>>,
     /// Per-function `IRBlockId -> BasicBlock` map. Set by
     /// [`crate::function::define_function`] before the body walk and
-    /// cleared on return; the [`IRInstruction::Receive`] emitter in
+    /// cleared on return. The [`IRInstruction::Receive`] emitter in
     /// [`crate::emit::process`] consults it to resolve arm body
     /// blocks (the host block ends with the dispatch + the IR-level
     /// `Unreachable` terminator). Non-Receive emit sites continue to
@@ -100,7 +100,7 @@ pub(crate) struct EmitContext<'ctx> {
     /// per-param `(local_id, type)` slots the
     /// [`koja_ir::IRTerminator::TailCall`] terminator emitter
     /// stores its new args into before branching back to the
-    /// header. `None` for non-TCO functions; the terminator emitter
+    /// header. `None` for non-TCO functions. The terminator emitter
     /// panics if it ever fires without a frame staged.
     tco_frame: RefCell<Option<TcoFrame<'ctx>>>,
     /// DWARF emitter, present only on the object-emitting `compile_*`
@@ -113,14 +113,14 @@ pub(crate) struct EmitContext<'ctx> {
 /// Per-function tail-call frame staged by
 /// [`crate::function::define_function`] when its IR carries a
 /// [`koja_ir::IRTerminator::TailCall`]. `loop_block` is the
-/// header reached by every back-edge; `param_slots[i]` is the
-/// `(local_id, type)` of the function's i-th parameter — the
+/// header reached by every back-edge. `param_slots[i]` is the
+/// `(local_id, type)` of the function's i-th parameter. The
 /// terminator emitter rebuilds the slot's `store` keyed at
 /// `local_id` against the value held by the i-th tail-call arg.
 ///
 /// `body_slots` lists every non-parameter `LocalDecl` in the
 /// function. The back-edge zeroes them so the next iteration starts
-/// from the fresh-activation state — a slot written on one iteration
+/// from the fresh-activation state. A slot written on one iteration
 /// but not revisited on the next (e.g. an untaken `receive` arm's
 /// payload local) would otherwise be exit-dropped a second time with
 /// its stale, already-released value.
@@ -133,7 +133,7 @@ pub(crate) struct TcoFrame<'ctx> {
 
 /// Borrowed env handle used by the closure-body emit path.
 /// `env_ptr` is the body's first LLVM parameter (the env pointer
-/// the caller's `MakeClosure` malloc'd); `env_struct` is the LLVM
+/// the caller's `MakeClosure` malloc'd). `env_struct` is the LLVM
 /// type assembled from the body's `FunctionKind::Closure::env_layout`
 /// so [`crate::emit::instruction`] can GEP into the right field.
 #[derive(Clone, Copy)]
@@ -148,7 +148,7 @@ impl<'ctx> EmitContext<'ctx> {
     /// name (matching the `__koja_app_name` global the runtime
     /// printer reads) so the generated IR's `; ModuleID = …` line
     /// identifies the binary that produced it.
-    /// `emit_debug_info` engages DWARF emission — set by the
+    /// `emit_debug_info` engages DWARF emission, set by the
     /// object-emitting `compile_*` entry points and left off by the
     /// `emit_*_llvm_ir` snapshot paths so their IR stays metadata-free.
     pub(crate) fn new(context: &'ctx Context, module_name: &str, emit_debug_info: bool) -> Self {
@@ -262,15 +262,15 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Stage the per-function [`TcoFrame`] for the body currently
-    /// being defined. Pairs with [`Self::clear_tco_frame`]; calling
+    /// being defined. Pairs with [`Self::clear_tco_frame`]. Calling
     /// twice without a clear in between panics so the per-function
     /// scope stays explicit.
     pub(crate) fn set_tco_frame(&self, frame: TcoFrame<'ctx>) {
         let mut slot = self.tco_frame.borrow_mut();
         if slot.is_some() {
             panic!(
-                "LLVM emit: nested TCO frame set without clearing the previous one — \
-                 caller must clear before re-entering",
+                "LLVM emit: nested TCO frame set without clearing the previous one \
+                 (caller must clear before re-entering)",
             );
         }
         *slot = Some(frame);
@@ -282,7 +282,7 @@ impl<'ctx> EmitContext<'ctx> {
 
     /// Active TCO frame for the body being emitted, or `None` for
     /// non-TCO bodies. The [`koja_ir::IRTerminator::TailCall`]
-    /// terminator emitter calls into this; the seal pass guarantees
+    /// terminator emitter calls into this. The seal pass guarantees
     /// any function carrying a `TailCall` block is set up with a
     /// frame here before its body is walked.
     pub(crate) fn tco_frame(&self) -> Option<TcoFrame<'ctx>> {
@@ -292,14 +292,14 @@ impl<'ctx> EmitContext<'ctx> {
     /// Stage the per-function `IRBlockId -> BasicBlock` map for
     /// emit sites that don't otherwise see it (today: the
     /// [`IRInstruction::Receive`] dispatcher). Pairs with
-    /// [`Self::clear_block_map`]; calling twice without a clear in
+    /// [`Self::clear_block_map`]. Calling twice without a clear in
     /// between panics so the per-function scope stays explicit.
     pub(crate) fn set_block_map(&self, block_map: BTreeMap<IRBlockId, BasicBlock<'ctx>>) {
         let mut slot = self.current_block_map.borrow_mut();
         if slot.is_some() {
             panic!(
-                "LLVM emit: nested block map set without clearing the previous one — \
-                 caller must clear before re-entering",
+                "LLVM emit: nested block map set without clearing the previous one \
+                 (caller must clear before re-entering)",
             );
         }
         *slot = Some(block_map);
@@ -310,8 +310,8 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Resolve `block_id` to its registered `BasicBlock`. Misses
-    /// panic — the [`IRInstruction::Receive`] emitter calls into
-    /// this only after the per-function block-declare phase has
+    /// panic, because the [`IRInstruction::Receive`] emitter calls
+    /// into this only after the per-function block-declare phase has
     /// run, so a miss means the lowerer produced an arm body block
     /// that wasn't placed in the function's `blocks` list.
     pub(crate) fn block_for(&self, block_id: IRBlockId) -> BasicBlock<'ctx> {
@@ -321,29 +321,29 @@ impl<'ctx> EmitContext<'ctx> {
             .as_ref()
             .unwrap_or_else(|| {
                 panic!(
-                    "LLVM emit: block_for({block_id}) called outside a function emit — \
-                     EmitContext::set_block_map ordering violation",
+                    "LLVM emit: block_for({block_id}) called outside a function emit \
+                     (EmitContext::set_block_map ordering violation)",
                 )
             })
             .get(&block_id)
             .unwrap_or_else(|| {
                 panic!(
                     "LLVM emit: IR block `{block_id}` not registered in the current \
-                     block map — IR seal / lower invariant violation",
+                     block map (IR seal / lower invariant violation)",
                 )
             })
     }
 
     /// Set the active [`ClosureFrame`] for the body currently being
-    /// defined. Pairs with [`Self::clear_closure_frame`]; calling
+    /// defined. Pairs with [`Self::clear_closure_frame`]. Calling
     /// twice without a clear in between panics so the per-function
     /// scope stays explicit.
     pub(crate) fn set_closure_frame(&self, frame: ClosureFrame<'ctx>) {
         let mut slot = self.closure_frame.borrow_mut();
         if slot.is_some() {
             panic!(
-                "LLVM emit: nested closure frame set without clearing the previous one — \
-                 caller must clear before re-entering",
+                "LLVM emit: nested closure frame set without clearing the previous one \
+                 (caller must clear before re-entering)",
             );
         }
         *slot = Some(frame);
@@ -362,7 +362,7 @@ impl<'ctx> EmitContext<'ctx> {
 
     /// Insert a freshly-declared function into the
     /// `IRSymbol -> FunctionValue` index. Idempotent on a per-symbol
-    /// basis; the second call for the same `symbol` overwrites with
+    /// basis: the second call for the same `symbol` overwrites with
     /// the (presumed-equal) handle, mirroring the inkwell module's
     /// own dedup behavior for symbols already present in the LLVM
     /// module.
@@ -371,7 +371,7 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Resolve `symbol` to its registered LLVM function. `None` when
-    /// no declare step has run for this symbol yet — call sites
+    /// no declare step has run for this symbol yet. Call sites
     /// surface that as a codegen error since the declare phase is
     /// supposed to run before any body emission.
     pub(crate) fn declared_function(&self, symbol: &IRSymbol) -> Option<FunctionValue<'ctx>> {
@@ -386,7 +386,7 @@ impl<'ctx> EmitContext<'ctx> {
 
     /// Mint a fresh module-unique symbol name for a heap-payload
     /// global. Callers pass `"str"` for strings, `"bin"` for binary,
-    /// `"bits"` for bits — the prefix is purely cosmetic (helps
+    /// `"bits"` for bits. The prefix is purely cosmetic (helps
     /// reading raw LLVM IR) but the counter is shared so two
     /// different prefixes can't collide.
     pub(crate) fn next_payload_symbol(&self, prefix: &str) -> String {
@@ -395,21 +395,22 @@ impl<'ctx> EmitContext<'ctx> {
         format!("alpha_{prefix}.{n}")
     }
 
-    /// Register an `alloca` for `local`. Panics on duplicate keys —
-    /// the IR seal pass guarantees one `LocalDecl` per `IRLocalId`
-    /// per function, so a collision indicates an upstream bug.
+    /// Register an `alloca` for `local`. Panics on duplicate keys,
+    /// since the IR seal pass guarantees one `LocalDecl` per
+    /// `IRLocalId` per function and a collision indicates an
+    /// upstream bug.
     pub(crate) fn register_local_slot(&self, local: IRLocalId, ptr: PointerValue<'ctx>) {
         let mut slots = self.local_slots.borrow_mut();
         if slots.insert(local, ptr).is_some() {
             panic!(
-                "LLVM emit: local slot `{local}` registered twice — \
-                 IR seal invariant violation",
+                "LLVM emit: local slot `{local}` registered twice \
+                 (IR seal invariant violation)",
             );
         }
     }
 
     /// Resolve `local` to its registered `alloca` when present.
-    /// `None` means the slot hasn't been created yet — the TCO
+    /// `None` means the slot hasn't been created yet. The TCO
     /// pre-registration path in [`crate::function::define_function`]
     /// creates every slot up front, so the `LocalDecl` emitter checks
     /// here before minting a fresh alloca.
@@ -417,14 +418,14 @@ impl<'ctx> EmitContext<'ctx> {
         self.local_slots.borrow().get(&local).copied()
     }
 
-    /// Resolve `local` to its registered `alloca`. Misses panic — the
-    /// IR seal guarantees every `LocalRead` / `LocalWrite` is preceded
-    /// by a matching `LocalDecl` in the same function.
+    /// Resolve `local` to its registered `alloca`. Misses panic,
+    /// because the IR seal guarantees every `LocalRead` / `LocalWrite`
+    /// is preceded by a matching `LocalDecl` in the same function.
     pub(crate) fn local_slot(&self, local: IRLocalId) -> PointerValue<'ctx> {
         *self.local_slots.borrow().get(&local).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: local slot `{local}` not registered — \
-                 IR seal / lower invariant violation",
+                "LLVM emit: local slot `{local}` not registered \
+                 (IR seal / lower invariant violation)",
             )
         })
     }
@@ -440,7 +441,7 @@ impl<'ctx> EmitContext<'ctx> {
     /// mangled name. Outer types are minted (and so registered in the
     /// LLVM context's name table) by [`crate::layout::enums::declare_enum_type`];
     /// this accessor is a thin alias over [`Context::get_struct_type`]
-    /// so emission sites read with intent — "the enum outer for
+    /// so emission sites read with intent: "the enum outer for
     /// `<symbol>`" rather than "named LLVM struct by string." Bodies
     /// only land later in [`crate::layout::enums::define_enum_bodies`],
     /// but the opaque handle is stable across both phases, which is
@@ -449,9 +450,9 @@ impl<'ctx> EmitContext<'ctx> {
     pub(crate) fn enum_outer_type(&self, mangled: &str) -> StructType<'ctx> {
         self.context.get_struct_type(mangled).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: enum outer `{mangled}` not declared — \
-                 declare_enum_type ordering violation (must run before \
-                 any struct/enum body references this symbol)",
+                "LLVM emit: enum outer `{mangled}` not declared \
+                 (declare_enum_type must run before any struct/enum \
+                 body references this symbol)",
             )
         })
     }
@@ -490,9 +491,9 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Emit a call to `function` and unwrap its return as a
-    /// [`BasicValueEnum`] named `name`. Collapses the `build_call` →
-    /// `try_as_basic_value` → `basic` ceremony every value-returning
-    /// runtime call repeats; a void return is an internal compiler
+    /// [`BasicValueEnum`] named `name`. Collapses the `build_call` ->
+    /// `try_as_basic_value` -> `basic` ceremony every value-returning
+    /// runtime call repeats. A void return is an internal compiler
     /// error reported with the caller's `file:line`.
     #[track_caller]
     pub(crate) fn call_basic(

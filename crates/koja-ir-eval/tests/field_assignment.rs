@@ -1,6 +1,6 @@
 //! Runtime coverage for multi-segment field assignment in the
 //! interpreter: `p.x = v`, `a.b.c = v`, and `p.x += 1` round-trip
-//! through the SSA-pure `FieldGet → FieldSet` rebuild and update the
+//! through the SSA-pure `FieldGet -> FieldSet` rebuild and update the
 //! head local's slot to the freshly-assembled struct value.
 
 use koja_ast::util::dedent;

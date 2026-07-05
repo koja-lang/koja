@@ -55,9 +55,9 @@ impl LocalScope {
         Some((id, ty))
     }
 
-    /// Capture the visible name → id map so per-arm pattern bindings
+    /// Capture the visible name -> id map so per-arm pattern bindings
     /// can be unwound at the arm boundary. Only names are saved. The
-    /// id → type table and the `next_id` counter intentionally keep
+    /// id -> type table and the `next_id` counter intentionally keep
     /// growing so any lowering / seal walk that reaches the popped
     /// binding's `LocalId` still sees its type.
     pub(crate) fn snapshot(&self) -> LocalScopeSnapshot {
@@ -66,7 +66,7 @@ impl LocalScope {
         }
     }
 
-    /// Restore the visible name → id map captured by [`snapshot`].
+    /// Restore the visible name -> id map captured by [`snapshot`].
     pub(crate) fn restore(&mut self, snapshot: LocalScopeSnapshot) {
         self.names = snapshot.names;
     }

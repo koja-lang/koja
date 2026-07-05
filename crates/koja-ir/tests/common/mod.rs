@@ -4,12 +4,12 @@
 //! directory form (`tests/common/mod.rs`) keeps Cargo from picking
 //! this up as a test target itself.
 //!
-//! Every ir test shape drives `parse → check → lower` against a
+//! Every ir test shape drives `parse -> check -> lower` against a
 //! single in-memory source file, so we expose:
 //!
 //! - [`PACKAGE`] — the default package every test source registers
 //!   under (`"TestApp"`).
-//! - [`typecheck`] / [`typecheck_in`] — `parse_program → check_program`
+//! - [`typecheck`] / [`typecheck_in`] — `parse_program -> check_program`
 //!   shorthands, parameterized by `ParseMode` (and optionally package
 //!   name for tests that target `Global` directly, e.g.
 //!   `lower_intrinsics.rs`).

@@ -34,10 +34,7 @@ impl Process<WorkerConfig, WorkerMsg, String> for Worker
       WorkerMsg.Stop ->
         "#{self.label}: Stopped.".print()
 
-        match from
-          Option.Some(r) -> r.send("done")
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, "done")
 
         Step.Continue(self)
     end

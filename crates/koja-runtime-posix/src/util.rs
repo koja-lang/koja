@@ -10,7 +10,7 @@ use crate::memory;
 /// payload (`String` / `Binary` / `Bits`): `[i64 rc][i64 bit_length]`
 /// before the payload, so the payload sits `BLOCK_HEADER_SIZE` bytes
 /// past the block base. The runtime-side source of truth for the heap
-/// header ABI; mirrored on the codegen side by `koja-ir-llvm`'s
+/// header ABI, mirrored on the codegen side by `koja-ir-llvm`'s
 /// `emit::heap_layout::HEADER_BYTES`. The two are an API contract kept
 /// in sync by convention.
 pub const BLOCK_HEADER_SIZE: usize = 16;
@@ -21,7 +21,7 @@ pub const BLOCK_HEADER_SIZE: usize = 16;
 /// A closure env block carries a 24-byte header instead: `[i64
 /// rc][ptr drop_fn][ptr copy_fn]`. `drop_fn` (`LENGTH_OFFSET` bytes
 /// past the base) is the address of the closure's capture-release
-/// glue (or null when no capture is heap-managed); `copy_fn`
+/// glue (or null when no capture is heap-managed). `copy_fn`
 /// ([`COPY_FN_OFFSET`] bytes past the base) is the address of its
 /// env deep-copy glue (or null when the closure was built outside
 /// lowering and can never cross a process boundary). Captures follow
@@ -66,10 +66,9 @@ pub unsafe fn write_block_header(base: *mut u8, bit_length: i64) -> *mut u8 {
 }
 
 /// Increment the refcount of an rc-managed leaf heap block. `base`
-/// points at the block base (the `i64 rc` word). Immortal blocks —
-/// statically-allocated rodata payloads, stamped with a negative
-/// sentinel rc by codegen — are left untouched (`rc < 0`). Null is a
-/// no-op.
+/// points at the block base (the `i64 rc` word). Immortal blocks
+/// (statically-allocated rodata payloads, stamped with a negative
+/// sentinel rc by codegen) are left untouched. Null is a no-op.
 ///
 /// # Safety
 /// `base` must be null or the base of a live rc-managed block.
@@ -116,10 +115,10 @@ pub unsafe extern "C" fn koja_rc_dec(base: *mut u8) {
 
 /// Decrement the refcount of a closure env block, running its
 /// capture-release glue and freeing the block when the count reaches
-/// zero. `env` points at the block base (the `i64 rc` word); the
+/// zero. `env` points at the block base (the `i64 rc` word), and the
 /// `drop_fn` pointer sits `LENGTH_OFFSET` bytes past it (see the
-/// closure env header note on [`LENGTH_OFFSET`]). At zero, the glue —
-/// when present (null means no heap-managed capture) — is called with
+/// closure env header note on [`LENGTH_OFFSET`]). At zero, the glue,
+/// when present (null means no heap-managed capture), is called with
 /// the env pointer to release each captured value before the block is
 /// freed. Immortal blocks (`rc < 0`) and null are no-ops.
 ///
@@ -152,9 +151,9 @@ pub unsafe extern "C" fn koja_closure_rc_dec(env: *mut u8) {
 
 /// Deep-copy an rc-managed leaf heap block (`String` / `Binary` /
 /// `Bits`), returning a fresh payload pointer with `rc = 1` and the
-/// same `bit_length`. Immortal blocks (`rc < 0`) are shared as-is —
-/// rodata payloads are never mutated or freed, so a copy would only
-/// waste memory. Null returns null.
+/// same `bit_length`. Immortal blocks (`rc < 0`) are shared as-is,
+/// since rodata payloads are never mutated or freed and a copy would
+/// only waste memory. Null returns null.
 ///
 /// The copy always reserves one byte past the payload and writes a
 /// NUL there, matching [`alloc_koja_string`]'s layout so string
@@ -189,7 +188,7 @@ pub unsafe extern "C" fn koja_heap_deep_copy(payload: *mut u8) -> *mut u8 {
 /// [`LENGTH_OFFSET`]), returning a fresh env with `rc = 1` and every
 /// heap-managed capture recursively copied. Null (a captureless
 /// closure) returns null. A non-null env whose `copy_fn` is null
-/// cannot cross a process boundary — that is a compiler invariant
+/// cannot cross a process boundary. That is a compiler invariant
 /// violation, so the runtime aborts rather than alias the env.
 ///
 /// # Safety
@@ -205,8 +204,8 @@ pub unsafe extern "C" fn koja_closure_deep_copy(env: *mut u8) -> *mut u8 {
         let copy_fn = *env.add(COPY_FN_OFFSET).cast::<*const u8>();
         assert!(
             !copy_fn.is_null(),
-            "koja runtime: closure env crossing a process boundary carries no copy glue — \
-             compiler invariant violation",
+            "koja runtime: closure env crossing a process boundary carries no copy glue \
+             (compiler invariant violation)",
         );
         let glue = std::mem::transmute::<*const u8, extern "C" fn(*mut u8) -> *mut u8>(copy_fn);
         glue(env)
@@ -284,12 +283,12 @@ impl From<std::str::Utf8Error> for LastError {
     }
 }
 
-/// Reserved code for DNS failures; not part of the `io::ErrorKind` mapping.
+/// Reserved code for DNS failures, not part of the `io::ErrorKind` mapping.
 pub const ERROR_CODE_NAME_NOT_FOUND: i32 = 13;
 
 /// Maps `io::ErrorKind` to the stable cause codes consumed by the Koja
 /// stdlib (`SocketError` in `lib/net/src/error.koja`). Keep both sides
-/// in sync; 0 means "unmapped" and the Koja side falls back to
+/// in sync. A 0 means "unmapped" and the Koja side falls back to
 /// `Unknown(code)`.
 fn error_kind_code(kind: io::ErrorKind) -> i32 {
     match kind {
@@ -389,7 +388,7 @@ pub struct KojaList {
 ///
 /// # Safety
 /// `argv` must contain at least `argc` valid, NUL-terminated C strings.
-/// `out` must point to writable memory large enough for an `KojaList`.
+/// `out` must point to writable memory large enough for a `KojaList`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_rt_build_argv(argc: i32, argv: *const *const u8, out: *mut KojaList) {
     let skip = 1; // skip argv[0] (program name)

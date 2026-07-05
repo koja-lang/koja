@@ -26,13 +26,13 @@ use crate::value::Value;
 pub(super) fn type_mismatch(name: &str, signature: &str, args: &[Value]) -> RuntimeError {
     RuntimeError::TypeMismatch {
         detail: format!(
-            "{name} expects {signature}; got {} arg(s): {args:?}",
+            "{name} expects {signature}, got {} arg(s): {args:?}",
             args.len(),
         ),
     }
 }
 
-/// Koja ABI token → Rust C-ABI type, usable in type position.
+/// Koja ABI token -> Rust C-ABI type, usable in type position.
 macro_rules! c_type {
     (()) => { () };
     (CPtr) => { *mut u8 };
@@ -40,8 +40,8 @@ macro_rules! c_type {
     (Int64) => { i64 };
 }
 
-/// Koja ABI token + `&Value` → raw C argument. Expands inside a
-/// handler; a shape mismatch early-returns the handler's uniform
+/// Koja ABI token + `&Value` -> raw C argument. Expands inside a
+/// handler. A shape mismatch early-returns the handler's uniform
 /// [`type_mismatch`](super::marshal::type_mismatch) error.
 macro_rules! unmarshal_arg {
     (CPtr, $value:expr, $symbol:expr, $signature:expr, $args:expr) => {
@@ -76,7 +76,7 @@ macro_rules! unmarshal_arg {
     };
 }
 
-/// Koja ABI token + raw C result → [`Value`].
+/// Koja ABI token + raw C result -> [`Value`].
 macro_rules! marshal_return {
     ((), $raw:expr) => {{
         let _: () = $raw;

@@ -18,7 +18,7 @@ mod common;
 
 use common::{PACKAGE, diagnostic_messages, typecheck_file, typecheck_file_fail};
 
-/// Drive `parse_program → check_program` on multiple user files
+/// Drive `parse_program -> check_program` on multiple user files
 /// stacked in the same package. Used by [`alias_is_file_private`]
 /// to prove sister files don't see each other's alias slices.
 fn check_multi_file(files: &[(&str, &str)]) -> Result<CheckedProgram, CheckFailure> {

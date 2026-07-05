@@ -27,7 +27,7 @@
 //!    queries `get_abi_size` so opaque inner enum references in a
 //!    struct field are fine.
 //! 2. Set every enum variant *payload* body across all packages
-//!    ([`define_enum_payload_bodies`]). Same property — no size
+//!    ([`define_enum_payload_bodies`]). Same property: no size
 //!    query, so opaque inner enum-outer references in a payload
 //!    field are still fine.
 //! 3. Sort the enum decls in dependency order (every enum E whose
@@ -35,14 +35,14 @@
 //! 4. Walk the sorted decls and set each one's variant *complete*
 //!    body and outer chunk body ([`define_enum_completes_and_outer`]).
 //!    These query `get_abi_size` / `get_abi_alignment`, so every
-//!    transitively-referenced enum outer must already be bodied —
-//!    the topological order guarantees that.
+//!    transitively-referenced enum outer must already be bodied.
+//!    The topological order guarantees that.
 //!
 //! Without step 3 a stdlib enum like `Option<TestApp.TokenKind>`
 //! in `Global` would have its complete body set before
 //! `TestApp.TokenKind`'s outer, leaving the variant payload
 //! reading an opaque inner (`align 1`, `size 0`) and collapsing
-//! the outer chunk count to a single byte — wire-format wrong.
+//! the outer chunk count to a single byte (wire-format wrong).
 
 use koja_ir::IRProgram;
 
@@ -99,7 +99,7 @@ pub(crate) fn compile_program(
     for package in &program.packages {
         for function in package.functions.values() {
             // The entry wrapper declares and defines like any other
-            // helper (its kind is `ProcessEntryWrapper`); the host
+            // helper (its kind is `ProcessEntryWrapper`). The host
             // `main` trampoline is synthesized separately by
             // `emit_process_entry_main`.
             declared.push((function, declare_function(ctx, function)?));

@@ -5,7 +5,7 @@
 //! `IRSymbol -> FunctionValue` index on [`EmitContext`] (populated
 //! at declare time) before either body has been walked.
 //!
-//! The script body (`main`) follows a different shape — see
+//! The script body (`main`) follows a different shape. See
 //! [`crate::main_wrapper::emit_script_main`] for the auto-print
 //! scaffolding.
 
@@ -41,7 +41,7 @@ use crate::types::{closure_body_signature, env_struct_type, ir_basic_type, value
 ///   [`koja_ir::IRSymbol::mangled`] (the internal form).
 /// - `Extern(attrs)` declares under
 ///   [`koja_ir::IRExternAttrs::link_name`] when present, or
-///   the function's bare last segment otherwise (`TestApp.cosf` →
+///   the function's bare last segment otherwise (`TestApp.cosf` ->
 ///   `cosf`). The IRSymbol stays the call-site's resolution key,
 ///   regardless of the LLVM name.
 ///
@@ -80,7 +80,7 @@ pub(crate) fn declare_function<'ctx>(
             .add_function(&llvm_name, signature, Some(Linkage::External)),
     };
     ctx.register_declared_function(function.symbol.clone(), llvm_function);
-    // FFI declarations carry no body we define; everything else gets a
+    // FFI declarations carry no body we define. Everything else gets a
     // maintained frame pointer so panic backtraces can walk it.
     if !matches!(function.kind, FunctionKind::Extern(_)) {
         ctx.set_frame_pointer(llvm_function);
@@ -95,7 +95,7 @@ pub(crate) fn declare_function<'ctx>(
 
 /// Source location to attribute in DWARF for `function`, or `None`
 /// when the function carries no surface-source frame worth showing.
-/// Only user-declared `Regular` bodies qualify — synthesized glue,
+/// Only user-declared `Regular` bodies qualify: synthesized glue,
 /// closures, wrappers, and the bodyless `Intrinsic` / `Extern` kinds
 /// stay unattributed even when they retain a `def_location`.
 fn debuggable_def_location(function: &IRFunction) -> Option<&IRSourceDef> {
@@ -132,8 +132,8 @@ fn function_signature<'ctx>(
         // called through `koja_rt_spawn`'s `void (*)(i8*)` function
         // pointer. The IR signature carries `(config: C) -> Unit` for
         // type-checking convenience, but the LLVM declaration takes
-        // the raw config pointer the runtime hands the worker thread;
-        // each body emitter loads the typed config out of that
+        // the raw config pointer the runtime hands the worker thread.
+        // Each body emitter loads the typed config out of that
         // pointer in the entry block.
         let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
         return Ok(ctx.context.void_type().fn_type(&[ptr_ty.into()], false));
@@ -152,10 +152,10 @@ fn function_signature<'ctx>(
 
 /// Define a non-entry function's body. Dispatches on
 /// [`FunctionKind`]: `Regular` walks the IR basic blocks via
-/// [`emit::emit_block`]; `Intrinsic` routes to
+/// [`emit::emit_block`]. `Intrinsic` routes to
 /// [`intrinsics::emit_intrinsic_body`] which synthesizes a body from
 /// the per-symbol emitter table. Only `main` gets the auto-print
-/// wrapper; `Regular` helpers keep the natural `Return`-to-`ret`
+/// wrapper. `Regular` helpers keep the natural `Return`-to-`ret`
 /// emission. Pre-creates one inkwell `BasicBlock` per IR block (a
 /// no-op for `Intrinsic`'s empty `blocks`) so `Branch` / `CondBranch`
 /// terminators can resolve to a real [`BasicBlock`]. The body's
@@ -167,14 +167,14 @@ pub(crate) fn define_function<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
-    // Stage the body's debug scope before any instruction is built —
+    // Stage the body's debug scope before any instruction is built,
     // including the synthetic early-return kinds below, which unset the
     // location so they don't inherit the previous function's scope.
     ctx.enter_function_debug(llvm_function, debuggable_def_location(function));
     let env_layout = match &function.kind {
         FunctionKind::CopyClosureGlue { env_layout } => {
             // Env deep-copy glue has no IR body at all (it returns a
-            // raw env pointer); synthesize the whole `i8* (i8*)` body
+            // raw env pointer). Synthesize the whole `i8* (i8*)` body
             // from the capture layout.
             return emit::closures::emit_copy_closure_glue_body(
                 ctx,
@@ -195,7 +195,7 @@ pub(crate) fn define_function<'ctx>(
                 );
             }
             // Aggregate glue (struct / enum / union) carries a full
-            // `elaborate`-synthesized CFG; emit it exactly like a
+            // `elaborate`-synthesized CFG. Emit it exactly like a
             // `Regular` body (no closure env).
             None
         }
@@ -204,8 +204,8 @@ pub(crate) fn define_function<'ctx>(
         }
         FunctionKind::Extern(_) => {
             // FFI declarations carry no body. Mirrors `Intrinsic`'s
-            // skip path but without dispatching to an emitter — the
-            // C linker provides the implementation at link time.
+            // skip path but without dispatching to an emitter, since
+            // the C linker provides the implementation at link time.
             return Ok(());
         }
         FunctionKind::SpawnWrapper { .. } => {
@@ -228,7 +228,7 @@ pub(crate) fn define_function<'ctx>(
         }
         FunctionKind::Regular => None,
     };
-    // Slot table is per-function — flush any leftovers from the
+    // Slot table is per-function. Flush any leftovers from the
     // previous helper before walking this body.
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, llvm_function, &function.blocks);
@@ -261,8 +261,8 @@ pub(crate) fn define_function<'ctx>(
     // Blocks unreachable from the entry block (e.g. the merge of a
     // value-producing `if`/`else` whose arms both diverge) get
     // `unreachable` instead of their natural terminator. The
-    // IR layer doesn't model `IRTerminator::Unreachable` yet;
-    // the LLVM boundary's reachability walk is the stand-in.
+    // IR layer doesn't model `IRTerminator::Unreachable` yet.
+    // The LLVM boundary's reachability walk is the stand-in.
     let reachable = emit::reachable_blocks(&function.blocks);
     let result = (|| -> Result<(), LlvmError> {
         for block in &function.blocks {
@@ -295,7 +295,7 @@ pub(crate) fn define_function<'ctx>(
 /// non-parameter `(local, type)` pairs for [`TcoFrame::body_slots`].
 ///
 /// A `TailCall` back-edge zeroes every body slot, and the terminator
-/// can be emitted before a later block's `LocalDecl` has run — so the
+/// can be emitted before a later block's `LocalDecl` has run, so the
 /// slots must all exist up front. [`crate::emit`]'s `LocalDecl`
 /// emitter detects the pre-registered slot and only emits its
 /// zero-init store.
@@ -306,7 +306,7 @@ fn preregister_local_slots<'ctx>(
     param_slots: &[(IRLocalId, IRType)],
 ) -> Result<Vec<(IRLocalId, IRType)>, LlvmError> {
     // `build_entry_alloca` needs an insertion block to find the
-    // function; park the builder at the entry block for the walk.
+    // function. Park the builder at the entry block for the walk.
     ctx.builder
         .position_at_end(block_map[&function.blocks[0].id]);
     let mut body_slots = Vec::new();
@@ -335,10 +335,10 @@ fn preregister_local_slots<'ctx>(
 /// the natural terminator caps it. Subsequent
 /// [`IRTerminator::TailCall`] terminators in any block then store
 /// fresh args into the matching param slots and branch back to
-/// the same `tco_loop` header — a constant-stack iteration.
+/// the same `tco_loop` header, a constant-stack iteration.
 ///
 /// Param-promotion length is exactly `2 * function.params.len()`
-/// instructions; lower always emits each param's
+/// instructions. Lower always emits each param's
 /// [`IRInstruction::LocalDecl`] + [`IRInstruction::LocalWrite`]
 /// pair before any body work. A mismatch would indicate a lower
 /// invariant break and panics with a clear message.
@@ -354,7 +354,7 @@ fn emit_entry_with_tco_split<'ctx>(
     if block.instructions.len() < promotion_len {
         panic!(
             "LLVM emit: TCO entry block on `{}` is shorter ({}) than the expected \
-             promotion sequence ({}) — lower invariant violation",
+             promotion sequence ({}), lower invariant violation",
             function.symbol,
             block.instructions.len(),
             promotion_len,
@@ -382,9 +382,9 @@ fn emit_entry_with_tco_split<'ctx>(
 
 /// Number of leading entry-block instructions lower emits to promote
 /// the parameters into their local slots. Each param is a `LocalDecl`
-/// then `LocalWrite` pair (2); a heap-managed param additionally
+/// then `LocalWrite` pair (2). A heap-managed param additionally
 /// *acquires* the borrowed argument into its owning slot between the
-/// two (3) — an inline `Clone` for a heap leaf / no-glue aggregate, or
+/// two (3): an inline `Clone` for a heap leaf / no-glue aggregate, or
 /// the `Call` the [`koja_ir::elaborate`] pass rewrote a composite
 /// clone into. The optional acquire is detected structurally (by its
 /// operand referencing the incoming param) so the count tracks
@@ -416,9 +416,9 @@ fn is_param_acquire(instruction: Option<&IRInstruction>, param: ValueId) -> bool
 
 /// Sanity-check that the entry block's leading instructions are the
 /// canonical per-parameter promotion sequences lower emits:
-/// `LocalDecl` → (acquire `Clone` / `Call` for heap-managed) →
+/// `LocalDecl` -> (acquire `Clone` / `Call` for heap-managed) ->
 /// `LocalWrite`. A violation indicates a lower invariant break that
-/// would otherwise corrupt the back-edge slot writes; we panic with a
+/// would otherwise corrupt the back-edge slot writes. We panic with a
 /// clear message.
 fn debug_assert_promotion_shape(prefix: &[IRInstruction], function: &IRFunction) {
     debug_assert_eq!(prefix.len(), promotion_prefix_len(function, prefix));
@@ -472,8 +472,8 @@ fn closure_env_ptr<'ctx>(
         .get_nth_param(0)
         .unwrap_or_else(|| {
             panic!(
-                "LLVM emit: closure body `{}` declared no env parameter — \
-                 declare_function ABI invariant violation",
+                "LLVM emit: closure body `{}` declared no env parameter \
+                 (declare_function ABI invariant violation)",
                 function.symbol,
             )
         })
@@ -500,7 +500,7 @@ pub(crate) fn declare_blocks<'ctx>(
 
 /// Seed a fresh [`ValueMap`] with each parameter's LLVM value, keyed
 /// by the [`koja_ir::IRFunctionParam::id`] that body lowering
-/// uses. Inkwell's `get_nth_param` panics on out-of-bounds; the IR
+/// uses. Inkwell's `get_nth_param` panics on out-of-bounds. The IR
 /// seal guarantees `params.len()` matches the LLVM function's arity,
 /// so a miss here is a compiler bug.
 ///
@@ -519,8 +519,8 @@ fn seed_params<'ctx>(
         let llvm_index = (index as u32) + llvm_offset;
         let llvm_param = llvm_function.get_nth_param(llvm_index).unwrap_or_else(|| {
             panic!(
-                "LLVM emit: missing LLVM param #{llvm_index} on `{}` — \
-                 signature/IR arity mismatch",
+                "LLVM emit: missing LLVM param #{llvm_index} on `{}` \
+                 (signature/IR arity mismatch)",
                 function.symbol,
             )
         });

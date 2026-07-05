@@ -2,7 +2,7 @@
 //! layer, the shared allocator funnel, and the runtime **protocol**
 //! traits that platform adapters implement.
 //!
-//! This crate names no platform — no `polling`, no inline assembly, no
+//! This crate names no platform: no `polling`, no inline assembly, no
 //! OS threads (`libc` appears only for the allocator passthrough). The
 //! native adapter (`koja-runtime-posix`) and the future cooperative adapters
 //! (eval, WASI) depend on it and supply the capabilities behind the
@@ -11,8 +11,6 @@
 //! executor's per-process execution state `X` and message representation `M`,
 //! so the policy is shared while a process splits into an agnostic control
 //! block plus an executor-owned execution state.
-//!
-//! See `koja/design/SCHEDULER-PROTOCOL.md` for the full design.
 
 pub mod driver;
 pub mod mailbox;

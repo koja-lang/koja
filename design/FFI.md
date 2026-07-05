@@ -329,7 +329,7 @@ Options:
 ### Open: function pointers as callback params
 
 Koja has `fn(T) -> U` as a closure type (fat pointer: function + env).
-C function pointers are thin (just the function address). Passing an Koja
+C function pointers are thin (just the function address). Passing a Koja
 closure to C doesn't work without a trampoline.
 
 Options:

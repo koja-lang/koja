@@ -1,7 +1,7 @@
 //! Typecheck coverage for `<<segments>>` binary literals
 //! ([`ExprKind::BinaryLiteral`]).
 //!
-//! Per-segment validation, byte-aligned vs sub-byte total → Binary
+//! Per-segment validation, byte-aligned vs sub-byte total -> Binary
 //! / Bits, and feature-gap diagnostics for dynamic widths or
 //! incompatible value/modifier pairs. Pairs with the lowering
 //! coverage in `koja-ir/tests/lower_binary_literal.rs` (which
@@ -47,8 +47,8 @@ fn global_leaf(checked: &CheckedProgram, name: &str) -> ResolvedType {
 
 #[test]
 fn byte_aligned_literal_resolves_to_binary() {
-    // `<<1, 2, 3>>`: three default-8-bit integer segments → 24
-    // bits → byte-aligned → Binary.
+    // `<<1, 2, 3>>`: three default-8-bit integer segments -> 24
+    // bits -> byte-aligned -> Binary.
     let checked = typecheck("<<1, 2, 3>>\n");
     assert_eq!(
         trailing_resolution(&checked),
@@ -58,7 +58,7 @@ fn byte_aligned_literal_resolves_to_binary() {
 
 #[test]
 fn sized_integer_segment_resolves_to_binary() {
-    // `<<255::16>>`: one 16-bit integer segment → 16 bits → Binary.
+    // `<<255::16>>`: one 16-bit integer segment -> 16 bits -> Binary.
     let checked = typecheck("<<255::16>>\n");
     assert_eq!(
         trailing_resolution(&checked),
@@ -68,7 +68,7 @@ fn sized_integer_segment_resolves_to_binary() {
 
 #[test]
 fn type_annotated_integer_segment_resolves_to_binary() {
-    // `<<x: Int16>>`: one Int16 segment → 16 bits → Binary.
+    // `<<x: Int16>>`: one Int16 segment -> 16 bits -> Binary.
     let checked = typecheck("<<42: Int16>>\n");
     assert_eq!(
         trailing_resolution(&checked),
@@ -78,7 +78,7 @@ fn type_annotated_integer_segment_resolves_to_binary() {
 
 #[test]
 fn float32_segment_resolves_to_binary() {
-    // `<<1.0: Float32>>`: 32 bits → Binary.
+    // `<<1.0: Float32>>`: 32 bits -> Binary.
     let checked = typecheck("<<1.0: Float32>>\n");
     assert_eq!(
         trailing_resolution(&checked),
@@ -97,7 +97,7 @@ fn float64_segment_resolves_to_binary() {
 
 #[test]
 fn string_segment_resolves_to_binary() {
-    // `<<"hi">>`: 16 bits → Binary.
+    // `<<"hi">>`: 16 bits -> Binary.
     let checked = typecheck("<<\"hi\">>\n");
     assert_eq!(
         trailing_resolution(&checked),
@@ -115,7 +115,7 @@ fn sub_byte_literal_resolves_to_bits() {
 
 #[test]
 fn empty_literal_resolves_to_binary() {
-    // Empty `<<>>` is 0 bits, vacuously byte-aligned → Binary.
+    // Empty `<<>>` is 0 bits, vacuously byte-aligned -> Binary.
     let checked = typecheck("<<>>\n");
     assert_eq!(
         trailing_resolution(&checked),
@@ -184,7 +184,7 @@ fn string_segment_with_size_diagnoses() {
 
 #[test]
 fn byte_unit_size_resolves_to_binary() {
-    // `<<x::4 byte>>` = 32 bits → Binary.
+    // `<<x::4 byte>>` = 32 bits -> Binary.
     let checked = typecheck("<<7::4 byte>>\n");
     assert_eq!(
         trailing_resolution(&checked),

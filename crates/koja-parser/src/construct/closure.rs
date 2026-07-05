@@ -83,8 +83,8 @@ impl Parser {
     }
 
     /// Reinterpret the LHS of a short-closure arrow as its parameter
-    /// list. `x -> ...` → `[x]`, `_ -> ...` → wildcard, and `(x) -> ...`
-    /// → unwrap the Group and recurse. Anything else is a syntax
+    /// list. `x -> ...` -> `[x]`, `_ -> ...` -> wildcard, and `(x) -> ...`
+    /// -> unwrap the Group and recurse. Anything else is a syntax
     /// error.
     pub(crate) fn expr_to_closure_params(&mut self, expr: &Expr, span: Span) -> Vec<ClosureParam> {
         match &expr.kind {

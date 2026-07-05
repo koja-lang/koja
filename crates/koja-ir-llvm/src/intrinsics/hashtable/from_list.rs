@@ -1,4 +1,4 @@
-//! `Set.from_list(items)` — walk the list's flat buffer and fold
+//! `Set.from_list(items)`: walk the list's flat buffer and fold
 //! each element into a fresh `Set` via [`call_set_insert_inline`].
 //! Lives in its own module because it stitches together pieces from
 //! every other submodule ([`build_empty_table`](super::util::build_empty_table),
@@ -127,8 +127,8 @@ pub(crate) fn emit_set_from_list<'ctx>(
 }
 
 /// Inline the `Set.insert` body at a call site. v1 emitted a
-/// sibling function and called it; this avoids that round-trip by
-/// inlining — the per-method declared-function index isn't
+/// sibling function and called it. This avoids that round-trip by
+/// inlining, since the per-method declared-function index isn't
 /// populated for the freshly-monomorphized `Set.insert` at the
 /// point where `from_list`'s body is being emitted.
 fn call_set_insert_inline<'ctx>(
@@ -143,7 +143,7 @@ fn call_set_insert_inline<'ctx>(
     let i64_ty = ctx.context.i64_type();
     // The receiver is a `current` struct already in hand (not
     // `self_val` from a parameter), so we don't use
-    // [`extract_table_fields`] here — the manual 4-extract pattern
+    // [`extract_table_fields`] here. The manual 4-extract pattern
     // is the natural fit.
     let current_struct = current.into_struct_value();
     let table = TableSnapshot {
@@ -157,7 +157,7 @@ fn call_set_insert_inline<'ctx>(
     let post = emit_resize_if_needed(ctx, llvm_function, layout, &table, &key_ops)?;
     let probe = emit_insert_probe(ctx, function, llvm_function, layout, &post, item, &key_ops)?;
     // After `emit_insert_probe` returns, the builder is parked on
-    // the (already-terminated) `advance` block — appending any
+    // the (already-terminated) `advance` block. Appending any
     // instruction here would land it after a terminator, which is
     // malformed IR. Build the merge block fresh and stitch the
     // two outcome paths together with a PHI instead of an alloca.
@@ -183,8 +183,8 @@ fn call_set_insert_inline<'ctx>(
 
     ctx.builder.position_at_end(probe.insert_bb);
     let ins_ptr = entry_pointer(ctx, post.entries_ptr, probe.pidx, layout.entry_size)?;
-    // Acquire the element so the set owns an independent reference;
-    // the source list it was read from keeps its own.
+    // Acquire the element so the set owns an independent reference.
+    // The source list it was read from keeps its own.
     let insert_item = acquire_value(ctx, layout.key_ty, item)?;
     ctx.builder.build_store(ins_ptr, insert_item).or_ice()?;
     ctx.builder

@@ -1,4 +1,4 @@
-//! Eval handlers for the `Equality` intrinsic family — `Bool`,
+//! Eval handlers for the `Equality` intrinsic family: `Bool`,
 //! 8 integer cells (flattened to [`Value::Int(i64)`]), `Float` /
 //! `Float32` (IEEE-754 ordered: `NaN != NaN`), and `String`.
 //! Mismatched shapes surface a typed
@@ -13,7 +13,7 @@ pub(super) fn dispatch(impl_: EqualityImpl, args: &[Value]) -> Result<Value, Run
     let [lhs, rhs] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
-                "Equality.eq ({impl_:?}) expects 2 arguments; got {} arg(s): {args:?}",
+                "Equality.eq ({impl_:?}) expects 2 arguments, got {} arg(s): {args:?}",
                 args.len(),
             ),
         });
@@ -27,7 +27,7 @@ pub(super) fn dispatch(impl_: EqualityImpl, args: &[Value]) -> Result<Value, Run
         _ => {
             return Err(RuntimeError::TypeMismatch {
                 detail: format!(
-                    "Equality.eq ({impl_:?}) expects matching operands for the impl cell; \
+                    "Equality.eq ({impl_:?}) expects matching operands for the impl cell, \
                      got {lhs:?} and {rhs:?}",
                 ),
             });

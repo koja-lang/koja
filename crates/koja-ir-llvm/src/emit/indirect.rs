@@ -1,6 +1,6 @@
 //! Heap-box / unbox helpers for [`koja_ir::IRType::Indirect`]
 //! field slots. `Indirect(T)` is stored as a pointer to a heap-
-//! allocated `T`; constructors malloc + memcpy on write, projectors
+//! allocated `T`. Constructors malloc + memcpy on write, projectors
 //! load through the pointer on read. Pairs with the cycle pass in
 //! `koja-ir/src/cycle.rs`.
 
@@ -33,7 +33,7 @@ pub(super) fn emit_box_value<'ctx>(
 
 /// Load a `T` value through `ptr` where the IR slot is typed
 /// `Indirect(T)`. Caller has already extracted the pointer (e.g.
-/// from a struct GEP + load); this just routes through the inner
+/// from a struct GEP + load). This just routes through the inner
 /// type's LLVM shape.
 pub(super) fn emit_unbox_value<'ctx>(
     ctx: &EmitContext<'ctx>,

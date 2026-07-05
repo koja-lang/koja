@@ -22,8 +22,7 @@ mod system;
 mod tsan;
 mod util;
 
-// The mailbox / wire message layer now lives in the agnostic core; the
-// native adapter re-exports the modules so `crate::mailbox` /
-// `crate::wire` paths keep resolving. See
-// `koja/design/SCHEDULER-PROTOCOL.md`.
+// The mailbox / wire message layer lives in the platform-agnostic
+// core. This native adapter re-exports the modules so
+// `crate::mailbox` / `crate::wire` paths keep resolving.
 pub(crate) use koja_runtime_core::{mailbox, wire};

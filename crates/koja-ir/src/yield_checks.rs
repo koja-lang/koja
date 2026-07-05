@@ -45,7 +45,7 @@ pub(crate) fn insert_yield_checks(packages: &mut [IRPackage]) {
 /// don't pay for a check they can never need.
 ///
 /// The check lands after the parameter-promotion prologue (the canonical
-/// `LocalDecl` → acquire → `LocalWrite` run the backends split on), not at
+/// `LocalDecl` -> acquire -> `LocalWrite` run the backends split on), not at
 /// absolute index 0, so it never disturbs that prologue's shape.
 fn insert_entry_check(function: &mut IRFunction) {
     let contains_call = function.blocks.iter().any(|block| {

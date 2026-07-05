@@ -3,7 +3,7 @@
 //! The driver feeds a parsed project (sources + test fixtures) into
 //! [`discover_tests`] to enumerate every `@test`-annotated function
 //! belonging to the current project. [`generate_harness`] then
-//! produces an Koja source string for a synthetic
+//! produces a Koja source string for a synthetic
 //! [`HARNESS_ENTRY`] type implementing `Process<(), (), ()>` whose
 //! `run` invokes each test, tracks pass/fail counts, and stops with
 //! `StopReason.Shutdown` (exit 1) when anything fails. The driver

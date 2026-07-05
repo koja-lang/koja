@@ -792,8 +792,8 @@ fn extract_result_payload(
 /// scheduling weight via [`IRInstruction::SetPriority`], before `run`.
 ///
 /// The variant is a runtime value, so the weight is chosen by a
-/// name-keyed branch diamond — `High → 2`, `Low → 0`, else (`Normal`)
-/// → 1, matching `koja_runtime_core::Priority::from_index`. The arms
+/// name-keyed branch diamond — `High -> 2`, `Low -> 0`, else (`Normal`)
+/// -> 1, matching `koja_runtime_core::Priority::from_index`. The arms
 /// converge on a join block carrying the `Int64` weight as a
 /// [`crate::function::BlockParam`]; that block is returned so the
 /// caller appends `run` to it.

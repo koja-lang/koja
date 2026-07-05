@@ -1,6 +1,6 @@
 //! Struct literal + field projection emission: `StructInit` and
 //! `FieldGet`. The literal path materializes through an entry-block
-//! alloca, GEP, store-per-field, then load — matching how every
+//! alloca, GEP, store-per-field, then load, matching how every
 //! aggregate-shape instruction in this crate threads through LLVM
 //! (see also [`crate::emit::enums`]).
 
@@ -48,7 +48,7 @@ pub(super) fn emit_struct_init<'ctx>(
 
 /// Project a single field out of a struct-typed SSA value via a
 /// scratch entry-block alloca + GEP + load. The `field_type` passed
-/// by the instruction is the unboxed view; the decl's recorded type
+/// by the instruction is the unboxed view. The decl's recorded type
 /// drives the actual load shape so cycle-broken `Indirect(_)` slots
 /// load a `ptr` then unbox.
 pub(super) fn emit_field_get<'ctx>(

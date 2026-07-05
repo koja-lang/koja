@@ -1,5 +1,5 @@
 //! Direct-call emission. Closure-call dispatch lives in
-//! [`super::closures`]; this module only handles the
+//! [`super::closures`]. This module only handles the
 //! statically-resolved [`koja_ir::IRInstruction::Call`] form.
 
 use inkwell::values::{BasicMetadataValueEnum, BasicValueEnum};
@@ -12,7 +12,7 @@ use super::{ValueMap, lookup};
 
 /// Call the function registered on `ctx.module` under the callee's
 /// mangled symbol. Returns `None` for `Unit`-returning callees (LLVM
-/// `void` calls); the caller skips the value-map insert in that case.
+/// `void` calls), and the caller skips the value-map insert then.
 pub(super) fn emit_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     args: &[ValueId],
@@ -22,7 +22,7 @@ pub(super) fn emit_call<'ctx>(
     let function = ctx.declared_function(callee).unwrap_or_else(|| {
         panic!(
             "LLVM emit: callee `{}` not registered in the declared-functions \
-             index — declaration order or seal violation",
+             index (declaration order or seal violation)",
             callee.mangled(),
         )
     });

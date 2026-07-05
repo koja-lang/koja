@@ -1,13 +1,13 @@
-//! `CPtr<T>` family — raw, manually-managed C pointers. Each call
+//! `CPtr<T>` family: raw, manually-managed C pointers. Each call
 //! site monomorphizes to a separate intrinsic body via the receiver
 //! pinning (`Global.CPtr_$UInt8$.alloc` and `Global.CPtr_$Float32$.alloc`
-//! emit distinct functions); the dispatch id stays the bare
+//! emit distinct functions). The dispatch id stays the bare
 //! `CPtr.<method>` since [`crate::intrinsics::emitter_for`] cannot see
 //! the type args otherwise. The pointee `IRType` lives on
 //! `params[0].ty` for instance methods and on `return_type` for
-//! `alloc`/`null`; [`pointee`] picks the right slot.
+//! `alloc`/`null`. [`pointee`] picks the right slot.
 //!
-//! Bodies are inline LLVM IR — `null` returns `null`, `alloc` calls
+//! Bodies are inline LLVM IR: `null` returns `null`, `alloc` calls
 //! `malloc(count * sizeof(T))`, `free` calls libc `free`, `offset`
 //! issues a typed GEP, `read` / `write` load / store at the typed
 //! pointer, `null?` compares against `null`, `to_string` is a
@@ -52,7 +52,7 @@ pub(super) fn emit_cptr<'ctx>(
 }
 
 /// Resolve the pointee `T` for a `CPtr<T>` intrinsic. `alloc` /
-/// `null` carry it on the return type; every other method receives
+/// `null` carry it on the return type. Every other method receives
 /// `self: CPtr<T>` as `params[0]`. Falls through to a codegen error
 /// if neither slot is a `CPtr`.
 fn pointee(method: CPtrMethod, function: &IRFunction) -> Result<&IRType, LlvmError> {
@@ -175,7 +175,7 @@ fn emit_null_check<'ctx>(
     ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
 }
 
-/// `to_string(self): String` — `self` must already point at a valid
+/// `to_string(self): String`: `self` must already point at a valid
 /// length-prefixed Koja string payload (same `[i64 bit_length]
 /// [payload]` layout as `String`). Returns a fresh, independent
 /// `String` copy rather than reinterpreting the pointer in place:
@@ -193,10 +193,10 @@ fn emit_to_string<'ctx>(
     ctx.builder.build_return(Some(&copied)).or_ice().map(|_| ())
 }
 
-/// `to_binary(self, len): Binary` — malloc a `[i64 bit_len][len bytes]`
+/// `to_binary(self, len): Binary`: malloc a `[i64 bit_len][len bytes]`
 /// block and `memcpy` `len` bytes from the source pointer. Returns a
 /// pointer to the payload (`base + 8`) per the `Binary` ABI.
-/// Caller retains ownership of `self`; the produced `Binary` is a
+/// Caller retains ownership of `self`. The produced `Binary` is a
 /// fresh owned heap allocation.
 fn emit_to_binary<'ctx>(
     ctx: &EmitContext<'ctx>,

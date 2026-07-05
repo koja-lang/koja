@@ -221,7 +221,7 @@ fn nested_field_access_chains_two_field_gets() {
 // Feature-gap diagnostics on the IR side (`lower/structs.rs::has_feature_gap`)
 // duplicate the equivalents in `pipeline/collect.rs::diagnose_struct_feature_gaps`.
 // In practice the typecheck pass rejects these programs before lowering ever
-// runs, so they're unreachable through the normal `parse → check → lower`
+// runs, so they're unreachable through the normal `parse -> check -> lower`
 // pipeline these tests drive. The IR-side checks stay as defense-in-depth
 // for any future caller that bypasses typecheck (e.g. tooling that constructs
 // a CheckedProgram by hand); the typecheck-side gaps are covered by

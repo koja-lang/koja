@@ -1,7 +1,7 @@
 //! Emit-time synthesis of *collection* clone / deep-copy / drop glue
 //! bodies (`List` / `Map` / `Set`). The `elaborate` sub-pass registers
 //! these as [`FunctionKind::CloneGlue`] / [`FunctionKind::DeepCopyGlue`]
-//! / [`FunctionKind::DropGlue`] shells with empty `blocks`; unlike
+//! / [`FunctionKind::DropGlue`] shells with empty `blocks`. Unlike
 //! aggregate glue (whose CFG `elaborate` synthesizes in IR), a
 //! collection's body is a runtime-shaped buffer walk we build straight
 //! from the operand type here.
@@ -18,7 +18,7 @@
 //!
 //! The per-element ops live in [`crate::intrinsics::element`]
 //! (shared with the copy-on-write mutators). This module owns the
-//! dispatch entry point plus the collection-struct field helpers; the
+//! dispatch entry point plus the collection-struct field helpers. The
 //! per-collection bodies live in [`list`] (the dynamic-array walk) and
 //! [`table`] (the open-addressed `Map` / `Set` bucket walk).
 
@@ -102,15 +102,15 @@ pub(crate) fn emit_collection_glue_body<'ctx>(
             table::drop_table(ctx, function, llvm_function, key, Some(value))
         }
         (kind, other) => panic!(
-            "collection glue `{}`: unexpected ({kind:?}, operand {other:?}) — \
-             only collection operands lower with empty blocks (`Indirect` is \
+            "collection glue `{}`: unexpected ({kind:?}, operand {other:?}). \
+             Only collection operands lower with empty blocks (`Indirect` is \
              transparent and carries no glue of its own)",
             function.symbol,
         ),
     }
 }
 
-/// ABI byte size of `ty` on the host triple — the same target-data
+/// ABI byte size of `ty` on the host triple: the same target-data
 /// the rest of the layout pipeline (and the hashtable intrinsics) read,
 /// so glue buffer arithmetic matches the emitted field sizes exactly.
 pub(super) fn abi_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u64, LlvmError> {

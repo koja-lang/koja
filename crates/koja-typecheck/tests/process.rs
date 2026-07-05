@@ -461,8 +461,8 @@ fn receive_with_inconsistent_arm_tails_diagnoses() {
 fn ref_call_accepts_union_member_arg() {
     // `impl Process<_, MsgA | MsgB, _>` makes `spawn`'s return
     // `Ref<MsgA | MsgB, _>`. Calling `.call(MsgA.Ping(...))` must
-    // accept: the receiver's slot already pre-binds `M → MsgA |
-    // MsgB`, and the arg-driven unification of `M → MsgA` is a
+    // accept: the receiver's slot already pre-binds `M -> MsgA |
+    // MsgB`, and the arg-driven unification of `M -> MsgA` is a
     // union-member compatibility, not a conflict.
     let source = "
         enum MsgA

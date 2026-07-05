@@ -1,13 +1,13 @@
 //! Synthesize the host `main` entry point. Two shapes, one per
 //! compile path:
 //!
-//! - **Script** ([`emit_script_main`]) — `.kojs` shape. Stamps
+//! - **Script** ([`emit_script_main`]): `.kojs` shape. Stamps
 //!   `void __koja_user_main(i8*)` carrying the script body plus an
 //!   `i64 main()` trampoline that registers the thunk as PID 1 and
 //!   boots the scheduler. Always returns 0.
-//! - **Program** ([`emit_process_entry_main`]) — project shape.
+//! - **Program** ([`emit_process_entry_main`]): project shape.
 //!   The IR program's entry function is a `ProcessEntryWrapper`
-//!   already defined like any helper; this module only synthesizes
+//!   already defined like any helper. This module only synthesizes
 //!   the host `main` trampoline that builds the `C` argument,
 //!   hands the wrapper to `koja_rt_spawn`, runs the scheduler via
 //!   `koja_rt_main_done`, and returns whatever the wrapper stored
@@ -17,17 +17,17 @@
 //! - Scripts stay at `i64 main()`.
 //! - Program entries use `i32 main(i32, i8**)` iff the entry
 //!   state's config type is `List<String>` (so the trampoline can
-//!   build a `List<String>` from argc/argv); otherwise they stay
+//!   build a `List<String>` from argc/argv). Otherwise they stay
 //!   at `i32 main()` and zero-fill the config alloca.
 //!
 //! Running the user body inside a spawned process (PID 1) is what
 //! lets `koja_rt_self()`, `Ref.call`, `Ref.cast`, and the rest of
-//! the concurrency primitives work from `main` — they need a
+//! the concurrency primitives work from `main`. They need a
 //! `CURRENT_PID >= 1` thread-local and a real mailbox, both of
 //! which the scheduler installs before invoking the spawned thunk.
 //!
 //! The [`__koja_app_name`](APP_NAME_SYMBOL) global lives here
-//! because it's the same kind of "runtime convention" plumbing —
+//! because it's the same kind of "runtime convention" plumbing,
 //! emitted on every compiled binary so the runtime archive's
 //! panic handler links cleanly regardless of cgu partitioning.
 //!
@@ -53,7 +53,7 @@ use crate::types::value_basic_type;
 const APP_NAME_SYMBOL: &str = "__koja_app_name";
 const ENTRY_SYMBOL: &str = "main";
 /// Module-level `i32` global the [`FunctionKind::ProcessEntryWrapper`]
-/// body writes the entry process's exit code into; the synthesized
+/// body writes the entry process's exit code into. The synthesized
 /// `main` trampoline returns its value after the scheduler joins.
 /// Scripts never touch this global (they always return 0 from
 /// `main`).
@@ -64,7 +64,7 @@ const USER_MAIN_SYMBOL: &str = "__koja_user_main";
 
 /// Emit `__koja_app_name` as a null-terminated C-string constant.
 /// The `koja-runtime` panic handler reads it for backtrace labels
-/// (declared there as `extern static [c_char; 0]`); every
+/// (declared there as `extern static [c_char; 0]`). Every
 /// compiled binary defines it so the runtime archive links
 /// cleanly regardless of codegen-unit partitioning.
 pub(crate) fn emit_app_name_global(ctx: &EmitContext<'_>, app_name: &str) {
@@ -77,7 +77,7 @@ pub(crate) fn emit_app_name_global(ctx: &EmitContext<'_>, app_name: &str) {
 }
 
 /// Emit the mutable `__koja_exit_code` (i32, init 0) global the
-/// process-entry wrapper writes into; the `main` trampoline
+/// process-entry wrapper writes into. The `main` trampoline
 /// returns its value after the scheduler joins.
 pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
     if ctx.module.get_global(EXIT_CODE_SYMBOL).is_some() {
@@ -97,7 +97,7 @@ pub(crate) fn emit_exit_code_global(ctx: &EmitContext<'_>) {
 ///    scheduler (which runs until PID 1 dies), then `ret i64 0`.
 ///
 /// The trailing block of `__koja_user_main` is always capped with
-/// `ret void` — the script body's trailing value is computed (for
+/// `ret void`. The script body's trailing value is computed (for
 /// its side effects) and discarded. Empty bodies are illegal
 /// (sealed IR guarantees at least one block), and the final IR
 /// block must end in `Return`. The seal pass admits other
@@ -112,7 +112,7 @@ pub(crate) fn emit_script_main<'ctx>(
 }
 
 /// Define `void __koja_user_main(i8*)` carrying the script body.
-/// The single pointer parameter is ignored — present only to match
+/// The single pointer parameter is ignored, present only to match
 /// `koja_rt_spawn`'s `ProcessFn` signature so the trampoline can
 /// hand the function pointer over directly.
 fn define_user_main<'ctx>(
@@ -130,7 +130,7 @@ fn define_user_main<'ctx>(
     // top-level panic resolves to `main` at the user's file:line.
     ctx.enter_named_function_debug(function, "main", def_location);
     // The script-mode body is its own function from a slot-identity
-    // perspective; flush any stragglers from a prior compile or
+    // perspective. Flush any stragglers from a prior compile or
     // helper so `LocalDecl` registers cleanly here.
     ctx.reset_locals();
     let block_map = declare_blocks(ctx, function, blocks);
@@ -168,7 +168,7 @@ fn define_user_main<'ctx>(
 
 /// Synthesize the `main` trampoline for a Process-entry program.
 /// The entry IR function is a [`FunctionKind::ProcessEntryWrapper`]
-/// already declared+defined like any other helper; this trampoline
+/// already declared+defined like any other helper. This trampoline
 /// only handles host-side argv plumbing and the exit-code return.
 ///
 /// Signature picks:
@@ -177,8 +177,8 @@ fn define_user_main<'ctx>(
 ///   `Process<List<String>, _, _>`). The body calls
 ///   `koja_rt_build_argv(argc, argv, &config_alloca)` to build a
 ///   `List<String>` in place before spawning.
-/// - `i32 main()` otherwise. The config alloca is zero-initialized;
-///   non-`List<String>` configs aren't reachable from `koja.toml`
+/// - `i32 main()` otherwise. The config alloca is zero-initialized.
+///   Non-`List<String>` configs aren't reachable from `koja.toml`
 ///   today (Process configs that aren't `List<String>` only make
 ///   sense for spawn-from-user-code, not the project entry), but
 ///   the shape leaves the door open.
@@ -290,7 +290,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
 ///
 /// `koja_rt_spawn(__koja_user_main, null, 0)` registers the thunk
 /// as PID 1 with a zero-byte config (the thunk ignores the
-/// pointer); `koja_rt_main_done()` boots the I/O reactor + worker
+/// pointer). `koja_rt_main_done()` boots the I/O reactor + worker
 /// pool and runs the scheduling loop until PID 1 dies. Returning
 /// `0` from `main` after the scheduler joins keeps the host exit
 /// status at success unless the runtime itself exited with a
@@ -338,10 +338,10 @@ fn define_main_trampoline<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError
 
 /// Cap the trailing block of `__koja_user_main` with `ret void`.
 /// The script body's `Return` terminator's value (if any) has
-/// already been emitted by [`emit::emit_instructions`]; we discard
+/// already been emitted by [`emit::emit_instructions`]. We discard
 /// it because scripts always exit 0 on normal completion.
 ///
-/// Skips the cap when the host block is already terminated —
+/// Skips the cap when the host block is already terminated.
 /// `IRInstruction::Receive` ends the block with its dispatcher
 /// branch, so emitting `ret void` after would be a duplicate
 /// terminator.
@@ -357,9 +357,9 @@ fn emit_user_main_return<'ctx>(ctx: &EmitContext<'ctx>) -> Result<(), LlvmError>
 /// The [`IRBlockId`] of the unique *reachable* block ending in
 /// `Return`. Today's slice produces exactly one reachable
 /// `Return`-terminated block per function (the merge block of an
-/// `if` / `unless` falls through to it via `Branch`); divergent
+/// `if` / `unless` falls through to it via `Branch`). Divergent
 /// if/else's may synthesize an unreachable merge whose `Return`
-/// reads an unmaterialized `BlockParam` — those don't count and
+/// reads an unmaterialized `BlockParam`. Those don't count and
 /// are filtered out via `reachable`. A missing or duplicate
 /// reachable `Return` is a lowering bug we surface as a codegen
 /// error.

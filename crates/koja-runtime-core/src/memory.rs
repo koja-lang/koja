@@ -1,24 +1,25 @@
 //! The single allocator funnel for all Koja heap.
 //!
-//! Every Koja-managed allocation — codegen-emitted `String` / `Binary`
+//! Every Koja-managed allocation (codegen-emitted `String` / `Binary`
 //! / `Bits` / `List` / `HashTable` / closure / socket buffers, the
 //! runtime's own envelope transport and process-local byte runs, and
-//! the `CPtr` / `CString` FFI types — routes through this one pair of
+//! the `CPtr` / `CString` FFI types) routes through this one pair of
 //! `alloc` / `free` (plus `realloc`). The platform adapter exports the
 //! `koja_alloc` / `koja_realloc` / `koja_free` C-ABI symbols over these
-//! helpers; both bottom out here, so drop glue can free a message's
+//! helpers. Both bottom out here, so drop glue can free a message's
 //! nested heap without ever crossing allocators.
 //!
 //! **Passthrough invariant.** These are thin wrappers over the libc
 //! allocator: a pointer from [`alloc`] is freeable by libc `free` and a
 //! libc-`malloc`'d pointer is freeable by [`free`]. That equivalence is
-//! load-bearing — `CPtr` / `CString` and user `extern fn malloc/free`
-//! hand pointers across the C-ABI boundary in both directions. If a
+//! load-bearing, because `CPtr` / `CString` and user `extern fn
+//! malloc/free` hand pointers across the C-ABI boundary in both
+//! directions. If a
 //! non-libc managed allocator (arena/GC) is ever introduced, the
 //! C-interop types must be split back onto literal libc first.
 //!
 //! Frees are **sizeless** (libc `free` recovers the block size itself),
-//! matching codegen's `free(payload - 8)` drop recipe; no `Layout` is
+//! matching codegen's `free(payload - 8)` drop recipe. No `Layout` is
 //! threaded to the free site.
 
 use std::process;
@@ -26,15 +27,15 @@ use std::sync::atomic::{AtomicI64, Ordering};
 
 /// Net count of live heap blocks handed out by this funnel: bumped on
 /// every non-null [`alloc`] / [`realloc`]-as-alloc and decremented on
-/// every [`free`] / [`realloc`]-as-free. It is *not* a byte total — one
-/// unit per block — so it returns to its starting value once every
+/// every [`free`] / [`realloc`]-as-free. It is *not* a byte total (one
+/// unit per block), so it returns to its starting value once every
 /// allocation made since a checkpoint has been freed.
 ///
 /// Exposed via [`live_blocks`] for steady-state leak fixtures: record
 /// the count, run a leak-prone pattern N times, assert the delta is
-/// zero. `Relaxed` is sufficient — we only need eventual per-thread
-/// visibility and an exact total at a quiesced checkpoint, not ordering
-/// against other memory.
+/// zero. `Relaxed` is sufficient, since we only need eventual
+/// per-thread visibility and an exact total at a quiesced checkpoint,
+/// not ordering against other memory.
 static LIVE_BLOCKS: AtomicI64 = AtomicI64::new(0);
 
 /// Allocate `size` bytes, aborting the process on allocation failure so
@@ -63,7 +64,7 @@ pub unsafe fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
         process::abort();
     }
     // A resize-in-place / move of a live block leaves the live count
-    // unchanged; only the alloc edge (null in, real bytes out) and the
+    // unchanged. Only the alloc edge (null in, real bytes out) and the
     // free edge (live block in, freed via size 0) move the counter.
     if ptr.is_null() {
         if !new_ptr.is_null() {

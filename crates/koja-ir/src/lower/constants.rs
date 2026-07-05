@@ -1,4 +1,4 @@
-//! Package-level `const` pool lowering and registry → [`IRConstantValue`] translation.
+//! Package-level `const` pool lowering and registry -> [`IRConstantValue`] translation.
 //! Primitives inline at use sites as [`IRInstruction::Const`](crate::function::IRInstruction::Const);
 //! strings, unit enum variants, and struct literals pool on
 //! [`IRPackage::constants`](crate::package::IRPackage::constants) and load through

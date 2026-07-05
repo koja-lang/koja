@@ -5,8 +5,8 @@
 //! C-ABI helpers in [`crate::string`] map outcomes to return codes
 //! for LLVM-emitted IR, and `koja-ir-eval`'s parse shims consume
 //! [`ParseOutcome`] directly. This module is the authoritative
-//! definition of the return codes; `koja-ir-llvm` mirrors them by
-//! spec (see `koja/design/ABI.md` § Numeric parse helpers).
+//! definition of the return codes, and `koja-ir-llvm`'s parse
+//! intrinsic emitter hardcodes matching constants.
 
 use std::num::IntErrorKind;
 
@@ -66,7 +66,7 @@ pub fn parse_int_text(text: &str) -> ParseOutcome<i64> {
 /// decimal text parses: a well-formed magnitude that overflows
 /// `f64` (e.g. `1e999`) is out of range, while the `inf` /
 /// `infinity` / `nan` tokens Rust's parser accepts are rejected as
-/// invalid — Koja has no literal syntax for them.
+/// invalid, because Koja has no literal syntax for them.
 pub fn parse_float_text(text: &str) -> ParseOutcome<f64> {
     match text.parse::<f64>() {
         Ok(v) if v.is_finite() => ParseOutcome::Ok(v),

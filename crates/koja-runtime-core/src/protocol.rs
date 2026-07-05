@@ -1,24 +1,24 @@
 //! The runtime protocol: the capability traits a platform adapter
 //! implements, plus the shared vocabulary types they trade in.
 //!
-//! The agnostic core owns scheduling *decisions*; an adapter supplies
-//! *capabilities* — how a process runs and suspends ([`Executor`]), how
-//! fd readiness arrives ([`Reactor`]), how the run loop is driven and
-//! synchronized ([`Driver`]), and how time and OS signals are observed
-//! ([`Clock`], [`SignalSource`]). The native adapter (`koja-runtime-posix`)
-//! is the first implementation; a single-threaded cooperative adapter
-//! (eval, then WASI) is the second.
+//! The agnostic core owns scheduling *decisions*, while an adapter
+//! supplies *capabilities*: how a process runs and suspends
+//! ([`Executor`]), how fd readiness arrives ([`Reactor`]), how the run
+//! loop is driven and synchronized ([`Driver`]), and how time and OS
+//! signals are observed ([`Clock`], [`SignalSource`]). The native
+//! adapter (`koja-runtime-posix`) is the first implementation, and a
+//! single-threaded cooperative adapter (eval, then WASI) is the second.
 //!
 //! Signatures here are the design surface and may refine as the native
 //! implementations land against them.
 
 use std::time::{Duration, Instant};
 
-/// A scheduler-assigned process handle. Opaque to user code; the native
+/// A scheduler-assigned process handle. Opaque to user code. The native
 /// adapter packs a slot index and generation into it.
 pub type Pid = i64;
 
-/// Routing class of a mailbox message — which part of the receiver's
+/// Routing class of a mailbox message: which part of the receiver's
 /// mailbox an incoming message lands in. A routing class, not a payload
 /// shape. See [`crate::mailbox`].
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -34,7 +34,7 @@ pub enum Tag {
 }
 
 /// A value that can ride a mailbox. The mailbox routes purely by
-/// [`tag`](Message::tag); the concrete representation (byte `Envelope`
+/// [`tag`](Message::tag). The concrete representation (byte `Envelope`
 /// natively, a typed value cooperatively) is the executor's choice.
 pub trait Message {
     fn tag(&self) -> Tag;
@@ -42,13 +42,13 @@ pub trait Message {
 
 /// Mints the protocol messages the
 /// [`CooperativeDriver`](crate::CooperativeDriver) must synthesize on its
-/// own — lifecycle signals drained from the [`SignalSource`] and I/O
+/// own: lifecycle signals drained from the [`SignalSource`] and I/O
 /// readiness events the [`Reactor`] reports for a `Fd.watch` owner. The
 /// native driver builds these inline in its own loop (signals into the
 /// system queue, `IOReady`s via `send_io_event`), so only cooperative
 /// backends (eval, then WASI) implement this. Carries the message as a
 /// type parameter (rather than an associated type) so the driver can bind
-/// it to the executor's `Message` — `E: MessageSource<E::Message>` —
+/// it to the executor's `Message` (`E: MessageSource<E::Message>`)
 /// without a second `Message` associated type to disambiguate.
 pub trait MessageSource<M: Message> {
     /// Build the message delivered to the entry process for `event`.
@@ -60,8 +60,9 @@ pub trait MessageSource<M: Message> {
 }
 
 /// A lifecycle event delivered to the entry process. Discriminants are
-/// the wire variant indices (`SIGTERM` -> `Shutdown`, `SIGINT` ->
-/// `Interrupt`, `SIGHUP` -> `Reload`); see `koja/design/ABI.md`.
+/// the variant bytes stamped into lifecycle envelopes (`SIGTERM` ->
+/// `Shutdown`, `SIGINT` -> `Interrupt`, `SIGHUP` -> `Reload`), so
+/// emitted receive arms match on them and they must not be renumbered.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Lifecycle {
     Shutdown = 0,
@@ -88,10 +89,11 @@ pub enum Readiness {
 
 /// What the reactor does when a registered fd becomes ready: resume a
 /// process blocked on the fd (`io_block` path), or enqueue an `IOReady`
-/// message for a watcher (`Fd.watch` path). Replaces the integer-offset
-/// keyspace multiplexing called out in `koja/design/RUNTIME-GAPS.md`.
+/// message for a watcher (`Fd.watch` path). A typed action, replacing
+/// the old scheme that multiplexed pid keys and offset fd keys into one
+/// integer keyspace.
 ///
-/// Registered as the action to take; returned by [`Reactor::poll`] with
+/// Registered as the action to take. Returned by [`Reactor::poll`] with
 /// the `Deliver` `readiness` filled in from the event that fired.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Waker {
@@ -119,7 +121,7 @@ pub trait SignalSource {
 }
 
 /// fd readiness. Native drives [`poll`](Reactor::poll) on a dedicated
-/// thread (`polling` crate); a cooperative driver calls it inline when
+/// thread (`polling` crate). A cooperative driver calls it inline when
 /// the ready queue empties (WASI `poll_oneoff`).
 pub trait Reactor {
     fn register(&self, fd: i32, interest: Interest, waker: Waker);
@@ -128,7 +130,7 @@ pub trait Reactor {
     fn poll(&self, timeout: Option<Duration>) -> Vec<Waker>;
 }
 
-/// Process activation and suspension — the abstraction that decouples
+/// Process activation and suspension: the abstraction that decouples
 /// stackful-native from single-threaded-cooperative execution.
 ///
 /// [`resume`](Executor::resume) enters or continues a process until it
@@ -139,7 +141,7 @@ pub trait Reactor {
 /// process reads its own execution state mid-switch, so a borrow can't
 /// span the suspension point. The [`Driver`] reads the prior token out
 /// of the table under the lock, drops the lock, calls `resume`, then
-/// stores the returned token back — and consults the process's
+/// stores the returned token back. It consults the process's
 /// control-block state (the authoritative record) to decide what to do
 /// next, since a concurrent kill or wake may have landed meanwhile.
 ///
@@ -166,7 +168,7 @@ pub trait Executor {
 
 /// Owns the run loop and all synchronization. Native spins
 /// `worker_count()` worker threads plus a reactor thread over a
-/// `Mutex`-guarded core; a cooperative driver runs a single
+/// `Mutex`-guarded core. A cooperative driver runs a single
 /// ready-queue loop over the core with no lock. Replaces
 /// `koja_rt_main_done`.
 pub trait Driver {

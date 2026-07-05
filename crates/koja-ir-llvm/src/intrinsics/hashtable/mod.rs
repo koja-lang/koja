@@ -2,10 +2,10 @@
 //!
 //! Both collections sit on the same open-addressed, linear-probing
 //! table layout described in [`crate::types::hashtable_value_type`].
-//! `Map`'s entry is a `(K, V)` pair; `Set`'s entry is a single `T`.
+//! `Map`'s entry is a `(K, V)` pair, `Set`'s entry is a single `T`.
 //! All the probe / resize / state-machine bookkeeping is identical
-//! between them — only the entry size and the optional value-side
-//! payload differ. This module owns the shared emitters; the per-
+//! between them: only the entry size and the optional value-side
+//! payload differ. This module owns the shared emitters, and the per-
 //! collection modules ([`super::map`], [`super::set`]) stitch them
 //! into the per-method dispatch.
 //!
@@ -13,10 +13,10 @@
 //!
 //! - [`util`]: low-level helpers ([`call_malloc`](util::call_malloc),
 //!   [`resolve_hash_eq`](util::resolve_hash_eq), …) used by every
-//!   other submodule. Pure "build one instruction" wrappers — no
+//!   other submodule. Pure "build one instruction" wrappers with no
 //!   per-method shape.
-//! - [`lifecycle`]: allocate / inspect — `new`, `length`, `empty?`,
-//!   and the `from_map` identity.
+//! - [`lifecycle`]: allocate / inspect (`new`, `length`, `empty?`,
+//!   and the `from_map` identity).
 //! - [`read`]: the read-only probe loop and the `get` / `has?` /
 //!   `remove` tails that consume it.
 //! - [`resize`]: the load-factor check + rehash loop reused by every
@@ -53,7 +53,7 @@ pub(super) const INITIAL_CAPACITY: u64 = 8;
 /// produced (`0`) so a fresh malloc + memset routes through one
 /// runtime call. `STATE_OCCUPIED` is "live entry, probe match
 /// considers it". `STATE_TOMBSTONE` is "deleted entry, probe must
-/// advance past it" — used by `remove` to keep the linear-probe
+/// advance past it", used by `remove` to keep the linear-probe
 /// chain intact without back-shifting.
 pub(super) const STATE_EMPTY: u64 = 0;
 pub(super) const STATE_OCCUPIED: u64 = 1;
@@ -66,7 +66,7 @@ pub(super) const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
 pub(super) const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
 
 /// Per-instantiation layout knob for the per-method emitters. Set
-/// passes `value_ty: None` (the entry is just `T`); Map passes
+/// passes `value_ty: None` (the entry is just `T`). Map passes
 /// `Some(V)` (the entry is `K` followed by `V`).
 pub(super) struct HashtableLayout<'ty> {
     pub entry_size: u64,

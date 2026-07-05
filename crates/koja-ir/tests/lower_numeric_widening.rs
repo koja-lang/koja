@@ -44,7 +44,7 @@ fn int32_arg_into_int_param_lowers_to_numeric_widen() {
     assert_eq!(
         widens,
         vec![(&IRType::Int32, &IRType::Int64)],
-        "expected exactly one Int32 → Int64 NumericWiden for the arg site",
+        "expected exactly one Int32 -> Int64 NumericWiden for the arg site",
     );
 }
 
@@ -62,6 +62,6 @@ fn float32_return_into_float_lowers_to_numeric_widen() {
     assert_eq!(
         widens,
         vec![(&IRType::Float32, &IRType::Float64)],
-        "expected exactly one Float32 → Float64 NumericWiden at the return site",
+        "expected exactly one Float32 -> Float64 NumericWiden at the return site",
     );
 }

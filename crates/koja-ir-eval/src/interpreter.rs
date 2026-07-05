@@ -1,7 +1,7 @@
 //! Tree-walking interpreter over a sealed [`IRProgram`] / [`IRScript`].
 //! Parameterized over a [`CallResolver`] so both IR shapes share the
 //! per-instruction execution, frame management, and terminator
-//! dispatch code; only callee lookup differs. Operator math lives in
+//! dispatch code. Only callee lookup differs. Operator math lives in
 //! [`crate::ops`].
 
 use std::cell::RefCell;
@@ -34,24 +34,24 @@ use crate::value::{EnumPayload, Value};
 /// A boxed, lifetime-bound interpreter future. Every function on the
 /// suspension-reachable call tree returns one so the tree can `.await`
 /// a process park (`receive` / `io_block`) and so the mutual recursion
-/// type-checks — a boxed `dyn Future` breaks the otherwise-infinite
+/// type-checks. A boxed `dyn Future` breaks the otherwise-infinite
 /// `impl Future` cycle between the call-tree functions.
 type EvalFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, RuntimeError>> + 'a>>;
 
 pub struct Interpreter;
 
 impl Interpreter {
-    /// Execute the project-mode entry and return its result. The
-    /// entry is always a [`FunctionKind::ProcessEntryWrapper`] (seal
-    /// guarantees it); the interpreter executes the IR-synthesized
-    /// `<state>.__entry_body` the wrapper's IR `Call` names — the
-    /// full `start` → `run` → `StopReason.code` dispatch lives there
-    /// — and reports the resulting exit code as a [`Value::Int`].
+    /// Execute the project-mode entry and report its exit code as a
+    /// [`Value::Int`]. The entry is always a
+    /// [`FunctionKind::ProcessEntryWrapper`] (seal guarantees it).
+    /// The interpreter executes the IR-synthesized
+    /// `<state>.__entry_body` the wrapper's IR `Call` names, where
+    /// the full `start` -> `run` -> `StopReason.code` dispatch lives.
     /// `args` carries the user-facing program arguments (everything
-    /// after the program name): a `Process<List<String>, _, _>`
-    /// entry receives them as its config, mirroring the LLVM
-    /// trampoline's `koja_rt_build_argv` (which skips `argv[0]`);
-    /// other config types zero-init via [`default_value_for_type`].
+    /// after the program name). An argv-shaped
+    /// `Process<List<String>, _, _>` entry receives them as its
+    /// config, other config types zero-init via
+    /// [`default_value_for_type`].
     pub fn run_program(program: &IRProgram, args: &[String]) -> Result<Value, RuntimeError> {
         let entry = program.entry_function();
         assert!(
@@ -63,7 +63,7 @@ impl Interpreter {
 
         // Boot PID 1 (the entry process) into a fresh cooperative core, then
         // hand the run loop to the shared `CooperativeDriver`. The entry's
-        // `StopReason`-derived exit code surfaces through `exit_cell` — the
+        // `StopReason`-derived exit code surfaces through `exit_cell`. The
         // process future has `Output = ()`, so it stashes its `Value` result
         // here for `run_program` to return once the driver tears down.
         let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
@@ -88,8 +88,8 @@ impl Interpreter {
         // runtime performs. Draining is gated on the program actually
         // having a `Lifecycle`-arm `receive`: the latch flags are
         // process-global, so an indifferent run must not steal them from a
-        // concurrent one (eval runs share one host process; native ones
-        // don't).
+        // concurrent one (eval runs share one host process, unlike native
+        // ones).
         let signals = EvalSignals::new(program_uses_lifecycle(program));
         EvalDriver::new(
             core,
@@ -125,12 +125,10 @@ impl Interpreter {
     ///
     /// Coerces the trailing value to [`Value::Unit`] when the
     /// script's static [`IRScript::return_type`] is `Unit`. See
-    /// [`coerce_return`] for the rationale — same shape mirrors
-    /// LLVM's `void`-return coercion in
-    /// `koja_ir_llvm::emit::emit_terminator`.
+    /// [`coerce_return`] for the rationale.
     pub fn run_script(script: &IRScript) -> Result<Value, RuntimeError> {
         // Run the implicit body as PID 1 under the shared cooperative
-        // driver — same boot as `run_program` — so top-level `spawn` /
+        // driver (same boot as `run_program`) so top-level `spawn` /
         // `receive` / timers / I/O engage the runtime instead of tripping
         // the "runtime not installed" guard. The body's trailing value
         // surfaces through `exit_cell` once the driver tears down.
@@ -172,7 +170,7 @@ impl Interpreter {
 /// in separate maps so slot identity never collides with SSA
 /// identity even though both keys happen to be `u32`. `captures`
 /// holds the closure environment array (empty for non-closure
-/// frames); `LoadCapture` indexes into it directly.
+/// frames), which `LoadCapture` indexes into directly.
 struct Frame {
     captures: Vec<Value>,
     values: BTreeMap<ValueId, Value>,
@@ -195,11 +193,10 @@ impl Frame {
 
 /// Lookup seam used by the per-instruction walker. Both
 /// [`IRProgram`] and [`IRScript`] implement this so the same body
-/// driver runs over either IR shape; only the underlying maps
-/// differ. Function-call resolution + enum-decl lookup share the
-/// same trait so each `EnumConstruct` arm has a registry-equivalent
-/// handle for materializing the variant's `name` and (for struct
-/// payloads) per-field names.
+/// driver runs over either IR shape. Function-call resolution and
+/// decl lookup share the trait so each `EnumConstruct` arm has a
+/// registry-equivalent handle for materializing variant and field
+/// names.
 pub(crate) trait CallResolver {
     fn resolve(&self, mangled: &str) -> Option<&IRFunction>;
     fn enum_decl(&self, mangled: &str) -> Option<&IREnumDecl>;
@@ -244,7 +241,7 @@ impl CallResolver for IRScript {
 }
 
 /// Outcome of one pass through a function body. `Done` carries the
-/// `Return`'s value; `TailRestart` carries the new positional args
+/// `Return`'s value. `TailRestart` carries the new positional args
 /// for the surrounding [`execute_function`] trampoline to rebind
 /// before re-walking the body. Surfacing tail restarts as a
 /// distinct [`Result::Ok`] payload (rather than a special
@@ -256,12 +253,11 @@ enum BlockOutcome {
 }
 
 /// Run a [`FunctionKind::ProcessEntryWrapper`] entry's body as PID 1.
-/// The wrapper itself is a backend ABI shim; the full `start` → `run` →
+/// The wrapper itself is a backend ABI shim. The full `start` -> `run` ->
 /// `StopReason.code` dispatch lives in the IR-synthesized
 /// `<state>.__entry_body` its IR `Call` names, which the interpreter
 /// executes directly with the argv-derived (or default) config. The
-/// returned [`Value::Int`] is the exit code — analogous to what the LLVM
-/// shim stores into `__koja_exit_code`. Driven by the
+/// returned [`Value::Int`] is the exit code. Driven by the
 /// [`crate::scheduler::EvalExecutor`] (not [`block_on`]) so a `receive`
 /// inside it parks against the core mailbox.
 async fn run_entry_body<'a>(
@@ -304,15 +300,15 @@ async fn run_script_body(script: &IRScript) -> Result<Value, RuntimeError> {
     match execute_blocks(&script.blocks, &mut frame, script).await? {
         BlockOutcome::Done(value) => Ok(coerce_return(value, &script.return_type)),
         BlockOutcome::TailRestart(_) => panic!(
-            "interpreter: script body produced a `TailCall` terminator — \
+            "interpreter: script body produced a `TailCall` terminator, but \
              tail-call rewrite never targets the implicit script body",
         ),
     }
 }
 
-/// Whether any of `blocks` has a `receive` with a `Lifecycle` arm — i.e.
-/// whether the run observes OS lifecycle signals at all. Gates signal
-/// draining so a run that ignores lifecycle events leaves the
+/// Whether any of `blocks` has a `receive` with a `Lifecycle` arm,
+/// i.e. whether the run observes OS lifecycle signals at all. Gates
+/// signal draining so a run that ignores lifecycle events leaves the
 /// process-global signal latches for a run that wants them.
 fn blocks_use_lifecycle<'a>(blocks: impl Iterator<Item = &'a IRBasicBlock>) -> bool {
     blocks
@@ -348,11 +344,11 @@ fn script_uses_lifecycle(script: &IRScript) -> bool {
     blocks_use_lifecycle(function_blocks.chain(script.blocks.iter()))
 }
 
-/// Resolve a process wrapper's body — the [`FunctionKind::Regular`]
+/// Resolve a process wrapper's body, the [`FunctionKind::Regular`]
 /// function its single IR `Call` names. Shared by the entry boot and the
 /// `spawn` path: a `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
-/// shim whose body holds the real `start` → `run` dispatch. `None` only
-/// for a malformed wrapper (seal violation); callers decide whether that
+/// shim whose body holds the real `start` -> `run` dispatch. `None` only
+/// for a malformed wrapper (seal violation). Callers decide whether that
 /// is an error or a panic.
 fn process_body_of<'a, R: CallResolver>(
     resolver: &'a R,
@@ -381,7 +377,7 @@ pub(crate) fn build_spawn_future<'a, R: CallResolver>(
 ) -> ProcessFuture<'a> {
     let body_fn = process_body_of(resolver, wrapper).unwrap_or_else(|| {
         panic!(
-            "interpreter: spawn wrapper `{wrapper}` has no process body — seal invariant violation"
+            "interpreter: spawn wrapper `{wrapper}` has no process body (seal invariant violation)"
         )
     });
     Box::pin(async move {
@@ -405,10 +401,9 @@ fn render_process_crash(error: &RuntimeError) -> CrashInfo {
     }
 }
 
-/// Whether a process-entry config type is `List<String>` — the one
+/// Whether a process-entry config type is `List<String>`, the one
 /// shape that receives host argv instead of a zero-init default.
-/// Mirrors the LLVM trampoline's `argv_shaped` test in
-/// `koja_ir_llvm::main_wrapper::emit_process_entry_main`.
+/// Mirrors the LLVM trampoline's `argv_shaped` test.
 fn is_argv_shaped(config_type: &IRType) -> bool {
     matches!(
         config_type,
@@ -432,8 +427,8 @@ fn argv_value(args: &[String]) -> Value {
 /// structs round-trip as `Value::Struct` with no fields, `List<T>`
 /// produces an empty list, and primitive scalars default to their
 /// zero element. The argv-shaped `List<String>` config never reaches
-/// this helper — [`run_entry_body`] routes it through [`argv_value`]
-/// first.
+/// this helper, since [`run_entry_body`] routes it through
+/// [`argv_value`] first.
 fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, RuntimeError> {
     match ty {
         IRType::Bool => Ok(Value::Bool(false)),
@@ -484,16 +479,10 @@ fn default_value_for_type(ty: &IRType, program: &IRProgram) -> Result<Value, Run
 /// return type.
 ///
 /// IR lowering threads the trailing expression's SSA value through
-/// `Return { Some(id) }` even for void-returning functions — the
-/// IR comment in `koja_ir::lower::body::finalize_open_flow`
-/// notes the value is tracked for seal / dominator analysis but
-/// is unobservable at the type level. The LLVM backend collapses
-/// this to `ret void` in `koja_ir_llvm::emit::emit_terminator`;
-/// without this coercion the interpreter would propagate the
-/// trailing temp (e.g. `STDOUT.write`'s `Result<Int64, String>`
-/// inside `IO.puts`) and callers would see a richer-than-declared
-/// runtime shape. Centralizing the coercion at every body exit
-/// keeps the two backends aligned.
+/// `Return { Some(id) }` even for void-returning functions, and the
+/// LLVM backend collapses it to `ret void`. Without this coercion
+/// the interpreter would propagate the trailing temp and callers
+/// would see a richer-than-declared runtime shape.
 fn coerce_return(value: Value, return_type: &IRType) -> Value {
     if matches!(return_type, IRType::Unit) {
         Value::Unit
@@ -505,7 +494,7 @@ fn coerce_return(value: Value, return_type: &IRType) -> Value {
 /// Run `function` in a fresh frame with `args` positionally bound to
 /// its param `ValueId`s. Param promotion (entry-block `LocalDecl` +
 /// `LocalWrite`) means the body reads from the slot, not the raw
-/// param id; seeding `frame.values` keeps the promotion's
+/// param id, so seeding `frame.values` keeps the promotion's
 /// `LocalWrite { value: param.id }` resolvable. `@intrinsic`-tagged
 /// functions route to [`crate::intrinsics`].
 ///
@@ -549,15 +538,13 @@ fn execute_function<'a, R: CallResolver>(
             // every host `Value` is independent (deep-cloned on `lookup`)
             // and reclaimed by the host GC, so a clone is a rebind of the
             // argument and a drop returns unit. Short-circuiting here means
-            // eval never executes a glue body — neither the aggregate CFG
-            // `elaborate` synthesizes nor the empty collection shell the
-            // LLVM backend fills.
+            // eval never executes a glue body.
             FunctionKind::CloneGlue | FunctionKind::DeepCopyGlue => {
                 return Ok(args.into_iter().next().unwrap_or(Value::Unit));
             }
             FunctionKind::DropGlue => return Ok(Value::Unit),
             FunctionKind::Closure { .. } => panic!(
-                "interpreter: direct `Call` to closure body `{}` — must dispatch via \
+                "interpreter: direct `Call` to closure body `{}`, which must dispatch via \
              `CallClosure` (seal invariant violation)",
                 function.symbol,
             ),
@@ -567,20 +554,20 @@ fn execute_function<'a, R: CallResolver>(
             // carries its captures by value and is reclaimed by the host
             // GC, so it never calls (or even references) either.
             FunctionKind::CopyClosureGlue { .. } => panic!(
-                "interpreter: `$copy_env$` env deep-copy glue `{}` is LLVM-only — eval copies \
+                "interpreter: `$copy_env$` env deep-copy glue `{}` is LLVM-only; eval copies \
              closures structurally and never invokes it",
                 function.symbol,
             ),
             FunctionKind::DropClosureGlue { .. } => panic!(
-                "interpreter: `$drop_env$` capture-release glue `{}` is LLVM-only — eval reclaims \
+                "interpreter: `$drop_env$` capture-release glue `{}` is LLVM-only; eval reclaims \
              closures via the host GC and never invokes it",
                 function.symbol,
             ),
             FunctionKind::SpawnWrapper { .. } => {
                 return Err(RuntimeError::Unsupported {
                     detail: format!(
-                        "spawn wrapper `{}` cannot be invoked directly under the interpreter; \
-                     spawn/receive scheduling lives in the LLVM runtime",
+                        "spawn wrapper `{}` cannot be invoked directly under the interpreter. \
+                     Spawn/receive scheduling lives in the LLVM runtime",
                         function.symbol,
                     ),
                 });
@@ -588,7 +575,7 @@ fn execute_function<'a, R: CallResolver>(
             FunctionKind::ProcessEntryWrapper { .. } => {
                 return Err(RuntimeError::Unsupported {
                     detail: format!(
-                        "process entry wrapper `{}` cannot be invoked directly; use \
+                        "process entry wrapper `{}` cannot be invoked directly. Use \
                      `Interpreter::run_program`, which dispatches through state.start / \
                      state.run for ProcessEntryWrapper entries",
                         function.symbol,
@@ -656,7 +643,7 @@ fn execute_closure_function<'a, R: CallResolver>(
         match execute_blocks(&function.blocks, &mut frame, resolver).await? {
             BlockOutcome::Done(value) => Ok(coerce_return(value, &function.return_type)),
             BlockOutcome::TailRestart(_) => panic!(
-                "interpreter: closure body `{}` produced a `TailCall` terminator — \
+                "interpreter: closure body `{}` produced a `TailCall` terminator, but \
              tail-call rewrite is not enabled for closures yet",
                 function.symbol,
             ),
@@ -665,14 +652,11 @@ fn execute_closure_function<'a, R: CallResolver>(
 }
 
 /// Drive a function body starting at `blocks[0]` until a `Return`
-/// exits. The frame is shared across every block; unknown branch
-/// targets panic per the seal contract. Loop back-edges fall out of
-/// [`IRTerminator::Branch`] to any [`IRBlockId`] — the dispatcher
-/// treats them like any other branch. The interpreter imposes no
-/// step / iteration cap: real programs have legitimate infinite
-/// loops (a server's main loop, an actor's `receive`, the eventual
-/// `loop { ... }` construct). Test harnesses provide their own
-/// timeouts at the binary level if a test accidentally diverges.
+/// exits. The frame is shared across every block. Unknown branch
+/// targets panic per the seal contract. The interpreter imposes no
+/// step or iteration cap: real programs have legitimate infinite
+/// loops, and test harnesses provide their own timeouts if a test
+/// accidentally diverges.
 fn execute_blocks<'a, R: CallResolver>(
     blocks: &'a [IRBasicBlock],
     frame: &'a mut Frame,
@@ -687,8 +671,8 @@ fn execute_blocks<'a, R: CallResolver>(
             let block = find_block(blocks, current);
             for instruction in &block.instructions {
                 // `Receive` transfers control to an arm (or after) body
-                // block instead of defining a value — lowering places it
-                // last in its block with an `Unreachable` terminator —
+                // block instead of defining a value (lowering places it
+                // last in its block with an `Unreachable` terminator),
                 // so it dispatches here rather than in
                 // `execute_instruction`.
                 if let IRInstruction::Receive { after, arms, .. } = instruction {
@@ -711,7 +695,7 @@ fn execute_blocks<'a, R: CallResolver>(
                     let Value::Bool(b) = cond_value else {
                         return Err(RuntimeError::TypeMismatch {
                             detail: format!(
-                                "cond_branch expects a Bool condition; got {cond_value}",
+                                "cond_branch expects a Bool condition, got {cond_value}",
                             ),
                         });
                     };
@@ -739,15 +723,10 @@ fn execute_blocks<'a, R: CallResolver>(
 /// Evaluate `target.args` in the predecessor's value-map and bind
 /// the resulting [`Value`]s to the target block's
 /// [`koja_ir::BlockParam::dest`] ids before stepping into the
-/// target. Block params are SSA defs available on entry to the
-/// block; backends bind them on edge traversal so the body's
-/// instructions see them as ordinary `ValueId`s.
-///
-/// Seal asserts arg/param arity match, so a length mismatch is a
-/// compiler bug; we panic with the same shape as `find_block`'s
-/// missing-block panic. Args are looked up before bindings are
-/// inserted so a hypothetical self-loop's arg list reads the
-/// pre-edge values, not the new param bindings.
+/// target. Seal asserts arg/param arity match, so a length mismatch
+/// panics. Args are looked up before bindings are inserted so a
+/// hypothetical self-loop's arg list reads the pre-edge values, not
+/// the new param bindings.
 fn bind_block_params(
     target: &BranchTarget,
     blocks: &[IRBasicBlock],
@@ -756,8 +735,8 @@ fn bind_block_params(
     let target_block = find_block(blocks, target.block);
     if target.args.len() != target_block.params.len() {
         panic!(
-            "interpreter: branch to `{}` passes {} arg(s) but target declares {} param(s) — \
-             seal invariant violation",
+            "interpreter: branch to `{}` passes {} arg(s) but target declares {} param(s) \
+             (seal invariant violation)",
             target.block,
             target.args.len(),
             target_block.params.len(),
@@ -783,11 +762,10 @@ fn bind_block_params(
 /// arm, else (when an `after` clause is present) check the deadline, else
 /// park `Blocked` and yield back to the driver. The driver re-resumes
 /// only once a delivery or the deadline promotes the process, so a
-/// delivered message beats an already-expired timeout — the runtime's
-/// message-before-timeout priority. A `receive` with no matching delivery
-/// and no `after` parks indefinitely, exactly as the native runtime does
-/// (a genuine deadlock is a program bug). A synthesized
-/// `ReceiveTag::IOReady` arm is inert until the reactor phase.
+/// delivered message beats an already-expired timeout, matching the
+/// runtime's message-before-timeout priority. A `receive` with no
+/// matching delivery and no `after` parks indefinitely, exactly as the
+/// native runtime does (a genuine deadlock is a program bug).
 fn execute_receive<'a, R: CallResolver>(
     arms: &'a [ReceiveArm],
     after: Option<&'a ReceiveAfter>,
@@ -800,7 +778,7 @@ fn execute_receive<'a, R: CallResolver>(
                 let value = lookup(&frame.values, clause.timeout)?;
                 let Value::Int(ms) = value else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("receive `after` expects an Int timeout; got {value}"),
+                        detail: format!("receive `after` expects an Int timeout, got {value}"),
                     });
                 };
                 Ok(Instant::now() + Duration::from_millis(ms.max(0) as u64))
@@ -829,8 +807,8 @@ fn execute_receive<'a, R: CallResolver>(
 /// Dispatch a mailbox message popped during `receive` to the arm whose
 /// tag matches, binding the arm's payload local and returning its body
 /// block. `None` when no arm matches (the message is dropped). Business
-/// traffic binds a `Pair<M, Option<ReplyTo<R>>>` (built from the arm's
-/// payload type); lifecycle traffic binds the `Lifecycle` enum value.
+/// traffic binds a `Pair<M, Option<ReplyTo<R>>>` built from the arm's
+/// payload type. Lifecycle traffic binds the `Lifecycle` enum value.
 fn dispatch_received<R: CallResolver>(
     message: EvalMessage,
     arms: &[ReceiveArm],
@@ -845,8 +823,8 @@ fn dispatch_received<R: CallResolver>(
             Some(arm.body)
         }
         // The reactor delivers a fully-built `IOReady` enum value
-        // ([`build_io_ready_value`]); bind it into the synthesized
-        // `IOReady` arm (whose body reshapes it into the business `Pair`).
+        // ([`build_io_ready_value`]). Bind it into the synthesized
+        // `IOReady` arm, whose body reshapes it into the business `Pair`.
         Tag::IOReady => {
             let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::IOReady)?;
             frame.locals.insert(arm.payload_local, message.value);
@@ -872,18 +850,18 @@ fn dispatch_received<R: CallResolver>(
 
 /// Materialize the `Lifecycle` enum value for a drained signal.
 /// `variant` is the variant index in declaration order (Shutdown=0,
-/// Interrupt=1, Reload=2) — the same mapping
+/// Interrupt=1, Reload=2), the same mapping
 /// `koja_runtime::signals::drain` documents.
 fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R) -> Value {
     let IRType::Enum(symbol) = &arm.payload_type else {
         panic!(
-            "interpreter: lifecycle receive arm payload type is not an enum \
-             (got `{:?}`) — seal invariant violation",
+            "interpreter: lifecycle receive arm payload type is not an enum, got `{:?}` \
+             (seal invariant violation)",
             arm.payload_type,
         );
     };
     let decl = resolver.enum_decl(symbol.mangled()).unwrap_or_else(|| {
-        panic!("interpreter: enum `{symbol}` missing from IR — seal invariant violation")
+        panic!("interpreter: enum `{symbol}` missing from IR (seal invariant violation)")
     });
     let variant_decl = decl.variants.get(variant as usize).unwrap_or_else(|| {
         panic!(
@@ -901,14 +879,14 @@ fn lifecycle_value<R: CallResolver>(arm: &ReceiveArm, variant: i64, resolver: &R
 }
 
 /// Mangled symbol of the kernel `IO.Ready` enum (`lib/global/src/io.koja`).
-/// Non-generic, so its symbol is the bare package-qualified name — the
+/// Non-generic, so its symbol is the bare package-qualified name, the
 /// same constant the `koja-ir` `deliver_io_ready` elaborate pass keys on.
 const IO_READY_SYMBOL: &str = "Global.IO.Ready";
 
 /// Materialize the `IOReady.{Read,Write,Error}(Fd)` value the reactor
 /// delivers to a `Fd.watch` owner. Built at send time (the driver's
 /// readiness pass) so the receiver's synthesized `ReceiveTag::IOReady` arm
-/// just binds it. `readiness` selects the variant; `fd` fills the wrapped
+/// just binds it. `readiness` selects the variant. `fd` fills the wrapped
 /// `Fd{ descriptor }`, whose struct symbol is recovered from the variant
 /// payload rather than fabricated.
 pub(crate) fn build_io_ready_value<R: CallResolver>(
@@ -922,23 +900,25 @@ pub(crate) fn build_io_ready_value<R: CallResolver>(
         Readiness::Writable => "Write",
     };
     let decl = resolver.enum_decl(IO_READY_SYMBOL).unwrap_or_else(|| {
-        panic!("interpreter: kernel enum `{IO_READY_SYMBOL}` missing from IR — a watched fd fired but `IOReady` is not in the program")
+        panic!(
+            "interpreter: kernel enum `{IO_READY_SYMBOL}` missing from IR, yet a watched fd fired"
+        )
     });
     let variant = decl
         .variants
         .iter()
         .find(|variant| variant.name == variant_name)
         .unwrap_or_else(|| {
-            panic!("interpreter: `{IO_READY_SYMBOL}` has no `{variant_name}` variant — seal invariant violation")
+            panic!("interpreter: `{IO_READY_SYMBOL}` has no `{variant_name}` variant (seal invariant violation)")
         });
     let IRVariantPayload::Tuple(types) = &variant.payload else {
         panic!(
-            "interpreter: `IOReady.{variant_name}` payload is not a tuple — seal invariant violation"
+            "interpreter: `IOReady.{variant_name}` payload is not a tuple (seal invariant violation)"
         );
     };
     let [IRType::Struct(fd_symbol)] = types.as_slice() else {
         panic!(
-            "interpreter: `IOReady.{variant_name}` payload is not a single `Fd` struct — seal invariant violation"
+            "interpreter: `IOReady.{variant_name}` payload is not a single `Fd` struct (seal invariant violation)"
         );
     };
     Value::Enum {
@@ -956,7 +936,7 @@ fn find_block(blocks: &[IRBasicBlock], id: IRBlockId) -> &IRBasicBlock {
     blocks
         .iter()
         .find(|b| b.id == id)
-        .unwrap_or_else(|| panic!("interpreter: block `{id}` missing — seal invariant violation"))
+        .unwrap_or_else(|| panic!("interpreter: block `{id}` missing (seal invariant violation)"))
 }
 
 fn execute_instruction<'a, R: CallResolver>(
@@ -989,8 +969,8 @@ fn execute_instruction<'a, R: CallResolver>(
                 }
                 let callee_fn = resolver.resolve(callee.mangled()).unwrap_or_else(|| {
                     panic!(
-                        "interpreter: callee `{callee}` missing from IR — \
-                     seal invariant violation",
+                        "interpreter: callee `{callee}` missing from IR \
+                     (seal invariant violation)",
                     )
                 });
                 let result = execute_function(callee_fn, arg_values, resolver).await?;
@@ -999,11 +979,9 @@ fn execute_instruction<'a, R: CallResolver>(
             }
             // The host `Value` is deep-cloned on every `lookup`, so a
             // `Clone` is just a re-bind: the result is already an
-            // independent copy with no shared backing. The LLVM backend
-            // does the real allocation; here the GC handles reclamation.
-            // `DeepCopy` (the process-boundary copy) gets the same
-            // treatment for the same reason — lookup's clone is already
-            // physically independent.
+            // independent copy with no shared backing. `DeepCopy` (the
+            // process-boundary copy) gets the same treatment for the
+            // same reason.
             IRInstruction::Clone { dest, source, .. }
             | IRInstruction::DeepCopy { dest, source, .. } => {
                 let value = lookup(&frame.values, *source)?;
@@ -1033,7 +1011,7 @@ fn execute_instruction<'a, R: CallResolver>(
             } => {
                 let pooled = resolver.constant_value(const_id.mangled()).unwrap_or_else(|| {
                 panic!(
-                    "interpreter: LoadConst `{}` missing from pooled constants — seal invariant violation",
+                    "interpreter: LoadConst `{}` missing from pooled constants (seal invariant violation)",
                     const_id.mangled(),
                 )
             });
@@ -1066,13 +1044,13 @@ fn execute_instruction<'a, R: CallResolver>(
                 } = base
                 else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("EnumPayloadFieldGet expects an Enum receiver; got {base}"),
+                        detail: format!("EnumPayloadFieldGet expects an Enum receiver, got {base}"),
                     });
                 };
                 if actual_tag != *tag {
                     panic!(
                         "interpreter: EnumPayloadFieldGet expected tag {tag} but value carries \
-                     tag {actual_tag} — match driver should have gated on a tag check first",
+                     tag {actual_tag}, so the match driver failed to gate on a tag check",
                     );
                 }
                 let field = match payload {
@@ -1082,7 +1060,7 @@ fn execute_instruction<'a, R: CallResolver>(
                         .unwrap_or_else(|| {
                             panic!(
                                 "interpreter: EnumPayloadFieldGet tuple index {payload_index} \
-                             out of range — seal invariant violation",
+                             out of range (seal invariant violation)",
                             )
                         }),
                     EnumPayload::Struct(fields) => fields
@@ -1092,11 +1070,11 @@ fn execute_instruction<'a, R: CallResolver>(
                         .unwrap_or_else(|| {
                             panic!(
                                 "interpreter: EnumPayloadFieldGet struct index {payload_index} \
-                             out of range — seal invariant violation",
+                             out of range (seal invariant violation)",
                             )
                         }),
                     EnumPayload::Unit => panic!(
-                        "interpreter: EnumPayloadFieldGet on a Unit variant — seal invariant violation",
+                        "interpreter: EnumPayloadFieldGet on a Unit variant (seal invariant violation)",
                     ),
                 };
                 frame.values.insert(*dest, field);
@@ -1106,7 +1084,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 let base = lookup(&frame.values, *value)?;
                 let Value::Enum { tag, .. } = base else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("EnumTagGet expects an Enum receiver; got {base}"),
+                        detail: format!("EnumTagGet expects an Enum receiver, got {base}"),
                     });
                 };
                 frame.values.insert(*dest, Value::Int(i64::from(tag.0)));
@@ -1122,7 +1100,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 let base_value = lookup(&frame.values, *base)?;
                 let Value::Struct { fields, .. } = base_value else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("field_get expects a Struct receiver; got {base_value}",),
+                        detail: format!("field_get expects a Struct receiver, got {base_value}",),
                     });
                 };
                 let field = fields
@@ -1130,8 +1108,8 @@ fn execute_instruction<'a, R: CallResolver>(
                     .nth(*field_index as usize)
                     .unwrap_or_else(|| {
                         panic!(
-                            "interpreter: FieldGet index {field_index} out of range — \
-                         seal invariant violation",
+                            "interpreter: FieldGet index {field_index} out of range \
+                         (seal invariant violation)",
                         )
                     });
                 frame.values.insert(*dest, field);
@@ -1148,14 +1126,14 @@ fn execute_instruction<'a, R: CallResolver>(
                 let base_value = lookup(&frame.values, *base)?;
                 let Value::Struct { mut fields, symbol } = base_value else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("field_set expects a Struct receiver; got {base_value}",),
+                        detail: format!("field_set expects a Struct receiver, got {base_value}",),
                     });
                 };
                 let new_field = lookup(&frame.values, *value)?;
                 let slot = fields.get_mut(*field_index as usize).unwrap_or_else(|| {
                     panic!(
-                        "interpreter: FieldSet index {field_index} out of range — seal invariant \
-                     violation",
+                        "interpreter: FieldSet index {field_index} out of range (seal invariant \
+                     violation)",
                     )
                 });
                 *slot = new_field;
@@ -1163,14 +1141,14 @@ fn execute_instruction<'a, R: CallResolver>(
                 Ok(())
             }
             IRInstruction::DropLocal { .. } => Ok(()),
-            // Heap reclamation is handled by the host GC; the IR-level
+            // Heap reclamation is handled by the host GC, so the IR-level
             // value-keyed drop is a no-op for the interpreter (mirrors
             // [`IRInstruction::DropLocal`] above).
             IRInstruction::DropValue { .. } => Ok(()),
             // The LLVM backend zero-initializes the slot at the decl
             // site so scope-exit drop glue can run on never-written
             // slots (e.g. the payload local of a receive arm that did
-            // not fire). Mirror with a `Unit` placeholder — eval's drop
+            // not fire). Mirror with a `Unit` placeholder. Eval's drop
             // glue short-circuits, so the placeholder is only ever
             // observed by a glue-feeding `LocalRead`, never by user
             // code (a user-level read-before-write cannot pass
@@ -1182,8 +1160,8 @@ fn execute_instruction<'a, R: CallResolver>(
             IRInstruction::LocalRead { dest, local, .. } => {
                 let value = frame.locals.get(local).cloned().unwrap_or_else(|| {
                     panic!(
-                        "interpreter: `LocalRead` of `{local}` before its `LocalDecl` — \
-                     seal invariant violation",
+                        "interpreter: `LocalRead` of `{local}` before its `LocalDecl` \
+                     (seal invariant violation)",
                     )
                 });
                 frame.values.insert(*dest, value);
@@ -1224,7 +1202,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 let Value::Closure { body, captures } = callee_value else {
                     return Err(RuntimeError::TypeMismatch {
                         detail: format!(
-                            "CallClosure expects a Closure receiver; got {callee_value}"
+                            "CallClosure expects a Closure receiver, got {callee_value}"
                         ),
                     });
                 };
@@ -1234,8 +1212,8 @@ fn execute_instruction<'a, R: CallResolver>(
                 }
                 let body_fn = resolver.resolve(body.mangled()).unwrap_or_else(|| {
                     panic!(
-                        "interpreter: closure body `{body}` missing from IR — \
-                     seal invariant violation",
+                        "interpreter: closure body `{body}` missing from IR \
+                     (seal invariant violation)",
                     )
                 });
                 let result =
@@ -1254,8 +1232,8 @@ fn execute_instruction<'a, R: CallResolver>(
                     .cloned()
                     .unwrap_or_else(|| {
                         panic!(
-                            "interpreter: LoadCapture index {capture_index} out of range \
-                         (env has {} entries) — seal invariant violation",
+                            "interpreter: LoadCapture index {capture_index} out of range, \
+                         env has {} entries (seal invariant violation)",
                             frame.captures.len(),
                         )
                     });
@@ -1283,7 +1261,7 @@ fn execute_instruction<'a, R: CallResolver>(
             }
             // Sized integers are already canonical `Value::Int(i64)`
             // (sign/zero-extended at materialization), so the integer
-            // widen is a pass-through; only `Float32 -> Float64`
+            // widen is a pass-through. Only `Float32 -> Float64`
             // changes representation.
             IRInstruction::NumericWiden { dest, value, .. } => {
                 let source = lookup(&frame.values, *value)?;
@@ -1302,8 +1280,8 @@ fn execute_instruction<'a, R: CallResolver>(
                 ..
             } => {
                 // Register the child in the core table now (so its PID is
-                // stable for the returned `Ref`) and queue the spawn request;
-                // the executor builds and installs the child's future after
+                // stable for the returned `Ref`) and queue the spawn request.
+                // The executor builds and installs the child's future after
                 // this resume, before the driver can claim it. `Ref<M, R>`
                 // lays out as `{ i64 id }` (see `koja-ir-llvm`'s `pid_from_self`).
                 let config_value = lookup(&frame.values, *config)?;
@@ -1321,7 +1299,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 let reason = lookup(&frame.values, *reason)?;
                 let Value::Int(reason) = reason else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("ProcessExit expects an Int reason; got {reason}"),
+                        detail: format!("ProcessExit expects an Int reason, got {reason}"),
                     });
                 };
                 scheduler::process_exit(reason);
@@ -1331,7 +1309,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 let level = lookup(&frame.values, *tag)?;
                 let Value::Int(level) = level else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("SetPriority expects an Int tag; got {level}"),
+                        detail: format!("SetPriority expects an Int tag, got {level}"),
                     });
                 };
                 scheduler::set_priority(level);
@@ -1344,7 +1322,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 Ok(())
             }
             IRInstruction::Receive { .. } => panic!(
-                "interpreter: `Receive` reached `execute_instruction` — `execute_blocks` \
+                "interpreter: `Receive` reached `execute_instruction`, but `execute_blocks` \
              intercepts it as a control transfer (lowering places it last in its block)",
             ),
             IRInstruction::UnionWrap {
@@ -1357,8 +1335,8 @@ fn execute_instruction<'a, R: CallResolver>(
                 let payload = lookup(&frame.values, *value)?;
                 let IRType::Union { mangled, .. } = ty else {
                     panic!(
-                        "interpreter: UnionWrap target IRType is not Union (got `{ty:?}`) — \
-                     IR seal invariant violation",
+                        "interpreter: UnionWrap target IRType is not Union, got `{ty:?}` \
+                     (seal invariant violation)",
                     );
                 };
                 frame.values.insert(
@@ -1375,7 +1353,7 @@ fn execute_instruction<'a, R: CallResolver>(
                 let base = lookup(&frame.values, *value)?;
                 let Value::Union { tag, .. } = base else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("UnionTagGet expects a Union receiver; got {base}"),
+                        detail: format!("UnionTagGet expects a Union receiver, got {base}"),
                     });
                 };
                 frame.values.insert(*dest, Value::Int(i64::from(tag)));
@@ -1396,13 +1374,13 @@ fn execute_instruction<'a, R: CallResolver>(
                 } = base
                 else {
                     return Err(RuntimeError::TypeMismatch {
-                        detail: format!("UnionPayloadGet expects a Union receiver; got {base}"),
+                        detail: format!("UnionPayloadGet expects a Union receiver, got {base}"),
                     });
                 };
                 if actual_tag != *member_index {
                     panic!(
                         "interpreter: UnionPayloadGet expected member-index {member_index} but value \
-                     carries tag {actual_tag} — match driver should have gated on a tag check first",
+                     carries tag {actual_tag}, so the match driver failed to gate on a tag check",
                     );
                 }
                 frame.values.insert(*dest, *payload);
@@ -1439,14 +1417,14 @@ fn materialize_pooled_constant<R: CallResolver>(
         IRConstantValue::EnumVariant { tag, ty } => {
             let decl = resolver.enum_decl(ty.mangled()).unwrap_or_else(|| {
                 panic!(
-                    "interpreter: pooled enum `{}` missing from IR — seal invariant violation",
+                    "interpreter: pooled enum `{}` missing from IR (seal invariant violation)",
                     ty.mangled(),
                 )
             });
             let variant = decl.variants.get(usize::from(tag.0)).unwrap_or_else(|| {
                 panic!(
-                    "interpreter: pooled EnumVariant `{}` references tag {:?} past {} variants — \
-                         seal invariant violation",
+                    "interpreter: pooled EnumVariant `{}` references tag {:?} past {} variants \
+                         (seal invariant violation)",
                     ty.mangled(),
                     tag,
                     decl.variants.len(),
@@ -1474,17 +1452,9 @@ fn materialize_pooled_constant<R: CallResolver>(
 
 /// Materialize a [`Value::Enum`] from an `EnumConstruct` payload init.
 /// Looks up the enum decl through the resolver, fetches the variant
-/// at `tag.0` (constant-time index — seal asserts the tag is in
-/// range and matches the payload shape), and zips the init values
-/// with the variant's declared shape into an [`EnumPayload`].
-///
-/// Per-shape:
-/// - Unit → `EnumPayload::Unit`.
-/// - Tuple → materialize each `ValueId` against `frame.values`.
-/// - Struct → zip the (canonicalized, declaration-order) inits with
-///   the variant's declared `IRStructField`s so each materialized
-///   value pairs with its declared field name in the resulting
-///   `Vec<(String, Value)>`.
+/// at `tag.0` (seal asserts the tag is in range and matches the
+/// payload shape), and zips the init values with the variant's
+/// declared shape into an [`EnumPayload`].
 fn materialize_enum<R: CallResolver>(
     symbol: &IRSymbol,
     tag: IRVariantTag,
@@ -1494,14 +1464,14 @@ fn materialize_enum<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     let decl = resolver.enum_decl(symbol.mangled()).unwrap_or_else(|| {
         panic!(
-            "interpreter: enum `{symbol}` missing from IR — \
-             seal invariant violation",
+            "interpreter: enum `{symbol}` missing from IR \
+             (seal invariant violation)",
         )
     });
     let variant = decl.variants.get(usize::from(tag.0)).unwrap_or_else(|| {
         panic!(
             "interpreter: EnumConstruct on `{symbol}` references tag {tag} but the decl only \
-             declares {} variant(s) — seal invariant violation",
+             declares {} variant(s) (seal invariant violation)",
             decl.variants.len(),
         )
     });
@@ -1523,8 +1493,8 @@ fn materialize_enum<R: CallResolver>(
             EnumPayload::Struct(fields)
         }
         (init, declared) => panic!(
-            "interpreter: EnumConstruct payload shape mismatch on `{symbol}.{}` \
-             (declared {declared:?}, supplied {init:?}) — seal invariant violation",
+            "interpreter: EnumConstruct payload shape mismatch on `{symbol}.{}`, \
+             declared {declared:?} but supplied {init:?} (seal invariant violation)",
             variant.name,
         ),
     };
@@ -1540,7 +1510,7 @@ fn materialize_enum<R: CallResolver>(
 /// backend's split: `String` / `Binary` are byte-aligned `memcpy`s,
 /// `Bits` does sub-byte alignment in Rust (the runtime helper's
 /// algorithm). Mismatched [`Value`] kinds vs `kind` surface a
-/// `TypeMismatch` — defensive, since seal + typecheck should have
+/// defensive `TypeMismatch`, since seal + typecheck should have
 /// kept these consistent.
 fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value, RuntimeError> {
     match kind {
@@ -1586,7 +1556,7 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
             let total_bytes = total.div_ceil(8) as usize;
             let mut out = vec![0u8; total_bytes];
             // Copy lhs bits (which are already left-aligned in `lb`)
-            // verbatim — the trailing partial byte already has its
+            // verbatim. The trailing partial byte already has its
             // high bits set and low bits zeroed.
             for (idx, byte) in lb.iter().enumerate() {
                 out[idx] = *byte;
@@ -1601,9 +1571,8 @@ fn concat_values(kind: ConcatKind, left: &Value, right: &Value) -> Result<Value,
 /// Append `length` bits from `src` (which is left-aligned with
 /// `length` valid bits and possible zero padding in the low bits of
 /// its trailing byte) into `dest` starting at bit offset
-/// `start_bit`. Helper for [`concat_values`]'s `Bits` arm; mirrors
-/// the algorithm the LLVM `__koja_concat_bits` runtime helper
-/// runs at native code speed.
+/// `start_bit`. Helper for [`concat_values`]'s `Bits` arm, mirroring
+/// the LLVM `__koja_concat_bits` runtime helper.
 fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
     if length == 0 {
         return;
@@ -1670,7 +1639,7 @@ fn construct_binary_literal(
                     other => {
                         return Err(RuntimeError::TypeMismatch {
                             detail: format!(
-                                "binary literal integer segment expected an Int value; got {other}",
+                                "binary literal integer segment expected an Int value, got {other}",
                             ),
                         });
                     }
@@ -1690,8 +1659,8 @@ fn construct_binary_literal(
                     (64, Value::Float64(v)) => v.to_bits(),
                     (64, Value::Float32(v)) => f64::from(*v).to_bits(),
                     (w, _) => panic!(
-                        "interpreter: BinaryConstruct float segment of width {w} — \
-                         seal invariant violation (float widths are 32 or 64)",
+                        "interpreter: BinaryConstruct float segment of width {w}, \
+                         but float widths are 32 or 64 (seal invariant violation)",
                     ),
                 };
                 pack_integer_segment(&mut buffer, bits, *width, *endian, *bit_offset);
@@ -1705,14 +1674,14 @@ fn construct_binary_literal(
                 let Value::String(bytes) = resolved else {
                     return Err(RuntimeError::TypeMismatch {
                         detail: format!(
-                            "binary literal string segment expected a String value; got {resolved}",
+                            "binary literal string segment expected a String value, got {resolved}",
                         ),
                     });
                 };
                 debug_assert!(
                     bytes.len() as u64 >= *byte_length,
                     "interpreter: BinaryConstruct string segment carries byte_length {byte_length} \
-                     but the runtime String holds {} bytes — typecheck/lower invariant violation",
+                     but the runtime String holds {} bytes (typecheck/lower invariant violation)",
                     bytes.len(),
                 );
                 let start_byte = (bit_offset / 8) as usize;
@@ -1732,7 +1701,7 @@ fn construct_binary_literal(
 /// Pack the low `width` bits of `value` into `buffer` starting at
 /// `start_bit`, byte-flipping per `endian`. The byte-aligned fast
 /// path collapses to a per-byte `or` (mirrors the LLVM backend's
-/// `emit_byte_packing` shape); the sub-byte path delegates to
+/// `emit_byte_packing` shape). The sub-byte path delegates to
 /// [`pack_bits_into`] so the integer / float arms share one
 /// bit-stream packer.
 fn pack_integer_segment(
@@ -1758,15 +1727,15 @@ fn pack_integer_segment(
         return;
     }
     // Sub-byte: write the low `width` bits MSB-first, mirroring the
-    // runtime `__koja_pack_bits` helper. Endianness is
-    // meaningless for non-byte-multiple widths in v1, so we only
-    // honour the high-order-first convention.
+    // runtime `__koja_pack_bits` helper. Endianness is meaningless
+    // for non-byte-multiple widths in v1, so we only honour the
+    // high-order-first convention.
     pack_bits_into(buffer, value, width, start_bit);
 }
 
 /// Eval-side mirror of the `__koja_pack_bits` runtime helper:
 /// write the low `width` bits of `value` (MSB first) into `buffer`
-/// at bit offset `start_bit`. `buffer` is assumed pre-zeroed; we
+/// at bit offset `start_bit`. `buffer` is assumed pre-zeroed, and we
 /// `or` rather than overwrite so adjacent segments that share a
 /// byte don't clobber each other.
 fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
@@ -1785,12 +1754,12 @@ fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
 /// Eval-side `BinaryMatch` driver, mirroring the LLVM emission
 /// described on [`IRInstruction::BinaryMatch`]: gate on the
 /// subject's runtime bit length (equality without a greedy tail,
-/// `>=` with one), then test every literal segment and — as a side
-/// effect — extract each `BindInt` / `GreedyTail` slice into its
-/// pre-declared local slot. Binds happen as segments are walked,
-/// matching the LLVM order; a later literal failure leaves earlier
-/// binds written, which is unobservable because the arm body only
-/// runs when the whole match succeeds.
+/// `>=` with one), then test every literal segment, extracting each
+/// `BindInt` / `GreedyTail` slice into its pre-declared local slot
+/// as a side effect. Binds happen as segments are walked, matching
+/// the LLVM order. A later literal failure leaves earlier binds
+/// written, which is unobservable because the arm body only runs
+/// when the whole match succeeds.
 fn execute_binary_match(
     layout: LoweredBinaryMatchLayout,
     segments: &[LoweredBinaryPattern],
@@ -1802,7 +1771,7 @@ fn execute_binary_match(
         Value::Bits { bytes, bit_length } => (bytes.as_slice(), *bit_length),
         other => {
             return Err(RuntimeError::TypeMismatch {
-                detail: format!("binary match expects a Binary/Bits/String subject; got {other}"),
+                detail: format!("binary match expects a Binary/Bits/String subject, got {other}"),
             });
         }
     };
@@ -1871,8 +1840,8 @@ fn execute_binary_match(
                         bit_length - *bit_offset,
                     ),
                     other => panic!(
-                        "interpreter: binary-match greedy tail typed `{other:?}` — \
-                         seal invariant violation (tail is Binary or Bits)",
+                        "interpreter: binary-match greedy tail typed `{other:?}`, \
+                         but a tail is Binary or Bits (seal invariant violation)",
                     ),
                 };
                 frame.locals.insert(*local, tail);
@@ -1944,8 +1913,8 @@ fn width_mask(width: u64) -> u64 {
 }
 
 /// Copy `length` bits starting at `start_bit` into a fresh
-/// MSB-first, zero-padded byte buffer — the greedy-tail extraction
-/// for `Bits`. Byte-aligned starts take the `memcpy` fast path.
+/// MSB-first, zero-padded byte buffer (the greedy-tail extraction
+/// for `Bits`). Byte-aligned starts take the `memcpy` fast path.
 fn extract_bit_range(bytes: &[u8], start_bit: u64, length: u64) -> Vec<u8> {
     let byte_count = length.div_ceil(8) as usize;
     if start_bit.is_multiple_of(8) {

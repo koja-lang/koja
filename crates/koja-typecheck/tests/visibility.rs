@@ -3,7 +3,7 @@
 //! Pins the contract surface for the visibility check threaded
 //! through [`koja_typecheck::pipeline::resolve::calls`]: every
 //! `priv fn` carries a [`VisibilityScope`] in the registry (top-level
-//! `→` `PackagePrivate`, method `→` `TypePrivate(owner)`), and bare
+//! `->` `PackagePrivate`, method `->` `TypePrivate(owner)`), and bare
 //! / method call resolution rejects callers that fall outside that
 //! scope. Surface syntax can't currently dispatch `Pkg.fn(args)` to
 //! a top-level function in another package, so the cross-package
@@ -22,7 +22,7 @@ mod common;
 
 use common::{PACKAGE, diagnostic_messages, typecheck_file, typecheck_file_fail};
 
-/// Drive `parse_program → check_program` on multiple user files
+/// Drive `parse_program -> check_program` on multiple user files
 /// stacked in `TestApp`. Used by
 /// [`top_level_priv_callable_across_files_in_same_package`] to prove
 /// `priv fn` reaches sibling files inside one package.

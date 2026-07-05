@@ -1,4 +1,4 @@
-//! Envelope wire format — the ABI between emitted code and the runtime.
+//! Envelope wire format: the ABI between emitted code and the runtime.
 //!
 //! A mailbox message is a heap buffer laid out as a fixed-size tag
 //! header followed by the payload:
@@ -16,19 +16,18 @@
 //! backend (LLVM today, others after self-hosting) must conform to.
 //!
 //! **This module is the authoritative definition.** The conforming
-//! constants on the backend side — `ENVELOPE_PAYLOAD_OFFSET` in
-//! `koja-ir-llvm` and `ReceiveTag::wire_byte` in `koja-ir` — mirror
-//! these values by spec, not via a shared type (a shared crate would
-//! solidify a Rust-level coupling that self-hosting is meant to
-//! remove — see `koja/design/ABI.md` for the policy and the full
-//! contract catalog). A mismatch needs no dedicated test: the
+//! constants on the backend side (`ENVELOPE_PAYLOAD_OFFSET` in
+//! `koja-ir-llvm` and `ReceiveTag::wire_byte` in `koja-ir`) mirror
+//! these values by spec, not via a shared type, because a shared crate
+//! would solidify a Rust-level coupling that self-hosting is meant to
+//! remove. A mismatch needs no dedicated test: the
 //! `lang_process_*` / `lang_io` suites read garbage the moment the
 //! offsets disagree.
 //!
 //! Tags are routing classes, not payload shapes: they decide which part
 //! of the receiver's mailbox an envelope lands in (see
 //! [`crate::mailbox`]). Receive arms only ever see `TAG_BUSINESS`,
-//! `TAG_LIFECYCLE`, and `TAG_IO_READY`; `TAG_REPLY` is consumed by the
+//! `TAG_LIFECYCLE`, and `TAG_IO_READY`. `TAG_REPLY` is consumed by the
 //! blocked caller inside `koja_rt_call_receive` and never surfaces.
 
 use std::ptr;
@@ -50,7 +49,7 @@ pub const TAG_IO_READY: u8 = 2;
 pub const TAG_REPLY: u8 = 3;
 
 /// Bytes reserved for the tag header. The payload begins at this
-/// offset; backends know this value as the envelope payload offset.
+/// offset. Backends know this value as the envelope payload offset.
 pub const TAG_HEADER_SIZE: usize = 8;
 
 /// Total size of a lifecycle envelope: tag header + one variant byte.
@@ -74,7 +73,7 @@ pub const IO_READY_ERROR: u8 = 2;
 /// metadata needed to free it without consulting the send site.
 ///
 /// Freeing is RAII via [`Drop`], which runs `drop_glue` over the
-/// payload (when present) and then deallocates the buffer — the
+/// payload (when present) and then deallocates the buffer: the
 /// discard semantics for any undelivered envelope (process death,
 /// send-to-dead, stale reply). The delivered-receive path is the one
 /// exception: it copies the payload into the receiver's slot and then
@@ -173,7 +172,7 @@ impl Message for Envelope {
 
 /// Discard-path free: runs payload drop glue (when present) over the
 /// undelivered payload, then frees the transport buffer. This is the
-/// default for any envelope that is dropped without being delivered —
+/// default for any envelope that is dropped without being delivered:
 /// undelivered mail on process death, sends to a dead target, stale
 /// replies, etc. The delivered path opts out via
 /// [`Envelope::free_transport`].
@@ -189,7 +188,7 @@ impl Drop for Envelope {
 /// An owned, untagged payload: a heap buffer of Koja value bytes plus
 /// the drop glue for any nested heap it references. The RAII
 /// counterpart of [`Envelope`] for payloads that live outside a
-/// transport buffer — a process's spawn config (`init_state`).
+/// transport buffer: a process's spawn config (`init_state`).
 ///
 /// The empty value ([`Default`]) is null and drops as a no-op, so it
 /// doubles as the placeholder left behind when ownership moves out via

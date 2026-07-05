@@ -4,7 +4,7 @@
 //!
 //! Eager semantics: both sides always evaluated; result produced by
 //! a single `BinaryOp` / `UnaryOp` instruction. Source-driven (parse
-//! → check → lower → run) so the tests stay faithful to the IR
+//! -> check -> lower -> run) so the tests stay faithful to the IR
 //! shape lowering produces; the helpers themselves never see anything
 //! but pre-resolved [`Value`] operands.
 

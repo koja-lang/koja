@@ -3,7 +3,7 @@
 //! `Hash.hash` (Bool + 8 int widths), and `Kernel.panic`. The tests
 //! drive the auto-imported `.eq` / `.hash` methods and the
 //! `Kernel.panic(message)` call directly, so each family is
-//! exercised through `parse → check → lower → run` without the
+//! exercised through `parse -> check -> lower -> run` without the
 //! handlers needing to be re-exported from the `koja-ir-eval`
 //! public surface.
 //!

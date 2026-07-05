@@ -9,7 +9,7 @@
 //!
 //! The bug this guards: the stdlib hands out a parametric
 //! `impl Debug for Pair<A, B>` whose body calls `self.first.format()`
-//! on a type-parameter receiver. Substituting `A → Union<...>` at
+//! on a type-parameter receiver. Substituting `A -> Union<...>` at
 //! monomorphization time produces a method call whose receiver
 //! resolution is `Union(...)`, which the old `receiver_struct_id`
 //! would reject as a non-`Named { Global }` value — hence the panic

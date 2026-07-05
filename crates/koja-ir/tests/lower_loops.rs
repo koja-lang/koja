@@ -334,7 +334,7 @@ fn for_lowers_via_desugar_to_while_plus_match() {
 
 #[test]
 fn loop_lowers_to_body_with_self_back_edge() {
-    // `loop end` (no break) emits an entry → loop_body branch and a
+    // `loop end` (no break) emits an entry -> loop_body branch and a
     // back-edge from loop_body to itself. The exit block is
     // synthesized but never reached at runtime — the IR still
     // contains it (every `loop` produces both blocks unconditionally).

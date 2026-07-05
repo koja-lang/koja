@@ -15,7 +15,7 @@
 //! `Wrapper { inner: TokenKind }` still threads `TokenKind`'s outer
 //! into the dependency set.
 //!
-//! Pure IR-data walk — no LLVM types touched here. Lives next to
+//! Pure IR-data walk, no LLVM types touched here. Lives next to
 //! the body-define modules so the order constraint and the consumer
 //! sit side-by-side.
 
@@ -33,9 +33,9 @@ use koja_ir::{IREnumDecl, IRPackage, IRStructField, IRSymbol, IRType, IRVariantP
 /// Struct fields are followed transitively because a struct payload
 /// inside an enum variant pulls in the structs' nested enums too
 /// (e.g. `Option<Wrapper>` where `Wrapper { inner: TokenKind }`).
-/// Unresolved references — symbols missing from the program (e.g.
-/// stdlib-internal types still threaded as opaque) — are skipped
-/// instead of panicking; they contribute no size dependency we can
+/// Unresolved references (symbols missing from the program, e.g.
+/// stdlib-internal types still threaded as opaque) are skipped
+/// instead of panicking. They contribute no size dependency we can
 /// honor here.
 pub(crate) fn enums_in_dependency_order(packages: &[IRPackage]) -> Vec<&IREnumDecl> {
     let enum_index = build_enum_index(packages);
@@ -142,8 +142,8 @@ fn collect_type_enum_refs(
             // (e.g. `Some(Wrapper { inner: TokenKind })`) still
             // contributes its nested enum dependencies. The
             // struct's body is already set by this point, but its
-            // size depends on the inner enum being bodied —
-            // honoring the chain here keeps the chunk count
+            // size depends on the inner enum being bodied.
+            // Honoring the chain here keeps the chunk count
             // honest for outer-enum size computation upstream.
             if let Some(fields) = struct_field_index.get(symbol) {
                 for field in *fields {
@@ -156,7 +156,7 @@ fn collect_type_enum_refs(
                 collect_type_enum_refs(member, struct_field_index, deps);
             }
         }
-        // Heap-pointer payloads — the inner type lives behind a
+        // Heap-pointer payloads: the inner type lives behind a
         // pointer and contributes no inline size dependency to the
         // outer enum chunk computation. `Indirect` is the cycle-
         // breaking pointer minted by `koja_ir::cycle`.

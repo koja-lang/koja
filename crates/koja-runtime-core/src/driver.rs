@@ -2,10 +2,10 @@
 //! implementation of the run loop, shared by every cooperative backend
 //! (eval today, WASI next).
 //!
-//! It mirrors the native `worker_loop` decision-for-decision — drain
+//! It mirrors the native `worker_loop` decision-for-decision (drain
 //! signals into the entry process, promote due deadlines, fire due
 //! timers, claim a runnable process and resume it, reclaim it on
-//! switch-out, and otherwise idle until the nearest wakeup — minus the
+//! switch-out, and otherwise idle until the nearest wakeup) minus the
 //! two things that make native multi-threaded: there are **no worker
 //! threads** (one loop on the calling thread) and **no locking** (the
 //! `ProcessTable` sits behind a bare `Rc<RefCell<…>>` borrow held only
@@ -29,10 +29,10 @@ use crate::protocol::{
     Clock, Driver, Executor, Lifecycle, MessageSource, Reactor, SignalSource, Waker,
 };
 
-/// Idle park cap when a process is `Running`/`WaitingIO` — work is
+/// Idle park cap when a process is `Running`/`WaitingIO`. Work is
 /// imminent, so wake often. Mirrors the native worker loop.
 const IDLE_CAP_ACTIVE: Duration = Duration::from_millis(10);
-/// Idle park cap when nothing is active — bounds signal-delivery latency
+/// Idle park cap when nothing is active. Bounds signal-delivery latency
 /// without busy-spinning. Mirrors the native worker loop.
 const IDLE_CAP_IDLE: Duration = Duration::from_millis(100);
 
@@ -51,7 +51,7 @@ where
     clock: C,
     core: Rc<RefCell<ProcessTable<E::Execution, E::Message>>>,
     executor: E,
-    /// Drain grace window armed when a `SIGTERM` arrives; supplied by the
+    /// Drain grace window armed when a `SIGTERM` arrives. Supplied by the
     /// adapter (which reads `KOJA_GRACE_MS`) so the core stays env-free.
     grace: Duration,
     reactor: R,
@@ -87,8 +87,8 @@ where
     }
 
     /// Drains latched OS signals into the entry process's system queue,
-    /// one lifecycle message per fired signal — the cooperative mirror of
-    /// the native loop's `poll_signals`.
+    /// one lifecycle message per fired signal. This is the cooperative
+    /// mirror of the native loop's `poll_signals`.
     fn deliver_signals(&self) {
         let fired = self.signals.drain();
         if fired.is_empty() {
@@ -157,9 +157,9 @@ where
         for waker in self.reactor.poll(Some(timeout)) {
             match waker {
                 // `io_block`: promote the waiter back onto the ready queue.
-                // Guard on `WaitingIO` like the native `promote_io_waiter` —
-                // a concurrent wake / kill may have already moved it, and
-                // re-transitioning would trip the legal-edge assertion.
+                // Guard on `WaitingIO` like the native `promote_io_waiter`,
+                // because a concurrent wake / kill may have already moved it,
+                // and re-transitioning would trip the legal-edge assertion.
                 Waker::Resume(pid) => {
                     if self.is_waiting_io(pid) {
                         self.core
@@ -179,7 +179,7 @@ where
         }
     }
 
-    /// Whether `pid` is currently parked in `WaitingIO` — the only state a
+    /// Whether `pid` is currently parked in `WaitingIO`, the only state a
     /// reactor `Resume` may legally promote from.
     fn is_waiting_io(&self, pid: crate::protocol::Pid) -> bool {
         self.core
@@ -250,7 +250,7 @@ mod tests {
 
     type MockTable = ProcessTable<(), MockMessage>;
 
-    /// Executor that optionally marks a resumed process `Dead` — modelling a
+    /// Executor that optionally marks a resumed process `Dead`, modelling a
     /// `main` that reacts to `Shutdown` by returning. Counts resumes so a
     /// test can tell whether `main` ever ran.
     struct MockExecutor {
@@ -305,7 +305,7 @@ mod tests {
     }
 
     /// Fires a single `SIGTERM` (`Shutdown`) on its first drain, nothing
-    /// after — the injected signal the drain reacts to.
+    /// after: the injected signal the drain reacts to.
     struct OneShotSigterm {
         pending: Cell<bool>,
     }

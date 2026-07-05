@@ -1,9 +1,9 @@
-//! `Kernel.panic(message: String)` — abort the process with a
+//! `Kernel.panic(message: String)`: abort the process with a
 //! diagnostic. v1 routed panic through the runtime's symbolicated
-//! stack-trace helper; we keep the same surface (calls
+//! stack-trace helper. We keep the same surface (calls
 //! `__koja_panic` with the message) and falls back to libc
 //! `abort` if the helper isn't linked. Either way the body ends in
-//! `unreachable` so LLVM treats the call as divergent — paired with
+//! `unreachable` so LLVM treats the call as divergent. Paired with
 //! the IR-level `Statement::Expr` Never-detection that caps the
 //! enclosing block with `IRTerminator::Unreachable`, the typed
 //! Never return is preserved end to end.

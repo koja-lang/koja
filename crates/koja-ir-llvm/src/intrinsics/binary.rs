@@ -1,26 +1,26 @@
 //! `Binary.*` and `Bits.*` intrinsic family. Both layouts share the
-//! `[i64 bit_length][ceil(bit_length / 8) bytes]` heap shape; the
+//! `[i64 bit_length][ceil(bit_length / 8) bytes]` heap shape. The
 //! returned pointer points at the payload, with the bit-length
 //! header at offset `-8`. Conversions between `Binary` and `Bits`
 //! are zero-cost when the lengths line up.
 //!
-//! - `Binary.at(self, index: Int) -> Option<Int>` — O(1) byte read:
-//!   bounds-check against the header, then GEP + load + zext. No
+//! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
+//!   Bounds-check against the header, then GEP + load + zext. No
 //!   runtime call.
-//! - `Binary.byte_size(self) -> Int` — divides the header by 8.
-//! - `Binary.ptr(self) -> CPtr<UInt8>` — returns `self` (the payload
+//! - `Binary.byte_size(self) -> Int`: divides the header by 8.
+//! - `Binary.ptr(self) -> CPtr<UInt8>`: returns `self` (the payload
 //!   pointer is already byte-addressable).
-//! - `Binary.slice(self, range: Range) -> Binary` — copies the
+//! - `Binary.slice(self, range: Range) -> Binary`: copies the
 //!   inclusive byte range `[start, stop]` via the
-//!   `koja_binary_slice` runtime helper; endpoints clamp.
-//! - `Binary.to_bits(self) -> Bits` — zero-cost reinterpret.
-//! - `Binary.to_string(self) -> Result<String, String>` — validates
+//!   `koja_binary_slice` runtime helper. Endpoints clamp.
+//! - `Binary.to_bits(self) -> Bits`: zero-cost reinterpret.
+//! - `Binary.to_string(self) -> Result<String, String>`: validates
 //!   UTF-8 via the `koja_utf8_validate` runtime helper, then
 //!   heap-copies into a NUL-terminated `String` payload on success.
 //!   Error branch returns `Result.Err("invalid UTF-8")`. Mirrors
 //!   v1's `Binary_to_string` codegen one-for-one (same runtime
 //!   helper, same Ok/Err shapes).
-//! - `Bits.to_binary(self) -> Result<Binary, String>` — checks
+//! - `Bits.to_binary(self) -> Result<Binary, String>`: checks
 //!   `bit_length & 7 == 0` and returns `Result.Ok(self)` (zero-cost
 //!   reinterpret, both layouts are identical) when aligned, or
 //!   `Result.Err("bit length is not byte-aligned")` otherwise.
@@ -38,12 +38,12 @@ use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
 use crate::runtime::{declare_binary_slice_extern, declare_utf8_validate_extern};
 
-/// `enum Result<T, E>` variant tag for `Ok(T)` — declaration order
+/// `enum Result<T, E>` variant tag for `Ok(T)`: declaration order
 /// in `koja/lib/global/src/kernel.koja`.
 const RESULT_OK_TAG: IRVariantTag = IRVariantTag(0);
 /// `enum Result<T, E>` variant tag for `Err(E)`.
 const RESULT_ERR_TAG: IRVariantTag = IRVariantTag(1);
-/// `enum Option<T>` variant tags — declaration order in
+/// `enum Option<T>` variant tags: declaration order in
 /// `koja/lib/global/src/kernel.koja`.
 const OPTION_SOME_TAG: IRVariantTag = IRVariantTag(0);
 const OPTION_NONE_TAG: IRVariantTag = IRVariantTag(1);
@@ -81,7 +81,7 @@ pub(super) fn emit_bits<'ctx>(
     }
 }
 
-/// `Binary.to_bits(self) -> Bits` — a zero-cost reinterpret: `Binary`
+/// `Binary.to_bits(self) -> Bits` is a zero-cost reinterpret: `Binary`
 /// and `Bits` share the identical `[rc][bit_length][bytes]` block, so
 /// we rc-acquire the immutable block and hand back the same payload
 /// pointer as an owned `Bits`. The matching `Drop` rc-decrements.
@@ -95,7 +95,7 @@ fn emit_to_bits<'ctx>(
     ctx.builder.build_return(Some(&shared)).or_ice().map(|_| ())
 }
 
-/// `Binary.at(self, index) -> Option<Int>` — pure inline IR: load
+/// `Binary.at(self, index) -> Option<Int>` is pure inline IR: load
 /// the byte count from the header, bounds-check the index, then
 /// GEP + load + zext the byte. Out-of-bounds returns `Option.None`.
 fn emit_at<'ctx>(
@@ -164,7 +164,7 @@ fn emit_at<'ctx>(
     ctx.builder.build_return(Some(&none)).or_ice().map(|_| ())
 }
 
-/// `Binary.slice(self, range) -> Binary` — unpack the `Range`
+/// `Binary.slice(self, range) -> Binary`: unpack the `Range`
 /// struct's `start` / `stop` fields and delegate the clamped copy to
 /// the `koja_binary_slice` runtime helper.
 fn emit_slice<'ctx>(
@@ -223,7 +223,7 @@ fn emit_byte_size<'ctx>(
 }
 
 /// Zero-cost conversion. Both `Binary` and `Bits` lower to the same
-/// payload-pointer shape (`ptr` at the LLVM layer); `Binary.ptr`
+/// payload-pointer shape (`ptr` at the LLVM layer). `Binary.ptr`
 /// hands back a `CPtr<UInt8>` shaped identically. Just return `self`.
 fn emit_self_passthrough<'ctx>(
     ctx: &EmitContext<'ctx>,

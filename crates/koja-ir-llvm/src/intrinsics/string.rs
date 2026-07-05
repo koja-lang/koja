@@ -60,7 +60,7 @@ fn emit_byte_length<'ctx>(
         .map(|_| ())
 }
 
-/// `String.to_binary(self) -> Binary` — a zero-cost reinterpret.
+/// `String.to_binary(self) -> Binary`: a zero-cost reinterpret.
 /// `String` and `Binary` share the `[rc][bit_length][bytes]` block
 /// (the String's trailing libc NUL is just unused capacity a `Binary`
 /// never reads), so we rc-acquire the immutable block and hand back
@@ -235,7 +235,7 @@ fn load_byte_count<'ctx>(
 }
 
 /// Extract the IR symbol of an enum type from `ty`. Mirrors the
-/// helper in `intrinsics/list.rs` — the lowering pass guarantees an
+/// helper in `intrinsics/list.rs`. The lowering pass guarantees an
 /// enum-typed return for `String.get`, but the error path is kept
 /// to surface IR-seal violations as codegen errors rather than
 /// panics.

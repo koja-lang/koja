@@ -7,7 +7,7 @@
 //! Both call the same runtime helpers the LLVM backend declares
 //! (`koja_socket_resolve` / `koja_socket_recv_from`), branch on the
 //! null sentinel, and unpack the returned heap buffer into eval
-//! [`Value`]s — the eval analogue of the LLVM backend's
+//! [`Value`]s, the eval analogue of the LLVM backend's
 //! `intrinsics/socket.rs` emitters. Where LLVM transfers buffer
 //! ownership into the constructed value, eval copies the bytes out
 //! and frees the blocks through `koja_free` (keeping the runtime's
@@ -15,7 +15,7 @@
 //!
 //! `recv_from` waits for the socket to be readable through eval's
 //! [`crate::reactor`] (cooperatively parking the process, or blocking the
-//! thread in function mode) before delegating to the native receiver — the
+//! thread in function mode) before delegating to the native receiver, the
 //! same pre-wait-then-delegate pattern as the `externs/net.rs` wrappers.
 
 use std::cell::RefCell;
@@ -33,7 +33,7 @@ use crate::reactor;
 use crate::value::Value;
 
 /// Byte count of the `i64 count` header at the front of the
-/// `koja_socket_resolve` buffer; the IP-pointer array follows.
+/// `koja_socket_resolve` buffer. The IP-pointer array follows.
 const RESOLVE_HEADER_BYTES: usize = 8;
 /// Offset of `*u8 ip_bin` inside the runtime's
 /// `koja_socket_recv_from` `[*u8 data, *u8 ip_bin, i64 port]` triple.
@@ -66,7 +66,7 @@ fn resolve<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     let [Value::String(hostname)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("Socket.resolve expects a single String argument; got {args:?}"),
+            detail: format!("Socket.resolve expects a single String argument, got {args:?}"),
         });
     };
     let result_symbol = helpers::enum_return_symbol(function, "Socket.resolve")?;
@@ -106,7 +106,7 @@ async fn recv_from<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     let [receiver, Value::Int(count)] = args else {
         return Err(RuntimeError::TypeMismatch {
-            detail: format!("Socket.recv_from expects (Socket, Int) arguments; got {args:?}"),
+            detail: format!("Socket.recv_from expects (Socket, Int) arguments, got {args:?}"),
         });
     };
     let fd = socket_fd(receiver)?;
@@ -115,7 +115,7 @@ async fn recv_from<R: CallResolver>(
     let address_symbol = struct_field_symbol(&pair_symbol, 1, resolver)?;
     let ip_symbol = struct_field_symbol(&address_symbol, 0, resolver)?;
 
-    // Interrupted by a signal — surface an error instead of reading.
+    // Interrupted by a signal: surface an error instead of reading.
     if reactor::io_block(fd, Interest::Readable).await {
         return Ok(helpers::result_value(
             result_symbol,
@@ -204,7 +204,7 @@ fn recv_from_pair_symbol<R: CallResolver>(
 }
 
 /// The struct symbol at field `index` of `struct_symbol`'s decl.
-/// Used to walk `Pair → SocketAddress → IPAddress` without
+/// Used to walk `Pair -> SocketAddress -> IPAddress` without
 /// hardcoding identifier strings.
 fn struct_field_symbol<R: CallResolver>(
     struct_symbol: &IRSymbol,

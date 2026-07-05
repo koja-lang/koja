@@ -78,7 +78,7 @@ pub(super) fn lower_call(
             (template_symbol, return_ty)
         } else {
             // Bare static call into a sibling inside a concrete-pinned
-            // impl block (`impl CPtr<UInt8>` → `Global.CPtr.strlen`
+            // impl block (`impl CPtr<UInt8>` -> `Global.CPtr.strlen`
             // mangles as `Global.CPtr_$UInt8$.strlen`) — match the
             // mono-side `enqueue_member_methods` output so the call
             // resolves through the IRPackage.

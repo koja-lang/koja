@@ -1,15 +1,15 @@
 //! Runtime-internal accounting symbols exported by the linked
 //! `koja-runtime-posix` staticlib but *not* declared in any stdlib source
-//! file — the leak / race oracles the `tests/lang/memory/` and
+//! file: the leak / race oracles the `tests/lang/memory/` and
 //! `tests/lang/ownership/` fixtures declare ad-hoc as `@extern "C"` to
-//! assert reclaim behavior (see `koja/design/SCHEDULER-PROTOCOL.md`).
+//! assert reclaim behavior.
 //!
 //! - `koja_rt_live_blocks` passes straight through to the native symbol:
 //!   the koja-heap allocator (`koja_runtime_core::memory`) is shared, so
 //!   both backends read the same live-block counter.
 //! - `koja_rt_sched_violations` is read from eval's *own* cooperative core
-//!   instead — eval runs its own `ProcessTable`, never the native `SCHED`
-//!   — so the kill/park race fixtures genuinely exercise the cooperative
+//!   instead (eval runs its own `ProcessTable`, never the native `SCHED`),
+//!   so the kill/park race fixtures genuinely exercise the cooperative
 //!   scheduler's transition guard.
 
 use crate::error::RuntimeError;

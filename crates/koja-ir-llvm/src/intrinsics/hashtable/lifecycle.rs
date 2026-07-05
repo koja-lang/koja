@@ -1,5 +1,5 @@
 //! Allocate / inspect emitters: `new`, `length`, `empty?`, and the
-//! `from_map` identity. None of these touch the probe loop — they
+//! `from_map` identity. None of these touch the probe loop: they
 //! either mint a fresh buffer pair or peek at the table fields.
 
 use inkwell::IntPredicate;
@@ -16,9 +16,9 @@ use super::util::{
 };
 use super::{HashtableLayout, INITIAL_CAPACITY};
 
-/// `fn new() -> Self` — allocate the entries + states buffers and
+/// `fn new() -> Self`: allocate the entries + states buffers and
 /// initialize state to `EMPTY`. Same shape for `Map.new` and
-/// `Set.new`; the only knob is `entry_size`.
+/// `Set.new`, the only knob is `entry_size`.
 pub(crate) fn emit_new<'ctx>(ctx: &EmitContext<'ctx>, entry_size: u64) -> Result<(), LlvmError> {
     let i32_ty = ctx.context.i32_type();
     let i64_ty = ctx.context.i64_type();
@@ -50,7 +50,7 @@ pub(crate) fn emit_new<'ctx>(ctx: &EmitContext<'ctx>, entry_size: u64) -> Result
     ret_struct(ctx, result)
 }
 
-/// `fn length(self) -> Int` — return the `length` field. Both
+/// `fn length(self) -> Int`: return the `length` field. Both
 /// collections.
 pub(crate) fn emit_length<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -62,7 +62,7 @@ pub(crate) fn emit_length<'ctx>(
     ret_basic(ctx, len.into())
 }
 
-/// `fn empty?(self) -> Bool` — check `length == 0`. Both
+/// `fn empty?(self) -> Bool`: check `length == 0`. Both
 /// collections.
 pub(crate) fn emit_empty_q<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -82,7 +82,7 @@ pub(crate) fn emit_empty_q<'ctx>(
 /// Identity-shaped intrinsics: `Map.from_map(self) -> Self` and
 /// `Set.from_set(self) -> Self`. Value-wise an identity, but `self` is
 /// borrowed and dropped by the caller, so the result must own
-/// independent buffers — clone rather than alias `self`'s.
+/// independent buffers, cloned rather than aliasing `self`'s.
 pub(crate) fn emit_identity<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

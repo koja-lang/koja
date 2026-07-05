@@ -75,8 +75,8 @@ fn union_wrap_emits_tag_store_then_payload_store() {
     // Member-typed arg flowing into a union slot stamps a
     // `Coercion::UnionWiden` at typecheck and lowers to a
     // matching `UnionWrap` at IR. The LLVM emit shape is
-    // alloca-the-outer → GEP field 0 → store i8 tag → GEP field 1
-    // → store the typed payload → load the outer back as the SSA
+    // alloca-the-outer -> GEP field 0 -> store i8 tag -> GEP field 1
+    // -> store the typed payload -> load the outer back as the SSA
     // result. Substring-pinned on the tag store (`store i8`) and
     // the payload-pointer GEP into field 1.
     let source = "
@@ -158,7 +158,7 @@ fn typed_binding_arm_emits_tag_load_compare_branch_and_payload_load() {
 #[test]
 fn struct_field_union_typechecks_and_emits() {
     // A struct field whose type is a union has to round-trip
-    // through field-read → typed-binding match. Pre-emit ordering
+    // through field-read -> typed-binding match. Pre-emit ordering
     // declares the union outer before the struct body so the
     // struct's `{ ptr }` field can reference the union mangle.
     let source = "

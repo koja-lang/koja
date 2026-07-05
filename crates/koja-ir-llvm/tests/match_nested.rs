@@ -45,7 +45,7 @@ fn struct_literal_field_pattern_lowers_to_and_chained_test_blocks() {
 #[test]
 fn struct_partial_field_pattern_emits_only_one_field_test_no_follow_on() {
     // `Point{x: 5}` lists only `x`; lowering must not mint a
-    // `match_and_field` follow-on block (single test → no AND
+    // `match_and_field` follow-on block (single test -> no AND
     // chain).
     let source = "
         struct Point

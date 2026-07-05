@@ -1,8 +1,8 @@
 //! Write-side probe + per-method tails: `Map.put` overwrites or
-//! inserts a `(K, V)` pair; `Set.insert` is its single-payload twin.
+//! inserts a `(K, V)` pair, `Set.insert` is its single-payload twin.
 //! Both share [`emit_insert_probe`], which walks slots until the
-//! key matches (→ `update_bb`) or an EMPTY/TOMBSTONE slot is hit
-//! (→ `insert_bb`).
+//! key matches (-> `update_bb`) or an EMPTY/TOMBSTONE slot is hit
+//! (-> `insert_bb`).
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
@@ -52,7 +52,7 @@ pub(crate) fn emit_map_put<'ctx>(
         &key_ops,
     )?;
 
-    // Update path: dup key found, overwrite the value slot — release
+    // Update path: dup key found, overwrite the value slot. Release
     // the old value the clone acquired, store the acquired incoming
     // value. The matched key stays put (no key acquire / release).
     ctx.builder.position_at_end(probe.update_bb);
@@ -170,10 +170,10 @@ pub(super) struct InsertProbe<'ctx> {
 }
 
 /// Emit a probe loop that returns to the caller at either
-/// `update_bb` (existing key hit — caller decides what to do) or
-/// `insert_bb` (empty/tombstone slot — caller writes the new
-/// entry). On entry the builder must sit at a single predecessor;
-/// on return it sits at an unspecified position and the caller
+/// `update_bb` (existing key hit, caller decides what to do) or
+/// `insert_bb` (empty/tombstone slot, caller writes the new
+/// entry). On entry the builder must sit at a single predecessor.
+/// On return it sits at an unspecified position and the caller
 /// branches to `update_bb` / `insert_bb` via `position_at_end`.
 pub(super) fn emit_insert_probe<'ctx>(
     ctx: &EmitContext<'ctx>,

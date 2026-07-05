@@ -1,12 +1,12 @@
 //! Translate [`koja_ir::IRType`] values into the
-//! corresponding inkwell types. `Bool` maps to `i1`; signed and
+//! corresponding inkwell types. `Bool` maps to `i1`. Signed and
 //! unsigned widths share their LLVM width (signedness is
-//! per-instruction, not per-type); `Float32` / `Float64` map to
-//! `f32` / `f64` IEEE 754; `String` maps to a default-AS pointer
+//! per-instruction, not per-type). `Float32` / `Float64` map to
+//! `f32` / `f64` IEEE 754. `String` maps to a default-AS pointer
 //! (the v1 header layout lives in
-//! [`crate::emit::instruction::emit_const_string`]); `Struct(_)`
+//! [`crate::emit::instruction::emit_const_string`]). `Struct(_)`
 //! resolves through the pre-emitted [`crate::ctx::EmitContext`] struct
-//! type map; `Enum(_)` resolves through the pre-emitted enum-layout
+//! type map. `Enum(_)` resolves through the pre-emitted enum-layout
 //! map ([`crate::ctx::EmitContext::enum_outer_type`]).
 //!
 //! [`ir_byte_size`] / [`ir_alignment`] are the target-aware adapters
@@ -28,9 +28,9 @@ use crate::error::LlvmError;
 
 /// LLVM integer type for an integer-family or `Bool` [`IRType`].
 /// Float / `String` / `Unit` variants surface as a feature-gap
-/// diagnostic — call sites that genuinely need an int (e.g. cond
-/// branches, where the seal pass guarantees an `i1`) hit this;
-/// sites that accept any basic type use [`ir_basic_type`].
+/// diagnostic. Call sites that genuinely need an int (e.g. cond
+/// branches, where the seal pass guarantees an `i1`) hit this.
+/// Sites that accept any basic type use [`ir_basic_type`].
 pub(crate) fn ir_int_type<'ctx>(
     context: &'ctx Context,
     ty: &IRType,
@@ -78,12 +78,12 @@ pub(crate) fn ir_int_type<'ctx>(
 }
 
 /// LLVM basic type for any [`IRType`] that has a value-level
-/// representation. `Unit` is rejected (no value form at this layer —
-/// see [`value_basic_type`] for the placeholder-friendly variant);
-/// ints / `Bool` route through [`ir_int_type`]; `Float32` / `Float64`
-/// map to `f32` / `f64`; `String` is a default-AS pointer;
+/// representation. `Unit` is rejected (no value form at this layer,
+/// see [`value_basic_type`] for the placeholder-friendly variant).
+/// Ints / `Bool` route through [`ir_int_type`]. `Float32` / `Float64`
+/// map to `f32` / `f64`. `String` is a default-AS pointer.
 /// `Struct(symbol)` resolves through [`EmitContext::struct_type`]
-/// (registered by the pre-emit phase); `Enum(symbol)` resolves
+/// (registered by the pre-emit phase). `Enum(symbol)` resolves
 /// through [`EmitContext::enum_outer_type`] (the outer opaque blob
 /// registered by [`crate::layout::enums::declare_enum_type`] +
 /// [`crate::layout::enums::define_enum_bodies`]).
@@ -125,7 +125,7 @@ pub(crate) fn ir_basic_type<'ctx>(
 /// at every site that needs an LLVM type for a value-position slot
 /// (function params, local allocas, struct fields) so generic
 /// instantiations that pin a type-param to `Unit` lay out cleanly.
-/// The byte is inert at runtime — Unit constants emit `i8 0` (see
+/// The byte is inert at runtime: Unit constants emit `i8 0` (see
 /// [`crate::emit::constants::emit_const_instruction`]) and Unit
 /// returns still route through `void` in
 /// [`crate::function::function_signature`].
@@ -143,7 +143,7 @@ pub(crate) fn value_basic_type<'ctx>(
 /// [`inkwell::targets::TargetData::get_abi_size`] so the result
 /// matches what the object emitter will lay out (e.g. an
 /// `IRType::String` pointer is 8 bytes on 64-bit hosts and 4 on
-/// 32-bit hosts; an `IRType::Enum(_)` is the size of its outer
+/// 32-bit hosts, and an `IRType::Enum(_)` is the size of its outer
 /// blob, computed by the pre-emit phase).
 ///
 /// Public for follow-up enum-shaped emit work (eq, destructure,
@@ -158,7 +158,7 @@ pub(crate) fn ir_byte_size<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result
 /// ABI alignment of `ty` on the host triple. Sibling of
 /// [`ir_byte_size`]. The enum layout queries `target_data`
 /// directly during the pre-emit phase (it already has
-/// `BasicTypeEnum` handles in scope); this helper is kept for the
+/// `BasicTypeEnum` handles in scope). This helper is kept for the
 /// same follow-up emit work [`ir_byte_size`] is reserved for.
 #[allow(dead_code)]
 pub(crate) fn ir_alignment<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result<u32, LlvmError> {
@@ -169,7 +169,7 @@ pub(crate) fn ir_alignment<'ctx>(ctx: &EmitContext<'ctx>, ty: &IRType) -> Result
 /// Closure value shape: `{ fn_ptr, env_ptr }`. Anonymous (literal)
 /// struct so two `IRType::Function` operands of compatible shape
 /// share a single LLVM type without a named-type registry. Both
-/// fields are opaque pointers in the default address space; the
+/// fields are opaque pointers in the default address space. The
 /// fn_ptr's signature is reconstructed at each indirect call site
 /// via [`closure_body_signature`].
 pub(crate) fn closure_fat_ptr_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx> {
@@ -180,7 +180,7 @@ pub(crate) fn closure_fat_ptr_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<
 
 /// `List<T>` value shape: `{ buf_ptr: i8*, len: i64, cap: i64 }`.
 /// Anonymous (literal) struct so every `IRType::List(_)` shares a
-/// single LLVM type regardless of element type — the element type
+/// single LLVM type regardless of element type. The element type
 /// only enters when an emitter computes byte offsets. Element
 /// storage lives on the heap behind `buf_ptr`.
 pub(crate) fn list_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx> {
@@ -192,13 +192,13 @@ pub(crate) fn list_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx>
 
 /// Shared `Map<K, V>` / `Set<T>` value shape:
 /// `{ entries_ptr: i8*, states_ptr: i8*, length: i64, capacity: i64 }`.
-/// Open-addressed hash table with linear probing; `entries_ptr` is
+/// Open-addressed hash table with linear probing. `entries_ptr` is
 /// `[Entry; capacity]` (a `Map` entry is a key-value pair, a `Set`
 /// entry is just the element), `states_ptr` is `[u8; capacity]`
 /// (`0` empty / `1` occupied / `2` tombstone). Both buffers live
 /// off the GC-rooted heap. The struct itself is anonymous so every
 /// `IRType::Map { .. }` and `IRType::Set(_)` shares a single LLVM
-/// type — element / entry size only enters when an emitter
+/// type. Element / entry size only enters when an emitter
 /// computes byte offsets.
 pub(crate) fn hashtable_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
@@ -210,7 +210,7 @@ pub(crate) fn hashtable_value_type<'ctx>(ctx: &EmitContext<'ctx>) -> StructType<
 }
 
 /// LLVM `FunctionType` for a closure body's signature. Prepends an
-/// `env_ptr: i8*` parameter to the user-visible params; mirrors the
+/// `env_ptr: i8*` parameter to the user-visible params. Mirrors the
 /// closure-kind ABI declared by [`crate::function::declare_function`].
 /// Used by `MakeClosure` (to wire the indirect-call signature) and
 /// by `CallClosure` (to call through a fat-pointer's fn_ptr).
@@ -236,10 +236,10 @@ pub(crate) fn closure_body_signature<'ctx>(
 /// Number of leading header fields on every (non-null) closure env
 /// block: `[i64 rc][ptr drop_fn][ptr copy_fn]`. The rc word mirrors
 /// the heap-leaf `[i64 rc][i64 bit_length]` header so `koja_rc_inc`
-/// shares the same base-pointer ABI; the second word holds the
+/// shares the same base-pointer ABI. The second word holds the
 /// address of the closure's `FunctionKind::DropClosureGlue`
-/// capture-release glue (or null when no capture is heap-managed);
-/// the third holds its `FunctionKind::CopyClosureGlue` env deep-copy
+/// capture-release glue (or null when no capture is heap-managed).
+/// The third holds its `FunctionKind::CopyClosureGlue` env deep-copy
 /// glue, invoked by `koja_closure_deep_copy` when the closure crosses
 /// a process boundary (null only for hand-built IR that never sends
 /// the closure). Capture `i` therefore lives at struct field
@@ -252,8 +252,8 @@ pub(crate) const CLOSURE_ENV_HEADER_FIELDS: u32 = 3;
 /// [`CLOSURE_ENV_HEADER_FIELDS`]) followed by one field per capture.
 /// Anonymous (literal) struct so each capture-arity / type
 /// combination shares one LLVM type per emit module without a
-/// named-type registry. Empty layouts produce a header-only struct —
-/// the env pointer is null in that case (see `MakeClosure`'s
+/// named-type registry. Empty layouts produce a header-only struct.
+/// The env pointer is null in that case (see `MakeClosure`'s
 /// captureless path), so the header is never materialized.
 pub(crate) fn env_struct_type<'ctx>(
     ctx: &EmitContext<'ctx>,

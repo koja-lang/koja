@@ -1,4 +1,4 @@
-//! `Hash.hash` family — `Bool` and the 8 integer cells zero-extend
+//! `Hash.hash` family: `Bool` and the 8 integer cells zero-extend
 //! to `i64` and feed the [SplitMix64] finalizer. `String.hash`
 //! reads the payload's bit-length header, walks the byte range, and
 //! folds each byte through the FNV-1a recurrence.
@@ -147,7 +147,7 @@ fn emit_int_hash<'ctx>(
 }
 
 /// SplitMix64 finalizer. Three rounds of `(x ^= x >> shift) *= odd
-/// constant`; the exact constants match every other Koja backend so
+/// constant`. The exact constants match every other Koja backend so
 /// hash values are byte-stable across eval / native / future JIT.
 fn splitmix64<'ctx>(
     ctx: &EmitContext<'ctx>,

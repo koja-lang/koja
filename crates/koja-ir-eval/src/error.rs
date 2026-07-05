@@ -1,4 +1,4 @@
-//! Runtime errors raised by the interpreter — recoverable diagnostics
+//! Runtime errors raised by the interpreter: recoverable diagnostics
 //! like division by zero, integer overflow, and type mismatches.
 //! Anything that would indicate a malformed `IRProgram` (undefined
 //! `ValueId`, missing entry, etc.) is a seal violation upstream and
@@ -32,10 +32,10 @@ pub enum RuntimeError {
     /// An `@extern "C"` (FFI-linked) function was called whose C
     /// symbol isn't registered in [`crate::externs::dispatch`]. The
     /// eval backend exposes a curated subset of `koja-runtime`
-    /// symbols (the ones the auto-imported stdlib needs); calls
-    /// into externs outside that subset surface this error so users
-    /// see exactly which symbol needs a handler instead of a silent
-    /// `Unit` return.
+    /// symbols (the ones the auto-imported stdlib needs). Calls
+    /// outside that subset surface this error so users see exactly
+    /// which symbol needs a handler instead of a silent `Unit`
+    /// return.
     ExternNotSupported { symbol: String },
     /// Reached an `IRTerminator::Unreachable`. Lowering only emits
     /// these on the failure edge of an exhaustive `match`, so
@@ -75,7 +75,7 @@ impl fmt::Display for RuntimeError {
                 write!(
                     f,
                     "extern \"C\" `{symbol}` is not registered in the eval \
-                     dispatch table; use --backend=llvm or add a handler \
+                     dispatch table. Use --backend=llvm or add a handler \
                      in `koja-ir-eval/src/externs`",
                 )
             }

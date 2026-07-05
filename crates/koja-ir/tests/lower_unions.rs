@@ -53,7 +53,7 @@ take(Post{title: \"hi\"})
         .count();
     assert_eq!(
         wrap_count, 1,
-        "expected exactly one UnionWrap for the bare-Post → union arg site, got {wrap_count}",
+        "expected exactly one UnionWrap for the bare-Post -> union arg site, got {wrap_count}",
     );
 
     // Scope to the test package: the autoimported stdlib carries its

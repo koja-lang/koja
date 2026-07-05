@@ -124,19 +124,19 @@ impl Substitution {
     ///
     /// The compatibility check (rather than strict `prev == value`)
     /// matters most for the `fill_from_expected` path: a payload-
-    /// driven bind of `T → Int64` followed by an expected-type fill
-    /// of `T → Int` must not roll back the entire substitution and
+    /// driven bind of `T -> Int64` followed by an expected-type fill
+    /// of `T -> Int` must not roll back the entire substitution and
     /// strand sibling slots (`E` etc.) unbound, since `Int` and
     /// `Int64` are the same type. Today that's the alias rule.
     /// When `Int` becomes a union over its sized variants the same
-    /// predicate generalizes: `T → Int64` then `T → Int` still
+    /// predicate generalizes: `T -> Int64` then `T -> Int` still
     /// resolves cleanly because `Int64` is a member of the `Int`
     /// union.
     ///
     /// The union-member arm covers the dual case for user-declared
-    /// unions: a receiver pre-bind of `M → MsgA | MsgB` (from a
+    /// unions: a receiver pre-bind of `M -> MsgA | MsgB` (from a
     /// `Ref<MsgA | MsgB, _>.call(...)` site) followed by an
-    /// arg-driven bind of `M → MsgA` keeps the wider slot intact
+    /// arg-driven bind of `M -> MsgA` keeps the wider slot intact
     /// rather than rejecting the call as a "cannot be both" conflict.
     /// One-direction-only: if a narrower slot value would be widened
     /// by a later union arrival, that's a `fill_from_expected` story,
@@ -219,8 +219,8 @@ impl Substitution {
 ///
 /// Used by [`Substitution::set`] to accept a method-arg unification
 /// like `Ref<MsgA | MsgB, _>.call(MsgA.Ping(...))`: the receiver
-/// scope pre-binds `M → MsgA | MsgB`, and the arg drives a unify of
-/// `M → MsgA`. Without this rule the per-slot compatibility check
+/// scope pre-binds `M -> MsgA | MsgB`, and the arg drives a unify of
+/// `M -> MsgA`. Without this rule the per-slot compatibility check
 /// would surface a spurious "cannot be both" diagnostic.
 /// True when `prev` is a sized numeric primitive (`Int8`/`Int32`/...,
 /// `UInt8`/..., `Float32`) and `value` is the default literal type for

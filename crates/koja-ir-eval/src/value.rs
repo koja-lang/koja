@@ -1,13 +1,9 @@
-//! Runtime values produced by the [`crate::Interpreter`] — variants
-//! map 1:1 onto [`koja_ir::ConstValue`] for primitives, plus a
-//! [`Value::Struct`] variant carrying the receiver's
-//! [`koja_ir::IRSymbol`] and a positional `fields` vector
-//! (indexed by [`koja_ir::IRStructField::index`]) and a
-//! [`Value::Enum`] variant carrying the receiver enum's
-//! [`koja_ir::IRSymbol`], the discriminant
-//! [`koja_ir::IRVariantTag`], the variant `name` (cached for
-//! `Display`), and a per-shape [`EnumPayload`]. New variants (lists,
-//! closures, …) land as the IR vocabulary grows.
+//! Runtime values produced by the [`crate::Interpreter`]. Variants
+//! map 1:1 onto [`koja_ir::ConstValue`] for primitives, plus
+//! composite variants ([`Value::Struct`], [`Value::Enum`], lists,
+//! closures, ...) that carry their receiver's [`koja_ir::IRSymbol`]
+//! and already-evaluated payloads. New variants land as the IR
+//! vocabulary grows.
 
 use std::cell::RefCell;
 use std::fmt;
@@ -16,7 +12,7 @@ use std::rc::Rc;
 use koja_ir::{IRSymbol, IRVariantTag};
 
 /// `Map<K, V>` storage: `(key, value)` pairs in insertion order.
-/// Eval doesn't need a real hash table — linear probes over a Vec
+/// Eval doesn't need a real hash table. Linear probes over a Vec
 /// give the right semantics in tests' tiny working sets, and `Map`
 /// values are `Rc<RefCell<...>>` for the same copy-on-write
 /// reasons as [`Value::List`].
@@ -28,34 +24,34 @@ pub type SetEntries = Rc<RefCell<Vec<Value>>>;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
-    /// Shared heap bytes; `bit_length` is implicitly `bytes.len() * 8`.
+    /// Shared heap bytes with `bit_length` implicitly `bytes.len() * 8`.
     /// `Rc`-backed (like the collections) so `Value::clone` is a
-    /// refcount bump, not a buffer copy — the interpreter clones
+    /// refcount bump, not a buffer copy. The interpreter clones
     /// values on every local read and argument pass, and deep-copying
     /// payloads made that O(len) per touch. Binaries are immutable in
     /// eval (every operation builds a fresh buffer), so plain `Rc`
     /// without `RefCell` suffices.
     Binary(Rc<Vec<u8>>),
-    /// Shared heap bits. `bit_length` may be a non-multiple of 8 —
-    /// payload occupies `ceil(bit_length / 8)` bytes; trailing bits
-    /// in the last byte are zero-padded. `Rc`-backed for the same
-    /// reason as [`Value::Binary`].
+    /// Shared heap bits. `bit_length` may be a non-multiple of 8.
+    /// The payload occupies `ceil(bit_length / 8)` bytes, with
+    /// trailing bits in the last byte zero-padded. `Rc`-backed for
+    /// the same reason as [`Value::Binary`].
     Bits {
         bytes: Rc<Vec<u8>>,
         bit_length: u64,
     },
     Bool(bool),
-    /// Raw C pointer — backs `CPtr<T>` and the `@extern "C"` shims
+    /// Raw C pointer backing `CPtr<T>` and the `@extern "C"` shims
     /// in [`crate::externs`] that traffic in pointers. Eval is
     /// single-threaded and in-process, so the pointer is valid for
-    /// the duration of its referent — same memory the LLVM backend
-    /// would observe. The element type `T` is type-level only;
-    /// intrinsic emitters consult `function.params[0].ty` /
-    /// `function.return_type` when they need its size.
+    /// the duration of its referent. The element type `T` is
+    /// type-level only. Intrinsic emitters consult
+    /// `function.params[0].ty` / `function.return_type` when they
+    /// need its size.
     CPtr(*mut u8),
     /// First-class closure value. `body` resolves through the
     /// interpreter's call resolver to a `FunctionKind::Closure`
-    /// `IRFunction`; `captures` is the env array indexed by every
+    /// `IRFunction`. `captures` is the env array indexed by every
     /// `IRInstruction::LoadCapture` inside the body. Captureless
     /// closures (the fn-as-value adapter shape) carry an empty
     /// captures vec.
@@ -74,24 +70,24 @@ pub enum Value {
     Int(i64),
     /// Heap-backed dynamic array. Shared `Rc<RefCell>` so the
     /// collection intrinsics (`append`, `pop`, `concat`) can mutate
-    /// the underlying buffer via copy-on-write — the interpreter
+    /// the underlying buffer via copy-on-write. The interpreter
     /// copies the `Rc`, not the `Vec`, and clones the buffer before a
     /// mutation when the value is shared, matching the value-semantics
     /// model where no mutation is observable through another binding.
     List(Rc<RefCell<Vec<Value>>>),
     /// Heap-backed associative map keyed by [`Value`]. Eval uses
-    /// linear probes for `Eq` (matches Koja's `Equality` protocol's
-    /// `eq` shape — every key compared by value, no hashing). Same
-    /// `Rc<RefCell<…>>` motivation as [`Value::List`] for in-place
+    /// linear probes for `Eq`, matching Koja's `Equality` protocol's
+    /// `eq` shape (every key compared by value, no hashing). Same
+    /// `Rc<RefCell<...>>` motivation as [`Value::List`] for in-place
     /// mutation.
     Map(MapEntries),
     /// Heap-backed unique-element set. Same shape rationale as
     /// [`Value::Map`].
     Set(SetEntries),
-    /// Byte payload backing an Koja `String`. The runtime ABI
+    /// Byte payload backing a Koja `String`. The runtime ABI
     /// doesn't enforce UTF-8 (every Koja string is "bytes that
     /// happen to render as UTF-8 most of the time"), so eval stores
-    /// raw bytes here too — matches v1's permissive treatment.
+    /// raw bytes here too, matching v1's permissive treatment.
     /// Chains like `Random.bytes(n).to_string().to_binary()` rely
     /// on flowing arbitrary bytes through a `String` value without
     /// the interpreter rejecting non-UTF-8 payloads. `Rc`-backed for
@@ -105,7 +101,7 @@ pub enum Value {
     },
     /// Tagged union value. `tag` is the 0-based member index (the
     /// position of the wrapped member in the union's canonical
-    /// member list); `payload` is the boxed value the user wrote.
+    /// member list). `payload` is the boxed value the user wrote.
     /// `symbol` is the union's mangled name, kept for debug
     /// rendering and for sanity-checking against the IR's
     /// `IRType::Union { mangled }`.
@@ -143,8 +139,8 @@ impl Value {
         }
     }
 
-    /// Construct a [`Value::String`] from owned bytes (or anything
-    /// convertible — `String`, `Vec<u8>`, `&[u8]`, `&str`).
+    /// Construct a [`Value::String`] from owned bytes or anything
+    /// convertible (`String`, `Vec<u8>`, `&[u8]`, `&str`).
     pub fn string(bytes: impl Into<Vec<u8>>) -> Value {
         Value::String(Rc::new(bytes.into()))
     }
@@ -172,7 +168,7 @@ impl Value {
 
     /// Borrow the bytes backing a [`Value::String`]. Use this when
     /// the operation is byte-oriented (concat, byte length, FFI
-    /// passthrough) — it sidesteps the UTF-8 validity question
+    /// passthrough), since it sidesteps the UTF-8 validity question
     /// entirely.
     pub fn as_string_bytes(&self) -> Option<&[u8]> {
         match self {
@@ -183,8 +179,8 @@ impl Value {
 
     /// Borrow a [`Value::String`] as `&str` when its bytes are
     /// valid UTF-8. Returns `None` for non-string values or when
-    /// the payload isn't valid UTF-8 — callers that need codepoint
-    /// semantics surface a clean error in the latter case.
+    /// the payload isn't valid UTF-8, where callers that need
+    /// codepoint semantics surface a clean error.
     pub fn as_string(&self) -> Option<&str> {
         match self {
             Value::String(bytes) => std::str::from_utf8(bytes).ok(),
@@ -301,7 +297,7 @@ fn write_list_items(f: &mut fmt::Formatter<'_>, items: &[Value]) -> fmt::Result 
 }
 
 /// Render a [`Value::Map`] as `[k1: v1, k2: v2]`. Empty maps render
-/// as `[:]` to disambiguate from an empty list literal — matches
+/// as `[:]` to disambiguate from an empty list literal, matching
 /// the source-level convention.
 fn write_map_entries(f: &mut fmt::Formatter<'_>, entries: &[(Value, Value)]) -> fmt::Result {
     if entries.is_empty() {
@@ -347,8 +343,8 @@ fn write_binary_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8]) -> fmt::Result {
 }
 
 /// Render a [`Value::Bits`] as `<<0x48, 0b101::3>>`. Byte-aligned
-/// `Bits` (rare but legal) reuses the [`write_binary_bytes`] shape;
-/// non-byte-aligned tails render the trailing partial byte as a
+/// `Bits` (rare but legal) reuses the [`write_binary_bytes`] shape.
+/// Non-byte-aligned tails render the trailing partial byte as a
 /// width-suffixed binary literal.
 fn write_bits_bytes(f: &mut fmt::Formatter<'_>, bytes: &[u8], bit_length: u64) -> fmt::Result {
     let trailing_bits = (bit_length % 8) as u8;

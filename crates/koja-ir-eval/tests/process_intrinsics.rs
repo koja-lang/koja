@@ -3,8 +3,8 @@
 //! await, the `Process.CallError.Timeout` / `Process.CallError.ProcessDown` mappings, and
 //! `send_after` timer delivery. Each fixture boots a real `Process` entry
 //! (`App`) as PID 1 via `Interpreter::run_program` and encodes its
-//! assertion in the exit code (`Process.StopReason.Normal` → 0,
-//! `Process.StopReason.Shutdown` → 1).
+//! assertion in the exit code (`Process.StopReason.Normal` -> 0,
+//! `Process.StopReason.Shutdown` -> 1).
 
 mod common;
 
@@ -38,10 +38,7 @@ const BANK: &str = "
 
       fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Process.Step<Bank>
         total = self.balance + msg
-        match from
-          Option.Some(r) -> r.send(total)
-          Option.None -> ()
-        end
+        ReplyTo.reply(from, total)
         Process.Step.Continue(Bank{balance: total})
       end
     end

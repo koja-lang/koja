@@ -1,10 +1,10 @@
-//! `Set<T>` family — heap-backed unique-element container. Eval
+//! `Set<T>` family: heap-backed unique-element container. Eval
 //! stores elements in `Rc<RefCell<Vec<Value>>>`, but under value
 //! semantics every mutator (`insert`, `remove`) is copy-on-write:
 //! it clones the receiver's element vec into a fresh `Rc` before
 //! mutating, so a shared binding is never observably mutated through
 //! another alias. A linear probe over the element vec gives the
-//! right semantics — the LLVM backend's open-addressing hash table
+//! right semantics. The LLVM backend's open-addressing hash table
 //! is purely a perf detail that's invisible at the Koja level.
 
 use std::cell::RefCell;
@@ -71,7 +71,7 @@ fn remove(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Set(Rc::new(RefCell::new(items))))
 }
 
-/// `from_list(list: List<T>) -> Set<T>` — the `ListLiteral`
+/// `from_list(list: List<T>) -> Set<T>`: the `ListLiteral`
 /// path goes here when the resolver synthesizes
 /// `Set.from_list([a, b, c])`. Walks the list once, deduping.
 fn from_list(args: &[Value]) -> Result<Value, RuntimeError> {

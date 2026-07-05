@@ -1,12 +1,12 @@
-//! LLVM emission for `IRInstruction::BinaryMatch` — `<<segments>>`
-//! binary pattern matching.
+//! LLVM emission for `IRInstruction::BinaryMatch`, the `<<segments>>`
+//! binary pattern matching instruction.
 //!
 //! Algorithm:
 //!
 //! 1. Load the subject's runtime bit length from `subject - 8`,
 //!    shift right by 3 for the byte length.
 //! 2. Compare the byte length against `layout.fixed_bits >> 3`
-//!    — `EQ` when there's no greedy tail, `UGE` when there is.
+//!    (`EQ` when there's no greedy tail, `UGE` when there is).
 //!    The result is the seed `i1`.
 //! 3. Walk segments in source order, ANDing each segment's
 //!    per-segment success bit into the running result:
@@ -14,10 +14,10 @@
 //!      compare against the constant.
 //!    - [`LoweredBinaryPattern::BindInt`] extracts the bit slice,
 //!      sign-extends when the modifier asks for it (**fixes a v1
-//!      bug** — v1 always treated the extracted value as
+//!      bug**: v1 always treated the extracted value as
 //!      unsigned), narrows to the slot's declared LLVM type, and
 //!      stores it via the local slot table.
-//!    - [`LoweredBinaryPattern::Discard`] is a no-op — only the
+//!    - [`LoweredBinaryPattern::Discard`] is a no-op: only the
 //!      `bit_offset` accumulator advances (the IR layer already
 //!      tracked that).
 //!    - [`LoweredBinaryPattern::GreedyTail`] allocates a fresh
@@ -26,8 +26,8 @@
 //!      bit-length header, and writes the payload pointer into
 //!      the binding slot (when there is one).
 //!
-//! All sub-byte arithmetic is gated to the byte-aligned path —
-//! typecheck rejects bit-misaligned greedy tails, but a `Bits`
+//! All sub-byte arithmetic is gated to the byte-aligned path.
+//! Typecheck rejects bit-misaligned greedy tails, but a `Bits`
 //! greedy tail with a byte-aligned fixed prefix and a sub-byte
 //! suffix still flows through here: we memcpy
 //! `ceil(remaining_bits / 8)` bytes and let the heap layout carry
@@ -50,7 +50,7 @@ use super::heap_layout::{block_alloc_size, init_heap_block};
 use super::{ValueMap, lookup};
 
 /// Lower an `IRInstruction::BinaryMatch`. Returns the `i1` success
-/// bit; binding segments stamp their extracted values into the
+/// bit. Binding segments stamp their extracted values into the
 /// pre-declared local slots as a side effect.
 pub(super) fn emit_binary_match<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -152,9 +152,9 @@ fn shift_right_by_three<'ctx>(
 }
 
 /// `byte_length == fixed_bits / 8` (exact match) when the pattern
-/// has no greedy tail; `byte_length >= fixed_bits / 8` (prefix
+/// has no greedy tail, `byte_length >= fixed_bits / 8` (prefix
 /// match) when it does. `fixed_bits` is always a multiple of 8 at
-/// this point — the only sub-byte sources are literal segments
+/// this point. The only sub-byte sources are literal segments
 /// with sub-byte widths, which lower-side rejects.
 fn length_check<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -240,8 +240,8 @@ fn emit_segment<'ctx>(
 
 /// Compare the byte-aligned slice at `bit_offset` against the
 /// constant `value`. Sub-byte widths flow through here too, but
-/// only at sub-byte `bit_offset`s; for now we gate to byte
-/// alignment — the literal-only path that hits sub-byte widths
+/// only at sub-byte `bit_offset`s. For now we gate to byte
+/// alignment. The literal-only path that hits sub-byte widths
 /// is `<<x::3, _::5>>`-style and isn't required by any current
 /// test.
 fn emit_literal_int<'ctx>(
@@ -280,7 +280,7 @@ fn emit_literal_int<'ctx>(
 
 /// Compare a run of bytes at `bit_offset / 8` against an emitted
 /// constant payload via `memcmp`. `bit_offset` is byte-aligned by
-/// construction — string segments don't carry sub-byte offsets.
+/// construction, since string segments don't carry sub-byte offsets.
 fn emit_literal_bytes<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
@@ -331,7 +331,7 @@ fn emit_literal_bytes<'ctx>(
 /// per the segment's modifier, narrow to the slot's declared type
 /// (`Int8`..`Int64`/`UInt8`..`UInt64`), and store via the local
 /// slot table. Returns nothing because bindings never gate the
-/// arm — the length check + literal comparisons handle that.
+/// arm. The length check + literal comparisons handle that.
 #[allow(clippy::too_many_arguments)]
 fn emit_bind_int<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -362,7 +362,7 @@ fn emit_bind_int<'ctx>(
 /// bytes, copy `remaining_bytes` from the subject payload, store
 /// the bit-length header, and write the resulting payload pointer
 /// into `local`'s slot (when present). Bit alignment is the caller's
-/// responsibility — typecheck enforces a byte-aligned prefix for
+/// responsibility. Typecheck enforces a byte-aligned prefix for
 /// `: Binary` tails, and `: Bits` tails accept any prefix shape but
 /// our lower path only emits byte-aligned `bit_offset`s through this
 /// helper.
@@ -382,8 +382,8 @@ fn emit_greedy_tail<'ctx>(
         )));
     }
     let Some(local) = local else {
-        // `_: Binary` / `_: Bits` — successful length check already
-        // covered the "rest exists" requirement; no work to do.
+        // `_: Binary` / `_: Bits`: successful length check already
+        // covered the "rest exists" requirement, so no work to do.
         return Ok(());
     };
     let i8_ty = ctx.context.i8_type();
@@ -431,7 +431,7 @@ fn emit_greedy_tail<'ctx>(
 
 /// Read `num_bytes` from `payload + byte_offset` and assemble them
 /// into an `i64`. Mirrors v1's `extract_segment_value` byte-shift
-/// loop. `Big` packs high-byte-first; `Little` packs low-byte-first.
+/// loop. `Big` packs high-byte-first, `Little` low-byte-first.
 fn extract_int<'ctx>(
     ctx: &EmitContext<'ctx>,
     payload: PointerValue<'ctx>,
@@ -482,7 +482,7 @@ fn extract_int<'ctx>(
 
 /// Sign-extend the low `width` bits when `sign == Signed`. Fixes
 /// v1's behavior of returning the raw extracted `i64` regardless
-/// of `signed` / `unsigned` modifier — for example, the byte `0xFF`
+/// of `signed` / `unsigned` modifier. For example, the byte `0xFF`
 /// in a `signed`-modified segment should bind as `-1`, not `255`.
 fn extend_for_sign<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -505,7 +505,7 @@ fn extend_for_sign<'ctx>(
 }
 
 /// Truncate the running `i64` extraction to the LLVM type backing
-/// `ty`. Width must already match `ty`'s natural size — caller is
+/// `ty`. Width must already match `ty`'s natural size. The caller is
 /// responsible for the typecheck-time width pairing (`x: Int16` ↔
 /// `width == 16`, etc.).
 fn narrow_to_ir_type<'ctx>(

@@ -1,28 +1,28 @@
-//! Eval's cooperative I/O reactor — the second [`Reactor`] implementor
+//! Eval's cooperative I/O reactor, the second [`Reactor`] implementor
 //! after the native `koja-runtime-posix` adapter, and the shape a future
 //! `koja-runtime-wasi` adapter reuses (`poll_oneoff` in place of POSIX
 //! `poll(2)`).
 //!
 //! Native runs its reactor on a dedicated thread and context-switches
-//! blocked processes; eval is single-threaded, so the reactor's
+//! blocked processes. Eval is single-threaded, so the reactor's
 //! registration state is a thread-local [`REGISTRY`] shared between the
 //! extern handlers that register fds ([`crate::externs::fd`]'s `io_block`
 //! / `watch`) and the [`CooperativeDriver`](koja_runtime_core::CooperativeDriver)
 //! that polls it when the ready queue empties. Both run on the one
 //! interpreter thread, so a plain `RefCell` borrow held across single
-//! operations is sufficient — there is nothing to lock against.
+//! operations is sufficient.
 //!
 //! Two readiness paths, one waker vocabulary (mirroring native):
 //!
 //! - **`io_block`** (a syscall hit `EAGAIN`, or a `Fd.block`): the process
-//!   parks `WaitingIO` against a [`Waker::Resume`]; the driver promotes it
-//!   when the fd fires. In *function* mode (a plain `koja eval` of a
+//!   parks `WaitingIO` against a [`Waker::Resume`], and the driver promotes
+//!   it when the fd fires. In *function* mode (a plain `koja eval` of a
 //!   non-process body, driven by [`block_on`](crate::scheduler::block_on)
 //!   with no driver loop) there is no one to promote it, so `io_block`
-//!   blocks the single thread on the fd instead — both legal under the
-//!   protocol (`koja/design/SCHEDULER-PROTOCOL.md`).
-//! - **`watch`** (`Fd.watch`): registers a [`Waker::Deliver`]; the driver
-//!   mints an `IOReady` message for the watcher when the fd fires.
+//!   blocks the single thread on the fd instead. Both are legal under the
+//!   scheduler protocol.
+//! - **`watch`** (`Fd.watch`): registers a [`Waker::Deliver`], and the
+//!   driver mints an `IOReady` message for the watcher when the fd fires.
 //!
 //! Registration is oneshot: a fired fd is dropped from the registry (a
 //! `Fd.watch` owner re-arms by watching again), matching the native
@@ -30,12 +30,12 @@
 //!
 //! ## Why pre-wait then delegate
 //!
-//! The native `koja_fd_read` / `koja_socket_accept` / … symbols couple the
+//! The native `koja_fd_read` / `koja_socket_accept` / ... symbols couple the
 //! syscall and its koja-heap marshaling with the *native* `io_block`
 //! (native `SCHED` + asm context switch), which eval cannot drive. Eval's
 //! cooperative wrappers ([`crate::externs::fd`], [`crate::externs::net`])
 //! therefore [`io_block`] for readiness *first*, then call the native
-//! symbol on an fd that is now ready — so its internal `block_until_ready`
+//! symbol on an fd that is now ready, so its internal `block_until_ready`
 //! completes on the first syscall and the native `io_block` is never
 //! reached. The invariant that makes this sound: eval is single-threaded,
 //! so nothing drains the fd between the readiness check and the immediate
@@ -80,14 +80,14 @@ struct Registration {
 thread_local! {
     /// The reactor's armed fds for the in-flight run. Mutated by the
     /// extern handlers (`io_block` / `watch`) and read by the driver's
-    /// idle [`poll`](Reactor::poll); single-threaded, so a `RefCell` is
+    /// idle [`poll`](Reactor::poll). Single-threaded, so a `RefCell` is
     /// enough. The cooperative analog of native's global poller.
     static REGISTRY: RefCell<HashMap<i32, Registration>> = RefCell::new(HashMap::new());
 }
 
 /// Eval's [`Reactor`]: a thread-local fd registry polled with `poll(2)`.
-/// Unit-sized — all state lives in [`REGISTRY`] so the extern handlers can
-/// reach it without a handle.
+/// Unit-sized, since all state lives in [`REGISTRY`] so the extern
+/// handlers can reach it without a handle.
 pub(crate) struct EvalReactor;
 
 impl Reactor for EvalReactor {
@@ -151,7 +151,7 @@ impl Reactor for EvalReactor {
 }
 
 /// Register `fd` for one `IOReady` delivery to `pid` (`Fd.watch`). The
-/// reactor fills the fired direction in at `poll` time; the `readiness`
+/// reactor fills the fired direction in at `poll` time. The `readiness`
 /// here is the registered interest, a placeholder until then.
 pub(crate) fn watch(fd: i32, interest: Interest, pid: Pid) {
     let readiness = match interest {
@@ -170,7 +170,7 @@ pub(crate) fn unwatch(fd: i32) {
 /// wait was *interrupted* (resumed without the fd becoming ready, i.e.
 /// woken by a message rather than readiness). The cooperative core of
 /// every eval I/O wait: an already-ready fd returns `false` immediately
-/// (the common sequential case); otherwise a driven process parks
+/// (the common sequential case). Otherwise a driven process parks
 /// `WaitingIO` and yields to the driver, while a driver-less function-mode
 /// run blocks the single thread on the fd.
 pub(crate) async fn io_block(fd: i32, interest: Interest) -> bool {
@@ -188,7 +188,8 @@ pub(crate) async fn io_block(fd: i32, interest: Interest) -> bool {
         arm(fd, interest, Waker::Resume(pid));
         YieldOnce::new().await;
         unwatch(fd);
-        // Resumed without readiness ⇒ a message woke us; report the interrupt.
+        // Resumed without readiness means a message woke us, so report
+        // the interrupt.
         return !ready_now(fd, interest);
     }
     false
@@ -209,7 +210,7 @@ fn arm(fd: i32, interest: Interest, waker: Waker) {
 }
 
 /// A zero-timeout `poll(2)`: whether `fd` is ready for `interest` right
-/// now (or has errored / hung up — either way the delegated syscall should
+/// now, or has errored / hung up (either way the delegated syscall should
 /// run rather than park on a dead fd).
 fn ready_now(fd: i32, interest: Interest) -> bool {
     let events = events_for(interest);
@@ -224,7 +225,7 @@ fn ready_now(fd: i32, interest: Interest) -> bool {
 
 /// Block the calling thread on `fd` until it is ready for `interest`
 /// (function mode: no driver to resume a parked process). Retries across
-/// `EINTR`; a genuine poll error returns so the delegated syscall surfaces
+/// `EINTR`. A genuine poll error returns so the delegated syscall surfaces
 /// it (a broken fd fails with a real errno, never `EAGAIN`, so the native
 /// `io_block` is still not reached).
 fn blocking_poll(fd: i32, interest: Interest) {
@@ -258,7 +259,7 @@ fn events_for(interest: Interest) -> i16 {
 
 /// The direction a fired fd became ready in, from its registered interest
 /// and the `revents` the kernel set. Hangup on a reader surfaces as
-/// `Readable` (so the read sees EOF); a poll error / hangup elsewhere is
+/// `Readable` (so the read sees EOF). A poll error / hangup elsewhere is
 /// `Error`.
 fn readiness_for(events: i16, revents: i16) -> Readiness {
     if events & POLLIN != 0 && revents & (POLLIN | POLLHUP) != 0 {
@@ -270,7 +271,7 @@ fn readiness_for(events: i16, revents: i16) -> Readiness {
     }
 }
 
-/// Fill a `Deliver` waker's readiness from the fired event; pass a
+/// Fill a `Deliver` waker's readiness from the fired event, passing a
 /// `Resume` waker through unchanged. Mirrors native's `with_readiness`.
 fn fill(waker: Waker, readiness: Readiness) -> Waker {
     match waker {
@@ -280,7 +281,7 @@ fn fill(waker: Waker, readiness: Readiness) -> Waker {
 }
 
 /// `poll(2)` timeout in milliseconds: a missing timeout blocks
-/// indefinitely (`-1`); a present one clamps to `i32::MAX` ms.
+/// indefinitely (`-1`), and a present one clamps to `i32::MAX` ms.
 fn timeout_ms(timeout: Option<Duration>) -> i32 {
     match timeout {
         Some(duration) => duration.as_millis().min(i32::MAX as u128) as i32,

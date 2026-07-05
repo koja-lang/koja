@@ -62,7 +62,7 @@ pub struct ResolvedStructField {
 /// first parameter. Everything else stays [`Dispatch::Static`].
 ///
 /// `impl_args` carries the concrete pinning of a partial-spec impl
-/// block (`impl CPtr<UInt8>` → `[UInt8]`). Empty for top-level
+/// block (`impl CPtr<UInt8>` -> `[UInt8]`). Empty for top-level
 /// functions, inline struct/enum methods, and generic-pinned impl
 /// blocks (`impl Bag<T>`). Set only when every arg of the impl
 /// target is fully resolved (no `TypeParam`s). Lower consults this

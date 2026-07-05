@@ -32,7 +32,7 @@ const MACOS_TARGET_ARCH: &str = "x86_64";
 /// triple + CPU + features, run the optimization pipeline at
 /// `opt_level`, and write `module` to `path` as a native object file.
 /// At `OptimizationLevel::None` no middle-end passes run (debug
-/// builds); release builds pass `Aggressive` to engage the full
+/// builds). Release builds pass `Aggressive` to engage the full
 /// pipeline.
 pub(crate) fn emit_object_file(
     module: &Module<'_>,
@@ -50,7 +50,7 @@ pub(crate) fn emit_object_file(
     // because it constructs a fresh `X86Subtarget` per function during
     // emission and indexes into scheduling tables that are only
     // populated for known CPU models. v1 codegen learned this the
-    // hard way; mirroring its host-CPU selection avoids the same
+    // hard way. Mirroring its host-CPU selection avoids the same
     // SIGSEGV on Linux x86_64.
     let cpu = TargetMachine::get_host_cpu_name().to_string();
     let features = TargetMachine::get_host_cpu_features().to_string();
@@ -92,7 +92,7 @@ fn passes_for(level: OptimizationLevel) -> Option<&'static str> {
 /// macOS, pin the deployment-target portion (honoring
 /// `MACOSX_DEPLOYMENT_TARGET` if the caller has set one, otherwise
 /// [`DEFAULT_MACOS_DEPLOYMENT_TARGET`]) so the bundled crypto
-/// archives and the user binary land on the same floor; elsewhere
+/// archives and the user binary land on the same floor. Elsewhere,
 /// fall back to whatever LLVM thinks the host is.
 fn host_triple() -> TargetTriple {
     #[cfg(target_os = "macos")]

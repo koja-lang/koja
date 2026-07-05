@@ -5,22 +5,22 @@
 //! (`List` / hashtable intrinsics).
 //!
 //! Acquiring an element makes a freshly-copied slot own an independent
-//! reference; releasing one hands that reference back; deep-copying
+//! reference, releasing one hands that reference back, and deep-copying
 //! one severs every share for a process-boundary hand-off:
 //!
 //! - **heap leaf** (`String` / `Binary` / `Bits`): `rc++` / `rc--` on
-//!   the payload block (the pointer is shared, only the count moves);
-//!   deep copy swaps in a fresh block via `koja_heap_deep_copy`.
+//!   the payload block (the pointer is shared, only the count moves).
+//!   Deep copy swaps in a fresh block via `koja_heap_deep_copy`.
 //! - **closure** (`Function`): `rc++` / `koja_closure_rc_dec` on the
-//!   fat pointer's env block; deep copy swaps in a fresh env via
+//!   fat pointer's env block. Deep copy swaps in a fresh env via
 //!   `koja_closure_deep_copy`.
 //! - **heap composite** carrying glue (`clone_T` / `deep_copy_T`
-//!   declared): recurse — acquire / deep copy overwrite the slot with
+//!   declared): recurse. Acquire / deep copy overwrite the slot with
 //!   the glue's result, release calls `drop_T`.
-//! - **scalar / no-glue aggregate**: nothing; the `memcpy` already
+//! - **scalar / no-glue aggregate**: nothing, the `memcpy` already
 //!   produced an independent value.
 //!
-//! The slot forms operate in place on a pointer into the buffer; the
+//! The slot forms operate in place on a pointer into the buffer. The
 //! buffer forms wrap them in a `0..count` walk for the contiguous
 //! element arrays both `List` and the hashtable entry buffer use.
 
@@ -40,7 +40,7 @@ use crate::runtime::{
 };
 use crate::types::{closure_fat_ptr_type, ir_basic_type};
 
-/// Acquire a collection element held as an SSA value — an insert
+/// Acquire a collection element held as an SSA value: an insert
 /// store-in (`List.append` / `List.replace_at`, hashtable insert) or a
 /// hand-out (`List.get` / `List.pop`). Returns the value the caller
 /// should store or return: a heap leaf passes through after `rc++`, a
@@ -76,7 +76,7 @@ pub(crate) fn acquire_value<'ctx>(
 
 /// Acquire the element at `slot` (a pointer into a freshly-copied
 /// buffer): bump a heap leaf's / closure env's rc, or overwrite the
-/// slot with a deep clone for a composite. Scalars need nothing — the
+/// slot with a deep clone for a composite. Scalars need nothing, the
 /// `memcpy` already copied them.
 pub(crate) fn acquire_in_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -108,7 +108,7 @@ pub(crate) fn acquire_in_slot<'ctx>(
 /// Deep-copy the element at `slot` (a pointer into a freshly-copied
 /// buffer): swap a heap leaf for a fresh block, a closure for a fresh
 /// env, or overwrite the slot through `deep_copy_T` for a composite.
-/// Scalars need nothing — the `memcpy` already copied them. The
+/// Scalars need nothing, the `memcpy` already copied them. The
 /// process-boundary analog of [`acquire_in_slot`].
 pub(crate) fn deep_copy_in_slot<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -169,7 +169,7 @@ pub(crate) fn release_in_slot<'ctx>(
 }
 
 /// Load the element at `slot`, pass it through `glue` (`clone_T` /
-/// `deep_copy_T`), and store the result back — the shared composite
+/// `deep_copy_T`), and store the result back: the shared composite
 /// path of [`acquire_in_slot`] and [`deep_copy_in_slot`].
 fn copy_slot_through_glue<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -299,7 +299,7 @@ pub(crate) fn element_slot<'ctx>(
 
 /// Emit a `for index in 0..count` loop whose straight-line `body` is
 /// generated once into the loop body block. The body must not branch
-/// (it emits into and leaves control in the body block); the helper
+/// (it emits into and leaves control in the body block). The helper
 /// owns the counter, the `index < count` guard, and the back-edge.
 fn index_loop<'ctx>(
     ctx: &EmitContext<'ctx>,

@@ -21,8 +21,8 @@ use super::types::{TypeParamScope, concrete_self_type, resolve_type_expr};
 /// The function's [`TypeParamScope`] chains its own params (innermost)
 /// over its enclosing receiver's params (outermost) so generic methods
 /// like `fn swap(self) -> Pair<U, T>` on `struct Pair<T, U>` see both
-/// scopes resolve to their true owners (`T` → struct id, the function's
-/// own `<X>` → function id).
+/// scopes resolve to their true owners (`T` -> struct id, the function's
+/// own `<X>` -> function id).
 pub(super) fn lift_function_with_identifier(
     function: &Function,
     identifier: Identifier,

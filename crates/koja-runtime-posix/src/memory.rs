@@ -1,11 +1,12 @@
 //! C-ABI allocator symbols for the Koja heap.
 //!
-//! The allocation logic — the libc passthrough and the live-block
-//! counter — lives in [`koja_runtime_core::memory`]. These
+//! The allocation logic (the libc passthrough and the live-block
+//! counter) lives in [`koja_runtime_core::memory`]. These
 //! `#[no_mangle]` wrappers export it to codegen (`koja_alloc` /
 //! `koja_realloc` / `koja_free`) and to the leak fixtures
 //! (`koja_rt_live_blocks`), and keep the symbols rooted in the linked
-//! `libkoja_runtime.a` staticlib. See `koja/design/SCHEDULER-PROTOCOL.md`.
+//! `libkoja_runtime.a` staticlib, because the platform-agnostic core
+//! crate deliberately exports no C-ABI symbols of its own.
 
 pub(crate) use koja_runtime_core::memory::{alloc, free, realloc};
 

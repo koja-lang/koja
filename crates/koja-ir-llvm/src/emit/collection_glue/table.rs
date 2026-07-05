@@ -1,10 +1,10 @@
 //! `Map<K,V>` / `Set<T>` clone / drop glue: the open-addressed
 //! hashtable bucket walk. Layout is `{ entries_ptr, states_ptr, len,
-//! cap }` (see [`crate::types::hashtable_value_type`]); `entries_ptr`
-//! is a flat `[Entry; cap]` and `states_ptr` a `[u8; cap]` occupancy
-//! map. `Set`'s entry is a bare `K`; `Map`'s entry is `K` then `V` at
-//! byte offset `key_size` — the packed layout the hashtable intrinsics
-//! write.
+//! cap }` (see [`crate::types::hashtable_value_type`]), where
+//! `entries_ptr` is a flat `[Entry; cap]` and `states_ptr` a
+//! `[u8; cap]` occupancy map. `Set`'s entry is a bare `K`. `Map`'s
+//! entry is `K` then `V` at byte offset `key_size`: the packed
+//! layout the hashtable intrinsics write.
 
 use inkwell::values::{FunctionValue, IntValue, PointerValue, StructValue};
 use koja_ir::{IRFunction, IRType};
@@ -138,7 +138,7 @@ pub(super) fn drop_table<'ctx>(
     ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
-/// Pointer `bytes` past `base` — the in-entry value slot of a `Map`
+/// Pointer `bytes` past `base`: the in-entry value slot of a `Map`
 /// bucket (`base` is the key at offset 0, the value sits at
 /// `key_size`).
 #[track_caller]
