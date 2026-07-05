@@ -251,7 +251,7 @@ Goal: `koja shell` graduates from scratch evaluator to project development surfa
 - `koja shell` loads a project (`koja.toml`, deps, all package sources) into the interpreter's session state -- **done**. It auto-detects the project from the working directory via `ProjectLoader`; an explicit `-S <path>` selector is still pending.
 - Call any user-defined function (including across modules) from the REPL -- **done**. The session evaluates inside the project's package, so modules resolve unqualified (`Cli.usage()`) exactly as they do from the project's own files.
 - `h module.function` / `h Type` pulls inline docs from `@doc` annotations.
-- Tab completion for module names, functions, types, and variables in scope (reuse the `koja-lsp` completion plumbing where it generalizes).
+- Tab completion for module names, functions, types, and variables in scope -- **done**. The candidate queries were extracted from `koja-lsp` onto the shared `GlobalRegistry` surface, so the editor and the REPL complete from the same data. The shell completes keywords, `:commands`, package/type/function names, session variables, static `Type.` members (including enum variants), and instance methods/fields on session bindings, refreshing after every successful eval.
 - Process inspection: list spawned processes (pid, state, mailbox depth), dump a mailbox, step a single message.
 - **Done when**: `shortener` can be developed end-to-end inside `koja shell -S .` -- start the server, exercise it from a sibling REPL session, inspect running process state, edit code, restart.
 

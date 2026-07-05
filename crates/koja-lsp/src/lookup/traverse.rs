@@ -4,9 +4,8 @@
 //! symbol that contains the given cursor position.
 
 use koja_ast::ast::*;
-use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType};
+use koja_ast::identifier::{GlobalRegistryId, Resolution};
 use koja_ast::span::Span;
-use koja_typecheck::GlobalRegistry;
 
 use super::span::span_contains;
 use super::{LookupCtx, SymbolInfo, classify_name};
@@ -1039,38 +1038,13 @@ fn compute_active_param(args: &[Arg], line: u32, col: u32) -> usize {
 /// bare type name return the type id directly. Returns `None` if the
 /// receiver doesn't resolve to a named type.
 pub(crate) fn receiver_type_id(receiver: &Expr, ctx: &LookupCtx<'_>) -> Option<GlobalRegistryId> {
-    if let Some(id) = head_type_id(&receiver.resolution, ctx.registry) {
+    if let Some(id) = ctx.registry.head_type_id(&receiver.resolution) {
         return Some(id);
     }
     if let ExprKind::Ident { name, .. } = &receiver.kind {
         return lookup_type(name, ctx);
     }
     None
-}
-
-/// Walk a [`ResolvedType`] to its leaf [`Resolution::Global`] type
-/// id, following type aliases through the registry. Returns `None`
-/// for anonymous types or unresolved leaves.
-fn head_type_id(ty: &ResolvedType, registry: &GlobalRegistry) -> Option<GlobalRegistryId> {
-    match ty {
-        ResolvedType::Named {
-            resolution: Resolution::Global(id),
-            ..
-        } => {
-            if let Some(expansion) = registry.alias_expansion(*id) {
-                return head_type_id(&expansion, registry);
-            }
-            Some(*id)
-        }
-        ResolvedType::Union(members) => {
-            if let Some(first) = members.first() {
-                head_type_id(first, registry)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
 }
 
 /// Resolve a bare type name (`Point`, `Option`) to a registry id by
