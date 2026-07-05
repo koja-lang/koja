@@ -13,17 +13,17 @@
 //!
 //! ## Output shape
 //!
-//! - Integers: `format!("{}", value)` — decimal digits, optional
-//!   leading minus.
+//! - Integers: `format!("{}", value)` (decimal digits, optional
+//!   leading minus).
 //! - Booleans: `"true"` / `"false"`.
-//! - Floats: `format!("{:?}", value)` — the round-trippable shape
+//! - Floats: `format!("{:?}", value)`, the round-trippable shape
 //!   (`1.0`, not `1`).
 
 use crate::util::alloc_koja_string;
 
 /// Render a 64-bit signed integer as a decimal Koja string.
 /// Narrower widths sign- or zero-extend to `i64` at the LLVM call
-/// site so this is the single integer ABI; signedness is the
+/// site so this is the single integer ABI. Signedness is the
 /// caller's responsibility (see [`koja_format_u64`] for the
 /// unsigned escape hatch).
 #[unsafe(no_mangle)]
@@ -33,8 +33,8 @@ pub extern "C" fn koja_format_i64(value: i64) -> *const u8 {
 }
 
 /// Render a 64-bit unsigned integer as a decimal Koja string. Used
-/// for `UInt8` / `UInt16` / `UInt32` / `UInt64` debug formatting —
-/// the LLVM call site zero-extends the value to `u64` before
+/// for `UInt8` / `UInt16` / `UInt32` / `UInt64` debug formatting.
+/// The LLVM call site zero-extends the value to `u64` before
 /// calling so this is the single unsigned ABI.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_format_u64(value: u64) -> *const u8 {
@@ -52,7 +52,7 @@ pub extern "C" fn koja_format_bool(value: i64) -> *const u8 {
 }
 
 /// Render a 32-bit float using Rust's `{:?}` so `1.0` round-trips
-/// as `"1.0"` (vs `{}`'s `"1"`); pairs with `Value::Float32`'s
+/// as `"1.0"` (vs `{}`'s `"1"`). Pairs with `Value::Float32`'s
 /// `Display` in `koja-ir-eval` for byte-exact backend
 /// symmetry.
 #[unsafe(no_mangle)]
@@ -61,7 +61,7 @@ pub extern "C" fn koja_format_f32(value: f32) -> *const u8 {
     unsafe { alloc_koja_string(rendered.as_bytes()) }
 }
 
-/// Render a 64-bit float using Rust's `{:?}` — same rule as
+/// Render a 64-bit float using Rust's `{:?}`, same rule as
 /// [`koja_format_f32`].
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_format_f64(value: f64) -> *const u8 {

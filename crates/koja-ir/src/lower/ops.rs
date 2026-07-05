@@ -4,12 +4,12 @@
 //! return.
 //!
 //! Three concerns live here together because they form the "AST
-//! vocabulary → IR vocabulary" border for non-control-flow constructs:
+//! vocabulary -> IR vocabulary" border for non-control-flow constructs:
 //!
 //! - [`lower_literal`] / [`lower_bin_op`] / [`lower_unary_op`] —
-//!   surface-syntax → IR-enum mapping, with diagnostics on feature
+//!   surface-syntax -> IR-enum mapping, with diagnostics on feature
 //!   gaps (Float / String literals, `<>` concat).
-//! - [`const_value_type`] — `ConstValue` variant → `IRType` width.
+//! - [`const_value_type`] — `ConstValue` variant -> `IRType` width.
 //! - [`bin_op_result_type`] / [`unary_op_result_type`] — typed-result
 //!   inference: comparisons / boolean logic always produce `Bool`,
 //!   arithmetic and `Neg` preserve operand width.

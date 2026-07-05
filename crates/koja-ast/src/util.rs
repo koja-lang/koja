@@ -127,7 +127,7 @@ mod tests {
 
     #[test]
     fn whitespace_only_input_has_zero_min_indent() {
-        // No non-blank lines → min_indent defaults to 0; whitespace
+        // No non-blank lines -> min_indent defaults to 0; whitespace
         // is preserved on each line and one trailing `\n` is dropped.
         assert_eq!(dedent("\n    \n   \n"), "    \n   ");
     }

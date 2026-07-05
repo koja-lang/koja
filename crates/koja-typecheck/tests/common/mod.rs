@@ -6,7 +6,7 @@
 //! target itself.
 //!
 //! Today's surface is intentionally narrow: every test wants to drive
-//! `parse_program → check_program` against a single in-memory source
+//! `parse_program -> check_program` against a single in-memory source
 //! file, so we expose:
 //!
 //! - [`PACKAGE`]: the package name every test source registers under.

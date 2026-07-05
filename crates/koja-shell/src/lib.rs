@@ -2,9 +2,9 @@
 //!
 //! `koja-shell` owns the runtime-side REPL: it accumulates user input
 //! into a [`Session`] and, on every step, re-runs the whole session
-//! through `koja-parser → koja-typecheck → koja-ir → koja-ir-eval`,
+//! through `koja-parser -> koja-typecheck -> koja-ir -> koja-ir-eval`,
 //! printing the trailing expression's value (if any). Each step is
-//! lowered as a script (`lower_script` → `Interpreter::run_script`), so
+//! lowered as a script (`lower_script` -> `Interpreter::run_script`), so
 //! top-level expressions, assignments, and `fn` definitions are all
 //! first-class.
 //!

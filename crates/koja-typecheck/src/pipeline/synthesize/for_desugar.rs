@@ -1,4 +1,4 @@
-//! `for pat in iter ... end` → desugared `while` shape:
+//! `for pat in iter ... end` -> desugared `while` shape:
 //!
 //! ```text
 //! __it_n  = <iterable>

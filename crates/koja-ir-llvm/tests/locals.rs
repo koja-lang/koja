@@ -57,7 +57,7 @@ fn local_decl_zero_initializes_the_slot() {
 
 #[test]
 fn heap_local_drop_null_checks_the_payload_before_rc_dec() {
-    // The exit drop's payload→block-base mapping must propagate a
+    // The exit drop's payload->block-base mapping must propagate a
     // null payload to a null base (`select`) rather than wrapping to
     // `0 - HEADER_BYTES` — a zero-initialized, never-written slot is
     // a legal drop target.

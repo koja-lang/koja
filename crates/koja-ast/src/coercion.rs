@@ -28,7 +28,7 @@ use crate::identifier::ResolvedType;
 
 /// Backend-stable target width for a coerced numeric literal.
 /// Translated to the IR's typed `Const` opcode at lowering time
-/// without crossing the typecheck → IR crate boundary on `IRType`
+/// without crossing the typecheck -> IR crate boundary on `IRType`
 /// itself.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum NumericLiteralWidth {

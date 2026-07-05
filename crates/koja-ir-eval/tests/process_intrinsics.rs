@@ -3,8 +3,8 @@
 //! await, the `Process.CallError.Timeout` / `Process.CallError.ProcessDown` mappings, and
 //! `send_after` timer delivery. Each fixture boots a real `Process` entry
 //! (`App`) as PID 1 via `Interpreter::run_program` and encodes its
-//! assertion in the exit code (`Process.StopReason.Normal` → 0,
-//! `Process.StopReason.Shutdown` → 1).
+//! assertion in the exit code (`Process.StopReason.Normal` -> 0,
+//! `Process.StopReason.Shutdown` -> 1).
 
 mod common;
 

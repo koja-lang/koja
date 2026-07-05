@@ -14,7 +14,7 @@ use koja_ast::ast::{
 };
 
 /// Where a [`DocPackage`] came from. Drives the cross-package sort
-/// order (project → dependency → stdlib, alphabetical within tier)
+/// order (project -> dependency -> stdlib, alphabetical within tier)
 /// and lets the renderer label package origins in the roster.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PackageKind {

@@ -96,7 +96,7 @@ impl Reactor for NativeReactor {
     /// Waits for readiness up to `timeout` and returns a waker for each
     /// fired fd. Oneshot disarms the poller entry on fire, but the waker
     /// stays registered until an explicit [`deregister`](Reactor::deregister)
-    /// (an `io_block` waiter, on resume) or `release_fd` (a watcher) — a
+    /// (an `io_block` waiter, on resume) or `release_fd` (a watcher). A
     /// `Fd.watch` owner re-arms by watching again.
     fn poll(&self, timeout: Option<Duration>) -> Vec<Waker> {
         let mut events = Events::new();
@@ -114,8 +114,8 @@ impl Reactor for NativeReactor {
     }
 }
 
-/// Fills a `Deliver` waker's readiness in from the fired event; passes a
-/// `Resume` waker through unchanged.
+/// Fills a `Deliver` waker's readiness in from the fired event, and
+/// passes a `Resume` waker through unchanged.
 fn with_readiness(waker: Waker, event: &Event) -> Option<Waker> {
     match waker {
         Waker::Deliver { fd, pid, .. } => Some(Waker::Deliver {
@@ -127,8 +127,8 @@ fn with_readiness(waker: Waker, event: &Event) -> Option<Waker> {
     }
 }
 
-/// The direction an event fired in, preferring readable then writable;
-/// anything else (hangup, poll error) is `Error`.
+/// The direction an event fired in, preferring readable then writable.
+/// Anything else (hangup, poll error) is `Error`.
 fn readiness_of(event: &Event) -> Readiness {
     if event.readable {
         Readiness::Readable
@@ -177,7 +177,7 @@ fn promote_io_waiter(sched: &mut NativeTable, pid: i64) {
 }
 
 /// Applies the wakers from one [`poll`](Reactor::poll) pass. `Resume`
-/// wakers are promoted in a single `SCHED` critical section; `Deliver`
+/// wakers are promoted in a single `SCHED` critical section. `Deliver`
 /// wakers send their `IOReady` afterward (`send_io_event` takes `SCHED`
 /// itself), so payload glue never runs under the promote lock.
 fn apply_wakers(wakers: Vec<Waker>) {
@@ -189,7 +189,7 @@ fn apply_wakers(wakers: Vec<Waker>) {
             }
         }
         // Route the promoted waiters (staged in `pending_ready`) to the
-        // work-stealing injectors; the `notify_all` below wakes the workers.
+        // work-stealing injectors. The `notify_all` below wakes the workers.
         publish_ready(&mut sched);
     }
     for waker in wakers {
@@ -257,7 +257,7 @@ pub extern "C" fn koja_rt_unwatch_fd(fd: i32) {
 /// on it from another. Idempotent.
 ///
 /// A process `io_block`-ed on `fd` is promoted `WaitingIO -> Runnable` (it
-/// resumes, retries the syscall, and gets `EBADF`); a `Fd.watch` owner is
+/// resumes, retries the syscall, and gets `EBADF`). A `Fd.watch` owner is
 /// sent a synthetic `IOReady.Error` so its handler observes the hangup.
 /// Without this, the poller entry is torn down and no further readiness
 /// event ever fires for that fd.
@@ -296,7 +296,8 @@ pub(crate) fn release_fd(fd: i32) {
 pub fn io_block(fd: i32, interest: Interest) -> bool {
     let pid = CURRENT_PID.with(|c| c.get());
 
-    // A queued system message must not be stranded behind the wait — bail so the caller can interrupt.
+    // A queued system message must not be stranded behind the wait.
+    // Bail so the caller can interrupt.
     let parked = {
         let mut sched = SCHED.lock().unwrap();
         if sched.has_system_mail(pid) {

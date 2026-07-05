@@ -1,6 +1,6 @@
 //! Integration tests for the package-aware doc generator.
 //!
-//! Covers the full extract → finalize → render → search-index
+//! Covers the full extract -> finalize -> render -> search-index
 //! pipeline across multiple packages, including the
 //! sort-by-tier-then-name guarantee, the per-package subdir
 //! URLs in the search index, and the rendered output's wiring

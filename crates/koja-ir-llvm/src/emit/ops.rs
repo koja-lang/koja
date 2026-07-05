@@ -149,7 +149,7 @@ fn float_predicate(op: IRBinOp) -> FloatPredicate {
 
 /// Lossless hub widening: sign-extend signed integer sources,
 /// zero-extend unsigned, `fpext` a `Float32` into `f64`. The
-/// source / target pairing is typecheck-guaranteed (sized numeric →
+/// source / target pairing is typecheck-guaranteed (sized numeric ->
 /// `Int64` / `Float64` only), so any other `from` shape is an ICE.
 pub(super) fn emit_numeric_widen<'ctx>(
     ctx: &EmitContext<'ctx>,

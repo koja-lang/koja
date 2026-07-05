@@ -36,7 +36,7 @@ use super::types::{
 /// `protocol_subst` maps the protocol's type-param slots to concrete
 /// types so conformance can compare apples to apples: slot 0 (`Self`)
 /// is the impl's resolved target type, slots 1..N are the type-args
-/// the user wrote on `trait_expr` (`Eq<String>` → `[String]`).
+/// the user wrote on `trait_expr` (`Eq<String>` -> `[String]`).
 #[derive(Clone, Copy)]
 struct ProtocolImplScope<'a> {
     package: &'a str,

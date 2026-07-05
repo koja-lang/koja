@@ -1,10 +1,10 @@
 //! Per-process mailbox: two receive queues plus a one-shot reply slot.
 //!
 //! Generic over the message representation `M`: the native adapter
-//! carries byte [`Envelope`](crate::wire::Envelope)s; a cooperative
-//! adapter can carry typed values. The routing and priority semantics —
-//! the part that must stay identical across backends for observable
-//! parity — live here once and are driven purely by [`Message::tag`].
+//! carries byte [`Envelope`](crate::wire::Envelope)s, and a cooperative
+//! adapter can carry typed values. The routing and priority semantics
+//! (the part that must stay identical across backends for observable
+//! parity) live here once and are driven purely by [`Message::tag`].
 //!
 //! Routing is by [`Tag`]. Lifecycle signals land in the `system` queue,
 //! which `receive` drains before any business traffic, so a shutdown
@@ -13,13 +13,13 @@
 //! arrival order.
 //!
 //! Replies bypass both queues into a one-shot `reply` slot read only by
-//! `koja_rt_call_receive`. Calls are atomic — a caller blocked in
-//! `Ref.call` handles no other traffic until the call completes or times
-//! out — so at most one reply is expected at a time and a slot, not a
-//! queue, is sufficient. A reply that arrives while the slot is occupied
-//! displaces the occupant: the occupant is necessarily stale (a leftover
-//! from an earlier call that timed out), and the newest reply is the one
-//! the in-flight call is waiting on.
+//! `koja_rt_call_receive`. Calls are atomic (a caller blocked in
+//! `Ref.call` handles no other traffic until the call completes or
+//! times out), so at most one reply is expected at a time and a slot,
+//! not a queue, is sufficient. A reply that arrives while the slot is
+//! occupied displaces the occupant: the occupant is necessarily stale
+//! (a leftover from an earlier call that timed out), and the newest
+//! reply is the one the in-flight call is waiting on.
 
 use std::collections::VecDeque;
 
@@ -30,14 +30,14 @@ use crate::protocol::{Message, Tag};
 /// can actually satisfy the wait.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum WaitTarget {
-    /// The receive queues — woken by system or business traffic.
+    /// The receive queues, woken by system or business traffic.
     Receive,
-    /// The reply slot — woken only by a reply delivery.
+    /// The reply slot, woken only by a reply delivery.
     Reply,
 }
 
 /// A process's mailbox. Owned by the process slot and drained only by
-/// the process itself; dropping it discards every held message (running
+/// the process itself. Dropping it discards every held message (running
 /// each one's drop glue, for representations that carry it).
 pub struct Mailbox<M> {
     /// Business traffic in arrival order.

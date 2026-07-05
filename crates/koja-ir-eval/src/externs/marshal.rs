@@ -32,7 +32,7 @@ pub(super) fn type_mismatch(name: &str, signature: &str, args: &[Value]) -> Runt
     }
 }
 
-/// Koja ABI token → Rust C-ABI type, usable in type position.
+/// Koja ABI token -> Rust C-ABI type, usable in type position.
 macro_rules! c_type {
     (()) => { () };
     (CPtr) => { *mut u8 };
@@ -40,7 +40,7 @@ macro_rules! c_type {
     (Int64) => { i64 };
 }
 
-/// Koja ABI token + `&Value` → raw C argument. Expands inside a
+/// Koja ABI token + `&Value` -> raw C argument. Expands inside a
 /// handler. A shape mismatch early-returns the handler's uniform
 /// [`type_mismatch`](super::marshal::type_mismatch) error.
 macro_rules! unmarshal_arg {
@@ -76,7 +76,7 @@ macro_rules! unmarshal_arg {
     };
 }
 
-/// Koja ABI token + raw C result → [`Value`].
+/// Koja ABI token + raw C result -> [`Value`].
 macro_rules! marshal_return {
     ((), $raw:expr) => {{
         let _: () = $raw;

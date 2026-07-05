@@ -75,7 +75,7 @@ pub(crate) struct EmitContext<'ctx> {
     /// `IRSymbol -> FunctionValue` index populated at function
     /// declare time. Decouples call-site resolution from the LLVM
     /// symbol name. `@extern "C"` declarations may declare under a
-    /// `link_name` alias (`fn cosf` → `@cos`), so `module.get_function`
+    /// `link_name` alias (`fn cosf` -> `@cos`), so `module.get_function`
     /// keyed at the IR's mangled name would miss. Instruction
     /// emission goes through [`Self::declared_function`] /
     /// [`Self::register_declared_function`] instead.
@@ -491,8 +491,8 @@ impl<'ctx> EmitContext<'ctx> {
     }
 
     /// Emit a call to `function` and unwrap its return as a
-    /// [`BasicValueEnum`] named `name`. Collapses the `build_call` →
-    /// `try_as_basic_value` → `basic` ceremony every value-returning
+    /// [`BasicValueEnum`] named `name`. Collapses the `build_call` ->
+    /// `try_as_basic_value` -> `basic` ceremony every value-returning
     /// runtime call repeats. A void return is an internal compiler
     /// error reported with the caller's `file:line`.
     #[track_caller]

@@ -1,20 +1,21 @@
 //! C-ABI runtime helpers called from LLVM-emitted IR. The LLVM
 //! backend names each of these as an external declaration and emits
-//! direct calls; the eval interpreter mirrors each helper's
+//! direct calls. The eval interpreter mirrors each helper's
 //! behavior in pure Rust so the two backends produce byte-identical
 //! results.
 //!
-//! - [`__koja_print_string`] — the runtime body of the
+//! - [`__koja_print_string`]: the runtime body of the
 //!   [`Global.print`](../../koja-ir-llvm/src/intrinsics/print.rs)
 //!   intrinsic. Writes the bytes of a heap string followed by a
 //!   newline.
-//! - [`__koja_panic`] — the runtime body of `Kernel.panic`.
+//! - [`__koja_panic`]: the runtime body of `Kernel.panic`.
 //!   Routes the message through the panic backtrace formatter
 //!   (`** (panic) <message>` + filtered stack), then unwinds the
 //!   crashing process to the trampoline's `catch_unwind`.
-//! - [`__koja_concat_bits`] / [`__koja_pack_bits`] — helpers for
-//!   the LLVM emitter's bit-packing paths; emitting the sub-byte
-//!   alignment logic is far cleaner in Rust than in LLVM IR.
+//! - [`__koja_concat_bits`] / [`__koja_pack_bits`]: helpers for
+//!   the LLVM emitter's bit-packing paths, since emitting the
+//!   sub-byte alignment logic is far cleaner in Rust than in
+//!   LLVM IR.
 
 use std::io::{self, Write};
 
@@ -59,8 +60,8 @@ pub unsafe extern "C" fn __koja_concat_bits(lhs: *const u8, rhs: *const u8) -> *
         unsafe { std::ptr::copy_nonoverlapping(lhs, payload, l_bytes) };
     }
     if l_trailing > 0 {
-        // The lhs's trailing partial byte sits at `payload[l_bytes]`;
-        // copy it (low bits already zero per the bit-packing invariant).
+        // The lhs's trailing partial byte sits at `payload[l_bytes]`.
+        // Copy it (low bits already zero per the bit-packing invariant).
         unsafe {
             *payload.add(l_bytes) = *lhs.add(l_bytes);
         }
@@ -75,7 +76,7 @@ pub unsafe extern "C" fn __koja_concat_bits(lhs: *const u8, rhs: *const u8) -> *
 
 /// Append `length` bits from `src` (left-aligned, low-bit zero pad
 /// in the trailing partial byte) into `dest` starting at bit
-/// offset `start_bit`. Helper for [`__koja_concat_bits`];
+/// offset `start_bit`. Helper for [`__koja_concat_bits`], and
 /// mirrors the eval interpreter's `append_bits` so eval / native
 /// produce byte-identical results for the same input.
 ///
@@ -122,7 +123,7 @@ unsafe fn append_bits_into(dest: *mut u8, start_bit: u64, src: *const u8, length
 /// Pack the low `width` bits of `value` (MSB-first) into `payload`
 /// at bit offset `bit_offset`. Used by the LLVM backend's
 /// `IRInstruction::BinaryConstruct` lowering to handle sub-byte
-/// segment widths — the bit-shift loop in LLVM IR is far messier
+/// segment widths. The bit-shift loop in LLVM IR is far messier
 /// than the same logic in Rust, so the LLVM emitter delegates here.
 ///
 /// `payload` is `or`-merged: the `BinaryConstruct` lowerer
@@ -164,12 +165,12 @@ pub unsafe extern "C" fn __koja_pack_bits(
 }
 
 /// Crash the calling process with a diagnostic message. Paired with the
-/// LLVM backend's `Kernel.panic` emitter — the emitter passes the
+/// LLVM backend's `Kernel.panic` emitter: the emitter passes the
 /// `String` payload pointer (8 bytes past the length header) and
 /// trails the call with `unreachable`, so this helper never returns
 /// normally. Reads the `i64` bit length from `payload-8`, then routes the
-/// message through [`crate::panic::crash_unwind`] — printing
-/// `** (panic) <message>` followed by a filtered, symbolicated backtrace —
+/// message through [`crate::panic::crash_unwind`] (printing
+/// `** (panic) <message>` followed by a filtered, symbolicated backtrace)
 /// before unwinding the process to the `catch_unwind` at
 /// `process_trampoline`. `extern "C-unwind"` so the unwind may legally
 /// cross back into the compiled Koja frame that called it.
@@ -188,7 +189,7 @@ pub unsafe extern "C-unwind" fn __koja_panic(payload: *const u8) -> ! {
 
 /// Print a `String`-flavored body value followed by a newline.
 /// Reads the `i64` bit-length 8 bytes before `payload` (the header
-/// layout shared with `Binary` / `Bits`; see `IRType::String`) and
+/// layout shared with `Binary` / `Bits`, see `IRType::String`) and
 /// writes that many UTF-8 bytes to stdout.
 ///
 /// # Safety

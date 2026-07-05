@@ -1,5 +1,5 @@
 //! End-to-end coverage for the interpreter dispatcher in
-//! `src/interpreter.rs`. Drives `parse → check → lower →
+//! `src/interpreter.rs`. Drives `parse -> check -> lower ->
 //! Interpreter::run_*` to observe the runtime [`Value`] each shape
 //! produces.
 //!

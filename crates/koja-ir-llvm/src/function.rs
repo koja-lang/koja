@@ -41,7 +41,7 @@ use crate::types::{closure_body_signature, env_struct_type, ir_basic_type, value
 ///   [`koja_ir::IRSymbol::mangled`] (the internal form).
 /// - `Extern(attrs)` declares under
 ///   [`koja_ir::IRExternAttrs::link_name`] when present, or
-///   the function's bare last segment otherwise (`TestApp.cosf` →
+///   the function's bare last segment otherwise (`TestApp.cosf` ->
 ///   `cosf`). The IRSymbol stays the call-site's resolution key,
 ///   regardless of the LLVM name.
 ///
@@ -416,7 +416,7 @@ fn is_param_acquire(instruction: Option<&IRInstruction>, param: ValueId) -> bool
 
 /// Sanity-check that the entry block's leading instructions are the
 /// canonical per-parameter promotion sequences lower emits:
-/// `LocalDecl` → (acquire `Clone` / `Call` for heap-managed) →
+/// `LocalDecl` -> (acquire `Clone` / `Call` for heap-managed) ->
 /// `LocalWrite`. A violation indicates a lower invariant break that
 /// would otherwise corrupt the back-edge slot writes. We panic with a
 /// clear message.

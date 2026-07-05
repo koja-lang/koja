@@ -254,7 +254,7 @@ fn alias_float_accepts_arbitrary_value() {
 
 // ------------------------------------------------------------------
 // Float round-trip representability: `Float32` accepts a literal iff
-// `f64 → f32 → f64` round-trips equal. `0.5` does, `0.1` does not
+// `f64 -> f32 -> f64` round-trips equal. `0.5` does, `0.1` does not
 // (the closest f32 differs from the parsed f64).
 // ------------------------------------------------------------------
 

@@ -46,7 +46,7 @@ impl Interpreter {
     /// [`FunctionKind::ProcessEntryWrapper`] (seal guarantees it).
     /// The interpreter executes the IR-synthesized
     /// `<state>.__entry_body` the wrapper's IR `Call` names, where
-    /// the full `start` → `run` → `StopReason.code` dispatch lives.
+    /// the full `start` -> `run` -> `StopReason.code` dispatch lives.
     /// `args` carries the user-facing program arguments (everything
     /// after the program name). An argv-shaped
     /// `Process<List<String>, _, _>` entry receives them as its
@@ -253,7 +253,7 @@ enum BlockOutcome {
 }
 
 /// Run a [`FunctionKind::ProcessEntryWrapper`] entry's body as PID 1.
-/// The wrapper itself is a backend ABI shim. The full `start` → `run` →
+/// The wrapper itself is a backend ABI shim. The full `start` -> `run` ->
 /// `StopReason.code` dispatch lives in the IR-synthesized
 /// `<state>.__entry_body` its IR `Call` names, which the interpreter
 /// executes directly with the argv-derived (or default) config. The
@@ -347,7 +347,7 @@ fn script_uses_lifecycle(script: &IRScript) -> bool {
 /// Resolve a process wrapper's body, the [`FunctionKind::Regular`]
 /// function its single IR `Call` names. Shared by the entry boot and the
 /// `spawn` path: a `ProcessEntryWrapper` / `SpawnWrapper` is a pure ABI
-/// shim whose body holds the real `start` → `run` dispatch. `None` only
+/// shim whose body holds the real `start` -> `run` dispatch. `None` only
 /// for a malformed wrapper (seal violation). Callers decide whether that
 /// is an error or a panic.
 fn process_body_of<'a, R: CallResolver>(

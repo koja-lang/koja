@@ -120,7 +120,7 @@ fn reassignment_emits_only_local_write() {
             _ => None,
         })
         .collect();
-    assert_eq!(writes.len(), 2, "two assignments → two LocalWrites");
+    assert_eq!(writes.len(), 2, "two assignments -> two LocalWrites");
     assert_eq!(
         writes[0], writes[1],
         "both writes target the same slot (no shadowing)",

@@ -4,12 +4,12 @@
 //! file. The directory form (`tests/common/mod.rs`) keeps Cargo from
 //! picking this up as a test target itself.
 //!
-//! Every llvm test shape drives `parse → check → lower → emit_*` and
+//! Every llvm test shape drives `parse -> check -> lower -> emit_*` and
 //! asserts substrings of the produced IR text, so we expose:
 //!
 //! - [`PACKAGE`] / [`APP_NAME`] — defaults every test source registers
 //!   under (`"TestApp"` / `"emit_test"`).
-//! - [`typecheck`] / [`typecheck_in`] — `parse_program → check_program`
+//! - [`typecheck`] / [`typecheck_in`] — `parse_program -> check_program`
 //!   shorthands, parameterized by `ParseMode` (and optionally package
 //!   name for tests that target `Global` directly, e.g.
 //!   `intrinsics.rs`).

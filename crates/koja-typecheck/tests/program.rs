@@ -1,6 +1,6 @@
 //! End-to-end smoke test for the typecheck pipeline.
 //!
-//! Drives `parse_program → check_program` on `fn main; 2 + 2; end` and
+//! Drives `parse_program -> check_program` on `fn main; 2 + 2; end` and
 //! asserts the pipeline succeeds, the registry holds `TestApp.main`,
 //! and the body's `2 + 2` resolves into the preloaded `Global.Int`
 //! stdlib stub.

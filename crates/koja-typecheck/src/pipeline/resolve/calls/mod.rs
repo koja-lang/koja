@@ -640,7 +640,7 @@ fn try_field_callable(
 }
 
 /// Drive call-site type inference for a generic callee. Tries a
-/// speculative pre-seed (`fill_from_expected` → per-arg unify on a
+/// speculative pre-seed (`fill_from_expected` -> per-arg unify on a
 /// scratch). On success the pre-seeded substitution wins so
 /// `x: Int32 = identity(42)` keeps `T = Int32` via `literal_widens_into`.
 /// On any conflict (e.g. outer expected `Unit` vs `identity(1) : Int`)

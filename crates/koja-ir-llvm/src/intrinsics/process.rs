@@ -190,9 +190,9 @@ fn emit_send_after<'ctx>(
 /// never touches queued business / lifecycle traffic (calls are
 /// atomic). Three-way dispatch on the result:
 ///
-/// - `0` → load `R` from the reply slot → `Result.Ok(R)`.
-/// - `-1` + target alive → `Result.Err(CallError.Timeout)`.
-/// - `-1` + target dead → `Result.Err(CallError.ProcessDown)`.
+/// - `0` -> load `R` from the reply slot -> `Result.Ok(R)`.
+/// - `-1` + target alive -> `Result.Err(CallError.Timeout)`.
+/// - `-1` + target dead -> `Result.Err(CallError.ProcessDown)`.
 fn emit_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,

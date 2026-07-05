@@ -375,7 +375,7 @@ fn signed_numeric_name(ty: &ResolvedType, registry: &GlobalRegistry) -> Option<&
 /// [`numeric_comparison_compatible`]. Returns the result type for
 /// `Int`/`Float` alias pairs, same-sized numerics, and sized +
 /// default-literal mixes (literal node stamped with `LiteralCoercion`).
-/// Cross-sized arithmetic (`Int32 + Int64`) → `None`. The broader
+/// Cross-sized arithmetic (`Int32 + Int64`) -> `None`. The broader
 /// `IntLiteral<T>` carrier (planned in `literals/carrier.rs`) is the
 /// long-term direction.
 fn numeric_arithmetic_result(

@@ -204,7 +204,7 @@ fn recv_from_pair_symbol<R: CallResolver>(
 }
 
 /// The struct symbol at field `index` of `struct_symbol`'s decl.
-/// Used to walk `Pair → SocketAddress → IPAddress` without
+/// Used to walk `Pair -> SocketAddress -> IPAddress` without
 /// hardcoding identifier strings.
 fn struct_field_symbol<R: CallResolver>(
     struct_symbol: &IRSymbol,

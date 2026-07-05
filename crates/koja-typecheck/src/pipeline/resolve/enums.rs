@@ -183,7 +183,7 @@ fn infer_enum_type_args(
 /// Build the enum's canonical self-referential template
 /// `Named { Global(enum_id), [TypeParam(enum_id, 0..N)] }`. Used as the
 /// LHS of a [`fill_from_expected`] hint walk so an expected `Maybe<Int>`
-/// can populate `T → Int` without bespoke per-slot fill logic.
+/// can populate `T -> Int` without bespoke per-slot fill logic.
 fn canonical_enum_template(enum_id: GlobalRegistryId, arity: usize) -> ResolvedType {
     ResolvedType::Named {
         resolution: Resolution::Global(enum_id),

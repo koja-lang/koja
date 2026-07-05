@@ -706,7 +706,7 @@ pub struct Expr {
     pub literal_coercion: Option<LiteralCoercion>,
     /// Per-expression value-conversion coercion. Stamped by
     /// typecheck when the expression's value needs runtime work to
-    /// flow into its consumer (member→union widening today; future
+    /// flow into its consumer (member->union widening today; future
     /// fn-as-closure, generic phi widening, etc.). Each
     /// [`Coercion`] variant pairs 1:1 with an `IRInstruction::*`
     /// variant the lowerer emits at this exact site. Lives

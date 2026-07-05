@@ -4,7 +4,7 @@
 //!
 //! Walks the bound's protocols, finds the unique provider (or
 //! emits not-found / ambiguity), validates args against the
-//! protocol method's signature with `Self → t`, and returns the
+//! protocol method's signature with `Self -> t`, and returns the
 //! substituted return type. The receiver's `Resolution::TypeParam`
 //! stays put. IR-side substitution rewrites it into a concrete
 //! type post-mono and the regular `[concrete_target, method_name]`
@@ -209,7 +209,7 @@ pub(super) struct BoundedArgsSite<'a> {
     pub(super) method: &'a str,
     pub(super) param_name: &'a str,
     pub(super) protocol_method: &'a ResolvedProtocolMethod,
-    /// `Self → <receiver>` substitution applied to each expected
+    /// `Self -> <receiver>` substitution applied to each expected
     /// param type before the compatibility check, so a method
     /// declaring `other: Self` accepts an arg whose actual type is
     /// the receiver (rather than the literal `Self` placeholder).

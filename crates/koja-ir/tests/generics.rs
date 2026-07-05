@@ -8,7 +8,7 @@
 //!   concrete decls land in [`IRPackage`].
 //! - Construction-site type-arg inference at typecheck propagates
 //!   into IR as a discovered instantiation, deduplicated by the
-//!   worklist driver: same `(template, args)` → one decl.
+//!   worklist driver: same `(template, args)` -> one decl.
 //! - Distinct args mint distinct decls with substituted field /
 //!   payload [`IRType`]s and distinct mangled symbols.
 //! - Nested generics (a generic instantiation whose args themselves

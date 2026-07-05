@@ -44,7 +44,7 @@ fn cptr_alloc_then_free_round_trips_without_panicking() {
         not is_null
         "#,
     ))
-    .expect("alloc → null? → free chain should evaluate cleanly");
+    .expect("alloc -> null? -> free chain should evaluate cleanly");
     assert_eq!(outcome, Value::Bool(true));
 }
 
@@ -68,7 +68,7 @@ fn cptr_write_then_read_round_trips_a_byte() {
         v
         "#,
     ))
-    .expect("write → read → free chain should evaluate cleanly");
+    .expect("write -> read -> free chain should evaluate cleanly");
     assert_eq!(outcome, Value::Int(0x42));
 }
 
@@ -114,7 +114,7 @@ fn string_to_cstring_then_to_string_round_trips_utf8() {
         copy
         "#,
     ))
-    .expect("to_cstring → to_string → free chain should evaluate");
+    .expect("to_cstring -> to_string -> free chain should evaluate");
     assert_eq!(outcome, Value::string("hello"));
 }
 
@@ -131,6 +131,6 @@ fn string_to_cstring_round_trips_multibyte_utf8() {
         copy
         "#,
     ))
-    .expect("multibyte to_cstring → to_string round-trip");
+    .expect("multibyte to_cstring -> to_string round-trip");
     assert_eq!(outcome, Value::string("héllo"));
 }

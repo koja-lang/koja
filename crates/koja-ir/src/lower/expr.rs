@@ -59,8 +59,8 @@ pub(super) fn lower_expr(
 /// Apply `expr.coercion` (if any) to a freshly lowered value. Each
 /// [`Coercion`] variant pairs 1:1 with an `IRInstruction::*`
 /// emission per the northstar coercion contract:
-/// [`Coercion::NumericWiden`] → [`IRInstruction::NumericWiden`] and
-/// [`Coercion::UnionWiden`] → [`IRInstruction::UnionWrap`].
+/// [`Coercion::NumericWiden`] -> [`IRInstruction::NumericWiden`] and
+/// [`Coercion::UnionWiden`] -> [`IRInstruction::UnionWrap`].
 fn apply_value_coercion(
     expr: &Expr,
     value: ValueId,

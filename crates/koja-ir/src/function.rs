@@ -61,7 +61,7 @@ impl IRSymbol {
     }
 
     /// The bare last segment of the underlying AST identifier path
-    /// (e.g. `TestApp.cosf` → `cosf`). Falls back to the full
+    /// (e.g. `TestApp.cosf` -> `cosf`). Falls back to the full
     /// mangled name when no `.` is present (root identifiers,
     /// derived monomorphization suffixes that don't contain a
     /// path separator). Used by the LLVM backend when it needs a
@@ -147,7 +147,7 @@ impl fmt::Display for IRBlockId {
 ///   structs do.
 /// - `ProcessEntryWrapper { state }` is the project-mode entry
 ///   thunk minted when `koja.toml`'s `entry` names a PascalCase
-///   `Process<C, M, R>` type. Same `void(i8*)` shape and `start →
+///   `Process<C, M, R>` type. Same `void(i8*)` shape and `start ->
 ///   run` dispatch as `SpawnWrapper`, but the LLVM emit pass also
 ///   funnels the resulting `StopReason` through `ExitStatus.code()`
 ///   and stores it in the module-level `__koja_exit_code` global
@@ -725,7 +725,7 @@ pub enum IRInstruction {
     /// signed integer sources, zero-extend unsigned sources, `fpext`
     /// a `Float32` into `Float64`. Lowered from the typecheck-stamped
     /// [`koja_ast::coercion::Coercion::NumericWiden`] at every
-    /// sized-numeric → hub flow site (assignments, struct fields,
+    /// sized-numeric -> hub flow site (assignments, struct fields,
     /// args, returns, enum payloads, consts).
     NumericWiden {
         dest: ValueId,
@@ -739,7 +739,7 @@ pub enum IRInstruction {
     /// `member_type` in the union's canonical (sorted) member list,
     /// used as the runtime tag byte. Lowered from the typecheck-
     /// stamped [`koja_ast::coercion::Coercion::UnionWiden`] at every
-    /// member→union flow site (assignments, struct fields, args,
+    /// member->union flow site (assignments, struct fields, args,
     /// returns).
     UnionWrap {
         dest: ValueId,

@@ -1,4 +1,4 @@
-//! Sealed-AST → IR lowering, organized as one submodule per
+//! Sealed-AST -> IR lowering, organized as one submodule per
 //! concern. Public surface to the rest of the crate is [`lower_package`]
 //! (the package walker invoked from [`crate::program::lower_program`])
 //! and [`lower_body_to_blocks`] (the body-shaped seam

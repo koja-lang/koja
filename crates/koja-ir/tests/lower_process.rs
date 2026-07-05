@@ -6,7 +6,7 @@
 //!   `Ref<M, R>`-typed value, plus a synthesized
 //!   [`FunctionKind::SpawnWrapper`] shim keyed by the state symbol
 //!   whose IR body calls the IR-synthesized `<state>.__spawn_body`
-//!   carrying the `start` → `run` dispatch with ownership markers.
+//!   carrying the `start` -> `run` dispatch with ownership markers.
 //! - `receive` lowers to a host block that ends with
 //!   [`IRInstruction::Receive`] + [`IRTerminator::Unreachable`],
 //!   one body block per arm carrying its lattice-coerced tail
@@ -345,7 +345,7 @@ fn spawn_lowers_to_spawn_instruction_plus_wrapper_fn() {
     assert_eq!(
         config_type,
         IRType::Int64,
-        "Counter's config is Int → Spawn.config_type should be Int64",
+        "Counter's config is Int -> Spawn.config_type should be Int64",
     );
     assert!(
         ref_type.mangled().contains(".Ref"),

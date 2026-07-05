@@ -1245,7 +1245,7 @@ fn match_nested_struct_binding_emits_chained_field_gets_in_body_block() {
 fn match_struct_or_pattern_inside_field_still_wires_or_chain_for_inner() {
     // `Point{x: 1 | 2 | 3, y: y_bind}` exercises the
     // or-pattern-inside-struct-field case: the inner or-pattern
-    // should preserve its ChainMode::Or wiring (any alt true →
+    // should preserve its ChainMode::Or wiring (any alt true ->
     // success) while the outer struct chain stays AND. Today this
     // would require lifting the or-chain into an AND-chain in
     // consume_inner_check; pin behavior so we see how it's wired.

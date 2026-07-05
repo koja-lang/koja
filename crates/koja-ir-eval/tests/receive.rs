@@ -1,5 +1,5 @@
 //! Entry-process `receive` coverage: the `after`-timeout path and OS
-//! signal → `Lifecycle` arm delivery. Cross-process business delivery
+//! signal -> `Lifecycle` arm delivery. Cross-process business delivery
 //! (cast/call) lives in `process_intrinsics.rs`.
 //!
 //! Signal flags are process-global, so the lifecycle test installs

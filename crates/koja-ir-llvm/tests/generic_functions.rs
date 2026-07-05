@@ -4,10 +4,10 @@
 //! [`koja_ir::generics::instantiate`] reaches LLVM as a
 //! distinct `define` carrying the mangled `_$arg.arg$` symbol:
 //!
-//! - `id<Int>(x)` → `define i64 @"TestApp.id_$Int64$"(i64 %x)`
-//! - `id<String>(x)` → `define ptr @"TestApp.id_$String$"(ptr %x)`
-//! - method on a generic struct → `@"TestApp.Pair_$Int64.String$.first"`
-//! - distinct args at the same call site → distinct `define`s
+//! - `id<Int>(x)` -> `define i64 @"TestApp.id_$Int64$"(i64 %x)`
+//! - `id<String>(x)` -> `define ptr @"TestApp.id_$String$"(ptr %x)`
+//! - method on a generic struct -> `@"TestApp.Pair_$Int64.String$.first"`
+//! - distinct args at the same call site -> distinct `define`s
 //!
 //! The LLVM backend has zero generics-aware code; it lowers whatever
 //! decls land in the [`koja_ir::IRPackage::functions`] map. A

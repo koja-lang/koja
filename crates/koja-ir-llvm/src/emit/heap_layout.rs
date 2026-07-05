@@ -18,13 +18,13 @@
 //! of every rc-managed block (uniform across leaf and, later,
 //! collection/closure buffers), so one runtime primitive pair
 //! operating on the block base serves every type. The only per-type
-//! knowledge is the payload→base offset, which lives here.
+//! knowledge is the payload->base offset, which lives here.
 //! Statically-allocated (rodata) literals carry a negative sentinel rc
 //! ([`RC_IMMORTAL`]) so inc/dec are no-ops and they never reach `free`.
 //!
 //! This module exists so the header arithmetic lives in exactly one
 //! place per crate. It is deliberately **not** shared with
-//! `koja-runtime` via a common crate: the IR→backend boundary is a
+//! `koja-runtime` via a common crate: the IR->backend boundary is a
 //! sealed, serializable handoff and the runtime is a leaf
 //! `staticlib`, so the ABI constants are mirrored there
 //! (`koja-runtime`'s `util::{BLOCK_HEADER_SIZE, LENGTH_OFFSET}` and the

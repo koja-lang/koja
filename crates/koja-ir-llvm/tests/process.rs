@@ -286,7 +286,7 @@ fn spawn_wrapper_loads_config_calls_start_then_run_on_ok() {
         "call void @TestApp.Counter.__spawn_body(i64 %loaded_config)",
     );
 
-    // The start → run dispatch lives in the IR-synthesized body,
+    // The start -> run dispatch lives in the IR-synthesized body,
     // emitted by the normal instruction pipeline. start returns
     // Result<Counter, StopReason>; the name mangler qualifies
     // StopReason with the package it was lifted from (today:

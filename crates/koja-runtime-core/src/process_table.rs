@@ -1,5 +1,5 @@
 //! Generational slotmap of live processes plus the scheduler's ready queue
-//! and timing wheel — the agnostic scheduling *policy*.
+//! and timing wheel: the agnostic scheduling *policy*.
 //!
 //! A PID packs a slot index and a generation: `pid = (generation << 32) |
 //! index`. Slots are reused after a process dies (so memory is bounded), and
@@ -10,17 +10,17 @@
 //! All state changes funnel through [`ProcessTable::transition`], which keeps
 //! the ready queue and the live / active counts in sync. The ready queue makes
 //! process pickup O(1), and the [`TimerWheel`] makes deadline promotion and
-//! timer firing amortized O(1) — both delayed deliveries and receive/call
+//! timer firing amortized O(1). Both delayed deliveries and receive/call
 //! deadlines share one wheel keyed by fire instant.
 //!
 //! The table is generic over two platform types and contains **no locking,
-//! no threads, and no I/O**: the per-process execution state `X` (opaque —
+//! no threads, and no I/O**: the per-process execution state `X` (opaque,
 //! the executor's private state, e.g. a native stack + saved `sp`) and the
 //! mailbox message representation `M` (byte [`Envelope`](crate::wire::Envelope)
 //! natively, a typed value cooperatively). An adapter wraps the table in
-//! whatever synchronization its driver needs — a `Mutex` for the
+//! whatever synchronization its driver needs: a `Mutex` for the
 //! multi-threaded native driver, a bare `&mut` borrow for a single-threaded
-//! cooperative one. See `koja/design/SCHEDULER-PROTOCOL.md`.
+//! cooperative one.
 
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -51,14 +51,14 @@ pub const fn slot_index(pid: Pid) -> usize {
 /// opaque executor `execution` state and the mailbox.
 ///
 /// The control-block fields (`state`, `waiting`, `deadline`, `on_cpu`) are
-/// the scheduling policy's; `execution` is the executor's private state,
+/// the scheduling policy's. `execution` is the executor's private state,
 /// which the table stores and hands back but never inspects.
 pub struct ProcessControlBlock<X, M> {
     /// The executor's per-process execution state (native: entry fn, config,
     /// saved `sp`, stack mapping). Opaque to the table.
     pub execution: X,
     /// Optional wake deadline. Set when parking with a timeout, cleared on
-    /// resume; the driver promotes `Blocked -> Runnable` when it passes.
+    /// resume. The driver promotes `Blocked -> Runnable` when it passes.
     pub deadline: Option<Instant>,
     /// Routed message queues plus the one-shot reply slot.
     pub mailbox: Mailbox<M>,
@@ -78,8 +78,8 @@ pub struct ProcessControlBlock<X, M> {
     priority: Priority,
     /// This quantum's reduction budget, granted (= `priority.budget()`) on
     /// each `-> Running` claim. An adapter seeds its thread-local decrement
-    /// counter from this on resume via [`ProcessTable::reductions_left`]; the
-    /// per-`YieldCheck` spend happens there, not on this field.
+    /// counter from this on resume via [`ProcessTable::reductions_left`].
+    /// The per-`YieldCheck` spend happens there, not on this field.
     reductions_left: u32,
     /// Why the process terminated, recorded at its death site and read by
     /// [`ProcessTable::notify_exit`] on the `-> Dead` edge. `Normal` until a
@@ -111,14 +111,14 @@ impl<X, M> ProcessControlBlock<X, M> {
     }
 }
 
-/// Resources moved out of a dead process, freed when this value is dropped —
+/// Resources moved out of a dead process, freed when this value is dropped,
 /// which the reclaim sites do only after any driver lock is released. Each
 /// field is an RAII owner, so dropping a `Reclaim` runs the execution state's
 /// drop glue (native: unmaps the stack, releases the spawn config) and drains the
 /// mailbox (running each message's drop glue).
 ///
-/// The fields are never read by name — they exist purely so their own `Drop`
-/// runs at this controlled point — hence `allow(dead_code)`.
+/// The fields are never read by name (they exist purely so their own `Drop`
+/// runs at this controlled point), hence `allow(dead_code)`.
 #[allow(dead_code)]
 pub struct Reclaim<X, M> {
     execution: X,
@@ -129,7 +129,7 @@ pub struct Reclaim<X, M> {
 pub enum ProcessState {
     /// Newly spawned, not yet entered by any worker.
     Created,
-    /// Ready to run; waiting for a worker to pick it up.
+    /// Ready to run, waiting for a worker to pick it up.
     Runnable,
     /// Currently executing on a worker.
     Running,
@@ -139,13 +139,13 @@ pub enum ProcessState {
     /// Waiting for I/O readiness on a file descriptor. The reactor promotes
     /// this to `Runnable` when the fd is ready.
     WaitingIO,
-    /// Function returned; process will not be scheduled again.
+    /// Function returned. Process will not be scheduled again.
     Dead,
 }
 
 /// A process's scheduling priority. The wire weight is an explicit ABI
 /// contract (0 = `Low`, 1 = `Normal`, 2 = `High`) decoded by
-/// `from_index`; the Rust enum's order fixes the ready-queue index via
+/// `from_index`. The Rust enum's order fixes the ready-queue index via
 /// `as usize`. Default is `Normal`.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum Priority {
@@ -173,7 +173,7 @@ impl Priority {
         }
     }
 
-    /// Reductions granted per scheduling quantum at this priority — one
+    /// Reductions granted per scheduling quantum at this priority: one is
     /// spent per `YieldCheck`, bounding how long a process runs before
     /// yielding. `Normal` mirrors BEAM's 2000-reduction quantum.
     pub fn budget(&self) -> u32 {
@@ -237,12 +237,12 @@ fn is_active(state: ProcessState) -> bool {
 
 /// Whether `from -> to` is a legal process lifecycle edge.
 ///
-/// Built from the audited transition sites: a worker claims a fresh or woken
-/// process (`Created`/`Runnable -> Running`); a running process blocks on a
-/// message or I/O (`Running -> Blocked`/`WaitingIO`); a wake re-arms a parked
-/// process (`Blocked`/`WaitingIO -> Runnable`); a running process voluntarily
+/// Built from the audited transition sites. A worker claims a fresh or woken
+/// process (`Created`/`Runnable -> Running`). A running process blocks on a
+/// message or I/O (`Running -> Blocked`/`WaitingIO`). A wake re-arms a parked
+/// process (`Blocked`/`WaitingIO -> Runnable`). A running process voluntarily
 /// yields back to the ready queue (`Running -> Runnable`, cooperative
-/// preemption); and any live process can die via return (`Running -> Dead`) or
+/// preemption). Any live process can die via return (`Running -> Dead`) or
 /// a kill from another worker (`* -> Dead`). No legal edge is a self-edge,
 /// because every call site gates its precondition first.
 fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
@@ -257,8 +257,8 @@ fn is_legal_transition(from: ProcessState, to: ProcessState) -> bool {
 }
 
 /// Monotonic invariant counters bumped at the [`ProcessTable`] chokepoints.
-/// `violations` is the machine oracle (must stay zero); the rest are coverage
-/// evidence — e.g. a kill-storm fixture observing `parks_refused > 0` knows
+/// `violations` is the machine oracle (must stay zero). The rest are coverage
+/// evidence: a kill-storm fixture observing `parks_refused > 0` knows
 /// the kill-vs-park window was actually hit, not merely survived. Exposed to
 /// lang fixtures via the adapter's `koja_rt_sched_violations` /
 /// `koja_rt_parks_refused`.
@@ -275,7 +275,7 @@ pub struct ScheduleCounters {
     /// Envelopes bounced off a dead or stale target.
     pub undeliverable_envelopes: u64,
     /// Illegal lifecycle edges applied by `transition`. Always zero in a
-    /// correct runtime; counted (not just debug-asserted) so release builds
+    /// correct runtime. Counted (not just debug-asserted) so release builds
     /// can detect ordering bugs too.
     pub violations: u64,
 }
@@ -304,7 +304,7 @@ pub enum Mode {
 }
 
 /// The scheduler's process store: a generational slotmap with a ready queue
-/// and a timing wheel. Contains no synchronization; the adapter's driver
+/// and a timing wheel. Contains no synchronization. The adapter's driver
 /// supplies it.
 pub struct ProcessTable<X, M> {
     /// Count of `Running` + `WaitingIO` processes (park-timeout heuristic).
@@ -315,7 +315,7 @@ pub struct ProcessTable<X, M> {
     counters: ScheduleCounters,
     /// Due deliveries staged by the most recent [`Self::advance_timers`],
     /// drained by [`Self::take_due_timers`]. Promotions are applied inline
-    /// during the advance; only the deliveries the driver routes wait here.
+    /// during the advance. Only the deliveries the driver routes wait here.
     due_delivers: Vec<TimerEntry<M>>,
     /// When set, [`Self::enqueue_ready`] stages PIDs in [`Self::pending_ready`]
     /// for an adapter that owns the ready queue (native work-stealing) instead
@@ -332,9 +332,9 @@ pub struct ProcessTable<X, M> {
     /// the wheel exactly once.
     last_advance: Option<Instant>,
     /// First spawned process (the program entry). Drives signal delivery and
-    /// the shutdown decision; `0` until the first spawn.
+    /// the shutdown decision. `0` until the first spawn.
     main_pid: Pid,
-    /// Runtime lifecycle mode; `Draining` once a `SIGTERM` has been seen.
+    /// Runtime lifecycle mode, `Draining` once a `SIGTERM` has been seen.
     mode: Mode,
     /// Newly-runnable PIDs staged for an external queue owner, drained by
     /// [`Self::drain_pending_ready`]. Only populated while [`Self::external_ready`].
@@ -343,7 +343,7 @@ pub struct ProcessTable<X, M> {
     /// (index = `priority as usize`), highest level served first.
     ready: [VecDeque<Pid>; LEVELS],
     /// Per-level count of consecutive selections each ready queue has
-    /// been passed over while non-empty; a level that reaches
+    /// been passed over while non-empty. A level that reaches
     /// `STARVATION_THRESHOLD` preempts so no priority is starved.
     ready_ages: [u32; LEVELS],
     /// All slots, indexed by a PID's low 32 bits.
@@ -419,15 +419,15 @@ impl<X, M: Message> ProcessTable<X, M> {
             .is_some_and(|process| process.state != ProcessState::Dead)
     }
 
-    /// Whether `pid` has a pending system/lifecycle message — the signal a
+    /// Whether `pid` has a pending system/lifecycle message: the signal a
     /// blocking I/O wait checks to decide whether it was interrupted.
     pub fn has_system_mail(&self, pid: Pid) -> bool {
         self.get(pid)
             .is_some_and(|process| process.mailbox.has_system())
     }
 
-    /// Sets `pid`'s scheduling priority. Takes effect at the next enqueue —
-    /// an entry already queued at the old level is not moved.
+    /// Sets `pid`'s scheduling priority. Takes effect at the next enqueue,
+    /// so an entry already queued at the old level is not moved.
     pub fn set_priority(&mut self, pid: Pid, priority: Priority) {
         if let Some(process) = self.get_mut(pid) {
             process.priority = priority;
@@ -461,7 +461,7 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// Reclaims a dead process's slot: detaches its resources (to drop
     /// off-lock), bumps the generation, and returns the slot to the freelist.
-    /// Idempotent — a second call on the same PID returns `None`.
+    /// Idempotent: a second call on the same PID returns `None`.
     fn free(&mut self, pid: Pid) -> Option<Reclaim<X, M>> {
         let (index, generation) = decode(pid);
         let slot = self.slots.get_mut(index as usize)?;
@@ -521,7 +521,7 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
     }
 
-    /// Enqueues `pid` onto the ready queue for its current priority — or, in
+    /// Enqueues `pid` onto the ready queue for its current priority, or, in
     /// [`external_ready`](Self::external_ready) mode, stages it in
     /// [`pending_ready`](Self::pending_ready) for the adapter to route.
     fn enqueue_ready(&mut self, pid: Pid) {
@@ -537,7 +537,7 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// [`enqueue_ready`](Self::enqueue_ready) stages newly-runnable PIDs in
     /// [`pending_ready`](Self::pending_ready) (drained via
     /// [`drain_pending_ready`](Self::drain_pending_ready)) rather than the
-    /// in-core [`ready`](Self::ready) queues. One-way; set once at native boot.
+    /// in-core [`ready`](Self::ready) queues. One-way, set once at native boot.
     pub fn use_external_ready(&mut self) {
         self.external_ready = true;
     }
@@ -556,11 +556,12 @@ impl<X, M: Message> ProcessTable<X, M> {
     }
 
     /// Parks `pid` as `Blocked`, recording which part of its mailbox it waits
-    /// on and an optional wake deadline. Refuses — returning `false` without
-    /// touching the state — when the process is dead or stale: a kill can land
-    /// while the process is mid-run on another worker (`* -> Dead` is a legal
-    /// cross-worker edge), and parking over the tombstone would resurrect it.
-    /// A refused caller should still yield; the worker sees `Dead` on
+    /// on and an optional wake deadline. Refuses (returning `false` without
+    /// touching the state) when the process is dead or stale, because a kill
+    /// can land while the process is mid-run on another worker (`* -> Dead`
+    /// is a legal cross-worker edge), and parking over the tombstone would
+    /// resurrect it.
+    /// A refused caller should still yield. The worker sees `Dead` on
     /// switch-out and reclaims the slot, so the frame never resumes.
     pub fn try_park(&mut self, pid: Pid, target: WaitTarget, deadline: Option<Instant>) -> bool {
         if !self.is_alive(pid) {
@@ -580,7 +581,7 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// Parks `pid` as `WaitingIO`, with the same kill-tombstone refusal as
     /// [`try_park`](Self::try_park). A refused caller must not register the fd
-    /// with the reactor — there is no waiter to wake.
+    /// with the reactor, since there is no waiter to wake.
     pub fn try_park_io(&mut self, pid: Pid) -> bool {
         if !self.is_alive(pid) {
             self.note_refused_park(pid);
@@ -595,10 +596,10 @@ impl<X, M: Message> ProcessTable<X, M> {
         self.trace.record(pid, TraceEvent::ParkRefused);
     }
 
-    /// Marks `pid` `Dead` unless it already is (a racing kill may have won) or
-    /// the slot is stale — re-marking would be an illegal self-edge and would
-    /// double-decrement the `alive` count. Returns whether this call performed
-    /// the transition.
+    /// Marks `pid` `Dead` unless it already is (a racing kill may have won)
+    /// or the slot is stale, since re-marking would be an illegal self-edge
+    /// and would double-decrement the `alive` count. Returns whether this
+    /// call performed the transition.
     pub fn mark_dead_if_alive(&mut self, pid: Pid) -> bool {
         if !self.is_alive(pid) {
             return false;
@@ -610,7 +611,7 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// The "last resort" termination primitive: marks `pid` `Dead` and
     /// reclaims its slot, returning the detached resources for the caller to
     /// drop off-lock. `None` when the target was already dead/stale, or when
-    /// it is still `on_cpu` — reclaiming a stack a worker is running on would
+    /// it is still `on_cpu`. Reclaiming a stack a worker is running on would
     /// be a use-after-free, so the owning worker reclaims on switch-out
     /// instead (it sees `Dead` in [`after_switch`](Self::after_switch)). The
     /// mailbox rides along either way, so envelopes are freed exactly once.
@@ -632,8 +633,8 @@ impl<X, M: Message> ProcessTable<X, M> {
     }
 
     /// Records why `pid` is terminating, to be read by [`notify_exit`] on the
-    /// `-> Dead` edge. Set before marking the process dead; a no-op for a
-    /// stale PID. A process that sets no reason dies `Normal`.
+    /// `-> Dead` edge. Set before marking the process dead. A no-op for a
+    /// stale PID, and a process that sets no reason dies `Normal`.
     ///
     /// [`notify_exit`]: Self::notify_exit
     pub fn set_exit_reason(&mut self, pid: Pid, reason: ExitReason) {
@@ -674,7 +675,7 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
     }
 
-    /// Whether `pid` is alive and still waiting on the reply for `token` —
+    /// Whether `pid` is alive and still waiting on the reply for `token`:
     /// the linearizable check `ReplyTo.send` makes under the lock to decide
     /// `Delivery.Delivered` versus `Delivery.Expired`.
     pub fn is_awaiting_reply(&self, pid: Pid, token: i64) -> bool {
@@ -683,15 +684,16 @@ impl<X, M: Message> ProcessTable<X, M> {
     }
 
     /// Fired from [`transition`](Self::transition) when a process goes `Dead`,
-    /// carrying its recorded [`ExitReason`]. A no-op seam today; process
+    /// carrying its recorded [`ExitReason`]. A no-op seam today. Process
     /// monitoring delivers exit signals to linked/monitoring processes here.
     fn notify_exit(&mut self, _pid: Pid, _reason: ExitReason) {}
 
     /// Pops the next claimable process, marking it `Running` and `on_cpu`.
-    /// Serves the highest-priority non-empty queue, but ages the ready queues
-    /// so any non-empty level passed over `STARVATION_THRESHOLD` times preempts
-    /// — bounding every level's wait so no priority is starved. Skips stale
-    /// ready-queue entries (killed, already resumed, or still `on_cpu`).
+    /// Serves the highest-priority non-empty queue, but ages the ready
+    /// queues so any non-empty level passed over `STARVATION_THRESHOLD`
+    /// times preempts, bounding every level's wait so no priority is
+    /// starved. Skips stale ready-queue entries (killed, already resumed,
+    /// or still `on_cpu`).
     pub fn claim_next(&mut self) -> Option<Pid> {
         loop {
             let level = self.next_ready_level()?;
@@ -704,10 +706,11 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// Marks `pid` `Running` and `on_cpu`, granting its quantum's reduction
     /// budget, when it is a fresh claim (alive, not already `on_cpu`,
-    /// `Created`/`Runnable`). Returns `false` for a stale ready entry (killed,
-    /// already resumed, or still `on_cpu`), counting the skip — the caller pops
-    /// the next candidate. The per-PID half of [`claim_next`](Self::claim_next),
-    /// used by an external queue owner that pops candidates itself.
+    /// `Created`/`Runnable`). Returns `false` for a stale ready entry
+    /// (killed, already resumed, or still `on_cpu`), counting the skip so
+    /// the caller pops the next candidate. The per-PID half of
+    /// [`claim_next`](Self::claim_next), used by an external queue owner
+    /// that pops candidates itself.
     pub fn try_claim(&mut self, pid: Pid) -> bool {
         match self.get_mut(pid) {
             Some(process)
@@ -731,7 +734,7 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// Chooses which priority level `claim_next` serves, aging the ready
     /// queues so no level starves. Normally the highest-priority non-empty
-    /// level wins; but any non-empty level that has been passed over
+    /// level wins, but any non-empty level that has been passed over
     /// `STARVATION_THRESHOLD` times preempts (most-aged first, ties broken
     /// toward higher priority), bounding every level's wait. Returns `None`
     /// only when all queues are empty.
@@ -785,8 +788,8 @@ impl<X, M: Message> ProcessTable<X, M> {
     }
 
     /// Voluntarily returns a running process to the ready queue (cooperative
-    /// preemption). No-op unless `pid` is currently `Running`. Only marks the
-    /// process `Runnable`; the actual re-enqueue happens in
+    /// preemption). No-op unless `pid` is currently `Running`. Only marks
+    /// the process `Runnable`. The actual re-enqueue happens in
     /// [`after_switch`](Self::after_switch) once `on_cpu` is released.
     pub fn yield_running(&mut self, pid: Pid) {
         if self
@@ -814,7 +817,8 @@ impl<X, M: Message> ProcessTable<X, M> {
             .get_mut(pid)
             .expect("is_alive implies the process exists");
         // Wake a `Blocked` receiver for the matching queue, or a `WaitingIO`
-        // process for a system/lifecycle signal (RUNTIME-GAPS #3).
+        // process for a system/lifecycle signal so blocking I/O can be
+        // interrupted.
         let wake = match process.state {
             ProcessState::Blocked => process.waiting == target,
             ProcessState::WaitingIO => is_system,
@@ -839,7 +843,7 @@ impl<X, M: Message> ProcessTable<X, M> {
     /// inline (promoting validated waiters, counting stale entries) and stages
     /// due deliveries in [`Self::due_delivers`] for the driver to route. The
     /// paired `promote_due_deadlines` / `take_due_timers` calls a driver makes
-    /// for one `now` both route here; the second is a no-op.
+    /// for one `now` both route here, and the second is a no-op.
     fn advance_timers(&mut self, now: Instant) {
         if self.last_advance.is_some_and(|last| now <= last) {
             return;
@@ -871,11 +875,12 @@ impl<X, M: Message> ProcessTable<X, M> {
         }
     }
 
-    /// Removes and returns every timer whose `fire_at` is at or before `now`,
-    /// soonest first; the caller delivers each staged envelope. Pairs with
-    /// [`Self::promote_due_deadlines`] for the same `now` — the wheel is
-    /// advanced at most once per `now`, so whichever of the two runs first
-    /// does the draining and the second only reads what that advance staged.
+    /// Removes and returns every timer whose `fire_at` is at or before
+    /// `now`, soonest first. The caller delivers each staged envelope.
+    /// Pairs with [`Self::promote_due_deadlines`] for the same `now`: the
+    /// wheel is advanced at most once per `now`, so whichever of the two
+    /// runs first does the draining and the second only reads what that
+    /// advance staged.
     pub fn take_due_timers(&mut self, now: Instant) -> Vec<TimerEntry<M>> {
         self.advance_timers(now);
         std::mem::take(&mut self.due_delivers)
@@ -894,8 +899,8 @@ impl<X, M: Message> ProcessTable<X, M> {
     ///
     /// Drives the shared wheel via [`Self::advance_timers`]. A driver calls
     /// this *before* [`Self::take_due_timers`] for the same `now`: this call
-    /// advances the wheel and applies expired deadlines inline; the paired
-    /// `take` then collects the deliveries staged by the same advance.
+    /// advances the wheel and applies expired deadlines inline, and the
+    /// paired `take` then collects the deliveries staged by the same advance.
     pub fn promote_due_deadlines(&mut self, now: Instant) {
         self.advance_timers(now);
     }
@@ -1207,7 +1212,7 @@ mod tests {
 
     #[test]
     fn park_refuses_killed_process() {
-        // A cross-worker kill can land while the victim is mid-run; its next
+        // A cross-worker kill can land while the victim is mid-run. Its next
         // park must not resurrect it over the `Dead` tombstone.
         let mut table = TestTable::new();
         let pid = fake_spawn(&mut table);
@@ -1391,7 +1396,7 @@ mod tests {
         table.transition(high, ProcessState::Runnable);
 
         // Keep the High queue continuously non-empty by re-queuing it each
-        // claim; the Low process must still be served within the bound.
+        // claim. The Low process must still be served within the bound.
         let mut claims = 0;
         loop {
             let pid = table.claim_next().expect("a process is always ready");
@@ -1423,7 +1428,7 @@ mod tests {
         table.transition(normal, ProcessState::Runnable);
         table.transition(high, ProcessState::Runnable);
 
-        // Keep High and Low queues continuously non-empty; the Normal process
+        // Keep High and Low queues continuously non-empty. The Normal process
         // must still be claimed within the aging bound.
         let mut claims = 0;
         let mut normal_seen = false;

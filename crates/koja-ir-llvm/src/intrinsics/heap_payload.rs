@@ -12,7 +12,7 @@
 //!   and reinterpret the *same* payload pointer as the result type.
 //!   The cheap default: Koja blocks are immutable and value semantics
 //!   makes the sharing invisible, so a same-layout reinterpret
-//!   (`Binary` ↔ `Bits`, `String` → `Binary`) is just an `rc++`.
+//!   (`Binary` ↔ `Bits`, `String` -> `Binary`) is just an `rc++`.
 //!   Mirrors [`crate::emit::clone`]'s heap-leaf arm.
 //! - [`copy_heap_payload`]: deep-copy the header + payload into a
 //!   fresh `rc = 1` block. Required only when the result block differs

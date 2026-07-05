@@ -1,8 +1,8 @@
 //! Write-side probe + per-method tails: `Map.put` overwrites or
 //! inserts a `(K, V)` pair, `Set.insert` is its single-payload twin.
 //! Both share [`emit_insert_probe`], which walks slots until the
-//! key matches (→ `update_bb`) or an EMPTY/TOMBSTONE slot is hit
-//! (→ `insert_bb`).
+//! key matches (-> `update_bb`) or an EMPTY/TOMBSTONE slot is hit
+//! (-> `insert_bb`).
 
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;

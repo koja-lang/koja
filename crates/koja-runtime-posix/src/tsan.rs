@@ -1,7 +1,7 @@
 //! ThreadSanitizer fiber annotations for the cooperative scheduler.
 //!
 //! [`crate::scheduler`]'s `koja_context_switch` swaps stacks behind TSan's
-//! back; without telling TSan about the switch its shadow stack faults
+//! back. Without telling TSan about the switch its shadow stack faults
 //! (DEADLYSIGNAL) the first time a process yields from mid-function. The
 //! `__tsan_*_fiber` API lets us model each process (and each worker's
 //! scheduler context) as a fiber and announce every switch.
@@ -12,10 +12,10 @@
 //! release builds are untouched.
 //!
 //! Usage from the scheduler:
-//! - [`capture_scheduler_fiber`] once at the top of each worker loop;
+//! - [`capture_scheduler_fiber`] once at the top of each worker loop.
 //! - [`slot_fiber`] to fetch a process-table slot's fiber, created lazily on
-//!   first use and reused across the slot's successive occupants;
-//! - [`switch_to_process`] right before context-switching into a process;
+//!   first use and reused across the slot's successive occupants.
+//! - [`switch_to_process`] right before context-switching into a process.
 //! - [`switch_to_scheduler`] right before a process yields back.
 //!
 //! Fibers are bound to slots, not individual processes, and are never
@@ -29,7 +29,8 @@ use std::ffi::c_void;
 use std::ptr;
 
 /// Opaque TSan fiber handle. Null when sanitization is off (the handle is
-/// never dereferenced in that case — every operation below is a no-op).
+/// never dereferenced in that case, because every operation below is a
+/// no-op).
 #[derive(Clone, Copy)]
 pub(crate) struct Fiber(#[allow(dead_code)] *mut c_void);
 
@@ -57,7 +58,7 @@ pub(crate) fn capture_scheduler_fiber() {
 
 /// The TSan fiber bound to process-table slot `index`, created on first
 /// use and reused across the slot's successive (strictly sequential)
-/// occupants. The single fiber-creation site; see the module docs for why
+/// occupants. The single fiber-creation site. See the module docs for why
 /// fibers are slot-bound rather than per-process.
 pub(crate) fn slot_fiber(index: usize) -> Fiber {
     imp::slot_fiber(index)

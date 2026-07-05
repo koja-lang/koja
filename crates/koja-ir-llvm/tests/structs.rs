@@ -6,16 +6,16 @@
 //! - **Pre-emission types**: every `IRStructDecl` becomes a named LLVM
 //!   `%Pkg.Name = type { ... }` with the field list translated by
 //!   [`crate::types::ir_basic_type`]. Mutually-referential types
-//!   resolve through the two-phase `declare → set_body` loop in
+//!   resolve through the two-phase `declare -> set_body` loop in
 //!   [`crate::layout::structs`].
 //! - **`StructInit` lowering**: a `Type{...}` literal lowers to
-//!   `alloca → store-per-field via getelementptr → load`. The alloca
+//!   `alloca -> store-per-field via getelementptr -> load`. The alloca
 //!   lives in the function's entry block (per
 //!   [`EmitContext::build_entry_alloca`]) so the canonicalized field-init
 //!   order in the IR layer flows straight into linear `store`
 //!   sequences in the bitcode.
 //! - **`FieldGet` lowering**: a `recv.field` projection lowers to
-//!   alloca → store-receiver → `getelementptr inbounds → load`,
+//!   alloca -> store-receiver -> `getelementptr inbounds -> load`,
 //!   mirroring v1 codegen's `emit_field_load` shape.
 //!
 //! All assertions are substring-only (LLVM may shuffle attribute
@@ -84,8 +84,8 @@ fn field_get_lowers_to_gep_then_load() {
     let ir_text =
         emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir should succeed");
 
-    // FieldGet always projects through alloca → store-receiver →
-    // GEP → load (mirroring v1 codegen's `emit_field_load`).
+    // FieldGet always projects through alloca -> store-receiver ->
+    // GEP -> load (mirroring v1 codegen's `emit_field_load`).
     assert_contains(&ir_text, "getelementptr inbounds %TestApp.Point");
     assert_contains(&ir_text, "load i64");
 }
@@ -137,7 +137,7 @@ fn nested_struct_emits_inner_type_inside_outer_field_layout() {
     assert_contains(&ir_text, "%TestApp.Outer = type { %TestApp.Inner, i1 }");
     // Cross-struct field reference: Outer's first slot is the
     // *Inner struct value*, not a flat i64. Pinning the named-type
-    // body confirms the two-phase pre-emit (`declare → set_body`)
+    // body confirms the two-phase pre-emit (`declare -> set_body`)
     // resolves the inner type by symbol when sizing Outer's field
     // list.
     assert_contains(&ir_text, "store %TestApp.Inner");

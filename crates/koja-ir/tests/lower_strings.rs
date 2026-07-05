@@ -1,5 +1,5 @@
 //! Lowering coverage for string literals: `ExprKind::String { parts:
-//! [Literal] }` → `IRInstruction::Const { ConstValue::String }` with
+//! [Literal] }` -> `IRInstruction::Const { ConstValue::String }` with
 //! return type `IRType::String`. Interpolation surfaces as a
 //! feature-gap diagnostic.
 //!
