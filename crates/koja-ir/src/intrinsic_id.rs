@@ -185,11 +185,12 @@ pub enum RefMethod {
 
 /// `@intrinsic`-flagged statics on the `Process` protocol: `Monitor`
 /// registers the calling process as a watcher of a `Pid`, `Demonitor`
-/// retracts one.
+/// retracts one, `Parent` reports the calling process's spawner.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessMethod {
     Demonitor,
     Monitor,
+    Parent,
 }
 
 /// `@intrinsic`-flagged method on `ReplyTo<R>`. Single-variant today
@@ -760,6 +761,7 @@ impl ProcessMethod {
         Some(match s {
             "demonitor" => Self::Demonitor,
             "monitor" => Self::Monitor,
+            "parent" => Self::Parent,
             _ => return None,
         })
     }
@@ -768,6 +770,7 @@ impl ProcessMethod {
         match self {
             Self::Demonitor => "demonitor",
             Self::Monitor => "monitor",
+            Self::Parent => "parent",
         }
     }
 }
@@ -1087,6 +1090,7 @@ mod tests {
         for (method, variant) in [
             ("demonitor", ProcessMethod::Demonitor),
             ("monitor", ProcessMethod::Monitor),
+            ("parent", ProcessMethod::Parent),
         ] {
             assert_round_trip(
                 &["Process", method],

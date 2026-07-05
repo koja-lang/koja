@@ -74,6 +74,9 @@ pub struct ProcessControlBlock<X, M> {
     /// until it has persisted the post-yield execution state. Gates pickup so no
     /// other worker resumes a stale frame in the publish-before-save window.
     on_cpu: bool,
+    /// The spawning process, `None` only for the entry process (PID 1).
+    /// Read by the kill-cascade in [`ProcessTable::notify_exit`].
+    parent: Option<Pid>,
     /// Scheduling priority, selecting which ready queue an enqueue lands in.
     priority: Priority,
     /// This quantum's reduction budget, granted (= `priority.budget()`) on
@@ -94,7 +97,7 @@ pub struct ProcessControlBlock<X, M> {
 
 impl<X, M> ProcessControlBlock<X, M> {
     /// A freshly spawned process in the `Created` state with an empty mailbox.
-    fn new(execution: X) -> Self {
+    fn new(execution: X, parent: Option<Pid>) -> Self {
         Self {
             execution,
             deadline: None,
@@ -102,6 +105,7 @@ impl<X, M> ProcessControlBlock<X, M> {
             awaiting_reply: None,
             crash_info: None,
             on_cpu: false,
+            parent,
             priority: Priority::default(),
             reductions_left: Priority::default().budget(),
             exit_reason: ExitReason::default(),
@@ -366,6 +370,9 @@ pub struct ProcessTable<X, M> {
     /// `ExitSignal` deliveries staged by [`Self::notify_exit`] /
     /// [`Self::monitor`], drained by [`Self::take_exit_notices`].
     pending_exit_notices: Vec<ExitNotice>,
+    /// Kill-cascade targets staged by [`Self::notify_exit`] (a dead
+    /// process's live children), drained by [`Self::take_pending_kills`].
+    pending_kills: Vec<Pid>,
     /// Newly-runnable PIDs staged for an external queue owner, drained by
     /// [`Self::drain_pending_ready`]. Only populated while [`Self::external_ready`].
     pending_ready: Vec<Pid>,
@@ -400,6 +407,7 @@ impl<X, M: Message> ProcessTable<X, M> {
             monitors: Vec::new(),
             next_monitor_token: 1,
             pending_exit_notices: Vec::new(),
+            pending_kills: Vec::new(),
             pending_ready: Vec::new(),
             ready: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             ready_ages: [0; LEVELS],
@@ -469,7 +477,8 @@ impl<X, M: Message> ProcessTable<X, M> {
 
     /// Registers a new process (with its executor `execution` state) in a free
     /// or freshly grown slot, queues it as runnable, and returns its packed PID.
-    pub fn spawn(&mut self, execution: X) -> Pid {
+    /// `parent` is the spawning process, `None` only for the entry process.
+    pub fn spawn(&mut self, execution: X, parent: Option<Pid>) -> Pid {
         let (index, generation) = match self.free.pop() {
             Some(index) => (index, self.slots[index as usize].generation),
             None => {
@@ -483,7 +492,7 @@ impl<X, M: Message> ProcessTable<X, M> {
         };
 
         let pid = encode(index, generation);
-        self.slots[index as usize].process = Some(ProcessControlBlock::new(execution));
+        self.slots[index as usize].process = Some(ProcessControlBlock::new(execution, parent));
         self.alive += 1;
         self.enqueue_ready(pid);
         if self.main_pid == 0 {
@@ -691,6 +700,12 @@ impl<X, M: Message> ProcessTable<X, M> {
             .and_then(|process| process.crash_info.as_ref())
     }
 
+    /// The process that spawned `pid`. `None` for the entry process
+    /// and for stale PIDs.
+    pub fn parent(&self, pid: Pid) -> Option<Pid> {
+        self.get(pid).and_then(|process| process.parent)
+    }
+
     /// Records that `pid` is now waiting on the reply for call `token`. Set
     /// when the token is minted (before the request is sent) so a reply can
     /// never race ahead of the caller registering its interest.
@@ -753,10 +768,17 @@ impl<X, M: Message> ProcessTable<X, M> {
         std::mem::take(&mut self.pending_exit_notices)
     }
 
+    /// Drains the staged kill-cascade targets. The driver kills each
+    /// (staging any grandchildren in turn) and loops until empty.
+    pub fn take_pending_kills(&mut self) -> Vec<Pid> {
+        std::mem::take(&mut self.pending_kills)
+    }
+
     /// Fired from [`transition`](Self::transition) on the `-> Dead`
-    /// edge: stages one [`ExitNotice`] per monitor watching `pid` and
-    /// evicts the dead process's entries in both directions (as target
-    /// and as watcher).
+    /// edge: stages one [`ExitNotice`] per monitor watching `pid`,
+    /// evicts the dead process's monitor entries in both directions
+    /// (as target and as watcher), and stages the kill-cascade for its
+    /// live children.
     fn notify_exit(&mut self, pid: Pid, reason: ExitReason) {
         let mut watchers = Vec::new();
         self.monitors.retain(|entry| {
@@ -768,6 +790,20 @@ impl<X, M: Message> ProcessTable<X, M> {
         for watcher in watchers {
             self.stage_exit_notice(watcher, pid, reason);
         }
+        self.stage_child_kills(pid);
+    }
+
+    /// Stages every live child of `pid` for the kill-cascade. A flat
+    /// slot scan (like the `monitors` list) rather than a reverse
+    /// index: process counts are small and the scan needs no eviction
+    /// bookkeeping.
+    fn stage_child_kills(&mut self, pid: Pid) {
+        let children = self.slots.iter().enumerate().filter_map(|(index, slot)| {
+            let process = slot.process.as_ref()?;
+            (process.parent == Some(pid) && process.state != ProcessState::Dead)
+                .then(|| encode(index as u32, slot.generation))
+        });
+        self.pending_kills.extend(children);
     }
 
     /// Stages one `ExitSignal` delivery, snapshotting the crash capture
@@ -1087,7 +1123,11 @@ mod tests {
     type TestTable = ProcessTable<(), Envelope>;
 
     fn fake_spawn(table: &mut TestTable) -> Pid {
-        table.spawn(())
+        table.spawn((), None)
+    }
+
+    fn fake_spawn_child(table: &mut TestTable, parent: Pid) -> Pid {
+        table.spawn((), Some(parent))
     }
 
     /// Spawns a process, promotes it to `priority`, and parks it off the ready
@@ -1095,7 +1135,7 @@ mod tests {
     /// level). Requires the ready queues to be empty at call time so the fresh
     /// PID is the one claimed.
     fn spawn_parked(table: &mut TestTable, priority: Priority) -> Pid {
-        let pid = table.spawn(());
+        let pid = table.spawn((), None);
         assert_eq!(table.claim_next(), Some(pid), "freshly spawned pid claimed");
         table.set_priority(pid, priority);
         assert!(table.try_park(pid, WaitTarget::Receive, None));
@@ -1682,6 +1722,86 @@ mod tests {
         let notices = table.take_exit_notices();
         assert_eq!(notices.len(), 1);
         assert_eq!(notices[0].reason, ExitReason::Killed);
+    }
+
+    #[test]
+    fn parent_recorded_at_spawn() {
+        let mut table = TestTable::new();
+        let root = fake_spawn(&mut table);
+        let child = fake_spawn_child(&mut table, root);
+        assert_eq!(table.parent(root), None, "entry process has no parent");
+        assert_eq!(table.parent(child), Some(root));
+        assert_eq!(table.parent(child + 1), None, "stale pid has no parent");
+    }
+
+    /// Drains staged kills as a driver would: kill each, which stages
+    /// the next generation, until the cascade settles.
+    fn run_kill_cascade(table: &mut TestTable) -> Vec<Pid> {
+        let mut killed = Vec::new();
+        loop {
+            let staged = table.take_pending_kills();
+            if staged.is_empty() {
+                return killed;
+            }
+            for pid in staged {
+                table.kill(pid);
+                killed.push(pid);
+            }
+        }
+    }
+
+    #[test]
+    fn death_cascades_to_descendants_transitively() {
+        let mut table = TestTable::new();
+        let root = fake_spawn(&mut table);
+        let child = fake_spawn_child(&mut table, root);
+        let grandchild = fake_spawn_child(&mut table, child);
+        let bystander = fake_spawn(&mut table);
+
+        run_to_death(&mut table, root, ExitReason::Normal);
+        let killed = run_kill_cascade(&mut table);
+
+        assert_eq!(killed, vec![child, grandchild], "subtree died in order");
+        assert!(!table.is_alive(child));
+        assert!(!table.is_alive(grandchild));
+        assert!(table.is_alive(bystander), "unrelated process survives");
+        assert_eq!(table.counters().violations, 0);
+    }
+
+    #[test]
+    fn cascade_kills_fire_monitors_with_killed_reason() {
+        let mut table = TestTable::new();
+        let watcher = fake_spawn(&mut table);
+        let root = fake_spawn(&mut table);
+        let child = fake_spawn_child(&mut table, root);
+        table.monitor(watcher, child);
+
+        run_to_death(&mut table, root, ExitReason::Killed);
+        run_kill_cascade(&mut table);
+
+        let notices = table.take_exit_notices();
+        assert_eq!(notices.len(), 1, "the child's monitor fired");
+        assert_eq!(notices[0].target, child);
+        assert_eq!(notices[0].reason, ExitReason::Killed);
+    }
+
+    #[test]
+    fn dead_children_are_not_staged() {
+        let mut table = TestTable::new();
+        let root = fake_spawn(&mut table);
+        let child = fake_spawn_child(&mut table, root);
+        assert!(table.kill(child).is_some());
+        assert_eq!(
+            table.take_pending_kills(),
+            Vec::<Pid>::new(),
+            "a childless kill stages nothing"
+        );
+
+        run_to_death(&mut table, root, ExitReason::Normal);
+        assert!(
+            table.take_pending_kills().is_empty(),
+            "already-dead child is not staged again"
+        );
     }
 
     #[test]

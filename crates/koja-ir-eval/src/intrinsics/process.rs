@@ -58,14 +58,16 @@ pub(super) async fn reply_to_dispatch<R: CallResolver>(
     }
 }
 
-pub(super) fn process_dispatch(
+pub(super) fn process_dispatch<R: CallResolver>(
     method: ProcessMethod,
     function: &IRFunction,
     args: &[Value],
+    resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match method {
         ProcessMethod::Demonitor => demonitor(function, args),
         ProcessMethod::Monitor => monitor(function, args),
+        ProcessMethod::Parent => parent(function, resolver),
     }
 }
 
@@ -237,6 +239,17 @@ fn demonitor(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErro
     Ok(Value::Unit)
 }
 
+/// `Process.parent() -> Option<Pid>`: the running process's spawner,
+/// `None` for the entry process.
+fn parent<R: CallResolver>(function: &IRFunction, resolver: &R) -> Result<Value, RuntimeError> {
+    let option_symbol = helpers::enum_return_symbol(function, "Process.parent")?;
+    let pid = scheduler::parent().map(|pid| Value::Struct {
+        symbol: option_some_struct_symbol(&option_symbol, resolver),
+        fields: vec![Value::Int(pid)],
+    });
+    Ok(helpers::option_value(option_symbol, pid))
+}
+
 // ----- ReplyTo methods ----------------------------------------------------
 
 /// `ReplyTo.send(self, reply) -> ReplyTo.Delivery`: route `reply` to the
@@ -289,7 +302,7 @@ pub(crate) fn build_business_payload<R: CallResolver>(
         );
     };
     let reply_to = message.reply.map(|info| Value::Struct {
-        symbol: reply_to_symbol(option_symbol, resolver),
+        symbol: option_some_struct_symbol(option_symbol, resolver),
         fields: vec![Value::Int(info.caller_pid), Value::Int(info.token)],
     });
     Value::Struct {
@@ -318,9 +331,10 @@ fn reply_field_type<'a>(
         })
 }
 
-/// Recover the `ReplyTo<R>` struct symbol from an `Option<ReplyTo<R>>`
-/// enum decl's `Some` payload.
-fn reply_to_symbol<R: CallResolver>(option_symbol: &IRSymbol, resolver: &R) -> IRSymbol {
+/// Recover the payload struct symbol from an `Option<T>` enum decl's
+/// `Some` variant (`T` = `ReplyTo<R>` for call replies, `Pid` for
+/// `Process.parent`).
+fn option_some_struct_symbol<R: CallResolver>(option_symbol: &IRSymbol, resolver: &R) -> IRSymbol {
     let option_decl = resolver.enum_decl(option_symbol.mangled()).unwrap_or_else(|| {
         panic!("interpreter: `Option` enum `{option_symbol}` missing from IR (seal invariant violation)")
     });
@@ -335,7 +349,7 @@ fn reply_to_symbol<R: CallResolver>(option_symbol: &IRSymbol, resolver: &R) -> I
         IRVariantPayload::Tuple(types) => match types.as_slice() {
             [IRType::Struct(symbol)] => symbol.clone(),
             other => panic!(
-                "interpreter: `Option.Some` payload `{other:?}` is not a single `ReplyTo` struct \
+                "interpreter: `Option.Some` payload `{other:?}` is not a single struct \
                  (seal invariant violation)"
             ),
         },

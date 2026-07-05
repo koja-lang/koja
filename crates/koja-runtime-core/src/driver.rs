@@ -323,7 +323,7 @@ mod tests {
     #[test]
     fn sigterm_lets_a_responsive_main_exit_before_the_deadline() {
         let core = Rc::new(RefCell::new(MockTable::new()));
-        let main = core.borrow_mut().spawn(());
+        let main = core.borrow_mut().spawn((), None);
         assert_eq!(main, core.borrow().main_pid());
 
         let resumes = Rc::new(Cell::new(0));
@@ -360,7 +360,7 @@ mod tests {
     #[test]
     fn sigterm_hard_kills_an_unresponsive_main_at_the_deadline() {
         let core = Rc::new(RefCell::new(MockTable::new()));
-        let main = core.borrow_mut().spawn(());
+        let main = core.borrow_mut().spawn((), None);
 
         let resumes = Rc::new(Cell::new(0));
         let start = Instant::now();

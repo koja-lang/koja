@@ -52,6 +52,7 @@ pub(crate) const RT_DEMONITOR_SYMBOL: &str = "koja_rt_demonitor";
 pub(crate) const RT_KILL_SYMBOL: &str = "koja_rt_kill";
 pub(crate) const RT_MONITOR_SYMBOL: &str = "koja_rt_monitor";
 pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "koja_rt_main_done";
+pub(crate) const RT_PARENT_SYMBOL: &str = "koja_rt_parent";
 pub(crate) const RT_PROCESS_ALIVE_SYMBOL: &str = "koja_rt_is_process_alive";
 pub(crate) const RT_PROCESS_EXIT_SYMBOL: &str = "koja_rt_process_exit";
 pub(crate) const RT_RECEIVE_SYMBOL: &str = "koja_rt_receive";
@@ -619,6 +620,16 @@ pub(crate) fn declare_rt_demonitor_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Func
     let i64_ty = ctx.context.i64_type();
     let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
     declare_extern(ctx, RT_DEMONITOR_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_parent`. Signature:
+/// `i64 koja_rt_parent()`. Returns the calling process's parent PID,
+/// or 0 for the entry process (mapped to `Option.None` by the
+/// emitter).
+pub(crate) fn declare_rt_parent_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[], false);
+    declare_extern(ctx, RT_PARENT_SYMBOL, signature)
 }
 
 /// Declare (or look up) `koja_rt_is_process_alive`. Signature:

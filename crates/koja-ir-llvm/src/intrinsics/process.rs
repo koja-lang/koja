@@ -26,8 +26,8 @@ use crate::intrinsics::element::release_in_slot;
 use crate::runtime::{
     declare_rt_call_receive_extern, declare_rt_call_token_extern, declare_rt_demonitor_extern,
     declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_monitor_extern,
-    declare_rt_reply_extern, declare_rt_self_extern, declare_rt_send_after_extern,
-    declare_rt_send_extern, declare_rt_send_lifecycle_extern,
+    declare_rt_parent_extern, declare_rt_reply_extern, declare_rt_self_extern,
+    declare_rt_send_after_extern, declare_rt_send_extern, declare_rt_send_lifecycle_extern,
 };
 use crate::types::{ir_basic_type, value_basic_type};
 
@@ -68,6 +68,7 @@ pub(super) fn emit_process<'ctx>(
     match method {
         ProcessMethod::Demonitor => emit_demonitor(ctx, function, llvm_function),
         ProcessMethod::Monitor => emit_monitor(ctx, function, llvm_function),
+        ProcessMethod::Parent => emit_parent(ctx, function, llvm_function),
     }
 }
 
@@ -526,6 +527,102 @@ fn emit_demonitor<'ctx>(
         .build_call(demonitor_fn, &[token.into()], "")
         .or_ice()?;
     ctx.builder.build_return(None).or_ice().map(|_| ())
+}
+
+/// `Process.parent() -> Option<Pid>`: fetch the calling process's
+/// parent PID via `koja_rt_parent` and wrap it as `Option.Some(Pid)`,
+/// or `Option.None` when the runtime reports 0 (the entry process).
+/// Variant tags resolve by name so `Option`'s declaration order isn't
+/// baked into codegen.
+fn emit_parent<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry_bb);
+
+    let IRType::Enum(option_symbol) = &function.return_type else {
+        return Err(LlvmError::Codegen(format!(
+            "LLVM emit: `Process.parent` returns `{:?}`, expected the \
+             `Option<Pid>` enum (IR seal invariant violation)",
+            function.return_type,
+        )));
+    };
+    let some_tag = ctx.layouts.enum_variant_tag(option_symbol, "Some");
+    let none_tag = ctx.layouts.enum_variant_tag(option_symbol, "None");
+    let pid_symbol = match ctx.layouts.enum_variant_payload(option_symbol, some_tag) {
+        IRVariantPayload::Tuple(types) => match types.as_slice() {
+            [IRType::Struct(symbol)] => symbol.clone(),
+            other => {
+                return Err(LlvmError::Codegen(format!(
+                    "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
+                     a single `Pid` struct (IR seal invariant violation)",
+                )));
+            }
+        },
+        other => {
+            return Err(LlvmError::Codegen(format!(
+                "LLVM emit: `Process.parent` Some payload is `{other:?}`, expected \
+                 a tuple (IR seal invariant violation)",
+            )));
+        }
+    };
+
+    let parent_fn = declare_rt_parent_extern(ctx);
+    let parent_pid = ctx
+        .call_basic(parent_fn, &[], "parent_pid")?
+        .into_int_value();
+    let has_parent = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            parent_pid,
+            ctx.context.i64_type().const_zero(),
+            "has_parent",
+        )
+        .or_ice()?;
+
+    let some_bb = ctx.context.append_basic_block(llvm_function, "parent_some");
+    let none_bb = ctx.context.append_basic_block(llvm_function, "parent_none");
+    let merge_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "parent_merge");
+    ctx.builder
+        .build_conditional_branch(has_parent, some_bb, none_bb)
+        .or_ice()?;
+
+    // `Pid` lays out as `{ i64 id }`.
+    ctx.builder.position_at_end(some_bb);
+    let pid_llvm = ctx.layouts.struct_type(pid_symbol.mangled());
+    let pid_value = ctx
+        .builder
+        .build_insert_value(pid_llvm.get_undef(), parent_pid, 0, "parent_pid_struct")
+        .or_ice()?
+        .into_struct_value();
+    let some_value = build_enum_value(ctx, option_symbol, some_tag, &[pid_value.into()])?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
+    let some_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("emit_parent lost the some insertion block before the merge phi");
+
+    ctx.builder.position_at_end(none_bb);
+    let none_value = build_enum_value(ctx, option_symbol, none_tag, &[])?;
+    ctx.builder.build_unconditional_branch(merge_bb).or_ice()?;
+    let none_block = ctx
+        .builder
+        .get_insert_block()
+        .expect("emit_parent lost the none insertion block before the merge phi");
+
+    ctx.builder.position_at_end(merge_bb);
+    let outer = ctx.enum_outer_type(option_symbol.mangled());
+    let phi = ctx.builder.build_phi(outer, "parent_option").or_ice()?;
+    phi.add_incoming(&[(&some_value, some_block), (&none_value, none_block)]);
+    ctx.builder
+        .build_return(Some(&phi.as_basic_value()))
+        .or_ice()
+        .map(|_| ())
 }
 
 // ----- ReplyTo method emitters --------------------------------------------

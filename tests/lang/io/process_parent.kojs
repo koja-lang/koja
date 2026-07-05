@@ -1,0 +1,139 @@
+alias Process.ExitReason
+alias Process.ExitSignal
+alias Process.Step
+alias Process.StopReason
+
+# Universal parenting + kill-cascade: a process's children die with it,
+# whether it was killed or finished normally. Workers refuse to run
+# unparented (exiting `Shutdown`), so the `exit killed` lines also
+# prove the spawner was recorded as parent.
+
+enum WorkerMsg
+  Ping
+end
+
+struct Worker
+end
+
+impl Process<Worker, WorkerMsg, Int> for Worker
+  fn start(config: Worker) -> Result<Self, StopReason>
+    match Process.parent()
+      Option.Some(parent_pid) -> Result.Ok(config)
+      Option.None -> Result.Err(StopReason.Shutdown)
+    end
+  end
+
+  fn handle(self, msg: WorkerMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+end
+
+enum ParentMsg
+  GetWorker
+  Stop
+end
+
+struct ParentConfig
+  label: String
+end
+
+struct Parent
+  worker: Pid
+end
+
+impl Process<ParentConfig, ParentMsg, Pid> for Parent
+  fn start(config: ParentConfig) -> Result<Self, StopReason>
+    "#{config.label}: started".print()
+    worker = spawn Worker.start(Worker{})
+    Result.Ok(Parent{worker: worker.pid()})
+  end
+
+  fn handle(self, msg: ParentMsg, from: Option<ReplyTo<Pid>>) -> Step<Self>
+    match msg
+      ParentMsg.GetWorker ->
+        ReplyTo.reply(from, self.worker)
+
+        Step.Continue(self)
+
+      ParentMsg.Stop -> Step.Done(StopReason.Normal)
+    end
+  end
+end
+
+enum Ready
+  Check
+end
+
+struct WatcherConfig
+  label: String
+  target: Pid
+end
+
+struct Watcher
+  label: String
+end
+
+impl Process<WatcherConfig, ExitSignal | Ready, Int> for Watcher
+  fn start(config: WatcherConfig) -> Result<Self, StopReason>
+    Process.monitor(config.target)
+    Result.Ok(Watcher{label: config.label})
+  end
+
+  fn handle(self, msg: ExitSignal | Ready, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match msg
+      signal: ExitSignal ->
+        match signal.reason
+          ExitReason.Normal -> "#{self.label}: exit normal".print()
+          ExitReason.Shutdown -> "#{self.label}: exit shutdown".print()
+          ExitReason.Killed -> "#{self.label}: exit killed".print()
+          ExitReason.Crashed(info) -> "#{self.label}: exit crashed".print()
+        end
+
+        Step.Done(StopReason.Normal)
+
+      check: Ready ->
+        ReplyTo.reply(from, 0)
+
+        Step.Continue(self)
+    end
+  end
+end
+
+fn observe_cascade(label: String, parent: Ref<ParentMsg, Pid>, stop_normally: Bool)
+  match parent.call(ParentMsg.GetWorker, 5000)
+    Result.Ok(worker_pid) ->
+      watcher = spawn Watcher.start(WatcherConfig{label: label, target: worker_pid})
+      # The Check round-trip orders the watcher's monitor registration
+      # before the parent's death.
+      watcher.call(Ready.Check, 5000)
+
+      if stop_normally
+        parent.cast(ParentMsg.Stop)
+      else
+        parent.kill()
+      end
+
+      loop
+        if watcher.alive?()
+          ()
+        else
+          break
+        end
+      end
+
+    Result.Err(error) -> "#{label}: call failed".print()
+  end
+end
+
+match Process.parent()
+  Option.Some(pid) -> "main: parented".print()
+  Option.None -> "main: no parent".print()
+end
+
+parent_a = spawn Parent.start(ParentConfig{label: "parent-a"})
+observe_cascade("after kill", parent_a, false)
+
+parent_b = spawn Parent.start(ParentConfig{label: "parent-b"})
+observe_cascade("after stop", parent_b, true)
+
+"main: done".print()

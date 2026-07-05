@@ -17,6 +17,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Watch another process with `Process.monitor(pid)`. When it exits, you receive a `Process.ExitSignal` message telling you which process died and why.
 - Cancel a monitor with `Process.demonitor(ref)`.
 - Calling `Process.monitor` from a process whose message type can't receive `Process.ExitSignal` is a compile error.
+- Every process now dies with the process that spawned it. When a parent exits for any reason, its children (and their children, transitively) are killed, so orphaned processes can no longer accumulate.
+- `Process.parent()` returns the pid of the process that spawned the caller, or `Option.None` in the entry process.
 
 ### Changed
 

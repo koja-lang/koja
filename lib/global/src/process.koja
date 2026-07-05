@@ -300,6 +300,15 @@ extend Process
   """
   @intrinsic
   fn demonitor(reference: Process.MonitorRef)
+
+  @doc """
+  The process that spawned the calling process, or `Option.None` for
+  the entry process. Every process dies with its parent: when a parent
+  exits for any reason, the runtime force-kills its children,
+  transitively tearing down the whole subtree.
+  """
+  @intrinsic
+  fn parent -> Option<Pid>
 end
 
 @doc """

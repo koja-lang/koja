@@ -273,6 +273,13 @@ pub(crate) fn is_alive(pid: Pid) -> bool {
     with_table(|table| table.is_alive(pid))
 }
 
+/// The currently-resuming process's parent (`Process.parent`), `None`
+/// for the entry process.
+pub(crate) fn parent() -> Option<Pid> {
+    let pid = current_pid();
+    with_table(|table| table.parent(pid))
+}
+
 /// Sets the currently-resuming process's scheduling priority from a
 /// `Priority` variant index (0=Low, 1=Normal, 2=High). The cooperative
 /// analog of native's `koja_rt_set_priority`.
@@ -345,7 +352,7 @@ pub(crate) fn spawn_child(wrapper: IRSymbol, config: Value) -> Pid {
     if with_table(|table| table.is_draining()) {
         return 0;
     }
-    let pid = with_table(|table| table.spawn(()));
+    let pid = with_table(|table| table.spawn((), Some(current_pid())));
     PENDING_SPAWNS.with(|queue| {
         queue.borrow_mut().push(PendingSpawn {
             config,
@@ -455,9 +462,28 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
         }
     }
 
-    /// Synthesizes and delivers every `ExitSignal` staged during the
-    /// resume that just finished, waking parked watchers. The
-    /// single-threaded analog of native's per-death-site drains.
+    /// Settles the death edges from the resume that just finished:
+    /// force-kills the staged kill-cascade targets until none remain
+    /// (each kill can stage grandchildren), dropping their futures and
+    /// reclaimed resources, then delivers the staged `ExitSignal`s.
+    /// The single-threaded analog of native's per-death-site settles.
+    fn settle_exits(&self) {
+        loop {
+            let staged = self.core.borrow_mut().take_pending_kills();
+            if staged.is_empty() {
+                break;
+            }
+            for pid in staged {
+                let reclaim = self.core.borrow_mut().kill(pid);
+                drop(reclaim);
+                self.futures.borrow_mut().remove(&pid);
+            }
+        }
+        self.deliver_exit_signals();
+    }
+
+    /// Synthesizes and delivers every staged `ExitSignal`, waking
+    /// parked watchers.
     fn deliver_exit_signals(&self) {
         let notices = self.core.borrow_mut().take_exit_notices();
         for notice in notices {
@@ -512,7 +538,7 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
             }
         }
         self.install_pending_spawns();
-        self.deliver_exit_signals();
+        self.settle_exits();
     }
 }
 
