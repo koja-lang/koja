@@ -65,15 +65,18 @@
 //! composite's glue body recurses into its constituents' glue. Leaves
 //! and `Indirect` boxes themselves are skipped — they carry no glue.
 
+mod exit_signal;
 mod io_ready;
 mod rewrite;
 mod synthesis;
 
 use std::collections::BTreeSet;
 
+use koja_ast::identifier::LocalId;
+
 use crate::enum_decl::{IREnumDecl, IREnumVariant, IRVariantPayload};
 use crate::function::{
-    FunctionKind, IRBasicBlock, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
+    FunctionKind, IRBasicBlock, IRBlockId, IRFunction, IRFunctionParam, IRInstruction, IRSymbol,
 };
 use crate::intrinsic_id::{IRIntrinsicId, RefMethod, ReplyToMethod};
 use crate::local::IRLocalId;
@@ -92,6 +95,7 @@ pub(crate) fn elaborate(packages: &mut [IRPackage]) {
     register_all(packages, &needed, &deep_needed);
     rewrite_all(packages, &needed, &deep_needed);
     io_ready::deliver_io_ready(packages);
+    exit_signal::deliver_exit_signal(packages);
 }
 
 /// Run the elaborate sub-pass for a script: same three steps as
@@ -105,6 +109,7 @@ pub(crate) fn elaborate_script(packages: &mut [IRPackage], body: &mut [IRBasicBl
     rewrite_all(packages, &needed, &deep_needed);
     rewrite::rewrite_blocks_standalone(body, &needed, &deep_needed);
     io_ready::deliver_io_ready(packages);
+    exit_signal::deliver_exit_signal(packages);
 }
 
 fn register_all(
@@ -407,6 +412,62 @@ fn constituent_types(ty: &IRType, packages: &[IRPackage]) -> Vec<IRType> {
             .unwrap_or_default(),
         _ => Vec::new(),
     }
+}
+
+/// First unused [`IRBlockId`], one past the function's max block id.
+/// Shared by the delivery sub-passes that splice synthesized blocks
+/// into existing functions.
+fn next_block_id(function: &IRFunction) -> IRBlockId {
+    let max = function.blocks.iter().map(|block| block.id.0).max();
+    IRBlockId(max.map_or(0, |id| id + 1))
+}
+
+/// First unused [`crate::types::ValueId`], one past every parameter,
+/// block parameter, and instruction definition. Mirrors `tail_calls`.
+fn next_value_id(function: &IRFunction) -> u32 {
+    let mut max = 0;
+    for param in &function.params {
+        max = max.max(param.id.0);
+    }
+    for block in &function.blocks {
+        for block_param in &block.params {
+            max = max.max(block_param.dest.0);
+        }
+        for instruction in &block.instructions {
+            if let Some(dest) = instruction.dest() {
+                max = max.max(dest.0);
+            }
+        }
+    }
+    max + 1
+}
+
+/// First unused [`IRLocalId`], one past every slot the function names.
+/// Every local (params, body slots, receive-arm payloads, binary-match
+/// binds) carries a `LocalDecl` in entry, so the scan below is exhaustive
+/// even though it doesn't descend into `BinaryMatch` segments.
+fn next_local_id(function: &IRFunction) -> IRLocalId {
+    let mut max = 0;
+    for param in &function.params {
+        max = max.max(param.local_id.as_u32());
+    }
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            match instruction {
+                IRInstruction::DropLocal { local, .. }
+                | IRInstruction::LocalDecl { local, .. }
+                | IRInstruction::LocalRead { local, .. }
+                | IRInstruction::LocalWrite { local, .. } => max = max.max(local.as_u32()),
+                IRInstruction::Receive { arms, .. } => {
+                    for arm in arms {
+                        max = max.max(arm.payload_local.as_u32());
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    IRLocalId::from_local_id(LocalId::new(max + 1))
 }
 
 fn find_struct<'a>(packages: &'a [IRPackage], symbol: &IRSymbol) -> Option<&'a IRStructDecl> {

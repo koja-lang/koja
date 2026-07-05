@@ -14,19 +14,17 @@
 //! business body already consumes, then branches there. Every step reuses
 //! an existing `IRInstruction`, so no backend gains a new emission shape.
 
-use koja_ast::identifier::LocalId;
-
 use crate::enum_decl::{EnumPayloadInit, IRVariantTag};
 use crate::function::{
-    BranchTarget, IRBasicBlock, IRBlockId, IRFunction, IRInstruction, IRSymbol, IRTerminator,
-    ReceiveArm, ReceiveTag,
+    BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRSymbol, IRTerminator, ReceiveArm,
+    ReceiveTag,
 };
 use crate::local::IRLocalId;
 use crate::package::IRPackage;
 use crate::struct_decl::StructFieldInit;
 use crate::types::{IRType, ValueId};
 
-use super::{find_enum, find_struct};
+use super::{find_enum, find_struct, next_block_id, next_local_id, next_value_id};
 
 /// Mangled symbol of the kernel `IO.Ready` enum (`global/src/io.koja`).
 /// Non-generic, so its symbol is the bare package-qualified name.
@@ -236,58 +234,4 @@ fn apply(packages: &mut [IRPackage], plan: ArmPlan) {
         payload_type: plan.io_ready_type,
         tag: ReceiveTag::IOReady,
     });
-}
-
-/// First unused [`IRBlockId`] — one past the function's max block id.
-fn next_block_id(function: &IRFunction) -> IRBlockId {
-    let max = function.blocks.iter().map(|block| block.id.0).max();
-    IRBlockId(max.map_or(0, |id| id + 1))
-}
-
-/// First unused [`ValueId`] — one past every parameter, block
-/// parameter, and instruction definition. Mirrors `tail_calls`.
-fn next_value_id(function: &IRFunction) -> u32 {
-    let mut max = 0;
-    for param in &function.params {
-        max = max.max(param.id.0);
-    }
-    for block in &function.blocks {
-        for block_param in &block.params {
-            max = max.max(block_param.dest.0);
-        }
-        for instruction in &block.instructions {
-            if let Some(dest) = instruction.dest() {
-                max = max.max(dest.0);
-            }
-        }
-    }
-    max + 1
-}
-
-/// First unused [`IRLocalId`] — one past every slot the function names.
-/// Every local (params, body slots, receive-arm payloads, binary-match
-/// binds) carries a `LocalDecl` in entry, so the scan below is exhaustive
-/// even though it doesn't descend into `BinaryMatch` segments.
-fn next_local_id(function: &IRFunction) -> IRLocalId {
-    let mut max = 0;
-    for param in &function.params {
-        max = max.max(param.local_id.as_u32());
-    }
-    for block in &function.blocks {
-        for instruction in &block.instructions {
-            match instruction {
-                IRInstruction::DropLocal { local, .. }
-                | IRInstruction::LocalDecl { local, .. }
-                | IRInstruction::LocalRead { local, .. }
-                | IRInstruction::LocalWrite { local, .. } => max = max.max(local.as_u32()),
-                IRInstruction::Receive { arms, .. } => {
-                    for arm in arms {
-                        max = max.max(arm.payload_local.as_u32());
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    IRLocalId::from_local_id(LocalId::new(max + 1))
 }

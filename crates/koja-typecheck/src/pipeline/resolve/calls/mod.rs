@@ -46,6 +46,7 @@ use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
 use super::expr::{resolve_expr, resolve_expr_with_expected};
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
+use super::process::check_monitor_call_site;
 use super::types::{display_resolution, lookup_type};
 
 /// Co-traveling call-site context shared by [`resolve_call`] /
@@ -417,7 +418,14 @@ pub(super) fn resolve_method_call(
         return MethodCallOutcome::Method(ResolvedType::unresolved());
     };
     let receiver_label = struct_entry.identifier.to_string();
-    let receiver_type_params = struct_entry.type_params.clone();
+    // A protocol's type params (`Self`, `C`, ...) belong to its
+    // contract, not to its extend-registered statics. Blanking them
+    // keeps inference from demanding args no static can constrain.
+    let receiver_type_params = if matches!(struct_entry.kind, GlobalKind::Protocol(_)) {
+        Vec::new()
+    } else {
+        struct_entry.type_params.clone()
+    };
 
     let mut method_path = struct_entry.identifier.path().to_vec();
     method_path.push(method.to_string());
@@ -456,6 +464,7 @@ pub(super) fn resolve_method_call(
     let method_label = method_entry.identifier.to_string();
     let method_identifier = method_entry.identifier.clone();
     let method_type_params = method_entry.type_params.clone();
+    check_monitor_call_site(&method_identifier, call_span, resolver, diagnostics);
 
     if receiver_type_params.is_empty() && method_type_params.is_empty() {
         resolve_args(

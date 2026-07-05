@@ -280,6 +280,28 @@ protocol Process<C, M, R>
   end
 end
 
+extend Process
+  @doc """
+  Registers the calling process as a watcher of `target`. When the
+  watched process exits for any reason, a `Process.ExitSignal` is
+  delivered to the caller's mailbox as an ordinary message, so the
+  calling process's message type `M` must include `Process.ExitSignal`.
+  Monitoring an already-dead process delivers the signal immediately.
+  Monitors are unidirectional and stackable: each call delivers its own
+  signal, and the returned `MonitorRef` cancels just that monitor.
+  """
+  @intrinsic
+  fn monitor(target: Pid) -> Process.MonitorRef
+
+  @doc """
+  Removes the monitor identified by `reference`. Later exits of the
+  watched process deliver no `ExitSignal` for it. Does nothing if the
+  monitor already fired or was already removed.
+  """
+  @intrinsic
+  fn demonitor(reference: Process.MonitorRef)
+end
+
 @doc """
 A lightweight async task that runs a function in a spawned process and
 returns its result via `Task.await`.

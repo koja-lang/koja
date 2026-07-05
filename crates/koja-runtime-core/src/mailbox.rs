@@ -81,7 +81,7 @@ impl<M: Message> Mailbox<M> {
                 None
             }
             Tag::Reply => self.reply.replace(message),
-            Tag::Business | Tag::IOReady => {
+            Tag::Business | Tag::ExitSignal | Tag::IOReady => {
                 self.business.push_back(message);
                 None
             }

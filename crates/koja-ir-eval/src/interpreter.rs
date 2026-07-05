@@ -18,7 +18,7 @@ use koja_ir::{
     IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId,
 };
-use koja_runtime_core::{CrashInfo, Driver, Readiness, Tag};
+use koja_runtime_core::{CrashInfo, Driver, ExitNotice, ExitReason, Readiness, Tag};
 
 use crate::error::RuntimeError;
 use crate::externs;
@@ -822,9 +822,16 @@ fn dispatch_received<R: CallResolver>(
             frame.locals.insert(arm.payload_local, payload);
             Some(arm.body)
         }
-        // The reactor delivers a fully-built `IOReady` enum value
-        // ([`build_io_ready_value`]). Bind it into the synthesized
-        // `IOReady` arm, whose body reshapes it into the business `Pair`.
+        // The scheduler delivers fully-built event values (the reactor's
+        // `IOReady` enum via [`build_io_ready_value`], the monitor
+        // machinery's `ExitSignal` struct via [`build_exit_signal_value`]).
+        // Bind them into the synthesized arm, whose body reshapes them
+        // into the business `Pair`.
+        Tag::ExitSignal => {
+            let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::ExitSignal)?;
+            frame.locals.insert(arm.payload_local, message.value);
+            Some(arm.body)
+        }
         Tag::IOReady => {
             let arm = arms.iter().find(|arm| arm.tag == ReceiveTag::IOReady)?;
             frame.locals.insert(arm.payload_local, message.value);
@@ -927,6 +934,87 @@ pub(crate) fn build_io_ready_value<R: CallResolver>(
             symbol: fd_symbol.clone(),
             fields: vec![Value::Int(i64::from(fd))],
         }]),
+        symbol: decl.symbol.clone(),
+        tag: variant.tag,
+    }
+}
+
+/// Mangled symbol of the stdlib `Process.ExitSignal` struct, the same
+/// constant the `koja-ir` `deliver_exit_signal` elaborate pass keys on.
+const EXIT_SIGNAL_SYMBOL: &str = "Global.Process.ExitSignal";
+
+/// Materialize the `Process.ExitSignal{ pid, reason }` value for one
+/// staged exit notice, mirroring the native wire payload. Symbols are
+/// recovered from the monomorphized decls rather than fabricated.
+pub(crate) fn build_exit_signal_value<R: CallResolver>(resolver: &R, notice: &ExitNotice) -> Value {
+    let decl = resolver.struct_decl(EXIT_SIGNAL_SYMBOL).unwrap_or_else(|| {
+        panic!(
+            "interpreter: stdlib struct `{EXIT_SIGNAL_SYMBOL}` missing from IR, \
+             yet a monitor fired"
+        )
+    });
+    let [pid_field, reason_field] = decl.fields.as_slice() else {
+        panic!("interpreter: `{EXIT_SIGNAL_SYMBOL}` is not `{{ pid, reason }}`-shaped");
+    };
+    let IRType::Struct(pid_symbol) = &pid_field.ir_type else {
+        panic!("interpreter: `ExitSignal.pid` is not a `Pid` struct");
+    };
+    let IRType::Enum(reason_symbol) = &reason_field.ir_type else {
+        panic!("interpreter: `ExitSignal.reason` is not an `ExitReason` enum");
+    };
+    let pid = Value::Struct {
+        symbol: pid_symbol.clone(),
+        fields: vec![Value::Int(notice.target)],
+    };
+    let reason = build_exit_reason_value(resolver, reason_symbol, notice);
+    Value::Struct {
+        symbol: decl.symbol.clone(),
+        fields: vec![pid, reason],
+    }
+}
+
+/// Materialize the `ExitReason` enum value for a staged notice. The
+/// variant index is the core [`ExitReason`]'s wire code (declaration
+/// order is the pinned ABI contract).
+fn build_exit_reason_value<R: CallResolver>(
+    resolver: &R,
+    reason_symbol: &IRSymbol,
+    notice: &ExitNotice,
+) -> Value {
+    let decl = resolver
+        .enum_decl(reason_symbol.mangled())
+        .unwrap_or_else(|| {
+            panic!("interpreter: enum `{reason_symbol}` missing from IR (seal invariant violation)")
+        });
+    let variant_index = notice.reason as usize;
+    let variant = decl.variants.get(variant_index).unwrap_or_else(|| {
+        panic!(
+            "interpreter: exit-reason index {variant_index} out of range for `{reason_symbol}` \
+             ({} variant(s) declared)",
+            decl.variants.len(),
+        )
+    });
+    let payload = if notice.reason == ExitReason::Crashed {
+        let IRVariantPayload::Tuple(types) = &variant.payload else {
+            panic!("interpreter: `ExitReason.Crashed` payload is not a tuple");
+        };
+        let [IRType::Struct(crash_symbol)] = types.as_slice() else {
+            panic!("interpreter: `ExitReason.Crashed` payload is not a single `CrashInfo` struct");
+        };
+        let crash_info = notice.crash_info.clone().unwrap_or_default();
+        EnumPayload::Tuple(vec![Value::Struct {
+            symbol: crash_symbol.clone(),
+            fields: vec![
+                Value::String(Rc::new(crash_info.message.into_bytes())),
+                Value::String(Rc::new(crash_info.backtrace.into_bytes())),
+            ],
+        }])
+    } else {
+        EnumPayload::Unit
+    };
+    Value::Enum {
+        name: variant.name.clone(),
+        payload,
         symbol: decl.symbol.clone(),
         tag: variant.tag,
     }

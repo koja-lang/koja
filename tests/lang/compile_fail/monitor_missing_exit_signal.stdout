@@ -1,0 +1,1 @@
+requires the calling process's message type to include `Process.ExitSignal`

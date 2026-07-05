@@ -48,7 +48,9 @@ pub(crate) const STRING_SLICE_SYMBOL: &str = "koja_string_slice";
 pub(crate) const RT_BUILD_ARGV_SYMBOL: &str = "koja_rt_build_argv";
 pub(crate) const RT_CALL_RECEIVE_SYMBOL: &str = "koja_rt_call_receive";
 pub(crate) const RT_CALL_TOKEN_SYMBOL: &str = "koja_rt_call_token";
+pub(crate) const RT_DEMONITOR_SYMBOL: &str = "koja_rt_demonitor";
 pub(crate) const RT_KILL_SYMBOL: &str = "koja_rt_kill";
+pub(crate) const RT_MONITOR_SYMBOL: &str = "koja_rt_monitor";
 pub(crate) const RT_MAIN_DONE_SYMBOL: &str = "koja_rt_main_done";
 pub(crate) const RT_PROCESS_ALIVE_SYMBOL: &str = "koja_rt_is_process_alive";
 pub(crate) const RT_PROCESS_EXIT_SYMBOL: &str = "koja_rt_process_exit";
@@ -599,6 +601,24 @@ pub(crate) fn declare_rt_kill_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionV
     let i64_ty = ctx.context.i64_type();
     let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
     declare_extern(ctx, RT_KILL_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_monitor`. Signature:
+/// `i64 koja_rt_monitor(i64 target_pid)`. Registers the calling
+/// process as a monitor of the target and returns the monitor token.
+pub(crate) fn declare_rt_monitor_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[i64_ty.into()], false);
+    declare_extern(ctx, RT_MONITOR_SYMBOL, signature)
+}
+
+/// Declare (or look up) `koja_rt_demonitor`. Signature:
+/// `void koja_rt_demonitor(i64 token)`. Removes the monitor minted
+/// with that token.
+pub(crate) fn declare_rt_demonitor_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+    let i64_ty = ctx.context.i64_type();
+    let signature = ctx.context.void_type().fn_type(&[i64_ty.into()], false);
+    declare_extern(ctx, RT_DEMONITOR_SYMBOL, signature)
 }
 
 /// Declare (or look up) `koja_rt_is_process_alive`. Signature:

@@ -1,0 +1,6 @@
+"watch: exit normal"
+"kill: exit killed"
+"crash: exit crashed: boom"
+"late: exit normal"
+"ignorer: no signal"
+"main: done"

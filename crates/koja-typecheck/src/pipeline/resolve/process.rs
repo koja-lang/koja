@@ -25,7 +25,7 @@ use crate::registry::GlobalRegistry;
 use super::control_flow::{body_tail_type, join_arm_tails, require_bool_condition};
 use super::ctx::Resolver;
 use super::expr::resolve_expr;
-use super::types::{display_resolution, is_primitive};
+use super::types::{display_resolution, is_primitive, peel_alias};
 use super::walker::resolve_body_with_expected;
 
 /// Resolve `spawn Type.start(config)`. The inner expression must be
@@ -114,6 +114,72 @@ pub(super) fn resolve_spawn(
     ResolvedType::Named {
         resolution: Resolution::Global(ref_id),
         type_args: vec![msg_ty.clone(), reply_ty.clone()],
+    }
+}
+
+/// The contract rule at a `Process.monitor` call site: the monitor's
+/// `ExitSignal` arrives as an ordinary business message, so the
+/// calling process's `Process<C, M, R>` impl must include
+/// `Process.ExitSignal` in `M`. Non-`monitor` callees pass through
+/// untouched.
+pub(super) fn check_monitor_call_site(
+    method_identifier: &Identifier,
+    call_span: Span,
+    resolver: &Resolver<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if !method_identifier.is_in_global()
+        || method_identifier.path() != ["Process".to_string(), "monitor".to_string()]
+    {
+        return;
+    }
+    let registry = resolver.registry;
+    let Some(process_id) = registry
+        .lookup(&Identifier::new("Global", vec!["Process".to_string()]))
+        .map(|(id, _)| id)
+    else {
+        return;
+    };
+    let conformance = resolver
+        .enclosing_type_id
+        .and_then(|type_id| registry.lookup_conformance(type_id, process_id));
+    let Some(protocol_args) = conformance else {
+        diagnostics.push(Diagnostic::error_with_hint(
+            "`Process.monitor` must be called from a method of a type that implements `Process`",
+            "the monitored process's `ExitSignal` is delivered to the calling process's mailbox",
+            call_span,
+        ));
+        return;
+    };
+    let [_config, message_type, _reply] = protocol_args else {
+        return;
+    };
+    if message_includes_exit_signal(message_type, registry) {
+        return;
+    }
+    diagnostics.push(Diagnostic::error_with_hint(
+        format!(
+            "`Process.monitor` requires the calling process's message type to include \
+             `Process.ExitSignal` (`M` is `{}`)",
+            display_resolution(message_type, registry),
+        ),
+        "add `Process.ExitSignal` to the `M` of your `impl Process<C, M, R>` and handle it",
+        call_span,
+    ));
+}
+
+/// Whether `M` is `Process.ExitSignal` or a union (possibly behind an
+/// alias) with an `ExitSignal` member.
+fn message_includes_exit_signal(message_type: &ResolvedType, registry: &GlobalRegistry) -> bool {
+    match peel_alias(message_type, registry) {
+        ResolvedType::Union(members) => members
+            .iter()
+            .any(|member| message_includes_exit_signal(member, registry)),
+        ResolvedType::Named {
+            resolution: Resolution::Global(id),
+            type_args,
+        } => type_args.is_empty() && is_global_type(id, registry, &["Process", "ExitSignal"]),
+        _ => false,
     }
 }
 

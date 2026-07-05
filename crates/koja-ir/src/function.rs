@@ -782,13 +782,15 @@ pub struct ReceiveArm {
     pub tag: ReceiveTag,
 }
 
-/// Envelope kind a receive arm matches. `IOReady` arms aren't written
-/// by source lowering — the `elaborate` I/O sub-pass synthesizes them
-/// for a `Process` whose message type `M` is a union containing
-/// `IOReady`, so reactor readiness reaches the business `handle`.
+/// Envelope kind a receive arm matches. `IOReady` and `ExitSignal`
+/// arms aren't written by source lowering. The `elaborate` delivery
+/// sub-passes synthesize them for a `Process` whose message type `M`
+/// includes `IOReady` / `Process.ExitSignal`, so runtime-delivered
+/// events reach the business `handle`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReceiveTag {
     Business,
+    ExitSignal,
     IOReady,
     Lifecycle,
 }
@@ -799,6 +801,7 @@ impl ReceiveTag {
     pub fn wire_byte(self) -> u8 {
         match self {
             Self::Business => 0,
+            Self::ExitSignal => 4,
             Self::IOReady => 2,
             Self::Lifecycle => 1,
         }

@@ -1,0 +1,187 @@
+alias Process.ExitReason
+alias Process.ExitSignal
+alias Process.Step
+alias Process.StopReason
+
+# Monitors: watchers spawn their own child (so monitor registration
+# is causally before the child's death), observe normal and killed
+# exits, see an immediate signal when monitoring an already-dead pid,
+# and see nothing after demonitor.
+
+enum ChildMsg
+  Crash
+  Stop
+end
+
+struct Child
+end
+
+impl Process<Child, ChildMsg, Int> for Child
+  fn start(config: Child) -> Result<Self, StopReason>
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: ChildMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match msg
+      ChildMsg.Crash ->
+        Kernel.panic("boom")
+        Step.Done(StopReason.Normal)
+
+      ChildMsg.Stop -> Step.Done(StopReason.Normal)
+    end
+  end
+end
+
+enum Mode
+  Crash
+  Watch
+  Kill
+  Late(Pid)
+end
+
+struct WatcherConfig
+  label: String
+  mode: Mode
+end
+
+# `M` is exactly `ExitSignal` (no union).
+struct Watcher
+  label: String
+end
+
+impl Process<WatcherConfig, ExitSignal, Int> for Watcher
+  fn start(config: WatcherConfig) -> Result<Self, StopReason>
+    match config.mode
+      Mode.Crash ->
+        child = spawn Child.start(Child{})
+        Process.monitor(child.pid())
+        child.cast(ChildMsg.Crash)
+        ()
+
+      Mode.Watch ->
+        child = spawn Child.start(Child{})
+        Process.monitor(child.pid())
+        child.cast(ChildMsg.Stop)
+        ()
+
+      Mode.Kill ->
+        child = spawn Child.start(Child{})
+        Process.monitor(child.pid())
+        child.kill()
+        ()
+
+      Mode.Late(target) ->
+        Process.monitor(target)
+        ()
+    end
+
+    Result.Ok(Watcher{label: config.label})
+  end
+
+  fn handle(self, msg: ExitSignal, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match msg.reason
+      ExitReason.Normal -> "#{self.label}: exit normal".print()
+      ExitReason.Shutdown -> "#{self.label}: exit shutdown".print()
+      ExitReason.Killed -> "#{self.label}: exit killed".print()
+      ExitReason.Crashed(info) -> "#{self.label}: exit crashed: #{info.message}".print()
+    end
+
+    Step.Done(StopReason.Normal)
+  end
+end
+
+enum Tick
+  Fire
+end
+
+# `M` is a union including `ExitSignal`. Demonitors before the child
+# stops, so only the self-sent `Tick` should arrive.
+struct Ignorer
+end
+
+impl Process<Ignorer, ExitSignal | Tick, Int> for Ignorer
+  fn start(config: Ignorer) -> Result<Self, StopReason>
+    child = spawn Child.start(Child{})
+    reference = Process.monitor(child.pid())
+    Process.demonitor(reference)
+    child.cast(ChildMsg.Stop)
+
+    me: Ref<ExitSignal | Tick, Int> = Ref.self_ref()
+    me.send_after(Tick.Fire, 200)
+
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: ExitSignal | Tick, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match msg
+      signal: ExitSignal -> "ignorer: unexpected signal".print()
+      tick: Tick -> "ignorer: no signal".print()
+    end
+
+    Step.Done(StopReason.Normal)
+  end
+end
+
+watcher = spawn Watcher.start(WatcherConfig{label: "watch", mode: Mode.Watch})
+
+loop
+  if watcher.alive?()
+    ()
+  else
+    break
+  end
+end
+
+killer = spawn Watcher.start(WatcherConfig{label: "kill", mode: Mode.Kill})
+
+loop
+  if killer.alive?()
+    ()
+  else
+    break
+  end
+end
+
+crasher = spawn Watcher.start(WatcherConfig{label: "crash", mode: Mode.Crash})
+
+loop
+  if crasher.alive?()
+    ()
+  else
+    break
+  end
+end
+
+# A verifiably-dead pid for the late monitor.
+child = spawn Child.start(Child{})
+child.cast(ChildMsg.Stop)
+
+loop
+  if child.alive?()
+    ()
+  else
+    break
+  end
+end
+
+late = spawn Watcher.start(WatcherConfig{label: "late", mode: Mode.Late(child.pid())})
+
+loop
+  if late.alive?()
+    ()
+  else
+    break
+  end
+end
+
+ignorer = spawn Ignorer.start(Ignorer{})
+
+loop
+  if ignorer.alive?()
+    ()
+  else
+    break
+  end
+end
+
+"main: done".print()

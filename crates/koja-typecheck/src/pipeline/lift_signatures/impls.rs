@@ -155,14 +155,21 @@ pub(super) fn lift_extend(
         return;
     };
     let target_identifier = Identifier::new(target_package.as_str(), target_path.clone());
-    if !matches!(
-        scope
-            .registry
-            .lookup(&target_identifier)
-            .map(|(_, e)| &e.kind),
-        Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
-    ) {
+    let target_kind = scope
+        .registry
+        .lookup(&target_identifier)
+        .map(|(_, e)| &e.kind);
+    let is_protocol = matches!(target_kind, Some(GlobalKind::Protocol(_)));
+    if !is_protocol
+        && !matches!(
+            target_kind,
+            Some(GlobalKind::Enum(_) | GlobalKind::Struct(_))
+        )
+    {
         return;
+    }
+    if is_protocol {
+        diagnose_protocol_extend_self_methods(extend_block, &target_identifier, diagnostics);
     }
     let resolved_target = resolve_block_target(&extend_block.target, &target_identifier, scope);
     let self_override = Some(&resolved_target);
@@ -182,6 +189,34 @@ pub(super) fn lift_extend(
             scope,
             diagnostics,
         );
+    }
+}
+
+/// A protocol has no instance layout to receive on, so `extend` on
+/// one only admits static methods.
+fn diagnose_protocol_extend_self_methods(
+    extend_block: &ExtendBlock,
+    target_identifier: &Identifier,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    for member in &extend_block.members {
+        let ImplMember::Function(function) = member else {
+            continue;
+        };
+        if function
+            .params
+            .first()
+            .is_some_and(|p| matches!(p, Param::Self_ { .. }))
+        {
+            diagnostics.push(Diagnostic::error(
+                format!(
+                    "`extend` on protocol `{target_identifier}` only supports static methods \
+                     (`{}` takes `self`)",
+                    function.name,
+                ),
+                function.span,
+            ));
+        }
     }
 }
 

@@ -432,8 +432,8 @@ fn function_signature_from_entry(entry: &RegistryEntry) -> &FunctionSignature {
     }
 }
 
-/// A bare `Ident` resolving to a struct or enum names the type
-/// itself (static dispatch); anything else is a value receiver
+/// A bare `Ident` resolving to a struct, enum, or protocol names the
+/// type itself (static dispatch). Anything else is a value receiver
 /// (instance dispatch).
 fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch {
     if let ExprKind::Ident {
@@ -441,7 +441,10 @@ fn method_dispatch_kind(receiver: &Expr, registry: &GlobalRegistry) -> Dispatch 
         ..
     } = &receiver.kind
         && let Some(entry) = registry.get(*id)
-        && matches!(entry.kind, GlobalKind::Enum(_) | GlobalKind::Struct(_))
+        && matches!(
+            entry.kind,
+            GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_)
+        )
     {
         return Dispatch::Static;
     }
