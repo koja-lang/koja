@@ -55,6 +55,10 @@ pub enum IRIntrinsicId {
     /// print(s: String)`. Goes away when the `Debug` protocol
     /// displaces it.
     Print,
+    /// `@intrinsic` statics on the `Process` protocol from
+    /// [`koja/lib/global/src/process.koja`], dispatched on the
+    /// protocol name with no receiver value.
+    Process(ProcessMethod),
     /// `@intrinsic` methods on `Ref<M, R>` from
     /// [`koja/lib/global/src/process.koja`]. The `M` / `R` type
     /// parameters don't appear here — they ride the
@@ -177,6 +181,15 @@ pub enum RefMethod {
     SelfRef,
     SendAfter,
     Signal,
+}
+
+/// `@intrinsic`-flagged statics on the `Process` protocol: `Monitor`
+/// registers the calling process as a watcher of a `Pid`, `Demonitor`
+/// retracts one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProcessMethod {
+    Demonitor,
+    Monitor,
 }
 
 /// `@intrinsic`-flagged method on `ReplyTo<R>`. Single-variant today
@@ -366,6 +379,9 @@ impl IRIntrinsicId {
         }
         if receiver == "Map" {
             return MapMethod::from_source(method).map(Self::Map);
+        }
+        if receiver == "Process" {
+            return ProcessMethod::from_source(method).map(Self::Process);
         }
         if receiver == "Ref" {
             return RefMethod::from_source(method).map(Self::Ref);
@@ -739,6 +755,23 @@ impl RefMethod {
     }
 }
 
+impl ProcessMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "demonitor" => Self::Demonitor,
+            "monitor" => Self::Monitor,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::Demonitor => "demonitor",
+            Self::Monitor => "monitor",
+        }
+    }
+}
+
 impl ReplyToMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
@@ -895,6 +928,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::NumericConvert(convert) => f.write_str(&convert.path()),
             Self::Parse(target) => write!(f, "{}.parse", target.segment()),
             Self::Print => f.write_str("print"),
+            Self::Process(m) => write!(f, "Process.{}", m.segment()),
             Self::Ref(m) => write!(f, "Ref.{}", m.segment()),
             Self::ReplyTo(m) => write!(f, "ReplyTo.{}", m.segment()),
             Self::Set(m) => write!(f, "Set.{}", m.segment()),
@@ -1044,6 +1078,20 @@ mod tests {
                 &["Ref", method],
                 IRIntrinsicId::Ref(variant),
                 &format!("Ref.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn process_methods_cover_the_full_surface() {
+        for (method, variant) in [
+            ("demonitor", ProcessMethod::Demonitor),
+            ("monitor", ProcessMethod::Monitor),
+        ] {
+            assert_round_trip(
+                &["Process", method],
+                IRIntrinsicId::Process(variant),
+                &format!("Process.{method}"),
             );
         }
     }

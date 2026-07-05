@@ -488,10 +488,15 @@ fn register_extend(
         .get(target_id)
         .expect("lookup_owner_path returned a live id")
         .kind;
-    if !matches!(entry_kind, GlobalKind::Enum(_) | GlobalKind::Struct(_)) {
+    // Protocol targets are admitted for static methods only. Lift
+    // diagnoses `self` receivers on them.
+    if !matches!(
+        entry_kind,
+        GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_)
+    ) {
         diagnostics.push(Diagnostic::error(
             format!(
-                "`extend` only supports structs and enums (`{}` is a {})",
+                "`extend` only supports structs, enums, and protocols (`{}` is a {})",
                 target_path.join("."),
                 entry_kind.label(),
             ),

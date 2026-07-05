@@ -27,8 +27,9 @@
 //! Tags are routing classes, not payload shapes: they decide which part
 //! of the receiver's mailbox an envelope lands in (see
 //! [`crate::mailbox`]). Receive arms only ever see `TAG_BUSINESS`,
-//! `TAG_LIFECYCLE`, and `TAG_IO_READY`. `TAG_REPLY` is consumed by the
-//! blocked caller inside `koja_rt_call_receive` and never surfaces.
+//! `TAG_LIFECYCLE`, `TAG_IO_READY`, and `TAG_EXIT_SIGNAL`. `TAG_REPLY`
+//! is consumed by the blocked caller inside `koja_rt_call_receive` and
+//! never surfaces.
 
 use std::ptr;
 
@@ -47,6 +48,9 @@ pub const TAG_IO_READY: u8 = 2;
 /// [`reply_token`](Envelope::reply_token). Routed to the caller's
 /// one-shot reply slot, never the receive queues.
 pub const TAG_REPLY: u8 = 3;
+/// A monitor's exit notification. Payload is a bare
+/// `Process.ExitSignal` struct (see the `EXIT_SIGNAL_*` offsets).
+pub const TAG_EXIT_SIGNAL: u8 = 4;
 
 /// Bytes reserved for the tag header. The payload begins at this
 /// offset. Backends know this value as the envelope payload offset.
@@ -68,6 +72,21 @@ pub const IO_READY_READ: u8 = 0;
 pub const IO_READY_WRITE: u8 = 1;
 /// IOReady variant: the fd reported an error or hangup.
 pub const IO_READY_ERROR: u8 = 2;
+
+/// Total size of an ExitSignal envelope: tag header + the 32-byte
+/// `Process.ExitSignal` struct (`Pid` i64, then the `ExitReason`
+/// outer: tag byte, 7 pad bytes, two `CrashInfo` string pointers).
+pub const EXIT_SIGNAL_BUF_SIZE: usize = 40;
+/// Offset of the dying process's `Pid` (i64) within the envelope.
+pub const EXIT_SIGNAL_PID_OFFSET: usize = 8;
+/// Offset of the `ExitReason` tag byte within the envelope.
+pub const EXIT_SIGNAL_REASON_OFFSET: usize = 16;
+/// Offset of `CrashInfo.message` (heap `String` pointer, null unless
+/// `Crashed`) within the envelope.
+pub const EXIT_SIGNAL_MESSAGE_OFFSET: usize = 24;
+/// Offset of `CrashInfo.backtrace` (heap `String` pointer, null unless
+/// `Crashed`) within the envelope.
+pub const EXIT_SIGNAL_BACKTRACE_OFFSET: usize = 32;
 
 /// An owned mailbox message: the tagged transport buffer plus the
 /// metadata needed to free it without consulting the send site.
@@ -165,6 +184,7 @@ impl Message for Envelope {
             TAG_LIFECYCLE => Tag::Lifecycle,
             TAG_IO_READY => Tag::IOReady,
             TAG_REPLY => Tag::Reply,
+            TAG_EXIT_SIGNAL => Tag::ExitSignal,
             _ => Tag::Business,
         }
     }

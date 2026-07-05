@@ -192,7 +192,13 @@ fn lower_extend(
     let Some((target_package, target_path)) = lookup_owner_path(path, package, registry) else {
         return;
     };
-    if impl_target_is_generic(&target_path, target_package.as_str(), registry) {
+    // Protocol targets carry statics only (typecheck enforces this),
+    // so their extends lower eagerly even though the protocol itself
+    // is generic. The generic skip is for struct/enum receivers whose
+    // methods mention the target's type params.
+    if !extend_target_is_protocol(&target_path, target_package.as_str(), registry)
+        && impl_target_is_generic(&target_path, target_package.as_str(), registry)
+    {
         return;
     }
     lower_block_members(
@@ -204,6 +210,17 @@ fn lower_extend(
         output,
         functions,
     );
+}
+
+fn extend_target_is_protocol(
+    target_path: &[String],
+    package: &str,
+    registry: &GlobalRegistry,
+) -> bool {
+    let identifier = Identifier::new(package, target_path.to_vec());
+    registry
+        .lookup(&identifier)
+        .is_some_and(|(_, entry)| matches!(entry.kind, GlobalKind::Protocol(_)))
 }
 
 /// Resolve a nominal `impl`/`extend` target into its owning

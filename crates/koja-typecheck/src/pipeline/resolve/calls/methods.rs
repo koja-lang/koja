@@ -112,12 +112,15 @@ pub(super) fn classify_receiver(
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<MethodReceiver> {
+    // Protocols admit static dispatch only (statics registered via
+    // `extend`, like `Process.monitor`). There is no instance path
+    // for them, so no Instance-arm counterpart below.
     if let Some(receiver_path) = static_receiver_path(&receiver.kind)
         && let Some((struct_id, struct_entry)) =
             lookup_type(&receiver_path, resolver.resolution_scope())
         && matches!(
             struct_entry.kind,
-            GlobalKind::Enum(_) | GlobalKind::Struct(_)
+            GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_)
         )
     {
         rewrite_to_static_ident(receiver, &receiver_path, struct_id);

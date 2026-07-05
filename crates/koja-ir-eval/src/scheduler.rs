@@ -35,7 +35,7 @@ use koja_runtime_core::{
     Pid, Priority, ProcessTable, Readiness, SignalSource, Tag, WaitTarget,
 };
 
-use crate::interpreter::CallResolver;
+use crate::interpreter::{CallResolver, build_exit_signal_value};
 use crate::reactor::EvalReactor;
 use crate::value::Value;
 
@@ -255,6 +255,19 @@ pub(crate) fn kill(pid: Pid) {
     drop(reclaim);
 }
 
+/// Registers the currently-resuming process as a monitor of `target`
+/// (`Process.monitor`). Staged `ExitSignal`s are delivered by the
+/// executor at the end of the current resume.
+pub(crate) fn monitor(target: Pid) -> i64 {
+    let watcher = current_pid();
+    with_table(|table| table.monitor(watcher, target))
+}
+
+/// Removes the monitor identified by `token` (`Process.demonitor`).
+pub(crate) fn demonitor(token: i64) {
+    with_table(|table| table.demonitor(token));
+}
+
 /// Whether `pid` resolves to a live process (`Ref.alive?`).
 pub(crate) fn is_alive(pid: Pid) -> bool {
     with_table(|table| table.is_alive(pid))
@@ -441,6 +454,23 @@ impl<'a, R: CallResolver> EvalExecutor<'a, R> {
             self.futures.borrow_mut().insert(spawn.pid, future);
         }
     }
+
+    /// Synthesizes and delivers every `ExitSignal` staged during the
+    /// resume that just finished, waking parked watchers. The
+    /// single-threaded analog of native's per-death-site drains.
+    fn deliver_exit_signals(&self) {
+        let notices = self.core.borrow_mut().take_exit_notices();
+        for notice in notices {
+            deliver(
+                notice.watcher,
+                EvalMessage {
+                    reply: None,
+                    tag: Tag::ExitSignal,
+                    value: build_exit_signal_value(self.resolver, &notice),
+                },
+            );
+        }
+    }
 }
 
 impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
@@ -482,6 +512,7 @@ impl<R: CallResolver> Executor for EvalExecutor<'_, R> {
             }
         }
         self.install_pending_spawns();
+        self.deliver_exit_signals();
     }
 }
 

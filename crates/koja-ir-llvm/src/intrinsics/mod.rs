@@ -74,6 +74,9 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         }
         IRIntrinsicId::Parse(target) => parse::emit_parse(ctx, function, llvm_function, target),
         IRIntrinsicId::Print => print::emit_global_print(ctx, function, llvm_function),
+        IRIntrinsicId::Process(method) => {
+            process::emit_process(ctx, function, llvm_function, method)
+        }
         IRIntrinsicId::Ref(method) => process::emit_ref(ctx, function, llvm_function, method),
         IRIntrinsicId::ReplyTo(method) => {
             process::emit_reply_to(ctx, function, llvm_function, method)

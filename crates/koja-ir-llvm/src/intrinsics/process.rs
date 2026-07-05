@@ -13,7 +13,8 @@ use inkwell::types::{BasicType, BasicTypeEnum, StructType};
 use inkwell::values::{ArrayValue, BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::mangling::{drop_glue_symbol, envelope_drop_glue_symbol, global_primitive_symbol};
 use koja_ir::{
-    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, RefMethod, ReplyToMethod,
+    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, ProcessMethod, RefMethod,
+    ReplyToMethod,
 };
 
 use crate::ctx::EmitContext;
@@ -23,10 +24,10 @@ use crate::emit::process::serialize_to_stack;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::element::release_in_slot;
 use crate::runtime::{
-    declare_rt_call_receive_extern, declare_rt_call_token_extern,
-    declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_reply_extern,
-    declare_rt_self_extern, declare_rt_send_after_extern, declare_rt_send_extern,
-    declare_rt_send_lifecycle_extern,
+    declare_rt_call_receive_extern, declare_rt_call_token_extern, declare_rt_demonitor_extern,
+    declare_rt_is_process_alive_extern, declare_rt_kill_extern, declare_rt_monitor_extern,
+    declare_rt_reply_extern, declare_rt_self_extern, declare_rt_send_after_extern,
+    declare_rt_send_extern, declare_rt_send_lifecycle_extern,
 };
 use crate::types::{ir_basic_type, value_basic_type};
 
@@ -55,6 +56,18 @@ pub(super) fn emit_reply_to<'ctx>(
 ) -> Result<(), LlvmError> {
     match method {
         ReplyToMethod::Send => emit_reply_send(ctx, function, llvm_function),
+    }
+}
+
+pub(super) fn emit_process<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    method: ProcessMethod,
+) -> Result<(), LlvmError> {
+    match method {
+        ProcessMethod::Demonitor => emit_demonitor(ctx, function, llvm_function),
+        ProcessMethod::Monitor => emit_monitor(ctx, function, llvm_function),
     }
 }
 
@@ -444,6 +457,75 @@ fn emit_alive<'ctx>(
         .build_return(Some(&alive_bit))
         .or_ice()
         .map(|_| ())
+}
+
+// ----- Process static emitters ---------------------------------------------
+
+/// `Process.monitor(target: Pid) -> Process.MonitorRef`: register the
+/// calling process as a watcher of `target` via `koja_rt_monitor` and
+/// wrap the returned token in the `MonitorRef` struct.
+fn emit_monitor<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry_bb);
+
+    // `Pid` lays out as `{ i64 id }`.
+    let (target_value, _) = nth_param(function, llvm_function, 0)?;
+    let target_pid = ctx
+        .builder
+        .build_extract_value(target_value.into_struct_value(), 0, "target_pid")
+        .or_ice()?
+        .into_int_value();
+    let monitor_fn = declare_rt_monitor_extern(ctx);
+    let token = ctx
+        .call_basic(monitor_fn, &[target_pid.into()], "monitor_token")?
+        .into_int_value();
+
+    let ref_struct = match &function.return_type {
+        IRType::Struct(symbol) => ctx.layouts.struct_type(symbol.mangled()),
+        other => {
+            return Err(LlvmError::Codegen(format!(
+                "LLVM emit: `Process.monitor` returns `{other:?}`, expected the \
+                 `Process.MonitorRef` struct (IR seal invariant violation)",
+            )));
+        }
+    };
+    let monitor_ref = ctx
+        .builder
+        .build_insert_value(ref_struct.get_undef(), token, 0, "monitor_ref")
+        .or_ice()?
+        .into_struct_value();
+    ctx.builder
+        .build_return(Some(&monitor_ref))
+        .or_ice()
+        .map(|_| ())
+}
+
+/// `Process.demonitor(reference: Process.MonitorRef)`: retract the
+/// monitor via `koja_rt_demonitor`. `MonitorRef` lays out as
+/// `{ i64 token }`.
+fn emit_demonitor<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
+    ctx.builder.position_at_end(entry_bb);
+
+    let (reference_value, _) = nth_param(function, llvm_function, 0)?;
+    let token = ctx
+        .builder
+        .build_extract_value(reference_value.into_struct_value(), 0, "monitor_token")
+        .or_ice()?
+        .into_int_value();
+    let demonitor_fn = declare_rt_demonitor_extern(ctx);
+    ctx.builder
+        .build_call(demonitor_fn, &[token.into()], "")
+        .or_ice()?;
+    ctx.builder.build_return(None).or_ice().map(|_| ())
 }
 
 // ----- ReplyTo method emitters --------------------------------------------

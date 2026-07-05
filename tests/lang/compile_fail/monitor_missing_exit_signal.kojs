@@ -1,0 +1,23 @@
+alias Process.Step
+alias Process.StopReason
+
+enum Msg
+  Ping
+end
+
+struct Watcher
+  target: Pid
+end
+
+impl Process<Watcher, Msg, Int> for Watcher
+  fn start(config: Watcher) -> Result<Self, StopReason>
+    Process.monitor(config.target)
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: Msg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Done(StopReason.Normal)
+  end
+end
+
+"unreachable".print()

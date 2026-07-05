@@ -14,7 +14,8 @@
 use std::time::{Duration, Instant};
 
 use koja_ir::{
-    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, RefMethod, ReplyToMethod,
+    IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, ProcessMethod, RefMethod,
+    ReplyToMethod,
 };
 use koja_runtime_core::{Pid, Tag};
 
@@ -54,6 +55,17 @@ pub(super) async fn reply_to_dispatch<R: CallResolver>(
 ) -> Result<Value, RuntimeError> {
     match method {
         ReplyToMethod::Send => reply_send(function, args, resolver),
+    }
+}
+
+pub(super) fn process_dispatch(
+    method: ProcessMethod,
+    function: &IRFunction,
+    args: &[Value],
+) -> Result<Value, RuntimeError> {
+    match method {
+        ProcessMethod::Demonitor => demonitor(function, args),
+        ProcessMethod::Monitor => monitor(function, args),
     }
 }
 
@@ -196,6 +208,35 @@ async fn call<R: CallResolver>(
     }
 }
 
+// ----- Process statics ------------------------------------------------------
+
+/// `Process.monitor(target: Pid) -> Process.MonitorRef`: register the
+/// running process as a watcher of `target` and wrap the token in the
+/// `MonitorRef` struct the return type names.
+fn monitor(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let target = wrapped_int(function, args, "Pid")?;
+    let IRType::Struct(symbol) = &function.return_type else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "`{}` (monitor) must return a `MonitorRef` struct, got `{:?}`",
+                function.symbol, function.return_type,
+            ),
+        });
+    };
+    let token = scheduler::monitor(target);
+    Ok(Value::Struct {
+        symbol: symbol.clone(),
+        fields: vec![Value::Int(token)],
+    })
+}
+
+/// `Process.demonitor(reference: MonitorRef)`: retract the monitor.
+fn demonitor(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let token = wrapped_int(function, args, "MonitorRef")?;
+    scheduler::demonitor(token);
+    Ok(Value::Unit)
+}
+
 // ----- ReplyTo methods ----------------------------------------------------
 
 /// `ReplyTo.send(self, reply) -> ReplyTo.Delivery`: route `reply` to the
@@ -317,12 +358,18 @@ fn business(value: Value, reply: Option<ReplyInfo>) -> EvalMessage {
 
 /// Read the PID out of a `Ref<M, R>` self value (`{ id }`, field 0).
 fn pid_from_ref(function: &IRFunction, args: &[Value]) -> Result<Pid, RuntimeError> {
+    wrapped_int(function, args, "Ref")
+}
+
+/// Read the single integer field out of arg 0's struct wrapper
+/// (`Ref` / `Pid` / `MonitorRef` all lay out as `{ i64 }`).
+fn wrapped_int(function: &IRFunction, args: &[Value], kind: &str) -> Result<i64, RuntimeError> {
     match args.first() {
         Some(Value::Struct { fields, .. }) => match fields.first() {
-            Some(Value::Int(pid)) => Ok(*pid),
-            _ => Err(self_shape_error(function, "Ref")),
+            Some(Value::Int(value)) => Ok(*value),
+            _ => Err(self_shape_error(function, kind)),
         },
-        _ => Err(self_shape_error(function, "Ref")),
+        _ => Err(self_shape_error(function, kind)),
     }
 }
 

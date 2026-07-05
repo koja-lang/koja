@@ -14,6 +14,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `[project]` table accepts `authors`, `description`, and `license` metadata fields, though unused.
 - `koja shell` now properly loads project files when launched inside a project directory.
 - `koja shell` now tab-completes keywords, types, functions, session variables, `Type.` members, and `value.` methods and fields.
+- Watch another process with `Process.monitor(pid)`. When it exits, you receive a `Process.ExitSignal` message telling you which process died and why.
+- Cancel a monitor with `Process.demonitor(ref)`.
+- Calling `Process.monitor` from a process whose message type can't receive `Process.ExitSignal` is a compile error.
 
 ### Changed
 

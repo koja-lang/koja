@@ -222,6 +222,29 @@ pub struct CrashInfo {
     pub backtrace: String,
 }
 
+/// A staged `ExitSignal` delivery: everything an adapter needs to
+/// synthesize the watcher's message outside the transition. Staged by
+/// [`ProcessTable::notify_exit`] / [`ProcessTable::monitor`], drained
+/// via [`ProcessTable::take_exit_notices`].
+pub struct ExitNotice {
+    /// The dying process's crash capture, present only for `Crashed`.
+    pub crash_info: Option<CrashInfo>,
+    pub reason: ExitReason,
+    /// The process that exited.
+    pub target: Pid,
+    /// The monitoring process the signal is addressed to.
+    pub watcher: Pid,
+}
+
+/// One registered monitor: `watcher` observes `target`'s exit. A flat
+/// list (not a per-target map) so `new` stays `const`. Monitor counts
+/// are small, so the linear scans are cheap.
+struct MonitorEntry {
+    target: Pid,
+    token: i64,
+    watcher: Pid,
+}
+
 /// One slot in the table. `process` is `None` when the slot is free;
 /// `generation` is bumped on free so recycled slots reject stale PIDs.
 struct Slot<X, M> {
@@ -336,6 +359,13 @@ pub struct ProcessTable<X, M> {
     main_pid: Pid,
     /// Runtime lifecycle mode, `Draining` once a `SIGTERM` has been seen.
     mode: Mode,
+    /// Registered monitors, evicted when either endpoint dies.
+    monitors: Vec<MonitorEntry>,
+    /// Next monitor token to mint. Starts at 1 so 0 is never valid.
+    next_monitor_token: i64,
+    /// `ExitSignal` deliveries staged by [`Self::notify_exit`] /
+    /// [`Self::monitor`], drained by [`Self::take_exit_notices`].
+    pending_exit_notices: Vec<ExitNotice>,
     /// Newly-runnable PIDs staged for an external queue owner, drained by
     /// [`Self::drain_pending_ready`]. Only populated while [`Self::external_ready`].
     pending_ready: Vec<Pid>,
@@ -367,6 +397,9 @@ impl<X, M: Message> ProcessTable<X, M> {
             last_advance: None,
             main_pid: 0,
             mode: Mode::Running,
+            monitors: Vec::new(),
+            next_monitor_token: 1,
+            pending_exit_notices: Vec::new(),
             pending_ready: Vec::new(),
             ready: [VecDeque::new(), VecDeque::new(), VecDeque::new()],
             ready_ages: [0; LEVELS],
@@ -683,10 +716,71 @@ impl<X, M: Message> ProcessTable<X, M> {
             && self.get(pid).and_then(|process| process.awaiting_reply) == Some(token)
     }
 
-    /// Fired from [`transition`](Self::transition) when a process goes `Dead`,
-    /// carrying its recorded [`ExitReason`]. A no-op seam today. Process
-    /// monitoring delivers exit signals to linked/monitoring processes here.
-    fn notify_exit(&mut self, _pid: Pid, _reason: ExitReason) {}
+    /// Registers `watcher`'s monitor on `target`, returning its token.
+    /// Monitoring an already-dead PID stages an immediate [`ExitNotice`]
+    /// instead, so the watcher receives an `ExitSignal` either way (no
+    /// race window). The caller must drain
+    /// [`take_exit_notices`](Self::take_exit_notices) afterwards.
+    pub fn monitor(&mut self, watcher: Pid, target: Pid) -> i64 {
+        let token = self.next_monitor_token;
+        self.next_monitor_token += 1;
+        if self.is_alive(target) {
+            self.monitors.push(MonitorEntry {
+                target,
+                token,
+                watcher,
+            });
+        } else {
+            // The target's slot may already be reclaimed, losing its
+            // recorded reason; a freed PID reports `Normal`.
+            let reason = self
+                .get(target)
+                .map_or(ExitReason::Normal, |process| process.exit_reason);
+            self.stage_exit_notice(watcher, target, reason);
+        }
+        token
+    }
+
+    /// Removes the monitor identified by `token`, suppressing its
+    /// `ExitSignal`. A no-op for an unknown or already-evicted token.
+    pub fn demonitor(&mut self, token: i64) {
+        self.monitors.retain(|entry| entry.token != token);
+    }
+
+    /// Drains every staged [`ExitNotice`] for the driver to synthesize
+    /// and deliver, same staged discipline as `due_delivers`.
+    pub fn take_exit_notices(&mut self) -> Vec<ExitNotice> {
+        std::mem::take(&mut self.pending_exit_notices)
+    }
+
+    /// Fired from [`transition`](Self::transition) on the `-> Dead`
+    /// edge: stages one [`ExitNotice`] per monitor watching `pid` and
+    /// evicts the dead process's entries in both directions (as target
+    /// and as watcher).
+    fn notify_exit(&mut self, pid: Pid, reason: ExitReason) {
+        let mut watchers = Vec::new();
+        self.monitors.retain(|entry| {
+            if entry.target == pid {
+                watchers.push(entry.watcher);
+            }
+            entry.target != pid && entry.watcher != pid
+        });
+        for watcher in watchers {
+            self.stage_exit_notice(watcher, pid, reason);
+        }
+    }
+
+    /// Stages one `ExitSignal` delivery, snapshotting the crash capture
+    /// while the dying slot is still readable.
+    fn stage_exit_notice(&mut self, watcher: Pid, target: Pid, reason: ExitReason) {
+        let crash_info = self.get(target).and_then(|p| p.crash_info.clone());
+        self.pending_exit_notices.push(ExitNotice {
+            crash_info,
+            reason,
+            target,
+            watcher,
+        });
+    }
 
     /// Pops the next claimable process, marking it `Running` and `on_cpu`.
     /// Serves the highest-priority non-empty queue, but ages the ready
@@ -1475,6 +1569,133 @@ mod tests {
         let order: Vec<Pid> = std::iter::from_fn(|| table.claim_next()).take(2).collect();
         assert_eq!(order, vec![pid, normal], "yielded High beats Normal");
         assert_eq!(table.counters().violations, 0);
+    }
+
+    /// Drives a process to `Dead` through a legal path (`Created ->
+    /// Running -> Dead`) with `reason` recorded first, as a worker's
+    /// death site would. The slot is left unreclaimed so staged
+    /// notices can still snapshot it.
+    fn run_to_death(table: &mut TestTable, pid: Pid, reason: ExitReason) {
+        table.transition(pid, ProcessState::Running);
+        table.set_exit_reason(pid, reason);
+        assert!(table.mark_dead_if_alive(pid));
+    }
+
+    #[test]
+    fn monitor_stages_notice_on_target_death() {
+        let mut table = TestTable::new();
+        let watcher = fake_spawn(&mut table);
+        let target = fake_spawn(&mut table);
+        let token = table.monitor(watcher, target);
+        assert!(token > 0);
+        assert!(table.take_exit_notices().is_empty(), "nothing staged yet");
+
+        run_to_death(&mut table, watcher, ExitReason::Normal);
+        // The watcher died first: its own monitor entry is evicted, so
+        // the target's later death stages nothing.
+        run_to_death(&mut table, target, ExitReason::Normal);
+        assert!(
+            table.take_exit_notices().is_empty(),
+            "dead watcher's monitors are evicted"
+        );
+    }
+
+    #[test]
+    fn target_death_stages_one_notice_per_monitor() {
+        let mut table = TestTable::new();
+        let watcher_a = fake_spawn(&mut table);
+        let watcher_b = fake_spawn(&mut table);
+        let target = fake_spawn(&mut table);
+        table.monitor(watcher_a, target);
+        table.monitor(watcher_a, target);
+        table.monitor(watcher_b, target);
+
+        table.set_crash_info(
+            target,
+            CrashInfo {
+                message: "boom".into(),
+                backtrace: "trace".into(),
+            },
+        );
+        run_to_death(&mut table, target, ExitReason::Crashed);
+
+        let notices = table.take_exit_notices();
+        assert_eq!(notices.len(), 3, "one notice per monitor");
+        for notice in &notices {
+            assert_eq!(notice.target, target);
+            assert_eq!(notice.reason, ExitReason::Crashed);
+            assert_eq!(notice.crash_info.as_ref().unwrap().message, "boom");
+        }
+        let watchers: Vec<Pid> = notices.iter().map(|n| n.watcher).collect();
+        assert_eq!(watchers, vec![watcher_a, watcher_a, watcher_b]);
+        assert!(table.take_exit_notices().is_empty(), "drain is exhaustive");
+        // Entries were evicted: a hypothetical second death can't fire.
+        assert!(table.monitors.is_empty());
+    }
+
+    #[test]
+    fn demonitor_suppresses_delivery() {
+        let mut table = TestTable::new();
+        let watcher = fake_spawn(&mut table);
+        let target = fake_spawn(&mut table);
+        let token = table.monitor(watcher, target);
+        table.demonitor(token);
+
+        run_to_death(&mut table, target, ExitReason::Killed);
+        assert!(table.take_exit_notices().is_empty());
+        // A second demonitor of the same token is a harmless no-op.
+        table.demonitor(token);
+    }
+
+    #[test]
+    fn monitor_on_dead_pid_stages_immediately() {
+        let mut table = TestTable::new();
+        let watcher = fake_spawn(&mut table);
+        let target = fake_spawn(&mut table);
+        // Off-cpu kill reclaims the slot inline.
+        assert!(table.kill(target).is_some());
+        let _ = table.take_exit_notices();
+
+        // The slot is already reclaimed, so the recorded reason is
+        // lost: a freed PID reports `Normal`.
+        let token = table.monitor(watcher, target);
+        assert!(token > 0, "a token is minted even for a dead target");
+        let notices = table.take_exit_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].watcher, watcher);
+        assert_eq!(notices[0].target, target);
+        assert_eq!(notices[0].reason, ExitReason::Normal);
+    }
+
+    #[test]
+    fn monitor_on_dead_unreclaimed_pid_reports_recorded_reason() {
+        let mut table = TestTable::new();
+        let watcher = fake_spawn(&mut table);
+        let target = fake_spawn(&mut table);
+        // Claim + kill: on_cpu defers reclaim, so the slot (and its
+        // recorded reason) is still readable.
+        assert!(table.try_claim(target));
+        assert!(table.kill(target).is_none(), "on_cpu kill defers");
+        let _ = table.take_exit_notices();
+
+        table.monitor(watcher, target);
+        let notices = table.take_exit_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].reason, ExitReason::Killed);
+    }
+
+    #[test]
+    fn kill_stages_killed_notice() {
+        let mut table = TestTable::new();
+        let watcher = fake_spawn(&mut table);
+        let target = fake_spawn(&mut table);
+        table.monitor(watcher, target);
+
+        assert!(table.kill(target).is_some());
+        let notices = table.take_exit_notices();
+        assert_eq!(notices.len(), 1);
+        assert_eq!(notices[0].reason, ExitReason::Killed);
+        assert!(notices[0].crash_info.is_none());
     }
 
     #[test]

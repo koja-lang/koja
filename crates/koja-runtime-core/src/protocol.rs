@@ -25,6 +25,8 @@ pub type Pid = i64;
 pub enum Tag {
     /// Casts, call requests, timer fires: the business queue.
     Business,
+    /// A monitor's exit notification: the business queue.
+    ExitSignal,
     /// I/O readiness events from the reactor: the business queue.
     IOReady,
     /// Lifecycle signals: the system queue, drained before business.

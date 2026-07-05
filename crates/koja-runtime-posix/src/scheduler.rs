@@ -15,8 +15,8 @@ use std::time::{Duration, Instant};
 
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use koja_runtime_core::{
-    Clock, CrashInfo, Driver, Executor, ExitReason, Lifecycle, Pid, Priority, ProcessTable,
-    SignalSource, slot_index,
+    Clock, CrashInfo, Driver, Executor, ExitNotice, ExitReason, Lifecycle, Pid, Priority,
+    ProcessTable, SignalSource, slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, koja_seed_reductions, setvbuf};
@@ -26,9 +26,12 @@ use crate::panic;
 use crate::reactor;
 use crate::signals;
 use crate::tsan;
+use crate::util::{BLOCK_HEADER_SIZE, alloc_koja_string, koja_rc_dec};
 use crate::wire::{
-    Envelope, IO_READY_BUF_SIZE, IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE,
-    OwnedPayload, TAG_BUSINESS, TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE, TAG_REPLY,
+    EXIT_SIGNAL_BACKTRACE_OFFSET, EXIT_SIGNAL_BUF_SIZE, EXIT_SIGNAL_MESSAGE_OFFSET,
+    EXIT_SIGNAL_PID_OFFSET, EXIT_SIGNAL_REASON_OFFSET, Envelope, IO_READY_BUF_SIZE,
+    IO_READY_FD_OFFSET, IO_READY_VARIANT_OFFSET, LIFECYCLE_BUF_SIZE, OwnedPayload, TAG_BUSINESS,
+    TAG_EXIT_SIGNAL, TAG_HEADER_SIZE, TAG_IO_READY, TAG_LIFECYCLE, TAG_REPLY,
 };
 
 /// The native process table: a generational slotmap of [`NativeExecution`]
@@ -367,6 +370,63 @@ fn deliver_or_discard(pid: i64, envelope: Envelope) {
     drop(leftover);
 }
 
+/// Payload drop glue for an undelivered `ExitSignal` envelope:
+/// releases the two `CrashInfo` strings [`exit_signal_envelope`]
+/// allocated.
+unsafe extern "C" fn exit_signal_drop_glue(payload: *mut u8) {
+    for offset in [EXIT_SIGNAL_MESSAGE_OFFSET, EXIT_SIGNAL_BACKTRACE_OFFSET] {
+        unsafe {
+            let string = *payload.add(offset - TAG_HEADER_SIZE).cast::<*mut u8>();
+            if !string.is_null() {
+                koja_rc_dec(string.sub(BLOCK_HEADER_SIZE));
+            }
+        }
+    }
+}
+
+/// Synthesizes the `TAG_EXIT_SIGNAL` envelope for one staged
+/// [`ExitNotice`] (see the `EXIT_SIGNAL_*` offsets in [`crate::wire`]).
+/// A `Crashed` reason allocates the two `CrashInfo` strings, owned by
+/// the envelope until delivery.
+fn exit_signal_envelope(notice: &ExitNotice) -> Envelope {
+    const PAYLOAD_SIZE: usize = EXIT_SIGNAL_BUF_SIZE - TAG_HEADER_SIZE;
+    let field = |offset: usize| offset - TAG_HEADER_SIZE;
+
+    let mut payload = [0u8; PAYLOAD_SIZE];
+    let mut write_word = |offset: usize, word: u64| {
+        payload[field(offset)..field(offset) + 8].copy_from_slice(&word.to_ne_bytes());
+    };
+    write_word(EXIT_SIGNAL_PID_OFFSET, notice.target as u64);
+    if let Some(crash_info) = &notice.crash_info {
+        let message = unsafe { alloc_koja_string(crash_info.message.as_bytes()) };
+        let backtrace = unsafe { alloc_koja_string(crash_info.backtrace.as_bytes()) };
+        write_word(EXIT_SIGNAL_MESSAGE_OFFSET, message as u64);
+        write_word(EXIT_SIGNAL_BACKTRACE_OFFSET, backtrace as u64);
+    }
+    payload[field(EXIT_SIGNAL_REASON_OFFSET)] = notice.reason as u8;
+
+    unsafe {
+        Envelope::from_payload(
+            TAG_EXIT_SIGNAL,
+            payload.as_ptr(),
+            PAYLOAD_SIZE,
+            Some(exit_signal_drop_glue),
+        )
+    }
+}
+
+/// Synthesizes and delivers every staged `ExitSignal`, waking parked
+/// watchers. Returns the undeliverable envelopes for the caller to
+/// drop after releasing the lock. Call at every site that can stage
+/// notices (death edges and `koja_rt_monitor`).
+fn deliver_exit_signals(table: &mut NativeTable) -> Vec<Envelope> {
+    table
+        .take_exit_notices()
+        .into_iter()
+        .filter_map(|notice| table.deliver(notice.watcher, exit_signal_envelope(&notice)))
+        .collect()
+}
+
 /// `koja_rt_reply` status: the reply was slotted for a still-waiting caller.
 /// Mirrored as `Delivery.Delivered` by the `ReplyTo.send` emitter.
 const REPLY_DELIVERED: i64 = 0;
@@ -447,7 +507,17 @@ unsafe extern "C" fn process_trampoline() {
         }
     }
 
-    SCHED.lock().unwrap().mark_dead_if_alive(pid);
+    // The `-> Dead` edge stages one `ExitSignal` per monitor of this
+    // process. Deliver them (waking parked watchers) before yielding,
+    // dropping any bounced envelope off-lock.
+    let leftovers = {
+        let mut guard = SCHED.lock().unwrap();
+        guard.mark_dead_if_alive(pid);
+        let leftovers = deliver_exit_signals(&mut guard);
+        publish_ready(&mut guard);
+        leftovers
+    };
+    drop(leftovers);
 
     WORK_AVAILABLE.notify_all();
     yield_to_scheduler();
@@ -1266,8 +1336,37 @@ pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
 /// config glue, so nested heap is released too.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_kill(pid: i64) {
-    let reclaim = SCHED.lock().unwrap().kill(pid);
+    let mut guard = SCHED.lock().unwrap();
+    let reclaim = guard.kill(pid);
+    let leftovers = deliver_exit_signals(&mut guard);
+    let woken = publish_ready(&mut guard);
+    drop(guard);
+    notify_workers(woken);
     drop(reclaim);
+    drop(leftovers);
+}
+
+/// Registers the calling process as a monitor of `target`, returning
+/// the token backing `Process.MonitorRef`. Monitoring an already-dead
+/// PID delivers the `ExitSignal` immediately.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_monitor(target: i64) -> i64 {
+    let watcher = CURRENT_PID.with(|c| c.get());
+    let mut guard = SCHED.lock().unwrap();
+    let token = guard.monitor(watcher, target);
+    let leftovers = deliver_exit_signals(&mut guard);
+    let woken = publish_ready(&mut guard);
+    drop(guard);
+    notify_workers(woken);
+    drop(leftovers);
+    token
+}
+
+/// Removes the monitor identified by `token`, suppressing its
+/// `ExitSignal`. A no-op for an unknown or already-fired token.
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_demonitor(token: i64) {
+    SCHED.lock().unwrap().demonitor(token);
 }
 
 /// Count of illegal lifecycle edges the scheduler has applied: zero in

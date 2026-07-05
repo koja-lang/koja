@@ -1,0 +1,23 @@
+alias Process.Step
+alias Process.StopReason
+
+enum Msg
+  Ping
+end
+
+struct Child
+end
+
+impl Process<Child, Msg, Int> for Child
+  fn start(config: Child) -> Result<Self, StopReason>
+    Result.Ok(config)
+  end
+
+  fn handle(self, msg: Msg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Done(StopReason.Normal)
+  end
+end
+
+child = spawn Child.start(Child{})
+Process.monitor(child.pid())
+"unreachable".print()
