@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja.toml` now accepts a `bin` field under `[project]` to name the output binary independently of the package name. When omitted it defaults to the lowercased package name.
 - The `[project]` table accepts `authors`, `description`, and `license` metadata fields, though unused.
 - `koja shell` now properly loads project files when launched inside a project directory.
+- `koja shell` now tab-completes keywords, types, functions, session variables, `Type.` members, and `value.` methods and fields.
 
 ### Changed
 

@@ -34,9 +34,11 @@ use koja_ast::identifier::{
 };
 use koja_ast::span::Span;
 
+mod candidates;
 mod definitions;
 mod format;
 
+pub use candidates::{Candidate, CandidateDetail, CandidateKind, KEYWORDS};
 pub use definitions::{
     ConstantDefinition, Dispatch, EnumDefinition, FunctionSignature, ProtocolDefinition,
     ResolvedEnumVariant, ResolvedParam, ResolvedProtocolMethod, ResolvedStructField,

@@ -24,10 +24,14 @@ use koja_ast::token::TokenKind;
 use koja_ir::{IRScript, IRType, lower_script};
 use koja_ir_eval::{Interpreter, Value};
 use koja_parser::{ParseMode, ParsedProgram, SourceFile, parse_program};
-use koja_typecheck::{CheckFailure, check_program};
+use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
 use rustyline::Editor;
 use rustyline::error::ReadlineError;
 use rustyline::history::DefaultHistory;
+
+use crate::complete::{CompletionContext, ShellHelper};
+
+mod complete;
 
 /// Default session package for a bare `koja shell` (no project). The
 /// session re-runs the entire concatenated input history through the
@@ -41,6 +45,10 @@ pub const SESSION_PACKAGE: &str = "REPL";
 const BANNER: &str = "koja shell -- IR interpreter\n\
     Type :help for commands, :quit (or Ctrl-D) to exit\n";
 
+/// REPL commands, offered by tab completion and matched literally in
+/// [`run`]'s dispatch.
+const COMMANDS: &[&str] = &[":help", ":quit", ":reset", ":state"];
+
 const HELP: &str = "Commands:\n  \
     :help    show this message\n  \
     :quit    exit the shell\n  \
@@ -51,6 +59,8 @@ Notes:\n  \
     - Multi-line blocks (struct, enum, fn, ...) rewrite the prompt onto\n    \
       its own line so the block reads as bare code; Ctrl-C or :reset\n    \
       abandons an in-flight multi-line input.\n  \
+    - Tab completes keywords, types, functions, session variables,\n    \
+      `Type.` members, and `value.` methods and fields.\n  \
     - Up-arrow recalls previous inputs (in-memory, per session).\n  \
     - State accumulates across inputs: each new input runs the whole\n    \
       session (today's pipeline is whole-program; incremental support\n    \
@@ -95,7 +105,7 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
     }
     let _ = io::stdout().flush();
 
-    let mut editor = match Editor::<(), DefaultHistory>::new() {
+    let mut editor = match Editor::<ShellHelper, DefaultHistory>::new() {
         Ok(editor) => editor,
         Err(err) => {
             eprintln!("error: failed to initialize line editor: {err}");
@@ -104,6 +114,7 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
     };
 
     let mut session = Session::new(baseline, session_package);
+    editor.set_helper(Some(ShellHelper::new(session.initial_completion())));
     loop {
         let input = match read_input(&mut editor, session.counter()) {
             InputOutcome::Buffer(input) => input,
@@ -139,12 +150,14 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
         }
         let _ = editor.add_history_entry(input.as_str());
         match session.try_eval(trimmed) {
-            Ok(Some(rendered)) => {
-                println!("\x1b[90m{rendered}\x1b[0m");
+            Ok(outcome) => {
+                if let Some(rendered) = outcome.rendered {
+                    println!("\x1b[90m{rendered}\x1b[0m");
+                }
                 session.bump_counter();
-            }
-            Ok(None) => {
-                session.bump_counter();
+                if let Some(helper) = editor.helper_mut() {
+                    helper.set_context(outcome.completion);
+                }
             }
             Err(error) => eprintln!("error: {error}"),
         }
@@ -167,7 +180,7 @@ pub fn run(baseline: Vec<SourceFile>, session_package: String) {
 /// surfaces as a Cancelled outcome with an "unterminated input
 /// discarded at EOF" message; Ctrl-D on the first read returns
 /// [`InputOutcome::Eof`].
-fn read_input(editor: &mut Editor<(), DefaultHistory>, counter: u32) -> InputOutcome {
+fn read_input(editor: &mut Editor<ShellHelper, DefaultHistory>, counter: u32) -> InputOutcome {
     let prompt = format!("koja({counter})> ");
     let first = match editor.readline(&prompt) {
         Ok(line) => line,
@@ -278,18 +291,18 @@ impl Session {
     /// back on pipeline failure (parse / typecheck / lower / runtime
     /// errors leave the session exactly as it was before the call).
     ///
-    /// `Ok(Some(rendered))` carries the trailing expression's
-    /// `Debug.format` output — the exact bytes `value.print()` would
-    /// emit — and `Ok(None)` covers a [`Value::Unit`] trailing value
-    /// so the REPL suppresses the print line for void inputs (a `fn`
-    /// item, an assignment, or a call like `IO.puts` whose signature
-    /// elides `-> T`). The statement evaluated successfully in either
-    /// case (side effects already landed), so we don't roll back.
-    fn try_eval(&mut self, input: &str) -> Result<Option<String>, String> {
+    /// The outcome's `rendered` carries the trailing expression's
+    /// `Debug.format` output, the exact bytes `value.print()` would
+    /// emit. It is `None` for a [`Value::Unit`] trailing value so the
+    /// REPL suppresses the print line for void inputs (a `fn` item,
+    /// an assignment, or a call like `IO.puts` whose signature elides
+    /// `-> T`). The statement evaluated successfully in either case
+    /// (side effects already landed), so we don't roll back.
+    fn try_eval(&mut self, input: &str) -> Result<EvalOutcome, String> {
         let snapshot = self.statements.len();
         self.statements.push(input.to_string());
         match self.run() {
-            Ok(rendered) => Ok(rendered),
+            Ok(outcome) => Ok(outcome),
             Err(error) => {
                 self.statements.truncate(snapshot);
                 Err(error)
@@ -297,10 +310,28 @@ impl Session {
         }
     }
 
-    /// Synthesize the full session source and evaluate it, returning
-    /// the REPL's print line (`None` suppresses it for a `Unit`
-    /// trailing value).
-    fn run(&self) -> Result<Option<String>, String> {
+    /// Completion context before any input has evaluated: the
+    /// baseline checked with an empty fragment. Degrades to an empty
+    /// context (keywords and `:commands` only) if the baseline does
+    /// not check. The session itself stays usable and reports the
+    /// real errors on the first eval.
+    fn initial_completion(&self) -> CompletionContext {
+        let (sources, path) = self.sources();
+        match check_fragment(sources, &path, false) {
+            Ok(checked) => CompletionContext::of(&checked, self.package.clone(), &path),
+            Err(_) => CompletionContext::empty(self.package.clone()),
+        }
+    }
+
+    /// Synthesize the full session source and evaluate it.
+    fn run(&self) -> Result<EvalOutcome, String> {
+        let (sources, path) = self.sources();
+        eval_fragment(sources, &path, &self.package)
+    }
+
+    /// The baseline plus the synthesized session fragment, and the
+    /// fragment's path within that source set.
+    fn sources(&self) -> (Vec<SourceFile>, PathBuf) {
         let path = PathBuf::from(format!("{}.koja", self.package));
         let mut sources = self.baseline.clone();
         sources.push(SourceFile {
@@ -308,7 +339,7 @@ impl Session {
             path: path.clone(),
             source: self.synthesize(),
         });
-        eval_fragment(sources, &path)
+        (sources, path)
     }
 
     /// Concatenate all statement blocks into the script source the
@@ -320,12 +351,22 @@ impl Session {
     }
 }
 
+/// A successful eval: the REPL's print line (`None` suppresses it
+/// for a `Unit` trailing value) plus the completion snapshot taken
+/// from the checked session.
+struct EvalOutcome {
+    completion: CompletionContext,
+    rendered: Option<String>,
+}
+
 /// Drive the assembled `sources` through the script-mode pipeline and
-/// produce the REPL's print line: `Some(text)` for a value, `None` for
-/// a `Unit` trailing value (suppressed).
+/// produce an [`EvalOutcome`]: the REPL's print line (`Some(text)`
+/// for a value, `None` for a suppressed `Unit` trailing value) plus
+/// the completion snapshot taken from the probe pass's
+/// [`CheckedProgram`].
 ///
 /// The trailing expression is rendered through its real `Debug.format`
-/// instance — the same path `value.print()` takes — so structs show
+/// instance, the same path `value.print()` takes, so structs show
 /// named fields and enums show source-level variant names instead of
 /// the runtime [`Display`]'s mangled monomorphization symbols. To get
 /// there, the trailing expression `E` is rewritten to `E.format()`
@@ -335,49 +376,68 @@ impl Session {
 /// call. A post-hoc lookup can't, since the program never formats the
 /// value on its own.
 ///
-/// The rewrite only fires for a non-`Unit` trailing value; the probe
+/// The rewrite only fires for a non-`Unit` trailing value. The probe
 /// lower that decides this is side-effect-free, so exactly one
 /// [`Interpreter::run_script`] executes per input and a fragment like
 /// `GitHub.user("x")` fires its request once. If the wrapped lower
-/// fails — a trailing type with no usable `Debug.format`, e.g. a bare
-/// function value — the unwrapped body runs and the runtime [`Display`]
-/// renders it.
+/// fails (a trailing type with no usable `Debug.format`, e.g. a bare
+/// function value), the unwrapped body runs and the runtime
+/// [`Display`] renders it.
 ///
-/// Always parses in [`ParseMode::Script`]: the REPL treats top-level
-/// statements as first-class, and helper `fn` items land on
-/// [`koja_ir::IRScript::packages`] as call targets. `sources` is the
-/// driver-supplied baseline (stdlib prelude plus, in a project, the
-/// project + dependency sources) with the REPL fragment appended last;
-/// `fragment_path` identifies that fragment file for the rewrite.
-fn eval_fragment(sources: Vec<SourceFile>, fragment_path: &Path) -> Result<Option<String>, String> {
-    let probe = lower_fragment(sources.clone(), fragment_path, false)?;
+/// `sources` is the driver-supplied baseline (stdlib prelude plus, in
+/// a project, the project + dependency sources) with the REPL
+/// fragment appended last. `fragment_path` identifies that fragment
+/// file for the rewrite and the binding walk, and `package` labels
+/// the completion snapshot.
+fn eval_fragment(
+    sources: Vec<SourceFile>,
+    fragment_path: &Path,
+    package: &str,
+) -> Result<EvalOutcome, String> {
+    let checked = check_fragment(sources.clone(), fragment_path, false)?;
+    let completion = CompletionContext::of(&checked, package.to_string(), fragment_path);
+    let probe = lower_checked(&checked)?;
     if probe.return_type == IRType::Unit {
         run_script(&probe)?;
-        return Ok(None);
+        return Ok(EvalOutcome {
+            completion,
+            rendered: None,
+        });
     }
-    let value = match lower_fragment(sources, fragment_path, true) {
-        Ok(formatted) => run_script(&formatted)?,
+    let formatted =
+        check_fragment(sources, fragment_path, true).and_then(|wrapped| lower_checked(&wrapped));
+    let value = match formatted {
+        Ok(script) => run_script(&script)?,
         Err(_) => run_script(&probe)?,
     };
-    Ok(Some(render(value)))
+    Ok(EvalOutcome {
+        completion,
+        rendered: Some(render(value)),
+    })
 }
 
-/// Parse + typecheck + lower `sources` in script mode. When `wrap` is
+/// Parse + typecheck `sources` in script mode. [`ParseMode::Script`]
+/// is unconditional: the REPL treats top-level statements as
+/// first-class, and helper `fn` items land on
+/// [`koja_ir::IRScript::packages`] as call targets. When `wrap` is
 /// set, the fragment file's trailing expression is rewritten to
 /// `<expr>.format()` so the lowered script yields its `Debug.format`
-/// string. On failure returns a formatted error string covering parse
-/// / typecheck / lower failures.
-fn lower_fragment(
+/// string. On failure returns a formatted error string covering
+/// parse and typecheck failures.
+fn check_fragment(
     sources: Vec<SourceFile>,
     fragment_path: &Path,
     wrap: bool,
-) -> Result<IRScript, String> {
+) -> Result<CheckedProgram, String> {
     let mut parsed = parse_program(sources, ParseMode::Script);
     if wrap {
         wrap_trailing_in_format(&mut parsed, fragment_path);
     }
-    let checked = check_program(parsed).map_err(format_check_failure)?;
-    lower_script(&checked).map_err(|err| err.to_string())
+    check_program(parsed).map_err(format_check_failure)
+}
+
+fn lower_checked(checked: &CheckedProgram) -> Result<IRScript, String> {
+    lower_script(checked).map_err(|err| err.to_string())
 }
 
 fn run_script(script: &IRScript) -> Result<Value, String> {
@@ -523,26 +583,55 @@ fn format_block(prefix: &str, diagnostics: &[&Diagnostic]) -> String {
     out
 }
 
+/// Shared fixtures for this crate's tests, used by both the eval
+/// tests below and the completion tests in [`complete`].
 #[cfg(test)]
-mod tests {
-    use super::*;
+pub(crate) mod testutil {
+    use std::path::PathBuf;
 
-    /// Stdlib prelude plus a synthetic project package `Demo` so a REPL
-    /// fragment can call into project sources just like the driver wires
-    /// them up. `Calc` exercises a method call; `Point` exercises the
-    /// struct `Debug.format` rendering.
-    fn baseline_with_project() -> Vec<SourceFile> {
+    use koja_parser::SourceFile;
+
+    /// Stdlib prelude plus a synthetic project package `Demo` so a
+    /// REPL fragment can call into project sources just like the
+    /// driver wires them up. `Calc` exercises a static method call,
+    /// `Point` a struct with fields, and `Color` an enum with unit
+    /// variants.
+    pub(crate) fn baseline_with_project() -> Vec<SourceFile> {
         let mut baseline = koja_stdlib::autoimport_sources();
         baseline.extend(koja_stdlib::qualified_sources());
         baseline.push(SourceFile {
             package: "Demo".to_string(),
             path: PathBuf::from("demo.koja"),
             source: "struct Calc\n  fn double(x: Int) -> Int\n    x * 2\n  end\nend\n\
-                     struct Point\n  x: Int\n  y: Int\nend\n"
+                     struct Point\n  x: Int\n  y: Int\nend\n\
+                     enum Color\n  Red\n  Green\n  Blue\nend\n"
                 .to_string(),
         });
         baseline
     }
+
+    /// The REPL fragment's source set and path for `package`, the
+    /// way [`crate::Session::sources`] assembles them.
+    pub(crate) fn fragment_sources(
+        baseline: &[SourceFile],
+        package: &str,
+        source: &str,
+    ) -> (Vec<SourceFile>, PathBuf) {
+        let path = PathBuf::from(format!("{package}.koja"));
+        let mut sources = baseline.to_vec();
+        sources.push(SourceFile {
+            package: package.to_string(),
+            path: path.clone(),
+            source: source.to_string(),
+        });
+        (sources, path)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::testutil::{baseline_with_project, fragment_sources};
+    use super::*;
 
     /// Append `source` as the REPL fragment for `package` and evaluate
     /// it the way [`Session::run`] does.
@@ -551,14 +640,8 @@ mod tests {
         package: &str,
         source: &str,
     ) -> Result<Option<String>, String> {
-        let path = PathBuf::from(format!("{package}.koja"));
-        let mut sources = baseline.to_vec();
-        sources.push(SourceFile {
-            package: package.to_string(),
-            path: path.clone(),
-            source: source.to_string(),
-        });
-        eval_fragment(sources, &path)
+        let (sources, path) = fragment_sources(baseline, package, source);
+        eval_fragment(sources, &path, package).map(|outcome| outcome.rendered)
     }
 
     #[test]
