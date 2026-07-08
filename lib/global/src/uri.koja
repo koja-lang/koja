@@ -1,0 +1,799 @@
+alias URI.Error as URIError
+
+@doc """
+Why a `URI` value could not be produced. `InvalidURI` carries the
+offending part of the input.
+"""
+enum URI.Error
+  InvalidPercentEncoding(String)
+  InvalidURI(String)
+  InvalidUTF8
+end
+
+@doc """
+A parsed RFC 3986 URI. Fields hold the encoded (wire-form) components
+exactly as they appear in the URI:
+
+    [scheme]://[userinfo]@[host]:[port][path]?[query]#[fragment]
+
+Every URI has a path (possibly empty), so `path` is not optional.
+Obtain values via `URI.parse`, which validates its input; the fields of
+a parsed URI can be reassembled losslessly with `to_string`.
+"""
+struct URI
+  fragment: Option<String>
+  host: Option<String>
+  path: String
+  port: Option<Int>
+  query: Option<String>
+  scheme: Option<String>
+  userinfo: Option<String>
+
+  @doc """
+  Percent-unescapes `input`. Returns an error if the input contains a
+  malformed `%XX` sequence or decodes to invalid UTF-8; all other
+  characters pass through verbatim.
+  """
+  fn decode(input: String) -> Result<String, URIError>
+    bytes = input.to_binary()
+    size = bytes.byte_size()
+    out = "".to_binary()
+    seg_start = 0
+    i = 0
+
+    while i < size
+      if URI.percent_byte?(URI.byte_at(bytes, i))
+        if i + 2 >= size
+          truncated = URI.text(bytes, i, size - 1)
+          return Result.Err(URIError.InvalidPercentEncoding(truncated))
+        end
+
+        hi = URI.hex_value(URI.byte_at(bytes, i + 1))
+        lo = URI.hex_value(URI.byte_at(bytes, i + 2))
+
+        if hi.none?() or lo.none?()
+          malformed = URI.text(bytes, i, i + 2)
+          return Result.Err(URIError.InvalidPercentEncoding(malformed))
+        end
+
+        if seg_start <= i - 1
+          out = out <> bytes.slice(Range{start: seg_start, stop: i - 1})
+        end
+
+        decoded = hi.unwrap() * 16 + lo.unwrap()
+        decoded_byte = <<decoded::8>>
+        out = out <> decoded_byte
+        seg_start = i + 3
+        i += 3
+      else
+        i += 1
+      end
+    end
+
+    if seg_start <= size - 1
+      out = out <> bytes.slice(Range{start: seg_start, stop: size - 1})
+    end
+
+    match out.to_string()
+      Result.Ok(s) -> Result.Ok(s)
+      Result.Err(_) -> Result.Err(URIError.InvalidUTF8)
+    end
+  end
+
+  @doc """
+  The registered default port for `scheme`, or `Option.None` when the
+  scheme is unknown.
+  """
+  fn default_port(scheme: String) -> Option<Int>
+    cond
+      scheme == "ftp" -> Option.Some(21)
+      scheme == "http" -> Option.Some(80)
+      scheme == "https" -> Option.Some(443)
+      scheme == "ldap" -> Option.Some(389)
+      scheme == "sftp" -> Option.Some(22)
+      scheme == "tftp" -> Option.Some(69)
+      scheme == "ws" -> Option.Some(80)
+      scheme == "wss" -> Option.Some(443)
+      else -> Option.None
+    end
+  end
+
+  @doc """
+  Percent-encodes every byte of `input` that is neither reserved nor
+  unreserved per RFC 3986. Reserved characters such as `:` and `/` are
+  kept as-is, so this suits encoding a whole URI.
+  """
+  fn encode(input: String) -> String
+    bytes = input.to_binary()
+    size = bytes.byte_size()
+    parts: List<String> = List.new()
+    seg_start = 0
+    i = 0
+
+    while i < size
+      unless URI.unescaped_byte?(URI.byte_at(bytes, i))
+        if seg_start <= i - 1
+          parts = parts.append(URI.text(bytes, seg_start, i - 1))
+        end
+
+        parts = parts.append(URI.percent_encode_byte(URI.byte_at(bytes, i)))
+        seg_start = i + 1
+      end
+
+      i += 1
+    end
+
+    if seg_start <= size - 1
+      parts = parts.append(URI.text(bytes, seg_start, size - 1))
+    end
+
+    String.join(parts, "")
+  end
+
+  @doc """
+  Parses and validates `input` as an RFC 3986 URI (absolute or
+  relative). The scheme is lowercased and a known scheme's default port
+  fills `port` when the input has none. Returns `URIError.InvalidURI`
+  with the offending part when a component contains a forbidden
+  character.
+  """
+  fn parse(input: String) -> Result<URI, URIError>
+    bytes = input.to_binary()
+    size = bytes.byte_size()
+    uri = URI{
+      fragment: Option.None,
+      host: Option.None,
+      path: "",
+      port: Option.None,
+      query: Option.None,
+      scheme: Option.None,
+      userinfo: Option.None,
+    }
+
+    pos = 0
+
+    match URI.scan_scheme(bytes, size)
+      Option.Some(colon_pos) ->
+        uri.scheme = Option.Some(URI.text(bytes, 0, colon_pos - 1).downcase())
+        pos = colon_pos + 1
+
+      Option.None ->
+        ()
+    end
+
+    if pos + 1 < size
+      # "//" introduces the authority component.
+      if URI.slash_byte?(URI.byte_at(bytes, pos)) and
+      URI.slash_byte?(URI.byte_at(bytes, pos + 1))
+        auth_end = URI.scan_authority_end(bytes, pos + 2, size)
+
+        match URI.parse_authority(bytes, pos + 2, auth_end, uri)
+          Result.Ok(updated) -> uri = updated
+          Result.Err(err) -> return Result.Err(err)
+        end
+
+        pos = auth_end
+      end
+    end
+
+    path_end = URI.scan_path_end(bytes, pos, size)
+    relative = uri.scheme.none?() and uri.host.none?()
+
+    match URI.validate_path(bytes, pos, path_end, relative)
+      Option.Some(err) -> return Result.Err(err)
+      Option.None -> ()
+    end
+
+    uri.path = URI.text(bytes, pos, path_end - 1)
+
+    match URI.parse_suffix(bytes, path_end, size, uri)
+      Result.Err(err) -> return Result.Err(err)
+      Result.Ok(updated) -> uri = updated
+    end
+
+    if uri.port.none?()
+      match uri.scheme
+        Option.Some(scheme) -> uri.port = URI.default_port(scheme)
+        Option.None -> ()
+      end
+    end
+
+    Result.Ok(uri)
+  end
+
+  @doc """
+  Reassembles the URI into its string form. The port is omitted when it
+  equals the scheme's default, and a host containing `:` (an IPv6
+  literal) is wrapped in brackets.
+  """
+  fn to_string(self) -> String
+    out = ""
+
+    match self.scheme
+      Option.Some(scheme) -> out = out <> scheme <> ":"
+      Option.None -> ()
+    end
+
+    match self.host
+      Option.Some(host) ->
+        out = out <> "//"
+
+        match self.userinfo
+          Option.Some(userinfo) -> out = out <> userinfo <> "@"
+          Option.None -> ()
+        end
+
+        out = out <> (host.contains?(":") ? ("[" <> host <> "]") : host)
+        out = out <> URI.port_suffix(self.scheme, self.port)
+
+      Option.None ->
+        ()
+    end
+
+    out = out <> self.path
+
+    match self.query
+      Option.Some(query) -> out = out <> "?" <> query
+      Option.None -> ()
+    end
+
+    match self.fragment
+      Option.Some(fragment) -> out = out <> "#" <> fragment
+      Option.None -> ()
+    end
+
+    out
+  end
+
+  priv fn alpha_byte?(b: Int) -> Bool
+    (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
+  end
+
+  priv fn byte_at(bytes: Binary, pos: Int) -> Int
+    # Callers guarantee `pos` is in bounds.
+
+    bytes.at(pos).unwrap()
+  end
+
+  priv fn colon_byte?(b: Int) -> Bool
+    b == 58
+  end
+
+  priv fn digit_byte?(b: Int) -> Bool
+    b >= 48 and b <= 57
+  end
+
+  priv fn find_byte(bytes: Binary, target: Int, start: Int, stop: Int)
+    -> Option<Int>
+
+    i = start
+
+    while i < stop
+      if URI.byte_at(bytes, i) == target
+        return Option.Some(i)
+      end
+
+      i += 1
+    end
+
+    Option.None
+  end
+
+  priv fn gen_delim_byte?(b: Int) -> Bool
+    # gen-delims = : / ? # [ ] @
+
+    b == 58 or b == 47 or b == 63 or b == 35 or b == 91 or b == 93 or b == 64
+  end
+
+  priv fn hash_byte?(b: Int) -> Bool
+    b == 35
+  end
+
+  priv fn hex_value(b: Int) -> Option<Int>
+    if URI.digit_byte?(b)
+      return Option.Some(b - 48)
+    end
+
+    if b >= 65 and b <= 70
+      return Option.Some(b - 55)
+    end
+
+    if b >= 97 and b <= 102
+      return Option.Some(b - 87)
+    end
+
+    Option.None
+  end
+
+  priv fn option_int_eq(a: Option<Int>, b: Option<Int>) -> Bool
+    match a
+      Option.Some(x) ->
+        match b
+          Option.Some(y) -> x == y
+          Option.None -> false
+        end
+
+      Option.None ->
+        b.none?()
+    end
+  end
+
+  priv fn option_string_eq(a: Option<String>, b: Option<String>) -> Bool
+    match a
+      Option.Some(x) ->
+        match b
+          Option.Some(y) -> x == y
+          Option.None -> false
+        end
+
+      Option.None ->
+        b.none?()
+    end
+  end
+
+  priv fn parse_authority(bytes: Binary, start: Int, stop: Int, uri: URI)
+    -> Result<URI, URIError>
+
+    # Splits the authority bytes `[start, stop)` into userinfo, host,
+    # and port. An empty authority (as in `//`) yields an empty host.
+
+    if start >= stop
+      uri.host = Option.Some("")
+      return Result.Ok(uri)
+    end
+
+    host_start = start
+
+    # '@' (byte 64) separates userinfo from host.
+    match URI.find_byte(bytes, 64, start, stop)
+      Option.Some(at_pos) ->
+        match URI.validate_component(
+          bytes,
+          start,
+          at_pos,
+          b -> URI.userinfo_byte?(b),
+        )
+          Option.Some(err) -> return Result.Err(err)
+          Option.None -> ()
+        end
+
+        uri.userinfo = Option.Some(URI.text(bytes, start, at_pos - 1))
+        host_start = at_pos + 1
+
+      Option.None ->
+        ()
+    end
+
+    match URI.parse_host(bytes, host_start, stop, uri)
+      Result.Err(err) ->
+        Result.Err(err)
+
+      Result.Ok(host_pair) ->
+        uri = host_pair.first
+        after_host = host_pair.second
+
+        if after_host >= stop
+          return Result.Ok(uri)
+        end
+
+        # Only ':' (introducing the port) may follow the host.
+        unless URI.colon_byte?(URI.byte_at(bytes, after_host))
+          invalid = URI.text(bytes, after_host, after_host)
+          return Result.Err(URIError.InvalidURI(invalid))
+        end
+
+        URI.parse_port(bytes, after_host + 1, stop, uri)
+    end
+  end
+
+  priv fn parse_host(bytes: Binary, start: Int, stop: Int, uri: URI)
+    -> Result<Pair<URI, Int>, URIError>
+
+    # Parses the host from `[start, stop)`, stripping brackets from IP
+    # literals. Returns the updated URI and the position after the host.
+
+    bracketed = false
+
+    if start < stop
+      # '[' opens an IPv6/IPvFuture literal.
+      if URI.byte_at(bytes, start) == 91
+        bracketed = true
+      end
+    end
+
+    unless bracketed
+      # The host ends at the port ':' (byte 58) or the authority's end.
+      host_end =
+        match URI.find_byte(bytes, 58, start, stop)
+          Option.Some(colon_pos) -> colon_pos
+          Option.None -> stop
+        end
+
+      match URI.validate_component(
+        bytes,
+        start,
+        host_end,
+        b -> URI.reg_name_byte?(b),
+      )
+        Option.Some(err) -> return Result.Err(err)
+        Option.None -> ()
+      end
+
+      uri.host = Option.Some(URI.text(bytes, start, host_end - 1))
+      ok_pair: Pair<URI, Int> = Pair{first: uri, second: host_end}
+      return Result.Ok(ok_pair)
+    end
+
+    # A bracketed literal must close with ']' (byte 93).
+    match URI.find_byte(bytes, 93, start, stop)
+      Option.None ->
+        Result.Err(URIError.InvalidURI("["))
+
+      Option.Some(rb_pos) ->
+        match URI.validate_component(
+          bytes,
+          start + 1,
+          rb_pos,
+          b -> URI.userinfo_byte?(b),
+        )
+          Option.Some(err) -> return Result.Err(err)
+          Option.None -> ()
+        end
+
+        uri.host = Option.Some(URI.text(bytes, start + 1, rb_pos - 1))
+        bracketed_pair: Pair<URI, Int> = Pair{first: uri, second: rb_pos + 1}
+        Result.Ok(bracketed_pair)
+    end
+  end
+
+  priv fn parse_port(bytes: Binary, start: Int, stop: Int, uri: URI)
+    -> Result<URI, URIError>
+
+    # Parses the port digits from `[start, stop)`. An empty port (as in
+    # `http://host:`) is treated as absent.
+
+    if start >= stop
+      return Result.Ok(uri)
+    end
+
+    i = start
+
+    while i < stop
+      unless URI.digit_byte?(URI.byte_at(bytes, i))
+        return Result.Err(URIError.InvalidURI(URI.text(bytes, i, i)))
+      end
+
+      i += 1
+    end
+
+    port_text = URI.text(bytes, start, stop - 1)
+
+    match port_text.to_int()
+      Result.Ok(port) ->
+        uri.port = Option.Some(port)
+        Result.Ok(uri)
+
+      Result.Err(_) ->
+        Result.Err(URIError.InvalidURI(port_text))
+    end
+  end
+
+  priv fn parse_suffix(bytes: Binary, start: Int, size: Int, uri: URI)
+    -> Result<URI, URIError>
+
+    # Parses the optional query and fragment starting at `start`.
+
+    pos = start
+
+    if pos < size
+      if URI.question_byte?(URI.byte_at(bytes, pos))
+        q_end = URI.scan_query_end(bytes, pos + 1, size)
+
+        match URI.validate_component(
+          bytes,
+          pos + 1,
+          q_end,
+          b -> URI.query_byte?(b),
+        )
+          Option.Some(err) -> return Result.Err(err)
+          Option.None -> ()
+        end
+
+        uri.query = Option.Some(URI.text(bytes, pos + 1, q_end - 1))
+        pos = q_end
+      end
+    end
+
+    if pos < size
+      if URI.hash_byte?(URI.byte_at(bytes, pos))
+        match URI.validate_component(
+          bytes,
+          pos + 1,
+          size,
+          b -> URI.query_byte?(b),
+        )
+          Option.Some(err) -> return Result.Err(err)
+          Option.None -> ()
+        end
+
+        uri.fragment = Option.Some(URI.text(bytes, pos + 1, size - 1))
+      end
+    end
+
+    Result.Ok(uri)
+  end
+
+  priv fn path_byte?(b: Int) -> Bool
+    URI.pchar_byte?(b) or URI.slash_byte?(b)
+  end
+
+  priv fn pchar_byte?(b: Int) -> Bool
+    # pchar = unreserved / pct-encoded / sub-delims / ":" / "@"
+
+    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == 58 or b == 64
+  end
+
+  priv fn percent_byte?(b: Int) -> Bool
+    b == 37
+  end
+
+  priv fn percent_encode_byte(b: Int) -> String
+    hex = "0123456789ABCDEF"
+    "%" <> hex.at(b / 16).unwrap() <> hex.at(b % 16).unwrap()
+  end
+
+  priv fn port_default?(scheme: Option<String>, port: Int) -> Bool
+    match scheme
+      Option.None ->
+        false
+
+      Option.Some(s) ->
+        match URI.default_port(s)
+          Option.Some(default) -> default == port
+          Option.None -> false
+        end
+    end
+  end
+
+  priv fn port_suffix(scheme: Option<String>, port: Option<Int>) -> String
+    match port
+      Option.None -> ""
+      Option.Some(p) -> URI.port_default?(scheme, p) ? "" : ":#{p}"
+    end
+  end
+
+  priv fn query_byte?(b: Int) -> Bool
+    # query = *( pchar / "/" / "?" ); the fragment grammar is identical.
+
+    URI.pchar_byte?(b) or URI.slash_byte?(b) or URI.question_byte?(b)
+  end
+
+  priv fn question_byte?(b: Int) -> Bool
+    b == 63
+  end
+
+  priv fn reg_name_byte?(b: Int) -> Bool
+    # reg-name = *( unreserved / pct-encoded / sub-delims )
+
+    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b)
+  end
+
+  priv fn reserved_byte?(b: Int) -> Bool
+    URI.gen_delim_byte?(b) or URI.sub_delim_byte?(b)
+  end
+
+  priv fn scan_authority_end(bytes: Binary, start: Int, size: Int) -> Int
+    i = start
+
+    while i < size
+      b = URI.byte_at(bytes, i)
+
+      if URI.slash_byte?(b) or URI.question_byte?(b) or URI.hash_byte?(b)
+        return i
+      end
+
+      i += 1
+    end
+
+    i
+  end
+
+  priv fn scan_path_end(bytes: Binary, start: Int, size: Int) -> Int
+    i = start
+
+    while i < size
+      b = URI.byte_at(bytes, i)
+
+      if URI.question_byte?(b) or URI.hash_byte?(b)
+        return i
+      end
+
+      i += 1
+    end
+
+    i
+  end
+
+  priv fn scan_query_end(bytes: Binary, start: Int, size: Int) -> Int
+    i = start
+
+    while i < size
+      if URI.hash_byte?(URI.byte_at(bytes, i))
+        return i
+      end
+
+      i += 1
+    end
+
+    i
+  end
+
+  priv fn scan_scheme(bytes: Binary, size: Int) -> Option<Int>
+    # Position of the ':' ending a valid scheme, or `Option.None` when
+    # the input has no scheme (making it a relative reference).
+
+    if size == 0
+      return Option.None
+    end
+
+    unless URI.alpha_byte?(URI.byte_at(bytes, 0))
+      return Option.None
+    end
+
+    i = 1
+
+    while i < size
+      b = URI.byte_at(bytes, i)
+
+      if URI.colon_byte?(b)
+        return Option.Some(i)
+      end
+
+      unless URI.scheme_byte?(b)
+        return Option.None
+      end
+
+      i += 1
+    end
+
+    Option.None
+  end
+
+  priv fn scheme_byte?(b: Int) -> Bool
+    # scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
+
+    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == 43 or b == 45 or b == 46
+  end
+
+  priv fn slash_byte?(b: Int) -> Bool
+    b == 47
+  end
+
+  priv fn sub_delim_byte?(b: Int) -> Bool
+    # sub-delims = ! $ & ' ( ) * + , ; =
+
+    b == 33 or b == 36 or (b >= 38 and b <= 44) or b == 59 or b == 61
+  end
+
+  priv fn text(bytes: Binary, start: Int, stop: Int) -> String
+    # The inclusive byte range `[start, stop]` as a String; empty when
+    # the range is. Cut points are always ASCII delimiters, so slices
+    # of valid input are valid UTF-8.
+
+    if start > stop
+      return ""
+    end
+
+    match bytes.slice(Range{start: start, stop: stop}).to_string()
+      Result.Ok(s) -> s
+      Result.Err(_) -> ""
+    end
+  end
+
+  priv fn unescaped_byte?(b: Int) -> Bool
+    URI.reserved_byte?(b) or URI.unreserved_byte?(b)
+  end
+
+  priv fn unreserved_byte?(b: Int) -> Bool
+    # unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
+
+    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == 45 or b == 46 or
+    b == 95 or b == 126
+  end
+
+  priv fn userinfo_byte?(b: Int) -> Bool
+    # userinfo = *( unreserved / pct-encoded / sub-delims / ":" );
+    # also used for the inside of bracketed IP literals.
+
+    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == 58
+  end
+
+  priv fn validate_component(
+    bytes: Binary,
+    start: Int,
+    stop: Int,
+    allowed: fn (Int) -> Bool,
+  ) -> Option<URIError>
+
+    # Checks every byte in `[start, stop)` against `allowed`, treating
+    # `%XX` sequences as single pct-encoded units. Returns the error
+    # for the first forbidden byte, or `Option.None` when clean.
+
+    i = start
+
+    while i < stop
+      b = URI.byte_at(bytes, i)
+
+      if URI.percent_byte?(b)
+        if i + 2 >= stop
+          return Option.Some(URIError.InvalidURI(URI.text(bytes, i, i)))
+        end
+
+        if URI.hex_value(URI.byte_at(bytes, i + 1)).none?() or
+        URI.hex_value(URI.byte_at(bytes, i + 2)).none?()
+          return Option.Some(URIError.InvalidURI(URI.text(bytes, i, i)))
+        end
+
+        i += 3
+      else
+        unless allowed(b)
+          return Option.Some(URIError.InvalidURI(URI.text(bytes, i, i)))
+        end
+
+        i += 1
+      end
+    end
+
+    Option.None
+  end
+
+  priv fn validate_path(bytes: Binary, start: Int, stop: Int, relative: Bool)
+    -> Option<URIError>
+
+    # A relative reference without scheme or authority must not have
+    # ':' in its first segment, which would make it indistinguishable
+    # from a scheme (RFC 3986 section 4.2).
+
+    if relative
+      # The first segment ends at the first '/' (byte 47).
+      seg_end =
+        match URI.find_byte(bytes, 47, start, stop)
+          Option.Some(slash_pos) -> slash_pos
+          Option.None -> stop
+        end
+
+      # ':' is byte 58.
+      if URI.find_byte(bytes, 58, start, seg_end).some?()
+        return Option.Some(URIError.InvalidURI(":"))
+      end
+    end
+
+    URI.validate_component(bytes, start, stop, b -> URI.path_byte?(b))
+  end
+end
+
+impl Debug for URI
+  @doc """
+  Renders the assembled URI string (see `to_string`) so interpolating
+  a URI produces the URL rather than a struct dump.
+  """
+  fn format(self) -> String
+    self.to_string()
+  end
+end
+
+impl Equality for URI
+  @doc """
+  Structural, component-wise comparison of the encoded fields. Note
+  `http://a` and `HTTP://A` parse to unequal URIs; normalization is a
+  planned follow-up.
+  """
+  fn eq(self, other: URI) -> Bool
+    URI.option_string_eq(self.fragment, other.fragment) and
+    URI.option_string_eq(self.host, other.host) and self.path == other.path and
+    URI.option_int_eq(self.port, other.port) and
+    URI.option_string_eq(self.query, other.query) and
+    URI.option_string_eq(self.scheme, other.scheme) and
+    URI.option_string_eq(self.userinfo, other.userinfo)
+  end
+end

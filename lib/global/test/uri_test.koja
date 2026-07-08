@@ -1,0 +1,289 @@
+alias URI.Error as URIError
+
+struct URITest
+  @test "parses a full absolute URI"
+  fn test_parse_full -> Result<Bool, String>
+    match URI.parse("http://user:pass@example.com:8080/path?a=1#frag")
+      Result.Err(err) ->
+        Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        expected = URI{
+          fragment: Option.Some("frag"),
+          host: Option.Some("example.com"),
+          path: "/path",
+          port: Option.Some(8080),
+          query: Option.Some("a=1"),
+          scheme: Option.Some("http"),
+          userinfo: Option.Some("user:pass"),
+        }
+
+        uri == expected
+          ? Result.Ok(true)
+          : Result.Err("unexpected parse: #{uri.format()}")
+    end
+  end
+
+  @test "fills default port for known schemes"
+  fn test_parse_default_port -> Result<Bool, String>
+    match URI.parse("https://koja-lang.org/")
+      Result.Err(err) ->
+        Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless URITest.option_int_is(uri.port, 443)
+          return Result.Err("expected port 443, got #{uri.port.format()}")
+        end
+
+        unless uri.path == "/"
+          return Result.Err("expected path /, got #{uri.path}")
+        end
+
+        Result.Ok(true)
+    end
+  end
+
+  @test "parses protocol-relative reference"
+  fn test_parse_protocol_relative -> Result<Bool, String>
+    match URI.parse("//koja-lang.org/")
+      Result.Err(err) ->
+        Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless uri.scheme.none?() and uri.port.none?()
+          return Result.Err("expected no scheme or port: #{uri.format()}")
+        end
+
+        unless URITest.option_string_is(uri.host, "koja-lang.org")
+          return Result.Err("unexpected host: #{uri.host.format()}")
+        end
+
+        Result.Ok(true)
+    end
+  end
+
+  @test "parses absolute and relative paths"
+  fn test_parse_paths -> Result<Bool, String>
+    match URI.parse("/foo/bar")
+      Result.Err(err) ->
+        return Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless uri.path == "/foo/bar" and uri.host.none?() and
+        uri.scheme.none?()
+          return Result.Err("unexpected parse: #{uri.format()}")
+        end
+    end
+
+    match URI.parse("foo/bar")
+      Result.Err(err) ->
+        return Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless uri.path == "foo/bar"
+          return Result.Err("unexpected path: #{uri.path}")
+        end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "parses bracketed IPv6 host"
+  fn test_parse_ipv6 -> Result<Bool, String>
+    match URI.parse("//[fe80::]/")
+      Result.Err(err) ->
+        Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless URITest.option_string_is(uri.host, "fe80::")
+          return Result.Err("unexpected host: #{uri.host.format()}")
+        end
+
+        unless uri.to_string() == "//[fe80::]/"
+          return Result.Err("bad round trip: #{uri}")
+        end
+
+        Result.Ok(true)
+    end
+  end
+
+  @test "parses scheme-only URI with query"
+  fn test_parse_scheme_query -> Result<Bool, String>
+    match URI.parse("https:?query")
+      Result.Err(err) ->
+        Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless URITest.option_string_is(uri.query, "query")
+          return Result.Err("unexpected query: #{uri.query.format()}")
+        end
+
+        unless uri.path == "" and uri.host.none?()
+          return Result.Err("unexpected parse: #{uri.format()}")
+        end
+
+        Result.Ok(true)
+    end
+  end
+
+  @test "lowercases the scheme"
+  fn test_parse_scheme_case -> Result<Bool, String>
+    match URI.parse("HTTPS://EXAMPLE.COM/")
+      Result.Err(err) ->
+        Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless URITest.option_string_is(uri.scheme, "https")
+          return Result.Err("unexpected scheme: #{uri.scheme.format()}")
+        end
+
+        unless URITest.option_string_is(uri.host, "EXAMPLE.COM")
+          return Result.Err("host should keep case: #{uri.host.format()}")
+        end
+
+        Result.Ok(true)
+    end
+  end
+
+  @test "rejects forbidden characters"
+  fn test_parse_invalid -> Result<Bool, String>
+    unless URI.parse("/invalid_greater_than_in_path/>").err?()
+      return Result.Err("expected error for > in path")
+    end
+
+    unless URI.parse("http://exa mple.com/").err?()
+      return Result.Err("expected error for space in host")
+    end
+
+    unless URI.parse("http://example.com:8a/").err?()
+      return Result.Err("expected error for non-digit port")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "rejects colon in first segment of relative reference"
+  fn test_parse_relative_colon -> Result<Bool, String>
+    unless URI.parse("1ab:cd").err?()
+      return Result.Err("expected error for ambiguous relative reference")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "reports the offending part"
+  fn test_parse_error_part -> Result<Bool, String>
+    match URI.parse("/invalid_greater_than_in_path/>")
+      Result.Ok(uri) ->
+        Result.Err("expected error, got #{uri}")
+
+      Result.Err(err) ->
+        match err
+          URIError.InvalidURI(part) ->
+            part == ">"
+              ? Result.Ok(true)
+              : Result.Err("expected part >, got #{part}")
+
+          _ ->
+            Result.Err("expected InvalidURI, got #{err}")
+        end
+    end
+  end
+
+  @test "to_string reassembles components"
+  fn test_to_string_round_trip -> Result<Bool, String>
+    inputs = [
+      "http://user:pass@example.com:8080/path?a=1#frag",
+      "https://koja-lang.org/", "//koja-lang.org/", "/foo/bar", "foo/bar",
+      "https:?query"
+    ]
+
+    for input in inputs
+      match URI.parse(input)
+        Result.Err(err) ->
+          return Result.Err("parse failed for #{input}: #{err}")
+
+        Result.Ok(uri) ->
+          unless uri.to_string() == input
+            return Result.Err("round trip failed: #{input} -> #{uri}")
+          end
+      end
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "to_string omits the default port"
+  fn test_to_string_default_port -> Result<Bool, String>
+    match URI.parse("https://example.com:443/")
+      Result.Err(err) ->
+        Result.Err("expected Ok, got #{err}")
+
+      Result.Ok(uri) ->
+        unless URITest.option_int_is(uri.port, 443)
+          return Result.Err("expected port 443, got #{uri.port.format()}")
+        end
+
+        uri.to_string() == "https://example.com/"
+          ? Result.Ok(true)
+          : Result.Err("expected port omitted, got #{uri}")
+    end
+  end
+
+  @test "default_port knows common schemes"
+  fn test_default_port -> Result<Bool, String>
+    unless URITest.option_int_is(URI.default_port("ftp"), 21)
+      return Result.Err("expected ftp -> 21")
+    end
+
+    unless URITest.option_int_is(URI.default_port("wss"), 443)
+      return Result.Err("expected wss -> 443")
+    end
+
+    unless URI.default_port("ponzi").none?()
+      return Result.Err("expected unknown scheme -> None")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "equality is component-wise"
+  fn test_equality -> Result<Bool, String>
+    a = URI.parse("http://example.com/a?x=1").unwrap()
+    b = URI.parse("http://example.com/a?x=1").unwrap()
+    c = URI.parse("http://example.com/b?x=1").unwrap()
+
+    unless a == b
+      return Result.Err("expected equal URIs")
+    end
+
+    unless a != c
+      return Result.Err("expected unequal URIs")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "interpolation renders the URI string"
+  fn test_interpolation -> Result<Bool, String>
+    uri = URI.parse("https://example.com/pkg?v=1").unwrap()
+
+    "#{uri}" == "https://example.com/pkg?v=1"
+      ? Result.Ok(true)
+      : Result.Err("unexpected interpolation: #{uri}")
+  end
+
+  priv fn option_int_is(opt: Option<Int>, expected: Int) -> Bool
+    match opt
+      Option.Some(value) -> value == expected
+      Option.None -> false
+    end
+  end
+
+  priv fn option_string_is(opt: Option<String>, expected: String) -> Bool
+    match opt
+      Option.Some(value) -> value == expected
+      Option.None -> false
+    end
+  end
+end
