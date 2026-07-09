@@ -14,16 +14,14 @@ use crate::span::Span;
 
 // Semantic enums
 
-/// Visibility marker on functions: `Public` (default) or `Private` (from the
-/// `priv` keyword). The enforcement scope of `Private` depends on where the
-/// function is declared:
-///
-/// - Top-level `priv fn` is **package-private**: callable from any file in
-///   the same package, rejected from other packages.
-/// - `priv fn` declared inside a `struct` / `enum` / `impl` body is
-///   **type-private**: callable from any other method on that same target
-///   type (across inherent and protocol-impl blocks alike), rejected
-///   everywhere else.
+/// Visibility marker on top-level declarations: `Public` (default) or
+/// `Private` (from the `priv` keyword). Every top-level decl kind
+/// (function, struct, enum, constant, type alias, protocol) accepts
+/// `priv`, which makes it **package-private**: usable from any file in
+/// the same package, rejected from other packages. The one exception is
+/// a `priv fn` declared inside a `struct` / `enum` / `impl` body, which
+/// is **type-private**: callable from any other method on that same
+/// target type, rejected everywhere else.
 ///
 /// Typecheck enforces both via its internal `VisibilityScope` projection.
 ///
@@ -38,11 +36,10 @@ use crate::span::Span;
 /// ```
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Visibility {
-    /// Callable from anywhere the function can be named.
+    /// Usable from anywhere the declaration can be named.
     Public,
-    /// Callable only from within the function's declaration scope
-    /// (its package for top-level functions, its target type for
-    /// methods).
+    /// Usable only from within the declaration's scope (its package,
+    /// or its target type for methods).
     Private,
 }
 
@@ -333,6 +330,7 @@ pub struct TypeParam {
 #[derive(Debug, Clone)]
 pub struct Constant {
     pub annotations: Vec<Annotation>,
+    pub visibility: Visibility,
     pub name: String,
     pub type_annotation: Option<TypeExpr>,
     pub value: Expr,
@@ -348,6 +346,7 @@ pub struct Constant {
 #[derive(Debug, Clone)]
 pub struct EnumDecl {
     pub annotations: Vec<Annotation>,
+    pub visibility: Visibility,
     pub path: Vec<String>,
     pub type_params: Vec<TypeParam>,
     pub variants: Vec<EnumVariant>,
@@ -433,6 +432,7 @@ pub enum ImplMember {
 #[derive(Debug, Clone)]
 pub struct ProtocolDecl {
     pub annotations: Vec<Annotation>,
+    pub visibility: Visibility,
     pub name: String,
     pub type_params: Vec<TypeParam>,
     pub methods: Vec<ProtocolMethod>,
@@ -488,6 +488,7 @@ pub enum Param {
 #[derive(Debug, Clone)]
 pub struct StructDecl {
     pub annotations: Vec<Annotation>,
+    pub visibility: Visibility,
     pub path: Vec<String>,
     pub type_params: Vec<TypeParam>,
     pub fields: Vec<StructField>,
@@ -530,6 +531,7 @@ pub struct AliasDecl {
 #[derive(Debug, Clone)]
 pub struct TypeAlias {
     pub annotations: Vec<Annotation>,
+    pub visibility: Visibility,
     pub name: String,
     pub type_expr: TypeExpr,
     pub span: Span,

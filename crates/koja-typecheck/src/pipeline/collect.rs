@@ -295,6 +295,13 @@ fn function_visibility_scope(
     }
 }
 
+/// Map the surface `Visibility` of a non-function decl (struct, enum,
+/// constant, type alias, protocol) to its [`VisibilityScope`]. These
+/// are always top-level, so `priv` means package-private.
+fn package_visibility_scope(visibility: Visibility) -> VisibilityScope {
+    function_visibility_scope(visibility, None)
+}
+
 /// `@doc` on a private declaration is a compile error: private items
 /// never surface in generated docs, so the docstring is dead metadata.
 fn diagnose_doc_on_private(
@@ -358,27 +365,29 @@ fn register_struct(
     diagnose_struct_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
-    let struct_id = match registry.insert_struct(identifier.clone(), decl.span, type_params) {
-        InsertOutcome::Fresh(id) => Some(id),
-        InsertOutcome::Collision { existing } => {
-            diagnostics.push(Diagnostic::error_with_hint(
-                format!("`{}` is already defined", existing.identifier),
-                format!(
-                    "previous {} definition is at line {}",
-                    existing.kind.label(),
-                    existing.span.start.line
-                ),
-                decl.span,
-            ));
-            // Still register inline methods even on collision: the
-            // duplicate decl is itself diagnosed, and methods declared
-            // under the duplicate would otherwise dangle. Re-look up
-            // the existing entry's id so methods scope their
-            // visibility against whatever struct already owns the
-            // name.
-            registry.lookup(&identifier).map(|(id, _)| id)
-        }
-    };
+    let visibility = package_visibility_scope(decl.visibility);
+    let struct_id =
+        match registry.insert_struct(identifier.clone(), decl.span, type_params, visibility) {
+            InsertOutcome::Fresh(id) => Some(id),
+            InsertOutcome::Collision { existing } => {
+                diagnostics.push(Diagnostic::error_with_hint(
+                    format!("`{}` is already defined", existing.identifier),
+                    format!(
+                        "previous {} definition is at line {}",
+                        existing.kind.label(),
+                        existing.span.start.line
+                    ),
+                    decl.span,
+                ));
+                // Still register inline methods even on collision: the
+                // duplicate decl is itself diagnosed, and methods declared
+                // under the duplicate would otherwise dangle. Re-look up
+                // the existing entry's id so methods scope their
+                // visibility against whatever struct already owns the
+                // name.
+                registry.lookup(&identifier).map(|(id, _)| id)
+            }
+        };
     for function in &decl.functions {
         let method_identifier = Identifier::member(package, &decl.path, &function.name);
         register_function_with_identifier(
@@ -406,7 +415,9 @@ fn register_enum(
     diagnose_enum_feature_gaps(decl, diagnostics);
     let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
-    let enum_id = match registry.insert_enum(identifier.clone(), decl.span, type_params) {
+    let visibility = package_visibility_scope(decl.visibility);
+    let enum_id = match registry.insert_enum(identifier.clone(), decl.span, type_params, visibility)
+    {
         InsertOutcome::Fresh(id) => Some(id),
         InsertOutcome::Collision { existing } => {
             diagnostics.push(Diagnostic::error_with_hint(
@@ -601,8 +612,9 @@ fn register_protocol(
         }
         type_params.push(param.name.clone());
     }
+    let visibility = package_visibility_scope(decl.visibility);
     if let InsertOutcome::Collision { existing } =
-        registry.insert_protocol(identifier, decl.span, type_params)
+        registry.insert_protocol(identifier, decl.span, type_params, visibility)
     {
         diagnostics.push(Diagnostic::error_with_hint(
             format!("`{}` is already defined", existing.identifier),
@@ -631,8 +643,9 @@ fn register_constant(
 ) {
     diagnose_constant_annotations(&constant.name, &constant.annotations, diagnostics);
     let identifier = Identifier::new(package, vec![constant.name.clone()]);
+    let visibility = package_visibility_scope(constant.visibility);
     if let InsertOutcome::Collision { existing } =
-        registry.insert_constant(identifier, constant.span)
+        registry.insert_constant(identifier, constant.span, visibility)
     {
         diagnostics.push(Diagnostic::error_with_hint(
             format!("`{}` is already defined", existing.identifier),
@@ -659,8 +672,9 @@ fn register_type_alias(
 ) {
     diagnose_alias_annotations(&alias.name, &alias.annotations, diagnostics);
     let identifier = Identifier::new(package, vec![alias.name.clone()]);
+    let visibility = package_visibility_scope(alias.visibility);
     if let InsertOutcome::Collision { existing } =
-        registry.insert_type_alias(identifier, alias.span)
+        registry.insert_type_alias(identifier, alias.span, visibility)
     {
         diagnostics.push(Diagnostic::error_with_hint(
             format!("`{}` is already defined", existing.identifier),

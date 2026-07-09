@@ -5,7 +5,7 @@
 //! - lowercase (Ident) and PascalCase (TypeIdent) names both accepted
 //! - annotations attach correctly
 
-use koja_ast::ast::{Item, TypeExpr};
+use koja_ast::ast::{Item, TypeExpr, Visibility};
 use koja_ast::util::dedent;
 
 mod common;
@@ -20,6 +20,29 @@ fn first_constant(source: &str) -> koja_ast::ast::Constant {
         }
     }
     panic!("no constant in parsed output");
+}
+
+#[test]
+fn priv_constant_records_private_visibility() {
+    let src = dedent(
+        "
+        priv const MAX: Int = 100
+        ",
+    );
+    let c = first_constant(&src);
+    assert_eq!(c.visibility, Visibility::Private);
+    assert_eq!(c.name, "MAX");
+}
+
+#[test]
+fn constant_defaults_to_public_visibility() {
+    let src = dedent(
+        "
+        const MAX: Int = 100
+        ",
+    );
+    let c = first_constant(&src);
+    assert_eq!(c.visibility, Visibility::Public);
 }
 
 #[test]

@@ -8,7 +8,7 @@
 //! - `type Name = TypeExpr` at the top level produces
 //!   `Item::TypeAlias`
 
-use koja_ast::ast::Item;
+use koja_ast::ast::{Item, Visibility};
 use koja_ast::util::dedent;
 
 mod common;
@@ -85,6 +85,37 @@ fn top_level_type_alias() {
         other => panic!("expected TypeAlias, got {other:?}"),
     };
     assert_eq!(alias.name, "UserId");
+}
+
+#[test]
+fn priv_type_alias_records_private_visibility() {
+    let src = dedent(
+        "
+        priv type UserId = Int
+        ",
+    );
+    let file = parse_clean(&src);
+    let alias = match &file.items[0] {
+        Item::TypeAlias(a) => a,
+        other => panic!("expected TypeAlias, got {other:?}"),
+    };
+    assert_eq!(alias.visibility, Visibility::Private);
+    assert_eq!(alias.name, "UserId");
+}
+
+#[test]
+fn type_alias_defaults_to_public_visibility() {
+    let src = dedent(
+        "
+        type UserId = Int
+        ",
+    );
+    let file = parse_clean(&src);
+    let alias = match &file.items[0] {
+        Item::TypeAlias(a) => a,
+        other => panic!("expected TypeAlias, got {other:?}"),
+    };
+    assert_eq!(alias.visibility, Visibility::Public);
 }
 
 #[test]

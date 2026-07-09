@@ -6,13 +6,17 @@
 //! error sentinel so later phases can still walk the rest of the
 //! file.
 
-use koja_ast::ast::{Annotation, Constant, Item};
+use koja_ast::ast::{Annotation, Constant, Item, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::{ERROR_IDENT, Parser};
 
 impl Parser {
-    pub(crate) fn parse_constant_item(&mut self, annotations: Vec<Annotation>) -> Item {
+    pub(crate) fn parse_constant_item(
+        &mut self,
+        annotations: Vec<Annotation>,
+        visibility: Visibility,
+    ) -> Item {
         let start = self.current_span();
         self.expect(&TokenKind::Const);
         let name = match self.peek().clone() {
@@ -40,6 +44,7 @@ impl Parser {
         let value = self.parse_expr();
         Item::Constant(Constant {
             annotations,
+            visibility,
             name,
             type_annotation,
             value,

@@ -25,6 +25,45 @@ fn unterminated_struct_emits_error() {
 }
 
 #[test]
+fn priv_before_impl_is_rejected() {
+    let src = dedent(
+        "
+        struct Point
+          x: Int
+        end
+
+        priv impl Debug for Point
+          fn format(self) -> String
+            \"p\"
+          end
+        end
+        ",
+    );
+    let result = parse_failing(&src);
+    assert_message_contains(&result, "`priv` must be followed by");
+    // Recovery: the impl block itself still parses on the next pass.
+    assert!(
+        result
+            .ast
+            .items
+            .iter()
+            .any(|item| matches!(item, koja_ast::ast::Item::Impl(_))),
+        "expected the impl block to survive recovery",
+    );
+}
+
+#[test]
+fn priv_before_non_declaration_is_rejected() {
+    let src = dedent(
+        "
+        priv 42
+        ",
+    );
+    let result = parse_failing(&src);
+    assert_message_contains(&result, "`priv` must be followed by");
+}
+
+#[test]
 fn else_if_pins_user_facing_message() {
     let src = dedent(
         "
