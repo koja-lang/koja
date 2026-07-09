@@ -454,8 +454,9 @@ struct Decoder
     while i < self.size
       b = self.byte(i)
 
-      if b != BYTE_SPACE and b != BYTE_NEWLINE and b != BYTE_RETURN and
-      b != BYTE_TAB
+      if b != BYTE_SPACE and b != BYTE_NEWLINE and b != BYTE_RETURN
+        and b != BYTE_TAB
+
         return i
       end
 

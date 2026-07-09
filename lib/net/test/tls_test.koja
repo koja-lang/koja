@@ -94,12 +94,12 @@ struct TLSTest
 
               _ ->
                 Result.Err("expected verification failure, got: " <>
-                tls_error.message())
+                  tls_error.message())
             end
 
           socket_error: SocketError ->
             Result.Err("expected verification failure, got: " <>
-            socket_error.message())
+              socket_error.message())
         end
     end
   end

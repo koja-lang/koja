@@ -69,8 +69,9 @@ struct URITest
         return Result.Err("expected Ok, got #{err}")
 
       Result.Ok(uri) ->
-        unless uri.path == "/foo/bar" and uri.host.none?() and
-        uri.scheme.none?()
+        unless uri.path == "/foo/bar" and uri.host.none?()
+          and uri.scheme.none?()
+
           return Result.Err("unexpected parse: #{uri.format()}")
         end
     end

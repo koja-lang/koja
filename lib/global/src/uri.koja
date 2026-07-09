@@ -191,8 +191,9 @@ struct URI
 
     if pos + 1 < size
       # "//" introduces the authority component.
-      if URI.slash_byte?(URI.byte_at(bytes, pos)) and
-      URI.slash_byte?(URI.byte_at(bytes, pos + 1))
+      if URI.slash_byte?(URI.byte_at(bytes, pos))
+        and URI.slash_byte?(URI.byte_at(bytes, pos + 1))
+
         auth_end = URI.scan_authority_end(bytes, pos + 2, size)
 
         match URI.parse_authority(bytes, pos + 2, auth_end, uri)
@@ -274,8 +275,8 @@ struct URI
   end
 
   priv fn alpha_byte?(b: Int) -> Bool
-    (b >= BYTE_UPPER_A and b <= BYTE_UPPER_Z) or
-    (b >= BYTE_LOWER_A and b <= BYTE_LOWER_Z)
+    (b >= BYTE_UPPER_A and b <= BYTE_UPPER_Z)
+      or (b >= BYTE_LOWER_A and b <= BYTE_LOWER_Z)
   end
 
   priv fn byte_at(bytes: Binary, pos: Int) -> Int
@@ -311,8 +312,8 @@ struct URI
   priv fn gen_delim_byte?(b: Int) -> Bool
     # gen-delims = : / ? # [ ] @
 
-    b == BYTE_COLON or b == BYTE_SLASH or b == BYTE_QUESTION or
-    b == BYTE_HASH or b == BYTE_LBRACKET or b == BYTE_RBRACKET or b == BYTE_AT
+    b == BYTE_COLON or b == BYTE_SLASH or b == BYTE_QUESTION or b == BYTE_HASH
+      or b == BYTE_LBRACKET or b == BYTE_RBRACKET or b == BYTE_AT
   end
 
   priv fn hash_byte?(b: Int) -> Bool
@@ -560,8 +561,8 @@ struct URI
   priv fn pchar_byte?(b: Int) -> Bool
     # pchar = unreserved / pct-encoded / sub-delims / ":" / "@"
 
-    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == BYTE_COLON or
-    b == BYTE_AT
+    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == BYTE_COLON
+      or b == BYTE_AT
   end
 
   priv fn percent_byte?(b: Int) -> Bool
@@ -693,8 +694,8 @@ struct URI
   priv fn scheme_byte?(b: Int) -> Bool
     # scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
 
-    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == BYTE_PLUS or
-    b == BYTE_MINUS or b == BYTE_DOT
+    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == BYTE_PLUS
+      or b == BYTE_MINUS or b == BYTE_DOT
   end
 
   priv fn slash_byte?(b: Int) -> Bool
@@ -705,9 +706,9 @@ struct URI
     # sub-delims = ! $ & ' ( ) * + , ; =
     # The middle range covers & ' ( ) * + , contiguously.
 
-    b == BYTE_EXCLAMATION or b == BYTE_DOLLAR or
-    (b >= BYTE_AMPERSAND and b <= BYTE_COMMA) or b == BYTE_SEMICOLON or
-    b == BYTE_EQUALS
+    b == BYTE_EXCLAMATION or b == BYTE_DOLLAR
+      or (b >= BYTE_AMPERSAND and b <= BYTE_COMMA) or b == BYTE_SEMICOLON
+      or b == BYTE_EQUALS
   end
 
   priv fn text(bytes: Binary, start: Int, stop: Int) -> String
@@ -732,8 +733,8 @@ struct URI
   priv fn unreserved_byte?(b: Int) -> Bool
     # unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
 
-    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == BYTE_MINUS or
-    b == BYTE_DOT or b == BYTE_UNDERSCORE or b == BYTE_TILDE
+    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == BYTE_MINUS or b == BYTE_DOT
+      or b == BYTE_UNDERSCORE or b == BYTE_TILDE
   end
 
   priv fn userinfo_byte?(b: Int) -> Bool
@@ -764,8 +765,9 @@ struct URI
           return Option.Some(URIError.InvalidURI(URI.text(bytes, i, i)))
         end
 
-        if URI.hex_value(URI.byte_at(bytes, i + 1)).none?() or
-        URI.hex_value(URI.byte_at(bytes, i + 2)).none?()
+        if URI.hex_value(URI.byte_at(bytes, i + 1)).none?()
+          or URI.hex_value(URI.byte_at(bytes, i + 2)).none?()
+
           return Option.Some(URIError.InvalidURI(URI.text(bytes, i, i)))
         end
 
@@ -823,11 +825,11 @@ impl Equality for URI
   planned follow-up.
   """
   fn eq(self, other: URI) -> Bool
-    URI.option_string_eq(self.fragment, other.fragment) and
-    URI.option_string_eq(self.host, other.host) and self.path == other.path and
-    URI.option_int_eq(self.port, other.port) and
-    URI.option_string_eq(self.query, other.query) and
-    URI.option_string_eq(self.scheme, other.scheme) and
-    URI.option_string_eq(self.userinfo, other.userinfo)
+    URI.option_string_eq(self.fragment, other.fragment)
+      and URI.option_string_eq(self.host, other.host)
+      and self.path == other.path and URI.option_int_eq(self.port, other.port)
+      and URI.option_string_eq(self.query, other.query)
+      and URI.option_string_eq(self.scheme, other.scheme)
+      and URI.option_string_eq(self.userinfo, other.userinfo)
   end
 end

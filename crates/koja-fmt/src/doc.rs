@@ -129,17 +129,22 @@ fn emit_newline(out: &mut String, col: &mut u32, ind: u32) {
     *col = ind;
 }
 
-/// Fill rendering: pack items left-to-right, breaking only when an item
-/// doesn't fit on the current line.
+/// Fill rendering: pack items left-to-right separated by single spaces,
+/// breaking before an item that doesn't fit on the current line.
 ///
-/// Each item carries any separator as a *trailing* suffix (e.g. `", "` or
-/// `" and "`), so a break lands on a fresh line at the fill indent with no
-/// stray leading space. The dangling trailing separator is removed by the
-/// final per-line `trim_end`.
+/// Items carry their own separators without the inter-item space, either
+/// trailing (`","`, `" |"`) so a break leaves the separator at the end of
+/// the line, or leading (`"and "`) so a break starts the next line with
+/// the separator.
 fn render_fill(out: &mut String, col: &mut u32, ind: u32, items: &[Doc], width: u32) {
     for (i, item) in items.iter().enumerate() {
-        if i > 0 && !fits(width.saturating_sub(*col), &[(ind, Mode::Flat, item)]) {
-            emit_newline(out, col, ind);
+        if i > 0 {
+            if fits(width.saturating_sub(*col + 1), &[(ind, Mode::Flat, item)]) {
+                out.push(' ');
+                *col += 1;
+            } else {
+                emit_newline(out, col, ind);
+            }
         }
         render_doc_into(out, col, ind, Mode::Flat, item, width);
     }
@@ -237,6 +242,11 @@ fn fits(mut remaining: u32, stack: &[(u32, Mode, &Doc)]) -> bool {
                 work.push((ind, Mode::Flat, inner));
             }
             Doc::Fill(items) => {
+                let separator_spaces = items.len().saturating_sub(1) as u32;
+                if separator_spaces > remaining {
+                    return false;
+                }
+                remaining -= separator_spaces;
                 for item in items.iter().rev() {
                     work.push((ind, Mode::Flat, item));
                 }

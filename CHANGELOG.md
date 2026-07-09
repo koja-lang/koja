@@ -21,8 +21,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `priv` now works on top-level `struct`, `enum`, `const`, `type`, and `protocol` declarations, hiding them from other packages.
 - A public declaration whose signature mentions a private type is now a compile error.
 - `@doc` on a private declaration is now a compile error, since private items never appear in generated documentation.
+- A boolean expression can now continue on the next line when that line starts with `and` or `or`.
 
 ### Changed
+
+- `koja format` now wraps a long `if`/`unless`/`while` condition by starting each continuation line with the operator, indented two past the keyword, with a blank line before the body.
+- `koja format` now indents the continuation lines of a wrapped binary expression two past where the expression started, so wrapped chains no longer align with sibling statements.
 
 - Parse errors now describe tokens as they appear in source (``expected `)`, found end of file``) instead of internal compiler names (`expected RParen, found EndOfFile`).
 - A `panic()` in a spawned process is now contained to that process — the runtime prints the crash and keeps running, while a panic in the main process still exits non-zero.

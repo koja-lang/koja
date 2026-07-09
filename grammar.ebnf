@@ -12,7 +12,8 @@
 (*                                                                            *)
 (* Whitespace and newlines are significant as statement separators but are    *)
 (* omitted from the grammar for readability. Newlines terminate statements;   *)
-(* line continuation is implicit after binary operators, ".", and ",".        *)
+(* line continuation is implicit after binary operators, ".", and ",", and    *)
+(* before a line starting with "and", "or", or the ternary "?".               *)
 (* ========================================================================== *)
 
 

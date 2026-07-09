@@ -201,11 +201,19 @@ impl Parser {
                 }
             }
 
-            // Ternary continuation across newlines: `expr\n  ? ...`
-            if matches!(self.peek(), TokenKind::Newline) && BP_TERNARY >= min_bp {
+            // Continuation across newlines: `expr\n  ? ...` for ternary and
+            // `expr\n  and ...` for boolean chains wrapped by the formatter.
+            if matches!(self.peek(), TokenKind::Newline) {
                 let saved = self.save_pos();
                 self.skip_newlines();
-                if matches!(self.peek(), TokenKind::Question) {
+                let continues = match self.peek() {
+                    TokenKind::Question => BP_TERNARY >= min_bp,
+                    kind @ TokenKind::Ident(name) if name == "and" || name == "or" => {
+                        infix_bp(kind).is_some_and(|(l_bp, _)| l_bp >= min_bp)
+                    }
+                    _ => false,
+                };
+                if continues {
                     continue;
                 }
                 self.restore_pos(saved);

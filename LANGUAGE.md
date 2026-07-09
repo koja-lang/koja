@@ -85,7 +85,15 @@ Numeric literals coerce to any same-category type annotation. Integer literals c
 
 ### Line Continuation
 
-Newlines terminate statements. Line continuation is implicit after binary operators, `.`, and `,`.
+Newlines terminate statements. Line continuation is implicit after binary operators, `.`, and `,`. A line starting with `and`, `or`, or the ternary `?` also continues the previous expression, so wrapped conditions lead each continuation line with the operator.
+
+```koja
+if request.valid? and request.authorized?
+  and request.body.present?
+
+  handle(request)
+end
+```
 
 ---
 

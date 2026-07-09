@@ -185,8 +185,8 @@ mod tests {
         ", "
             fn f(x: Int, y: Int) -> Bool
               cond
-                x > 0 and not x == 50 and y > 0 and not y == 50 or x == 999 or y == 999 or
-                not x == y ->
+                x > 0 and not x == 50 and y > 0 and not y == 50 or x == 999 or y == 999
+                  or not x == y ->
                   true
 
                 else ->
@@ -208,8 +208,8 @@ mod tests {
         ", "
             fn f(x: Int, y: Int) -> Bool
               cond
-                x > 0 and x < 100 and y > 0 and y < 100 and x != y and x != 50 and
-                y != 50 and x != 99 ->
+                x > 0 and x < 100 and y > 0 and y < 100 and x != y and x != 50 and y != 50
+                  and x != 99 ->
                   true
 
                 else ->
@@ -507,6 +507,73 @@ mod tests {
     }
 
     #[test]
+    fn wrapped_condition_indents_and_separates_from_body() {
+        // A condition too long for one line mirrors wrapped function
+        // heads: continuation indented two past the keyword, blank
+        // line before the body.
+        assert_unchanged(
+            "
+            fn f(alpha: Bool, bravo: Bool, charlie: Bool, delta: Bool) -> Int
+              if alpha and bravo and charlie and delta and alpha and bravo and charlie
+                and delta
+
+                1
+              else
+                2
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn wrapped_while_condition_indents_and_separates_from_body() {
+        assert_unchanged(
+            "
+            fn f(first_operand: Bool, second_operand: Bool, third_operand: Bool) -> Int
+              while first_operand and second_operand and third_operand and first_operand
+                and second_operand
+
+                1
+              end
+
+              2
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn wrapped_chain_in_statement_position_hangs_two() {
+        // A chain that wraps outside a condition header still indents
+        // its continuation lines two past the statement start.
+        assert_unchanged(
+            r#"
+            fn f(text: String) -> Bool
+              text.contains?("-----BEGIN PRIVATE KEY-----")
+                or text.contains?("-----BEGIN RSA PRIVATE KEY-----")
+                or text.contains?("-----BEGIN EC PRIVATE KEY-----")
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn short_condition_stays_inline_without_blank_line() {
+        assert_unchanged(
+            "
+            fn f(x: Int) -> Int
+              if x > 10
+                1
+              else
+                2
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn blank_line_before_block_statement() {
         assert_fmt(
             "
@@ -667,8 +734,8 @@ mod tests {
             r#"
             fn f(x: String) -> String
               cond
-                x == "alpha" or x == "bravo" or x == "charlie" or x == "delta" or
-                x == "echo" or x == "foxtrot" or x == "golf" ->
+                x == "alpha" or x == "bravo" or x == "charlie" or x == "delta"
+                  or x == "echo" or x == "foxtrot" or x == "golf" ->
                   "nato"
 
                 else ->
