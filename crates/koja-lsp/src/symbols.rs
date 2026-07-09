@@ -15,6 +15,17 @@ use koja_ast::ast::{File, Function, ImplMember, Item, Param, TypeExpr, TypeParam
 use crate::backend::Backend;
 use crate::convert::{path_to_uri, span_to_range};
 
+/// Prefixes `detail` with `priv` for private declarations.
+fn detail_with_visibility(visibility: Visibility, detail: Option<String>) -> Option<String> {
+    if visibility == Visibility::Public {
+        return detail;
+    }
+    match detail {
+        Some(d) => Some(format!("priv {d}")),
+        None => Some("priv".to_string()),
+    }
+}
+
 /// Formats a [`TypeExpr`] into a human-readable string for symbol details.
 fn type_expr_label(te: &TypeExpr) -> String {
     match te {
@@ -278,7 +289,10 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: s.name().to_string(),
-                    detail: type_params_detail(&s.type_params),
+                    detail: detail_with_visibility(
+                        s.visibility,
+                        type_params_detail(&s.type_params),
+                    ),
                     kind: SymbolKind::STRUCT,
                     tags: None,
                     deprecated: None,
@@ -316,7 +330,10 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: e.name().to_string(),
-                    detail: type_params_detail(&e.type_params),
+                    detail: detail_with_visibility(
+                        e.visibility,
+                        type_params_detail(&e.type_params),
+                    ),
                     kind: SymbolKind::ENUM,
                     tags: None,
                     deprecated: None,
@@ -334,7 +351,7 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: c.name.clone(),
-                    detail: None,
+                    detail: detail_with_visibility(c.visibility, None),
                     kind: SymbolKind::CONSTANT,
                     tags: None,
                     deprecated: None,
@@ -423,7 +440,10 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: p.name.clone(),
-                    detail: type_params_detail(&p.type_params),
+                    detail: detail_with_visibility(
+                        p.visibility,
+                        type_params_detail(&p.type_params),
+                    ),
                     kind: SymbolKind::INTERFACE,
                     tags: None,
                     deprecated: None,
@@ -441,7 +461,10 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
                 #[allow(deprecated)]
                 symbols.push(DocumentSymbol {
                     name: ta.name.clone(),
-                    detail: Some(type_expr_label(&ta.type_expr)),
+                    detail: detail_with_visibility(
+                        ta.visibility,
+                        Some(type_expr_label(&ta.type_expr)),
+                    ),
                     kind: SymbolKind::TYPE_PARAMETER,
                     tags: None,
                     deprecated: None,
@@ -459,11 +482,6 @@ fn build_document_symbols(file: &File) -> Vec<DocumentSymbol> {
 /// Builds a [`DocumentSymbol`] for a function declaration.
 fn function_symbol(f: &Function) -> DocumentSymbol {
     let range = span_to_range(&f.span);
-    let vis = if f.visibility == Visibility::Private {
-        "priv "
-    } else {
-        ""
-    };
     let params: Vec<String> = f
         .params
         .iter()
@@ -479,12 +497,12 @@ fn function_symbol(f: &Function) -> DocumentSymbol {
         .as_ref()
         .map(|t| format!(" -> {}", type_expr_label(t)))
         .unwrap_or_default();
-    let detail = format!("{}fn({}){}", vis, params.join(", "), ret);
+    let detail = format!("fn({}){}", params.join(", "), ret);
 
     #[allow(deprecated)]
     DocumentSymbol {
         name: f.name.clone(),
-        detail: Some(detail),
+        detail: detail_with_visibility(f.visibility, Some(detail)),
         kind: SymbolKind::FUNCTION,
         tags: None,
         deprecated: None,

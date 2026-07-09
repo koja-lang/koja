@@ -111,6 +111,39 @@ only the uppercase path form.
 
 ---
 
+## `and` / `or` do not short-circuit
+
+Both operands of `and` and `or` are always evaluated. `lower_bin_op` in
+`koja-ir/src/lower/ops.rs` maps them to strict `IRBinOp::And` / `Or`,
+plain binary ops over two already-computed `Bool`s, identical on both
+backends. LANGUAGE.md does not document the evaluation order either way.
+
+This makes the universal guard idiom a runtime trap:
+
+```koja
+if i < self.size and self.byte(i) == BYTE_QUOTE   # panics past end of input
+```
+
+Every mainstream comparison point (Rust, Ruby, Elixir, Python, Go, Swift)
+short-circuits, so users will write this, it compiles, and it faults at
+runtime. Stdlib code works around it with nested `if` guards or
+bounds-checked helpers (see `peek?` / `digit_at?` in
+`lib/json/src/decoder.koja`, added 2026-07-09 for exactly this reason).
+
+**Fix path (assessed 2026-07-09):** confined to IR lowering. Lower
+`a and b` as control flow, the moral equivalent of `if a then b else
+false` (mirror for `or`), so both backends inherit the semantics from the
+lowered shape. The block-and-merge machinery already exists, pattern
+match chains do the same thing via `ChainMode::And`. Parser, typecheck,
+formatter, and precedence are untouched. LLVM folds the branch back into
+branchless `and` when the right side is cheap and pure, so there is no
+performance regression for the common case. The change is observable only
+when the right operand panics or performs effects, which is the behavior
+being fixed. Land with a LANGUAGE.md paragraph pinning left-to-right,
+short-circuit evaluation and golden tests covering both backends.
+
+---
+
 ## Arithmetic fault semantics undefined (ArithmeticError)
 
 Investigated 2026-06-10. The fault behavior of `+ - * / %` and unary

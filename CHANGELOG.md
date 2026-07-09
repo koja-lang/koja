@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Watch another process with `Process.monitor(pid)`. When it exits, you receive a `Process.ExitSignal` message telling you which process died and why.
 - Cancel a monitor with `Process.demonitor(ref)`.
 - Calling `Process.monitor` from a process whose message type can't receive `Process.ExitSignal` is a compile error.
+- `priv` now works on top-level `struct`, `enum`, `const`, `type`, and `protocol` declarations, hiding them from other packages.
+- A public declaration whose signature mentions a private type is now a compile error.
+- `@doc` on a private declaration is now a compile error, since private items never appear in generated documentation.
 
 ### Changed
 

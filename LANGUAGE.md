@@ -8,7 +8,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 
 - [Lexical Structure](#lexical-structure) -- Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
 - [Variables and Constants](#variables-and-constants) -- Assignment, Type Annotations, Compound Assignment, Constants
-- [Functions](#functions) -- Declaration, Private Functions, `return`, Parameters
+- [Functions](#functions) -- Declaration, Private Declarations, `return`, Parameters
 - [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
 - [Types](#types) -- Primitives, Numeric Widening, Unit, Strings, Structs, Enums, Union Types, Generics
 - [Pattern Matching](#pattern-matching) -- `match`, OR Patterns, `cond`
@@ -168,12 +168,13 @@ Functions without a return type return `()`. Parameters require explicit types. 
 
 A compiled program's entry point is a type implementing the `Process` protocol, named by `entry` in `koja.toml`. There is no `fn main`. Scripts (`.kojs`) execute top-level statements directly. Most functions are declared inside `impl` blocks on a struct or enum. See [Impl Functions](#impl-functions) and [Static Functions](#static-functions).
 
-### Private Functions
+### Private Declarations
 
-`priv fn` restricts a function's visibility based on where it's declared:
+`priv` restricts a declaration's visibility based on where it appears:
 
-- A top-level `priv fn` is **package-private**: it's callable from any file
-  in the same package, but rejected from any other package.
+- A top-level `priv` declaration (`fn`, `struct`, `enum`, `const`, `type`,
+  `protocol`) is **package-private**: it's usable from any file in the same
+  package, but rejected from any other package.
 - A `priv fn` declared inside a `struct`, `enum`, or `impl` body is
   **type-private**: it's callable from any other method on the same target
   type (whether declared in the type's decl block, an `extend Type` block,
@@ -182,6 +183,12 @@ A compiled program's entry point is a type implementing the `Process` protocol, 
 ```koja
 priv fn helper(x: Int32) -> Int32    # package-private
   x * 2
+end
+
+priv const RETRY_LIMIT: Int32 = 3    # package-private
+
+priv struct Bucket                   # package-private
+  count: Int32
 end
 
 struct Counter
@@ -196,6 +203,10 @@ struct Counter
   end
 end
 ```
+
+A public declaration cannot leak a private type through its signature. A public function whose parameter or return type names a private type, or a public struct field, enum variant payload, type alias, or protocol method that mentions one, is a compile error. Callers outside the package could see the type but never name it, so the compiler rejects the leak at the declaration site.
+
+`@doc` on a private declaration is also a compile error. Private items never appear in generated documentation, so use regular `#` comments instead.
 
 ### `return`
 
@@ -980,16 +991,17 @@ end
 
 ### Visibility
 
-Access control is at the function level (`priv fn`), not the module level:
+Access control is at the declaration level (`priv`), not the module level:
 
-- Top-level `priv fn` is **package-private** -- callable from any file in
-  the same package, rejected from other packages.
+- A top-level `priv` declaration (`fn`, `struct`, `enum`, `const`, `type`,
+  `protocol`) is **package-private** -- usable from any file in the same
+  package, rejected from other packages.
 - `priv fn` declared inside a `struct`, `enum`, `extend`, or `impl` body
   is **type-private** -- callable from any other method on the same target
   type (across the decl block and any `extend` or `impl Protocol for Type`
   block on that type), rejected everywhere else.
 
-See [Private Functions](#private-functions) for examples.
+See [Private Declarations](#private-declarations) for examples.
 
 ### Aliases
 
@@ -1881,6 +1893,8 @@ end
 ```
 
 `@doc false` excludes an item from generated documentation.
+
+`@doc` on a `priv` declaration is a compile error, since private items never appear in generated documentation.
 
 Doc strings support Markdown and are rendered by `koja doc`.
 
