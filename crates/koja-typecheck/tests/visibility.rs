@@ -9,7 +9,12 @@
 //! position (signature type expressions, constructors, patterns,
 //! static receivers, `extend` targets, `alias` targets) rejects
 //! other packages while staying usable across files of the declaring
-//! package.
+//! package. The signature leak check (public surface exposing a
+//! same-package private type) is pinned at the end.
+//!
+//! Everything runs in script mode so use-site statements sit at top
+//! level without `fn main` wrappers. The enforcement seams live in
+//! collect / lift / resolve, which are mode-agnostic.
 //!
 //! [`VisibilityScope`]: koja_typecheck::registry::VisibilityScope
 
@@ -21,7 +26,7 @@ use koja_typecheck::{CheckFailure, CheckedProgram, check_program};
 
 mod common;
 
-use common::{PACKAGE, diagnostic_messages, typecheck_file, typecheck_file_fail};
+use common::{PACKAGE, diagnostic_messages, typecheck_script, typecheck_script_fail};
 
 /// Drive `parse_program -> check_program` on multiple user files
 /// stacked in `TestApp`. Used by the same-package positives to prove
@@ -47,7 +52,7 @@ fn check_packages(files: &[(&str, &str, &str)]) -> Result<CheckedProgram, CheckF
             source: dedent(body),
         });
     }
-    check_program(parse_program(sources, ParseMode::File))
+    check_program(parse_program(sources, ParseMode::Script))
 }
 
 /// Assert the failure contains the standard cross-package rejection
@@ -65,15 +70,13 @@ fn assert_private_reference_rejected(failure: &CheckFailure, kind_label: &str, i
 
 #[test]
 fn top_level_priv_callable_from_same_file() {
-    typecheck_file(&dedent(
+    typecheck_script(&dedent(
         "
         priv fn double(x: Int) -> Int
           x * 2
         end
 
-        fn main
-          double(21).print()
-        end
+        double(21).print()
         ",
     ));
 }
@@ -89,14 +92,7 @@ fn top_level_priv_callable_across_files_in_same_package() {
             end
             ",
         ),
-        (
-            "main.koja",
-            "
-            fn main
-              double(21).print()
-            end
-            ",
-        ),
+        ("main.kojs", "double(21).print()"),
     ])
     .expect("same-package cross-file priv call should succeed");
     assert!(
@@ -108,7 +104,7 @@ fn top_level_priv_callable_across_files_in_same_package() {
 
 #[test]
 fn top_level_priv_callable_from_method_in_same_package() {
-    typecheck_file(&dedent(
+    typecheck_script(&dedent(
         "
         priv fn double(x: Int) -> Int
           x * 2
@@ -122,16 +118,14 @@ fn top_level_priv_callable_from_method_in_same_package() {
           end
         end
 
-        fn main
-          Counter { value: 21 }.boosted().print()
-        end
+        Counter { value: 21 }.boosted().print()
         ",
     ));
 }
 
 #[test]
 fn priv_method_callable_from_sibling_method_in_decl_block() {
-    typecheck_file(&dedent(
+    typecheck_script(&dedent(
         "
         struct Counter
           value: Int
@@ -145,9 +139,7 @@ fn priv_method_callable_from_sibling_method_in_decl_block() {
           end
         end
 
-        fn main
-          Counter { value: 1 }.next().print()
-        end
+        Counter { value: 1 }.next().print()
         ",
     ));
 }
@@ -158,7 +150,7 @@ fn priv_method_callable_across_impl_blocks_on_same_type() {
     // calling method lives in a separate `impl Counter` block. Both
     // register under `TestApp.Counter`, so the visibility scope
     // covers both blocks.
-    typecheck_file(&dedent(
+    typecheck_script(&dedent(
         "
         struct Counter
           value: Int
@@ -174,16 +166,14 @@ fn priv_method_callable_across_impl_blocks_on_same_type() {
           end
         end
 
-        fn main
-          Counter { value: 7 }.doubled().print()
-        end
+        Counter { value: 7 }.doubled().print()
         ",
     ));
 }
 
 #[test]
 fn priv_method_rejected_from_another_type() {
-    let failure = typecheck_file_fail(&dedent(
+    let failure = typecheck_script_fail(&dedent(
         "
         struct Counter
           value: Int
@@ -199,9 +189,7 @@ fn priv_method_rejected_from_another_type() {
           end
         end
 
-        fn main
-          Probe {}.poke().print()
-        end
+        Probe {}.poke().print()
         ",
     ));
     let messages = diagnostic_messages(&failure);
@@ -215,8 +203,8 @@ fn priv_method_rejected_from_another_type() {
 }
 
 #[test]
-fn priv_method_rejected_from_top_level_function() {
-    let failure = typecheck_file_fail(&dedent(
+fn priv_method_rejected_from_top_level_code() {
+    let failure = typecheck_script_fail(&dedent(
         "
         struct Counter
           value: Int
@@ -226,9 +214,7 @@ fn priv_method_rejected_from_top_level_function() {
           end
         end
 
-        fn main
-          Counter { value: 1 }.helper().print()
-        end
+        Counter { value: 1 }.helper().print()
         ",
     ));
     let messages = diagnostic_messages(&failure);
@@ -261,12 +247,10 @@ fn priv_struct_usable_across_files_in_same_package() {
             ",
         ),
         (
-            "main.koja",
+            "main.kojs",
             "
-            fn main
-              c = bump(Counter{value: 1})
-              c.value.print()
-            end
+            c = bump(Counter{value: 1})
+            c.value.print()
             ",
         ),
     ])
@@ -286,14 +270,12 @@ fn priv_enum_usable_across_files_in_same_package() {
             ",
         ),
         (
-            "main.koja",
+            "main.kojs",
             "
-            fn main
-              m = Mode.On
-              match m
-                Mode.On -> \"on\".print()
-                Mode.Off -> \"off\".print()
-              end
+            m = Mode.On
+            match m
+              Mode.On -> \"on\".print()
+              Mode.Off -> \"off\".print()
             end
             ",
         ),
@@ -305,14 +287,7 @@ fn priv_enum_usable_across_files_in_same_package() {
 fn priv_constant_usable_across_files_in_same_package() {
     check_multi_file(&[
         ("lib.koja", "priv const LIMIT: Int = 10"),
-        (
-            "main.koja",
-            "
-            fn main
-              LIMIT.print()
-            end
-            ",
-        ),
+        ("main.kojs", "LIMIT.print()"),
     ])
     .expect("same-package priv constant use should succeed");
 }
@@ -335,7 +310,7 @@ fn priv_type_alias_usable_across_files_in_same_package() {
             ",
         ),
         (
-            "main.koja",
+            "main.kojs",
             "
             priv fn name_of(p: Pet) -> String
               match p
@@ -344,9 +319,7 @@ fn priv_type_alias_usable_across_files_in_same_package() {
               end
             end
 
-            fn main
-              name_of(Cat{name: \"whiskers\"}).print()
-            end
+            name_of(Cat{name: \"whiskers\"}).print()
             ",
         ),
     ])
@@ -365,7 +338,7 @@ fn priv_protocol_implementable_in_same_package() {
             ",
         ),
         (
-            "main.koja",
+            "main.kojs",
             "
             struct Point
               x: Int
@@ -377,9 +350,7 @@ fn priv_protocol_implementable_in_same_package() {
               end
             end
 
-            fn main
-              Point{x: 3}.mark().print()
-            end
+            Point{x: 3}.mark().print()
             ",
         ),
     ])
@@ -418,31 +389,19 @@ const LIB_DECLS: &str = "
     ";
 
 fn check_lib_and_app(app: &str) -> Result<CheckedProgram, CheckFailure> {
-    check_packages(&[("Lib", "lib.koja", LIB_DECLS), (PACKAGE, "main.koja", app)])
+    check_packages(&[("Lib", "lib.koja", LIB_DECLS), (PACKAGE, "main.kojs", app)])
 }
 
 #[test]
 fn public_struct_usable_cross_package_control() {
-    check_lib_and_app(
-        "
-        fn main
-          Lib.Open{value: 1}.value.print()
-        end
-        ",
-    )
-    .expect("public cross-package struct use should succeed");
+    check_lib_and_app("Lib.Open{value: 1}.value.print()")
+        .expect("public cross-package struct use should succeed");
 }
 
 #[test]
 fn priv_struct_construction_rejected_cross_package() {
-    let failure = check_lib_and_app(
-        "
-        fn main
-          Lib.Hidden{value: 1}.value.print()
-        end
-        ",
-    )
-    .expect_err("cross-package priv struct construction should fail");
+    let failure = check_lib_and_app("Lib.Hidden{value: 1}.value.print()")
+        .expect_err("cross-package priv struct construction should fail");
     assert_private_reference_rejected(&failure, "struct", "Lib.Hidden");
 }
 
@@ -452,10 +411,6 @@ fn priv_struct_in_signature_rejected_cross_package() {
         "
         fn probe(h: Lib.Hidden) -> Int
           h.value
-        end
-
-        fn main
-          0.print()
         end
         ",
     )
@@ -467,10 +422,8 @@ fn priv_struct_in_signature_rejected_cross_package() {
 fn priv_enum_construction_rejected_cross_package() {
     let failure = check_lib_and_app(
         "
-        fn main
-          m = Lib.Mode.On
-          m.print()
-        end
+        m = Lib.Mode.On
+        m.print()
         ",
     )
     .expect_err("cross-package priv enum construction should fail");
@@ -479,14 +432,8 @@ fn priv_enum_construction_rejected_cross_package() {
 
 #[test]
 fn priv_static_receiver_rejected_cross_package() {
-    let failure = check_lib_and_app(
-        "
-        fn main
-          Lib.Hidden.make().value.print()
-        end
-        ",
-    )
-    .expect_err("cross-package static call on priv type should fail");
+    let failure = check_lib_and_app("Lib.Hidden.make().value.print()")
+        .expect_err("cross-package static call on priv type should fail");
     assert_private_reference_rejected(&failure, "struct", "Lib.Hidden");
 }
 
@@ -496,10 +443,6 @@ fn priv_type_alias_rejected_cross_package() {
         "
         fn probe(s: Lib.Secret) -> Int
           0
-        end
-
-        fn main
-          0.print()
         end
         ",
     )
@@ -520,10 +463,6 @@ fn priv_protocol_impl_rejected_cross_package() {
             self.x
           end
         end
-
-        fn main
-          0.print()
-        end
         ",
     )
     .expect_err("cross-package impl of priv protocol should fail");
@@ -532,16 +471,8 @@ fn priv_protocol_impl_rejected_cross_package() {
 
 #[test]
 fn priv_alias_target_rejected_cross_package() {
-    let failure = check_lib_and_app(
-        "
-        alias Lib.Hidden
-
-        fn main
-          0.print()
-        end
-        ",
-    )
-    .expect_err("cross-package alias of priv type should fail");
+    let failure = check_lib_and_app("alias Lib.Hidden")
+        .expect_err("cross-package alias of priv type should fail");
     assert_private_reference_rejected(&failure, "struct", "Lib.Hidden");
 }
 
@@ -553,10 +484,6 @@ fn priv_extend_target_rejected_cross_package() {
           fn poke(self) -> Int
             self.value
           end
-        end
-
-        fn main
-          0.print()
         end
         ",
     )
@@ -577,12 +504,239 @@ fn priv_struct_pattern_rejected_cross_package() {
             Lib.Hidden{value: v} -> v
           end
         end
-
-        fn main
-          0.print()
-        end
         ",
     )
     .expect_err("cross-package priv struct pattern should fail");
     assert_private_reference_rejected(&failure, "struct", "Lib.Hidden");
+}
+
+// ---------------------------------------------------------------------------
+// Signature leak check: public surface may not expose same-package privates
+// ---------------------------------------------------------------------------
+
+/// Assert the failure contains the leak message for a public
+/// `subject` exposing private `leaked` (both "kind `identifier`").
+fn assert_leak_rejected(failure: &CheckFailure, subject: &str, leaked: &str) {
+    let needle = format!("public {subject} exposes private {leaked}");
+    let messages = diagnostic_messages(failure);
+    assert!(
+        messages.iter().any(|m| m.contains(&needle)),
+        "expected `{needle}`, got {messages:?}",
+    );
+}
+
+#[test]
+fn public_fn_param_of_priv_struct_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        fn probe(h: Hidden) -> Int
+          h.value
+        end
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "function `TestApp.probe`",
+        "struct `TestApp.Hidden`",
+    );
+}
+
+#[test]
+fn public_fn_return_of_priv_struct_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        fn make -> Hidden
+          Hidden{value: 1}
+        end
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "function `TestApp.make`",
+        "struct `TestApp.Hidden`",
+    );
+}
+
+#[test]
+fn public_fn_generic_arg_of_priv_struct_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        fn find -> Option<Hidden>
+          Option.None
+        end
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "function `TestApp.find`",
+        "struct `TestApp.Hidden`",
+    );
+}
+
+#[test]
+fn public_struct_field_of_priv_enum_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv enum Mode
+          Off
+          On
+        end
+
+        struct Config
+          mode: Mode
+        end
+        ",
+    ));
+    assert_leak_rejected(&failure, "struct `TestApp.Config`", "enum `TestApp.Mode`");
+}
+
+#[test]
+fn public_enum_payload_of_priv_struct_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        enum Wrapper
+          Empty
+          Full(Hidden)
+        end
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "enum `TestApp.Wrapper`",
+        "struct `TestApp.Hidden`",
+    );
+}
+
+#[test]
+fn public_type_alias_of_priv_struct_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Cat
+          name: String
+        end
+
+        priv struct Dog
+          name: String
+        end
+
+        type Pet = Cat | Dog
+        ",
+    ));
+    assert_leak_rejected(&failure, "type alias `TestApp.Pet`", "struct `TestApp.Cat`");
+    assert_leak_rejected(&failure, "type alias `TestApp.Pet`", "struct `TestApp.Dog`");
+}
+
+#[test]
+fn public_protocol_method_of_priv_struct_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        protocol Producer
+          fn produce(self) -> Hidden
+        end
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "protocol `TestApp.Producer`",
+        "struct `TestApp.Hidden`",
+    );
+}
+
+#[test]
+fn public_constant_of_priv_struct_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        const DEFAULT = Hidden{value: 1}
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "constant `TestApp.DEFAULT`",
+        "struct `TestApp.Hidden`",
+    );
+}
+
+#[test]
+fn public_fn_bound_on_priv_protocol_leaks() {
+    let failure = typecheck_script_fail(&dedent(
+        "
+        priv protocol Marked
+          fn mark(self) -> Int
+        end
+
+        fn tally<T: Marked>(x: T) -> Int
+          x.mark()
+        end
+        ",
+    ));
+    assert_leak_rejected(
+        &failure,
+        "function `TestApp.tally`",
+        "protocol `TestApp.Marked`",
+    );
+}
+
+#[test]
+fn priv_fn_may_mention_priv_type() {
+    typecheck_script(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+        end
+
+        priv fn bump(h: Hidden) -> Hidden
+          Hidden{value: h.value + 1}
+        end
+
+        bump(Hidden{value: 1}).value.print()
+        ",
+    ));
+}
+
+#[test]
+fn public_method_on_priv_type_may_mention_it() {
+    // The method is only nameable through the private type, so its
+    // signature mentioning that type leaks nothing. This exemption
+    // also keeps derived impls (Debug's `format`) legal on privates.
+    typecheck_script(&dedent(
+        "
+        priv struct Hidden
+          value: Int
+
+          fn make -> Hidden
+            Hidden{value: 1}
+          end
+
+          fn doubled(self) -> Hidden
+            Hidden{value: self.value * 2}
+          end
+        end
+
+        Hidden.make().doubled().value.print()
+        ",
+    ));
 }

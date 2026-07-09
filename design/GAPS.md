@@ -84,6 +84,33 @@ not a 1.0 blocker.
 
 ---
 
+## Constants are not referenceable across packages
+
+Every `const` is same-package only in practice. Bare identifiers resolve
+constants only in the current package, with no `Global` fallback, so even
+`Global`'s `STDOUT`/`STDERR`/`STDIN` are unreachable outside `lib/global`.
+`Pkg.CONST` parses as a unit enum construction and diagnoses "does not
+recognize the enum type". `alias` rejects constant targets. As a result
+`priv const` (2026-07) only affects the `@doc` rule today, though the
+registry visibility gate is already wired for when a cross-package
+reference path lands.
+
+**Fix path (assessed 2026-07-09, roughly half a day):** everything below
+typecheck resolve is already package-agnostic. IR reads constants by
+registry id and both backends merge every package's constant pool into one
+flat map. The work is a resolve-phase fallback: when the unit enum
+interpretation of `Pkg.NAME` fails, look up `Identifier::new(pkg, [name])`
+and on a constant hit rewrite the node to an `Ident` stamped
+`Resolution::Global(id)`, the same rewrite trick `classify_receiver` uses
+for static receivers, plus a `check_reference_visibility` call. A guard
+must keep a real type named `Pkg` winning, mirroring
+`try_package_function_call`. Optionally add a `Global` fallback for bare
+constants in `resolve_ident` so stdlib constants become usable. Lowercase
+constant names parse as field access instead of the enum shape, so support
+only the uppercase path form.
+
+---
+
 ## Arithmetic fault semantics undefined (ArithmeticError)
 
 Investigated 2026-06-10. The fault behavior of `+ - * / %` and unary

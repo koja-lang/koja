@@ -1,0 +1,1 @@
+public function `priv_type_in_public_signature.probe` exposes private struct `priv_type_in_public_signature.Hidden`

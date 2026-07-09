@@ -11,7 +11,7 @@ use koja_ast::ast::{Diagnostic, File, Severity};
 use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
-use crate::pipeline::{aliases, collect, lift_signatures, resolve, seal, synthesize};
+use crate::pipeline::{aliases, collect, lift_signatures, resolve, seal, synthesize, visibility};
 use crate::registry::GlobalRegistry;
 
 /// A package fragment of a [`CheckedProgram`].
@@ -121,6 +121,8 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     aliases::validate_aliases(&packages, &registry, &mut diagnostics);
 
     lift_signatures::lift_signatures(&mut packages, &mut registry, &mut diagnostics);
+
+    visibility::check_signature_leaks(&registry, &mut diagnostics);
 
     synthesize::synthesize_program(&mut packages);
 
