@@ -247,13 +247,12 @@ struct Decoder
     self.scan_string(pos + 1, pos)
   end
 
-  @doc """
-  Fast path for string contents: scan for the closing quote and cut
-  the value out as one slice. Falls over to `scan_escaped` at the
-  first backslash.
-  """
   priv fn scan_string(self, start: Int, open: Int)
     -> Result<Pair<String, Int>, String>
+
+    # Fast path for string contents: scan for the closing quote and cut
+    # the value out as one slice. Falls over to `scan_escaped` at the
+    # first backslash.
 
     i = start
 
@@ -278,11 +277,6 @@ struct Decoder
     Result.Err("unterminated string starting at position #{open}")
   end
 
-  @doc """
-  Slow path for strings containing escapes: accumulate the slices
-  between escapes plus each unescaped character. `start` tracks the
-  beginning of the pending unflushed segment.
-  """
   priv fn scan_escaped(
     self,
     seg_start: Int,
@@ -290,6 +284,10 @@ struct Decoder
     open: Int,
     sb: StringBuilder,
   ) -> Result<Pair<String, Int>, String>
+
+    # Slow path for strings containing escapes: accumulate the slices
+    # between escapes plus each unescaped character. `start` tracks the
+    # beginning of the pending unflushed segment.
 
     start = seg_start
     i = pos
@@ -466,10 +464,9 @@ struct Decoder
     end
   end
 
-  @doc """
-  The byte at `pos`. Callers guarantee `pos` is in bounds.
-  """
   priv fn byte(self, pos: Int) -> Int
+    # The byte at `pos`. Callers guarantee `pos` is in bounds.
+
     self.input.at(pos).unwrap()
   end
 
@@ -494,12 +491,11 @@ struct Decoder
     i
   end
 
-  @doc """
-  The inclusive byte range `[start, stop]` as a String. The input
-  bytes come from a String and every cut point is an ASCII byte, so
-  the slice is always valid UTF-8.
-  """
   priv fn text(self, start: Int, stop: Int) -> String
+    # The inclusive byte range `[start, stop]` as a String. The input
+    # bytes come from a String and every cut point is an ASCII byte, so
+    # the slice is always valid UTF-8.
+
     match self.input.slice(Range{start: start, stop: stop}).to_string()
       Result.Ok(s) -> s
       Result.Err(_) -> ""

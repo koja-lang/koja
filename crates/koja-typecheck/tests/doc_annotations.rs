@@ -1,8 +1,10 @@
-//! `@doc` annotations are pure metadata for `koja-doc` / `koja-fmt`.
-//! The typechecker neither honors nor enforces them. It only needs
-//! to stop rejecting them as a feature gap on the decl shapes that
-//! historically diagnosed every annotation. Other annotation names
-//! (`@derive`, `@spec`, …) still raise the existing message.
+//! `@doc` annotations are metadata consumed by `koja-doc` and LSP
+//! hovers. The typechecker accepts them on public decls (it only
+//! needed to stop rejecting them as a feature gap on the shapes that
+//! historically diagnosed every annotation) and rejects them on
+//! private decls, which never surface in generated docs. Other
+//! annotation names (`@derive`, `@spec`, and friends) still raise
+//! the existing message.
 //!
 //! Top-level functions and impl-block functions silently accept any
 //! annotation today, so they aren't covered here. There's nothing to
@@ -146,6 +148,88 @@ fn doc_false_on_protocol_method_is_accepted() {
           fn private_helper(self) -> Int
           fn public_op(self) -> Int
         end
+        ";
+    typecheck(&dedent(source));
+}
+
+// ---------------------------------------------------------------------------
+// Negative: `@doc` on a private function is a compile error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn doc_string_on_top_level_priv_fn_is_rejected() {
+    let source = "
+        @doc \"Internal helper.\"
+        priv fn helper -> Int
+          7
+        end
+
+        helper()
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`@doc` is not allowed on private function `helper`")),
+        "expected @doc-on-private error, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_false_on_top_level_priv_fn_is_rejected() {
+    let source = "
+        @doc false
+        priv fn helper -> Int
+          7
+        end
+
+        helper()
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`@doc` is not allowed on private function `helper`")),
+        "expected @doc-on-private error, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_string_on_type_body_priv_fn_is_rejected() {
+    let source = "
+        struct Point
+          x: Int
+
+          @doc \"Internal helper.\"
+          priv fn shift(self) -> Int
+            self.x + 1
+          end
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`@doc` is not allowed on private function `shift`")),
+        "expected @doc-on-private error, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_string_on_public_top_level_fn_is_accepted() {
+    let source = "
+        @doc \"Adds one.\"
+        fn bump(n: Int) -> Int
+          n + 1
+        end
+
+        bump(1)
         ";
     typecheck(&dedent(source));
 }

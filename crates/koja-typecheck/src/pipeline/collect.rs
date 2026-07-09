@@ -248,6 +248,13 @@ fn register_function_with_identifier(
     registry: &mut GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
+    diagnose_doc_on_private(
+        &function.name,
+        "function",
+        function.visibility,
+        &function.annotations,
+        diagnostics,
+    );
     if reject_self_param(function, &identifier, self_context, diagnostics) {
         return;
     }
@@ -285,6 +292,31 @@ fn function_visibility_scope(
         (Visibility::Public, _) => VisibilityScope::Public,
         (Visibility::Private, Some(owner)) => VisibilityScope::TypePrivate(owner),
         (Visibility::Private, None) => VisibilityScope::PackagePrivate,
+    }
+}
+
+/// `@doc` on a private declaration is a compile error: private items
+/// never surface in generated docs, so the docstring is dead metadata.
+fn diagnose_doc_on_private(
+    name: &str,
+    kind_label: &str,
+    visibility: Visibility,
+    annotations: &[Annotation],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    if visibility == Visibility::Public {
+        return;
+    }
+    for annotation in annotations {
+        if matches!(annotation.kind(), AnnotationKind::Doc(_)) {
+            diagnostics.push(Diagnostic::error_with_hint(
+                format!("`@doc` is not allowed on private {kind_label} `{name}`"),
+                "private declarations never appear in generated docs. Document it with a `#` \
+                 comment instead."
+                    .to_string(),
+                annotation.span,
+            ));
+        }
     }
 }
 

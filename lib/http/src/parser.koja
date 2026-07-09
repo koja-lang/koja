@@ -96,13 +96,12 @@ struct Parser
     })
   end
 
-  @doc """
-  Parses the header block and message body from a parser positioned at
-  the start of the headers (just past the request/status line). Returns
-  the parsed headers paired with the body string. Shared by
-  `parse_request` and `parse_response`.
-  """
   priv fn parse_headers_and_body(self) -> Result<Pair<Headers, String>, Error>
+    # Parses the header block and message body from a parser positioned at
+    # the start of the headers (just past the request/status line). Returns
+    # the parsed headers paired with the body string. Shared by
+    # `parse_request` and `parse_response`.
+
     header_pair =
       match self.parse_headers()
         Result.Ok(hp) -> hp
