@@ -1,5 +1,33 @@
 alias URI.Error as URIError
 
+priv const BYTE_AMPERSAND: Int = 38
+priv const BYTE_AT: Int = 64
+priv const BYTE_COLON: Int = 58
+priv const BYTE_COMMA: Int = 44
+priv const BYTE_DOLLAR: Int = 36
+priv const BYTE_DOT: Int = 46
+priv const BYTE_EQUALS: Int = 61
+priv const BYTE_EXCLAMATION: Int = 33
+priv const BYTE_HASH: Int = 35
+priv const BYTE_LBRACKET: Int = 91
+priv const BYTE_LOWER_A: Int = 97
+priv const BYTE_LOWER_F: Int = 102
+priv const BYTE_LOWER_Z: Int = 122
+priv const BYTE_MINUS: Int = 45
+priv const BYTE_NINE: Int = 57
+priv const BYTE_PERCENT: Int = 37
+priv const BYTE_PLUS: Int = 43
+priv const BYTE_QUESTION: Int = 63
+priv const BYTE_RBRACKET: Int = 93
+priv const BYTE_SEMICOLON: Int = 59
+priv const BYTE_SLASH: Int = 47
+priv const BYTE_TILDE: Int = 126
+priv const BYTE_UNDERSCORE: Int = 95
+priv const BYTE_UPPER_A: Int = 65
+priv const BYTE_UPPER_F: Int = 70
+priv const BYTE_UPPER_Z: Int = 90
+priv const BYTE_ZERO: Int = 48
+
 @doc """
 Why a `URI` value could not be produced. `InvalidURI` carries the
 offending part of the input.
@@ -246,7 +274,8 @@ struct URI
   end
 
   priv fn alpha_byte?(b: Int) -> Bool
-    (b >= 65 and b <= 90) or (b >= 97 and b <= 122)
+    (b >= BYTE_UPPER_A and b <= BYTE_UPPER_Z) or
+    (b >= BYTE_LOWER_A and b <= BYTE_LOWER_Z)
   end
 
   priv fn byte_at(bytes: Binary, pos: Int) -> Int
@@ -256,11 +285,11 @@ struct URI
   end
 
   priv fn colon_byte?(b: Int) -> Bool
-    b == 58
+    b == BYTE_COLON
   end
 
   priv fn digit_byte?(b: Int) -> Bool
-    b >= 48 and b <= 57
+    b >= BYTE_ZERO and b <= BYTE_NINE
   end
 
   priv fn find_byte(bytes: Binary, target: Int, start: Int, stop: Int)
@@ -282,24 +311,25 @@ struct URI
   priv fn gen_delim_byte?(b: Int) -> Bool
     # gen-delims = : / ? # [ ] @
 
-    b == 58 or b == 47 or b == 63 or b == 35 or b == 91 or b == 93 or b == 64
+    b == BYTE_COLON or b == BYTE_SLASH or b == BYTE_QUESTION or
+    b == BYTE_HASH or b == BYTE_LBRACKET or b == BYTE_RBRACKET or b == BYTE_AT
   end
 
   priv fn hash_byte?(b: Int) -> Bool
-    b == 35
+    b == BYTE_HASH
   end
 
   priv fn hex_value(b: Int) -> Option<Int>
     if URI.digit_byte?(b)
-      return Option.Some(b - 48)
+      return Option.Some(b - BYTE_ZERO)
     end
 
-    if b >= 65 and b <= 70
-      return Option.Some(b - 55)
+    if b >= BYTE_UPPER_A and b <= BYTE_UPPER_F
+      return Option.Some(b - BYTE_UPPER_A + 10)
     end
 
-    if b >= 97 and b <= 102
-      return Option.Some(b - 87)
+    if b >= BYTE_LOWER_A and b <= BYTE_LOWER_F
+      return Option.Some(b - BYTE_LOWER_A + 10)
     end
 
     Option.None
@@ -344,8 +374,8 @@ struct URI
 
     host_start = start
 
-    # '@' (byte 64) separates userinfo from host.
-    match URI.find_byte(bytes, 64, start, stop)
+    # '@' separates userinfo from host.
+    match URI.find_byte(bytes, BYTE_AT, start, stop)
       Option.Some(at_pos) ->
         match URI.validate_component(
           bytes,
@@ -396,15 +426,15 @@ struct URI
 
     if start < stop
       # '[' opens an IPv6/IPvFuture literal.
-      if URI.byte_at(bytes, start) == 91
+      if URI.byte_at(bytes, start) == BYTE_LBRACKET
         bracketed = true
       end
     end
 
     unless bracketed
-      # The host ends at the port ':' (byte 58) or the authority's end.
+      # The host ends at the port ':' or the authority's end.
       host_end =
-        match URI.find_byte(bytes, 58, start, stop)
+        match URI.find_byte(bytes, BYTE_COLON, start, stop)
           Option.Some(colon_pos) -> colon_pos
           Option.None -> stop
         end
@@ -424,8 +454,8 @@ struct URI
       return Result.Ok(ok_pair)
     end
 
-    # A bracketed literal must close with ']' (byte 93).
-    match URI.find_byte(bytes, 93, start, stop)
+    # A bracketed literal must close with ']'.
+    match URI.find_byte(bytes, BYTE_RBRACKET, start, stop)
       Option.None ->
         Result.Err(URIError.InvalidURI("["))
 
@@ -530,11 +560,12 @@ struct URI
   priv fn pchar_byte?(b: Int) -> Bool
     # pchar = unreserved / pct-encoded / sub-delims / ":" / "@"
 
-    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == 58 or b == 64
+    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == BYTE_COLON or
+    b == BYTE_AT
   end
 
   priv fn percent_byte?(b: Int) -> Bool
-    b == 37
+    b == BYTE_PERCENT
   end
 
   priv fn percent_encode_byte(b: Int) -> String
@@ -569,7 +600,7 @@ struct URI
   end
 
   priv fn question_byte?(b: Int) -> Bool
-    b == 63
+    b == BYTE_QUESTION
   end
 
   priv fn reg_name_byte?(b: Int) -> Bool
@@ -662,17 +693,21 @@ struct URI
   priv fn scheme_byte?(b: Int) -> Bool
     # scheme = ALPHA *( ALPHA / DIGIT / "+" / "-" / "." )
 
-    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == 43 or b == 45 or b == 46
+    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == BYTE_PLUS or
+    b == BYTE_MINUS or b == BYTE_DOT
   end
 
   priv fn slash_byte?(b: Int) -> Bool
-    b == 47
+    b == BYTE_SLASH
   end
 
   priv fn sub_delim_byte?(b: Int) -> Bool
     # sub-delims = ! $ & ' ( ) * + , ; =
+    # The middle range covers & ' ( ) * + , contiguously.
 
-    b == 33 or b == 36 or (b >= 38 and b <= 44) or b == 59 or b == 61
+    b == BYTE_EXCLAMATION or b == BYTE_DOLLAR or
+    (b >= BYTE_AMPERSAND and b <= BYTE_COMMA) or b == BYTE_SEMICOLON or
+    b == BYTE_EQUALS
   end
 
   priv fn text(bytes: Binary, start: Int, stop: Int) -> String
@@ -697,15 +732,15 @@ struct URI
   priv fn unreserved_byte?(b: Int) -> Bool
     # unreserved = ALPHA / DIGIT / "-" / "." / "_" / "~"
 
-    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == 45 or b == 46 or
-    b == 95 or b == 126
+    URI.alpha_byte?(b) or URI.digit_byte?(b) or b == BYTE_MINUS or
+    b == BYTE_DOT or b == BYTE_UNDERSCORE or b == BYTE_TILDE
   end
 
   priv fn userinfo_byte?(b: Int) -> Bool
-    # userinfo = *( unreserved / pct-encoded / sub-delims / ":" );
-    # also used for the inside of bracketed IP literals.
+    # userinfo = *( unreserved / pct-encoded / sub-delims / ":" ).
+    # Also used for the inside of bracketed IP literals.
 
-    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == 58
+    URI.unreserved_byte?(b) or URI.sub_delim_byte?(b) or b == BYTE_COLON
   end
 
   priv fn validate_component(
@@ -755,15 +790,14 @@ struct URI
     # from a scheme (RFC 3986 section 4.2).
 
     if relative
-      # The first segment ends at the first '/' (byte 47).
+      # The first segment ends at the first '/'.
       seg_end =
-        match URI.find_byte(bytes, 47, start, stop)
+        match URI.find_byte(bytes, BYTE_SLASH, start, stop)
           Option.Some(slash_pos) -> slash_pos
           Option.None -> stop
         end
 
-      # ':' is byte 58.
-      if URI.find_byte(bytes, 58, start, seg_end).some?()
+      if URI.find_byte(bytes, BYTE_COLON, start, seg_end).some?()
         return Option.Some(URIError.InvalidURI(":"))
       end
     end
