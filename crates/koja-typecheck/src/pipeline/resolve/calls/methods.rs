@@ -18,6 +18,7 @@ use super::super::inference::{
 use super::super::types::{display_resolution, lookup_type, peel_alias};
 use super::emit_conflict;
 use crate::pipeline::unify::{Substitution, substitute};
+use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
     Dispatch, FunctionSignature, GlobalKind, GlobalRegistry, RegistryEntry, ResolvedParam,
 };
@@ -123,6 +124,7 @@ pub(super) fn classify_receiver(
             GlobalKind::Enum(_) | GlobalKind::Protocol(_) | GlobalKind::Struct(_)
         )
     {
+        check_reference_visibility(struct_entry, resolver.package, receiver.span, diagnostics);
         rewrite_to_static_ident(receiver, &receiver_path, struct_id);
         return Some(MethodReceiver::Static { struct_id });
     }

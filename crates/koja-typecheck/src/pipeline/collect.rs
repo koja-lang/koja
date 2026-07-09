@@ -31,6 +31,7 @@ use koja_ast::ast::{
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 use koja_ast::span::Span;
 
+use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry, InsertOutcome, VisibilityScope};
 
@@ -363,6 +364,13 @@ fn register_struct(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_struct_feature_gaps(decl, diagnostics);
+    diagnose_doc_on_private(
+        decl.name(),
+        "struct",
+        decl.visibility,
+        &decl.annotations,
+        diagnostics,
+    );
     let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
     let visibility = package_visibility_scope(decl.visibility);
@@ -413,6 +421,13 @@ fn register_enum(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_enum_feature_gaps(decl, diagnostics);
+    diagnose_doc_on_private(
+        decl.name(),
+        "enum",
+        decl.visibility,
+        &decl.annotations,
+        diagnostics,
+    );
     let identifier = Identifier::new(package, decl.path.clone());
     let type_params = type_param_names(&decl.type_params);
     let visibility = package_visibility_scope(decl.visibility);
@@ -527,10 +542,16 @@ fn register_extend(
         ));
         return;
     };
-    let entry_kind = &registry
+    let target_entry = registry
         .get(target_id)
-        .expect("lookup_owner_path returned a live id")
-        .kind;
+        .expect("lookup_owner_path returned a live id");
+    check_reference_visibility(
+        target_entry,
+        package,
+        type_expr_span(&extend_block.target),
+        diagnostics,
+    );
+    let entry_kind = &target_entry.kind;
     // Protocol targets are admitted for static methods only. Lift
     // diagnoses `self` receivers on them.
     if !matches!(
@@ -597,6 +618,13 @@ fn register_protocol(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_protocol_feature_gaps(decl, diagnostics);
+    diagnose_doc_on_private(
+        &decl.name,
+        "protocol",
+        decl.visibility,
+        &decl.annotations,
+        diagnostics,
+    );
     let identifier = Identifier::new(package, vec![decl.name.clone()]);
     let mut type_params = vec!["Self".to_string()];
     for param in &decl.type_params {
@@ -642,6 +670,13 @@ fn register_constant(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_constant_annotations(&constant.name, &constant.annotations, diagnostics);
+    diagnose_doc_on_private(
+        &constant.name,
+        "constant",
+        constant.visibility,
+        &constant.annotations,
+        diagnostics,
+    );
     let identifier = Identifier::new(package, vec![constant.name.clone()]);
     let visibility = package_visibility_scope(constant.visibility);
     if let InsertOutcome::Collision { existing } =
@@ -671,6 +706,13 @@ fn register_type_alias(
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     diagnose_alias_annotations(&alias.name, &alias.annotations, diagnostics);
+    diagnose_doc_on_private(
+        &alias.name,
+        "type alias",
+        alias.visibility,
+        &alias.annotations,
+        diagnostics,
+    );
     let identifier = Identifier::new(package, vec![alias.name.clone()]);
     let visibility = package_visibility_scope(alias.visibility);
     if let InsertOutcome::Collision { existing } =

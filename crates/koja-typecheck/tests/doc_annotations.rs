@@ -235,6 +235,95 @@ fn doc_string_on_public_top_level_fn_is_accepted() {
 }
 
 // ---------------------------------------------------------------------------
+// Negative: `@doc` on other private decl kinds is a compile error
+// ---------------------------------------------------------------------------
+
+/// Assert `source` fails with the @doc-on-private message for
+/// `kind_label` (e.g. "struct") on `name`.
+fn assert_doc_on_private_rejected(source: &str, kind_label: &str, name: &str) {
+    let needle = format!("`@doc` is not allowed on private {kind_label} `{name}`");
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains(&needle)),
+        "expected `{needle}`, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_struct_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal state.\"
+        priv struct Hidden
+          slot: Int
+        end
+        ",
+        "struct",
+        "Hidden",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_enum_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal modes.\"
+        priv enum Mode
+          Off
+          On
+        end
+        ",
+        "enum",
+        "Mode",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_protocol_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal contract.\"
+        priv protocol Marked
+          fn mark(self) -> Int
+        end
+        ",
+        "protocol",
+        "Marked",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_constant_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal limit.\"
+        priv const LIMIT: Int = 10
+
+        LIMIT
+        ",
+        "constant",
+        "LIMIT",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_type_alias_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        struct Cat
+          name: String
+        end
+
+        @doc \"Internal union.\"
+        priv type Pet = Cat
+        ",
+        "type alias",
+        "Pet",
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Negative: non-`@doc` annotations still raise the feature-gap message
 // ---------------------------------------------------------------------------
 

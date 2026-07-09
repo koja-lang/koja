@@ -14,6 +14,7 @@ use koja_ast::identifier::{
 use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
+use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{GlobalKind, GlobalRegistry, ResolvedStructField};
 
 use super::coercion::{Mismatch, check_compatible_stamping};
@@ -85,6 +86,7 @@ pub(super) fn resolve_struct_construction(
         ));
         return ResolvedType::unresolved();
     };
+    check_reference_visibility(struct_entry, resolver.package, span, diagnostics);
 
     let GlobalKind::Struct(definition) = &struct_entry.kind else {
         bare_walk_fields(fields, resolver, diagnostics);
