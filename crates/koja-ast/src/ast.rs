@@ -14,14 +14,15 @@ use crate::span::Span;
 
 // Semantic enums
 
-/// Visibility marker on top-level declarations: `Public` (default) or
-/// `Private` (from the `priv` keyword). Every top-level decl kind
-/// (function, struct, enum, constant, type alias, protocol) accepts
-/// `priv`, which makes it **package-private**: usable from any file in
-/// the same package, rejected from other packages. The one exception is
-/// a `priv fn` declared inside a `struct` / `enum` / `impl` body, which
-/// is **type-private**: callable from any other method on that same
-/// target type, rejected everywhere else.
+/// Visibility marker on top-level declarations. `Public` is the
+/// default and `Private` comes from the `priv` keyword. Every
+/// top-level decl kind (function, struct, enum, constant, type alias,
+/// protocol) accepts `priv`, which makes it **package-private**.
+/// Package-private means usable from any file in the same package,
+/// rejected from other packages. The one exception is a `priv fn`
+/// declared inside a `struct` / `enum` / `impl` body, which is
+/// **type-private**. Type-private means callable from any other method
+/// on that same target type, rejected everywhere else.
 ///
 /// Typecheck enforces both via its internal `VisibilityScope` projection.
 ///

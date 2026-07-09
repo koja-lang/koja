@@ -409,8 +409,8 @@ impl Parser {
 
     /// Parse a single top-level item. Annotations (`@name [value]`)
     /// and the optional `priv` marker are read once up front so the
-    /// dispatch table below is flat: every declaration kind gets the
-    /// (possibly empty) annotation list and visibility directly.
+    /// dispatch table below stays flat. Every declaration kind gets
+    /// the (possibly empty) annotation list and visibility directly.
     /// `impl`, `extend`, and `alias` decline both. If either is
     /// present we route to a guiding diagnostic instead.
     fn parse_item(&mut self) -> Option<Item> {

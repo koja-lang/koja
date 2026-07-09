@@ -303,7 +303,7 @@ fn package_visibility_scope(visibility: Visibility) -> VisibilityScope {
     function_visibility_scope(visibility, None)
 }
 
-/// `@doc` on a private declaration is a compile error: private items
+/// `@doc` on a private declaration is a compile error. Private items
 /// never surface in generated docs, so the docstring is dead metadata.
 fn diagnose_doc_on_private(
     name: &str,
@@ -387,7 +387,7 @@ fn register_struct(
                     ),
                     decl.span,
                 ));
-                // Still register inline methods even on collision: the
+                // Still register inline methods even on collision. The
                 // duplicate decl is itself diagnosed, and methods declared
                 // under the duplicate would otherwise dangle. Re-look up
                 // the existing entry's id so methods scope their

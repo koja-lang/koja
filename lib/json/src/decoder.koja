@@ -218,7 +218,7 @@ struct Decoder
   priv fn scan_string(self, start: Int, open: Int)
     -> Result<Pair<String, Int>, String>
 
-    # Fast path for string contents: scan for the closing quote and cut
+    # Fast path for string contents. Scan for the closing quote and cut
     # the value out as one slice. Falls over to `scan_escaped` at the
     # first backslash.
 
@@ -253,7 +253,7 @@ struct Decoder
     sb: StringBuilder,
   ) -> Result<Pair<String, Int>, String>
 
-    # Slow path for strings containing escapes: accumulate the slices
+    # Slow path for strings containing escapes. Accumulate the slices
     # between escapes plus each unescaped character. `start` tracks the
     # beginning of the pending unflushed segment.
 

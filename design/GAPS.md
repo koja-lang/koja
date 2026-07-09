@@ -133,7 +133,7 @@ bounds-checked helpers (see `peek?` / `digit_at?` in
 **Fix path (assessed 2026-07-09):** confined to IR lowering. Lower
 `a and b` as control flow, the moral equivalent of `if a then b else
 false` (mirror for `or`), so both backends inherit the semantics from the
-lowered shape. The block-and-merge machinery already exists, pattern
+lowered shape. The block-and-merge machinery already exists. Pattern
 match chains do the same thing via `ChainMode::And`. Parser, typecheck,
 formatter, and precedence are untouched. LLVM folds the branch back into
 branchless `and` when the right side is cheap and pure, so there is no

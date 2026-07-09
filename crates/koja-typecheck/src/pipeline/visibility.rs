@@ -2,12 +2,12 @@
 //!
 //! Call sites enforce `priv fn` in `resolve::calls` (see
 //! `check_callee_visibility` there). This module is the equivalent
-//! seam for every other reference position: type expressions in
-//! signatures (`lift_signatures`), constructors / patterns / static
+//! seam for every other reference position. Those are type expressions
+//! in signatures (`lift_signatures`), constructors / patterns / static
 //! receivers (`resolve`), `extend` targets (`collect`), and `alias`
 //! targets (`aliases`). It also owns the signature leak check
-//! ([`check_signature_leaks`]): a public declaration may not expose
-//! a same-package private type on its signature surface.
+//! ([`check_signature_leaks`]), which rejects public declarations that
+//! expose a same-package private type on their signature surface.
 
 use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::{AnonymousKind, GlobalRegistryId, Identifier, Resolution, ResolvedType};
@@ -53,13 +53,13 @@ pub(crate) fn check_reference_visibility(
 /// Reject every public declaration whose signature surface mentions a
 /// same-package `priv` type. Runs right after `lift_signatures`, so
 /// every surface is a stamped [`ResolvedType`] with registry ids.
-/// Cross-package private mentions are not re-checked here: the
+/// Cross-package private mentions are not re-checked here. The
 /// reference gate already diagnosed them during lift.
 ///
 /// Functions declared on a private type are exempt. Their signatures
 /// necessarily mention the type (`self`, constructors returning
 /// `Self`), and the type itself is unreachable from other packages,
-/// so nothing leaks. The exemption is function-only on purpose: a
+/// so nothing leaks. The exemption is function-only on purpose. A
 /// public nested type under a private owner is still resolvable by
 /// its full path, so its surface is checked like any other.
 pub(crate) fn check_signature_leaks(registry: &GlobalRegistry, diagnostics: &mut Vec<Diagnostic>) {
@@ -139,8 +139,8 @@ fn leaked_private_mentions<'r>(
     leaked
 }
 
-/// Append every registry id mentioned on `entry`'s public surface:
-/// signature types per kind, plus type-parameter bounds. Unstamped
+/// Append every registry id mentioned on `entry`'s public surface,
+/// meaning signature types per kind plus type-parameter bounds. Unstamped
 /// (`None`) payloads contribute nothing, since collect already
 /// diagnosed whatever prevented the stamp.
 fn collect_surface_ids(entry: &RegistryEntry, ids: &mut Vec<GlobalRegistryId>) {

@@ -41,7 +41,7 @@ fn priv_before_impl_is_rejected() {
     );
     let result = parse_failing(&src);
     assert_message_contains(&result, "`priv` must be followed by");
-    // Recovery: the impl block itself still parses on the next pass.
+    // Recovery still works. The impl block itself parses on the next pass.
     assert!(
         result
             .ast

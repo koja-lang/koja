@@ -1,10 +1,10 @@
 //! `priv` visibility enforcement at reference sites.
 //!
-//! Two enforcement seams are pinned here. Call sites: every `priv fn`
+//! Two enforcement seams are pinned here. At call sites, every `priv fn`
 //! carries a [`VisibilityScope`] in the registry (top-level `->`
 //! `PackagePrivate`, method `->` `TypePrivate(owner)`), and bare /
 //! method call resolution rejects callers that fall outside that
-//! scope. Reference sites: `priv` structs, enums, constants, type
+//! scope. At reference sites, `priv` structs, enums, constants, type
 //! aliases, and protocols are `PackagePrivate`, and every reference
 //! position (signature type expressions, constructors, patterns,
 //! static receivers, `extend` targets, `alias` targets) rejects
