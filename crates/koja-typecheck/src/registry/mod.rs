@@ -110,11 +110,10 @@ impl GlobalKind {
 /// vec per param. Lift's bounds-resolve sub-pass replaces it with the
 /// resolved protocol ids via [`GlobalRegistry::set_type_param_bounds`].
 ///
-/// `visibility` carries the `priv fn` enforcement scope as a
-/// [`VisibilityScope`]. See that enum for the three-case
-/// rationale. Non-function entries (structs, enums, protocols,
-/// constants, type aliases) all carry `Public`. Visibility isn't
-/// a language concern for them.
+/// `visibility` carries the `priv` enforcement scope as a
+/// [`VisibilityScope`]. See that enum for the three-case rationale.
+/// Functions can be `TypePrivate`. Every other entry kind is either
+/// `Public` or `PackagePrivate`.
 #[derive(Clone, Debug)]
 pub struct RegistryEntry {
     pub identifier: Identifier,
@@ -126,21 +125,22 @@ pub struct RegistryEntry {
 }
 
 /// Typecheck-internal projection of the AST [`koja_ast::ast::Visibility`]
-/// plus the contextual scope where a `priv fn` was declared. Encoded as
+/// plus the contextual scope where a `priv` decl appeared. Encoded as
 /// a single enum so illegal states (public-with-owner, private-with-no-
 /// scope) are unrepresentable. The surface keyword and its declaration
 /// position together pick exactly one variant.
 ///
-/// - `Public` (default): no restriction. The call resolves wherever
-///   the name is reachable.
-/// - `PackagePrivate`: top-level `priv fn`. Callable from any file
+/// - `Public` (default): no restriction. The reference resolves
+///   wherever the name is reachable.
+/// - `PackagePrivate`: any top-level `priv` decl (function, struct,
+///   enum, constant, type alias, protocol). Usable from any file
 ///   in the same package. The package name lives on the entry's
 ///   [`Identifier`] so it doesn't need to be repeated here.
 /// - `TypePrivate(type_id)`: `priv fn` declared inside a `struct` /
 ///   `enum` / `impl` body. Callable only from other methods on the
 ///   same target type, including across inherent and protocol-impl
 ///   blocks, since they all register at `[type, method]` and share
-///   one owner id.
+///   one owner id. Only functions can be type-private.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum VisibilityScope {
     Public,
@@ -196,13 +196,18 @@ impl GlobalRegistry {
     /// resolved type + value [`ConstantDefinition`] is stamped in
     /// later by [`Self::set_constant_definition`]. Constants don't
     /// take type parameters, so callers always pass an empty vec.
-    pub fn insert_constant(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
+    pub fn insert_constant(
+        &mut self,
+        identifier: Identifier,
+        span: Span,
+        visibility: VisibilityScope,
+    ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Constant(None),
             span,
             Vec::new(),
-            VisibilityScope::Public,
+            visibility,
         )
     }
 
@@ -217,13 +222,14 @@ impl GlobalRegistry {
         identifier: Identifier,
         span: Span,
         type_params: Vec<String>,
+        visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Enum(None),
             span,
             type_params,
-            VisibilityScope::Public,
+            visibility,
         )
     }
 
@@ -261,13 +267,14 @@ impl GlobalRegistry {
         identifier: Identifier,
         span: Span,
         type_params: Vec<String>,
+        visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Protocol(None),
             span,
             type_params,
-            VisibilityScope::Public,
+            visibility,
         )
     }
 
@@ -279,13 +286,14 @@ impl GlobalRegistry {
         identifier: Identifier,
         span: Span,
         type_params: Vec<String>,
+        visibility: VisibilityScope,
     ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::Struct(None),
             span,
             type_params,
-            VisibilityScope::Public,
+            visibility,
         )
     }
 
@@ -295,13 +303,18 @@ impl GlobalRegistry {
     /// generic params today, so callers always pass an empty vec.
     /// Generic aliases are tracked as a future language extension
     /// in the v1-parity plan.
-    pub fn insert_type_alias(&mut self, identifier: Identifier, span: Span) -> InsertOutcome<'_> {
+    pub fn insert_type_alias(
+        &mut self,
+        identifier: Identifier,
+        span: Span,
+        visibility: VisibilityScope,
+    ) -> InsertOutcome<'_> {
         self.insert(
             identifier,
             GlobalKind::TypeAlias(None),
             span,
             Vec::new(),
-            VisibilityScope::Public,
+            visibility,
         )
     }
 
@@ -790,6 +803,7 @@ fn seed_primitive_stub(reg: &mut GlobalRegistry, name: &str, type_params: Vec<St
         Identifier::new("Global", vec![name.to_string()]),
         Span::default(),
         type_params,
+        VisibilityScope::Public,
     );
     let id = match outcome {
         InsertOutcome::Fresh(id) => id,

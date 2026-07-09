@@ -2,7 +2,7 @@
 //! Bare `impl Type` is rejected with a migration diagnostic and
 //! recovered as [`ExtendBlock`] so the rest of the file still parses.
 
-use koja_ast::ast::{ExtendBlock, ImplBlock, ImplMember, Item};
+use koja_ast::ast::{ExtendBlock, ImplBlock, ImplMember, Item, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
@@ -61,7 +61,7 @@ impl Parser {
                     members.push(ImplMember::Function(func));
                 }
                 TokenKind::Type => {
-                    let alias = self.parse_type_alias(Vec::new());
+                    let alias = self.parse_type_alias(Vec::new(), Visibility::Public);
                     members.push(ImplMember::TypeAlias(alias));
                 }
                 _ => {

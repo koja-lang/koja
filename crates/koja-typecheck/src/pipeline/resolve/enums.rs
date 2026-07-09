@@ -22,6 +22,7 @@ use koja_ast::identifier::{GlobalRegistryId, Resolution, ResolvedType, TypeParam
 use koja_ast::span::Span;
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
+use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{
     GlobalKind, GlobalRegistry, ResolvedEnumVariant, ResolvedStructField, ResolvedVariantData,
 };
@@ -53,6 +54,7 @@ pub(super) fn resolve_enum_construction(
         ));
         return ResolvedType::unresolved();
     };
+    check_reference_visibility(enum_entry, resolver.package, span, diagnostics);
 
     let GlobalKind::Enum(definition) = &enum_entry.kind else {
         bare_walk_construction_data(data, resolver, diagnostics);

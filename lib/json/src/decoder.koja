@@ -1,25 +1,25 @@
-const BYTE_BACKSLASH: Int = 92
-const BYTE_COLON: Int = 58
-const BYTE_COMMA: Int = 44
-const BYTE_DOT: Int = 46
-const BYTE_LBRACE: Int = 123
-const BYTE_LBRACKET: Int = 91
-const BYTE_LOWER_E: Int = 101
-const BYTE_LOWER_F: Int = 102
-const BYTE_LOWER_N: Int = 110
-const BYTE_LOWER_T: Int = 116
-const BYTE_MINUS: Int = 45
-const BYTE_NEWLINE: Int = 10
-const BYTE_NINE: Int = 57
-const BYTE_PLUS: Int = 43
-const BYTE_QUOTE: Int = 34
-const BYTE_RBRACE: Int = 125
-const BYTE_RBRACKET: Int = 93
-const BYTE_RETURN: Int = 13
-const BYTE_SPACE: Int = 32
-const BYTE_TAB: Int = 9
-const BYTE_UPPER_E: Int = 69
-const BYTE_ZERO: Int = 48
+priv const BYTE_BACKSLASH: Int = 92
+priv const BYTE_COLON: Int = 58
+priv const BYTE_COMMA: Int = 44
+priv const BYTE_DOT: Int = 46
+priv const BYTE_LBRACE: Int = 123
+priv const BYTE_LBRACKET: Int = 91
+priv const BYTE_LOWER_E: Int = 101
+priv const BYTE_LOWER_F: Int = 102
+priv const BYTE_LOWER_N: Int = 110
+priv const BYTE_LOWER_T: Int = 116
+priv const BYTE_MINUS: Int = 45
+priv const BYTE_NEWLINE: Int = 10
+priv const BYTE_NINE: Int = 57
+priv const BYTE_PLUS: Int = 43
+priv const BYTE_QUOTE: Int = 34
+priv const BYTE_RBRACE: Int = 125
+priv const BYTE_RBRACKET: Int = 93
+priv const BYTE_RETURN: Int = 13
+priv const BYTE_SPACE: Int = 32
+priv const BYTE_TAB: Int = 9
+priv const BYTE_UPPER_E: Int = 69
+priv const BYTE_ZERO: Int = 48
 
 @doc """
 Recursive descent parser that converts a JSON string into a Value
@@ -36,19 +36,19 @@ struct Decoder
     bytes = input.to_binary()
     d = Decoder{input: bytes, size: bytes.byte_size()}
 
-    match d.parse_value_at(d.skip_ws(0))
-      Result.Ok(pair) ->
-        rest = d.skip_ws(pair.second)
+    pair =
+      match d.parse_value_at(d.skip_ws(0))
+        Result.Ok(p) -> p
+        Result.Err(msg) -> return Result.Err(msg)
+      end
 
-        if rest < d.size
-          return Result.Err("unexpected trailing content at position #{rest}")
-        end
+    rest = d.skip_ws(pair.second)
 
-        Result.Ok(pair.first)
-
-      Result.Err(msg) ->
-        Result.Err(msg)
+    if rest < d.size
+      return Result.Err("unexpected trailing content at position #{rest}")
     end
+
+    Result.Ok(pair.first)
   end
 
   fn parse_value_at(self, pos: Int) -> Result<Pair<Value, Int>, String>
@@ -86,35 +86,29 @@ struct Decoder
   end
 
   fn parse_null(self, pos: Int) -> Result<Pair<Value, Int>, String>
-    if pos + 4 <= self.size
-      if self.text(pos, pos + 3) == "null"
-        ok_pair: Pair<Value, Int> = Pair{first: Value.Null, second: pos + 4}
-        return Result.Ok(ok_pair)
-      end
+    if pos + 4 > self.size or self.text(pos, pos + 3) != "null"
+      return Result.Err("expected 'null' at position #{pos}")
     end
 
-    Result.Err("expected 'null' at position #{pos}")
+    ok_pair: Pair<Value, Int> = Pair{first: Value.Null, second: pos + 4}
+    Result.Ok(ok_pair)
   end
 
   fn parse_bool(self, pos: Int) -> Result<Pair<Value, Int>, String>
-    if pos + 4 <= self.size
-      if self.text(pos, pos + 3) == "true"
-        ok_pair: Pair<Value, Int> = Pair{
-          first: Value.Bool(true),
-          second: pos + 4,
-        }
-        return Result.Ok(ok_pair)
-      end
+    if pos + 4 <= self.size and self.text(pos, pos + 3) == "true"
+      true_pair: Pair<Value, Int> = Pair{
+        first: Value.Bool(true),
+        second: pos + 4,
+      }
+      return Result.Ok(true_pair)
     end
 
-    if pos + 5 <= self.size
-      if self.text(pos, pos + 4) == "false"
-        false_pair: Pair<Value, Int> = Pair{
-          first: Value.Bool(false),
-          second: pos + 5,
-        }
-        return Result.Ok(false_pair)
-      end
+    if pos + 5 <= self.size and self.text(pos, pos + 4) == "false"
+      false_pair: Pair<Value, Int> = Pair{
+        first: Value.Bool(false),
+        second: pos + 5,
+      }
+      return Result.Ok(false_pair)
     end
 
     Result.Err("expected 'true' or 'false' at position #{pos}")
@@ -123,88 +117,66 @@ struct Decoder
   fn parse_number(self, pos: Int) -> Result<Pair<Value, Int>, String>
     i = pos
 
-    if i < self.size
-      if self.byte(i) == BYTE_MINUS
-        i += 1
-      end
+    if self.peek?(i, BYTE_MINUS)
+      i += 1
     end
 
-    if i >= self.size
-      return Result.Err("expected digit at position #{i}")
-    end
-
-    if not Decoder.digit?(self.byte(i))
+    if not self.digit_at?(i)
       return Result.Err("expected digit at position #{i}")
     end
 
     i = self.consume_digits(i)
     is_float = false
 
-    if i < self.size
-      if self.byte(i) == BYTE_DOT
-        is_float = true
-        i += 1
+    if self.peek?(i, BYTE_DOT)
+      is_float = true
+      i += 1
 
-        if i >= self.size
-          return Result.Err("expected digit after decimal point at position #{i}")
-        end
-
-        if not Decoder.digit?(self.byte(i))
-          return Result.Err("expected digit after decimal point at position #{i}")
-        end
-
-        i = self.consume_digits(i)
+      if not self.digit_at?(i)
+        return Result.Err("expected digit after decimal point at position #{i}")
       end
+
+      i = self.consume_digits(i)
     end
 
-    if i < self.size
-      e_byte = self.byte(i)
+    if self.peek?(i, BYTE_LOWER_E) or self.peek?(i, BYTE_UPPER_E)
+      is_float = true
+      i += 1
 
-      if e_byte == BYTE_LOWER_E or e_byte == BYTE_UPPER_E
-        is_float = true
+      if self.peek?(i, BYTE_PLUS) or self.peek?(i, BYTE_MINUS)
         i += 1
-
-        if i < self.size
-          sign_byte = self.byte(i)
-
-          if sign_byte == BYTE_PLUS or sign_byte == BYTE_MINUS
-            i += 1
-          end
-        end
-
-        if i >= self.size
-          return Result.Err("expected digit in exponent at position #{i}")
-        end
-
-        if not Decoder.digit?(self.byte(i))
-          return Result.Err("expected digit in exponent at position #{i}")
-        end
-
-        i = self.consume_digits(i)
       end
+
+      if not self.digit_at?(i)
+        return Result.Err("expected digit in exponent at position #{i}")
+      end
+
+      i = self.consume_digits(i)
     end
 
     num_str = self.text(pos, i - 1)
 
     if is_float
-      match num_str.to_float()
-        Result.Ok(f) ->
-          ok_pair: Pair<Value, Int> = Pair{first: Value.Float(f), second: i}
-          return Result.Ok(ok_pair)
+      f =
+        match num_str.to_float()
+          Result.Ok(v) -> v
+          Result.Err(msg) ->
+            return Result.Err("invalid float '#{num_str}' at position #{pos}: #{msg}")
+        end
 
+      float_pair: Pair<Value, Int> = Pair{first: Value.Float(f), second: i}
+      return Result.Ok(float_pair)
+    end
+
+    n =
+      match num_str.to_int()
+        Result.Ok(v) -> v
         Result.Err(msg) ->
-          return Result.Err("invalid float '#{num_str}' at position #{pos}: #{msg}")
+          return Result.Err("invalid integer '#{num_str}' at position #{pos}: #{msg}")
       end
-    end
 
-    match num_str.to_int()
-      Result.Ok(n) ->
-        int_pair: Pair<Value, Int> = Pair{first: Value.Int(n), second: i}
-        Result.Ok(int_pair)
-
-      Result.Err(msg) ->
-        Result.Err("invalid integer '#{num_str}' at position #{pos}: #{msg}")
-    end
+    int_pair: Pair<Value, Int> = Pair{first: Value.Int(n), second: i}
+    Result.Ok(int_pair)
   end
 
   fn consume_digits(self, start: Int) -> Int
@@ -222,38 +194,33 @@ struct Decoder
   end
 
   fn parse_string(self, pos: Int) -> Result<Pair<Value, Int>, String>
-    match self.parse_raw_string(pos)
-      Result.Ok(pair) ->
-        ok_pair: Pair<Value, Int> = Pair{
-          first: Value.String(pair.first),
-          second: pair.second,
-        }
-        Result.Ok(ok_pair)
+    pair =
+      match self.parse_raw_string(pos)
+        Result.Ok(p) -> p
+        Result.Err(msg) -> return Result.Err(msg)
+      end
 
-      Result.Err(msg) ->
-        Result.Err(msg)
-    end
+    ok_pair: Pair<Value, Int> = Pair{
+      first: Value.String(pair.first),
+      second: pair.second,
+    }
+    Result.Ok(ok_pair)
   end
 
   fn parse_raw_string(self, pos: Int) -> Result<Pair<String, Int>, String>
-    if pos >= self.size
-      return Result.Err("expected '\"' at position #{pos}")
-    end
-
-    if self.byte(pos) != BYTE_QUOTE
+    if not self.peek?(pos, BYTE_QUOTE)
       return Result.Err("expected '\"' at position #{pos}")
     end
 
     self.scan_string(pos + 1, pos)
   end
 
-  @doc """
-  Fast path for string contents: scan for the closing quote and cut
-  the value out as one slice. Falls over to `scan_escaped` at the
-  first backslash.
-  """
   priv fn scan_string(self, start: Int, open: Int)
     -> Result<Pair<String, Int>, String>
+
+    # Fast path for string contents. Scan for the closing quote and cut
+    # the value out as one slice. Falls over to `scan_escaped` at the
+    # first backslash.
 
     i = start
 
@@ -278,11 +245,6 @@ struct Decoder
     Result.Err("unterminated string starting at position #{open}")
   end
 
-  @doc """
-  Slow path for strings containing escapes: accumulate the slices
-  between escapes plus each unescaped character. `start` tracks the
-  beginning of the pending unflushed segment.
-  """
   priv fn scan_escaped(
     self,
     seg_start: Int,
@@ -290,6 +252,10 @@ struct Decoder
     open: Int,
     sb: StringBuilder,
   ) -> Result<Pair<String, Int>, String>
+
+    # Slow path for strings containing escapes. Accumulate the slices
+    # between escapes plus each unescaped character. `start` tracks the
+    # beginning of the pending unflushed segment.
 
     start = seg_start
     i = pos
@@ -340,14 +306,9 @@ struct Decoder
     i = self.skip_ws(pos + 1)
     items: List<Value> = List.new()
 
-    if i < self.size
-      if self.byte(i) == BYTE_RBRACKET
-        ok_pair: Pair<Value, Int> = Pair{
-          first: Value.Array(items),
-          second: i + 1,
-        }
-        return Result.Ok(ok_pair)
-      end
+    if self.peek?(i, BYTE_RBRACKET)
+      ok_pair: Pair<Value, Int> = Pair{first: Value.Array(items), second: i + 1}
+      return Result.Ok(ok_pair)
     end
 
     self.parse_array_elements(items, i, pos)
@@ -358,48 +319,43 @@ struct Decoder
 
     i = self.skip_ws(pos)
 
-    match self.parse_value_at(i)
-      Result.Err(msg) ->
-        Result.Err(msg)
+    pair =
+      match self.parse_value_at(i)
+        Result.Ok(p) -> p
+        Result.Err(msg) -> return Result.Err(msg)
+      end
 
-      Result.Ok(pair) ->
-        items = items.append(pair.first)
-        i = self.skip_ws(pair.second)
+    items = items.append(pair.first)
+    i = self.skip_ws(pair.second)
 
-        if i >= self.size
-          return Result.Err("unterminated array starting at position #{arr_start}")
-        end
-
-        b = self.byte(i)
-
-        if b == BYTE_RBRACKET
-          ok_pair: Pair<Value, Int> = Pair{
-            first: Value.Array(items),
-            second: i + 1,
-          }
-          return Result.Ok(ok_pair)
-        end
-
-        if b != BYTE_COMMA
-          return Result.Err("expected ',' or ']' in array at position #{i}")
-        end
-
-        self.parse_array_elements(items, i + 1, arr_start)
+    if i >= self.size
+      return Result.Err("unterminated array starting at position #{arr_start}")
     end
+
+    b = self.byte(i)
+
+    if b == BYTE_RBRACKET
+      ok_pair: Pair<Value, Int> = Pair{first: Value.Array(items), second: i + 1}
+      return Result.Ok(ok_pair)
+    end
+
+    if b != BYTE_COMMA
+      return Result.Err("expected ',' or ']' in array at position #{i}")
+    end
+
+    self.parse_array_elements(items, i + 1, arr_start)
   end
 
   fn parse_object(self, pos: Int) -> Result<Pair<Value, Int>, String>
     i = self.skip_ws(pos + 1)
     entries: List<Pair<String, Value>> = List.new()
 
-    if i < self.size
-      if self.byte(i) == BYTE_RBRACE
-        ok_pair: Pair<Value, Int> = Pair{
-          first: Value.Object(entries),
-          second: i + 1,
-        }
-        return Result.Ok(ok_pair)
-      end
+    if self.peek?(i, BYTE_RBRACE)
+      ok_pair: Pair<Value, Int> = Pair{
+        first: Value.Object(entries),
+        second: i + 1,
+      }
+      return Result.Ok(ok_pair)
     end
 
     self.parse_object_entries(entries, i, pos)
@@ -414,67 +370,82 @@ struct Decoder
 
     i = self.skip_ws(pos)
 
-    match self.parse_raw_string(i)
-      Result.Err(msg) ->
-        Result.Err("expected string key in object: " <> msg)
+    key_pair =
+      match self.parse_raw_string(i)
+        Result.Ok(kp) -> kp
+        Result.Err(msg) ->
+          return Result.Err("expected string key in object: " <> msg)
+      end
 
-      Result.Ok(key_pair) ->
-        i = self.skip_ws(key_pair.second)
+    i = self.skip_ws(key_pair.second)
 
-        if i >= self.size
-          return Result.Err("expected ':' after object key at position #{i}")
-        end
-
-        if self.byte(i) != BYTE_COLON
-          return Result.Err("expected ':' after object key at position #{i}")
-        end
-
-        i = self.skip_ws(i + 1)
-
-        match self.parse_value_at(i)
-          Result.Err(msg) ->
-            Result.Err(msg)
-
-          Result.Ok(val_pair) ->
-            e: Pair<String, Value> = Pair{
-              first: key_pair.first,
-              second: val_pair.first,
-            }
-            entries = entries.append(e)
-            i = self.skip_ws(val_pair.second)
-
-            if i >= self.size
-              return Result.Err("unterminated object starting at position #{obj_start}")
-            end
-
-            b = self.byte(i)
-
-            if b == BYTE_RBRACE
-              ok_pair: Pair<Value, Int> = Pair{
-                first: Value.Object(entries),
-                second: i + 1,
-              }
-              return Result.Ok(ok_pair)
-            end
-
-            if b != BYTE_COMMA
-              return Result.Err("expected ',' or '}' in object at position #{i}")
-            end
-
-            self.parse_object_entries(entries, i + 1, obj_start)
-        end
+    if not self.peek?(i, BYTE_COLON)
+      return Result.Err("expected ':' after object key at position #{i}")
     end
+
+    i = self.skip_ws(i + 1)
+
+    val_pair =
+      match self.parse_value_at(i)
+        Result.Ok(vp) -> vp
+        Result.Err(msg) -> return Result.Err(msg)
+      end
+
+    e: Pair<String, Value> = Pair{first: key_pair.first, second: val_pair.first}
+    entries = entries.append(e)
+    i = self.skip_ws(val_pair.second)
+
+    if i >= self.size
+      return Result.Err("unterminated object starting at position #{obj_start}")
+    end
+
+    b = self.byte(i)
+
+    if b == BYTE_RBRACE
+      ok_pair: Pair<Value, Int> = Pair{
+        first: Value.Object(entries),
+        second: i + 1,
+      }
+      return Result.Ok(ok_pair)
+    end
+
+    if b != BYTE_COMMA
+      return Result.Err("expected ',' or '}' in object at position #{i}")
+    end
+
+    self.parse_object_entries(entries, i + 1, obj_start)
   end
 
-  @doc """
-  The byte at `pos`. Callers guarantee `pos` is in bounds.
-  """
   priv fn byte(self, pos: Int) -> Int
+    # The byte at `pos`. Callers guarantee `pos` is in bounds.
+
     self.input.at(pos).unwrap()
   end
 
   priv fn digit?(b: Int) -> Bool
     b >= BYTE_ZERO and b <= BYTE_NINE
+  end
+
+  priv fn digit_at?(self, pos: Int) -> Bool
+    # Bounds-checked `digit?`. `and` evaluates both operands, so the
+    # guard must return before `byte` can be reached out of bounds.
+
+    if pos >= self.size
+      return false
+    end
+
+    Decoder.digit?(self.byte(pos))
+  end
+
+  priv fn peek?(self, pos: Int, expected: Int) -> Bool
+    # True when the byte at `pos` equals `expected`, false past the
+    # end of input.
+
+    if pos >= self.size
+      return false
+    end
+
+    self.byte(pos) == expected
   end
 
   priv fn skip_ws(self, pos: Int) -> Int
@@ -494,12 +465,11 @@ struct Decoder
     i
   end
 
-  @doc """
-  The inclusive byte range `[start, stop]` as a String. The input
-  bytes come from a String and every cut point is an ASCII byte, so
-  the slice is always valid UTF-8.
-  """
   priv fn text(self, start: Int, stop: Int) -> String
+    # The inclusive byte range `[start, stop]` as a String. The input
+    # bytes come from a String and every cut point is an ASCII byte, so
+    # the slice is always valid UTF-8.
+
     match self.input.slice(Range{start: start, stop: stop}).to_string()
       Result.Ok(s) -> s
       Result.Err(_) -> ""

@@ -74,6 +74,12 @@ mod tests {
         assert_formatted(fmt_script(input), expected);
     }
 
+    /// Assert `source` is already in canonical form (formatting it
+    /// changes nothing).
+    fn assert_unchanged(source: &str) {
+        assert_fmt(source, source);
+    }
+
     fn assert_formatted(actual: String, expected: &str) {
         let mut expected = dedent(expected);
         if !expected.ends_with('\n') {
@@ -472,6 +478,30 @@ mod tests {
               @extern \"C\" @link \"crypto:EVP_MD_CTX_free\"
               priv fn evp_md_ctx_free(ctx: CPtr<UInt8>)
             end
+        ",
+        );
+    }
+
+    #[test]
+    fn priv_decls_round_trip() {
+        assert_unchanged(
+            "
+            priv struct Hidden
+              value: Int
+            end
+
+            priv enum Mode
+              Off
+              On
+            end
+
+            priv type Pet = Hidden
+
+            priv protocol Marked
+              fn mark(self) -> Int
+            end
+
+            priv const LIMIT: Int = 10
         ",
         );
     }

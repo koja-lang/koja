@@ -11,7 +11,11 @@ use koja_ast::token::TokenKind;
 use crate::parser::Parser;
 
 impl Parser {
-    pub(crate) fn parse_struct_item(&mut self, annotations: Vec<Annotation>) -> Item {
+    pub(crate) fn parse_struct_item(
+        &mut self,
+        annotations: Vec<Annotation>,
+        visibility: Visibility,
+    ) -> Item {
         let start = self.current_span();
         self.advance(); // struct
 
@@ -36,6 +40,7 @@ impl Parser {
 
         Item::Struct(StructDecl {
             annotations,
+            visibility,
             path,
             type_params,
             fields,

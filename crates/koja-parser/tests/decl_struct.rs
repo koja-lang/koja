@@ -26,6 +26,33 @@ fn first_struct(source: &str) -> koja_ast::ast::StructDecl {
 }
 
 #[test]
+fn priv_struct_records_private_visibility() {
+    let src = dedent(
+        "
+        priv struct Internal
+          slot: Int
+        end
+        ",
+    );
+    let s = first_struct(&src);
+    assert_eq!(s.visibility, Visibility::Private);
+    assert_eq!(s.name(), "Internal");
+}
+
+#[test]
+fn struct_defaults_to_public_visibility() {
+    let src = dedent(
+        "
+        struct Open
+          slot: Int
+        end
+        ",
+    );
+    let s = first_struct(&src);
+    assert_eq!(s.visibility, Visibility::Public);
+}
+
+#[test]
 fn empty_struct() {
     let src = dedent(
         "
