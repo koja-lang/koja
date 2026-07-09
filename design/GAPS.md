@@ -84,6 +84,66 @@ not a 1.0 blocker.
 
 ---
 
+## Constants are not referenceable across packages
+
+Every `const` is same-package only in practice. Bare identifiers resolve
+constants only in the current package, with no `Global` fallback, so even
+`Global`'s `STDOUT`/`STDERR`/`STDIN` are unreachable outside `lib/global`.
+`Pkg.CONST` parses as a unit enum construction and diagnoses "does not
+recognize the enum type". `alias` rejects constant targets. As a result
+`priv const` (2026-07) only affects the `@doc` rule today, though the
+registry visibility gate is already wired for when a cross-package
+reference path lands.
+
+**Fix path (assessed 2026-07-09, roughly half a day):** everything below
+typecheck resolve is already package-agnostic. IR reads constants by
+registry id and both backends merge every package's constant pool into one
+flat map. The work is a resolve-phase fallback: when the unit enum
+interpretation of `Pkg.NAME` fails, look up `Identifier::new(pkg, [name])`
+and on a constant hit rewrite the node to an `Ident` stamped
+`Resolution::Global(id)`, the same rewrite trick `classify_receiver` uses
+for static receivers, plus a `check_reference_visibility` call. A guard
+must keep a real type named `Pkg` winning, mirroring
+`try_package_function_call`. Optionally add a `Global` fallback for bare
+constants in `resolve_ident` so stdlib constants become usable. Lowercase
+constant names parse as field access instead of the enum shape, so support
+only the uppercase path form.
+
+---
+
+## `and` / `or` do not short-circuit
+
+Both operands of `and` and `or` are always evaluated. `lower_bin_op` in
+`koja-ir/src/lower/ops.rs` maps them to strict `IRBinOp::And` / `Or`,
+plain binary ops over two already-computed `Bool`s, identical on both
+backends. LANGUAGE.md does not document the evaluation order either way.
+
+This makes the universal guard idiom a runtime trap:
+
+```koja
+if i < self.size and self.byte(i) == BYTE_QUOTE   # panics past end of input
+```
+
+Every mainstream comparison point (Rust, Ruby, Elixir, Python, Go, Swift)
+short-circuits, so users will write this, it compiles, and it faults at
+runtime. Stdlib code works around it with nested `if` guards or
+bounds-checked helpers (see `peek?` / `digit_at?` in
+`lib/json/src/decoder.koja`, added 2026-07-09 for exactly this reason).
+
+**Fix path (assessed 2026-07-09):** confined to IR lowering. Lower
+`a and b` as control flow, the moral equivalent of `if a then b else
+false` (mirror for `or`), so both backends inherit the semantics from the
+lowered shape. The block-and-merge machinery already exists. Pattern
+match chains do the same thing via `ChainMode::And`. Parser, typecheck,
+formatter, and precedence are untouched. LLVM folds the branch back into
+branchless `and` when the right side is cheap and pure, so there is no
+performance regression for the common case. The change is observable only
+when the right operand panics or performs effects, which is the behavior
+being fixed. Land with a LANGUAGE.md paragraph pinning left-to-right,
+short-circuit evaluation and golden tests covering both backends.
+
+---
+
 ## Arithmetic fault semantics undefined (ArithmeticError)
 
 Investigated 2026-06-10. The fault behavior of `+ - * / %` and unary

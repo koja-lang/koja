@@ -7,13 +7,17 @@
 //! top-level `fn`, but the body is optional (omitted bodies indicate
 //! a required method without a default).
 
-use koja_ast::ast::{Annotation, Item, ProtocolDecl, ProtocolMethod};
+use koja_ast::ast::{Annotation, Item, ProtocolDecl, ProtocolMethod, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
 
 impl Parser {
-    pub(crate) fn parse_protocol_item(&mut self, annotations: Vec<Annotation>) -> Item {
+    pub(crate) fn parse_protocol_item(
+        &mut self,
+        annotations: Vec<Annotation>,
+        visibility: Visibility,
+    ) -> Item {
         let start = self.current_span();
         self.advance(); // protocol
 
@@ -63,6 +67,7 @@ impl Parser {
 
         Item::Protocol(ProtocolDecl {
             annotations,
+            visibility,
             name,
             type_params,
             methods,

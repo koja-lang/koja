@@ -18,6 +18,7 @@ use super::super::ctx::Resolver;
 use super::super::types::{display_resolution, lookup_type};
 use super::{PatternCoverage, resolve_pattern};
 use crate::pipeline::unify::{Substitution, substitute};
+use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{GlobalKind, ResolvedStructField};
 
 pub(super) fn resolve_struct_pattern(
@@ -69,6 +70,7 @@ fn resolve_struct_metadata(
         ));
         return None;
     };
+    check_reference_visibility(entry, resolver.package, span, diagnostics);
     let GlobalKind::Struct(definition) = &entry.kind else {
         diagnostics.push(Diagnostic::error(
             format!(

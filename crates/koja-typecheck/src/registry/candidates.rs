@@ -112,7 +112,7 @@ impl GlobalRegistry {
     }
 
     /// Top-level symbols declared in `pkg`, as visible from
-    /// `caller_package` (package-private functions are hidden from
+    /// `caller_package` (package-private declarations are hidden from
     /// other packages). Instance methods and unstamped function
     /// signatures never appear.
     pub fn symbol_candidates<'a>(

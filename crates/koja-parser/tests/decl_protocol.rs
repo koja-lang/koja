@@ -7,7 +7,7 @@
 //! - the error path for an annotation in a protocol body that is
 //!   not followed by a function signature
 
-use koja_ast::ast::{Item, TypeExpr};
+use koja_ast::ast::{Item, TypeExpr, Visibility};
 use koja_ast::util::dedent;
 
 mod common;
@@ -22,6 +22,33 @@ fn first_protocol(source: &str) -> koja_ast::ast::ProtocolDecl {
         }
     }
     panic!("no protocol in parsed output");
+}
+
+#[test]
+fn priv_protocol_records_private_visibility() {
+    let src = dedent(
+        "
+        priv protocol Show
+          fn show(self) -> String
+        end
+        ",
+    );
+    let p = first_protocol(&src);
+    assert_eq!(p.visibility, Visibility::Private);
+    assert_eq!(p.name, "Show");
+}
+
+#[test]
+fn protocol_defaults_to_public_visibility() {
+    let src = dedent(
+        "
+        protocol Show
+          fn show(self) -> String
+        end
+        ",
+    );
+    let p = first_protocol(&src);
+    assert_eq!(p.visibility, Visibility::Public);
 }
 
 #[test]

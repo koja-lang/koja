@@ -1,8 +1,10 @@
-//! `@doc` annotations are pure metadata for `koja-doc` / `koja-fmt`.
-//! The typechecker neither honors nor enforces them. It only needs
-//! to stop rejecting them as a feature gap on the decl shapes that
-//! historically diagnosed every annotation. Other annotation names
-//! (`@derive`, `@spec`, …) still raise the existing message.
+//! `@doc` annotations are metadata consumed by `koja-doc` and LSP
+//! hovers. The typechecker accepts them on public decls (it only
+//! needed to stop rejecting them as a feature gap on the shapes that
+//! historically diagnosed every annotation) and rejects them on
+//! private decls, which never surface in generated docs. Other
+//! annotation names (`@derive`, `@spec`, and friends) still raise
+//! the existing message.
 //!
 //! Top-level functions and impl-block functions silently accept any
 //! annotation today, so they aren't covered here. There's nothing to
@@ -148,6 +150,177 @@ fn doc_false_on_protocol_method_is_accepted() {
         end
         ";
     typecheck(&dedent(source));
+}
+
+// ---------------------------------------------------------------------------
+// Negative: `@doc` on a private function is a compile error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn doc_string_on_top_level_priv_fn_is_rejected() {
+    let source = "
+        @doc \"Internal helper.\"
+        priv fn helper -> Int
+          7
+        end
+
+        helper()
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`@doc` is not allowed on private function `helper`")),
+        "expected @doc-on-private error, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_false_on_top_level_priv_fn_is_rejected() {
+    let source = "
+        @doc false
+        priv fn helper -> Int
+          7
+        end
+
+        helper()
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`@doc` is not allowed on private function `helper`")),
+        "expected @doc-on-private error, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_string_on_type_body_priv_fn_is_rejected() {
+    let source = "
+        struct Point
+          x: Int
+
+          @doc \"Internal helper.\"
+          priv fn shift(self) -> Int
+            self.x + 1
+          end
+        end
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("`@doc` is not allowed on private function `shift`")),
+        "expected @doc-on-private error, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_string_on_public_top_level_fn_is_accepted() {
+    let source = "
+        @doc \"Adds one.\"
+        fn bump(n: Int) -> Int
+          n + 1
+        end
+
+        bump(1)
+        ";
+    typecheck(&dedent(source));
+}
+
+// ---------------------------------------------------------------------------
+// Negative: `@doc` on other private decl kinds is a compile error
+// ---------------------------------------------------------------------------
+
+/// Assert `source` fails with the @doc-on-private message for
+/// `kind_label` (e.g. "struct") on `name`.
+fn assert_doc_on_private_rejected(source: &str, kind_label: &str, name: &str) {
+    let needle = format!("`@doc` is not allowed on private {kind_label} `{name}`");
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| m.contains(&needle)),
+        "expected `{needle}`, got {messages:?}",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_struct_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal state.\"
+        priv struct Hidden
+          slot: Int
+        end
+        ",
+        "struct",
+        "Hidden",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_enum_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal modes.\"
+        priv enum Mode
+          Off
+          On
+        end
+        ",
+        "enum",
+        "Mode",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_protocol_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal contract.\"
+        priv protocol Marked
+          fn mark(self) -> Int
+        end
+        ",
+        "protocol",
+        "Marked",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_constant_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        @doc \"Internal limit.\"
+        priv const LIMIT: Int = 10
+
+        LIMIT
+        ",
+        "constant",
+        "LIMIT",
+    );
+}
+
+#[test]
+fn doc_string_on_priv_type_alias_is_rejected() {
+    assert_doc_on_private_rejected(
+        "
+        struct Cat
+          name: String
+        end
+
+        @doc \"Internal union.\"
+        priv type Pet = Cat
+        ",
+        "type alias",
+        "Pet",
+    );
 }
 
 // ---------------------------------------------------------------------------

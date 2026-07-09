@@ -8,13 +8,17 @@
 //!   names are PascalCase (e.g. `Net`, `HTTP`, `JSON`) and the path
 //!   must end with a `TypeIdent` segment.
 
-use koja_ast::ast::{AliasDecl, Annotation, Item, TypeAlias};
+use koja_ast::ast::{AliasDecl, Annotation, Item, TypeAlias, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
 
 impl Parser {
-    pub(crate) fn parse_type_alias(&mut self, annotations: Vec<Annotation>) -> TypeAlias {
+    pub(crate) fn parse_type_alias(
+        &mut self,
+        annotations: Vec<Annotation>,
+        visibility: Visibility,
+    ) -> TypeAlias {
         let start = self.current_span();
         self.advance(); // type
         let name = self.expect_type_ident();
@@ -22,14 +26,19 @@ impl Parser {
         let type_expr = self.parse_type_expr();
         TypeAlias {
             annotations,
+            visibility,
             name,
             type_expr,
             span: self.span_from(start),
         }
     }
 
-    pub(crate) fn parse_type_alias_item(&mut self, annotations: Vec<Annotation>) -> Item {
-        let alias = self.parse_type_alias(annotations);
+    pub(crate) fn parse_type_alias_item(
+        &mut self,
+        annotations: Vec<Annotation>,
+        visibility: Visibility,
+    ) -> Item {
+        let alias = self.parse_type_alias(annotations, visibility);
         Item::TypeAlias(alias)
     }
 

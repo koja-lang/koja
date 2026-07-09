@@ -223,7 +223,11 @@ impl<'a> Printer<'a> {
             parts.push(doc);
             parts.push(hardline());
         }
-        let mut header = format!("struct {}", s.path.join("."));
+        let mut header = format!(
+            "{}struct {}",
+            visibility_prefix(s.visibility),
+            s.path.join(".")
+        );
         if !s.type_params.is_empty() {
             header.push('<');
             header.push_str(&util::format_type_params(&s.type_params));
@@ -284,7 +288,11 @@ impl<'a> Printer<'a> {
             parts.push(doc);
             parts.push(hardline());
         }
-        let mut header = format!("enum {}", e.path.join("."));
+        let mut header = format!(
+            "{}enum {}",
+            visibility_prefix(e.visibility),
+            e.path.join(".")
+        );
         if !e.type_params.is_empty() {
             header.push('<');
             header.push_str(&util::format_type_params(&e.type_params));
@@ -389,10 +397,7 @@ impl<'a> Printer<'a> {
     /// Formats a function signature (visibility, name, type params, params,
     /// return type) with group/indent for line-breaking.
     fn function_sig_to_doc(&mut self, f: &Function) -> Doc {
-        let mut prefix = String::new();
-        if f.visibility == Visibility::Private {
-            prefix.push_str("priv ");
-        }
+        let mut prefix = String::from(visibility_prefix(f.visibility));
         prefix.push_str("fn ");
         prefix.push_str(&f.name);
 
@@ -472,7 +477,7 @@ impl<'a> Printer<'a> {
             parts.push(doc);
             parts.push(hardline());
         }
-        let mut header = format!("protocol {}", p.name);
+        let mut header = format!("{}protocol {}", visibility_prefix(p.visibility), p.name);
         if !p.type_params.is_empty() {
             header.push('<');
             header.push_str(&util::format_type_params(&p.type_params));
@@ -595,6 +600,7 @@ impl<'a> Printer<'a> {
             parts.push(doc);
             parts.push(hardline());
         }
+        parts.push(text(visibility_prefix(c.visibility)));
         parts.push(text("const "));
         parts.push(text(&c.name));
         if let Some(type_ann) = &c.type_annotation {

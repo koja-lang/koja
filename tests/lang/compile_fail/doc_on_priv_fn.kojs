@@ -1,0 +1,6 @@
+@doc "Internal helper."
+priv fn helper -> Int
+  7
+end
+
+helper().print()
