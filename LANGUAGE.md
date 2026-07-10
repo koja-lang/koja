@@ -17,7 +17,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Protocols](#protocols) -- Behavioral Contracts, Static Dispatch
 - [Modules](#modules) -- Transparent Files, Visibility, Aliases
 - [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
-- [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, Protocols
+- [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Protocols
 - [C FFI](#c-ffi) -- `@extern "C"`, `CPtr<T>`, `CString`
 - [Annotations](#annotations) -- `@doc`
 - [Tooling](#tooling) -- CLI Commands, LSP, Formatter
@@ -85,7 +85,15 @@ Numeric literals coerce to any same-category type annotation. Integer literals c
 
 ### Line Continuation
 
-Newlines terminate statements. Line continuation is implicit after binary operators, `.`, and `,`.
+Newlines terminate statements. Line continuation is implicit after binary operators, `.`, and `,`. A line starting with `and`, `or`, or the ternary `?` also continues the previous expression, so wrapped conditions lead each continuation line with the operator.
+
+```koja
+if request.valid? and request.authorized?
+  and request.body.present?
+
+  handle(request)
+end
+```
 
 ---
 
@@ -1025,7 +1033,7 @@ response = HTTP.get("https://example.com")
 
 ### Standard library visibility
 
-The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, etc.) -- no alias needed. Domain-specific packages require qualified access:
+The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, etc.) -- no alias needed. Domain-specific packages require qualified access:
 
 - **`Crypto`** -- `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
 - **`Net`** -- `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
@@ -1640,6 +1648,41 @@ match Int.parse("99999999999999999999")
   Result.Ok(_) -> ()
   Result.Err(e) -> e.print()  # OutOfRange
 end
+```
+
+### `URI`
+
+An RFC 3986 URI, parsed into its components. Fields hold the encoded (wire-form) text exactly as it appears in the URI. Every URI has a path (possibly empty), so `path` is not optional:
+
+```koja
+struct URI
+  fragment: Option<String>
+  host: Option<String>
+  path: String
+  port: Option<Int>
+  query: Option<String>
+  scheme: Option<String>
+  userinfo: Option<String>
+end
+```
+
+Functions:
+
+- `URI.parse(input: String) -> Result<URI, URI.Error>` -- parses and validates an absolute or relative URI. The scheme is lowercased, and a known scheme's default port fills `port` when the input has none. Errors carry the offending part of the input.
+- `to_string(self) -> String` -- reassembles the URI, omitting the port when it equals the scheme's default.
+- `URI.encode(input: String) -> String` -- percent-encodes every character that is neither reserved nor unreserved.
+- `URI.decode(input: String) -> Result<String, URI.Error>` -- percent-unescapes, rejecting malformed `%XX` sequences and invalid UTF-8.
+- `URI.default_port(scheme: String) -> Option<Int>` -- the well-known port for a scheme (`"https"` gives `443`), or `Option.None`.
+
+`URI` implements `Equality` (component-wise) and `Debug` (`format` renders the assembled URI string, so interpolation produces the URL).
+
+```koja
+uri = URI.parse("https://example.com/pkg?v=1").unwrap()
+uri.host.unwrap().print()      # "example.com"
+uri.port.unwrap().print()      # 443
+"fetching #{uri}".print()      # "fetching https://example.com/pkg?v=1"
+
+URI.encode("put it+й").print() # "put%20it+%D0%B9"
 ```
 
 ### `Enumeration<T>` Protocol

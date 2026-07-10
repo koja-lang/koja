@@ -109,6 +109,7 @@ fn main() {
         "Global.string",
         "Global.system",
         "Global.time",
+        "Global.uri",
     ];
     code.push_str("\n/// Curated stdlib sources auto-imported by\n");
     code.push_str("/// every pipeline run (driver, tests, REPL).\n");

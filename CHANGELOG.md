@@ -14,14 +14,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The `[project]` table accepts `authors`, `description`, and `license` metadata fields, though unused.
 - `koja shell` now properly loads project files when launched inside a project directory.
 - `koja shell` now tab-completes keywords, types, functions, session variables, `Type.` members, and `value.` methods and fields.
+- New auto-imported `URI` type: parse and validate RFC 3986 URIs with `URI.parse`, reassemble them with `to_string`, and percent-encode/decode strings with `URI.encode` / `URI.decode`.
 - Watch another process with `Process.monitor(pid)`. When it exits, you receive a `Process.ExitSignal` message telling you which process died and why.
 - Cancel a monitor with `Process.demonitor(ref)`.
 - Calling `Process.monitor` from a process whose message type can't receive `Process.ExitSignal` is a compile error.
 - `priv` now works on top-level `struct`, `enum`, `const`, `type`, and `protocol` declarations, hiding them from other packages.
 - A public declaration whose signature mentions a private type is now a compile error.
 - `@doc` on a private declaration is now a compile error, since private items never appear in generated documentation.
+- A boolean expression can now continue on the next line when that line starts with `and` or `or`.
 
 ### Changed
+
+- `koja format` now wraps a long `if`/`unless`/`while` condition by starting each continuation line with the operator, indented two past the keyword, with a blank line before the body.
+- `koja format` now indents the continuation lines of a wrapped binary expression two past where the expression started, so wrapped chains no longer align with sibling statements.
 
 - Parse errors now describe tokens as they appear in source (``expected `)`, found end of file``) instead of internal compiler names (`expected RParen, found EndOfFile`).
 - A `panic()` in a spawned process is now contained to that process — the runtime prints the crash and keeps running, while a panic in the main process still exits non-zero.

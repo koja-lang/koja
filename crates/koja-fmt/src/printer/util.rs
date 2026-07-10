@@ -39,7 +39,7 @@ pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc
         .enumerate()
         .map(|(i, d)| {
             if i < last {
-                concat(vec![d, text(", ")])
+                concat(vec![d, text(",")])
             } else {
                 d
             }
@@ -297,7 +297,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             let mut items: Vec<Doc> = Vec::with_capacity(len);
             for (i, pat) in patterns.iter().enumerate() {
                 if i < len - 1 {
-                    items.push(concat(vec![pattern_to_doc(pat), text(" | ")]));
+                    items.push(concat(vec![pattern_to_doc(pat), text(" |")]));
                 } else {
                     items.push(pattern_to_doc(pat));
                 }

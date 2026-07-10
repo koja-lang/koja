@@ -44,8 +44,7 @@ struct System
   Returns the system hostname.
   """
   fn hostname -> String
-    ptr = koja_hostname()
-    cs = ptr.to_cstring()
+    cs = koja_hostname().to_cstring()
     result = cs.to_string()
     cs.free()
     result
