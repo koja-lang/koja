@@ -18,32 +18,38 @@ impl<'a> Printer<'a> {
             ExprKind::Ident { name, .. } => text(name.clone()),
             ExprKind::Self_ { .. } => text("self"),
 
+            // `and` / `or` chains pack densely with the operator leading
+            // each item, so a wrapped chain starts its continuation lines
+            // with the operator, indented two past where the chain began.
             ExprKind::Binary {
                 op: op @ (BinOp::Or | BinOp::And),
                 ..
             } => {
                 let op_str = binop_str(op);
                 let operands = self.flatten_binop_chain(expr, op);
-                let len = operands.len();
-                let mut items: Vec<Doc> = Vec::with_capacity(len);
-                for (i, doc) in operands.into_iter().enumerate() {
-                    if i < len - 1 {
-                        items.push(concat(vec![doc, text(" "), text(op_str), text(" ")]));
-                    } else {
-                        items.push(doc);
-                    }
-                }
-                fill(items)
+                let items: Vec<Doc> = operands
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, doc)| {
+                        if i == 0 {
+                            doc
+                        } else {
+                            concat(vec![text(op_str), text(" "), doc])
+                        }
+                    })
+                    .collect();
+                indent(2, fill(items))
             }
 
+            // Other binary operators keep the operator trailing (a leading
+            // operator would not parse) but hang continuations the same two.
             ExprKind::Binary { op, left, right } => {
                 let op_str = binop_str(op);
                 group(concat(vec![
                     self.expr_to_doc(left),
                     text(" "),
                     text(op_str),
-                    line(),
-                    self.expr_to_doc(right),
+                    indent(2, concat(vec![line(), self.expr_to_doc(right)])),
                 ]))
             }
 
@@ -123,8 +129,7 @@ impl<'a> Printer<'a> {
                 else_body,
             } => {
                 let mut parts = vec![
-                    text("if "),
-                    self.expr_to_doc(condition),
+                    self.condition_header_to_doc("if ", condition),
                     self.body_to_doc(then_body, expr.span.end.line),
                 ];
                 if let Some(eb) = else_body {
@@ -138,8 +143,7 @@ impl<'a> Printer<'a> {
             }
 
             ExprKind::Unless { condition, body } => concat(vec![
-                text("unless "),
-                self.expr_to_doc(condition),
+                self.condition_header_to_doc("unless ", condition),
                 self.body_to_doc(body, expr.span.end.line),
                 hardline(),
                 text("end"),
@@ -243,8 +247,7 @@ impl<'a> Printer<'a> {
             ]),
 
             ExprKind::While { condition, body } => concat(vec![
-                text("while "),
-                self.expr_to_doc(condition),
+                self.condition_header_to_doc("while ", condition),
                 self.body_to_doc(body, expr.span.end.line),
                 hardline(),
                 text("end"),
@@ -463,6 +466,18 @@ impl<'a> Printer<'a> {
             parts.push(type_expr_to_doc(ta));
         }
         concat(parts)
+    }
+
+    /// Formats an `if` / `unless` / `while` header. Like wrapped
+    /// function signatures, a wrapped condition indents two (the
+    /// expression doc hangs its own continuations) and a blank line
+    /// separates it from the body.
+    fn condition_header_to_doc(&mut self, keyword: &str, condition: &Expr) -> Doc {
+        group(concat(vec![
+            text(keyword),
+            self.expr_to_doc(condition),
+            if_break(nil(), hardline()),
+        ]))
     }
 
     /// Flattens a chain of same-operator binary expressions into a list of

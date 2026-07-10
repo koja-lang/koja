@@ -5,7 +5,7 @@
 //! - mixed variant kinds within one enum
 //! - generic enums and inline methods (same shape as struct bodies)
 
-use koja_ast::ast::{EnumVariantData, Item, TypeExpr};
+use koja_ast::ast::{EnumVariantData, Item, TypeExpr, Visibility};
 use koja_ast::util::dedent;
 
 mod common;
@@ -20,6 +20,35 @@ fn first_enum(source: &str) -> koja_ast::ast::EnumDecl {
         }
     }
     panic!("no enum in parsed output");
+}
+
+#[test]
+fn priv_enum_records_private_visibility() {
+    let src = dedent(
+        "
+        priv enum Mode
+          On
+          Off
+        end
+        ",
+    );
+    let e = first_enum(&src);
+    assert_eq!(e.visibility, Visibility::Private);
+    assert_eq!(e.name(), "Mode");
+}
+
+#[test]
+fn enum_defaults_to_public_visibility() {
+    let src = dedent(
+        "
+        enum Mode
+          On
+          Off
+        end
+        ",
+    );
+    let e = first_enum(&src);
+    assert_eq!(e.visibility, Visibility::Public);
 }
 
 #[test]

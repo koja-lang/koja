@@ -2,12 +2,12 @@ alias Crypto.Certificate
 alias Crypto.PrivateKey
 alias Net.Socket.Error as SocketError
 
-const SSL_ERROR_SYSCALL: Int64 = 5
-const SSL_ERROR_WANT_READ: Int64 = 2
-const SSL_ERROR_WANT_WRITE: Int64 = 3
-const SSL_ERROR_ZERO_RETURN: Int64 = 6
-const SSL_VERIFY_PEER: Int64 = 1
-const X509_V_OK: Int64 = 0
+priv const SSL_ERROR_SYSCALL: Int64 = 5
+priv const SSL_ERROR_WANT_READ: Int64 = 2
+priv const SSL_ERROR_WANT_WRITE: Int64 = 3
+priv const SSL_ERROR_ZERO_RETURN: Int64 = 6
+priv const SSL_VERIFY_PEER: Int64 = 1
+priv const X509_V_OK: Int64 = 0
 
 @doc """
 Why peer certificate verification failed: the actionable causes as
@@ -428,13 +428,11 @@ struct TLSSession
 
     err: Int = ssl_get_error(ssl, ret)
 
-    if err != SSL_ERROR_WANT_READ
-      if err != SSL_ERROR_WANT_WRITE
-        failure = handshake_failure(ssl, err)
-        ssl_free(ssl)
-        ssl_ctx_free(ctx)
-        return Result.Err(failure)
-      end
+    if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
+      failure = handshake_failure(ssl, err)
+      ssl_free(ssl)
+      ssl_ctx_free(ctx)
+      return Result.Err(failure)
     end
 
     fd.block(err == SSL_ERROR_WANT_READ)
@@ -530,10 +528,8 @@ struct TLSSession
 
     err: Int = ssl_get_error(ssl, ret)
 
-    if err != SSL_ERROR_WANT_READ
-      if err != SSL_ERROR_WANT_WRITE
-        return Result.Err(io_failure(err))
-      end
+    if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
+      return Result.Err(io_failure(err))
     end
 
     fd.block(err == SSL_ERROR_WANT_READ)
@@ -625,10 +621,8 @@ struct TLSSession
 
     err: Int = ssl_get_error(ssl, ret)
 
-    if err != SSL_ERROR_WANT_READ
-      if err != SSL_ERROR_WANT_WRITE
-        return Result.Err(io_failure(err))
-      end
+    if err != SSL_ERROR_WANT_READ and err != SSL_ERROR_WANT_WRITE
+      return Result.Err(io_failure(err))
     end
 
     fd.block(err == SSL_ERROR_WANT_READ)

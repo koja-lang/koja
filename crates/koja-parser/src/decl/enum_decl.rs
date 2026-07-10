@@ -6,13 +6,17 @@
 //! three shapes: Unit (`Color`), Tuple (`Rect(Int, Int)`), and
 //! Struct (`Pixel { x: Int, y: Int }`).
 
-use koja_ast::ast::{Annotation, EnumDecl, EnumVariant, EnumVariantData, Item};
+use koja_ast::ast::{Annotation, EnumDecl, EnumVariant, EnumVariantData, Item, Visibility};
 use koja_ast::token::TokenKind;
 
 use crate::parser::Parser;
 
 impl Parser {
-    pub(crate) fn parse_enum_item(&mut self, annotations: Vec<Annotation>) -> Item {
+    pub(crate) fn parse_enum_item(
+        &mut self,
+        annotations: Vec<Annotation>,
+        visibility: Visibility,
+    ) -> Item {
         let start = self.current_span();
         self.advance(); // enum
 
@@ -37,6 +41,7 @@ impl Parser {
 
         Item::Enum(EnumDecl {
             annotations,
+            visibility,
             path,
             type_params,
             variants,

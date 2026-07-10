@@ -9,7 +9,8 @@ use koja_ast::span::Span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::resolve::types::canonical_union;
-use crate::registry::{Dispatch, GlobalKind, GlobalRegistry};
+use crate::pipeline::visibility::check_reference_visibility;
+use crate::registry::{Dispatch, GlobalKind, GlobalRegistry, RegistryEntry};
 
 /// Read-only name-resolution inputs threaded through type-expression
 /// resolution. `Copy` so callers pass it by value without ceremony.
@@ -284,11 +285,25 @@ pub(crate) fn resolve_path_to_global(
     scope: ResolutionScope<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) -> Option<GlobalRegistryId> {
+    let (id, entry) = lookup_path_entry(path, span, scope, diagnostics)?;
+    check_reference_visibility(entry, scope.package, span, diagnostics);
+    Some(id)
+}
+
+/// The lookup body of [`resolve_path_to_global`], split out so the
+/// visibility gate sees the resolved entry once regardless of which
+/// precedence step hit.
+fn lookup_path_entry<'r>(
+    path: &[String],
+    span: Span,
+    scope: ResolutionScope<'r>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<(GlobalRegistryId, &'r RegistryEntry)> {
     if let Some(target) =
         rewrite_through_aliases(scope.aliases, path, scope.package, scope.registry)
     {
-        if let Some((id, _)) = scope.registry.lookup(&target) {
-            return Some(id);
+        if let Some(hit) = scope.registry.lookup(&target) {
+            return Some(hit);
         }
         diagnostics.push(Diagnostic::error(
             format!("typecheck does not recognize the alias target `{target}`"),
@@ -297,13 +312,13 @@ pub(crate) fn resolve_path_to_global(
         return None;
     }
     let local = Identifier::new(scope.package, path.to_vec());
-    if let Some((id, _)) = scope.registry.lookup(&local) {
-        return Some(id);
+    if let Some(hit) = scope.registry.lookup(&local) {
+        return Some(hit);
     }
     if path.len() >= 2 {
         let head_as_pkg = Identifier::new(&path[0], path[1..].to_vec());
-        if let Some((id, _)) = scope.registry.lookup(&head_as_pkg) {
-            return Some(id);
+        if let Some(hit) = scope.registry.lookup(&head_as_pkg) {
+            return Some(hit);
         }
     }
     let candidate = Identifier::new("Global", path.to_vec());
@@ -324,7 +339,7 @@ pub(crate) fn resolve_path_to_global(
             ));
             return None;
         }
-        return Some(id);
+        return Some((id, entry));
     }
     diagnostics.push(Diagnostic::error(
         format!(
@@ -385,6 +400,7 @@ pub(crate) fn resolve_bound_to_id(
         ));
         return None;
     }
+    check_reference_visibility(entry, scope.package, span, diagnostics);
     Some(id)
 }
 

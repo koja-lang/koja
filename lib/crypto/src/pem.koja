@@ -91,7 +91,7 @@ struct PrivateKey
 end
 
 priv fn private_key_block?(text: String) -> Bool
-  text.contains?("-----BEGIN PRIVATE KEY-----") or
-  text.contains?("-----BEGIN RSA PRIVATE KEY-----") or
-  text.contains?("-----BEGIN EC PRIVATE KEY-----")
+  text.contains?("-----BEGIN PRIVATE KEY-----")
+    or text.contains?("-----BEGIN RSA PRIVATE KEY-----")
+    or text.contains?("-----BEGIN EC PRIVATE KEY-----")
 end

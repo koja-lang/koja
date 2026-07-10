@@ -201,7 +201,7 @@ impl DocProject {
 }
 
 /// Extract documentation items from a parsed file into `package`
-/// inside `project`. Items with `@doc false` and private functions
+/// inside `project`. Items with `@doc false` and `priv` declarations
 /// are excluded. `extend Type` blocks queue their methods on the
 /// current package's `pending_extends` for [`finalize_project`] to
 /// distribute. `impl Protocol for Type` blocks contribute no
@@ -398,7 +398,7 @@ fn make_pending_extend(ext: &ExtendBlock, current_package: &str) -> Option<Pendi
 }
 
 fn extract_constant(c: &koja_ast::ast::Constant) -> Option<DocConstant> {
-    if has_doc_false(&c.annotations) {
+    if c.visibility == Visibility::Private || has_doc_false(&c.annotations) {
         return None;
     }
 
@@ -409,7 +409,7 @@ fn extract_constant(c: &koja_ast::ast::Constant) -> Option<DocConstant> {
 }
 
 fn extract_enum(e: &EnumDecl) -> Option<DocEnum> {
-    if has_doc_false(&e.annotations) {
+    if e.visibility == Visibility::Private || has_doc_false(&e.annotations) {
         return None;
     }
 
@@ -459,7 +459,7 @@ fn extract_params(params: &[Param]) -> Vec<DocParam> {
 }
 
 fn extract_protocol(p: &ProtocolDecl) -> Option<DocProtocol> {
-    if has_doc_false(&p.annotations) {
+    if p.visibility == Visibility::Private || has_doc_false(&p.annotations) {
         return None;
     }
 
@@ -494,7 +494,7 @@ fn extract_protocol_method(m: &ProtocolMethod) -> Option<DocFunction> {
 }
 
 fn extract_struct(s: &StructDecl) -> Option<DocStruct> {
-    if has_doc_false(&s.annotations) {
+    if s.visibility == Visibility::Private || has_doc_false(&s.annotations) {
         return None;
     }
 

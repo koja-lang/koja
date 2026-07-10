@@ -32,6 +32,6 @@ struct StringBuilder
 
     mid = start + count / 2
     StringBuilder.merge_join(parts, start, mid) <>
-    StringBuilder.merge_join(parts, mid, end_idx)
+      StringBuilder.merge_join(parts, mid, end_idx)
   end
 end

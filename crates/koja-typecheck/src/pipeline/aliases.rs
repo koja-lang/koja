@@ -18,6 +18,7 @@ use std::collections::BTreeMap;
 use koja_ast::ast::{AliasDecl, Diagnostic, Item};
 use koja_ast::identifier::{GlobalRegistryId, Identifier};
 
+use crate::pipeline::visibility::check_reference_visibility;
 use crate::program::CheckedPackage;
 use crate::registry::{GlobalKind, GlobalRegistry, RegistryEntry};
 
@@ -80,18 +81,20 @@ fn lookup_alias_target<'r>(
 /// [`super::lift_signatures::lift_signatures`] (so type-name
 /// lookups in struct / fn signatures see the validated roster).
 ///
-/// Five checks per alias, each emitting one diagnostic and
+/// Six checks per alias, each emitting one diagnostic and
 /// continuing so the user sees every alias problem in one pass:
 ///
 /// 1. Path length `>= 2`: alias targets must be qualified.
 /// 2. Target identifier exists and names a struct, enum, or
 ///    protocol (not a function or constant).
-/// 3. Local name not already used by another alias in this file.
-/// 4. Local name doesn't shadow a current-package decl, *unless*
+/// 3. Target is visible from the aliasing package (a `priv` type
+///    cannot be aliased cross-package).
+/// 4. Local name not already used by another alias in this file.
+/// 5. Local name doesn't shadow a current-package decl, *unless*
 ///    the alias's target is that very same identifier (redundant
 ///    self-alias is allowed, since the alias and the existing binding
 ///    resolve to the same id).
-/// 5. Same shadow check against `Global`.
+/// 6. Same shadow check against `Global`.
 pub(crate) fn validate_aliases(
     packages: &[CheckedPackage],
     registry: &GlobalRegistry,
@@ -146,6 +149,7 @@ fn validate_file_aliases<'a>(
         if !check_target_kind(alias, entry, diagnostics) {
             continue;
         }
+        check_reference_visibility(entry, package, alias.span, diagnostics);
         if !check_no_duplicate(alias, &mut seen_local_names, diagnostics) {
             continue;
         }

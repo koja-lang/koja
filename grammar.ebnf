@@ -12,7 +12,8 @@
 (*                                                                            *)
 (* Whitespace and newlines are significant as statement separators but are    *)
 (* omitted from the grammar for readability. Newlines terminate statements;   *)
-(* line continuation is implicit after binary operators, ".", and ",".        *)
+(* line continuation is implicit after binary operators, ".", and ",", and    *)
+(* before a line starting with "and", "or", or the ternary "?".               *)
 (* ========================================================================== *)
 
 
@@ -49,7 +50,7 @@ top_level_decl = struct_decl
 
 struct_member = struct_field | function_decl ;
 
-struct_decl = { annotation } , "struct" , TYPE_IDENT , [ type_params ] ,
+struct_decl = { annotation } , [ "priv" ] , "struct" , TYPE_IDENT , [ type_params ] ,
               { struct_member } ,
               "end" ;
 
@@ -57,7 +58,7 @@ struct_field = IDENT , ":" , type_expr , [ "=" , expr ] ;
 
 enum_member = enum_variant | function_decl ;
 
-enum_decl = { annotation } , "enum" , TYPE_IDENT , [ type_params ] ,
+enum_decl = { annotation } , [ "priv" ] , "enum" , TYPE_IDENT , [ type_params ] ,
             { enum_member } ,
             "end" ;
 
@@ -69,7 +70,7 @@ type_params = "<" , type_param , { "," , type_param } , ">" ;
 
 type_param = TYPE_IDENT , [ ":" , TYPE_IDENT , { "&" , TYPE_IDENT } ] ;
 
-type_alias_decl = { annotation } , "type" , TYPE_IDENT , "=" , type_expr ;
+type_alias_decl = { annotation } , [ "priv" ] , "type" , TYPE_IDENT , "=" , type_expr ;
 
 alias_decl = "alias" , alias_path , [ "as" , TYPE_IDENT ] ;
 
@@ -85,7 +86,7 @@ alias_path = { ( IDENT | TYPE_IDENT ) , "." } , TYPE_IDENT ;
 (* 3. Protocols                                                               *)
 (* ========================================================================== *)
 
-protocol_decl = { annotation } , "protocol" , TYPE_IDENT , [ type_params ] ,
+protocol_decl = { annotation } , [ "priv" ] , "protocol" , TYPE_IDENT , [ type_params ] ,
                 { protocol_method } ,
                 "end" ;
 
@@ -484,7 +485,7 @@ comment = "#" , { any_char_except_newline } ;
 
 (* Constant names accept both IDENT and TYPE_IDENT: the convention is
    SCREAMING_CASE (`MAX_SIZE`, `STDOUT`), which lexes as TYPE_IDENT. *)
-constant_decl = { annotation } , "const" , ( IDENT | TYPE_IDENT ) , [ ":" , type_expr ] , "=" , expr ;
+constant_decl = { annotation } , [ "priv" ] , "const" , ( IDENT | TYPE_IDENT ) , [ ":" , type_expr ] , "=" , expr ;
 
 
 (* ========================================================================== *)

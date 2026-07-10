@@ -408,30 +408,51 @@ impl Parser {
     }
 
     /// Parse a single top-level item. Annotations (`@name [value]`)
-    /// are read once up front so the dispatch table below is flat:
-    /// every declaration kind gets the (possibly empty) annotation
-    /// list directly. `impl` and `alias` decline annotations. If
-    /// any are present we route to the "annotation must be followed
-    /// by a declaration" diagnostic instead.
+    /// and the optional `priv` marker are read once up front so the
+    /// dispatch table below stays flat. Every declaration kind gets
+    /// the (possibly empty) annotation list and visibility directly.
+    /// `impl`, `extend`, and `alias` decline both. If either is
+    /// present we route to a guiding diagnostic instead.
     fn parse_item(&mut self) -> Option<Item> {
         self.skip_newlines();
         let annotations = self.parse_annotations();
         self.skip_newlines();
+        let visibility = if self.eat(&TokenKind::Priv).is_some() {
+            Visibility::Private
+        } else {
+            Visibility::Public
+        };
 
         match self.peek().clone() {
-            TokenKind::Struct => Some(self.parse_struct_item(annotations)),
-            TokenKind::Enum => Some(self.parse_enum_item(annotations)),
-            TokenKind::Protocol => Some(self.parse_protocol_item(annotations)),
-            TokenKind::Fn => Some(self.parse_function_item(annotations, Visibility::Public)),
-            TokenKind::Priv => {
-                self.advance();
-                Some(self.parse_function_item(annotations, Visibility::Private))
+            TokenKind::Struct => Some(self.parse_struct_item(annotations, visibility)),
+            TokenKind::Enum => Some(self.parse_enum_item(annotations, visibility)),
+            TokenKind::Protocol => Some(self.parse_protocol_item(annotations, visibility)),
+            TokenKind::Fn => Some(self.parse_function_item(annotations, visibility)),
+            TokenKind::Const => Some(self.parse_constant_item(annotations, visibility)),
+            TokenKind::Type => Some(self.parse_type_alias_item(annotations, visibility)),
+            // `priv impl` and friends fall through to the visibility
+            // diagnostic below without consuming the keyword, so the
+            // next parse_item call recovers by parsing the block as
+            // public.
+            TokenKind::Impl if annotations.is_empty() && visibility == Visibility::Public => {
+                Some(self.parse_impl_item())
             }
-            TokenKind::Const => Some(self.parse_constant_item(annotations)),
-            TokenKind::Type => Some(self.parse_type_alias_item(annotations)),
-            TokenKind::Impl if annotations.is_empty() => Some(self.parse_impl_item()),
-            TokenKind::Extend if annotations.is_empty() => Some(self.parse_extend_item()),
-            TokenKind::Alias if annotations.is_empty() => Some(self.parse_alias_item()),
+            TokenKind::Extend if annotations.is_empty() && visibility == Visibility::Public => {
+                Some(self.parse_extend_item())
+            }
+            TokenKind::Alias if annotations.is_empty() && visibility == Visibility::Public => {
+                Some(self.parse_alias_item())
+            }
+            _ if visibility == Visibility::Private => {
+                let span = self.current_span();
+                self.error(
+                    "`priv` must be followed by `fn`, `struct`, `enum`, `const`, `type`, \
+                     or `protocol`"
+                        .to_string(),
+                    span,
+                );
+                None
+            }
             _ if !annotations.is_empty() => {
                 let span = self.current_span();
                 self.error(

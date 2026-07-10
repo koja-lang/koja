@@ -18,6 +18,7 @@ use super::super::types::{display_resolution, lookup_type};
 use super::structs::{resolve_field_patterns_unbound, walk_field_patterns};
 use super::{PatternCoverage, VariantWitness, resolve_pattern};
 use crate::pipeline::unify::{Substitution, substitute};
+use crate::pipeline::visibility::check_reference_visibility;
 use crate::registry::{EnumDefinition, GlobalKind, ResolvedStructField, ResolvedVariantData};
 
 pub(super) fn resolve_enum_unit_pattern(
@@ -282,6 +283,7 @@ pub(super) fn lookup_pattern_enum<'a>(
         ));
         return None;
     };
+    check_reference_visibility(entry, resolver.package, span, diagnostics);
     let GlobalKind::Enum(definition) = &entry.kind else {
         diagnostics.push(Diagnostic::error(
             format!(

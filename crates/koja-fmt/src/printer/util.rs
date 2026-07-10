@@ -39,7 +39,7 @@ pub(super) fn fill_bracket_list(open: &str, close: &str, items: Vec<Doc>) -> Doc
         .enumerate()
         .map(|(i, d)| {
             if i < last {
-                concat(vec![d, text(", ")])
+                concat(vec![d, text(",")])
             } else {
                 d
             }
@@ -87,6 +87,15 @@ pub(super) fn item_span(item: &Item) -> &Span {
     }
 }
 
+/// The `priv ` keyword prefix for a private declaration, empty for
+/// public ones.
+pub(super) fn visibility_prefix(visibility: Visibility) -> &'static str {
+    match visibility {
+        Visibility::Private => "priv ",
+        Visibility::Public => "",
+    }
+}
+
 /// Formats an `alias` declaration (`alias pkg.Type` or `alias pkg.Type as Name`).
 pub(super) fn alias_to_doc(a: &AliasDecl) -> Doc {
     let mut parts = Vec::new();
@@ -107,6 +116,7 @@ pub(super) fn type_alias_to_doc(t: &TypeAlias) -> Doc {
         parts.push(doc);
         parts.push(hardline());
     }
+    parts.push(text(visibility_prefix(t.visibility)));
     parts.push(text("type "));
     parts.push(text(&t.name));
     parts.push(text(" = "));
@@ -287,7 +297,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
             let mut items: Vec<Doc> = Vec::with_capacity(len);
             for (i, pat) in patterns.iter().enumerate() {
                 if i < len - 1 {
-                    items.push(concat(vec![pattern_to_doc(pat), text(" | ")]));
+                    items.push(concat(vec![pattern_to_doc(pat), text(" |")]));
                 } else {
                     items.push(pattern_to_doc(pat));
                 }

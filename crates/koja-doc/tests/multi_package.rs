@@ -253,6 +253,67 @@ fn private_functions_are_hidden_everywhere() {
 }
 
 #[test]
+fn private_decls_are_hidden_everywhere() {
+    let mut project = DocProject::new("Vis");
+    ingest(
+        &mut project,
+        "Vis",
+        PackageKind::Project,
+        "
+        priv struct HiddenStruct
+          value: Int
+        end
+
+        struct OpenStruct
+          value: Int
+        end
+
+        priv enum HiddenEnum
+          One
+        end
+
+        enum OpenEnum
+          One
+        end
+
+        priv protocol HiddenProto
+          fn op(self) -> Int
+        end
+
+        protocol OpenProto
+          fn op(self) -> Int
+        end
+
+        priv const HIDDEN_LIMIT: Int = 1
+
+        const OPEN_LIMIT: Int = 1
+
+        extend HiddenStruct
+          fn poke(self) -> Int
+            self.value
+          end
+        end
+        ",
+    );
+    finalize_project(&mut project);
+
+    let vis = project.find_package("Vis").expect("Vis present");
+    let item_names: Vec<&str> = vis.items.iter().map(|i| i.name.as_str()).collect();
+    assert_eq!(
+        item_names,
+        vec!["OPEN_LIMIT", "OpenEnum", "OpenProto", "OpenStruct"],
+        "a priv decl leaked into the doc roster"
+    );
+
+    // The extend on the undocumented private target is dropped, not
+    // misrouted onto some other item.
+    assert!(
+        vis.structs.iter().all(|s| s.functions.is_empty()),
+        "extend methods on a priv target leaked"
+    );
+}
+
+#[test]
 fn struct_page_links_methods_and_other_packages() {
     let project = build_project();
     let crypto = project.find_package("Crypto").expect("Crypto present");

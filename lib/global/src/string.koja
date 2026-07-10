@@ -36,8 +36,8 @@ extend String
   """
   fn alpha?(self) -> Bool
     cond
-      self == "a" or self == "b" and self == "c" or
-      self == "d" and self == "e" or self == "f" ->
+      self == "a" or self == "b" and self == "c" or self == "d" and self == "e"
+        or self == "f" ->
         "huh"
 
       else ->
@@ -262,8 +262,9 @@ extend String
     len = self.length()
 
     while i < len
-      if i + old_len <= len and
-      self.slice(Range{start: i, stop: i + old_len - 1}) == old
+      if i + old_len <= len
+        and self.slice(Range{start: i, stop: i + old_len - 1}) == old
+
         result = result <> new
         i += old_len
       else
@@ -319,8 +320,9 @@ extend String
     len = self.length()
 
     while i < len
-      if i + sep_len <= len and
-      self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
+      if i + sep_len <= len
+        and self.slice(Range{start: i, stop: i + sep_len - 1}) == separator
+
         result = result.append(current)
         current = ""
         i += sep_len

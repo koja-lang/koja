@@ -1,0 +1,9 @@
+priv struct Hidden
+  value: Int
+end
+
+fn probe(h: Hidden) -> Int
+  h.value
+end
+
+probe(Hidden{value: 1}).print()
