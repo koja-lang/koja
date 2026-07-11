@@ -12,11 +12,11 @@
 //! freshly-emitted `Const::Unit` so every edge carries a
 //! type-matching arg.
 
-use koja_ast::ast::{CondArm, Expr, Statement};
+use koja_ast::ast::{BinOp, CondArm, Expr, Statement};
 use koja_typecheck::GlobalRegistry;
 
-use crate::function::{BranchTarget, IRBlockId, IRTerminator};
-use crate::types::{IRType, ValueId};
+use crate::function::{BranchTarget, IRBlockId, IRInstruction, IRTerminator};
+use crate::types::{ConstValue, IRType, ValueId};
 
 use super::arms::{emit_unit, lower_arm_into, lower_expr_arm_into};
 use super::ctx::{FnLowerCtx, LowerOutput, SlotStateSnapshot};
@@ -355,5 +355,70 @@ pub(super) fn lower_ternary(
     )?;
     let else_post = ctx.snapshot_slot_states();
     ctx.merge_slot_states(vec![then_post, else_post]);
+    Ok((result_id, merge_block))
+}
+
+/// Lower `and` / `or` as left-to-right control flow. The right operand
+/// runs only on the edge where the left operand does not determine the
+/// result. The other edge supplies the corresponding Bool constant.
+///
+/// Unlike ternary arms, the right operand is sequential with the left:
+/// it inherits the post-left slot state. The merge joins that state with
+/// the right operand's post-state so declarations confined to the
+/// conditional edge do not leak past the expression.
+pub(super) fn lower_short_circuit(
+    op: BinOp,
+    left: &Expr,
+    right: &Expr,
+    ctx: &mut FnLowerCtx,
+    block: IRBlockId,
+    registry: &GlobalRegistry,
+    output: &mut LowerOutput,
+) -> Result<(ValueId, IRBlockId), ()> {
+    let (left_value, after_left) = lower_expr(left, ctx, block, registry, output)?;
+    let (label, bypass_value, right_on_true) = match op {
+        BinOp::And => ("and", false, true),
+        BinOp::Or => ("or", true, false),
+        _ => panic!("IR lower: short-circuit helper received non-logical operator `{op:?}`"),
+    };
+    let right_block = ctx.fresh_block(format!("{label}_right"));
+    let merge_block = ctx.fresh_block(format!("{label}_merge"));
+    let result_id = ctx.declare_merge_param(merge_block, IRType::Bool);
+    let bypass = ctx.fresh_value(IRType::Bool);
+    ctx.cfg.append(
+        after_left,
+        IRInstruction::Const {
+            dest: bypass,
+            value: ConstValue::Bool(bypass_value),
+        },
+    );
+    let bypass_target = BranchTarget::with_args(merge_block, vec![bypass]);
+    let right_target = BranchTarget::to(right_block);
+    let (then_target, else_target) = if right_on_true {
+        (right_target, bypass_target)
+    } else {
+        (bypass_target, right_target)
+    };
+    ctx.cfg.set_terminator(
+        after_left,
+        IRTerminator::CondBranch {
+            cond: left_value,
+            else_target,
+            then_target,
+        },
+    );
+
+    let bypass_state = ctx.snapshot_slot_states();
+    lower_expr_arm_into(
+        right,
+        ctx,
+        right_block,
+        merge_block,
+        &IRType::Bool,
+        registry,
+        output,
+    )?;
+    let right_state = ctx.snapshot_slot_states();
+    ctx.merge_slot_states(vec![bypass_state, right_state]);
     Ok((result_id, merge_block))
 }

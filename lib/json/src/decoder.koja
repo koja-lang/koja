@@ -427,25 +427,11 @@ struct Decoder
   end
 
   priv fn digit_at?(self, pos: Int) -> Bool
-    # Bounds-checked `digit?`. `and` evaluates both operands, so the
-    # guard must return before `byte` can be reached out of bounds.
-
-    if pos >= self.size
-      return false
-    end
-
-    Decoder.digit?(self.byte(pos))
+    pos >= 0 and pos < self.size and Decoder.digit?(self.byte(pos))
   end
 
   priv fn peek?(self, pos: Int, expected: Int) -> Bool
-    # True when the byte at `pos` equals `expected`, false past the
-    # end of input.
-
-    if pos >= self.size
-      return false
-    end
-
-    self.byte(pos) == expected
+    pos >= 0 and pos < self.size and self.byte(pos) == expected
   end
 
   priv fn skip_ws(self, pos: Int) -> Int

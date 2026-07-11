@@ -120,6 +120,19 @@ fn mixed_int_and_bool_and_diagnoses() {
 }
 
 #[test]
+fn short_circuited_rhs_is_still_typechecked() {
+    for source in ["false and 1\n", "true or 1\n"] {
+        let failure = typecheck_fail(source);
+        assert_eq!(failure.diagnostics.len(), 1, "source = {source:?}");
+        assert!(
+            failure.diagnostics[0].message.contains("Bool operands"),
+            "unexpected diagnostic for {source:?}: {}",
+            failure.diagnostics[0].message,
+        );
+    }
+}
+
+#[test]
 fn ordering_on_bool_diagnoses() {
     let failure = typecheck_fail("true < false\n");
     assert_eq!(failure.diagnostics.len(), 1);

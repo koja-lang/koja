@@ -189,20 +189,18 @@ struct URI
         ()
     end
 
-    if pos + 1 < size
-      # "//" introduces the authority component.
-      if URI.slash_byte?(URI.byte_at(bytes, pos))
-        and URI.slash_byte?(URI.byte_at(bytes, pos + 1))
+    # "//" introduces the authority component.
+    if pos + 1 < size and URI.slash_byte?(URI.byte_at(bytes, pos))
+      and URI.slash_byte?(URI.byte_at(bytes, pos + 1))
 
-        auth_end = URI.scan_authority_end(bytes, pos + 2, size)
+      auth_end = URI.scan_authority_end(bytes, pos + 2, size)
 
-        match URI.parse_authority(bytes, pos + 2, auth_end, uri)
-          Result.Ok(updated) -> uri = updated
-          Result.Err(err) -> return Result.Err(err)
-        end
-
-        pos = auth_end
+      match URI.parse_authority(bytes, pos + 2, auth_end, uri)
+        Result.Ok(updated) -> uri = updated
+        Result.Err(err) -> return Result.Err(err)
       end
+
+      pos = auth_end
     end
 
     path_end = URI.scan_path_end(bytes, pos, size)
@@ -423,14 +421,8 @@ struct URI
     # Parses the host from `[start, stop)`, stripping brackets from IP
     # literals. Returns the updated URI and the position after the host.
 
-    bracketed = false
-
-    if start < stop
-      # '[' opens an IPv6/IPvFuture literal.
-      if URI.byte_at(bytes, start) == BYTE_LBRACKET
-        bracketed = true
-      end
-    end
+    # '[' opens an IPv6/IPvFuture literal.
+    bracketed = start < stop and URI.byte_at(bytes, start) == BYTE_LBRACKET
 
     unless bracketed
       # The host ends at the port ':' or the authority's end.
@@ -516,39 +508,35 @@ struct URI
 
     pos = start
 
-    if pos < size
-      if URI.question_byte?(URI.byte_at(bytes, pos))
-        q_end = URI.scan_query_end(bytes, pos + 1, size)
+    if pos < size and URI.question_byte?(URI.byte_at(bytes, pos))
+      q_end = URI.scan_query_end(bytes, pos + 1, size)
 
-        match URI.validate_component(
-          bytes,
-          pos + 1,
-          q_end,
-          b -> URI.query_byte?(b),
-        )
-          Option.Some(err) -> return Result.Err(err)
-          Option.None -> ()
-        end
-
-        uri.query = Option.Some(URI.text(bytes, pos + 1, q_end - 1))
-        pos = q_end
+      match URI.validate_component(
+        bytes,
+        pos + 1,
+        q_end,
+        b -> URI.query_byte?(b),
+      )
+        Option.Some(err) -> return Result.Err(err)
+        Option.None -> ()
       end
+
+      uri.query = Option.Some(URI.text(bytes, pos + 1, q_end - 1))
+      pos = q_end
     end
 
-    if pos < size
-      if URI.hash_byte?(URI.byte_at(bytes, pos))
-        match URI.validate_component(
-          bytes,
-          pos + 1,
-          size,
-          b -> URI.query_byte?(b),
-        )
-          Option.Some(err) -> return Result.Err(err)
-          Option.None -> ()
-        end
-
-        uri.fragment = Option.Some(URI.text(bytes, pos + 1, size - 1))
+    if pos < size and URI.hash_byte?(URI.byte_at(bytes, pos))
+      match URI.validate_component(
+        bytes,
+        pos + 1,
+        size,
+        b -> URI.query_byte?(b),
+      )
+        Option.Some(err) -> return Result.Err(err)
+        Option.None -> ()
       end
+
+      uri.fragment = Option.Some(URI.text(bytes, pos + 1, size - 1))
     end
 
     Result.Ok(uri)

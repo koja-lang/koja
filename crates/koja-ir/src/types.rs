@@ -62,9 +62,9 @@ pub enum ConstValue {
 }
 
 /// Binary operators the IR supports. Covers integer arithmetic,
-/// boolean conjunction / disjunction, and equality / ordering
-/// comparisons. All operators are eager — short-circuit lowering
-/// lands with control-flow constructs.
+/// equality, and ordering comparisons. Surface `and` / `or` lower
+/// directly to control flow, so eager logical operators cannot reach
+/// the sealed IR.
 ///
 /// **Overflow contract**: integer arithmetic (`Add`/`Sub`/`Mul`/`Div`/`Mod`)
 /// wraps on overflow (two's-complement). The interpreter currently
@@ -75,7 +75,6 @@ pub enum ConstValue {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IRBinOp {
     Add,
-    And,
     Div,
     Eq,
     Gt,
@@ -85,7 +84,6 @@ pub enum IRBinOp {
     Mod,
     Mul,
     NotEq,
-    Or,
     Sub,
 }
 

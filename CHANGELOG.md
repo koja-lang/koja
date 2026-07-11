@@ -28,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `and` and `or` now short-circuit from left to right, so the right-hand expression is skipped when the result is already determined.
 - `koja format` no longer separates a `#` comment from the declaration below it in package files.
 - `koja format` now wraps a long `if`/`unless`/`while` condition by starting each continuation line with the operator, indented two past the keyword, with a blank line before the body.
 - `koja format` now indents the continuation lines of a wrapped binary expression two past where the expression started, so wrapped chains no longer align with sibling statements.

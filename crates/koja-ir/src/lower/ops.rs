@@ -1,18 +1,16 @@
-//! Operator and literal translation helpers. Pure functions over
-//! AST nodes — no [`super::ctx::FnLowerCtx`] needed; callers in
-//! [`super::expr`] handle block / value bookkeeping after these
-//! return.
+//! Operator and literal translation helpers. These are pure functions
+//! over AST nodes. Callers in [`super::expr`] handle block and value
+//! bookkeeping after these return.
 //!
-//! Three concerns live here together because they form the "AST
-//! vocabulary -> IR vocabulary" border for non-control-flow constructs:
+//! Three concerns live here because they form the AST vocabulary to IR
+//! vocabulary border for non-control-flow constructs:
 //!
-//! - [`lower_literal`] / [`lower_bin_op`] / [`lower_unary_op`] —
-//!   surface-syntax -> IR-enum mapping, with diagnostics on feature
-//!   gaps (Float / String literals, `<>` concat).
-//! - [`const_value_type`] — `ConstValue` variant -> `IRType` width.
-//! - [`bin_op_result_type`] / [`unary_op_result_type`] — typed-result
-//!   inference: comparisons / boolean logic always produce `Bool`,
-//!   arithmetic and `Neg` preserve operand width.
+//! - [`lower_literal`], [`lower_bin_op`], and [`lower_unary_op`] map
+//!   surface syntax to IR enums.
+//! - [`const_value_type`] maps each `ConstValue` variant to its
+//!   `IRType`.
+//! - [`bin_op_result_type`] and [`unary_op_result_type`] infer result
+//!   types for eager operators.
 
 use koja_ast::ast::{BinOp, Diagnostic, Literal, UnaryOp};
 use koja_ast::span::Span;
@@ -132,7 +130,6 @@ pub(super) fn lower_bin_op(
 ) -> Result<IRBinOp, ()> {
     match op {
         BinOp::Add => Ok(IRBinOp::Add),
-        BinOp::And => Ok(IRBinOp::And),
         BinOp::Div => Ok(IRBinOp::Div),
         BinOp::Eq => Ok(IRBinOp::Eq),
         BinOp::Gt => Ok(IRBinOp::Gt),
@@ -142,8 +139,13 @@ pub(super) fn lower_bin_op(
         BinOp::Mod => Ok(IRBinOp::Mod),
         BinOp::Mul => Ok(IRBinOp::Mul),
         BinOp::NotEq => Ok(IRBinOp::NotEq),
-        BinOp::Or => Ok(IRBinOp::Or),
         BinOp::Sub => Ok(IRBinOp::Sub),
+        BinOp::And | BinOp::Or => {
+            panic!(
+                "IR lower: `{op:?}` must route through short-circuit control flow, \
+                 not `lower_bin_op`: caller dispatch bug"
+            )
+        }
         // `<>` concat doesn't reach this helper — the expression
         // lowerer intercepts `BinOp::Concat` and emits
         // [`IRInstruction::Concat`] directly. If we land here, the
@@ -191,15 +193,13 @@ pub(super) fn const_value_type(value: &ConstValue) -> IRType {
 }
 
 /// The result type of a [`IRBinOp`] given the operand type.
-/// Comparisons and boolean logic always produce `Bool`; arithmetic
-/// preserves the operand width (typecheck guarantees both operands
-/// share a width).
+/// Comparisons produce `Bool`. Arithmetic preserves the operand width
+/// (typecheck guarantees both operands share a width). Surface boolean
+/// logic lowers to control flow before reaching this helper.
 pub(super) fn bin_op_result_type(op: IRBinOp, operand_ty: IRType) -> IRType {
     match op {
         IRBinOp::Add | IRBinOp::Sub | IRBinOp::Mul | IRBinOp::Div | IRBinOp::Mod => operand_ty,
-        IRBinOp::And
-        | IRBinOp::Or
-        | IRBinOp::Eq
+        IRBinOp::Eq
         | IRBinOp::NotEq
         | IRBinOp::Gt
         | IRBinOp::GtEq

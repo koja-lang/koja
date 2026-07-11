@@ -17,7 +17,7 @@
 //! Supported IR vocabulary:
 //!
 //! - `Const(Bool, Int8..Int64, UInt8..UInt64)`.
-//! - `BinaryOp::{Add, And, Eq, Gt, GtEq, Lt, LtEq, NotEq, Or}`:
+//! - `BinaryOp::{Add, Eq, Gt, GtEq, Lt, LtEq, NotEq}`:
 //!   `Sub`/`Mul`/`Div`/`Mod` are feature-gap follow-ups.
 //! - `UnaryOp::{Neg, Not}`.
 //! - `Call`: direct calls to functions declared in the same

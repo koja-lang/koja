@@ -1,0 +1,23 @@
+struct Probe
+  fn mark(label: String, value: Bool) -> Bool
+    IO.puts(label)
+    value
+  end
+end
+
+(false and true).print()
+(true and false).print()
+(false or true).print()
+(true or false).print()
+
+(Probe.mark("and-left", false) and Probe.mark("and-right", true)).print()
+(Probe.mark("or-left", true) or Probe.mark("or-right", false)).print()
+(Probe.mark("and-taken-left", true) and Probe.mark("and-taken-right", true)).print()
+
+items: List<Int> = []
+(false and items.get(0).unwrap() == 1).print()
+(true or items.get(0).unwrap() == 1).print()
+(items.length() > 0 and items.get(0).unwrap() == 1).print()
+
+(false or true and false).print()
+(not false and true).print()
