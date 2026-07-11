@@ -94,7 +94,9 @@ struct GitHub
 
     match value
       Value.Array(items) ->
-        Result.Ok(items.map(fn (item: Value) -> GitHub.Repo GitHub.Repo.from_json(item) end))
+        Result.Ok(items.map(fn (item: Value) -> GitHub.Repo
+          GitHub.Repo.from_json(item)
+        end))
       _ -> Result.Err("expected a JSON array of repositories")
     end
   end

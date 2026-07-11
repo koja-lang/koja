@@ -37,6 +37,12 @@ jobs:
         run: cargo build -p koja-runtime-posix
       - name: Clippy (zero warnings)
         run: cargo clippy --workspace -- -D warnings
+      - name: Build koja CLI
+        run: cargo build -p koja-driver
+      - name: Koja format check
+        run: |
+          git ls-files '*.koja' '*.kojs' | grep -v compile_fail \
+            | xargs ./target/debug/koja format --check
 
   unit:
     name: Unit tests (${{ matrix.os }})

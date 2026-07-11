@@ -27,7 +27,8 @@ impl Process<Child, ChildMsg, Int> for Child
         Kernel.panic("boom")
         Step.Done(StopReason.Normal)
 
-      ChildMsg.Stop -> Step.Done(StopReason.Normal)
+      ChildMsg.Stop ->
+        Step.Done(StopReason.Normal)
     end
   end
 end
@@ -80,10 +81,17 @@ impl Process<WatcherConfig, ExitSignal, Int> for Watcher
 
   fn handle(self, msg: ExitSignal, from: Option<ReplyTo<Int>>) -> Step<Self>
     match msg.reason
-      ExitReason.Normal -> "#{self.label}: exit normal".print()
-      ExitReason.Shutdown -> "#{self.label}: exit shutdown".print()
-      ExitReason.Killed -> "#{self.label}: exit killed".print()
-      ExitReason.Crashed(info) -> "#{self.label}: exit crashed: #{info.message}".print()
+      ExitReason.Normal ->
+        "#{self.label}: exit normal".print()
+
+      ExitReason.Shutdown ->
+        "#{self.label}: exit shutdown".print()
+
+      ExitReason.Killed ->
+        "#{self.label}: exit killed".print()
+
+      ExitReason.Crashed(info) ->
+        "#{self.label}: exit crashed: #{info.message}".print()
     end
 
     Step.Done(StopReason.Normal)
@@ -112,7 +120,9 @@ impl Process<Ignorer, ExitSignal | Tick, Int> for Ignorer
     Result.Ok(config)
   end
 
-  fn handle(self, msg: ExitSignal | Tick, from: Option<ReplyTo<Int>>) -> Step<Self>
+  fn handle(self, msg: ExitSignal | Tick, from: Option<ReplyTo<Int>>)
+    -> Step<Self>
+
     match msg
       signal: ExitSignal -> "ignorer: unexpected signal".print()
       tick: Tick -> "ignorer: no signal".print()
@@ -164,7 +174,9 @@ loop
   end
 end
 
-late = spawn Watcher.start(WatcherConfig{label: "late", mode: Mode.Late(child.pid())})
+late = spawn Watcher.start(
+  WatcherConfig{label: "late", mode: Mode.Late(child.pid())},
+)
 
 loop
   if late.alive?()

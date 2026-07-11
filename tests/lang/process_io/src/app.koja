@@ -8,6 +8,7 @@ end
 enum AppMsg
   Tick
 end
+
 # Regression for `IOReady` union-message delivery: the entry process
 # watches STDIN for readability and must receive the reactor's readiness
 # event through its ordinary `handle` (tag-2 dispatch), not trap. The

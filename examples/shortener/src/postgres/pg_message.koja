@@ -31,9 +31,9 @@ struct PgMessage
   """
   fn encode_startup(user: String, database: String) -> Binary
     params = PgMessage.cstring("user") <> PgMessage.cstring(user) <>
-    PgMessage.cstring("database") <>
-    PgMessage.cstring(database) <>
-    <<0::8>>
+      PgMessage.cstring("database") <>
+      PgMessage.cstring(database) <>
+      <<0::8>>
 
     body = <<PROTOCOL_VERSION::32>> <> params
     <<(body.byte_size() + 4)::32>> <> body

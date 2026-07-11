@@ -55,7 +55,8 @@ impl Process<ParentConfig, ParentMsg, Pid> for Parent
 
         Step.Continue(self)
 
-      ParentMsg.Stop -> Step.Done(StopReason.Normal)
+      ParentMsg.Stop ->
+        Step.Done(StopReason.Normal)
     end
   end
 end
@@ -79,7 +80,9 @@ impl Process<WatcherConfig, ExitSignal | Ready, Int> for Watcher
     Result.Ok(Watcher{label: config.label})
   end
 
-  fn handle(self, msg: ExitSignal | Ready, from: Option<ReplyTo<Int>>) -> Step<Self>
+  fn handle(self, msg: ExitSignal | Ready, from: Option<ReplyTo<Int>>)
+    -> Step<Self>
+
     match msg
       signal: ExitSignal ->
         match signal.reason
@@ -99,10 +102,17 @@ impl Process<WatcherConfig, ExitSignal | Ready, Int> for Watcher
   end
 end
 
-fn observe_cascade(label: String, parent: Ref<ParentMsg, Pid>, stop_normally: Bool)
+fn observe_cascade(
+  label: String,
+  parent: Ref<ParentMsg, Pid>,
+  stop_normally: Bool,
+)
+
   match parent.call(ParentMsg.GetWorker, 5000)
     Result.Ok(worker_pid) ->
-      watcher = spawn Watcher.start(WatcherConfig{label: label, target: worker_pid})
+      watcher = spawn Watcher.start(
+        WatcherConfig{label: label, target: worker_pid},
+      )
       # The Check round-trip orders the watcher's monitor registration
       # before the parent's death.
       watcher.call(Ready.Check, 5000)
@@ -121,7 +131,8 @@ fn observe_cascade(label: String, parent: Ref<ParentMsg, Pid>, stop_normally: Bo
         end
       end
 
-    Result.Err(error) -> "#{label}: call failed".print()
+    Result.Err(error) ->
+      "#{label}: call failed".print()
   end
 end
 

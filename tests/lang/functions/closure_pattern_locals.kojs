@@ -9,6 +9,7 @@ end
 # match-arm payload binding inside a closure
 run_it(fn () -> Int
   o = Option.Some(3)
+
   match o
     Option.Some(n) -> n
     Option.None -> 0
@@ -16,21 +17,21 @@ run_it(fn () -> Int
 end).print()
 
 # assignment nested in an if block inside a closure
-run_it(fn () -> Int
-  if true
+run_it(fn () -> Int if true
     y = 2
     y
   else
     0
-  end
-end).print()
+  end end).print()
 
 # for-loop binding inside a closure
 run_it(fn () -> Int
   total = 0
+
   for item in [1, 2, 3]
     total += item
   end
+
   total
 end).print()
 
@@ -39,6 +40,7 @@ end).print()
 outer = 40
 run_it(fn () -> Int
   o = Option.Some(2)
+
   match o
     Option.Some(n) -> n + outer
     Option.None -> 0
