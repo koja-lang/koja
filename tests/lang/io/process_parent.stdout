@@ -1,0 +1,6 @@
+"main: no parent"
+"parent-a: started"
+"after kill: exit killed"
+"parent-b: started"
+"after stop: exit killed"
+"main: done"

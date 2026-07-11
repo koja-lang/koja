@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use koja_runtime_core::{
     Clock, CrashInfo, Driver, Executor, ExitNotice, ExitReason, Lifecycle, Pid, Priority,
-    ProcessTable, SignalSource, slot_index,
+    ProcessTable, Reclaim, SignalSource, slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, koja_seed_reductions, setvbuf};
@@ -417,14 +417,42 @@ fn exit_signal_envelope(notice: &ExitNotice) -> Envelope {
 
 /// Synthesizes and delivers every staged `ExitSignal`, waking parked
 /// watchers. Returns the undeliverable envelopes for the caller to
-/// drop after releasing the lock. Call at every site that can stage
-/// notices (death edges and `koja_rt_monitor`).
+/// drop after releasing the lock.
 fn deliver_exit_signals(table: &mut NativeTable) -> Vec<Envelope> {
     table
         .take_exit_notices()
         .into_iter()
         .filter_map(|notice| table.deliver(notice.watcher, exit_signal_envelope(&notice)))
         .collect()
+}
+
+/// Resources detached while settling a death edge, dropped by the
+/// caller after releasing the lock. The fields are never read by name
+/// (they exist so their `Drop` runs at that controlled point).
+#[allow(dead_code)]
+struct SettledExits {
+    leftovers: Vec<Envelope>,
+    reclaims: Vec<Reclaim<NativeExecution, Envelope>>,
+}
+
+/// Settles every consequence of a death edge under one lock hold:
+/// force-kills the staged kill-cascade targets until none remain (each
+/// kill can stage grandchildren), then delivers the staged
+/// `ExitSignal`s. Call at every site that can stage notices or kills
+/// (death edges and `koja_rt_monitor`).
+fn settle_exits(table: &mut NativeTable) -> SettledExits {
+    let mut reclaims = Vec::new();
+    loop {
+        let staged = table.take_pending_kills();
+        if staged.is_empty() {
+            break;
+        }
+        reclaims.extend(staged.into_iter().filter_map(|pid| table.kill(pid)));
+    }
+    SettledExits {
+        leftovers: deliver_exit_signals(table),
+        reclaims,
+    }
 }
 
 /// `koja_rt_reply` status: the reply was slotted for a still-waiting caller.
@@ -508,16 +536,17 @@ unsafe extern "C" fn process_trampoline() {
     }
 
     // The `-> Dead` edge stages one `ExitSignal` per monitor of this
-    // process. Deliver them (waking parked watchers) before yielding,
-    // dropping any bounced envelope off-lock.
-    let leftovers = {
+    // process plus the kill-cascade for its children. Settle both
+    // (waking parked watchers) before yielding, dropping bounced
+    // envelopes and reclaimed resources off-lock.
+    let settled = {
         let mut guard = SCHED.lock().unwrap();
         guard.mark_dead_if_alive(pid);
-        let leftovers = deliver_exit_signals(&mut guard);
+        let settled = settle_exits(&mut guard);
         publish_ready(&mut guard);
-        leftovers
+        settled
     };
-    drop(leftovers);
+    drop(settled);
 
     WORK_AVAILABLE.notify_all();
     yield_to_scheduler();
@@ -733,10 +762,14 @@ fn worker_loop(local: WorkerQueues, me: usize) {
             // detached resources drop after the lock is released.
             if guard.is_draining() && guard.grace_expired(now) {
                 let reclaim = guard.kill_all();
+                // Everything is dead, so the staged cascade kills are
+                // no-ops. Settling still drains the staging queues.
+                let settled = settle_exits(&mut guard);
                 SHUTDOWN.store(true, Ordering::Relaxed);
                 drop(guard);
                 WORK_AVAILABLE.notify_all();
                 drop(reclaim);
+                drop(settled);
                 break;
             }
             publish_ready(&mut guard)
@@ -1338,12 +1371,12 @@ pub extern "C" fn koja_rt_is_process_alive(pid: i64) -> i64 {
 pub extern "C" fn koja_rt_kill(pid: i64) {
     let mut guard = SCHED.lock().unwrap();
     let reclaim = guard.kill(pid);
-    let leftovers = deliver_exit_signals(&mut guard);
+    let settled = settle_exits(&mut guard);
     let woken = publish_ready(&mut guard);
     drop(guard);
     notify_workers(woken);
     drop(reclaim);
-    drop(leftovers);
+    drop(settled);
 }
 
 /// Registers the calling process as a monitor of `target`, returning
@@ -1354,11 +1387,11 @@ pub extern "C" fn koja_rt_monitor(target: i64) -> i64 {
     let watcher = CURRENT_PID.with(|c| c.get());
     let mut guard = SCHED.lock().unwrap();
     let token = guard.monitor(watcher, target);
-    let leftovers = deliver_exit_signals(&mut guard);
+    let settled = settle_exits(&mut guard);
     let woken = publish_ready(&mut guard);
     drop(guard);
     notify_workers(woken);
-    drop(leftovers);
+    drop(settled);
     token
 }
 
@@ -1367,6 +1400,14 @@ pub extern "C" fn koja_rt_monitor(target: i64) -> i64 {
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_rt_demonitor(token: i64) {
     SCHED.lock().unwrap().demonitor(token);
+}
+
+/// The calling process's parent PID, or 0 for the entry process
+/// (backing `Option.None` at the emitter).
+#[unsafe(no_mangle)]
+pub extern "C" fn koja_rt_parent() -> i64 {
+    let pid = CURRENT_PID.with(|c| c.get());
+    SCHED.lock().unwrap().parent(pid).unwrap_or(0)
 }
 
 /// Count of illegal lifecycle edges the scheduler has applied: zero in
@@ -1425,9 +1466,16 @@ pub unsafe extern "C" fn koja_rt_spawn(
     let (stack, sp) = allocate_process_stack();
     let execution = NativeExecution::new(fn_ptr, init_state, stack, sp);
 
+    // The spawner becomes the parent. On the host thread (the entry
+    // process's spawn) `CURRENT_PID` is -1, so PID 1 gets no parent.
+    let parent = match CURRENT_PID.with(|c| c.get()) {
+        pid if pid > 0 => Some(pid),
+        _ => None,
+    };
+
     let (id, woken) = {
         let mut guard = SCHED.lock().unwrap();
-        let id = guard.spawn(execution);
+        let id = guard.spawn(execution, parent);
         // The spawn staged the new process in `pending_ready`. Publish it to
         // the injectors so any worker can pick it up.
         (id, publish_ready(&mut guard))

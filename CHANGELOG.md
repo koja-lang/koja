@@ -18,6 +18,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Watch another process with `Process.monitor(pid)`. When it exits, you receive a `Process.ExitSignal` message telling you which process died and why.
 - Cancel a monitor with `Process.demonitor(ref)`.
 - Calling `Process.monitor` from a process whose message type can't receive `Process.ExitSignal` is a compile error.
+- Every process now dies with the process that spawned it. When a parent exits for any reason, its children (and their children, transitively) are killed, so orphaned processes can no longer accumulate.
+- `Process.parent()` returns the pid of the process that spawned the caller, or `Option.None` in the entry process.
+- The runtime-internal `ExitStatus` protocol is no longer part of the public `Global` API.
 - `priv` now works on top-level `struct`, `enum`, `const`, `type`, and `protocol` declarations, hiding them from other packages.
 - A public declaration whose signature mentions a private type is now a compile error.
 - `@doc` on a private declaration is now a compile error, since private items never appear in generated documentation.
@@ -25,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `koja format` no longer separates a `#` comment from the declaration below it in package files.
 - `koja format` now wraps a long `if`/`unless`/`while` condition by starting each continuation line with the operator, indented two past the keyword, with a blank line before the body.
 - `koja format` now indents the continuation lines of a wrapped binary expression two past where the expression started, so wrapped chains no longer align with sibling statements.
 

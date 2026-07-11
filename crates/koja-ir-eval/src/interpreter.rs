@@ -68,7 +68,7 @@ impl Interpreter {
         // here for `run_program` to return once the driver tears down.
         let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
         let _guard = scheduler::install_runtime(Rc::clone(&core));
-        let main = core.borrow_mut().spawn(());
+        let main = core.borrow_mut().spawn((), None);
 
         let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
             Rc::new(RefCell::new(None));
@@ -134,7 +134,7 @@ impl Interpreter {
         // surfaces through `exit_cell` once the driver tears down.
         let core: CoreHandle = Rc::new(RefCell::new(EvalTable::new()));
         let _guard = scheduler::install_runtime(Rc::clone(&core));
-        let main = core.borrow_mut().spawn(());
+        let main = core.borrow_mut().spawn((), None);
 
         let exit_cell: Rc<RefCell<Option<Result<Value, RuntimeError>>>> =
             Rc::new(RefCell::new(None));
