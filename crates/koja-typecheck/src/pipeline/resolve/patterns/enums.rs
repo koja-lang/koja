@@ -85,10 +85,9 @@ pub(super) fn resolve_enum_tuple_pattern(
             full = false;
         }
     }
-    // Exhaustiveness sees the variant covered regardless of `full`.
-    // Joint nested exhaustiveness (`Some(A)` + `Some(B)` + `None`
-    // covering `Option<AB>` when `A` / `B` partition the inner enum)
-    // is still TODO. It would need a Maranget-style coverage matrix.
+    // Partial payload patterns do not exhaust the outer variant.
+    // Recognizing several partial arms that jointly cover the payload
+    // requires a future pattern-matrix analysis.
     PatternCoverage::Variants(vec![VariantWitness {
         full,
         tag: metadata.variant_index,

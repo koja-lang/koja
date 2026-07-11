@@ -185,41 +185,6 @@ release-mode parity coverage.
 
 ---
 
-## Nested enum patterns overstate `match` exhaustiveness
-
-`resolve_enum_tuple_pattern` and `resolve_enum_struct_pattern` record
-the outer enum variant as covered even when a nested payload pattern is
-partial. The `full` bit on `VariantWitness` is retained for reachability,
-but `diagnose_missing_enum_variants` only sees the outer tags.
-
-As a result, this compiles as exhaustive:
-
-```koja
-color: Option<Color> = Option.Some(Color.Green)
-
-match color
-  Option.Some(Color.Red) -> "red"
-  Option.None -> "none"
-end
-```
-
-Confirmed 2026-07-10 on both backends: `Some(Green)` reaches the
-supposedly unreachable failure edge. Eval reports
-`IRTerminator::Unreachable`; LLVM exits non-zero without a diagnostic.
-This violates the exhaustiveness guarantee and is a correctness bug,
-not merely a conservative-analysis limitation.
-
-**Workaround:** add a catch-all payload arm such as `Option.Some(_)`, or
-bind the payload and perform a second exhaustive `match`.
-
-**Fix path:** until a full pattern-matrix algorithm lands, count an
-outer variant toward exhaustiveness only when its witness is `full`.
-That may conservatively reject multiple partial arms that jointly cover
-the payload, but it cannot accept a missing case. Add compile-fail and
-runtime regression fixtures for tuple and struct payloads.
-
----
-
 ## `String` representation violates UTF-8 and backend parity
 
 `String` is specified as length-bearing UTF-8, but several native

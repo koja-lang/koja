@@ -1,0 +1,11 @@
+enum Color
+  Red
+  Green
+end
+
+value: Option<Color> = Option.Some(Color.Green)
+
+match value
+  Option.Some(Color.Red) -> "red"
+  Option.None -> "none"
+end

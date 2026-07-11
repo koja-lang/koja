@@ -25,6 +25,7 @@ extend Classifier
       Option.Some(TokenKind.Ident(name)) -> name
       Option.Some(TokenKind.Number(0)) -> "zero"
       Option.Some(TokenKind.Number(_n)) -> "other number"
+      Option.Some(_) -> "unreachable"
       Option.None -> "none"
     end
   end

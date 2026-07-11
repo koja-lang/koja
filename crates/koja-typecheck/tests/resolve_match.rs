@@ -80,6 +80,17 @@ fn string_type(checked: &CheckedProgram) -> ResolvedType {
     primitive_type(checked, "String")
 }
 
+fn assert_missing_variant(source: &str, variant: &str) {
+    let failure = typecheck_fail(&dedent(source));
+    assert!(
+        failure.diagnostics.iter().any(|diagnostic| {
+            diagnostic.message.contains("not exhaustive") && diagnostic.message.contains(variant)
+        }),
+        "expected missing-{variant} diagnostic, got: {:?}",
+        failure.diagnostics,
+    );
+}
+
 #[test]
 fn match_int_literal_arms_resolve_to_int() {
     let source = "
@@ -707,9 +718,7 @@ fn match_enum_tuple_literal_payload_resolves() {
 }
 
 #[test]
-fn match_enum_tuple_with_literal_payload_still_satisfies_variant_coverage() {
-    // `Option.Some(5)` narrows but still records `Some` as covered
-    // for exhaustiveness. Joint nested coverage stays TODO.
+fn match_enum_tuple_with_literal_payload_requires_full_variant_coverage() {
     let source = "
         fn classify(op: Option<Int>) -> Int
           match op
@@ -720,13 +729,11 @@ fn match_enum_tuple_with_literal_payload_still_satisfies_variant_coverage() {
 
           classify(Option.Some(5))
         ";
-    let checked = typecheck(&dedent(source));
-    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    assert_missing_variant(source, "Some");
 }
 
 #[test]
-fn match_enum_struct_with_literal_field_still_satisfies_variant_coverage() {
-    // Mirrors the tuple-variant case for struct variants.
+fn match_enum_struct_with_literal_field_requires_full_variant_coverage() {
     let source = "
         enum Shape
           Rect{w: Int, h: Int}
@@ -742,8 +749,42 @@ fn match_enum_struct_with_literal_field_still_satisfies_variant_coverage() {
 
           classify(Shape.Circle{r: 7})
         ";
-    let checked = typecheck(&dedent(source));
-    assert_eq!(trailing_resolution(&checked), int_type(&checked));
+    assert_missing_variant(source, "Rect");
+}
+
+#[test]
+fn match_nested_enum_payload_requires_full_outer_variant_coverage() {
+    let source = "
+        enum Color
+          Red
+          Green
+        end
+
+        fn classify(op: Option<Color>) -> Int
+          match op
+            Option.Some(Color.Red) -> 1
+            Option.None -> 0
+          end
+        end
+
+          classify(Option.Some(Color.Green))
+        ";
+    assert_missing_variant(source, "Some");
+}
+
+#[test]
+fn match_guarded_full_payload_does_not_exhaust_outer_variant() {
+    let source = "
+        fn classify(op: Option<Int>) -> Int
+          match op
+            Option.Some(value) when value > 0 -> value
+            Option.None -> 0
+          end
+        end
+
+          classify(Option.Some(1))
+        ";
+    assert_missing_variant(source, "Some");
 }
 
 #[test]
@@ -830,9 +871,9 @@ fn match_some_binding_then_narrow_some_warns_unreachable() {
 }
 
 #[test]
-fn match_distinct_some_literal_payloads_do_not_warn_unreachable() {
+fn match_distinct_some_literal_payloads_require_full_variant_coverage() {
     // `Some(1)` and `Some(2)` narrow on disjoint primitive
-    // literals. Neither should shadow the other.
+    // literals but do not cover every possible `Some`.
     let source = "
         fn classify(op: Option<Int>) -> Int
           match op
@@ -844,13 +885,7 @@ fn match_distinct_some_literal_payloads_do_not_warn_unreachable() {
 
           classify(Option.Some(1))
         ";
-    let checked = typecheck(&dedent(source));
-    assert_eq!(trailing_resolution(&checked), int_type(&checked));
-    let warnings = warning_messages(&checked);
-    assert!(
-        warnings.is_empty(),
-        "narrowing literal payloads must not flag each other unreachable, got: {warnings:?}",
-    );
+    assert_missing_variant(source, "Some");
 }
 
 #[test]

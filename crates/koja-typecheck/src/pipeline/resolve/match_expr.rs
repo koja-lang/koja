@@ -37,16 +37,14 @@ use super::types::{display_resolution, is_primitive, peel_alias};
 use super::walker::resolve_body_with_expected;
 use crate::registry::{EnumDefinition, GlobalRegistry};
 
-/// Rolling accumulators of "what coverage has fired so far" used to
-/// flag arm-after-arm redundancy. `variants` drives exhaustiveness
-/// (every witness tag), `full_variants` drives reachability (only
-/// witnesses whose inner pattern was itself a catch-all).
+/// Rolling coverage used for exhaustiveness and arm reachability.
+/// Enum variants count only when their payload patterns match every
+/// inhabitant of the variant.
 #[derive(Default)]
 struct SeenCoverage {
     full_variants: BTreeSet<u32>,
     literals: BTreeSet<String>,
     union_members: BTreeSet<String>,
-    variants: BTreeSet<u32>,
 }
 
 pub(super) fn resolve_match(
@@ -67,8 +65,6 @@ pub(super) fn resolve_match(
 
     let mut has_catch_all = false;
     let mut has_literal_arm = false;
-    let mut covered_variants: Vec<u32> = Vec::new();
-    let mut covered_union_members: Vec<String> = Vec::new();
     let mut seen = SeenCoverage::default();
     let mut tails: Vec<(String, ResolvedType)> = Vec::with_capacity(arms.len());
     for (index, arm) in arms.iter_mut().enumerate() {
@@ -96,17 +92,14 @@ pub(super) fn resolve_match(
                 PatternCoverage::CatchAll => has_catch_all = true,
                 PatternCoverage::Variants(witnesses) => {
                     for witness in witnesses {
-                        seen.variants.insert(witness.tag);
                         if witness.full {
                             seen.full_variants.insert(witness.tag);
                         }
-                        covered_variants.push(witness.tag);
                     }
                 }
                 PatternCoverage::UnionMember(member) => {
                     let key = display_resolution(member, resolver.registry);
-                    seen.union_members.insert(key.clone());
-                    covered_union_members.push(key);
+                    seen.union_members.insert(key);
                 }
                 PatternCoverage::Other => {
                     let mut literals: Vec<String> = Vec::new();
@@ -141,7 +134,7 @@ pub(super) fn resolve_match(
 
     if !has_catch_all {
         if let Some(definition) = subject_enum {
-            diagnose_missing_enum_variants(definition, &covered_variants, span, diagnostics);
+            diagnose_missing_enum_variants(definition, &seen.full_variants, span, diagnostics);
         } else if let Some(member_keys) = subject_union_members {
             diagnose_missing_union_members(
                 &member_keys,
@@ -293,7 +286,7 @@ fn is_bool_exhaustive(
 
 fn diagnose_missing_enum_variants(
     definition: &EnumDefinition,
-    covered: &[u32],
+    covered: &BTreeSet<u32>,
     span: Span,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
