@@ -6,7 +6,7 @@ struct Random
   Returns `count` random bytes from the OS entropy source.
   """
   fn bytes(count: Int) -> Binary
-    koja_random_bytes(count).to_string().to_binary()
+    RuntimeBlock.adopt_binary(koja_random_bytes(count))
   end
 
   @doc """

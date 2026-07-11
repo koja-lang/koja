@@ -72,7 +72,7 @@ struct Socket
   fn accept(self) -> Result<Fd, String>
     client_fd = koja_socket_accept(self.fd.descriptor)
     client_fd == -1
-      ? Result.Err(koja_last_error().to_string())
+      ? Result.Err(last_error())
       : Result.Ok(Fd{descriptor: client_fd})
   end
 
@@ -82,10 +82,11 @@ struct Socket
   fn bind(self, addr: SocketAddress) -> Result<Socket, String>
     result = koja_socket_bind(
       self.fd.descriptor,
-      addr.ip.bytes.ptr(),
+      CPtr.borrow(addr.ip.bytes),
+      addr.ip.bytes.byte_size(),
       addr.port,
     )
-    result == -1 ? Result.Err(koja_last_error().to_string()) : Result.Ok(self)
+    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
   end
 
   @doc """
@@ -101,10 +102,11 @@ struct Socket
   fn connect(self, addr: SocketAddress) -> Result<Socket, String>
     result = koja_socket_connect(
       self.fd.descriptor,
-      addr.ip.bytes.ptr(),
+      CPtr.borrow(addr.ip.bytes),
+      addr.ip.bytes.byte_size(),
       addr.port,
     )
-    result == -1 ? Result.Err(koja_last_error().to_string()) : Result.Ok(self)
+    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
   end
 
   @doc """
@@ -119,7 +121,7 @@ struct Socket
 
     fd = koja_socket_create(sock_type)
     fd == -1
-      ? Result.Err(koja_last_error().to_string())
+      ? Result.Err(last_error())
       : Result.Ok(Socket{fd: Fd{descriptor: fd}})
   end
 
@@ -128,7 +130,7 @@ struct Socket
   """
   fn listen(self, backlog: Int) -> Result<Socket, String>
     result = koja_socket_listen(self.fd.descriptor, backlog)
-    result == -1 ? Result.Err(koja_last_error().to_string()) : Result.Ok(self)
+    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
   end
 
   @doc """
@@ -136,7 +138,7 @@ struct Socket
   Returns a pair of (data, sender address).
   """
   @intrinsic
-  fn recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>
+  fn recv_from(self, count: Int) -> Result<Pair<Binary, SocketAddress>, String>
 
   @doc """
   Resolves a hostname to a list of IP addresses via DNS.
@@ -148,15 +150,24 @@ struct Socket
   Sends data to the given address (for unconnected datagram sockets).
   Returns the number of bytes sent.
   """
-  fn send_to(self, data: String, addr: SocketAddress) -> Result<Int, String>
-    bin = data.to_binary()
+  fn send_to(self, data: Binary | String, addr: SocketAddress)
+    -> Result<Int, String>
+
+    bytes =
+      match data
+        binary: Binary -> binary
+        string: String -> string.to_binary()
+      end
+
     result = koja_socket_send_to(
       self.fd.descriptor,
-      bin.ptr(),
-      addr.ip.bytes.ptr(),
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+      CPtr.borrow(addr.ip.bytes),
+      addr.ip.bytes.byte_size(),
       addr.port,
     )
-    result == -1 ? Result.Err(koja_last_error().to_string()) : Result.Ok(result)
+    result == -1 ? Result.Err(last_error()) : Result.Ok(result)
   end
 
   @doc """
@@ -164,7 +175,7 @@ struct Socket
   """
   fn set_reuse_addr(self) -> Result<Socket, String>
     result = koja_socket_setsockopt_reuse(self.fd.descriptor)
-    result == -1 ? Result.Err(koja_last_error().to_string()) : Result.Ok(self)
+    result == -1 ? Result.Err(last_error()) : Result.Ok(self)
   end
 
   @doc """
@@ -176,17 +187,27 @@ struct Socket
     koja_socket_try_accept(self.fd.descriptor)
   end
 
-  @extern "C"
-  priv fn koja_last_error -> CPtr<UInt8>
+  @intrinsic
+  priv fn last_error -> String
 
   @extern "C"
   priv fn koja_socket_accept(fd: Int32) -> Int32
 
   @extern "C"
-  priv fn koja_socket_bind(fd: Int32, ip: CPtr<UInt8>, port: Int64) -> Int64
+  priv fn koja_socket_bind(
+    fd: Int32,
+    ip: CPtr<UInt8>,
+    ip_length: Int64,
+    port: Int64,
+  ) -> Int64
 
   @extern "C"
-  priv fn koja_socket_connect(fd: Int32, ip: CPtr<UInt8>, port: Int64) -> Int64
+  priv fn koja_socket_connect(
+    fd: Int32,
+    ip: CPtr<UInt8>,
+    ip_length: Int64,
+    port: Int64,
+  ) -> Int64
 
   @extern "C"
   priv fn koja_socket_create(kind: Int64) -> Int32
@@ -198,7 +219,9 @@ struct Socket
   priv fn koja_socket_send_to(
     fd: Int32,
     data: CPtr<UInt8>,
+    data_length: Int64,
     ip: CPtr<UInt8>,
+    ip_length: Int64,
     port: Int64,
   ) -> Int64
 

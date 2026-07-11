@@ -1,37 +1,33 @@
 //! String and binary manipulation runtime functions.
 
-use std::borrow::Cow;
-use std::ffi::{CStr, c_char};
 use std::ptr;
 use std::slice;
 use std::str;
 
 use crate::parse_text::{ParseOutcome, parse_float_text, parse_int_text};
-use crate::util::{BITS_PER_BYTE, alloc_binary, alloc_koja_string, read_bit_length};
+use crate::util::{
+    BITS_PER_BYTE, alloc_binary, alloc_koja_string, read_bit_length, string_payload_bytes,
+};
 
-/// Decodes a NUL-terminated C string pointer into a string. Every Koja
-/// `String` is valid UTF-8 by construction, so the borrowed path is taken
-/// for all well-formed input. The lossy fallback exists only so malformed
-/// bytes degrade to replacement characters instead of panicking across the
-/// C-ABI.
+/// Borrows the complete UTF-8 payload of a Koja `String`.
 ///
 /// # Safety
-/// `ptr` must point to a valid NUL-terminated string.
-unsafe fn cstr_str<'a>(ptr: *const u8) -> Cow<'a, str> {
-    let cstr = unsafe { CStr::from_ptr(ptr as *const c_char) };
-    String::from_utf8_lossy(cstr.to_bytes())
+/// `ptr` must point to a valid Koja `String` payload.
+unsafe fn payload_str<'a>(ptr: *const u8) -> &'a str {
+    let bytes = unsafe { string_payload_bytes(ptr) };
+    str::from_utf8(bytes).expect("Koja String payload must be valid UTF-8")
 }
 
-/// Attempts to parse a NUL-terminated string as a 64-bit float.
+/// Attempts to parse a Koja string as a 64-bit float.
 /// Returns a [`crate::parse_text`] code (`PARSE_OK` writes the
 /// value through `out`). See [`parse_float_text`] for the
 /// classification rules.
 ///
 /// # Safety
-/// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
+/// `ptr` must point to a valid Koja `String` payload. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_float_parse(ptr: *const u8, out: *mut f64) -> i64 {
-    let s = unsafe { cstr_str(ptr) };
+    let s = unsafe { payload_str(ptr) };
     let outcome = parse_float_text(s.trim());
     if let ParseOutcome::Ok(v) = outcome {
         unsafe { *out = v };
@@ -74,16 +70,16 @@ pub unsafe extern "C" fn koja_format_binary(ptr: *const u8, is_bits: i64) -> *co
     unsafe { alloc_koja_string(out.as_bytes()) }
 }
 
-/// Attempts to parse a NUL-terminated string as a 64-bit signed integer.
+/// Attempts to parse a Koja string as a 64-bit signed integer.
 /// Returns a [`crate::parse_text`] code (`PARSE_OK` writes the
 /// value through `out`). See [`parse_int_text`] for the
 /// classification rules.
 ///
 /// # Safety
-/// `ptr` must point to a valid NUL-terminated string. `out` must be writable.
+/// `ptr` must point to a valid Koja `String` payload. `out` must be writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
-    let s = unsafe { cstr_str(ptr) };
+    let s = unsafe { payload_str(ptr) };
     let outcome = parse_int_text(s.trim());
     if let ParseOutcome::Ok(v) = outcome {
         unsafe { *out = v };
@@ -94,10 +90,10 @@ pub unsafe extern "C" fn koja_int_parse(ptr: *const u8, out: *mut i64) -> i64 {
 /// Returns a codepoint at `index`, or null if out of bounds.
 ///
 /// # Safety
-/// `ptr` must point to a valid NUL-terminated UTF-8 string.
+/// `ptr` must point to a valid Koja `String` payload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_string_get(ptr: *const u8, index: i64) -> *const u8 {
-    let s = unsafe { cstr_str(ptr) };
+    let s = unsafe { payload_str(ptr) };
     let Some(ch) = s.chars().nth(index as usize) else {
         return ptr::null();
     };
@@ -106,24 +102,43 @@ pub unsafe extern "C" fn koja_string_get(ptr: *const u8, index: i64) -> *const u
     unsafe { alloc_koja_string(encoded.as_bytes()) }
 }
 
-/// Returns the number of Unicode scalar values (codepoints) in a NUL-terminated
-/// UTF-8 string.
+/// Returns the number of Unicode scalar values in a Koja string.
 ///
 /// # Safety
-/// `ptr` must point to a valid NUL-terminated UTF-8 string.
+/// `ptr` must point to a valid Koja `String` payload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_string_length(ptr: *const u8) -> i64 {
-    let s = unsafe { cstr_str(ptr) };
+    let s = unsafe { payload_str(ptr) };
     s.chars().count() as i64
+}
+
+/// Compares the complete byte payloads of two Koja strings.
+///
+/// # Safety
+/// Both pointers must point to valid Koja `String` payloads.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_string_eq(lhs: *const u8, rhs: *const u8) -> i64 {
+    let lhs = unsafe { string_payload_bytes(lhs) };
+    let rhs = unsafe { string_payload_bytes(rhs) };
+    i64::from(lhs == rhs)
+}
+
+/// Returns whether a Koja string contains an interior NUL byte.
+///
+/// # Safety
+/// `ptr` must point to a valid Koja `String` payload.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn koja_string_contains_nul(ptr: *const u8) -> i64 {
+    i64::from(unsafe { string_payload_bytes(ptr) }.contains(&0))
 }
 
 /// Returns a substring spanning the inclusive codepoint range `[start, stop]`.
 ///
 /// # Safety
-/// `ptr` must point to a valid NUL-terminated UTF-8 string.
+/// `ptr` must point to a valid Koja `String` payload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_string_slice(ptr: *const u8, start: i64, stop: i64) -> *const u8 {
-    let s = unsafe { cstr_str(ptr) };
+    let s = unsafe { payload_str(ptr) };
     let len = s.chars().count();
 
     let start = (start as usize).min(len);
@@ -167,9 +182,15 @@ pub unsafe extern "C" fn koja_binary_slice(payload: *const u8, start: i64, stop:
 /// Returns 1 if valid, 0 otherwise.
 ///
 /// # Safety
-/// `ptr` must point to at least `len` readable bytes.
+/// `ptr` must point to at least `len` readable bytes unless `len` is zero.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_utf8_validate(ptr: *const u8, len: u64) -> i64 {
+pub unsafe extern "C" fn koja_utf8_validate(ptr: *const u8, len: i64) -> i64 {
+    if len == 0 {
+        return 1;
+    }
+    if len < 0 || ptr.is_null() {
+        return 0;
+    }
     let slice = unsafe { slice::from_raw_parts(ptr, len as usize) };
     if str::from_utf8(slice).is_ok() { 1 } else { 0 }
 }

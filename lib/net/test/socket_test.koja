@@ -172,4 +172,28 @@ struct SocketTest
         Result.Ok(true)
     end
   end
+
+  @test "UDP send preserves embedded NUL length"
+  fn test_udp_send_embedded_nul -> Result<Bool, String>
+    socket =
+      match Socket.create(SocketKind.Datagram)
+        Result.Err(message) -> return Result.Err(message)
+        Result.Ok(value) -> value
+      end
+
+    payload = <<97, 0, 98>>.to_string().unwrap()
+    address = SocketAddress{ip: IPAddress.loopback(), port: 9}
+    result = socket.send_to(payload, address)
+    _ = socket.close()
+
+    match result
+      Result.Err(message) ->
+        Result.Err(message)
+
+      Result.Ok(sent) ->
+        sent == 3
+          ? Result.Ok(true)
+          : Result.Err("expected 3 bytes sent, got #{sent}")
+    end
+  end
 end

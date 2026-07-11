@@ -157,7 +157,7 @@ fn int_parse_and_float_parse_register_with_result_returns() {
 #[test]
 fn binary_intrinsics_register() {
     let checked = typecheck("1\n");
-    for method in ["at", "byte_size", "ptr", "slice", "to_bits", "to_string"] {
+    for method in ["at", "byte_size", "slice", "to_bits", "to_string"] {
         assert_registered(&checked, &["Binary", method]);
     }
     assert_registered(&checked, &["Bits", "to_binary"]);

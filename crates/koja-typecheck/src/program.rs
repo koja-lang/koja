@@ -11,7 +11,9 @@ use koja_ast::ast::{Diagnostic, File, Severity};
 use koja_parser::{ParsedFile, ParsedProgram};
 
 use crate::error::CheckFailure;
-use crate::pipeline::{aliases, collect, lift_signatures, resolve, seal, synthesize, visibility};
+use crate::pipeline::{
+    aliases, borrows, collect, lift_signatures, resolve, seal, synthesize, visibility,
+};
 use crate::registry::GlobalRegistry;
 
 /// A package fragment of a [`CheckedProgram`].
@@ -129,6 +131,14 @@ pub fn check_program(parsed: ParsedProgram) -> Result<CheckedProgram, CheckFailu
     for pkg in &mut packages {
         for file in &mut pkg.files {
             resolve::resolve_file(file, &pkg.package, &registry, &mut diagnostics);
+        }
+    }
+
+    // Position check on `CPtr.borrow` results. Runs after resolve so
+    // static receivers carry their `Resolution::Global` stamp.
+    for pkg in &packages {
+        for file in &pkg.files {
+            borrows::check_file(file, &registry, &mut diagnostics);
         }
     }
 

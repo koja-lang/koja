@@ -450,8 +450,13 @@ struct BinaryTest
     invalid: Binary = <<0xFF, 0xFE>>
 
     match invalid.to_string()
-      Result.Ok(_) -> Result.Err("should not decode invalid utf8")
-      Result.Err(_msg) -> Result.Ok(true)
+      Result.Ok(_) ->
+        Result.Err("should not decode invalid utf8")
+
+      Result.Err(error) ->
+        match error
+          String.ConversionError.InvalidUTF8 -> Result.Ok(true)
+        end
     end
   end
 

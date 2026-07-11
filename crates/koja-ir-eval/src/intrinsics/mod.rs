@@ -32,6 +32,7 @@ mod numeric;
 mod parse;
 mod print;
 mod process;
+mod runtime_block;
 mod set;
 mod socket;
 mod string;
@@ -60,11 +61,11 @@ pub(crate) async fn dispatch<R: CallResolver>(
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match *id {
-        IRIntrinsicId::Binary(method) => binary::binary(method, function, args),
+        IRIntrinsicId::Binary(method) => binary::binary(method, function, args, resolver),
         IRIntrinsicId::Bits(method) => binary::bits(method, function, args),
         IRIntrinsicId::Bitwise { ty, op } => bitwise::dispatch(ty, op, args),
         IRIntrinsicId::CPtr(method) => cptr::dispatch(method, function, args),
-        IRIntrinsicId::CString(_) => cstring::to_string(args),
+        IRIntrinsicId::CString(_) => cstring::to_string(function, args, resolver),
         IRIntrinsicId::Debug(impl_) => debug::dispatch(impl_, args),
         IRIntrinsicId::Equality(impl_) => equality::dispatch(impl_, args),
         IRIntrinsicId::Hash(impl_) => hash::dispatch(impl_, args),
@@ -83,8 +84,9 @@ pub(crate) async fn dispatch<R: CallResolver>(
         IRIntrinsicId::ReplyTo(method) => {
             process::reply_to_dispatch(method, function, args, resolver).await
         }
+        IRIntrinsicId::RuntimeBlock(method) => runtime_block::dispatch(method, args),
         IRIntrinsicId::Set(method) => set::dispatch(method, function, args),
         IRIntrinsicId::Socket(method) => socket::dispatch(method, function, args, resolver).await,
-        IRIntrinsicId::String(method) => string::dispatch(method, function, args),
+        IRIntrinsicId::String(method) => string::dispatch(method, function, args, resolver),
     }
 }

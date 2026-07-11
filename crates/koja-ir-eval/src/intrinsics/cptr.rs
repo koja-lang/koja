@@ -1,5 +1,5 @@
-//! `CPtr<T>` family: `alloc`, `free`, `null`, `null?`, `offset`,
-//! `read`, `to_binary`, `to_string`, `write`.
+//! `CPtr<T>` family: `alloc`, `borrow`, `copy`, `free`, `null`,
+//! `null?`, `offset`, `read`, `to_binary`, `write`.
 //!
 //! Eval now backs `CPtr<T>` with a real raw pointer ([`Value::CPtr`])
 //! so the shell can exercise the same FFI paths the LLVM backend
@@ -11,19 +11,13 @@
 //! [`crate::error::RuntimeError::Unsupported`] with a pointer to
 //! `--backend=llvm`.
 //!
-//! `to_string` / `to_binary` are the receiver-typed methods on
-//! `CPtr<UInt8>`: `to_string` reads the rc-prefixed block ABI (see
-//! [`crate::abi`]) and frees the source block. `to_binary`
-//! byte-copies `len` bytes into a fresh `Value::Binary` (the caller
-//! retains ownership of the source pointer per the stdlib
-//! docstring).
+//! `to_binary` byte-copies `len` bytes into a fresh `Value::Binary`.
 
 use std::ptr;
 use std::slice;
 
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
-use crate::abi;
 use crate::error::RuntimeError;
 use crate::intrinsics::helpers;
 use crate::value::Value;
@@ -40,13 +34,14 @@ pub(super) fn dispatch(
 ) -> Result<Value, RuntimeError> {
     match method {
         CPtrMethod::Alloc => alloc(function, args),
+        CPtrMethod::Borrow => borrow(args),
+        CPtrMethod::Copy => copy(args),
         CPtrMethod::Free => free_(args),
         CPtrMethod::Null => null(),
         CPtrMethod::NullQ => null_q(args),
         CPtrMethod::Offset => offset(function, args),
         CPtrMethod::Read => read(function, args),
         CPtrMethod::ToBinary => to_binary(args),
-        CPtrMethod::ToString => to_string(args),
         CPtrMethod::Write => write(function, args),
     }
 }
@@ -57,8 +52,13 @@ fn alloc(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
             detail: format!("CPtr.alloc expects a single Int argument, got {args:?}"),
         });
     };
+    if *count < 0 {
+        return Err(RuntimeError::Panicked {
+            message: "CPtr.alloc count cannot be negative".to_string(),
+        });
+    }
     let element_size = pointee_size(&function.return_type, "CPtr.alloc")?;
-    let count = (*count).max(0) as usize;
+    let count = *count as usize;
     let total = count
         .checked_mul(element_size)
         .ok_or_else(|| RuntimeError::Unsupported {
@@ -71,6 +71,31 @@ fn alloc(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     } else {
         unsafe { malloc(total) }
     };
+    Ok(Value::CPtr(ptr))
+}
+
+fn borrow(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!("CPtr.borrow expects a single Binary argument, got {args:?}"),
+        });
+    };
+    // The caller's frame local keeps the `Rc` alive through the
+    // statement, matching the position check's in-statement contract.
+    Ok(Value::CPtr(bytes.as_ptr() as *mut u8))
+}
+
+fn copy(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!("CPtr.copy expects a single Binary argument, got {args:?}"),
+        });
+    };
+    if bytes.is_empty() {
+        return Ok(Value::CPtr(ptr::null_mut()));
+    }
+    let ptr = unsafe { malloc(bytes.len()) };
+    unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
     Ok(Value::CPtr(ptr))
 }
 
@@ -147,7 +172,12 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
             detail: format!("CPtr.to_binary expects (CPtr<UInt8>, Int), got {args:?}"),
         });
     };
-    let len = (*len).max(0) as usize;
+    if *len < 0 {
+        return Err(RuntimeError::Panicked {
+            message: "CPtr.to_binary length cannot be negative".to_string(),
+        });
+    }
+    let len = *len as usize;
     if len == 0 {
         return Ok(Value::binary(Vec::new()));
     }
@@ -159,30 +189,6 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
     }
     let bytes = unsafe { slice::from_raw_parts(*ptr as *const u8, len) }.to_vec();
     Ok(Value::binary(bytes))
-}
-
-fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::CPtr(ptr)] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!("CPtr.to_string expects a single CPtr<UInt8> argument, got {args:?}"),
-        });
-    };
-    if ptr.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "CPtr.to_string(null) is undefined behavior, refusing to dereference"
-                .to_string(),
-        });
-    }
-    let bit_length = abi::read_bit_length(*ptr);
-    if bit_length < 0 {
-        return Err(RuntimeError::Unsupported {
-            detail: format!(
-                "CPtr.to_string: source header carries negative bit_length {bit_length} \
-                 (buffer does not look like a Koja string payload)"
-            ),
-        });
-    }
-    Ok(Value::string(abi::take_block_bytes(*ptr)))
 }
 
 fn pointee_size(return_type: &IRType, label: &str) -> Result<usize, RuntimeError> {

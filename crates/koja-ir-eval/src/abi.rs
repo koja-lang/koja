@@ -2,17 +2,12 @@
 //! `[i64 rc][i64 bit_length][payload…]` backs every Koja `String` /
 //! `Binary` payload that crosses the C boundary. This module is the
 //! single eval-side owner of the layout constants and the
-//! alloc/copy/free helpers: `intrinsics/binary.rs` (`Binary.ptr`),
-//! `intrinsics/cptr.rs` (`CPtr.to_string`), and
-//! `intrinsics/socket.rs` (resolve / recv_from buffers) all marshal
-//! through here.
+//! copy/free helpers used by runtime block adoption and socket
+//! result buffers.
 //!
-//! Allocation and free route through the runtime's `koja_alloc` /
-//! `koja_free` symbols rather than bare libc so blocks minted by
-//! eval and blocks minted by the runtime are interchangeable,
-//! including under the runtime's live-block accounting.
+//! Freeing routes through the runtime's `koja_free` symbol so live
+//! block accounting remains balanced.
 
-use std::ptr;
 use std::slice;
 
 /// Distance in bytes from a payload pointer back to its block base
@@ -23,31 +18,10 @@ pub(crate) const BLOCK_HEADER_SIZE: usize = 16;
 /// bit_length` word. API contract: MUST equal [`koja_runtime`]'s
 /// `util::LENGTH_OFFSET`.
 pub(crate) const LENGTH_OFFSET: usize = 8;
-/// `i64 rc` for a freshly allocated (mortal) block.
-const RC_INITIAL: i64 = 1;
 const BITS_PER_BYTE: usize = 8;
 
 unsafe extern "C" {
-    fn koja_alloc(size: usize) -> *mut u8;
     fn koja_free(ptr: *mut u8);
-}
-
-/// Copy `data` into a fresh block and return the payload pointer.
-/// Mirrors the runtime's `alloc_koja_string`: the payload is
-/// nul-terminated past `data.len()` so C consumers that walk to the
-/// terminator (e.g. `koja_socket_send_to`) stay in bounds, and empty
-/// inputs still get a real, non-null allocation, the same shape the
-/// runtime hands out.
-pub(crate) fn alloc_block(data: &[u8]) -> *mut u8 {
-    let base = unsafe { koja_alloc(BLOCK_HEADER_SIZE + data.len() + 1) };
-    unsafe {
-        *(base as *mut i64) = RC_INITIAL;
-        *(base.add(LENGTH_OFFSET) as *mut i64) = (data.len() * BITS_PER_BYTE) as i64;
-        let payload = base.add(BLOCK_HEADER_SIZE);
-        ptr::copy_nonoverlapping(data.as_ptr(), payload, data.len());
-        *payload.add(data.len()) = 0;
-        payload
-    }
 }
 
 /// The `i64 bit_length` header of the block backing `payload`.

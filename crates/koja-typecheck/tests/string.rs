@@ -25,6 +25,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 #[test]
 fn string_intrinsic_methods_register() {
     let checked = typecheck("1\n");
+    assert_registered(&checked, &["String", "ConversionError"]);
     for method in [
         "byte_length",
         "get",

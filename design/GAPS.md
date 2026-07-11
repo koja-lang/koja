@@ -162,38 +162,6 @@ release-mode parity coverage.
 
 ---
 
-## `String` representation violates UTF-8 and backend parity
-
-`String` is specified as length-bearing UTF-8, but several native
-operations treat its payload as a C string. `String.eq` delegates to
-`strcmp`, while native `length`, `get`, `slice`, and numeric parsing
-construct a `CStr`; all stop at the first NUL. Eval uses the complete
-byte payload.
-
-Embedded NUL is valid UTF-8 and is constructible without FFI through
-`Binary.to_string`. Confirmed 2026-07-10:
-
-- `<<97, 0, 98>>.to_string().unwrap()` and
-  `<<97, 0, 99>>.to_string().unwrap()` compare unequal in eval but equal
-  under LLVM.
-- Eval reports `length() == 3`; LLVM reports `length() == 1`; both
-  report `byte_length() == 3`.
-
-There is a second invariant breach at the FFI boundary:
-`CString.to_string() -> String` copies bytes without UTF-8 validation.
-With a one-byte `0xff` CString, eval rejects `String.length` as invalid
-UTF-8 while native code lossily decodes it and returns `1`.
-
-**Fix path:** make every native `String` operation use the bit-length
-header rather than NUL termination, and validate with strict UTF-8
-rather than `from_utf8_lossy`. Change `CString.to_string` to a checked
-conversion (matching `Binary.to_string`) or otherwise prevent invalid
-bytes from inhabiting `String`. `String.to_cstring` must also define how
-interior NUL is handled. Add dual-backend fixtures for embedded NUL and
-invalid C bytes.
-
----
-
 ## `koja shell` project mode
 
 `koja shell` auto-loads the project in the working directory (its `src`,

@@ -17,26 +17,38 @@ struct System
       cs = ptr.to_cstring()
       result = cs.to_string()
       cs.free()
-      Result.Ok(result)
+
+      match result
+        Result.Err(_) -> Result.Err("current directory is not valid UTF-8")
+        Result.Ok(value) -> Result.Ok(value)
+      end
     end
   end
 
   @doc """
   Returns the value of the environment variable `key`, or `Option.None`
-  if the variable is not set.
+  if the variable is not set. Panics when the key contains U+0000 or
+  the host value is not valid UTF-8.
   """
   fn get_env(key: String) -> Option<String>
-    key_cs = key.to_cstring()
+    key_cs = cstring_or_panic(key, "System.get_env key")
     ptr = koja_get_env(key_cs.ptr)
     key_cs.free()
 
     if ptr.null?()
-      Option.None
-    else
-      cs = ptr.to_cstring()
-      result = cs.to_string()
-      cs.free()
-      Option.Some(result)
+      return Option.None
+    end
+
+    cs = ptr.to_cstring()
+    result = cs.to_string()
+    cs.free()
+
+    match result
+      Result.Err(_) ->
+        Kernel.panic("System.get_env value for `#{key}` is not valid UTF-8")
+
+      Result.Ok(value) ->
+        Option.Some(value)
     end
   end
 
@@ -47,18 +59,26 @@ struct System
     cs = koja_hostname().to_cstring()
     result = cs.to_string()
     cs.free()
-    result
+    result.unwrap()
   end
 
   @doc """
-  Sets the environment variable `key` to `value`.
+  Sets the environment variable `key` to `value`. Panics when either
+  argument contains U+0000.
   """
   fn set_env(key: String, value: String)
-    key_cs = key.to_cstring()
-    val_cs = value.to_cstring()
+    key_cs = cstring_or_panic(key, "System.set_env key")
+    val_cs = cstring_or_panic(value, "System.set_env value")
     koja_set_env(key_cs.ptr, val_cs.ptr)
     key_cs.free()
     val_cs.free()
+  end
+
+  priv fn cstring_or_panic(value: String, label: String) -> CString
+    match value.to_cstring()
+      Result.Err(_) -> Kernel.panic("#{label} cannot contain U+0000")
+      Result.Ok(cstring) -> cstring
+    end
   end
 
   @extern "C"

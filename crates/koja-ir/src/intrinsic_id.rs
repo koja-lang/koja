@@ -70,6 +70,7 @@ pub enum IRIntrinsicId {
     /// method later a variant-add rather than a shape change, like
     /// [`KernelMethod`] / [`BitsMethod`].
     ReplyTo(ReplyToMethod),
+    RuntimeBlock(RuntimeBlockMethod),
     Set(SetMethod),
     /// `@intrinsic` methods on `Socket` from
     /// [`koja/lib/net/src/net.koja`]. Both methods bridge into the
@@ -88,15 +89,21 @@ pub enum KernelMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeBlockMethod {
+    AdoptBinary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CPtrMethod {
     Alloc,
+    Borrow,
+    Copy,
     Free,
     Null,
     NullQ,
     Offset,
     Read,
     ToBinary,
-    ToString,
     Write,
 }
 
@@ -109,7 +116,6 @@ pub enum CStringMethod {
 pub enum BinaryMethod {
     At,
     ByteSize,
-    Ptr,
     Slice,
     ToBits,
     ToString,
@@ -208,6 +214,7 @@ pub enum ReplyToMethod {
 /// is readable); `Resolve` is a synchronous `getaddrinfo` shim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketMethod {
+    LastError,
     RecvFrom,
     Resolve,
 }
@@ -245,9 +252,9 @@ pub enum DebugImpl {
 }
 
 /// Receiver shape for `Equality.eq` impls. One variant per emitter
-/// shape: `icmp` for `Bool` + integers, `fcmp` for floats, `strcmp`
-/// for `String`. Integer / float widths are folded into nested
-/// [`IntType`] / [`FloatType`] enums (each width its own emitter
+/// shape: `icmp` for `Bool` + integers, `fcmp` for floats, and a
+/// length-aware runtime helper for `String`. Numeric widths are folded
+/// into nested [`IntType`] / [`FloatType`] enums (each width its own emitter
 /// cell) so the outer arms stay one-to-one with the emitter family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EqualityImpl {
@@ -389,6 +396,9 @@ impl IRIntrinsicId {
         }
         if receiver == "ReplyTo" {
             return ReplyToMethod::from_source(method).map(Self::ReplyTo);
+        }
+        if receiver == "RuntimeBlock" {
+            return RuntimeBlockMethod::from_source(method).map(Self::RuntimeBlock);
         }
         if receiver == "Set" {
             return SetMethod::from_source(method).map(Self::Set);
@@ -585,13 +595,14 @@ impl CPtrMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "alloc" => Self::Alloc,
+            "borrow" => Self::Borrow,
+            "copy" => Self::Copy,
             "free" => Self::Free,
             "null" => Self::Null,
             "null?" => Self::NullQ,
             "offset" => Self::Offset,
             "read" => Self::Read,
             "to_binary" => Self::ToBinary,
-            "to_string" => Self::ToString,
             "write" => Self::Write,
             _ => return None,
         })
@@ -600,13 +611,14 @@ impl CPtrMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::Alloc => "alloc",
+            Self::Borrow => "borrow",
+            Self::Copy => "copy",
             Self::Free => "free",
             Self::Null => "null",
             Self::NullQ => "null?",
             Self::Offset => "offset",
             Self::Read => "read",
             Self::ToBinary => "to_binary",
-            Self::ToString => "to_string",
             Self::Write => "write",
         }
     }
@@ -632,7 +644,6 @@ impl BinaryMethod {
         Some(match s {
             "at" => Self::At,
             "byte_size" => Self::ByteSize,
-            "ptr" => Self::Ptr,
             "slice" => Self::Slice,
             "to_bits" => Self::ToBits,
             "to_string" => Self::ToString,
@@ -644,7 +655,6 @@ impl BinaryMethod {
         match self {
             Self::At => "at",
             Self::ByteSize => "byte_size",
-            Self::Ptr => "ptr",
             Self::Slice => "slice",
             Self::ToBits => "to_bits",
             Self::ToString => "to_string",
@@ -820,6 +830,7 @@ impl SetMethod {
 impl SocketMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
+            "last_error" => Self::LastError,
             "recv_from" => Self::RecvFrom,
             "resolve" => Self::Resolve,
             _ => return None,
@@ -828,8 +839,24 @@ impl SocketMethod {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::LastError => "last_error",
             Self::RecvFrom => "recv_from",
             Self::Resolve => "resolve",
+        }
+    }
+}
+
+impl RuntimeBlockMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "adopt_binary" => Self::AdoptBinary,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::AdoptBinary => "adopt_binary",
         }
     }
 }
@@ -934,6 +961,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Process(m) => write!(f, "Process.{}", m.segment()),
             Self::Ref(m) => write!(f, "Ref.{}", m.segment()),
             Self::ReplyTo(m) => write!(f, "ReplyTo.{}", m.segment()),
+            Self::RuntimeBlock(m) => write!(f, "RuntimeBlock.{}", m.segment()),
             Self::Set(m) => write!(f, "Set.{}", m.segment()),
             Self::Socket(m) => write!(f, "Socket.{}", m.segment()),
             Self::String(m) => write!(f, "String.{}", m.segment()),
@@ -974,6 +1002,8 @@ mod tests {
     fn cptr_methods_cover_the_full_surface() {
         for (method, variant) in [
             ("alloc", CPtrMethod::Alloc),
+            ("borrow", CPtrMethod::Borrow),
+            ("copy", CPtrMethod::Copy),
             ("free", CPtrMethod::Free),
             ("null", CPtrMethod::Null),
             ("null?", CPtrMethod::NullQ),
@@ -981,7 +1011,6 @@ mod tests {
             ("read", CPtrMethod::Read),
             ("write", CPtrMethod::Write),
             ("to_binary", CPtrMethod::ToBinary),
-            ("to_string", CPtrMethod::ToString),
         ] {
             assert_round_trip(
                 &["CPtr", method],
@@ -1055,6 +1084,7 @@ mod tests {
     #[test]
     fn socket_methods_cover_the_full_surface() {
         for (method, variant) in [
+            ("last_error", SocketMethod::LastError),
             ("recv_from", SocketMethod::RecvFrom),
             ("resolve", SocketMethod::Resolve),
         ] {
@@ -1064,6 +1094,15 @@ mod tests {
                 &format!("Socket.{method}"),
             );
         }
+    }
+
+    #[test]
+    fn runtime_block_adoption_round_trips() {
+        assert_round_trip(
+            &["RuntimeBlock", "adopt_binary"],
+            IRIntrinsicId::RuntimeBlock(RuntimeBlockMethod::AdoptBinary),
+            "RuntimeBlock.adopt_binary",
+        );
     }
 
     #[test]

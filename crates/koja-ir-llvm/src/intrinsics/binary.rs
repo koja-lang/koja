@@ -8,18 +8,14 @@
 //!   Bounds-check against the header, then GEP + load + zext. No
 //!   runtime call.
 //! - `Binary.byte_size(self) -> Int`: divides the header by 8.
-//! - `Binary.ptr(self) -> CPtr<UInt8>`: returns `self` (the payload
-//!   pointer is already byte-addressable).
 //! - `Binary.slice(self, range: Range) -> Binary`: copies the
 //!   inclusive byte range `[start, stop]` via the
 //!   `koja_binary_slice` runtime helper. Endpoints clamp.
 //! - `Binary.to_bits(self) -> Bits`: zero-cost reinterpret.
-//! - `Binary.to_string(self) -> Result<String, String>`: validates
+//! - `Binary.to_string(self) -> Result<String, String.ConversionError>`: validates
 //!   UTF-8 via the `koja_utf8_validate` runtime helper, then
 //!   heap-copies into a NUL-terminated `String` payload on success.
-//!   Error branch returns `Result.Err("invalid UTF-8")`. Mirrors
-//!   v1's `Binary_to_string` codegen one-for-one (same runtime
-//!   helper, same Ok/Err shapes).
+//!   The error branch returns `String.ConversionError.InvalidUTF8`.
 //! - `Bits.to_binary(self) -> Result<Binary, String>`: checks
 //!   `bit_length & 7 == 0` and returns `Result.Ok(self)` (zero-cost
 //!   reinterpret, both layouts are identical) when aligned, or
@@ -36,6 +32,7 @@ use crate::emit::enums::build_enum_value;
 use crate::emit::heap_layout::load_bit_length;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::heap_payload;
+use crate::intrinsics::result;
 use crate::runtime::{declare_binary_slice_extern, declare_utf8_validate_extern};
 
 /// `enum Result<T, E>` variant tag for `Ok(T)`: declaration order
@@ -60,7 +57,6 @@ pub(super) fn emit_binary<'ctx>(
     match method {
         BinaryMethod::At => emit_at(ctx, function, llvm_function),
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
-        BinaryMethod::Ptr => emit_self_passthrough(ctx, function, llvm_function),
         BinaryMethod::Slice => emit_slice(ctx, function, llvm_function),
         BinaryMethod::ToBits => emit_to_bits(ctx, function, llvm_function),
         BinaryMethod::ToString => emit_to_string(ctx, function, llvm_function),
@@ -222,25 +218,10 @@ fn emit_byte_size<'ctx>(
         .map(|_| ())
 }
 
-/// Zero-cost conversion. Both `Binary` and `Bits` lower to the same
-/// payload-pointer shape (`ptr` at the LLVM layer). `Binary.ptr`
-/// hands back a `CPtr<UInt8>` shaped identically. Just return `self`.
-fn emit_self_passthrough<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    ctx.builder
-        .build_return(Some(&payload))
-        .or_ice()
-        .map(|_| ())
-}
-
 /// `Binary.to_string`: validate UTF-8 via the runtime helper, then
 /// heap-copy the payload into a fresh NUL-terminated `String`
-/// allocation and return `Result.Ok(payload)`. Invalid UTF-8 falls
-/// through to `Result.Err("invalid UTF-8")`.
+/// allocation and return `Result.Ok(payload)`. Invalid UTF-8 returns
+/// `String.ConversionError.InvalidUTF8`.
 fn emit_to_string<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
@@ -278,9 +259,12 @@ fn emit_to_string<'ctx>(
     ctx.builder.position_at_end(valid_bb);
     let new_payload =
         heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), payload, true, false)?;
-    return_result(ctx, result_symbol, RESULT_OK_TAG, new_payload.into())?;
+    let ok = result::build_ok(ctx, result_symbol, new_payload.into())?;
+    ctx.builder.build_return(Some(&ok)).or_ice()?;
 
-    emit_err_branch(ctx, invalid_bb, result_symbol, b"invalid UTF-8")
+    ctx.builder.position_at_end(invalid_bb);
+    let error = result::build_unit_error(ctx, result_symbol, "InvalidUTF8")?;
+    ctx.builder.build_return(Some(&error)).or_ice().map(|_| ())
 }
 
 /// `Bits.to_binary`: branch on `bit_length & 7 == 0`. The aligned

@@ -22,6 +22,8 @@
 //! generated handlers narrow on the way out (`as i32`) at the C ABI
 //! boundary.
 
+use std::ptr;
+
 use koja_runtime_core::Interest;
 
 use crate::error::RuntimeError;
@@ -42,7 +44,7 @@ pass_through_externs! {
     file_open => fn koja_file_open(path: CPtr, mode: Int64) -> Int32;
     file_read_all => fn koja_file_read_all(path: CPtr) -> CPtr;
     file_rename => fn koja_file_rename(src: CPtr, dst: CPtr) -> Int64;
-    file_write_all => fn koja_file_write_all(path: CPtr, content: CPtr) -> Int64;
+    file_write_all => fn koja_file_write_all(path: CPtr, content: CPtr, len: Int64) -> Int64;
 }
 
 /// `koja_fd_read(fd, count)`: wait for `fd` to be readable, then delegate
@@ -58,7 +60,7 @@ pub(super) async fn fd_read(args: &[Value]) -> Result<Value, RuntimeError> {
     };
     // Interrupted by a signal: return the native null sentinel.
     if reactor::io_block(*fd as i32, Interest::Readable).await {
-        return Ok(Value::CPtr(std::ptr::null_mut()));
+        return Ok(Value::CPtr(ptr::null_mut()));
     }
     let ptr = unsafe { koja_fd_read(*fd as i32, *count) };
     Ok(Value::CPtr(ptr))

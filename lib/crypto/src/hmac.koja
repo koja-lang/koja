@@ -10,9 +10,9 @@ struct HMAC
     null: CPtr<UInt8> = CPtr.null()
     hmac_raw(
       evp_sha1(),
-      key.ptr(),
+      CPtr.borrow(key),
       key.byte_size(),
-      data.ptr(),
+      CPtr.borrow(data),
       data.byte_size(),
       out,
       null,
@@ -30,9 +30,9 @@ struct HMAC
     null: CPtr<UInt8> = CPtr.null()
     hmac_raw(
       evp_sha256(),
-      key.ptr(),
+      CPtr.borrow(key),
       key.byte_size(),
-      data.ptr(),
+      CPtr.borrow(data),
       data.byte_size(),
       out,
       null,
@@ -50,9 +50,9 @@ struct HMAC
     null: CPtr<UInt8> = CPtr.null()
     hmac_raw(
       evp_sha384(),
-      key.ptr(),
+      CPtr.borrow(key),
       key.byte_size(),
-      data.ptr(),
+      CPtr.borrow(data),
       data.byte_size(),
       out,
       null,
@@ -70,9 +70,9 @@ struct HMAC
     null: CPtr<UInt8> = CPtr.null()
     hmac_raw(
       evp_sha512(),
-      key.ptr(),
+      CPtr.borrow(key),
       key.byte_size(),
-      data.ptr(),
+      CPtr.borrow(data),
       data.byte_size(),
       out,
       null,

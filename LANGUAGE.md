@@ -338,6 +338,10 @@ Nested ternaries are disallowed.
 | `Bits`    | Arbitrary bit sequence                    |
 | `()`      | Unit type (empty value)                   |
 
+Every `String` is valid UTF-8 and carries an authoritative byte length.
+U+0000 is a valid character; trailing NUL storage is never used to
+determine a string's contents.
+
 All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
 
 ### Numeric Widening
@@ -531,6 +535,10 @@ end
 ```
 
 `to_cstring` is only available on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. Calling a specialized method on the wrong type argument produces a compile error with a hint showing which specialization provides the method.
+
+This pointer conversion is distinct from checked
+`String.to_cstring()`: it assumes a readable NUL-terminated C buffer
+and computes `CString.len` with `strlen`.
 
 Mixing concrete types and type parameters in the same `extend` block is not allowed:
 
@@ -1572,15 +1580,14 @@ Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns t
 
 - `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
 - `byte_size(self) -> Int` -- returns the number of bytes.
-- `ptr(self) -> CPtr<UInt8>` -- returns a raw pointer to the underlying byte data. Useful for passing binary data to C FFI functions.
 - `slice(self, range: Range) -> Binary` -- copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
 - `to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
-- `to_string(self) -> Result<String, String>` -- attempts to interpret bytes as UTF-8. Returns `Result.Err` with a diagnostic if invalid.
+- `to_string(self) -> Result<String, String.ConversionError>` -- attempts to interpret bytes as UTF-8, returning `InvalidUTF8` when decoding fails.
 
 #### Conversion Functions
 
 - `String.to_binary(self) -> Binary` -- zero-cost widening from UTF-8 string to bytes.
-- `CPtr<UInt8>.to_binary(self, len: Int) -> Binary` -- creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed.
+- `CPtr<UInt8>.to_binary(self, len: Int) -> Binary` -- creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed; a negative length panics.
 - `Bits.to_binary(self) -> Result<Binary, String>` -- narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
 
 ```koja
@@ -1604,8 +1611,9 @@ end
 
 Functions:
 
-- `read(self, count: Int) -> Result<String, String>` -- reads up to `count` bytes.
-- `write(self, data: String) -> Result<Int, String>` -- writes data, returns bytes written.
+- `read(self, count: Int) -> Result<String, String>` -- reads and validates up to `count` bytes as UTF-8.
+- `read_binary(self, count: Int) -> Result<Binary, String>` -- reads up to `count` arbitrary bytes.
+- `write(self, data: Binary | String) -> Result<Int, String>` -- writes data, returns bytes written.
 - `close(self) -> Result<String, String>` -- closes the descriptor.
 
 #### `File`
@@ -1621,8 +1629,9 @@ end
 Functions:
 
 - `File.open(path: String, mode: FileMode) -> Result<File, String>` -- opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
-- `File.read(path: String) -> Result<String, String>` -- reads an entire file as a string (opens, reads, closes).
-- `File.write(path: String, content: String) -> Result<String, String>` -- writes content to a file (creates or truncates).
+- `File.read(path: String) -> Result<String, String>` -- reads an entire file as UTF-8 text (opens, reads, closes).
+- `File.read_binary(path: String) -> Result<Binary, String>` -- reads an entire file as arbitrary bytes.
+- `File.write(path: String, content: Binary | String) -> Result<String, String>` -- writes text or arbitrary bytes (creates or truncates).
 - `File.exists?(path: String) -> Bool` -- returns true if the file exists.
 - `File.delete(path: String) -> Result<String, String>` -- deletes a file.
 - `File.rename(source: String, destination: String) -> Result<String, String>` -- renames (moves) a file.
@@ -1632,6 +1641,14 @@ Functions:
 content = File.read("config.txt").unwrap()
 content.print()
 ```
+
+### Environment
+
+- `System.get_env(key: String) -> Option<String>` -- returns a UTF-8 host value or `Option.None` when absent.
+- `System.set_env(key: String, value: String)` -- sets a UTF-8 environment value.
+
+Both functions panic when a key or value contains U+0000.
+`System.get_env` also panics if the host value is not valid UTF-8.
 
 ### Console I/O
 
@@ -1888,14 +1905,36 @@ null_ptr.null?().print()
 
 Type annotations on the variable drive generic inference for static methods like `CPtr.alloc()` and `CPtr.null()`.
 
+`CPtr<UInt8>` additionally provides the two ways to get a pointer to a `Binary`'s bytes:
+
+- `CPtr.borrow(bytes: Binary) -> CPtr<UInt8>` -- zero-cost view of the binary's payload. The result cannot be bound to a variable, returned, or stored; it may only be consumed within the statement that borrows it (as a call argument or chained receiver), where the source `Binary` is guaranteed to be live.
+- `CPtr.copy(bytes: Binary) -> CPtr<UInt8>` -- malloc'd owned copy of the bytes. Nameable like any value; the caller frees it. Use this when a C API retains the pointer past the call.
+
+```koja
+digest = CPtr.alloc(32)
+FFI.blake3_hash(CPtr.borrow(data), data.byte_size(), digest)  # fine
+
+p = CPtr.borrow(data)  # compile error: a borrowed pointer cannot be bound
+owned = CPtr.copy(data)  # owned copy, free it when C is done
+```
+
 ### `CString`
 
-A null-terminated C string for FFI interop. Allocated with `malloc`, must be freed explicitly.
+A pointer-and-length descriptor for a null-terminated C string. It does
+not encode ownership: `String.to_cstring()` allocates owned memory, while
+`CPtr<UInt8>.to_cstring()` wraps an existing pointer without allocating.
 
 ```koja
 struct CString
   ptr: CPtr<UInt8>
   len: Int
+end
+
+enum CString.ConversionError
+  InteriorNul
+  InvalidLength
+  InvalidUTF8
+  NullPointer
 end
 ```
 
@@ -1903,16 +1942,22 @@ Convert between Koja strings and C strings:
 
 ```koja
 name = "hello"
-cs = name.to_cstring()
+cs = name.to_cstring().unwrap()
 cs.len.print()
 
-back = cs.to_string()
+back = cs.to_string().unwrap()
 (back == name).print()
 
 cs.free()
 ```
 
-`String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies the bytes back into a Koja `String`. The original string is unaffected by either conversion.
+`String.to_cstring() -> Result<CString, CString.ConversionError>`
+allocates a null-terminated copy via `malloc` and rejects `String`
+values containing U+0000 with `InteriorNul`.
+`CString.to_string() -> Result<String, CString.ConversionError>` copies
+exactly `len` bytes and rejects invalid lengths, pointers, and UTF-8.
+It does not consume or free the C buffer. Call `free()` only when the
+descriptor owns malloc-compatible storage.
 
 ### Passing Pointers to C
 
@@ -1937,10 +1982,18 @@ buf.free()
 For string-accepting C functions, pass `cs.ptr` (the `CPtr<UInt8>`) and `cs.len`:
 
 ```koja
-cs = "hello".to_cstring()
+cs = "hello".to_cstring().unwrap()
 FFI.some_c_function(cs.ptr, cs.len)
 cs.free()
 ```
+
+For byte-accepting C functions, borrow a pointer to the `Binary` at the call site:
+
+```koja
+FFI.consume_bytes(CPtr.borrow(data), data.byte_size())
+```
+
+Pointers passed to C are valid for the duration of the call. A C function that keeps the pointer past the call needs `CPtr.copy` (an owned copy the caller frees).
 
 ---
 

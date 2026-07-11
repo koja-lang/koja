@@ -1,0 +1,2 @@
+error: type error:
+  `Global.CPtr` has no method `to_string`

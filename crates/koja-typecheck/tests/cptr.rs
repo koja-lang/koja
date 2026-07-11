@@ -35,12 +35,35 @@ fn cptr_struct_and_generic_methods_register() {
 
 #[test]
 fn cptr_uint8_concrete_impl_methods_register() {
-    // `to_binary` and `to_string` live on `impl CPtr<UInt8>`, plus
-    // the pure-Koja `to_cstring` and the private `strlen` extern.
+    // Byte and C-string conversion functions live on `impl CPtr<UInt8>`.
     let checked = typecheck("1\n");
-    for method in ["to_binary", "to_string", "to_cstring", "strlen"] {
+    for method in ["borrow", "copy", "to_binary", "to_cstring", "strlen"] {
         assert_registered(&checked, &["CPtr", method]);
     }
+}
+
+#[test]
+fn cptr_copy_static_resolves_with_unconstrained_receiver_param() {
+    // `copy` is a static on `extend CPtr<UInt8>` whose signature never
+    // mentions `T`. The concrete impl pinning must satisfy inference.
+    typecheck(&dedent(
+        "
+        bytes = \"abc\".to_binary()
+        owned = CPtr.copy(bytes)
+        first = owned.read()
+        owned.free()
+        ",
+    ));
+}
+
+#[test]
+fn cptr_borrow_static_resolves_in_statement_position() {
+    typecheck(&dedent(
+        "
+        bytes = \"abc\".to_binary()
+        CPtr.borrow(bytes).read()
+        ",
+    ));
 }
 
 // Surface-level call-site coverage (`p: CPtr<UInt8> = CPtr.alloc(8)`,

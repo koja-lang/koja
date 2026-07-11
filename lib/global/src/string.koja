@@ -474,8 +474,9 @@ extend String
 
   @doc """
   Allocates a null-terminated C string copy of this string using `malloc`.
-  The caller is responsible for calling `free()` on the returned `CString`.
+  Returns `InteriorNul` when the string contains U+0000. The caller must
+  call `free()` on a successful result.
   """
   @intrinsic
-  fn to_cstring(self) -> CString
+  fn to_cstring(self) -> Result<CString, CString.ConversionError>
 end

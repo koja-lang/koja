@@ -3,45 +3,39 @@
 //! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
 //!   Out-of-bounds indices return `None`.
 //! - `Binary.byte_size(self) -> Int`: `bytes.len()`.
-//! - `Binary.ptr(self) -> CPtr<UInt8>`: copies the byte payload
-//!   into a fresh rc-prefixed block (see [`crate::abi`]) so the
-//!   caller can hand it to C code. The caller owns the block.
-//!   Mirrors the LLVM backend's shape: `Binary` is itself
-//!   heap-backed there, so `.ptr()` just hands out the existing
-//!   payload offset. Eval has to copy because `Value::Binary`'s
-//!   `Rc<Vec<u8>>` gives no stable address guarantee, but the
-//!   *observable* C-side shape is identical.
 //! - `Binary.slice(self, range: Range) -> Binary`: copies the
 //!   inclusive byte range `[start, stop]`. Endpoints clamp to the
 //!   binary's bounds.
 //! - `Binary.to_bits(self) -> Bits`: zero-cost widening. Reuses
 //!   the existing byte vec with `bit_length = bytes.len() * 8`.
-//! - `Binary.to_string(self) -> Result<String, String>`:
+//! - `Binary.to_string(self) -> Result<String, String.ConversionError>`:
 //!   UTF-8 validate the bytes and materialize the `Result` enum
 //!   via the receiver symbol on `function.return_type`.
 //! - `Bits.to_binary(self) -> Result<Binary, String>`: require
 //!   byte-aligned bit_length and return `Ok(Binary)`, else
 //!   `Err(reason)`.
 
+use std::str;
+
 use koja_ir::{BinaryMethod, BitsMethod, IRFunction};
 
-use crate::abi;
 use crate::error::RuntimeError;
+use crate::interpreter::CallResolver;
 use crate::intrinsics::helpers;
 use crate::value::Value;
 
-pub(super) fn binary(
+pub(super) fn binary<R: CallResolver>(
     method: BinaryMethod,
     function: &IRFunction,
     args: &[Value],
+    resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match method {
         BinaryMethod::At => at(function, args),
         BinaryMethod::ByteSize => byte_size(args),
-        BinaryMethod::Ptr => ptr_(args),
         BinaryMethod::Slice => slice(args),
         BinaryMethod::ToBits => to_bits(args),
-        BinaryMethod::ToString => to_string(function, args),
+        BinaryMethod::ToString => to_string(function, args, resolver),
     }
 }
 
@@ -104,18 +98,6 @@ fn byte_size(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(bytes.len() as i64))
 }
 
-fn ptr_(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Binary(bytes)] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "Binary.ptr expects a single Binary argument, got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
-    };
-    Ok(Value::CPtr(abi::alloc_block(bytes)))
-}
-
 fn to_bits(args: &[Value]) -> Result<Value, RuntimeError> {
     let [Value::Binary(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
@@ -132,7 +114,11 @@ fn to_bits(args: &[Value]) -> Result<Value, RuntimeError> {
     })
 }
 
-fn to_string(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+fn to_string<R: CallResolver>(
+    function: &IRFunction,
+    args: &[Value],
+    resolver: &R,
+) -> Result<Value, RuntimeError> {
     let [Value::Binary(bytes)] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!(
@@ -142,12 +128,13 @@ fn to_string(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErro
         });
     };
     let result_symbol = helpers::enum_return_symbol(function, "Binary.to_string")?;
-    let parsed = match std::str::from_utf8(bytes) {
+    let parsed = match str::from_utf8(bytes) {
         Ok(_) => Ok(Value::String(bytes.clone())),
-        Err(err) => Err(Value::string(format!(
-            "Binary.to_string: payload is not valid UTF-8 (invalid at byte {}): {err}",
-            err.valid_up_to(),
-        ))),
+        Err(_) => Err(helpers::err_variant_value(
+            &result_symbol,
+            resolver,
+            "InvalidUTF8",
+        )?),
     };
     Ok(helpers::result_value(result_symbol, parsed))
 }

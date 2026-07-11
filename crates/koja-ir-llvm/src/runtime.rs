@@ -37,7 +37,8 @@ pub(crate) const PANIC_SYMBOL: &str = "__koja_panic";
 pub(crate) const PRINT_STRING_SYMBOL: &str = "__koja_print_string";
 pub(crate) const SOCKET_RECV_FROM_SYMBOL: &str = "koja_socket_recv_from";
 pub(crate) const SOCKET_RESOLVE_SYMBOL: &str = "koja_socket_resolve";
-pub(crate) const STRCMP_SYMBOL: &str = "strcmp";
+pub(crate) const STRING_CONTAINS_NUL_SYMBOL: &str = "koja_string_contains_nul";
+pub(crate) const STRING_EQ_SYMBOL: &str = "koja_string_eq";
 pub(crate) const STRING_GET_SYMBOL: &str = "koja_string_get";
 pub(crate) const STRING_LENGTH_SYMBOL: &str = "koja_string_length";
 pub(crate) const STRING_SLICE_SYMBOL: &str = "koja_string_slice";
@@ -273,7 +274,7 @@ pub(crate) fn declare_memset_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
 /// receives one datagram and returns a heap-allocated
 /// `[*u8 data, *u8 ip_bin, i64 port]` triple (or null on error).
 /// The `Socket.recv_from` intrinsic emitter marshals the triple
-/// into a `Pair<String, SocketAddress>` SSA value.
+/// into a `Pair<Binary, SocketAddress>` SSA value.
 pub(crate) fn declare_socket_recv_from_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {
@@ -324,15 +325,24 @@ pub(crate) fn declare_pack_bits_extern<'ctx>(ctx: &EmitContext<'ctx>) -> Functio
     declare_extern(ctx, PACK_BITS_SYMBOL, signature)
 }
 
-/// Declare (or look up) the libc `strcmp` extern.
-/// Signature: `i32 strcmp(i8* lhs, i8* rhs)`. Used by `String.eq`
-/// and the generic `==` lowering on `String` operands. Both
-/// arguments point to NUL-terminated payload bytes.
-pub(crate) fn declare_strcmp_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
+/// Declare the length-aware Koja string equality helper.
+/// Signature: `i64 koja_string_eq(i8* lhs, i8* rhs)`.
+pub(crate) fn declare_string_eq_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionValue<'ctx> {
     let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
-    let i32_ty = ctx.context.i32_type();
-    let signature = i32_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
-    declare_extern(ctx, STRCMP_SYMBOL, signature)
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into(), ptr_ty.into()], false);
+    declare_extern(ctx, STRING_EQ_SYMBOL, signature)
+}
+
+/// Declare the Koja string interior-NUL helper.
+/// Signature: `i64 koja_string_contains_nul(i8* payload)`.
+pub(crate) fn declare_string_contains_nul_extern<'ctx>(
+    ctx: &EmitContext<'ctx>,
+) -> FunctionValue<'ctx> {
+    let ptr_ty = ctx.context.ptr_type(AddressSpace::default());
+    let i64_ty = ctx.context.i64_type();
+    let signature = i64_ty.fn_type(&[ptr_ty.into()], false);
+    declare_extern(ctx, STRING_CONTAINS_NUL_SYMBOL, signature)
 }
 
 /// Declare (or look up) the `koja_string_get` runtime helper.

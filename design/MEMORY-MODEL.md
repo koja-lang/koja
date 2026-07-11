@@ -48,7 +48,11 @@ changes program semantics.
    sound by construction):
    - **Last-use move elision.** A clone whose source is dead
      afterward degrades to a move (free). Intra-procedural liveness,
-     far easier than escape analysis.
+     far easier than escape analysis. One FFI-facing constraint:
+     `CPtr.borrow(bytes)` hands C a view of the Binary's payload, so
+     liveness must treat the borrow's source as live through the
+     enclosing statement (the position check guarantees the borrowed
+     pointer never survives past it).
    - **Opportunistic in-place mutation.** When a heap value's refcount
      is 1, mutate in place instead of copying. Collapses the threaded-
      state idiom (`acc = acc.append(x)` in a loop) back to amortized

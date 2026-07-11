@@ -5,11 +5,12 @@
 //! [`Value::Struct`] matching the `CString` decl. Callers free it
 //! through `CString.free` (which routes to `CPtr.free`).
 
-use std::ptr;
+use std::{ptr, str};
 
 use koja_ir::{IRFunction, IRSymbol, IRType, StringMethod};
 
 use crate::error::RuntimeError;
+use crate::interpreter::CallResolver;
 use crate::intrinsics::helpers;
 use crate::value::Value;
 
@@ -17,10 +18,11 @@ unsafe extern "C" {
     fn malloc(size: usize) -> *mut u8;
 }
 
-pub(super) fn dispatch(
+pub(super) fn dispatch<R: CallResolver>(
     method: StringMethod,
     function: &IRFunction,
     args: &[Value],
+    resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match method {
         StringMethod::ByteLength => byte_length(args),
@@ -28,7 +30,7 @@ pub(super) fn dispatch(
         StringMethod::Length => length(args),
         StringMethod::Slice => slice(args),
         StringMethod::ToBinary => to_binary(args),
-        StringMethod::ToCstring => to_cstring(function, args),
+        StringMethod::ToCstring => to_cstring(function, args, resolver),
     }
 }
 
@@ -47,9 +49,21 @@ fn to_binary(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::binary(bytes))
 }
 
-fn to_cstring(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+fn to_cstring<R: CallResolver>(
+    function: &IRFunction,
+    args: &[Value],
+    resolver: &R,
+) -> Result<Value, RuntimeError> {
     let bytes = expect_string_bytes(args, 0, "String.to_cstring")?;
-    let cstring_symbol = struct_return_symbol(function, "String.to_cstring")?;
+    let result_symbol = helpers::enum_return_symbol(function, "String.to_cstring")?;
+    if bytes.contains(&0) {
+        let error = helpers::err_variant_value(&result_symbol, resolver, "InteriorNul")?;
+        return Ok(helpers::result_value(result_symbol, Err(error)));
+    }
+    let cstring_symbol = result_struct_symbol(
+        &helpers::single_ok_payload(&result_symbol, resolver, "String.to_cstring")?,
+        "String.to_cstring",
+    )?;
     let total = bytes.len() + 1; // null terminator
     let buf = unsafe { malloc(total) };
     if buf.is_null() {
@@ -63,10 +77,11 @@ fn to_cstring(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErr
         }
         *buf.add(bytes.len()) = 0;
     }
-    Ok(Value::Struct {
+    let cstring = Value::Struct {
         symbol: cstring_symbol,
         fields: vec![Value::CPtr(buf), Value::Int(bytes.len() as i64)],
-    })
+    };
+    Ok(helpers::result_value(result_symbol, Ok(cstring)))
 }
 
 fn get(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
@@ -136,7 +151,7 @@ fn expect_string_utf8<'a>(
     label: &str,
 ) -> Result<&'a str, RuntimeError> {
     let bytes = expect_string_bytes(args, index, label)?;
-    std::str::from_utf8(bytes).map_err(|err| RuntimeError::Unsupported {
+    str::from_utf8(bytes).map_err(|err| RuntimeError::Unsupported {
         detail: format!(
             "{label} arg #{index}: String contents are not valid UTF-8 \
              (invalid at byte {}): {err}",
@@ -184,11 +199,11 @@ fn expect_range(args: &[Value], index: usize, label: &str) -> Result<(i64, i64),
     }
 }
 
-fn struct_return_symbol(function: &IRFunction, label: &str) -> Result<IRSymbol, RuntimeError> {
-    match &function.return_type {
+fn result_struct_symbol(ty: &IRType, label: &str) -> Result<IRSymbol, RuntimeError> {
+    match ty {
         IRType::Struct(symbol) => Ok(symbol.clone()),
         other => Err(RuntimeError::TypeMismatch {
-            detail: format!("{label} expected Struct return type, got `{other:?}`"),
+            detail: format!("{label} expected a Struct Ok payload, got `{other:?}`"),
         }),
     }
 }

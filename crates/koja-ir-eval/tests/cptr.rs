@@ -5,13 +5,11 @@
 //! `String.to_cstring` + `CString.to_string` round-trip a String
 //! through a null-terminated `malloc` copy.
 //!
-//! `CPtr<UInt8>.to_string` reads the v1 length-prefixed Koja string
-//! ABI; we exercise it via `Random.bytes` (see the `random.rs` test
-//! suite) since constructing a header-prefixed buffer manually from
-//! pure Koja is awkward.
+//! Runtime-produced block adoption is covered separately through
+//! `Random.bytes`.
 
 use koja_ast::util::dedent;
-use koja_ir_eval::Value;
+use koja_ir_eval::{RuntimeError, Value};
 
 mod common;
 
@@ -49,6 +47,40 @@ fn cptr_alloc_then_free_round_trips_without_panicking() {
 }
 
 #[test]
+fn cptr_alloc_rejects_negative_count() {
+    let error = evaluate_script(&dedent(
+        r#"
+        ptr: CPtr<UInt8> = CPtr.alloc(-1)
+        ptr.null?()
+        "#,
+    ))
+    .expect_err("negative CPtr.alloc count must panic");
+    assert_eq!(
+        error,
+        RuntimeError::Panicked {
+            message: "CPtr.alloc count cannot be negative".to_string(),
+        },
+    );
+}
+
+#[test]
+fn cptr_to_binary_rejects_negative_length() {
+    let error = evaluate_script(&dedent(
+        r#"
+        ptr: CPtr<UInt8> = CPtr.null()
+        ptr.to_binary(-1)
+        "#,
+    ))
+    .expect_err("negative CPtr.to_binary length must panic");
+    assert_eq!(
+        error,
+        RuntimeError::Panicked {
+            message: "CPtr.to_binary length cannot be negative".to_string(),
+        },
+    );
+}
+
+#[test]
 fn cptr_write_then_read_round_trips_a_byte() {
     // Allocate a single-byte buffer, write a UInt8 marker, read it
     // back. Round-tripping a primitive value through a raw pointer
@@ -70,6 +102,49 @@ fn cptr_write_then_read_round_trips_a_byte() {
     ))
     .expect("write -> read -> free chain should evaluate cleanly");
     assert_eq!(outcome, Value::Int(0x42));
+}
+
+#[test]
+fn cptr_borrow_reads_underlying_bytes_in_statement() {
+    // `CPtr.borrow` results cannot be bound, so consumption happens
+    // within the borrowing statement (chained receiver position).
+    let outcome = evaluate_script(&dedent(
+        r#"
+        bytes: Binary = <<10, 20>>
+        CPtr.borrow(bytes).offset(1).read()
+        "#,
+    ))
+    .expect("CPtr.borrow should view readable bytes");
+    assert_eq!(outcome, Value::Int(20));
+}
+
+#[test]
+fn cptr_copy_is_independent_and_nameable() {
+    // `CPtr.copy` mallocs an owned copy. Bind it, read through it,
+    // free it, and confirm the source Binary is untouched.
+    let outcome = evaluate_script(&dedent(
+        r#"
+        bytes: Binary = <<10, 20>>
+        owned = CPtr.copy(bytes)
+        first = owned.read()
+        owned.free()
+        first == 10 and bytes.byte_size() == 2
+        "#,
+    ))
+    .expect("CPtr.copy chain should evaluate cleanly");
+    assert_eq!(outcome, Value::Bool(true));
+}
+
+#[test]
+fn cptr_copy_of_empty_binary_is_null() {
+    let outcome = evaluate_script(&dedent(
+        r#"
+        bytes: Binary = <<>>
+        CPtr.copy(bytes).null?()
+        "#,
+    ))
+    .expect("CPtr.copy of an empty Binary should evaluate");
+    assert_eq!(outcome, Value::Bool(true));
 }
 
 #[test]
@@ -102,14 +177,14 @@ fn cptr_offset_steps_by_element_width_for_uint8() {
 #[test]
 fn string_to_cstring_then_to_string_round_trips_utf8() {
     // `String.to_cstring` allocates a null-terminated copy and
-    // wraps `(ptr, byte_len)` in a CString; `CString.to_string`
+    // wraps `(ptr, byte_len)` in a CString. `CString.to_string`
     // reads `byte_len` bytes back into a fresh String. Pin the
     // round-trip for an ASCII string (every byte is its own
     // codepoint, so byte_len == char count).
     let outcome = evaluate_script(&dedent(
         r#"
-        cstr = "hello".to_cstring()
-        copy = cstr.to_string()
+        cstr = "hello".to_cstring().unwrap()
+        copy = cstr.to_string().unwrap()
         cstr.free()
         copy
         "#,
@@ -122,11 +197,11 @@ fn string_to_cstring_then_to_string_round_trips_utf8() {
 fn string_to_cstring_round_trips_multibyte_utf8() {
     // Non-ASCII codepoints take >1 byte each. `to_cstring` carries
     // byte_len, so the round-trip preserves the original payload
-    // verbatim — `to_string` slices off exactly byte_len bytes.
+    // verbatim because `to_string` reads exactly byte_len bytes.
     let outcome = evaluate_script(&dedent(
         r#"
-        cstr = "héllo".to_cstring()
-        copy = cstr.to_string()
+        cstr = "héllo".to_cstring().unwrap()
+        copy = cstr.to_string().unwrap()
         cstr.free()
         copy
         "#,

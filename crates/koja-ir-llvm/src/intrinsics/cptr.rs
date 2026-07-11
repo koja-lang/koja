@@ -10,10 +10,9 @@
 //! Bodies are inline LLVM IR: `null` returns `null`, `alloc` calls
 //! `malloc(count * sizeof(T))`, `free` calls libc `free`, `offset`
 //! issues a typed GEP, `read` / `write` load / store at the typed
-//! pointer, `null?` compares against `null`, `to_string` is a
-//! zero-cost reinterpret (the pointer already points to a valid Koja
-//! string payload), `to_binary` malloc's a length-prefixed block and
-//! memcpy's `len` bytes from the source pointer.
+//! pointer, `null?` compares against `null`, `to_binary` copies
+//! `len` bytes into a managed Binary, `borrow` returns a Binary's
+//! payload pointer as-is, and `copy` mallocs an owned byte copy.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -23,10 +22,10 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
-use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
+use crate::emit::constants::emit_string_literal_payload;
+use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 use crate::error::{IceExt, LlvmError};
-use crate::intrinsics::heap_payload;
-use crate::runtime::{declare_free_extern, declare_malloc_extern};
+use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_panic_extern};
 use crate::types::ir_basic_type;
 
 pub(super) fn emit_cptr<'ctx>(
@@ -40,13 +39,14 @@ pub(super) fn emit_cptr<'ctx>(
 
     match method {
         CPtrMethod::Alloc => emit_alloc(ctx, function, llvm_function),
+        CPtrMethod::Borrow => emit_borrow(ctx, function, llvm_function),
+        CPtrMethod::Copy => emit_copy(ctx, function, llvm_function),
         CPtrMethod::Free => emit_free(ctx, function, llvm_function),
         CPtrMethod::Null => emit_null(ctx),
         CPtrMethod::NullQ => emit_null_check(ctx, function, llvm_function),
         CPtrMethod::Offset => emit_offset(ctx, function, llvm_function),
         CPtrMethod::Read => emit_read(ctx, function, llvm_function),
         CPtrMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
-        CPtrMethod::ToString => emit_to_string(ctx, function, llvm_function),
         CPtrMethod::Write => emit_write(ctx, function, llvm_function),
     }
 }
@@ -91,12 +91,99 @@ fn emit_alloc<'ctx>(
         ))
     })?;
     let count = nth_int(function, llvm_function, 0, "count")?;
+    guard_nonnegative(
+        ctx,
+        llvm_function,
+        count,
+        b"CPtr.alloc count cannot be negative",
+    )?;
     let total = ctx
         .builder
         .build_int_mul(count, element_size, "alloc_bytes")
         .or_ice()?;
+    let is_empty = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            total,
+            total.get_type().const_zero(),
+            "is_empty",
+        )
+        .or_ice()?;
+    let empty_block = ctx.context.append_basic_block(llvm_function, "empty");
+    let allocate_block = ctx.context.append_basic_block(llvm_function, "allocate");
+    ctx.builder
+        .build_conditional_branch(is_empty, empty_block, allocate_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(empty_block);
+    let null = ctx.context.ptr_type(AddressSpace::default()).const_null();
+    ctx.builder.build_return(Some(&null)).or_ice()?;
+
+    ctx.builder.position_at_end(allocate_block);
     let malloc = declare_malloc_extern(ctx);
     let raw = ctx.call_basic(malloc, &[total.into()], "alloc_ptr")?;
+    ctx.builder.build_return(Some(&raw)).or_ice().map(|_| ())
+}
+
+/// `borrow(bytes: Binary) -> CPtr<UInt8>`: zero-cost view. `Binary`
+/// lowers to its payload pointer, which is already byte-addressable,
+/// so return the argument as-is. The typecheck position check keeps
+/// the result from outliving the statement (and thus the source).
+fn emit_borrow<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let payload = nth_pointer(function, llvm_function, 0, "bytes")?;
+    ctx.builder
+        .build_return(Some(&payload))
+        .or_ice()
+        .map(|_| ())
+}
+
+/// `copy(bytes: Binary) -> CPtr<UInt8>`: malloc `byte_size` bytes and
+/// memcpy the payload. The result is a bare C buffer (no Binary
+/// header, no NUL) the caller owns. Empty input returns null,
+/// mirroring `alloc(0)` and the eval backend.
+fn emit_copy<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let payload = nth_pointer(function, llvm_function, 0, "bytes")?;
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
+    let byte_count = ctx
+        .builder
+        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
+        .or_ice()?;
+    let is_empty = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            byte_count,
+            i64_ty.const_zero(),
+            "is_empty",
+        )
+        .or_ice()?;
+    let empty_block = ctx.context.append_basic_block(llvm_function, "empty");
+    let allocate_block = ctx.context.append_basic_block(llvm_function, "allocate");
+    ctx.builder
+        .build_conditional_branch(is_empty, empty_block, allocate_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(empty_block);
+    let null = ctx.context.ptr_type(AddressSpace::default()).const_null();
+    ctx.builder.build_return(Some(&null)).or_ice()?;
+
+    ctx.builder.position_at_end(allocate_block);
+    let malloc = declare_malloc_extern(ctx);
+    let raw = ctx.call_basic(malloc, &[byte_count.into()], "copy_ptr")?;
+    let memcpy = declare_memcpy_extern(ctx);
+    ctx.builder
+        .build_call(memcpy, &[raw.into(), payload.into(), byte_count.into()], "")
+        .or_ice()?;
     ctx.builder.build_return(Some(&raw)).or_ice().map(|_| ())
 }
 
@@ -175,24 +262,6 @@ fn emit_null_check<'ctx>(
     ctx.builder.build_return(Some(&cmp)).or_ice().map(|_| ())
 }
 
-/// `to_string(self): String`: `self` must already point at a valid
-/// length-prefixed Koja string payload (same `[i64 bit_length]
-/// [payload]` layout as `String`). Returns a fresh, independent
-/// `String` copy rather than reinterpreting the pointer in place:
-/// the value-semantics invariant requires every call result to be
-/// owned heap, so the drop pipeline can free it without touching the
-/// caller-managed `CPtr` memory. `with_nul=true` for libc compat.
-fn emit_to_string<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-) -> Result<(), LlvmError> {
-    let self_ptr = nth_pointer(function, llvm_function, 0, "self")?;
-    let copied =
-        heap_payload::copy_heap_payload(ctx, function.symbol.mangled(), self_ptr, true, false)?;
-    ctx.builder.build_return(Some(&copied)).or_ice().map(|_| ())
-}
-
 /// `to_binary(self, len): Binary`: malloc a `[i64 bit_len][len bytes]`
 /// block and `memcpy` `len` bytes from the source pointer. Returns a
 /// pointer to the payload (`base + 8`) per the `Binary` ABI.
@@ -207,6 +276,12 @@ fn emit_to_binary<'ctx>(
 
     let src_ptr = nth_pointer(function, llvm_function, 0, "self")?;
     let byte_len = nth_int(function, llvm_function, 1, "len")?;
+    guard_nonnegative(
+        ctx,
+        llvm_function,
+        byte_len,
+        b"CPtr.to_binary length cannot be negative",
+    )?;
 
     let total = block_alloc_size(ctx, byte_len, false, "total")?;
     let malloc = declare_malloc_extern(ctx);
@@ -219,11 +294,25 @@ fn emit_to_binary<'ctx>(
         .build_int_mul(byte_len, i64_ty.const_int(8, false), "bit_len")
         .or_ice()?;
     let payload_ptr = init_heap_block(ctx, base_ptr, bit_len, "cptr_str")?;
+    let has_bytes = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::NE,
+            byte_len,
+            byte_len.get_type().const_zero(),
+            "has_bytes",
+        )
+        .or_ice()?;
+    let copy_source = ctx
+        .builder
+        .build_select(has_bytes, src_ptr, payload_ptr, "copy_source")
+        .or_ice()?
+        .into_pointer_value();
     let memcpy = declare_memcpy_extern(ctx);
     ctx.builder
         .build_call(
             memcpy,
-            &[payload_ptr.into(), src_ptr.into(), byte_len.into()],
+            &[payload_ptr.into(), copy_source.into(), byte_len.into()],
             "",
         )
         .or_ice()?;
@@ -231,6 +320,41 @@ fn emit_to_binary<'ctx>(
         .build_return(Some(&payload_ptr))
         .or_ice()
         .map(|_| ())
+}
+
+fn guard_nonnegative<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    llvm_function: FunctionValue<'ctx>,
+    value: IntValue<'ctx>,
+    message: &[u8],
+) -> Result<(), LlvmError> {
+    let negative = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::SLT,
+            value,
+            value.get_type().const_zero(),
+            "negative",
+        )
+        .or_ice()?;
+    let panic_block = ctx
+        .context
+        .append_basic_block(llvm_function, "negative_panic");
+    let valid_block = ctx.context.append_basic_block(llvm_function, "nonnegative");
+    ctx.builder
+        .build_conditional_branch(negative, panic_block, valid_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(panic_block);
+    let panic_message = emit_string_literal_payload(ctx, message, "negative_count");
+    let panic = declare_panic_extern(ctx);
+    ctx.builder
+        .build_call(panic, &[panic_message.into()], "")
+        .or_ice()?;
+    ctx.builder.build_unreachable().or_ice()?;
+
+    ctx.builder.position_at_end(valid_block);
+    Ok(())
 }
 
 fn nth_pointer<'ctx>(

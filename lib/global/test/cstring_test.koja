@@ -2,13 +2,13 @@ struct CStringTest
   @test "basic round-trip"
   fn test_round_trip -> Result<Bool, String>
     s = "hello world"
-    cs = s.to_cstring()
+    cs = s.to_cstring().unwrap()
 
     unless cs.len == 11
       return Result.Err("expected len 11, got #{cs.len}")
     end
 
-    back = cs.to_string()
+    back = cs.to_string().unwrap()
 
     unless back == s
       return Result.Err("round-trip failed: #{back}")
@@ -20,13 +20,13 @@ struct CStringTest
 
   @test "empty string"
   fn test_empty -> Result<Bool, String>
-    cs = "".to_cstring()
+    cs = "".to_cstring().unwrap()
 
     unless cs.len == 0
       return Result.Err("expected len 0")
     end
 
-    unless cs.to_string() == ""
+    unless cs.to_string().unwrap() == ""
       return Result.Err("expected empty string")
     end
 
@@ -37,13 +37,13 @@ struct CStringTest
   @test "string with special characters"
   fn test_special_chars -> Result<Bool, String>
     special = "hello\tworld\n"
-    cs = special.to_cstring()
+    cs = special.to_cstring().unwrap()
 
     unless cs.len == 12
       return Result.Err("expected len 12, got #{cs.len}")
     end
 
-    unless cs.to_string() == special
+    unless cs.to_string().unwrap() == special
       return Result.Err("round-trip failed")
     end
 
@@ -54,13 +54,13 @@ struct CStringTest
   @test "longer string"
   fn test_long_string -> Result<Bool, String>
     long = "the quick brown fox jumps over the lazy dog"
-    cs = long.to_cstring()
+    cs = long.to_cstring().unwrap()
 
     unless cs.len == 43
       return Result.Err("expected len 43, got #{cs.len}")
     end
 
-    unless cs.to_string() == long
+    unless cs.to_string().unwrap() == long
       return Result.Err("round-trip failed")
     end
 
@@ -71,7 +71,7 @@ struct CStringTest
   @test "original string unaffected after conversion"
   fn test_original_unaffected -> Result<Bool, String>
     original = "unchanged"
-    cs = original.to_cstring()
+    cs = original.to_cstring().unwrap()
 
     unless original == "unchanged"
       return Result.Err("original was modified")
@@ -79,5 +79,62 @@ struct CStringTest
 
     cs.free()
     Result.Ok(true)
+  end
+
+  @test "rejects interior NUL"
+  fn test_interior_nul -> Result<Bool, String>
+    value = <<97, 0, 98>>.to_string().unwrap()
+
+    match value.to_cstring()
+      Result.Err(CString.ConversionError.InteriorNul) -> Result.Ok(true)
+      _ -> Result.Err("expected InteriorNul")
+    end
+  end
+
+  @test "rejects invalid UTF-8"
+  fn test_invalid_utf8 -> Result<Bool, String>
+    ptr: CPtr<UInt8> = CPtr.alloc(1)
+    ptr.write(255)
+    cs = CString{ptr: ptr, len: 1}
+    converted = cs.to_string()
+    cs.free()
+
+    match converted
+      Result.Err(CString.ConversionError.InvalidUTF8) -> Result.Ok(true)
+      _ -> Result.Err("expected InvalidUTF8")
+    end
+  end
+
+  @test "rejects invalid length"
+  fn test_invalid_length -> Result<Bool, String>
+    cs = CString{ptr: CPtr.null(), len: -1}
+
+    match cs.to_string()
+      Result.Err(CString.ConversionError.InvalidLength) -> Result.Ok(true)
+      _ -> Result.Err("expected InvalidLength")
+    end
+  end
+
+  @test "rejects null pointer with nonzero length"
+  fn test_null_pointer -> Result<Bool, String>
+    cs = CString{ptr: CPtr.null(), len: 1}
+
+    match cs.to_string()
+      Result.Err(CString.ConversionError.NullPointer) -> Result.Ok(true)
+      _ -> Result.Err("expected NullPointer")
+    end
+  end
+
+  @test "accepts null pointer with zero length"
+  fn test_null_empty -> Result<Bool, String>
+    cs = CString{ptr: CPtr.null(), len: 0}
+
+    match cs.to_string()
+      Result.Err(_) ->
+        Result.Err("expected empty string")
+
+      Result.Ok(value) ->
+        value == "" ? Result.Ok(true) : Result.Err("expected empty string")
+    end
   end
 end

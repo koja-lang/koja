@@ -1,0 +1,2 @@
+ptr: CPtr<UInt8> = CPtr.null()
+ptr.to_string()

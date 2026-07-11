@@ -107,35 +107,36 @@ fn udp_loopback_send_and_recv_from() {
         alias Net.Socket.Address as SocketAddress
         alias Net.UDPSocket
 
-        fn main -> String
+        fn main -> Binary
           receiver =
             match UDPSocket.bind({port})
               Result.Ok(r) -> r
-              Result.Err(e) -> return "bind failed: " <> e.message()
+              Result.Err(_) -> return <<>>
             end
 
           sender =
             match UDPSocket.bind(0)
               Result.Ok(s) -> s
-              Result.Err(e) -> return "sender bind failed: " <> e.message()
+              Result.Err(_) -> return <<>>
             end
 
           target = SocketAddress{{ip: IPAddress.loopback(), port: {port}}}
-          match sender.send_to("datagram", target)
+          payload = <<97, 0, 98>>.to_string().unwrap()
+          match sender.send_to(payload, target)
             Result.Ok(_) -> ()
-            Result.Err(_) -> return "send_to failed"
+            Result.Err(_) -> return <<>>
           end
 
           match receiver.recv_from(64)
             Result.Ok(received) -> received.first
-            Result.Err(_) -> "recv_from failed"
+            Result.Err(_) -> <<>>
           end
         end
         "#
     ));
     assert_eq!(
         evaluate_qualified_program(&source).expect("fixture should run"),
-        Value::string(b"datagram".as_slice()),
+        Value::binary(b"a\0b".as_slice()),
     );
 }
 

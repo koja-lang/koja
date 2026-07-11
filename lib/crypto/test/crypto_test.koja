@@ -22,7 +22,7 @@ struct SHA1Test
       return Result.Err("size mismatch")
     end
 
-    unless d1.ptr().read() == d2.ptr().read()
+    unless CPtr.borrow(d1).read() == CPtr.borrow(d2).read()
       return Result.Err("first byte mismatch")
     end
 
@@ -61,7 +61,7 @@ struct SHA256Test
     ctx = ctx.update("lo".to_binary())
     d2 = ctx.finalize()
 
-    unless d1.ptr().read() == d2.ptr().read()
+    unless CPtr.borrow(d1).read() == CPtr.borrow(d2).read()
       return Result.Err("first byte mismatch")
     end
 
@@ -111,7 +111,7 @@ struct SHA384Test
     ctx = ctx.update("lo".to_binary())
     d2 = ctx.finalize()
 
-    unless d1.ptr().read() == d2.ptr().read()
+    unless CPtr.borrow(d1).read() == CPtr.borrow(d2).read()
       return Result.Err("first byte mismatch")
     end
 
@@ -150,7 +150,7 @@ struct SHA512Test
     ctx = ctx.update("lo".to_binary())
     d2 = ctx.finalize()
 
-    unless d1.ptr().read() == d2.ptr().read()
+    unless CPtr.borrow(d1).read() == CPtr.borrow(d2).read()
       return Result.Err("first byte mismatch")
     end
 

@@ -29,8 +29,16 @@ struct Fd
   Returns the data read as a string, or an error message.
   """
   fn read(self, count: Int) -> Result<String, String>
-    ptr = koja_fd_read(self.descriptor, count)
-    ptr.null?() ? Result.Err("read failed") : Result.Ok(ptr.to_string())
+    match self.read_binary(count)
+      Result.Err(error) ->
+        Result.Err(error)
+
+      Result.Ok(bytes) ->
+        match bytes.to_string()
+          Result.Err(_) -> Result.Err("read data is not valid UTF-8")
+          Result.Ok(value) -> Result.Ok(value)
+        end
+    end
   end
 
   @doc """
@@ -43,7 +51,7 @@ struct Fd
     ptr = koja_fd_read(self.descriptor, count)
     ptr.null?()
       ? Result.Err("read failed")
-      : Result.Ok(ptr.to_string().to_binary())
+      : Result.Ok(RuntimeBlock.adopt_binary(ptr))
   end
 
   @doc """
@@ -78,7 +86,11 @@ struct Fd
         s: String -> s.to_binary()
       end
 
-    result = koja_fd_write(self.descriptor, bytes.ptr(), bytes.byte_size())
+    result = koja_fd_write(
+      self.descriptor,
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+    )
     result >= 0 ? Result.Ok(result) : Result.Err("write failed")
   end
 
@@ -128,7 +140,12 @@ struct File
   Returns Ok("ok") on success or an error message.
   """
   fn delete(path: String) -> Result<String, String>
-    cs = path.to_cstring()
+    cs =
+      match path_cstring(path)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
     result = koja_file_delete(cs.ptr)
     cs.free()
     result >= 0 ? Result.Ok("ok") : Result.Err("delete failed")
@@ -138,7 +155,12 @@ struct File
   Returns true if a file exists at the given path.
   """
   fn exists?(path: String) -> Bool
-    cs = path.to_cstring()
+    cs =
+      match path_cstring(path)
+        Result.Err(_) -> return false
+        Result.Ok(value) -> value
+      end
+
     result = koja_file_exists(cs.ptr)
     cs.free()
     result == 1
@@ -160,7 +182,12 @@ struct File
         FileMode.Append -> 2
       end
 
-    cs = path.to_cstring()
+    cs =
+      match path_cstring(path)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
     fd = koja_file_open(cs.ptr, mode_int)
     cs.free()
     fd >= 0
@@ -174,10 +201,36 @@ struct File
   Returns the file contents or an error message.
   """
   fn read(path: String) -> Result<String, String>
-    cs = path.to_cstring()
+    match File.read_binary(path)
+      Result.Err(error) ->
+        Result.Err(error)
+
+      Result.Ok(bytes) ->
+        match bytes.to_string()
+          Result.Err(_) -> Result.Err("file is not valid UTF-8")
+          Result.Ok(value) -> Result.Ok(value)
+        end
+    end
+  end
+
+  @doc """
+  Reads the entire contents of a file at the given path as raw bytes.
+  """
+  fn read_binary(path: String) -> Result<Binary, String>
+    cs =
+      match path_cstring(path)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
     ptr = koja_file_read_all(cs.ptr)
     cs.free()
-    ptr.null?() ? Result.Err("read failed") : Result.Ok(ptr.to_string())
+
+    if ptr.null?()
+      Result.Err("read failed")
+    else
+      Result.Ok(RuntimeBlock.adopt_binary(ptr))
+    end
   end
 
   @doc """
@@ -185,8 +238,22 @@ struct File
   Returns Ok("ok") on success or an error message.
   """
   fn rename(source: String, destination: String) -> Result<String, String>
-    src_cs = source.to_cstring()
-    dst_cs = destination.to_cstring()
+    src_cs =
+      match path_cstring(source)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
+    dst_cs =
+      match path_cstring(destination)
+        Result.Err(error) ->
+          src_cs.free()
+          return Result.Err(error)
+
+        Result.Ok(value) ->
+          value
+      end
+
     result = koja_file_rename(src_cs.ptr, dst_cs.ptr)
     src_cs.free()
     dst_cs.free()
@@ -194,16 +261,36 @@ struct File
   end
 
   @doc """
-  Writes content to the file at the given path, creating or truncating it.
+  Writes text or raw bytes to the given path, creating or truncating it.
   Returns Ok("ok") on success or an error message.
   """
-  fn write(path: String, content: String) -> Result<String, String>
-    path_cs = path.to_cstring()
-    content_cs = content.to_cstring()
-    result = koja_file_write_all(path_cs.ptr, content_cs.ptr)
+  fn write(path: String, content: Binary | String) -> Result<String, String>
+    path_cs =
+      match path_cstring(path)
+        Result.Err(error) -> return Result.Err(error)
+        Result.Ok(value) -> value
+      end
+
+    bytes =
+      match content
+        binary: Binary -> binary
+        string: String -> string.to_binary()
+      end
+
+    result = koja_file_write_all(
+      path_cs.ptr,
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+    )
     path_cs.free()
-    content_cs.free()
     result >= 0 ? Result.Ok("ok") : Result.Err("write failed")
+  end
+
+  priv fn path_cstring(path: String) -> Result<CString, String>
+    match path.to_cstring()
+      Result.Err(_) -> Result.Err("path contains an interior NUL")
+      Result.Ok(value) -> Result.Ok(value)
+    end
   end
 
   @extern "C"
@@ -222,5 +309,9 @@ struct File
   priv fn koja_file_rename(src: CPtr<UInt8>, dst: CPtr<UInt8>) -> Int64
 
   @extern "C"
-  priv fn koja_file_write_all(path: CPtr<UInt8>, content: CPtr<UInt8>) -> Int64
+  priv fn koja_file_write_all(
+    path: CPtr<UInt8>,
+    content: CPtr<UInt8>,
+    length: Int64,
+  ) -> Int64
 end

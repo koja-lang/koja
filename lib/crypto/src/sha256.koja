@@ -9,7 +9,7 @@ struct SHA256
   """
   fn digest(data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(32)
-    sha256_raw(data.ptr(), data.byte_size(), out)
+    sha256_raw(CPtr.borrow(data), data.byte_size(), out)
     result = out.to_binary(32)
     out.free()
     result
@@ -42,7 +42,7 @@ struct SHA256
   Feeds data into the hash context.
   """
   fn update(self, data: Binary) -> Self
-    evp_digest_update(self.ctx, data.ptr(), data.byte_size())
+    evp_digest_update(self.ctx, CPtr.borrow(data), data.byte_size())
     self
   end
 
