@@ -1,0 +1,83 @@
+alias Process.CallError
+alias Process.Step
+alias Process.StopReason
+
+struct Mute
+end
+
+impl Process<(), Int, Int> for Mute
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(Mute{})
+  end
+
+  fn handle(self, msg: Int, from: Option<ReplyTo<Int>>) -> Step<Self>
+    Step.Continue(self)
+  end
+end
+
+enum ProbeMsg
+  Run
+  Tick
+end
+
+struct Probe
+end
+
+impl Process<(), ProbeMsg, Int> for Probe
+  fn start(config: ()) -> Result<Self, StopReason>
+    Result.Ok(Probe{})
+  end
+
+  fn handle(self, msg: ProbeMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match msg
+      ProbeMsg.Run ->
+        me: Ref<ProbeMsg, Int> = Ref.self_ref()
+        me.cast(ProbeMsg.Tick)
+
+        receive
+          pair: Pair<ProbeMsg, Option<ReplyTo<Int>>> ->
+            IO.puts("deadline clamp: message wins")
+        after -1
+          IO.puts("deadline clamp: wrong timeout")
+        end
+
+        receive
+          pair: Pair<ProbeMsg, Option<ReplyTo<Int>>> ->
+            IO.puts("deadline clamp: wrong message")
+        after -1
+          IO.puts("deadline clamp: receive timeout")
+        end
+
+        me.send_after(ProbeMsg.Tick, -1)
+
+        receive
+          pair: Pair<ProbeMsg, Option<ReplyTo<Int>>> ->
+            IO.puts("deadline clamp: send after")
+        after 5000
+          IO.puts("deadline clamp: send after failed")
+        end
+
+        mute = spawn Mute.start(())
+
+        match mute.call(1, -1)
+          Result.Ok(_) ->
+            IO.puts("deadline clamp: wrong reply")
+
+          Result.Err(error) ->
+            match error
+              CallError.Timeout -> IO.puts("deadline clamp: call timeout")
+              CallError.ProcessDown -> IO.puts("deadline clamp: process down")
+            end
+        end
+
+        ReplyTo.reply(from, 0)
+        Step.Done(StopReason.Normal)
+
+      ProbeMsg.Tick ->
+        Step.Continue(self)
+    end
+  end
+end
+
+probe = spawn Probe.start(())
+probe.call(ProbeMsg.Run, 5000)

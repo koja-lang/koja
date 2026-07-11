@@ -1056,6 +1056,9 @@ Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
 Koja uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are passed by value (each process receives its own copy) -- there is no shared mutable state.
 
+Process timeout and delay values are measured in milliseconds. Negative
+values behave as zero.
+
 ### `Task<R>`
 
 The simplest way to run concurrent work. Wraps a closure, runs it in a spawned process, and returns the result:

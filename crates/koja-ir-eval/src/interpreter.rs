@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use koja_ir::{
     BinaryEndian, BinarySign, BranchTarget, ConcatKind, ConstValue, EnumPayloadInit, FunctionKind,
@@ -18,7 +18,9 @@ use koja_ir::{
     IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
     ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId,
 };
-use koja_runtime_core::{CrashInfo, Driver, ExitNotice, ExitReason, Readiness, Tag};
+use koja_runtime_core::{
+    CrashInfo, Driver, ExitNotice, ExitReason, Readiness, Tag, duration_from_user_millis,
+};
 
 use crate::error::RuntimeError;
 use crate::externs;
@@ -781,7 +783,7 @@ fn execute_receive<'a, R: CallResolver>(
                         detail: format!("receive `after` expects an Int timeout, got {value}"),
                     });
                 };
-                Ok(Instant::now() + Duration::from_millis(ms.max(0) as u64))
+                Ok(Instant::now() + duration_from_user_millis(ms))
             })
             .transpose()?;
 
