@@ -178,7 +178,7 @@ struct Ref<M, R>
   Sends a message and waits up to `timeout` milliseconds for a reply.
   Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)`
   if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)`
-  if the process is no longer running.
+  if the process is no longer running. Negative timeouts behave as zero.
   """
   @intrinsic
   fn call(self, msg: M, timeout: Int) -> Result<R, Process.CallError>
@@ -205,9 +205,9 @@ struct Ref<M, R>
 
   @doc """
   Schedules a message to be delivered to the process after `delay_ms`
-  milliseconds. The message is copied immediately; delivery happens
+  milliseconds. The message is copied immediately, and delivery happens
   asynchronously when the timer fires. Useful for periodic tasks
-  and timeouts within a process loop.
+  and timeouts within a process loop. Negative delays behave as zero.
   """
   @intrinsic
   fn send_after(self, msg: M, delay_ms: Int)

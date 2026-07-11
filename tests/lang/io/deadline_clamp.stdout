@@ -1,0 +1,4 @@
+deadline clamp: message wins
+deadline clamp: receive timeout
+deadline clamp: send after
+deadline clamp: call timeout

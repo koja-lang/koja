@@ -217,24 +217,6 @@ invalid C bytes.
 
 ---
 
-## Negative process deadlines diverge across backends
-
-The process APIs accept signed `Int` values for `Ref.call` timeouts,
-`Ref.send_after` delays, and `receive after`. Eval clamps negative values
-to zero with `max(0)`. The POSIX runtime casts the same `i64` directly to
-`u64`, so `-1` becomes an effectively infinite duration.
-
-This makes a negative deadline an immediate timeout under the
-interpreter and a near-permanent block or timer under LLVM. LANGUAGE.md
-does not define negative-duration behavior.
-
-**Fix path:** choose one rule before 1.0 (reject/trap is least surprising;
-clamping is the smallest compatibility change), centralize signed
-millisecond validation in the scheduler protocol, and cover `call`,
-`send_after`, and `receive after` on both backends.
-
----
-
 ## `koja shell` project mode
 
 `koja shell` auto-loads the project in the working directory (its `src`,

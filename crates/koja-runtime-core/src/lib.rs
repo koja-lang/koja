@@ -19,6 +19,7 @@ pub mod process_table;
 pub mod protocol;
 pub mod scheduler_trace;
 pub mod timer_wheel;
+pub mod timing;
 pub mod wire;
 
 pub use driver::CooperativeDriver;
@@ -33,4 +34,5 @@ pub use protocol::{
 };
 pub use scheduler_trace::{TraceEntry, TraceEvent};
 pub use timer_wheel::TimerEntry;
+pub use timing::duration_from_user_millis;
 pub use wire::{Envelope, OwnedPayload};

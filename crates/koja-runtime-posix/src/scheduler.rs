@@ -16,7 +16,7 @@ use std::time::{Duration, Instant};
 use crossbeam_deque::{Injector, Steal, Stealer, Worker};
 use koja_runtime_core::{
     Clock, CrashInfo, Driver, Executor, ExitNotice, ExitReason, Lifecycle, Pid, Priority,
-    ProcessTable, Reclaim, SignalSource, slot_index,
+    ProcessTable, Reclaim, SignalSource, duration_from_user_millis, slot_index,
 };
 
 use crate::ffi::{fflush, koja_context_switch, koja_seed_reductions, setvbuf};
@@ -1109,7 +1109,11 @@ pub extern "C" fn koja_rt_receive_timeout(out: *mut u8, out_cap: i64, timeout_ms
             drop(guard);
             return deliver_envelope(envelope, out, out_cap);
         }
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+        let now = Instant::now();
+        let deadline = now + duration_from_user_millis(timeout_ms);
+        if deadline <= now {
+            return -1;
+        }
         guard.try_park(pid, WaitTarget::Receive, Some(deadline));
     }
 
@@ -1157,7 +1161,7 @@ pub extern "C" fn koja_rt_call_receive(
     timeout_ms: i64,
 ) -> i64 {
     let pid = CURRENT_PID.with(|c| c.get());
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
+    let deadline = Instant::now() + duration_from_user_millis(timeout_ms);
 
     loop {
         let stale = {
@@ -1340,7 +1344,7 @@ pub unsafe extern "C" fn koja_rt_send_after(
 ) {
     let envelope =
         unsafe { Envelope::from_payload(TAG_BUSINESS, msg_ptr, msg_len as usize, drop_glue) };
-    let fire_at = Instant::now() + Duration::from_millis(delay_ms as u64);
+    let fire_at = Instant::now() + duration_from_user_millis(delay_ms);
 
     {
         let mut guard = SCHED.lock().unwrap();

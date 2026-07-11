@@ -11,13 +11,13 @@
 //! the timeout fires. The rest are non-blocking deliveries that return
 //! immediately.
 
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use koja_ir::{
     IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, ProcessMethod, RefMethod,
     ReplyToMethod,
 };
-use koja_runtime_core::{Pid, Tag};
+use koja_runtime_core::{Pid, Tag, duration_from_user_millis};
 
 use super::helpers;
 use crate::error::RuntimeError;
@@ -105,7 +105,7 @@ fn send_after(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeErr
     let pid = pid_from_ref(function, args)?;
     let msg = nth(function, args, 1, "message")?;
     let delay_ms = int_arg(function, args, 2, "delay")?;
-    let fire_at = Instant::now() + Duration::from_millis(delay_ms.max(0) as u64);
+    let fire_at = Instant::now() + duration_from_user_millis(delay_ms);
     scheduler::schedule_timer(pid, fire_at, business(msg, None));
     Ok(Value::Unit)
 }
@@ -181,7 +181,7 @@ async fn call<R: CallResolver>(
         ),
     );
 
-    let deadline = Instant::now() + Duration::from_millis(timeout_ms.max(0) as u64);
+    let deadline = Instant::now() + duration_from_user_millis(timeout_ms);
     loop {
         if let Some(reply) = scheduler::take_reply(caller) {
             // Correlate by token. A mismatch is a stale reply from an
