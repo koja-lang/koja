@@ -41,6 +41,19 @@ struct BoolTest
     Result.Ok(true)
   end
 
+  @test "logical operators short-circuit"
+  fn test_short_circuit -> Result<Bool, String>
+    if false and BoolTest.panic_bool()
+      return Result.Err("false and rhs should be false")
+    end
+
+    unless true or BoolTest.panic_bool()
+      return Result.Err("true or rhs should be true")
+    end
+
+    Result.Ok(true)
+  end
+
   @test "not"
   fn test_not -> Result<Bool, String>
     unless not true == false
@@ -65,5 +78,9 @@ struct BoolTest
     end
 
     Result.Ok(true)
+  end
+
+  priv fn panic_bool -> Bool
+    Kernel.panic("short-circuited expression ran")
   end
 end

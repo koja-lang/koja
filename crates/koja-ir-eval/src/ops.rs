@@ -8,7 +8,7 @@
 //!
 //! The dispatcher [`apply_binary_op`] fans out to one helper per
 //! operator family + numeric shape (integer / float arithmetic,
-//! integer / float comparison, boolean logic, equality) so each
+//! integer / float comparison, equality) so each
 //! helper stays exhaustive over the operators it owns and panics
 //! with `unreachable!` if the dispatch ever drifts. Numeric shape
 //! (`Int` vs `Float32` / `Float64`) is decided at the
@@ -31,7 +31,6 @@ pub(crate) fn apply_binary_op(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Val
                 apply_int_arith(op, lhs, rhs)
             }
         }
-        IRBinOp::And | IRBinOp::Or => apply_bool_logic(op, lhs, rhs),
         IRBinOp::Eq | IRBinOp::NotEq => apply_equality(op, lhs, rhs),
         IRBinOp::Gt | IRBinOp::GtEq | IRBinOp::Lt | IRBinOp::LtEq => {
             if is_float(&lhs) || is_float(&rhs) {
@@ -70,20 +69,6 @@ fn apply_int_arith(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, Runtime
     checked
         .map(Value::Int)
         .ok_or(RuntimeError::IntegerOverflow { lhs: a, op, rhs: b })
-}
-
-fn apply_bool_logic(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    let (Value::Bool(a), Value::Bool(b)) = (&lhs, &rhs) else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!("{op:?} expects two Bool operands, got {lhs} and {rhs}"),
-        });
-    };
-    let result = match op {
-        IRBinOp::And => *a && *b,
-        IRBinOp::Or => *a || *b,
-        _ => unreachable!("apply_bool_logic dispatched with non-logic op {op:?}"),
-    };
-    Ok(Value::Bool(result))
 }
 
 fn apply_equality(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {

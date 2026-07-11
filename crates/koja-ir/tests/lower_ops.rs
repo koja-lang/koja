@@ -1,13 +1,10 @@
-//! Coverage for the operator + literal helpers in `src/lower/ops.rs`:
-//! `lower_literal`, `lower_bin_op`, `lower_unary_op`, and the
-//! `*_result_type` helpers (observed indirectly through the
-//! produced `IRInstruction` shape).
-//!
-//! The eager-lowering contract: both operands first, then a single
-//! `BinaryOp` / `UnaryOp` for the result.
+//! Coverage for operator lowering. Arithmetic / comparison operators
+//! produce `BinaryOp`, unary operators produce `UnaryOp`, and logical
+//! `and` / `or` produce short-circuit CFGs with a Bool merge parameter.
 
 use koja_ir::{
-    ConstValue, IRBasicBlock, IRBinOp, IRInstruction, IRScript, IRTerminator, IRUnaryOp, ValueId,
+    ConstValue, IRBasicBlock, IRBinOp, IRInstruction, IRScript, IRTerminator, IRType, IRUnaryOp,
+    ValueId,
 };
 
 mod common;
@@ -23,48 +20,108 @@ fn entry_block(script: &IRScript) -> &IRBasicBlock {
     &script.blocks[0]
 }
 
-#[test]
-fn and_lowers_to_two_consts_and_a_binary_op() {
-    let script = lower("true and false\n");
-    let block = entry_block(&script);
-    assert_eq!(
-        block.instructions,
-        vec![
-            IRInstruction::Const {
-                dest: ValueId(0),
-                value: ConstValue::Bool(true),
-            },
-            IRInstruction::Const {
-                dest: ValueId(1),
-                value: ConstValue::Bool(false),
-            },
-            IRInstruction::BinaryOp {
-                dest: ValueId(2),
-                lhs: ValueId(0),
-                op: IRBinOp::And,
-                rhs: ValueId(1),
-            },
-        ],
-    );
-    assert_eq!(
-        block.terminator,
-        IRTerminator::Return {
-            value: Some(ValueId(2)),
-        },
-    );
+fn block_by_label<'a>(script: &'a IRScript, label: &str) -> &'a IRBasicBlock {
+    script
+        .blocks
+        .iter()
+        .find(|block| block.label == label)
+        .unwrap_or_else(|| panic!("missing block `{label}` in {:?}", script.blocks))
 }
 
 #[test]
-fn or_lowers_to_ir_bin_op_or() {
-    let script = lower("true or false\n");
-    let block = entry_block(&script);
+fn and_lowers_to_short_circuit_cfg() {
+    let script = lower("true and false\n");
+    let entry = &script.blocks[0];
+    let right = block_by_label(&script, "and_right");
+    let merge = block_by_label(&script, "and_merge");
+    let IRTerminator::CondBranch {
+        cond,
+        else_target,
+        then_target,
+    } = &entry.terminator
+    else {
+        panic!("and entry should end in CondBranch: {:?}", entry.terminator);
+    };
+    assert_eq!(then_target.block, right.id);
+    assert!(then_target.args.is_empty());
+    assert_eq!(else_target.block, merge.id);
+    assert_eq!(else_target.args.len(), 1);
     assert!(matches!(
-        block.instructions.last(),
-        Some(IRInstruction::BinaryOp {
-            op: IRBinOp::Or,
-            ..
-        }),
+        entry.instructions.as_slice(),
+        [
+            IRInstruction::Const {
+                dest: left,
+                value: ConstValue::Bool(true),
+            },
+            IRInstruction::Const {
+                dest: bypass,
+                value: ConstValue::Bool(false),
+            },
+        ] if left == cond && *bypass == else_target.args[0]
     ));
+    let IRTerminator::Branch(right_exit) = &right.terminator else {
+        panic!(
+            "and right block should branch to merge: {:?}",
+            right.terminator
+        );
+    };
+    assert_eq!(right_exit.block, merge.id);
+    assert_eq!(right_exit.args.len(), 1);
+    assert_eq!(merge.params.len(), 1);
+    assert_eq!(merge.params[0].ty, IRType::Bool);
+    assert_eq!(
+        merge.terminator,
+        IRTerminator::Return {
+            value: Some(merge.params[0].dest),
+        },
+    );
+    assert!(script.blocks.iter().all(|block| {
+        !block
+            .instructions
+            .iter()
+            .any(|instruction| matches!(instruction, IRInstruction::BinaryOp { .. }))
+    }));
+}
+
+#[test]
+fn or_lowers_to_short_circuit_cfg() {
+    let script = lower("false or true\n");
+    let entry = &script.blocks[0];
+    let right = block_by_label(&script, "or_right");
+    let merge = block_by_label(&script, "or_merge");
+    let IRTerminator::CondBranch {
+        cond,
+        else_target,
+        then_target,
+    } = &entry.terminator
+    else {
+        panic!("or entry should end in CondBranch: {:?}", entry.terminator);
+    };
+    assert_eq!(else_target.block, right.id);
+    assert!(else_target.args.is_empty());
+    assert_eq!(then_target.block, merge.id);
+    assert_eq!(then_target.args.len(), 1);
+    assert!(matches!(
+        entry.instructions.as_slice(),
+        [
+            IRInstruction::Const {
+                dest: left,
+                value: ConstValue::Bool(false),
+            },
+            IRInstruction::Const {
+                dest: bypass,
+                value: ConstValue::Bool(true),
+            },
+        ] if left == cond && *bypass == then_target.args[0]
+    ));
+    assert!(matches!(right.terminator, IRTerminator::Branch(_)));
+    assert_eq!(merge.params.len(), 1);
+    assert_eq!(
+        merge.terminator,
+        IRTerminator::Return {
+            value: Some(merge.params[0].dest),
+        },
+    );
 }
 
 #[test]

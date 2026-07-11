@@ -283,13 +283,15 @@ struct Parser
   end
 
   priv fn find_crlf(input: String, pos: Int) -> Option<Int>
-    if pos + 1 >= input.length()
+    if pos >= input.length()
       return Option.None
     end
 
     ch = input.get(pos).unwrap()
 
-    if ch == "\r" and input.get(pos + 1).unwrap() == "\n"
+    if ch == "\r" and pos + 1 < input.length()
+      and input.get(pos + 1).unwrap() == "\n"
+
       return Option.Some(pos)
     end
 

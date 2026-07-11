@@ -101,15 +101,41 @@ cleanup, not an active bug.
 **Fix.** Fold both into a typed `enum EventKey { Process(Pid),
 Watch(Fd) }` resolved through a table, rather than an integer offset.
 
+### 3. Unbounded mailboxes have no backpressure
+
+**Severity: medium-high. Bug class: load-driven memory growth / latency collapse.**
+
+Each process mailbox stores system and business traffic in unbounded
+`VecDeque`s. `cast`, timers, and I/O delivery keep accepting work while a
+receiver is slow or blocked, with no capacity limit, delivery failure, or
+mailbox-depth API. Because process boundaries deep-copy eagerly, every
+queued message has already paid its allocation and copy cost.
+
+This is not an ownership leak: draining or killing the process reclaims
+the envelopes correctly. It is demand-driven retention, so the existing
+steady-state live-block tests do not catch it. A producer that outruns a
+consumer can still grow RSS until the OS kills the program.
+
+**Fix.** Decide the backpressure contract before calling the runtime
+production-ready. At minimum expose mailbox message/byte depth and
+high-water counters so overload is observable. A bounded design must
+also define what non-blocking `cast`, timer, lifecycle, monitor, and I/O
+delivery do at capacity; likely system traffic needs a reserved lane,
+while business delivery returns an explicit accepted/rejected result or
+uses a process-configured overflow policy. Add a slow-consumer stress
+fixture that proves the selected bound and reclaim behavior on both
+adapters.
+
 ---
 
 ## Launch priority
 
-No open entry is a launch blocker. With the owned-temporary /
-construction leak now fixed, the unbounded-memory class is closed, and
-everything that remains is a robustness/coverage cleanup — **#1**
-(`loom`) and **#2** (typed `EventKey`) — that can land after a soft
-launch. The one-time fairness gap (preemption points covering only
-loops and tail calls, letting deep non-tail recursion monopolize a
-worker) is now closed: a `YieldCheck` sits at the entry of every
-call-containing function, lowered to an inline reduction decrement.
+No open entry blocks an experimental soft launch. The ownership-leak
+class is closed; **#1** (`loom`) and **#2** (typed `EventKey`) are
+robustness/coverage cleanups. **#3** (mailbox backpressure) should gate a
+production-ready claim unless the unbounded behavior is explicitly
+documented and instrumented first. The one-time fairness gap (preemption
+points covering only loops and tail calls, letting deep non-tail
+recursion monopolize a worker) is now closed: a `YieldCheck` sits at the
+entry of every call-containing function, lowered to an inline reduction
+decrement.

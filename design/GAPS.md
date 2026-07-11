@@ -111,39 +111,6 @@ only the uppercase path form.
 
 ---
 
-## `and` / `or` do not short-circuit
-
-Both operands of `and` and `or` are always evaluated. `lower_bin_op` in
-`koja-ir/src/lower/ops.rs` maps them to strict `IRBinOp::And` / `Or`,
-plain binary ops over two already-computed `Bool`s, identical on both
-backends. LANGUAGE.md does not document the evaluation order either way.
-
-This makes the universal guard idiom a runtime trap:
-
-```koja
-if i < self.size and self.byte(i) == BYTE_QUOTE   # panics past end of input
-```
-
-Every mainstream comparison point (Rust, Ruby, Elixir, Python, Go, Swift)
-short-circuits, so users will write this, it compiles, and it faults at
-runtime. Stdlib code works around it with nested `if` guards or
-bounds-checked helpers (see `peek?` / `digit_at?` in
-`lib/json/src/decoder.koja`, added 2026-07-09 for exactly this reason).
-
-**Fix path (assessed 2026-07-09):** confined to IR lowering. Lower
-`a and b` as control flow, the moral equivalent of `if a then b else
-false` (mirror for `or`), so both backends inherit the semantics from the
-lowered shape. The block-and-merge machinery already exists. Pattern
-match chains do the same thing via `ChainMode::And`. Parser, typecheck,
-formatter, and precedence are untouched. LLVM folds the branch back into
-branchless `and` when the right side is cheap and pure, so there is no
-performance regression for the common case. The change is observable only
-when the right operand panics or performs effects, which is the behavior
-being fixed. Land with a LANGUAGE.md paragraph pinning left-to-right,
-short-circuit evaluation and golden tests covering both backends.
-
----
-
 ## Arithmetic fault semantics undefined (ArithmeticError)
 
 Investigated 2026-06-10. The fault behavior of `+ - * / %` and unary
@@ -179,11 +146,10 @@ in, non-finite values out -- a format/parse round-trip asymmetry.
   can never reach comparisons, so the ordered-predicate semantics
   stay as-is.
 - The trap mechanism must be a panic: binops return bare values, so
-  there is no `Result` to thread an error through. Note panics
-  currently abort the whole OS process (`__koja_panic` ->
-  `process::abort()`); per-process isolation with
-  `ExitReason.Crashed` supervision is its own unimplemented gap, and
-  `ArithmeticError` inherits whatever that lands on.
+  there is no `Result` to thread an error through. User panics now
+  unwind only the current process into `ExitReason.Crashed`; a PID 1
+  panic exits the OS process non-zero. `ArithmeticError` should use
+  that same path.
 - LLVM-side shape: a shared guard helper in `emit/ops.rs` -- compare
   (or `llvm.*.with.overflow`), `build_conditional_branch` to a panic
   block calling `__koja_panic` with a constant message, mirroring the
@@ -202,6 +168,105 @@ in, non-finite values out -- a format/parse round-trip asymmetry.
 3. Whether a float literal that overflows `f64` (`1e999` in source)
    should be a compile-time `OutOfRange` diagnostic to match the
    parse behavior.
+
+Reconfirmed 2026-07-10 with executable scripts: `Int.max + 1` traps in
+eval but wraps to `Int.min` under LLVM, while `1 / 0` traps in eval but
+returned `0` in the tested arm64 LLVM build. The latter is one possible
+manifestation of LLVM UB, not a stable result.
+
+**Bit-shift extension (found 2026-07-10):** `Bitwise.bsl` / `bsr` also
+lack fault semantics. Typecheck accepts negative and width-sized counts;
+eval uses Rust's `wrapping_shl` / `wrapping_shr`, while LLVM emits a raw
+shift whose out-of-range count is poison. A repro using `1.bsl(64)` and
+`1.bsl(-1)` appeared hardware-masked in eval and debug LLVM, then
+produced unrelated values under release LLVM. Define whether counts
+trap, mask, or saturate, enforce the same rule in both backends, and add
+release-mode parity coverage.
+
+---
+
+## Nested enum patterns overstate `match` exhaustiveness
+
+`resolve_enum_tuple_pattern` and `resolve_enum_struct_pattern` record
+the outer enum variant as covered even when a nested payload pattern is
+partial. The `full` bit on `VariantWitness` is retained for reachability,
+but `diagnose_missing_enum_variants` only sees the outer tags.
+
+As a result, this compiles as exhaustive:
+
+```koja
+color: Option<Color> = Option.Some(Color.Green)
+
+match color
+  Option.Some(Color.Red) -> "red"
+  Option.None -> "none"
+end
+```
+
+Confirmed 2026-07-10 on both backends: `Some(Green)` reaches the
+supposedly unreachable failure edge. Eval reports
+`IRTerminator::Unreachable`; LLVM exits non-zero without a diagnostic.
+This violates the exhaustiveness guarantee and is a correctness bug,
+not merely a conservative-analysis limitation.
+
+**Workaround:** add a catch-all payload arm such as `Option.Some(_)`, or
+bind the payload and perform a second exhaustive `match`.
+
+**Fix path:** until a full pattern-matrix algorithm lands, count an
+outer variant toward exhaustiveness only when its witness is `full`.
+That may conservatively reject multiple partial arms that jointly cover
+the payload, but it cannot accept a missing case. Add compile-fail and
+runtime regression fixtures for tuple and struct payloads.
+
+---
+
+## `String` representation violates UTF-8 and backend parity
+
+`String` is specified as length-bearing UTF-8, but several native
+operations treat its payload as a C string. `String.eq` delegates to
+`strcmp`, while native `length`, `get`, `slice`, and numeric parsing
+construct a `CStr`; all stop at the first NUL. Eval uses the complete
+byte payload.
+
+Embedded NUL is valid UTF-8 and is constructible without FFI through
+`Binary.to_string`. Confirmed 2026-07-10:
+
+- `<<97, 0, 98>>.to_string().unwrap()` and
+  `<<97, 0, 99>>.to_string().unwrap()` compare unequal in eval but equal
+  under LLVM.
+- Eval reports `length() == 3`; LLVM reports `length() == 1`; both
+  report `byte_length() == 3`.
+
+There is a second invariant breach at the FFI boundary:
+`CString.to_string() -> String` copies bytes without UTF-8 validation.
+With a one-byte `0xff` CString, eval rejects `String.length` as invalid
+UTF-8 while native code lossily decodes it and returns `1`.
+
+**Fix path:** make every native `String` operation use the bit-length
+header rather than NUL termination, and validate with strict UTF-8
+rather than `from_utf8_lossy`. Change `CString.to_string` to a checked
+conversion (matching `Binary.to_string`) or otherwise prevent invalid
+bytes from inhabiting `String`. `String.to_cstring` must also define how
+interior NUL is handled. Add dual-backend fixtures for embedded NUL and
+invalid C bytes.
+
+---
+
+## Negative process deadlines diverge across backends
+
+The process APIs accept signed `Int` values for `Ref.call` timeouts,
+`Ref.send_after` delays, and `receive after`. Eval clamps negative values
+to zero with `max(0)`. The POSIX runtime casts the same `i64` directly to
+`u64`, so `-1` becomes an effectively infinite duration.
+
+This makes a negative deadline an immediate timeout under the
+interpreter and a near-permanent block or timer under LLVM. LANGUAGE.md
+does not define negative-duration behavior.
+
+**Fix path:** choose one rule before 1.0 (reject/trap is least surprising;
+clamping is the smallest compatibility change), centralize signed
+millisecond validation in the scheduler protocol, and cover `call`,
+`send_after`, and `receive after` on both backends.
 
 ---
 

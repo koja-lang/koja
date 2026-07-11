@@ -26,7 +26,8 @@ use super::calls::{MethodCallShape, lower_call, lower_method_call};
 use super::closures::{lower_block_closure, lower_short_closure, synthesize_fn_as_closure_wrapper};
 use super::constants::{constant_value_from_registry, pools_in_constant_pool};
 use super::control_flow::{
-    CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_ternary, lower_unless,
+    CondLowering, IfLowering, TernaryLowering, lower_cond, lower_if, lower_short_circuit,
+    lower_ternary, lower_unless,
 };
 use super::ctx::{FnLowerCtx, LowerOutput};
 use super::enums::lower_enum_construction;
@@ -132,6 +133,9 @@ fn lower_expr_inner(
 ) -> Result<(ValueId, IRBlockId), ()> {
     match &expr.kind {
         ExprKind::Binary { op, left, right } => {
+            if matches!(op, BinOp::And | BinOp::Or) {
+                return lower_short_circuit(*op, left, right, ctx, block, registry, output);
+            }
             let (lhs, block) = lower_expr(left, ctx, block, registry, output)?;
             let (rhs, block) = lower_expr(right, ctx, block, registry, output)?;
             if matches!(op, BinOp::Concat) {

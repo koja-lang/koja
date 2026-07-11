@@ -52,7 +52,6 @@ fn emit_int_binary_op<'ctx>(
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let result: IntValue<'ctx> = match op {
         IRBinOp::Add => ctx.builder.build_int_add(lhs, rhs, "add"),
-        IRBinOp::And => ctx.builder.build_and(lhs, rhs, "and"),
         IRBinOp::Div => ctx.builder.build_int_signed_div(lhs, rhs, "div"),
         IRBinOp::Eq => ctx
             .builder
@@ -74,18 +73,15 @@ fn emit_int_binary_op<'ctx>(
         IRBinOp::NotEq => ctx
             .builder
             .build_int_compare(IntPredicate::NE, lhs, rhs, "neq"),
-        IRBinOp::Or => ctx.builder.build_or(lhs, rhs, "or"),
         IRBinOp::Sub => ctx.builder.build_int_sub(lhs, rhs, "sub"),
     }
     .or_ice()?;
     Ok(result.into())
 }
 
-/// Float arithmetic + comparisons. `And` / `Or` reject because
-/// typecheck keeps Bool-only logic away from this seam. Comparisons use
-/// **ordered** predicates (`OEQ`/`OLT`/etc.) so `NaN`-on-either-side
-/// returns `false`, matching the `koja-ir-eval` interpreter
-/// and v1 codegen.
+/// Float arithmetic + comparisons. Comparisons use **ordered**
+/// predicates (`OEQ`/`OLT`/etc.) so `NaN`-on-either-side returns
+/// `false`, matching the `koja-ir-eval` interpreter and v1 codegen.
 fn emit_float_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
     op: IRBinOp,
@@ -128,10 +124,6 @@ fn emit_float_binary_op<'ctx>(
             .build_float_compare(float_predicate(op), lhs, rhs, "fcmp")
             .or_ice()
             .map(Into::into),
-        IRBinOp::And | IRBinOp::Or => Err(LlvmError::Codegen(format!(
-            "LLVM emit: `{op:?}` is Bool-only, float operands should never reach this \
-             path (typecheck violation)",
-        ))),
     }
 }
 

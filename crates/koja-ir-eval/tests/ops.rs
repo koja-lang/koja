@@ -1,12 +1,10 @@
-//! End-to-end coverage for the operator math in `src/ops.rs`:
-//! `apply_binary_op` (`and`, `or`, `==`, `!=`, `<`, `>`, `<=`, `>=`)
-//! and `apply_unary_op` (`not`, unary `-`).
+//! End-to-end coverage for operators: short-circuit `and` / `or`,
+//! `apply_binary_op` (`==`, `!=`, `<`, `>`, `<=`, `>=`), and
+//! `apply_unary_op` (`not`, unary `-`).
 //!
-//! Eager semantics: both sides always evaluated; result produced by
-//! a single `BinaryOp` / `UnaryOp` instruction. Source-driven (parse
-//! -> check -> lower -> run) so the tests stay faithful to the IR
-//! shape lowering produces; the helpers themselves never see anything
-//! but pre-resolved [`Value`] operands.
+//! Source-driven (parse -> check -> lower -> run) so the tests stay
+//! faithful to the control flow and IR instruction shapes lowering
+//! produces.
 
 use koja_ir_eval::Value;
 
@@ -15,7 +13,7 @@ mod common;
 use common::evaluate_script;
 
 #[test]
-fn logical_and_evaluates_eagerly() {
+fn logical_and_returns_bool() {
     assert_eq!(
         evaluate_script("true and false\n").unwrap(),
         Value::Bool(false),
@@ -27,13 +25,26 @@ fn logical_and_evaluates_eagerly() {
 }
 
 #[test]
-fn logical_or_evaluates_eagerly() {
+fn logical_or_returns_bool() {
     assert_eq!(
         evaluate_script("false or false\n").unwrap(),
         Value::Bool(false),
     );
     assert_eq!(
         evaluate_script("true or false\n").unwrap(),
+        Value::Bool(true),
+    );
+}
+
+#[test]
+fn logical_rhs_panics_are_skipped() {
+    let setup = "items: List<Int> = []\n";
+    assert_eq!(
+        evaluate_script(&format!("{setup}false and items.get(0).unwrap() == 1\n")).unwrap(),
+        Value::Bool(false),
+    );
+    assert_eq!(
+        evaluate_script(&format!("{setup}true or items.get(0).unwrap() == 1\n")).unwrap(),
         Value::Bool(true),
     );
 }

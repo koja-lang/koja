@@ -66,6 +66,10 @@ Precedence from lowest to highest:
 | 7          | `-` (unary negation)        |
 | 8          | `.field` `.fn()` `()`       |
 
+`and` and `or` evaluate left to right and short-circuit. `a and b`
+evaluates `b` only when `a` is `true`. `a or b` evaluates `b` only when
+`a` is `false`. Both operands are still typechecked as `Bool`.
+
 `<>` concatenates `String`, `Binary`, and `Bits` values. Both operands must be the same type -- no cross-type mixing.
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
