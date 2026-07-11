@@ -45,6 +45,25 @@ end
 
 extend CPtr<UInt8>
   @doc """
+  Borrows a pointer to the payload of `bytes` for the current statement.
+
+  The result cannot be bound to a variable, returned, or stored. It may
+  only be consumed within the statement that borrows it, where `bytes`
+  is guaranteed to be live. Use `copy` for an owned pointer.
+  """
+  @intrinsic
+  fn borrow(bytes: Binary) -> CPtr<UInt8>
+
+  @doc """
+  Copies the payload of `bytes` into a freshly malloc'd buffer.
+
+  The caller owns the returned pointer and must release it with `free`.
+  Use this when a C API retains the pointer past the call.
+  """
+  @intrinsic
+  fn copy(bytes: Binary) -> CPtr<UInt8>
+
+  @doc """
   Creates a `Binary` by copying `len` bytes from this pointer.
 
   The caller retains ownership of the pointer. Panics when `len` is negative.

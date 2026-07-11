@@ -1,5 +1,5 @@
-//! `CPtr<T>` family: `alloc`, `free`, `null`, `null?`, `offset`,
-//! `read`, `to_binary`, `write`.
+//! `CPtr<T>` family: `alloc`, `borrow`, `copy`, `free`, `null`,
+//! `null?`, `offset`, `read`, `to_binary`, `write`.
 //!
 //! Eval now backs `CPtr<T>` with a real raw pointer ([`Value::CPtr`])
 //! so the shell can exercise the same FFI paths the LLVM backend
@@ -34,6 +34,8 @@ pub(super) fn dispatch(
 ) -> Result<Value, RuntimeError> {
     match method {
         CPtrMethod::Alloc => alloc(function, args),
+        CPtrMethod::Borrow => borrow(args),
+        CPtrMethod::Copy => copy(args),
         CPtrMethod::Free => free_(args),
         CPtrMethod::Null => null(),
         CPtrMethod::NullQ => null_q(args),
@@ -69,6 +71,31 @@ fn alloc(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
     } else {
         unsafe { malloc(total) }
     };
+    Ok(Value::CPtr(ptr))
+}
+
+fn borrow(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!("CPtr.borrow expects a single Binary argument, got {args:?}"),
+        });
+    };
+    // The caller's frame local keeps the `Rc` alive through the
+    // statement, matching the position check's in-statement contract.
+    Ok(Value::CPtr(bytes.as_ptr() as *mut u8))
+}
+
+fn copy(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Binary(bytes)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!("CPtr.copy expects a single Binary argument, got {args:?}"),
+        });
+    };
+    if bytes.is_empty() {
+        return Ok(Value::CPtr(ptr::null_mut()));
+    }
+    let ptr = unsafe { malloc(bytes.len()) };
+    unsafe { ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len()) };
     Ok(Value::CPtr(ptr))
 }
 

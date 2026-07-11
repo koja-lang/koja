@@ -9,7 +9,7 @@ struct SHA512
   """
   fn digest(data: Binary) -> Binary
     out: CPtr<UInt8> = CPtr.alloc(64)
-    sha512_raw(data.ptr(), data.byte_size(), out)
+    sha512_raw(CPtr.borrow(data), data.byte_size(), out)
     result = out.to_binary(64)
     out.free()
     result
@@ -42,7 +42,7 @@ struct SHA512
   Feeds data into the hash context.
   """
   fn update(self, data: Binary) -> Self
-    evp_digest_update(self.ctx, data.ptr(), data.byte_size())
+    evp_digest_update(self.ctx, CPtr.borrow(data), data.byte_size())
     self
   end
 

@@ -292,6 +292,7 @@ pub(super) fn infer_method_call_type_args(
         method.type_params.len(),
     );
     seed_receiver_subst(&mut subst, receiver.id, receiver_type, registry);
+    seed_impl_args_subst(&mut subst, receiver.id, &sig.impl_args, registry);
     // Mirror `infer_call_type_args`'s speculative pre-seed: lets
     // binding annotations pin sized-numeric type params before
     // arg-driven default-literal types lock in.
@@ -380,6 +381,30 @@ pub(super) fn seed_receiver_subst(
     let ResolvedType::Named { type_args, .. } = receiver_type else {
         return;
     };
+    seed_receiver_args(subst, receiver_id, type_args, registry);
+}
+
+/// Seed the receiver scope from a method's concrete `impl_args`
+/// pinning. A method declared in `extend CPtr<UInt8>` only exists for
+/// `T = UInt8`, so statics whose signatures never mention `T` (e.g.
+/// `CPtr.borrow(bytes: Binary)`) still infer cleanly. Conflicts with
+/// an already-seeded receiver slot are ignored here because the
+/// extend-domain check downstream owns that diagnostic.
+pub(super) fn seed_impl_args_subst(
+    subst: &mut Substitution,
+    receiver_id: GlobalRegistryId,
+    impl_args: &[ResolvedType],
+    registry: &GlobalRegistry,
+) {
+    seed_receiver_args(subst, receiver_id, impl_args, registry);
+}
+
+fn seed_receiver_args(
+    subst: &mut Substitution,
+    receiver_id: GlobalRegistryId,
+    type_args: &[ResolvedType],
+    registry: &GlobalRegistry,
+) {
     for (index, arg) in type_args.iter().enumerate() {
         if arg.is_resolved() {
             let _ = subst.set(

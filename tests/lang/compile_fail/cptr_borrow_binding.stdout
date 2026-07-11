@@ -1,0 +1,1 @@
+a borrowed pointer cannot be bound to `p`: it is only valid within the statement that borrows it. Pass it directly to a call, or use `CPtr.copy(...)` for an owned copy

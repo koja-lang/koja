@@ -86,7 +86,11 @@ struct Fd
         s: String -> s.to_binary()
       end
 
-    result = koja_fd_write(self.descriptor, bytes.ptr(), bytes.byte_size())
+    result = koja_fd_write(
+      self.descriptor,
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+    )
     result >= 0 ? Result.Ok(result) : Result.Err("write failed")
   end
 
@@ -273,7 +277,11 @@ struct File
         string: String -> string.to_binary()
       end
 
-    result = koja_file_write_all(path_cs.ptr, bytes.ptr(), bytes.byte_size())
+    result = koja_file_write_all(
+      path_cs.ptr,
+      CPtr.borrow(bytes),
+      bytes.byte_size(),
+    )
     path_cs.free()
     result >= 0 ? Result.Ok("ok") : Result.Err("write failed")
   end

@@ -64,8 +64,8 @@ struct PgIO
   fn split_at(data: Binary, n: Int) -> Pair<Binary, Binary>
     size = data.byte_size()
     head_len = n > size ? size : n
-    head = data.ptr().to_binary(head_len)
-    tail = data.ptr().offset(head_len).to_binary(size - head_len)
+    head = CPtr.borrow(data).to_binary(head_len)
+    tail = CPtr.borrow(data).offset(head_len).to_binary(size - head_len)
     Pair{first: head, second: tail}
   end
 

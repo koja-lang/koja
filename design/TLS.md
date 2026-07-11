@@ -262,7 +262,7 @@ Server-side handshake:
 #### `TLS.write(ssl, fd, data) -> Result<Int, String>`
 
 1. Convert `String` data to `Binary`; preserve existing `Binary` data.
-2. Loop: call `ssl_write(ssl, bytes.ptr(), bytes.byte_size())`.
+2. Loop: call `ssl_write(ssl, CPtr.borrow(bytes), bytes.byte_size())`.
    - `ret > 0`: return `Ok(ret)`.
    - Error: same retry pattern.
 

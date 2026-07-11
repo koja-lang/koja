@@ -1580,7 +1580,6 @@ Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns t
 
 - `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
 - `byte_size(self) -> Int` -- returns the number of bytes.
-- `ptr(self) -> CPtr<UInt8>` -- borrows a raw pointer to the underlying byte data. The `Binary` must remain live while C uses the pointer.
 - `slice(self, range: Range) -> Binary` -- copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
 - `to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
 - `to_string(self) -> Result<String, String.ConversionError>` -- attempts to interpret bytes as UTF-8, returning `InvalidUTF8` when decoding fails.
@@ -1906,6 +1905,19 @@ null_ptr.null?().print()
 
 Type annotations on the variable drive generic inference for static methods like `CPtr.alloc()` and `CPtr.null()`.
 
+`CPtr<UInt8>` additionally provides the two ways to get a pointer to a `Binary`'s bytes:
+
+- `CPtr.borrow(bytes: Binary) -> CPtr<UInt8>` -- zero-cost view of the binary's payload. The result cannot be bound to a variable, returned, or stored; it may only be consumed within the statement that borrows it (as a call argument or chained receiver), where the source `Binary` is guaranteed to be live.
+- `CPtr.copy(bytes: Binary) -> CPtr<UInt8>` -- malloc'd owned copy of the bytes. Nameable like any value; the caller frees it. Use this when a C API retains the pointer past the call.
+
+```koja
+digest = CPtr.alloc(32)
+FFI.blake3_hash(CPtr.borrow(data), data.byte_size(), digest)  # fine
+
+p = CPtr.borrow(data)  # compile error: a borrowed pointer cannot be bound
+owned = CPtr.copy(data)  # owned copy, free it when C is done
+```
+
 ### `CString`
 
 A pointer-and-length descriptor for a null-terminated C string. It does
@@ -1974,6 +1986,14 @@ cs = "hello".to_cstring().unwrap()
 FFI.some_c_function(cs.ptr, cs.len)
 cs.free()
 ```
+
+For byte-accepting C functions, borrow a pointer to the `Binary` at the call site:
+
+```koja
+FFI.consume_bytes(CPtr.borrow(data), data.byte_size())
+```
+
+Pointers passed to C are valid for the duration of the call. A C function that keeps the pointer past the call needs `CPtr.copy` (an owned copy the caller frees).
 
 ---
 

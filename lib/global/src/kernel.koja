@@ -104,13 +104,6 @@ extend Binary
   fn byte_size(self) -> Int
 
   @doc """
-  Borrows a raw pointer to the underlying byte data. The `Binary` must
-  remain live and immutable while the pointer is in use.
-  """
-  @intrinsic
-  fn ptr(self) -> CPtr<UInt8>
-
-  @doc """
   Returns a new binary spanning the inclusive byte range
   `[range.start, range.stop]`. Endpoints clamp to the binary's bounds.
   """

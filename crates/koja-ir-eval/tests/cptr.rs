@@ -105,16 +105,46 @@ fn cptr_write_then_read_round_trips_a_byte() {
 }
 
 #[test]
-fn binary_ptr_borrows_underlying_bytes() {
+fn cptr_borrow_reads_underlying_bytes_in_statement() {
+    // `CPtr.borrow` results cannot be bound, so consumption happens
+    // within the borrowing statement (chained receiver position).
     let outcome = evaluate_script(&dedent(
         r#"
         bytes: Binary = <<10, 20>>
-        ptr = bytes.ptr()
-        ptr.offset(1).read()
+        CPtr.borrow(bytes).offset(1).read()
         "#,
     ))
-    .expect("Binary.ptr should borrow readable bytes");
+    .expect("CPtr.borrow should view readable bytes");
     assert_eq!(outcome, Value::Int(20));
+}
+
+#[test]
+fn cptr_copy_is_independent_and_nameable() {
+    // `CPtr.copy` mallocs an owned copy. Bind it, read through it,
+    // free it, and confirm the source Binary is untouched.
+    let outcome = evaluate_script(&dedent(
+        r#"
+        bytes: Binary = <<10, 20>>
+        owned = CPtr.copy(bytes)
+        first = owned.read()
+        owned.free()
+        first == 10 and bytes.byte_size() == 2
+        "#,
+    ))
+    .expect("CPtr.copy chain should evaluate cleanly");
+    assert_eq!(outcome, Value::Bool(true));
+}
+
+#[test]
+fn cptr_copy_of_empty_binary_is_null() {
+    let outcome = evaluate_script(&dedent(
+        r#"
+        bytes: Binary = <<>>
+        CPtr.copy(bytes).null?()
+        "#,
+    ))
+    .expect("CPtr.copy of an empty Binary should evaluate");
+    assert_eq!(outcome, Value::Bool(true));
 }
 
 #[test]

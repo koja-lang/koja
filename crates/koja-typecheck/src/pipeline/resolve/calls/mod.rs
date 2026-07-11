@@ -34,7 +34,7 @@ use bounded::{BoundedCall, resolve_bounded_method_call};
 use methods::{
     MethodInferenceOutputs, MethodInferenceTarget, MethodReceiver, classify_receiver,
     dispatch_mismatch_message, function_signature, infer_method_call_type_args,
-    method_lookup_message, seed_receiver_subst,
+    method_lookup_message, seed_impl_args_subst, seed_receiver_subst,
 };
 
 use crate::pipeline::unify::{Conflict, Substitution, substitute};
@@ -516,6 +516,12 @@ pub(super) fn resolve_method_call(
         &receiver.resolution,
         resolver.registry,
     );
+    seed_impl_args_subst(
+        &mut hint_subst,
+        receiver_callee.id,
+        &sig.impl_args,
+        resolver.registry,
+    );
     if let Some(hint) = expected {
         fill_from_expected(&sig.return_type, hint, &mut hint_subst, resolver.registry);
     }
@@ -536,6 +542,12 @@ pub(super) fn resolve_method_call(
         &mut partial_subst,
         receiver_callee.id,
         &receiver.resolution,
+        resolver.registry,
+    );
+    seed_impl_args_subst(
+        &mut partial_subst,
+        receiver_callee.id,
+        &sig.impl_args,
         resolver.registry,
     );
     let explicit = method_receiver.explicit_params(&sig.params);

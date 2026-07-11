@@ -82,7 +82,7 @@ struct Socket
   fn bind(self, addr: SocketAddress) -> Result<Socket, String>
     result = koja_socket_bind(
       self.fd.descriptor,
-      addr.ip.bytes.ptr(),
+      CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
     )
@@ -102,7 +102,7 @@ struct Socket
   fn connect(self, addr: SocketAddress) -> Result<Socket, String>
     result = koja_socket_connect(
       self.fd.descriptor,
-      addr.ip.bytes.ptr(),
+      CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
     )
@@ -161,9 +161,9 @@ struct Socket
 
     result = koja_socket_send_to(
       self.fd.descriptor,
-      bytes.ptr(),
+      CPtr.borrow(bytes),
       bytes.byte_size(),
-      addr.ip.bytes.ptr(),
+      CPtr.borrow(addr.ip.bytes),
       addr.ip.bytes.byte_size(),
       addr.port,
     )

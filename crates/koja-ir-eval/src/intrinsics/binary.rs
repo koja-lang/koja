@@ -3,8 +3,6 @@
 //! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
 //!   Out-of-bounds indices return `None`.
 //! - `Binary.byte_size(self) -> Int`: `bytes.len()`.
-//! - `Binary.ptr(self) -> CPtr<UInt8>`: borrows the immutable byte
-//!   payload. The Binary must remain live while C uses the pointer.
 //! - `Binary.slice(self, range: Range) -> Binary`: copies the
 //!   inclusive byte range `[start, stop]`. Endpoints clamp to the
 //!   binary's bounds.
@@ -35,7 +33,6 @@ pub(super) fn binary<R: CallResolver>(
     match method {
         BinaryMethod::At => at(function, args),
         BinaryMethod::ByteSize => byte_size(args),
-        BinaryMethod::Ptr => ptr_(args),
         BinaryMethod::Slice => slice(args),
         BinaryMethod::ToBits => to_bits(args),
         BinaryMethod::ToString => to_string(function, args, resolver),
@@ -99,18 +96,6 @@ fn byte_size(args: &[Value]) -> Result<Value, RuntimeError> {
         });
     };
     Ok(Value::Int(bytes.len() as i64))
-}
-
-fn ptr_(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Binary(bytes)] = args else {
-        return Err(RuntimeError::TypeMismatch {
-            detail: format!(
-                "Binary.ptr expects a single Binary argument, got {} arg(s): {args:?}",
-                args.len(),
-            ),
-        });
-    };
-    Ok(Value::CPtr(bytes.as_ptr().cast_mut()))
 }
 
 fn to_bits(args: &[Value]) -> Result<Value, RuntimeError> {

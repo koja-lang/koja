@@ -490,7 +490,7 @@ struct TLSSession
 
   priv fn load_ca_pem(ctx: CPtr<UInt8>, pem: String) -> Result<Bool, TLSError>
     bytes = pem.to_binary()
-    bio = bio_new_mem_buf(bytes.ptr(), bytes.byte_size())
+    bio = bio_new_mem_buf(CPtr.borrow(bytes), bytes.byte_size())
 
     if bio.null?()
       return Result.Err(TLSError.Internal)
@@ -573,7 +573,7 @@ struct TLSSession
     -> Result<Bool, TLSError>
 
     bytes = pem.to_binary()
-    bio = bio_new_mem_buf(bytes.ptr(), bytes.byte_size())
+    bio = bio_new_mem_buf(CPtr.borrow(bytes), bytes.byte_size())
 
     if bio.null?()
       return Result.Err(TLSError.Internal)
@@ -605,7 +605,7 @@ struct TLSSession
     -> Result<Bool, TLSError>
 
     bytes = pem.to_binary()
-    bio = bio_new_mem_buf(bytes.ptr(), bytes.byte_size())
+    bio = bio_new_mem_buf(CPtr.borrow(bytes), bytes.byte_size())
 
     if bio.null?()
       return Result.Err(TLSError.Internal)
@@ -628,7 +628,7 @@ struct TLSSession
   priv fn write_loop(ssl: CPtr<UInt8>, fd: Fd, bytes: Binary)
     -> Result<Int, SocketError | TLSError>
 
-    ret: Int = ssl_write(ssl, bytes.ptr(), bytes.byte_size())
+    ret: Int = ssl_write(ssl, CPtr.borrow(bytes), bytes.byte_size())
 
     if ret > 0
       return Result.Ok(ret)

@@ -10,8 +10,9 @@
 //! Bodies are inline LLVM IR: `null` returns `null`, `alloc` calls
 //! `malloc(count * sizeof(T))`, `free` calls libc `free`, `offset`
 //! issues a typed GEP, `read` / `write` load / store at the typed
-//! pointer, `null?` compares against `null`, and `to_binary` copies
-//! `len` bytes into a managed Binary.
+//! pointer, `null?` compares against `null`, `to_binary` copies
+//! `len` bytes into a managed Binary, `borrow` returns a Binary's
+//! payload pointer as-is, and `copy` mallocs an owned byte copy.
 
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
@@ -22,7 +23,7 @@ use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
 use crate::emit::constants::emit_string_literal_payload;
-use crate::emit::heap_layout::{block_alloc_size, init_heap_block};
+use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
 use crate::error::{IceExt, LlvmError};
 use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_panic_extern};
 use crate::types::ir_basic_type;
@@ -38,6 +39,8 @@ pub(super) fn emit_cptr<'ctx>(
 
     match method {
         CPtrMethod::Alloc => emit_alloc(ctx, function, llvm_function),
+        CPtrMethod::Borrow => emit_borrow(ctx, function, llvm_function),
+        CPtrMethod::Copy => emit_copy(ctx, function, llvm_function),
         CPtrMethod::Free => emit_free(ctx, function, llvm_function),
         CPtrMethod::Null => emit_null(ctx),
         CPtrMethod::NullQ => emit_null_check(ctx, function, llvm_function),
@@ -120,6 +123,67 @@ fn emit_alloc<'ctx>(
     ctx.builder.position_at_end(allocate_block);
     let malloc = declare_malloc_extern(ctx);
     let raw = ctx.call_basic(malloc, &[total.into()], "alloc_ptr")?;
+    ctx.builder.build_return(Some(&raw)).or_ice().map(|_| ())
+}
+
+/// `borrow(bytes: Binary) -> CPtr<UInt8>`: zero-cost view. `Binary`
+/// lowers to its payload pointer, which is already byte-addressable,
+/// so return the argument as-is. The typecheck position check keeps
+/// the result from outliving the statement (and thus the source).
+fn emit_borrow<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let payload = nth_pointer(function, llvm_function, 0, "bytes")?;
+    ctx.builder
+        .build_return(Some(&payload))
+        .or_ice()
+        .map(|_| ())
+}
+
+/// `copy(bytes: Binary) -> CPtr<UInt8>`: malloc `byte_size` bytes and
+/// memcpy the payload. The result is a bare C buffer (no Binary
+/// header, no NUL) the caller owns. Empty input returns null,
+/// mirroring `alloc(0)` and the eval backend.
+fn emit_copy<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let payload = nth_pointer(function, llvm_function, 0, "bytes")?;
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
+    let byte_count = ctx
+        .builder
+        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
+        .or_ice()?;
+    let is_empty = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::EQ,
+            byte_count,
+            i64_ty.const_zero(),
+            "is_empty",
+        )
+        .or_ice()?;
+    let empty_block = ctx.context.append_basic_block(llvm_function, "empty");
+    let allocate_block = ctx.context.append_basic_block(llvm_function, "allocate");
+    ctx.builder
+        .build_conditional_branch(is_empty, empty_block, allocate_block)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(empty_block);
+    let null = ctx.context.ptr_type(AddressSpace::default()).const_null();
+    ctx.builder.build_return(Some(&null)).or_ice()?;
+
+    ctx.builder.position_at_end(allocate_block);
+    let malloc = declare_malloc_extern(ctx);
+    let raw = ctx.call_basic(malloc, &[byte_count.into()], "copy_ptr")?;
+    let memcpy = declare_memcpy_extern(ctx);
+    ctx.builder
+        .build_call(memcpy, &[raw.into(), payload.into(), byte_count.into()], "")
+        .or_ice()?;
     ctx.builder.build_return(Some(&raw)).or_ice().map(|_| ())
 }
 

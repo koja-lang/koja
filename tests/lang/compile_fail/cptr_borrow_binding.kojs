@@ -1,0 +1,2 @@
+bytes = "abc".to_binary()
+p = CPtr.borrow(bytes)

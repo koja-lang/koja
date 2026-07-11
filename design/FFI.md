@@ -269,8 +269,13 @@ For pointers (`CPtr<T>`): the pointer is a plain machine word, copied by
 value like any scalar. The Koja side retains no ownership of what's
 behind the pointer.
 
-`Binary.ptr()` borrows the Binary's stable payload address. The Binary
-must remain live and immutable for the duration of the C call.
+`CPtr.borrow(bytes)` borrows the Binary's stable payload address at the
+call site. Its result cannot be bound, returned, or stored -- the
+compiler restricts it to in-statement consumption (call argument,
+chained receiver), where the source Binary is live by ordinary
+scope-exit drop semantics. No liveness rule is left for the user to
+track. For a C API that retains the pointer past the call,
+`CPtr.copy(bytes)` produces a malloc'd owned copy the caller frees.
 
 For strings: `String.to_cstring()` returns a checked `Result` and creates
 the successful copy via `malloc`. The original Koja `String` is

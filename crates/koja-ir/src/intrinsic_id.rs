@@ -96,6 +96,8 @@ pub enum RuntimeBlockMethod {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CPtrMethod {
     Alloc,
+    Borrow,
+    Copy,
     Free,
     Null,
     NullQ,
@@ -114,7 +116,6 @@ pub enum CStringMethod {
 pub enum BinaryMethod {
     At,
     ByteSize,
-    Ptr,
     Slice,
     ToBits,
     ToString,
@@ -594,6 +595,8 @@ impl CPtrMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "alloc" => Self::Alloc,
+            "borrow" => Self::Borrow,
+            "copy" => Self::Copy,
             "free" => Self::Free,
             "null" => Self::Null,
             "null?" => Self::NullQ,
@@ -608,6 +611,8 @@ impl CPtrMethod {
     fn segment(self) -> &'static str {
         match self {
             Self::Alloc => "alloc",
+            Self::Borrow => "borrow",
+            Self::Copy => "copy",
             Self::Free => "free",
             Self::Null => "null",
             Self::NullQ => "null?",
@@ -639,7 +644,6 @@ impl BinaryMethod {
         Some(match s {
             "at" => Self::At,
             "byte_size" => Self::ByteSize,
-            "ptr" => Self::Ptr,
             "slice" => Self::Slice,
             "to_bits" => Self::ToBits,
             "to_string" => Self::ToString,
@@ -651,7 +655,6 @@ impl BinaryMethod {
         match self {
             Self::At => "at",
             Self::ByteSize => "byte_size",
-            Self::Ptr => "ptr",
             Self::Slice => "slice",
             Self::ToBits => "to_bits",
             Self::ToString => "to_string",
@@ -999,6 +1002,8 @@ mod tests {
     fn cptr_methods_cover_the_full_surface() {
         for (method, variant) in [
             ("alloc", CPtrMethod::Alloc),
+            ("borrow", CPtrMethod::Borrow),
+            ("copy", CPtrMethod::Copy),
             ("free", CPtrMethod::Free),
             ("null", CPtrMethod::Null),
             ("null?", CPtrMethod::NullQ),

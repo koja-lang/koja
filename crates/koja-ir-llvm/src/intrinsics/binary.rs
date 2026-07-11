@@ -8,8 +8,6 @@
 //!   Bounds-check against the header, then GEP + load + zext. No
 //!   runtime call.
 //! - `Binary.byte_size(self) -> Int`: divides the header by 8.
-//! - `Binary.ptr(self) -> CPtr<UInt8>`: returns `self` (the payload
-//!   pointer is already byte-addressable).
 //! - `Binary.slice(self, range: Range) -> Binary`: copies the
 //!   inclusive byte range `[start, stop]` via the
 //!   `koja_binary_slice` runtime helper. Endpoints clamp.
@@ -59,7 +57,6 @@ pub(super) fn emit_binary<'ctx>(
     match method {
         BinaryMethod::At => emit_at(ctx, function, llvm_function),
         BinaryMethod::ByteSize => emit_byte_size(ctx, function, llvm_function),
-        BinaryMethod::Ptr => emit_self_passthrough(ctx, function, llvm_function),
         BinaryMethod::Slice => emit_slice(ctx, function, llvm_function),
         BinaryMethod::ToBits => emit_to_bits(ctx, function, llvm_function),
         BinaryMethod::ToString => emit_to_string(ctx, function, llvm_function),
@@ -217,21 +214,6 @@ fn emit_byte_size<'ctx>(
         .or_ice()?;
     ctx.builder
         .build_return(Some(&byte_count))
-        .or_ice()
-        .map(|_| ())
-}
-
-/// Zero-cost conversion. Both `Binary` and `Bits` lower to the same
-/// payload-pointer shape (`ptr` at the LLVM layer). `Binary.ptr`
-/// hands back a `CPtr<UInt8>` shaped identically. Just return `self`.
-fn emit_self_passthrough<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    function: &IRFunction,
-    llvm_function: FunctionValue<'ctx>,
-) -> Result<(), LlvmError> {
-    let payload = heap_payload::pointer_param(function, llvm_function)?;
-    ctx.builder
-        .build_return(Some(&payload))
         .or_ice()
         .map(|_| ())
 }

@@ -30,6 +30,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Breaking**: `String.to_cstring` and `CString.to_string` now return `Result<_, CString.ConversionError>`, rejecting interior NUL, malformed pointer metadata, and invalid UTF-8.
 - **Breaking**: `Binary.to_string` now returns `String.ConversionError.InvalidUTF8`, and the unchecked `CPtr.to_string` conversion has been removed.
+- **Breaking**: `Binary.ptr` has been removed in favor of `CPtr.borrow(bytes)`, which borrows a pointer for the current statement, and `CPtr.copy(bytes)`, which takes an owned copy.
 - **Breaking**: File and UDP byte APIs now use `Binary`: `File.read_binary` is available, `File.write` and UDP sends accept `Binary | String`, and UDP receives return `Binary`.
 - `and` and `or` now short-circuit from left to right, so the right-hand expression is skipped when the result is already determined.
 - `koja format` no longer separates a `#` comment from the declaration below it in package files.
@@ -45,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Native `String` equality, matching, indexing, slicing, length, parsing, and UDP sends now honor the full length-prefixed payload, including embedded NUL.
-- `Binary.ptr` now borrows the Binary payload consistently on both backends, while negative `CPtr.alloc` and `CPtr.to_binary` counts panic instead of diverging.
+- Negative `CPtr.alloc` and `CPtr.to_binary` counts now panic on both backends instead of diverging.
 - Enum matches with partial payload patterns now report the uncovered outer variant at compile time instead of reaching an unreachable runtime path.
 - Negative process timeouts and delayed sends now behave as zero on both execution backends instead of becoming near-infinite waits in compiled programs.
 - Generic call arguments such as `Option.None` and `Result.Err` now infer missing type parameters from the call's enclosing expected return type.
