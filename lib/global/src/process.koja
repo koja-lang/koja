@@ -26,10 +26,10 @@ enum Process.Priority
   Normal
 end
 
-@doc """
-Maps a stop reason to an OS exit code. Only the entry process needs this.
-"""
-protocol ExitStatus
+# Maps a stop reason to an OS exit code. Runtime-internal: IR lowering
+# routes the entry process's StopReason through `code()` to produce the
+# OS exit code. Not user API.
+priv protocol ExitStatus
   fn code(self) -> Int
 end
 

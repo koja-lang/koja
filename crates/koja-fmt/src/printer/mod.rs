@@ -119,11 +119,16 @@ impl<'a> Printer<'a> {
             } else {
                 let item = &file.items[i];
                 let span = item_span(item);
-                let (comment_docs, _) = self.comments.drain_before(span.start.line);
+                if emitted {
+                    parts.push(hardline());
+                }
+                let (comment_docs, last_comment_line) = self.comments.drain_before(span.start.line);
                 for c in comment_docs {
                     parts.push(c);
                 }
-                if emitted {
+                if let Some(lcl) = last_comment_line
+                    && span.start.line > lcl + 1
+                {
                     parts.push(hardline());
                 }
                 parts.push(self.item_to_doc(item));

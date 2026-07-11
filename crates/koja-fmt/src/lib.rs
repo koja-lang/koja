@@ -651,6 +651,52 @@ mod tests {
     }
 
     #[test]
+    fn leading_comment_stays_attached_to_declaration() {
+        assert_fmt(
+            "
+            enum A
+              B
+            end
+
+            # explains P
+            priv protocol P
+              fn f(self) -> Int
+            end
+        ",
+            "
+            enum A
+              B
+            end
+
+            # explains P
+            priv protocol P
+              fn f(self) -> Int
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn blank_line_between_comment_and_declaration_preserved() {
+        assert_fmt(
+            "
+            # stray file comment
+
+            fn f -> Int
+              1
+            end
+        ",
+            "
+            # stray file comment
+
+            fn f -> Int
+              1
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn method_chain_short_stays_inline() {
         assert_fmt(
             r#"
