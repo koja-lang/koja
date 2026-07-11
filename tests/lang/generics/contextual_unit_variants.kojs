@@ -1,0 +1,34 @@
+struct Thing
+  name: String
+end
+
+fn identity<T>(value: T) -> T
+  value
+end
+
+fn pair<A, B>(first: A, second: B) -> Pair<A, B>
+  Pair{first: first, second: second}
+end
+
+fn static_pair(thing: Thing) -> Pair<Thing, Option<String>>
+  Pair.new(thing, Option.None)
+end
+
+fn free_pair -> Pair<Int, Option<String>>
+  pair(1, Option.None)
+end
+
+fn optional -> Option<Int>
+  identity(Option.None)
+end
+
+fn failure -> Result<Int, String>
+  identity(Result.Err("failed"))
+end
+
+value = static_pair(Thing{name: "thing"})
+value.first.name.print()
+value.second.none?().print()
+free_pair().second.none?().print()
+optional().none?().print()
+failure().err?().print()

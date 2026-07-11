@@ -45,8 +45,7 @@ end
 
 c = Classifier{}
 
-none_opt: Option<TokenKind> = Option.None
-c.classify(none_opt).print()
+c.classify(Option.None).print()
 c.classify(Option.Some(TokenKind.Ident("and"))).print()
 c.classify(Option.Some(TokenKind.Ident("xyz"))).print()
 c.classify(Option.Some(TokenKind.Number(0))).print()

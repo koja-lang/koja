@@ -443,8 +443,7 @@ struct URI
       end
 
       uri.host = Option.Some(URI.text(bytes, start, host_end - 1))
-      ok_pair: Pair<URI, Int> = Pair{first: uri, second: host_end}
-      return Result.Ok(ok_pair)
+      return Result.Ok(Pair.new(uri, host_end))
     end
 
     # A bracketed literal must close with ']'.
@@ -464,8 +463,7 @@ struct URI
         end
 
         uri.host = Option.Some(URI.text(bytes, start + 1, rb_pos - 1))
-        bracketed_pair: Pair<URI, Int> = Pair{first: uri, second: rb_pos + 1}
-        Result.Ok(bracketed_pair)
+        Result.Ok(Pair.new(uri, rb_pos + 1))
     end
   end
 

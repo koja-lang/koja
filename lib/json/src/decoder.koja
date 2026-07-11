@@ -90,25 +90,16 @@ struct Decoder
       return Result.Err("expected 'null' at position #{pos}")
     end
 
-    ok_pair: Pair<Value, Int> = Pair{first: Value.Null, second: pos + 4}
-    Result.Ok(ok_pair)
+    Result.Ok(Pair.new(Value.Null, pos + 4))
   end
 
   fn parse_bool(self, pos: Int) -> Result<Pair<Value, Int>, String>
     if pos + 4 <= self.size and self.text(pos, pos + 3) == "true"
-      true_pair: Pair<Value, Int> = Pair{
-        first: Value.Bool(true),
-        second: pos + 4,
-      }
-      return Result.Ok(true_pair)
+      return Result.Ok(Pair.new(Value.Bool(true), pos + 4))
     end
 
     if pos + 5 <= self.size and self.text(pos, pos + 4) == "false"
-      false_pair: Pair<Value, Int> = Pair{
-        first: Value.Bool(false),
-        second: pos + 5,
-      }
-      return Result.Ok(false_pair)
+      return Result.Ok(Pair.new(Value.Bool(false), pos + 5))
     end
 
     Result.Err("expected 'true' or 'false' at position #{pos}")
@@ -164,8 +155,7 @@ struct Decoder
             return Result.Err("invalid float '#{num_str}' at position #{pos}: #{msg}")
         end
 
-      float_pair: Pair<Value, Int> = Pair{first: Value.Float(f), second: i}
-      return Result.Ok(float_pair)
+      return Result.Ok(Pair.new(Value.Float(f), i))
     end
 
     n =
@@ -175,8 +165,7 @@ struct Decoder
           return Result.Err("invalid integer '#{num_str}' at position #{pos}: #{msg}")
       end
 
-    int_pair: Pair<Value, Int> = Pair{first: Value.Int(n), second: i}
-    Result.Ok(int_pair)
+    Result.Ok(Pair.new(Value.Int(n), i))
   end
 
   fn consume_digits(self, start: Int) -> Int
@@ -200,11 +189,7 @@ struct Decoder
         Result.Err(msg) -> return Result.Err(msg)
       end
 
-    ok_pair: Pair<Value, Int> = Pair{
-      first: Value.String(pair.first),
-      second: pair.second,
-    }
-    Result.Ok(ok_pair)
+    Result.Ok(Pair.new(Value.String(pair.first), pair.second))
   end
 
   fn parse_raw_string(self, pos: Int) -> Result<Pair<String, Int>, String>
@@ -228,11 +213,7 @@ struct Decoder
       b = self.byte(i)
 
       if b == BYTE_QUOTE
-        ok_pair: Pair<String, Int> = Pair{
-          first: self.text(start, i - 1),
-          second: i + 1,
-        }
-        return Result.Ok(ok_pair)
+        return Result.Ok(Pair.new(self.text(start, i - 1), i + 1))
       end
 
       if b == BYTE_BACKSLASH
@@ -268,8 +249,7 @@ struct Decoder
           sb = sb.add(self.text(start, i - 1))
         end
 
-        ok_pair: Pair<String, Int> = Pair{first: sb.build(), second: i + 1}
-        return Result.Ok(ok_pair)
+        return Result.Ok(Pair.new(sb.build(), i + 1))
       end
 
       if b == BYTE_BACKSLASH
@@ -307,8 +287,7 @@ struct Decoder
     items: List<Value> = List.new()
 
     if self.peek?(i, BYTE_RBRACKET)
-      ok_pair: Pair<Value, Int> = Pair{first: Value.Array(items), second: i + 1}
-      return Result.Ok(ok_pair)
+      return Result.Ok(Pair.new(Value.Array(items), i + 1))
     end
 
     self.parse_array_elements(items, i, pos)
@@ -335,8 +314,7 @@ struct Decoder
     b = self.byte(i)
 
     if b == BYTE_RBRACKET
-      ok_pair: Pair<Value, Int> = Pair{first: Value.Array(items), second: i + 1}
-      return Result.Ok(ok_pair)
+      return Result.Ok(Pair.new(Value.Array(items), i + 1))
     end
 
     if b != BYTE_COMMA
@@ -351,11 +329,7 @@ struct Decoder
     entries: List<Pair<String, Value>> = List.new()
 
     if self.peek?(i, BYTE_RBRACE)
-      ok_pair: Pair<Value, Int> = Pair{
-        first: Value.Object(entries),
-        second: i + 1,
-      }
-      return Result.Ok(ok_pair)
+      return Result.Ok(Pair.new(Value.Object(entries), i + 1))
     end
 
     self.parse_object_entries(entries, i, pos)
@@ -391,8 +365,7 @@ struct Decoder
         Result.Err(msg) -> return Result.Err(msg)
       end
 
-    e: Pair<String, Value> = Pair{first: key_pair.first, second: val_pair.first}
-    entries = entries.append(e)
+    entries = entries.append(Pair.new(key_pair.first, val_pair.first))
     i = self.skip_ws(val_pair.second)
 
     if i >= self.size
@@ -402,11 +375,7 @@ struct Decoder
     b = self.byte(i)
 
     if b == BYTE_RBRACE
-      ok_pair: Pair<Value, Int> = Pair{
-        first: Value.Object(entries),
-        second: i + 1,
-      }
-      return Result.Ok(ok_pair)
+      return Result.Ok(Pair.new(Value.Object(entries), i + 1))
     end
 
     if b != BYTE_COMMA

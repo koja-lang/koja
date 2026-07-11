@@ -7,29 +7,6 @@ etc.). For the full design of the iterator protocol replacement, see
 
 ---
 
-## Generic enum unit variants in top-level code
-
-`Option.None` cannot infer `T` without usage context in bare declarations.
-
-**Workaround:** variable type annotations (`z: Option<Int32> = Option.None`).
-Inside monomorphized method bodies and closures with return type annotations,
-generic enum construction resolves all type parameters automatically.
-Struct-literal field positions also propagate the declared field type down
-into the initializer, so `Diagnostic{hint: Option.None}` resolves
-`Option.None` from `hint: Option<String>` with no extra annotation.
-
-Still affects generic free-function calls where one argument is a generic
-unit variant: `Pair.new(self, Option.None)` in a function returning
-`Pair<Lexer, Option<String>>` fails to infer `A` and `B` because the return
-type isn't propagated into the call. Workaround: use struct literals
-directly (`Pair{first: self, second: Option.None}`) where the field-type
-hint pins the variant, or bind with a type annotation first.
-
-Re-confirmed 2026-05-27 on both backends; diagnostic now reads
-``typecheck cannot infer type parameter `T` of `Global.Option` from unit variant `None` ``.
-
----
-
 ## Iteration protocol limits (`Enumeration<T>`)
 
 `Enumeration<T>` requires `length()` + `get(index)`, locking `for` to

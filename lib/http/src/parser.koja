@@ -267,18 +267,13 @@ struct Parser
     match Parser.find_crlf(self.input, self.pos)
       Option.Some(crlf_pos) ->
         line = self.input.slice(Range{start: self.pos, stop: crlf_pos - 1})
-        result: Pair<String, Int> = Pair{first: line, second: crlf_pos + 2}
-        Option.Some(result)
+        Option.Some(Pair.new(line, crlf_pos + 2))
 
       Option.None ->
         line = self.input.slice(
           Range{start: self.pos, stop: self.input.length() - 1},
         )
-        result: Pair<String, Int> = Pair{
-          first: line,
-          second: self.input.length(),
-        }
-        Option.Some(result)
+        Option.Some(Pair.new(line, self.input.length()))
     end
   end
 

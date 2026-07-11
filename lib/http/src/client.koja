@@ -157,9 +157,7 @@ fn parse_url(url: String) -> Result<Pair<String, Pair<Int, String>>, String>
     return Result.Err("missing host in URL: " <> url)
   end
 
-  port_path: Pair<Int, String> = Pair{first: port, second: path}
-  result: Pair<String, Pair<Int, String>> = Pair{first: host, second: port_path}
-  Result.Ok(result)
+  Result.Ok(Pair.new(host, Pair.new(port, path)))
 end
 
 priv fn build_request(

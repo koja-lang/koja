@@ -3,8 +3,7 @@ struct Node
   next: Option<Node>
 end
 
-no_next: Option<Node> = Option.None
-leaf = Node{value: 3, next: no_next}
+leaf = Node{value: 3, next: Option.None}
 mid = Node{value: 2, next: Option.Some(leaf)}
 head = Node{value: 1, next: Option.Some(mid)}
 

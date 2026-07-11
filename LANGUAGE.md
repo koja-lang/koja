@@ -120,7 +120,8 @@ z: Option<Int32> = Option.None
 list: List<Int32> = List.new()
 ```
 
-Annotations are required when the type cannot be inferred (e.g. generic enum unit variants like `Option.None`).
+Annotations are required when no surrounding context determines the type,
+such as a bare `Option.None` assignment.
 
 ### Compound Assignment
 
@@ -678,11 +679,19 @@ enum Option<T>
 end
 ```
 
-Generic enum unit variants require a type annotation for inference:
+Generic enum unit variants infer from an enclosing expected type. Expected
+types come from annotations, function and closure returns, control-flow
+arms, struct fields, and generic call returns:
 
 ```koja
 z: Option<Int32> = Option.None
+
+fn empty_pair() -> Pair<Int, Option<String>>
+  Pair.new(1, Option.None)
+end
 ```
+
+A context-free unit variant still requires an annotation.
 
 #### Annotation-Driven Inference
 
