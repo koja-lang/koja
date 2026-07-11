@@ -18,9 +18,10 @@ use crate::emit::heap_layout::load_bit_length;
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics::cptr::declare_memcpy_extern;
 use crate::intrinsics::heap_payload;
+use crate::intrinsics::result;
 use crate::runtime::{
-    declare_malloc_extern, declare_string_get_extern, declare_string_length_extern,
-    declare_string_slice_extern,
+    declare_malloc_extern, declare_string_contains_nul_extern, declare_string_get_extern,
+    declare_string_length_extern, declare_string_slice_extern,
 };
 use crate::types::ir_basic_type;
 
@@ -170,10 +171,57 @@ fn emit_to_cstring<'ctx>(
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
     let i64_ty = ctx.context.i64_type();
-    let i8_ty = ctx.context.i8_type();
     let payload = self_payload(function, llvm_function)?;
     let byte_len = load_byte_count(ctx, payload)?;
+    let result_symbol = result::return_symbol(function)?;
+    let cstring_ty = cstring_struct_type(ctx, result_symbol)?;
 
+    let contains_nul = declare_string_contains_nul_extern(ctx);
+    let has_nul = ctx
+        .call_basic(contains_nul, &[payload.into()], "has_nul")?
+        .into_int_value();
+    let rejected = ctx
+        .builder
+        .build_int_compare(IntPredicate::NE, has_nul, i64_ty.const_zero(), "rejected")
+        .or_ice()?;
+    let invalid_bb = ctx
+        .context
+        .append_basic_block(llvm_function, "interior_nul");
+    let valid_bb = ctx.context.append_basic_block(llvm_function, "valid");
+    ctx.builder
+        .build_conditional_branch(rejected, invalid_bb, valid_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(invalid_bb);
+    let error = result::build_unit_error(ctx, result_symbol, "InteriorNul")?;
+    ctx.builder.build_return(Some(&error)).or_ice()?;
+
+    ctx.builder.position_at_end(valid_bb);
+    emit_cstring_success(ctx, result_symbol, cstring_ty, payload, byte_len)
+}
+
+fn cstring_struct_type<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    result_symbol: &IRSymbol,
+) -> Result<StructType<'ctx>, LlvmError> {
+    let cstring_type = result::single_payload_type(ctx, result_symbol, result::OK_TAG)?;
+    match cstring_type {
+        IRType::Struct(_) => Ok(ir_basic_type(ctx, &cstring_type)?.into_struct_type()),
+        other => Err(LlvmError::Codegen(format!(
+            "String.to_cstring expected a CString Ok payload, got `{other:?}`",
+        ))),
+    }
+}
+
+fn emit_cstring_success<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    result_symbol: &IRSymbol,
+    cstring_ty: StructType<'ctx>,
+    payload: PointerValue<'ctx>,
+    byte_len: IntValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let i64_ty = ctx.context.i64_type();
+    let i8_ty = ctx.context.i8_type();
     let alloc_size = ctx
         .builder
         .build_int_add(byte_len, i64_ty.const_int(1, false), "alloc_size")
@@ -196,12 +244,9 @@ fn emit_to_cstring<'ctx>(
         .build_store(nul_ptr, i8_ty.const_zero())
         .or_ice()?;
 
-    let cstring_ty = ir_basic_type(ctx, &function.return_type)?.into_struct_type();
     let cstring = build_cstring(ctx, cstring_ty, buf, byte_len)?;
-    ctx.builder
-        .build_return(Some(&cstring))
-        .or_ice()
-        .map(|_| ())
+    let ok = result::build_ok(ctx, result_symbol, cstring)?;
+    ctx.builder.build_return(Some(&ok)).or_ice().map(|_| ())
 }
 
 fn self_payload<'ctx>(

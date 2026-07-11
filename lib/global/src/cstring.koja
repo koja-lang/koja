@@ -1,4 +1,14 @@
 @doc """
+Error returned when converting between Koja and C strings.
+"""
+enum CString.ConversionError
+  InteriorNul
+  InvalidLength
+  InvalidUTF8
+  NullPointer
+end
+
+@doc """
 A null-terminated C string. Allocated with `malloc`, must be freed
 explicitly via `free()`. Use `String.to_cstring()` to create one from
 a Koja string, and `to_string()` to convert back.
@@ -15,8 +25,9 @@ struct CString
   end
 
   @doc """
-  Converts this C string to a Koja String by copying the bytes.
+  Copies this C string into a Koja `String`, rejecting malformed
+  pointers, lengths, and UTF-8.
   """
   @intrinsic
-  fn to_string(self) -> String
+  fn to_string(self) -> Result<String, CString.ConversionError>
 end

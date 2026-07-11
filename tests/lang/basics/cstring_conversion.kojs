@@ -1,0 +1,50 @@
+valid = "héllo".to_cstring().unwrap()
+valid.to_string().unwrap().print()
+valid.free()
+
+with_nul = <<97, 0, 98>>.to_string().unwrap()
+
+match with_nul.to_cstring()
+  Result.Err(CString.ConversionError.InteriorNul) ->
+    "interior_nul".print()
+
+  _ ->
+    "wrong".print()
+end
+
+invalid_ptr: CPtr<UInt8> = CPtr.alloc(1)
+invalid_ptr.write(255)
+invalid = CString{ptr: invalid_ptr, len: 1}
+
+match invalid.to_string()
+  Result.Err(CString.ConversionError.InvalidUTF8) ->
+    "invalid_utf8".print()
+
+  _ ->
+    "wrong".print()
+end
+
+invalid.free()
+
+negative = CString{ptr: CPtr.null(), len: -1}
+
+match negative.to_string()
+  Result.Err(CString.ConversionError.InvalidLength) ->
+    "invalid_length".print()
+
+  _ ->
+    "wrong".print()
+end
+
+null_with_bytes = CString{ptr: CPtr.null(), len: 1}
+
+match null_with_bytes.to_string()
+  Result.Err(CString.ConversionError.NullPointer) ->
+    "null_pointer".print()
+
+  _ ->
+    "wrong".print()
+end
+
+empty = CString{ptr: CPtr.null(), len: 0}
+empty.to_string().unwrap().print()

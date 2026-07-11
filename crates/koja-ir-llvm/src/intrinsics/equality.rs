@@ -2,9 +2,7 @@
 //! `icmp eq` emitter (eval flattens both to fixed-width integers).
 //! `Float` / `Float32` use `fcmp oeq` (ordered: `NaN == NaN` is
 //! false, matching IEEE 754 and source-level `==`). `String.eq`
-//! delegates to libc `strcmp`. String payloads carry a
-//! trailing NUL, so byte-sequence equality matches Koja's source-
-//! level `==` semantics.
+//! delegates to the runtime's length-aware byte comparison.
 
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
@@ -12,7 +10,7 @@ use koja_ir::{EqualityImpl, IRFunction};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::runtime::declare_strcmp_extern;
+use crate::runtime::declare_string_eq_extern;
 
 pub(super) fn emit_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -46,16 +44,16 @@ fn emit_string_eq<'ctx>(
             function.symbol,
         ))
     })?;
-    let strcmp = declare_strcmp_extern(ctx);
-    let diff = ctx
-        .call_basic(strcmp, &[lhs.into(), rhs.into()], "strcmp")?
+    let string_eq = declare_string_eq_extern(ctx);
+    let equal = ctx
+        .call_basic(string_eq, &[lhs.into(), rhs.into()], "string_eq")?
         .into_int_value();
     let cmp = ctx
         .builder
         .build_int_compare(
-            IntPredicate::EQ,
-            diff,
-            ctx.context.i32_type().const_zero(),
+            IntPredicate::NE,
+            equal,
+            ctx.context.i64_type().const_zero(),
             "streq",
         )
         .or_ice()?;

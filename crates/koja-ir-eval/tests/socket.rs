@@ -121,7 +121,8 @@ fn udp_loopback_send_and_recv_from() {
             end
 
           target = SocketAddress{{ip: IPAddress.loopback(), port: {port}}}
-          match sender.send_to("datagram", target)
+          payload = <<97, 0, 98>>.to_string().unwrap()
+          match sender.send_to(payload, target)
             Result.Ok(_) -> ()
             Result.Err(_) -> return "send_to failed"
           end
@@ -135,7 +136,7 @@ fn udp_loopback_send_and_recv_from() {
     ));
     assert_eq!(
         evaluate_qualified_program(&source).expect("fixture should run"),
-        Value::string(b"datagram".as_slice()),
+        Value::string(b"a\0b".as_slice()),
     );
 }
 

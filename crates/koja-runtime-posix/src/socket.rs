@@ -260,8 +260,7 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
 /// if the send buffer is full. Returns bytes sent, or -1 on error.
 ///
 /// # Safety
-/// `data_ptr` must be a valid null-terminated string. `ip_ptr` must point to the payload
-/// of a valid Binary allocation (4 or 16 bytes) with an 8-byte length header at offset -8.
+/// Both pointers must point to valid Binary payloads.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_socket_send_to(
     fd: i32,
@@ -269,13 +268,7 @@ pub unsafe extern "C" fn koja_socket_send_to(
     ip_ptr: *const u8,
     port: i64,
 ) -> i64 {
-    let data_len = unsafe {
-        let mut p = data_ptr;
-        while *p != 0 {
-            p = p.offset(1);
-        }
-        p.offset_from(data_ptr) as usize
-    };
+    let data_len = (unsafe { read_bit_length(data_ptr) } / BITS_PER_BYTE as i64) as usize;
 
     let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, port) {
         Ok(v) => v,

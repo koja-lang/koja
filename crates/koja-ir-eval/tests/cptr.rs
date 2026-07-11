@@ -102,14 +102,14 @@ fn cptr_offset_steps_by_element_width_for_uint8() {
 #[test]
 fn string_to_cstring_then_to_string_round_trips_utf8() {
     // `String.to_cstring` allocates a null-terminated copy and
-    // wraps `(ptr, byte_len)` in a CString; `CString.to_string`
+    // wraps `(ptr, byte_len)` in a CString. `CString.to_string`
     // reads `byte_len` bytes back into a fresh String. Pin the
     // round-trip for an ASCII string (every byte is its own
     // codepoint, so byte_len == char count).
     let outcome = evaluate_script(&dedent(
         r#"
-        cstr = "hello".to_cstring()
-        copy = cstr.to_string()
+        cstr = "hello".to_cstring().unwrap()
+        copy = cstr.to_string().unwrap()
         cstr.free()
         copy
         "#,
@@ -122,11 +122,11 @@ fn string_to_cstring_then_to_string_round_trips_utf8() {
 fn string_to_cstring_round_trips_multibyte_utf8() {
     // Non-ASCII codepoints take >1 byte each. `to_cstring` carries
     // byte_len, so the round-trip preserves the original payload
-    // verbatim — `to_string` slices off exactly byte_len bytes.
+    // verbatim because `to_string` reads exactly byte_len bytes.
     let outcome = evaluate_script(&dedent(
         r#"
-        cstr = "héllo".to_cstring()
-        copy = cstr.to_string()
+        cstr = "héllo".to_cstring().unwrap()
+        copy = cstr.to_string().unwrap()
         cstr.free()
         copy
         "#,

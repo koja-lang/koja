@@ -245,9 +245,9 @@ pub enum DebugImpl {
 }
 
 /// Receiver shape for `Equality.eq` impls. One variant per emitter
-/// shape: `icmp` for `Bool` + integers, `fcmp` for floats, `strcmp`
-/// for `String`. Integer / float widths are folded into nested
-/// [`IntType`] / [`FloatType`] enums (each width its own emitter
+/// shape: `icmp` for `Bool` + integers, `fcmp` for floats, and a
+/// length-aware runtime helper for `String`. Numeric widths are folded
+/// into nested [`IntType`] / [`FloatType`] enums (each width its own emitter
 /// cell) so the outer arms stay one-to-one with the emitter family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EqualityImpl {

@@ -1,0 +1,49 @@
+s_ab = <<97, 0, 98>>.to_string().unwrap()
+s_ac = <<97, 0, 99>>.to_string().unwrap()
+s_ab_copy = <<97, 0, 98>>.to_string().unwrap()
+
+s_ab.byte_length().print()
+s_ab.length().print()
+(s_ab == s_ac).print()
+(s_ab == "a").print()
+(s_ab.hash() == s_ab_copy.hash()).print()
+
+match s_ab
+  "a" -> "wrong".print()
+  _ -> "match".print()
+end
+
+match s_ab.get(1)
+  Option.None ->
+    "none".print()
+
+  Option.Some(ch) ->
+    ch.byte_length().print()
+    ch.length().print()
+end
+
+match s_ab.get(2)
+  Option.None -> "none".print()
+  Option.Some(ch) -> ch.print()
+end
+
+(s_ab.slice(Range{start: 1, stop: 2}) == <<0, 98>>.to_string().unwrap()).print()
+
+values: Map<String, Int> = Map.new()
+values = values.put(s_ab, 1)
+values = values.put(s_ac, 2)
+values.length().print()
+
+numeric = <<52, 50, 0, 55>>.to_string().unwrap()
+
+match Int.parse(numeric)
+  Result.Err(_) -> "invalid".print()
+  Result.Ok(_) -> "wrong".print()
+end
+
+floating = <<49, 46, 53, 0, 50>>.to_string().unwrap()
+
+match Float.parse(floating)
+  Result.Err(_) -> "invalid_float".print()
+  Result.Ok(_) -> "wrong".print()
+end

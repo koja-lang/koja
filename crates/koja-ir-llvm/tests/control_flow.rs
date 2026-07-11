@@ -182,13 +182,10 @@ fn match_int_chain_emits_chained_test_blocks_and_merge_phi() {
 }
 
 #[test]
-fn match_string_literal_arm_emits_strcmp_test() {
-    // String equality lowers to `strcmp(a, b) == 0`, so the test
-    // block emits a `call @strcmp` followed by an `icmp eq i32 …, 0`
-    // before the conditional branch. Pin both shapes so a regression
-    // in string comparison surfaces clearly. The subject comes
-    // through a function parameter to keep the `strcmp` call from
-    // being constant-folded.
+fn match_string_literal_arm_emits_length_aware_equality_test() {
+    // String equality delegates to the runtime's length-aware helper.
+    // The subject comes through a function parameter so the call
+    // cannot be constant-folded.
     let source = "
         fn pick(s: String) -> Int
           match s
@@ -203,8 +200,8 @@ fn match_string_literal_arm_emits_strcmp_test() {
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_merge");
-    assert_contains(&ir_text, "@strcmp");
-    assert_contains(&ir_text, "icmp eq i32");
+    assert_contains(&ir_text, "@koja_string_eq");
+    assert_contains(&ir_text, "icmp ne i64");
 }
 
 #[test]

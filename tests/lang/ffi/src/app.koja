@@ -57,7 +57,7 @@ impl Process<(), (), ()> for App
 
     # Pass a CString to C and get back a pointer
     name = "Koja"
-    cs = name.to_cstring()
+    cs = name.to_cstring().unwrap()
     greeting_ptr = FFI.make_greeting(cs.ptr, cs.len)
     cs.free()
 
@@ -78,7 +78,7 @@ impl Process<(), (), ()> for App
     greeting_len = i
 
     greeting_cs = CString{ptr: greeting_ptr, len: greeting_len}
-    greeting = greeting_cs.to_string()
+    greeting = greeting_cs.to_string().unwrap()
     greeting.print()
     greeting_cs.free()
     StopReason.Normal

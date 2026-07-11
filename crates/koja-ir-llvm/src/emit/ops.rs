@@ -17,7 +17,7 @@ use koja_ir::{IRBinOp, IRType, IRUnaryOp};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::runtime::declare_strcmp_extern;
+use crate::runtime::declare_string_eq_extern;
 use crate::types::ir_int_type;
 
 pub(super) fn emit_binary_op<'ctx>(
@@ -207,9 +207,8 @@ fn emit_int_unary_op<'ctx>(
     Ok(result.into())
 }
 
-/// `strcmp(lhs, rhs)` then `icmp` the result against zero. Only
-/// `Eq` / `NotEq` admit string operands, because typecheck doesn't
-/// admit ordering or arithmetic on strings.
+/// Calls the runtime's length-aware string equality helper. Only
+/// `Eq` / `NotEq` admit string operands.
 fn emit_string_binary_op<'ctx>(
     ctx: &EmitContext<'ctx>,
     op: IRBinOp,
@@ -217,8 +216,8 @@ fn emit_string_binary_op<'ctx>(
     rhs: PointerValue<'ctx>,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let predicate = match op {
-        IRBinOp::Eq => IntPredicate::EQ,
-        IRBinOp::NotEq => IntPredicate::NE,
+        IRBinOp::Eq => IntPredicate::NE,
+        IRBinOp::NotEq => IntPredicate::EQ,
         other => {
             return Err(LlvmError::Codegen(format!(
                 "LLVM emit: `{other:?}` is not defined for `String` operands \
@@ -226,14 +225,14 @@ fn emit_string_binary_op<'ctx>(
             )));
         }
     };
-    let strcmp = declare_strcmp_extern(ctx);
-    let diff = ctx
-        .call_basic(strcmp, &[lhs.into(), rhs.into()], "strcmp")?
+    let string_eq = declare_string_eq_extern(ctx);
+    let equal = ctx
+        .call_basic(string_eq, &[lhs.into(), rhs.into()], "string_eq")?
         .into_int_value();
-    let zero = ctx.context.i32_type().const_zero();
+    let zero = ctx.context.i64_type().const_zero();
     let result = ctx
         .builder
-        .build_int_compare(predicate, diff, zero, "streq")
+        .build_int_compare(predicate, equal, zero, "streq")
         .or_ice()?;
     Ok(result.into())
 }

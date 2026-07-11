@@ -35,6 +35,7 @@ mod numeric;
 mod parse;
 mod print;
 pub(crate) mod process;
+mod result;
 mod set;
 mod socket;
 mod string;

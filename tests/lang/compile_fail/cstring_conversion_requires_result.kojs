@@ -1,0 +1,1 @@
+cs: CString = "hello".to_cstring()

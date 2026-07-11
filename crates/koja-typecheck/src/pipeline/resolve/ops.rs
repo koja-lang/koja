@@ -37,7 +37,7 @@ const EQ_METHOD: &str = "eq";
 
 /// Resolve `lhs == rhs` / `lhs != rhs`. Primitive operands (Bool,
 /// Int/Float widths, String) stay on the [`binary_type`] fast path.
-/// IR-lower emits `icmp eq` / `fcmp oeq` / `strcmp` directly.
+/// IR lowering keeps their equality operations primitive.
 /// User struct / enum operands rewrite to `lhs.eq(rhs)` (wrapped in
 /// `not …` for `!=`) and re-resolve through the normal method-call
 /// path. `derive_equality` guarantees an `Equality` impl is present
@@ -86,8 +86,8 @@ pub(super) fn resolve_equality_op_expr(
 
 /// True when both operands are primitive-equality-eligible. Keeps
 /// `Bool ==`, every integer / float width, and `String ==` on the
-/// `icmp` / `strcmp` fast path. Everything else routes through
-/// method-call dispatch.
+/// backend primitive fast path. Everything else routes through method-call
+/// dispatch.
 fn eligible_for_primitive_equality(left: &Expr, right: &Expr, registry: &GlobalRegistry) -> bool {
     is_primitive_equality_eligible(&left.resolution, registry)
         && is_primitive_equality_eligible(&right.resolution, registry)
@@ -158,9 +158,8 @@ pub(super) fn binary_type(
         BinOp::Eq | BinOp::NotEq => {
             // String operands flow through the same operator so
             // `match` arms with string-literal patterns can desugar
-            // to the same equality chain. LLVM emit routes the
-            // `IRType::String` case through `strcmp`. The numeric
-            // path covers both `Int ≡ Int64` / `Float ≡ Float64`
+            // to the same equality chain. The numeric path covers
+            // both `Int ≡ Int64` / `Float ≡ Float64`
             // alias mixes and sized-numeric vs default-literal pairs
             // (`Int32 == 0`, `fd >= 0`). The latter stamps the
             // matching [`LiteralCoercion`] on the literal side.

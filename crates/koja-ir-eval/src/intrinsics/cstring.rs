@@ -1,15 +1,20 @@
-//! `CString.to_string(self) -> String`: copies the bytes pointed
-//! at by the CString's `ptr: CPtr<UInt8>` (with byte length carried
-//! by the sibling `len: Int` field) into a fresh Koja `String`.
-//! The CString's underlying buffer is left untouched. Callers
-//! free it explicitly via `CString.free`.
+//! Checked `CString.to_string` conversion.
 
 use std::slice;
+use std::str;
+
+use koja_ir::IRFunction;
 
 use crate::error::RuntimeError;
+use crate::interpreter::CallResolver;
+use crate::intrinsics::helpers;
 use crate::value::Value;
 
-pub(super) fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
+pub(super) fn to_string<R: CallResolver>(
+    function: &IRFunction,
+    args: &[Value],
+    resolver: &R,
+) -> Result<Value, RuntimeError> {
     let [Value::Struct { fields, .. }] = args else {
         return Err(RuntimeError::TypeMismatch {
             detail: format!("CString.to_string expects a single CString struct, got {args:?}"),
@@ -22,16 +27,33 @@ pub(super) fn to_string(args: &[Value]) -> Result<Value, RuntimeError> {
             ),
         });
     };
-    let len = (*len).max(0) as usize;
-    if len == 0 {
-        return Ok(Value::string(Vec::new()));
-    }
-    if ptr.is_null() {
-        return Err(RuntimeError::Unsupported {
-            detail: "CString.to_string(ptr=null, len>0) is undefined behavior, refusing to copy"
-                .to_string(),
-        });
-    }
-    let bytes = unsafe { slice::from_raw_parts(*ptr as *const u8, len) }.to_vec();
-    Ok(Value::string(bytes))
+    let result_symbol = helpers::enum_return_symbol(function, "CString.to_string")?;
+    let converted = if *len < 0 {
+        Err(helpers::err_variant_value(
+            &result_symbol,
+            resolver,
+            "InvalidLength",
+        )?)
+    } else if *len > 0 && ptr.is_null() {
+        Err(helpers::err_variant_value(
+            &result_symbol,
+            resolver,
+            "NullPointer",
+        )?)
+    } else {
+        let bytes = if *len == 0 {
+            Vec::new()
+        } else {
+            unsafe { slice::from_raw_parts(*ptr as *const u8, *len as usize) }.to_vec()
+        };
+        match str::from_utf8(&bytes) {
+            Ok(_) => Ok(Value::string(bytes)),
+            Err(_) => Err(helpers::err_variant_value(
+                &result_symbol,
+                resolver,
+                "InvalidUTF8",
+            )?),
+        }
+    };
+    Ok(helpers::result_value(result_symbol, converted))
 }

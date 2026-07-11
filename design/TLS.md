@@ -422,7 +422,7 @@ directly.
 ### Hostname for `CString`
 
 When passing hostnames to `ssl_set_tlsext_host_name`, convert with
-`hostname.to_cstring()`, pass `.ptr`, and `free()` after the call
+`hostname.to_cstring().unwrap()`, pass `.ptr`, and `free()` after the call
 returns. Same pattern as the crypto package.
 
 ---

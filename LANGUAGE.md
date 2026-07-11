@@ -338,6 +338,10 @@ Nested ternaries are disallowed.
 | `Bits`    | Arbitrary bit sequence                    |
 | `()`      | Unit type (empty value)                   |
 
+Every `String` is valid UTF-8 and carries an authoritative byte length.
+U+0000 is a valid character; trailing NUL storage is never used to
+determine a string's contents.
+
 All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
 
 ### Numeric Widening
@@ -531,6 +535,10 @@ end
 ```
 
 `to_cstring` is only available on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. Calling a specialized method on the wrong type argument produces a compile error with a hint showing which specialization provides the method.
+
+This pointer conversion is distinct from checked
+`String.to_cstring()`: it assumes a readable NUL-terminated C buffer
+and computes `CString.len` with `strlen`.
 
 Mixing concrete types and type parameters in the same `extend` block is not allowed:
 
@@ -1897,22 +1905,34 @@ struct CString
   ptr: CPtr<UInt8>
   len: Int
 end
+
+enum CString.ConversionError
+  InteriorNul
+  InvalidLength
+  InvalidUTF8
+  NullPointer
+end
 ```
 
 Convert between Koja strings and C strings:
 
 ```koja
 name = "hello"
-cs = name.to_cstring()
+cs = name.to_cstring().unwrap()
 cs.len.print()
 
-back = cs.to_string()
+back = cs.to_string().unwrap()
 (back == name).print()
 
 cs.free()
 ```
 
-`String.to_cstring()` allocates a null-terminated copy via `malloc`. `CString.to_string()` copies the bytes back into a Koja `String`. The original string is unaffected by either conversion.
+`String.to_cstring() -> Result<CString, CString.ConversionError>`
+allocates a null-terminated copy via `malloc` and rejects `String`
+values containing U+0000 with `InteriorNul`.
+`CString.to_string() -> Result<String, CString.ConversionError>` copies
+exactly `len` bytes and rejects invalid lengths, pointers, and UTF-8.
+The original string is unaffected by either conversion.
 
 ### Passing Pointers to C
 
@@ -1937,7 +1957,7 @@ buf.free()
 For string-accepting C functions, pass `cs.ptr` (the `CPtr<UInt8>`) and `cs.len`:
 
 ```koja
-cs = "hello".to_cstring()
+cs = "hello".to_cstring().unwrap()
 FFI.some_c_function(cs.ptr, cs.len)
 cs.free()
 ```

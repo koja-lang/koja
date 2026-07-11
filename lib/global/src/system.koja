@@ -17,7 +17,11 @@ struct System
       cs = ptr.to_cstring()
       result = cs.to_string()
       cs.free()
-      Result.Ok(result)
+
+      match result
+        Result.Err(_) -> Result.Err("current directory is not valid UTF-8")
+        Result.Ok(value) -> Result.Ok(value)
+      end
     end
   end
 
@@ -26,17 +30,26 @@ struct System
   if the variable is not set.
   """
   fn get_env(key: String) -> Option<String>
-    key_cs = key.to_cstring()
+    key_cs =
+      match key.to_cstring()
+        Result.Err(_) -> return Option.None
+        Result.Ok(value) -> value
+      end
+
     ptr = koja_get_env(key_cs.ptr)
     key_cs.free()
 
     if ptr.null?()
-      Option.None
-    else
-      cs = ptr.to_cstring()
-      result = cs.to_string()
-      cs.free()
-      Option.Some(result)
+      return Option.None
+    end
+
+    cs = ptr.to_cstring()
+    result = cs.to_string()
+    cs.free()
+
+    match result
+      Result.Err(_) -> Option.None
+      Result.Ok(value) -> Option.Some(value)
     end
   end
 
@@ -47,15 +60,15 @@ struct System
     cs = koja_hostname().to_cstring()
     result = cs.to_string()
     cs.free()
-    result
+    result.unwrap()
   end
 
   @doc """
   Sets the environment variable `key` to `value`.
   """
   fn set_env(key: String, value: String)
-    key_cs = key.to_cstring()
-    val_cs = value.to_cstring()
+    key_cs = key.to_cstring().unwrap()
+    val_cs = value.to_cstring().unwrap()
     koja_set_env(key_cs.ptr, val_cs.ptr)
     key_cs.free()
     val_cs.free()

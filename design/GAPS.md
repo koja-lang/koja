@@ -162,35 +162,43 @@ release-mode parity coverage.
 
 ---
 
-## `String` representation violates UTF-8 and backend parity
+## Raw-byte APIs can still create invalid `String` values
 
-`String` is specified as length-bearing UTF-8, but several native
-operations treat its payload as a C string. `String.eq` delegates to
-`strcmp`, while native `length`, `get`, `slice`, and numeric parsing
-construct a `CStr`; all stop at the first NUL. Eval uses the complete
-byte payload.
+Native `String` operations are length-aware and both `CString`
+conversion directions are checked, but the valid-UTF-8 invariant is not
+yet enforced at every raw-byte boundary. The existing public APIs were
+kept stable rather than broadening this fix into an I/O and pointer API
+redesign:
 
-Embedded NUL is valid UTF-8 and is constructible without FFI through
-`Binary.to_string`. Confirmed 2026-07-10:
+- `CPtr<UInt8>.to_string() -> String` trusts that its length-prefixed
+  payload is valid UTF-8.
+- `CPtr<UInt8>.to_cstring() -> CString` trusts NUL termination and
+  computes its length with `strlen`, so an interior NUL truncates the
+  represented bytes.
+- `File.read` and `Socket.recv_from` still expose arbitrary file or
+  datagram bytes as `String`.
+- `Fd.read_binary` and `Random.bytes` temporarily route their
+  length-prefixed raw blocks through `String` before immediately
+  widening to `Binary`.
+- `System.set_env` retains its existing unit-returning API and unwraps
+  checked conversions, so an interior NUL in either argument panics.
 
-- `<<97, 0, 98>>.to_string().unwrap()` and
-  `<<97, 0, 99>>.to_string().unwrap()` compare unequal in eval but equal
-  under LLVM.
-- Eval reports `length() == 3`; LLVM reports `length() == 1`; both
-  report `byte_length() == 3`.
+The last two transient paths do not inspect the temporary string, but
+they still violate the representation invariant. The directly exposed
+paths are more serious: invalid input can inhabit `String`, after which
+eval rejects codepoint operations while native code treats invalid
+UTF-8 as an internal invariant failure.
 
-There is a second invariant breach at the FFI boundary:
-`CString.to_string() -> String` copies bytes without UTF-8 validation.
-With a one-byte `0xff` CString, eval rejects `String.length` as invalid
-UTF-8 while native code lossily decodes it and returns `1`.
-
-**Fix path:** make every native `String` operation use the bit-length
-header rather than NUL termination, and validate with strict UTF-8
-rather than `from_utf8_lossy`. Change `CString.to_string` to a checked
-conversion (matching `Binary.to_string`) or otherwise prevent invalid
-bytes from inhabiting `String`. `String.to_cstring` must also define how
-interior NUL is handled. Add dual-backend fixtures for embedded NUL and
-invalid C bytes.
+**Deferred fix:** make kernel and network byte reads produce `Binary`,
+layer text helpers over `Binary.to_string`, and replace unchecked
+`CPtr.to_string` with a checked conversion or a genuinely internal
+length-prefixed block adoption primitive. A private specialized CPtr
+function is not sufficient today because stdlib bodies specialized from
+another package fail its visibility check; solve that compiler/runtime
+boundary without exposing a new low-level public helper. This likely
+requires breaking `File.read` / `Socket.recv_from` signatures or adding
+parallel binary APIs, so it should land as a separately reviewed API
+change.
 
 ---
 

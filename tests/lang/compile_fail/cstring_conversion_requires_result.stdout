@@ -1,0 +1,2 @@
+error: type error:
+  type annotation on `cs` says `CString`, but the right-hand side has type `Result`

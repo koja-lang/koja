@@ -73,7 +73,7 @@ struct Argon2
   fn hash(password: String) -> Result<String, String>
     salt = random.bytes(16)
     buf: CPtr<UInt8> = CPtr.alloc(128)
-    pwd_c = password.to_cstring()
+    pwd_c = password.to_cstring().unwrap()
     result = argon2id_hash_encoded(
       3, 65536, 1,
       pwd_c.ptr, pwd_c.len,
@@ -81,15 +81,15 @@ struct Argon2
       32, buf, 128
     )
     if result == 0
-      Result.Ok(buf.to_cstring().to_string())
+      Result.Ok(buf.to_cstring().to_string().unwrap())
     else
       Result.Error("argon2 failed")
     end
   end
 
   fn verify(password: String, hash: String) -> Bool
-    pwd_c = password.to_cstring()
-    hash_c = hash.to_cstring()
+    pwd_c = password.to_cstring().unwrap()
+    hash_c = hash.to_cstring().unwrap()
     argon2id_verify(hash_c.ptr, pwd_c.ptr, pwd_c.len) == 0
   end
 end
@@ -142,17 +142,19 @@ functions to types.
 
 ## String interop (decided)
 
-Explicit `CString` type with manual conversion. No automatic marshaling.
+Explicit `CString` type with checked manual conversion. No automatic
+marshaling.
 
-- `string.to_cstring() -> CString` -- copies and null-terminates
-- `cstring.to_string() -> String` -- copies until null byte, produces
-  Koja String
+- `string.to_cstring() -> Result<CString, CString.ConversionError>` --
+  copies and null-terminates, rejecting interior NUL
+- `cstring.to_string() -> Result<String, CString.ConversionError>` --
+  copies exactly `len` bytes and validates UTF-8
 
 ```koja
 pwd = "hunter2"
-pwd_c = pwd.to_cstring()       # Koja String -> CString
-c_result = some_c_function(pwd_c.ptr())
-koja_str = c_result.to_string() # CString -> Koja String
+pwd_c = pwd.to_cstring().unwrap() # Koja String -> CString
+c_result = some_c_function(pwd_c.ptr)
+koja_str = c_result.to_string().unwrap() # CString -> Koja String
 ```
 
 ### `CString` ownership (decided)
@@ -160,6 +162,10 @@ koja_str = c_result.to_string() # CString -> Koja String
 - `to_cstring()` allocates with `malloc` (C-compatible). The caller
   is responsible for freeing via `CString.free()` (which calls
   `CPtr.free()` on the underlying pointer).
+- Koja `String` values may contain U+0000, but conversion rejects it
+  because a conventional null-terminated C string cannot preserve it.
+- `CString.to_string()` trusts the explicit `len`, not `strlen`, and
+  rejects invalid lengths, pointers, and UTF-8.
 - C-returned pointers: wrap in a `CString` struct and call `.free()`
   when done, or call `ptr.free()` directly on the `CPtr<UInt8>`.
 - `CString` lives in auto-imported stdlib (`Global.CString`). Always
@@ -252,9 +258,10 @@ For pointers (`CPtr<T>`): the pointer is a plain machine word, copied by
 value like any scalar. The Koja side retains no ownership of what's
 behind the pointer.
 
-For strings: `to_cstring()` creates a copy via `malloc`. The original
-Koja `String` is unaffected. The `CString` is a new allocation that
-must be freed via `CString.free()` or `cs.ptr.free()`.
+For strings: `String.to_cstring()` returns a checked `Result` and creates
+the successful copy via `malloc`. The original Koja `String` is
+unaffected. The `CString` is a new allocation that must be freed via
+`CString.free()` or `cs.ptr.free()`.
 
 ### Receiving values from C
 

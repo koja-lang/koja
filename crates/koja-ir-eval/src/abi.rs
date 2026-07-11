@@ -34,10 +34,8 @@ unsafe extern "C" {
 
 /// Copy `data` into a fresh block and return the payload pointer.
 /// Mirrors the runtime's `alloc_koja_string`: the payload is
-/// nul-terminated past `data.len()` so C consumers that walk to the
-/// terminator (e.g. `koja_socket_send_to`) stay in bounds, and empty
-/// inputs still get a real, non-null allocation, the same shape the
-/// runtime hands out.
+/// NUL-terminated past `data.len()` for explicit C interop. Empty
+/// inputs still receive a real non-null allocation.
 pub(crate) fn alloc_block(data: &[u8]) -> *mut u8 {
     let base = unsafe { koja_alloc(BLOCK_HEADER_SIZE + data.len() + 1) };
     unsafe {

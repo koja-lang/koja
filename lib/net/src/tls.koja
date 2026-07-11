@@ -56,7 +56,7 @@ enum VerificationError
 
       VerificationError.Other(code) ->
         # Static string owned by BoringSSL: wrap and copy, never free.
-        x509_verify_cert_error_string(code).to_cstring().to_string()
+        x509_verify_cert_error_string(code).to_cstring().to_string().unwrap()
 
       VerificationError.SelfSigned ->
         "certificate is self-signed"
@@ -282,7 +282,17 @@ struct TLSSession
 
     ssl_set_fd(ssl, fd.descriptor)
 
-    host_cs = hostname.to_cstring()
+    host_cs =
+      match hostname.to_cstring()
+        Result.Err(_) ->
+          ssl_free(ssl)
+          ssl_ctx_free(ctx)
+          return handshake_tls_failure(TLSError.ProtocolFailed)
+
+        Result.Ok(value) ->
+          value
+      end
+
     ssl_set_tlsext_host_name(ssl, host_cs.ptr)
 
     if config.verify
@@ -466,7 +476,12 @@ struct TLSSession
   end
 
   priv fn load_ca_file(ctx: CPtr<UInt8>, path: String) -> Result<Bool, TLSError>
-    path_cs = path.to_cstring()
+    path_cs =
+      match path.to_cstring()
+        Result.Err(_) -> return Result.Err(TLSError.TrustStoreInvalid)
+        Result.Ok(value) -> value
+      end
+
     no_dir: CPtr<UInt8> = CPtr.null()
     loaded: Int = ssl_ctx_load_verify_locations(ctx, path_cs.ptr, no_dir)
     path_cs.free()

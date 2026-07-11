@@ -1,8 +1,6 @@
 //! Surface-level coverage for the auto-imported `Global.cstring`
 //! source. Pins the `CString` struct's two fields (`ptr: CPtr<UInt8>`,
-//! `len: Int`), the `free` body, and the
-//! `@intrinsic to_string` declaration, all reachable from user
-//! code that round-trips through `CPtr<UInt8>.to_cstring`.
+//! `len: Int`), nested conversion error, and intrinsic methods.
 
 use koja_ast::identifier::Identifier;
 use koja_typecheck::CheckedProgram;
@@ -23,6 +21,7 @@ fn assert_registered(checked: &CheckedProgram, segments: &[&str]) {
 fn cstring_struct_and_methods_register() {
     let checked = typecheck("1\n");
     assert_registered(&checked, &["CString"]);
+    assert_registered(&checked, &["CString", "ConversionError"]);
     assert_registered(&checked, &["CString", "free"]);
     assert_registered(&checked, &["CString", "to_string"]);
 }
