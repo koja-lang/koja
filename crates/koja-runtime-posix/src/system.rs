@@ -2,6 +2,7 @@
 
 use std::env;
 use std::ffi::{CStr, CString, c_char};
+use std::os::unix::ffi::OsStringExt;
 use std::ptr;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -33,22 +34,20 @@ pub extern "C" fn koja_cwd() -> *const u8 {
 }
 
 /// Returns the value of environment variable `key`, or null if not set.
+/// The value bytes cross verbatim. The Koja caller owns the policy for
+/// values that are not valid UTF-8.
 ///
 /// # Safety
 /// `key_ptr` must point to a valid NUL-terminated UTF-8 string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_get_env(key_ptr: *const u8) -> *const u8 {
     let key = unsafe { CStr::from_ptr(key_ptr as *const c_char) };
-    let key = match key.to_str() {
-        Ok(s) => s,
-        Err(_) => return ptr::null(),
+    let Ok(key) = key.to_str() else {
+        return ptr::null();
     };
-    match env::var(key) {
-        Ok(val) => into_raw_cstring(val),
-        Err(env::VarError::NotPresent) => ptr::null(),
-        Err(env::VarError::NotUnicode(_)) => {
-            panic!("environment variable `{key}` is not valid UTF-8")
-        }
+    match env::var_os(key) {
+        Some(value) => into_raw_cstring(value.into_vec()),
+        None => ptr::null(),
     }
 }
 

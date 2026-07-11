@@ -44,8 +44,11 @@ struct System
     cs.free()
 
     match result
-      Result.Err(_) -> Option.None
-      Result.Ok(value) -> Option.Some(value)
+      Result.Err(_) ->
+        Kernel.panic("System.get_env value for `#{key}` is not valid UTF-8")
+
+      Result.Ok(value) ->
+        Option.Some(value)
     end
   end
 
