@@ -78,7 +78,7 @@ struct LinkStore
     query_one(
       conn,
       "UPDATE links SET url = " <> lit(url) <> " WHERE code = " <> lit(code) <>
-      " RETURNING code, url, created_at::text, hits",
+        " RETURNING code, url, created_at::text, hits",
     )
   end
 
@@ -108,7 +108,7 @@ struct LinkStore
 
     outcome = conn.simple_query(
       "UPDATE links SET hits = hits + 1 WHERE code = " <> lit(code) <>
-      " RETURNING url",
+        " RETURNING url",
     )
 
     match outcome.second
@@ -139,7 +139,7 @@ struct LinkStore
     code = generate_code(CODE_LENGTH, "")
     outcome = conn.simple_query(
       "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <> lit(url) <>
-      ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
+        ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
     )
 
     match outcome.second
