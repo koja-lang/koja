@@ -173,23 +173,23 @@ struct PgMessage
     match PgIO.take_u32(body)
       Option.Some(pair) ->
         if pair.first == NULL_VALUE
-          null: Option<String> = Option.None
           return PgMessage.read_columns(
             pair.second,
             remaining - 1,
-            acc.append(null),
+            acc.append(Option.None),
           )
         end
 
         split = PgIO.split_at(pair.second, pair.first)
 
-        value: Option<String> =
-          match split.first.to_string()
-            Result.Ok(s) -> Option.Some(s)
-            Result.Err(_) -> Option.None
-          end
-
-        PgMessage.read_columns(split.second, remaining - 1, acc.append(value))
+        PgMessage.read_columns(
+          split.second,
+          remaining - 1,
+          acc.append(match split.first.to_string()
+              Result.Ok(s) -> Option.Some(s)
+              Result.Err(_) -> Option.None
+            end),
+        )
 
       Option.None ->
         acc

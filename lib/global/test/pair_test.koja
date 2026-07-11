@@ -28,4 +28,19 @@ struct PairTest
 
     Result.Ok(true)
   end
+
+  @test "Pair.new infers Option.None from return type"
+  fn test_pair_new_contextual_none -> Result<Bool, String>
+    pair = PairTest.empty_labelled()
+
+    unless pair.first == 1 and pair.second.none?()
+      return Result.Err("expected Pair(1, None)")
+    end
+
+    Result.Ok(true)
+  end
+
+  priv fn empty_labelled -> Pair<Int, Option<String>>
+    Pair.new(1, Option.None)
+  end
 end

@@ -7,8 +7,7 @@ struct StringBuilder
   parts: List<String>
 
   fn new -> StringBuilder
-    parts: List<String> = List.new()
-    StringBuilder{parts: parts}
+    StringBuilder{parts: List.new()}
   end
 
   fn add(self, s: String) -> StringBuilder

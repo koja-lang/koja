@@ -44,7 +44,7 @@ use crate::registry::{
 
 use super::coercion::{Mismatch, check_compatible_stamping};
 use super::ctx::{Callee, Resolver};
-use super::expr::{resolve_expr, resolve_expr_with_expected};
+use super::expr::resolve_expr_with_expected;
 use super::inference::{PhantomContext, fill_from_expected, finalize_inference, unify_pairs};
 use super::process::check_monitor_call_site;
 use super::types::{display_resolution, lookup_type};
@@ -190,12 +190,17 @@ fn resolve_function_call(
         );
         sig.return_type.clone()
     } else {
-        resolve_non_closure_args(args, resolver, diagnostics);
         let callee = Callee {
             id,
             label: &label,
             type_params: &type_params,
         };
+        let mut hint_subst = Substitution::single(callee.id, callee.type_params.len());
+        if let Some(hint) = site.expected {
+            fill_from_expected(&sig.return_type, hint, &mut hint_subst, resolver.registry);
+        }
+        let hinted_params = substitute_params(&sig.params, &hint_subst);
+        resolve_non_closure_args(args, Some(&hinted_params), resolver, diagnostics);
         let mut partial_subst = Substitution::single(callee.id, callee.type_params.len());
         let partial_pairs = sig
             .params
@@ -499,7 +504,28 @@ pub(super) fn resolve_method_call(
         label: &method_label,
         type_params: &method_type_params,
     };
-    resolve_non_closure_args(args, resolver, diagnostics);
+    let mut hint_subst = Substitution::dual(
+        receiver_callee.id,
+        receiver_callee.type_params.len(),
+        method_callee.id,
+        method_callee.type_params.len(),
+    );
+    seed_receiver_subst(
+        &mut hint_subst,
+        receiver_callee.id,
+        &receiver.resolution,
+        resolver.registry,
+    );
+    if let Some(hint) = expected {
+        fill_from_expected(&sig.return_type, hint, &mut hint_subst, resolver.registry);
+    }
+    let hinted_params = substitute_params(&sig.params, &hint_subst);
+    resolve_non_closure_args(
+        args,
+        Some(method_receiver.explicit_params(&hinted_params)),
+        resolver,
+        diagnostics,
+    );
     let mut partial_subst = Substitution::dual(
         receiver_callee.id,
         receiver_callee.type_params.len(),
@@ -936,21 +962,25 @@ fn resolve_args(
     }
 }
 
-/// First-pass arg resolution for generic callees: resolve every arg
-/// that isn't a closure expression so type-arg inference has
-/// something to unify against. Closure args wait for the second pass
-/// once their expected `fn (T) -> U` shape is known.
+/// First-pass argument resolution for generic callees. Fully resolved
+/// parameter hints flow into context-dependent expressions while
+/// closure arguments wait for the second pass.
 fn resolve_non_closure_args(
     args: &mut [Arg],
+    expected: Option<&[ResolvedParam]>,
     resolver: &mut Resolver<'_>,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    for arg in args.iter_mut() {
+    for (index, arg) in args.iter_mut().enumerate() {
         diagnose_named_arg(arg, diagnostics);
         if is_closure_expr(&arg.value.kind) {
             continue;
         }
-        resolve_expr(&mut arg.value, resolver, diagnostics);
+        let expected_type = expected
+            .and_then(|params| params.get(index))
+            .map(|param| &param.ty)
+            .filter(|ty| ty.is_resolved());
+        resolve_expr_with_expected(&mut arg.value, expected_type, resolver, diagnostics);
     }
 }
 

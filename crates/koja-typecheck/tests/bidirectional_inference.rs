@@ -41,6 +41,47 @@ fn unit_variant_inferred_from_function_return_type() {
 }
 
 #[test]
+fn unit_variant_in_generic_static_call_arg_from_return_hint() {
+    let source = "
+        struct Thing
+        end
+
+        fn build(thing: Thing) -> Pair<Thing, Option<String>>
+          Pair.new(thing, Option.None)
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn unit_variant_in_generic_free_call_arg_from_return_hint() {
+    let source = "
+        fn pair<A, B>(first: A, second: B) -> Pair<A, B>
+          Pair{first: first, second: second}
+        end
+
+        fn build() -> Pair<Int, Option<String>>
+          pair(1, Option.None)
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn expected_return_can_seed_one_param_while_an_arg_infers_another() {
+    let source = "
+        fn keep_first<A, B>(first: Option<A>, _second: B) -> Option<A>
+          first
+        end
+
+        fn build() -> Option<Int>
+          keep_first(Option.None, \"unused\")
+        end
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
 fn unit_variant_inferred_from_match_arm_in_function_tail() {
     let source = "
         enum Maybe<T>

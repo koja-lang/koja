@@ -4,13 +4,19 @@
 [![GitHub Release](https://img.shields.io/github/v/release/koja-lang/koja)](https://github.com/koja-lang/koja/releases)
 [![Last Updated](https://img.shields.io/github/last-commit/koja-lang/koja.svg)](https://github.com/koja-lang/koja/commits/main)
 
-Koja is a statically typed, compiled language targeting native binaries via LLVM, with no garbage collector. It combines a Rust-inspired type system, Swift-style value semantics, an Erlang-style concurrency model, and Ruby-inspired syntax.
+Koja is a statically typed language for building readable, reliable
+services. It pairs Ruby-inspired syntax and Erlang-style concurrency
+with Swift-style value semantics and a Rust-inspired type system.
+Develop quickly with the interpreter, then ship native LLVM binaries
+with deterministic memory management and no garbage collector.
 
 For the full language specification, see [LANGUAGE.md](LANGUAGE.md).
 
 ## Installation
 
-The easiest way to install Koja is with [asdf](https://asdf-vm.com). This ships prebuilt binaries for macOS arm64 and Linux x86_64 — the `koja` compiler and the `koja-lsp` language server, kept in lockstep:
+The easiest way to install Koja is with [asdf](https://asdf-vm.com). This
+ships the `koja` compiler and `koja-lsp` language server for Apple Silicon
+and x86-64 Linux.
 
 ```sh
 asdf plugin add koja https://github.com/koja-lang/asdf-koja.git
@@ -18,7 +24,10 @@ asdf install koja latest
 asdf set --home koja latest
 ```
 
-Prebuilt tarballs are also attached to every [release](https://github.com/koja-lang/koja/releases). For other platforms, or to build from source, see [INSTALLING.md](INSTALLING.md).
+Prebuilt tarballs are also attached to every
+[release](https://github.com/koja-lang/koja/releases). For other
+platforms, or to build from source, see
+[INSTALLING.md](INSTALLING.md).
 
 ## Getting Started
 
@@ -29,159 +38,132 @@ echo 'IO.puts("hello, world!")' > hello.kojs
 koja run hello.kojs
 ```
 
-## Editor Extensions
-
-- **Vim** — [`vim-koja`](https://github.com/koja-lang/vim-koja) (Syntax and indentation only. No language server.)
-- **VS Code** — [`vscode-koja`](https://github.com/koja-lang/vscode-koja)
-- **Zed** — [`zed-koja`](https://github.com/koja-lang/zed-koja)
-
-Any editor with a tree-sitter or LSP client can integrate directly against the grammar and `koja-lsp`.
-
 ## Language Overview
 
-The snippets below are `.kojs` scripts — statements run from the top
+The snippets below are `.kojs` scripts. Statements run from the top
 of the file. Compiled programs (`koja.toml` projects) instead start
-from a type implementing `Process`; see
-[LANGUAGE.md](LANGUAGE.md#modules).
+from a type implementing `Process`. See [LANGUAGE.md](LANGUAGE.md#concurrency).
 
-### Functions
-
-```koja
-fn add(a: Int32, b: Int32) -> Int32
-  a + b
-end
-
-add(2, 3).print()
-```
-
-### Structs and Functions
+### Data and Pattern Matching
 
 ```koja
-struct Point
-  x: Int32
-  y: Int32
+struct User
+  name: String
 end
 
-extend Point
-  fn distance_squared(self) -> Int32
-    self.x * self.x + self.y * self.y
+enum Event
+  Joined(User)
+  Left(String)
+end
+
+fn describe(event: Event) -> String
+  match event
+    Event.Joined(user) -> "#{user.name} joined"
+    Event.Left(name) -> "#{name} left"
   end
 end
 
-p = Point{x: 3, y: 4}
-p.distance_squared().print()
+describe(Event.Joined(User{name: "Ada"})).print()
 ```
 
-### Enums and Pattern Matching
+### Value Semantics
 
-```koja
-enum Shape
-  Circle(Int32)
-  Rect(Int32, Int32)
-end
-
-fn area(s: Shape) -> Int32
-  match s
-    Shape.Circle(r) -> r * r * 3
-    Shape.Rect(w, h) -> w * h
-  end
-end
-```
-
-### Generics
-
-```koja
-fn identity<T>(x: T) -> T
-  x
-end
-
-identity(42).print()
-identity("hello").print()
-```
-
-### Values
-
-Variables, parameters, and return values are independent values:
-assigning or passing one hands off a logically separate copy. Copies are
-cheap -- heap-backed values like `String`, `Binary`, and collections are
-shared under the hood and only duplicated when mutated.
+Assignments produce independent values. Heap-backed storage is shared
+internally and copied only when one value changes.
 
 ```koja
 struct Config
   name: String
 end
 
-fn describe(c: Config) -> String
-  c.name
-end
+original = Config{name: "development"}
+copy = original
 
-c = Config{name: "test"}
-describe(c).print()   # c is passed by value
-c.name.print()        # and still usable here
+copy.name = "production"
+
+original.name.print() # "development"
+copy.name.print()     # "production"
 ```
 
-### Protocols
+### Binary Pattern Matching
 
 ```koja
-protocol Greeter
-  fn greet(self) -> String
-end
+fn describe_packet(packet: Binary) -> String
+  match packet
+    <<tag::8, length::16, payload: Binary>> ->
+      "tag #{tag}: #{length} bytes (#{payload.byte_size()} available)"
 
-impl Greeter for Point
-  fn greet(self) -> String
-    "(#{self.x}, #{self.y})"
-  end
-end
-```
-
-### Closures and Higher-Order Functions
-
-```koja
-fn apply(x: Int32, f: fn(Int32) -> Int32) -> Int32
-  f(x)
-end
-
-double = fn (n: Int32) -> Int32 n * 2 end
-apply(5, double).print()
-```
-
-### Collections and Iteration
-
-```koja
-list: List<Int32> = List.new().append(1).append(2).append(3)
-
-for item in list
-  item.print()
-end
-```
-
-### Control Flow
-
-```koja
-fn classify(n: Int32) -> String
-  cond
-    n > 100 -> "big"
-    n > 10 -> "medium"
-    else -> "small"
+    _ ->
+      "invalid packet"
   end
 end
 
-x = 5
-y = x > 2 ? "big" : "small"
-y.print()
-classify(200).print()
+describe_packet(<<1, 5::16, "hello">>).print()
 ```
+
+### Typed Processes
+
+```koja
+alias Process.Step
+alias Process.StopReason
+
+enum CounterMsg
+  Add(Int)
+end
+
+struct Counter
+  value: Int
+end
+
+impl Process<Int, CounterMsg, Int> for Counter
+  fn start(initial: Int) -> Result<Self, StopReason>
+    Result.Ok(Counter{value: initial})
+  end
+
+  fn handle(self, msg: CounterMsg, from: Option<ReplyTo<Int>>) -> Step<Self>
+    match msg
+      CounterMsg.Add(amount) ->
+        next = self.value + amount
+        ReplyTo.reply(from, next)
+        Step.Continue(Counter{value: next})
+    end
+  end
+end
+
+counter = spawn Counter.start(40)
+counter.cast(CounterMsg.Add(1))
+
+match counter.call(CounterMsg.Add(1), 1000)
+  Result.Ok(value) -> value.print()
+  Result.Err(_) -> "counter unavailable".print()
+end
+```
+
+Explore more in the runnable [language tour](examples/tour.kojs), or read
+the complete [language reference](LANGUAGE.md).
+
+## Editor Extensions
+
+- **Vim** - [`vim-koja`](https://github.com/koja-lang/vim-koja) (syntax and indentation)
+- **VS Code** - [`vscode-koja`](https://github.com/koja-lang/vscode-koja)
+- **Zed** - [`zed-koja`](https://github.com/koja-lang/zed-koja)
+
+Any editor with a tree-sitter or LSP client can integrate directly
+against the grammar and `koja-lsp`.
 
 ## Contributing
 
-Working on the compiler requires building from source — see [INSTALLING.md](INSTALLING.md) for toolchain setup (Rust 1.85+, LLVM 18).
+Working on the compiler requires building from source. See
+[INSTALLING.md](INSTALLING.md) for toolchain setup (Rust 1.85+, LLVM 18).
 
 ### Testing
 
 Build and run the test suite.
 
 ```sh
-cargo build && ./target/debug/koja run tests/test_build.kojs
+cargo build -p koja-runtime-posix
+cargo build --release -p koja-runtime-posix
+cargo test --workspace -- --test-threads=4
 ```
 
 ### Formatting
@@ -189,8 +171,18 @@ cargo build && ./target/debug/koja run tests/test_build.kojs
 Koja source files can be formatted with the built-in formatter.
 
 ```sh
-./target/debug/koja format --write <file.koja>
+koja format --write <file.koja>
 ```
+
+Compiler formatting and lint checks use Cargo:
+
+```sh
+cargo fmt --check
+cargo clippy --workspace
+```
+
+See [the CI workflow](.github/workflows/ci.yml) for the complete compiler,
+language, and standard library test matrix.
 
 ## License
 

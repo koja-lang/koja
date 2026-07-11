@@ -46,13 +46,10 @@ struct LinkStore
 
     match outcome.second
       Result.Err(e) ->
-        Pair{first: outcome.first, second: Result.Err(e)}
+        Pair.new(outcome.first, Result.Err(e))
 
       Result.Ok(qr) ->
-        Pair{
-          first: outcome.first,
-          second: Result.Ok(map_rows(qr.rows, 0, rows)),
-        }
+        Pair.new(outcome.first, Result.Ok(map_rows(qr.rows, 0, rows)))
     end
   end
 
@@ -92,10 +89,10 @@ struct LinkStore
 
     match outcome.second
       Result.Err(e) ->
-        Pair{first: outcome.first, second: Result.Err(e)}
+        Pair.new(outcome.first, Result.Err(e))
 
       Result.Ok(qr) ->
-        Pair{first: outcome.first, second: Result.Ok(qr.tag != "DELETE 0")}
+        Pair.new(outcome.first, Result.Ok(qr.tag != "DELETE 0"))
     end
   end
 
@@ -113,7 +110,7 @@ struct LinkStore
 
     match outcome.second
       Result.Err(e) ->
-        Pair{first: outcome.first, second: Result.Err(e)}
+        Pair.new(outcome.first, Result.Err(e))
 
       Result.Ok(qr) ->
         target: Option<String> =
@@ -122,7 +119,7 @@ struct LinkStore
             Option.None -> Option.None
           end
 
-        Pair{first: outcome.first, second: Result.Ok(target)}
+        Pair.new(outcome.first, Result.Ok(target))
     end
   end
 
@@ -130,10 +127,7 @@ struct LinkStore
     -> Pair<Postgres, Result<Link, String>>
 
     if attempt >= MAX_ATTEMPTS
-      return Pair{
-        first: conn,
-        second: Result.Err("could not generate a unique code"),
-      }
+      return Pair.new(conn, Result.Err("could not generate a unique code"))
     end
 
     code = generate_code(CODE_LENGTH, "")
@@ -144,12 +138,11 @@ struct LinkStore
 
     match outcome.second
       Result.Err(e) ->
-        Pair{first: outcome.first, second: Result.Err(e)}
+        Pair.new(outcome.first, Result.Err(e))
 
       Result.Ok(qr) ->
         match first_link(qr)
-          Option.Some(link) ->
-            Pair{first: outcome.first, second: Result.Ok(link)}
+          Option.Some(link) -> Pair.new(outcome.first, Result.Ok(link))
           Option.None -> create_attempt(outcome.first, url, attempt + 1)
         end
     end
@@ -160,13 +153,10 @@ struct LinkStore
 
     outcome = conn.simple_query(sql)
 
-    result: Result<Option<Link>, String> =
-      match outcome.second
+    Pair.new(outcome.first, match outcome.second
         Result.Ok(qr) -> Result.Ok(first_link(qr))
         Result.Err(e) -> Result.Err(e)
-      end
-
-    Pair{first: outcome.first, second: result}
+      end)
   end
 
   priv fn map_rows(

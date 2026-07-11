@@ -43,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Enum matches with partial payload patterns now report the uncovered outer variant at compile time instead of reaching an unreachable runtime path.
 - Negative process timeouts and delayed sends now behave as zero on both execution backends instead of becoming near-infinite waits in compiled programs.
+- Generic call arguments such as `Option.None` and `Result.Err` now infer missing type parameters from the call's enclosing expected return type.
 - `koja shell` now prints results the same way `.print()` does — structs with named fields, enums with their variant names, strings quoted — instead of garbled internal type names.
 
 ## [0.13.0] - 2026-06-24

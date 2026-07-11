@@ -54,18 +54,15 @@ struct Postgres
 
     match PgIO.write_all(self.socket, PgMessage.encode_query(sql))
       Result.Err(e) ->
-        return Pair{
-          first: self,
-          second: Result.Err("query write failed: " <> e),
-        }
+        return Pair.new(self, Result.Err("query write failed: " <> e))
       Result.Ok(_) -> ()
     end
 
     outcome = Postgres.collect(self.socket, self.buffer, QueryState.empty())
-    Pair{
-      first: Postgres{buffer: outcome.first, socket: self.socket},
-      second: outcome.second,
-    }
+    Pair.new(
+      Postgres{buffer: outcome.first, socket: self.socket},
+      outcome.second,
+    )
   end
 
   @doc """
@@ -108,14 +105,14 @@ struct Postgres
     pair =
       match PgIO.read_message(socket, buffer)
         Result.Ok(p) -> p
-        Result.Err(e) -> return Pair{first: buffer, second: Result.Err(e)}
+        Result.Err(e) -> return Pair.new(buffer, Result.Err(e))
       end
 
     leftover = pair.second
 
     match PgMessage.decode(pair.first)
       BackendMessage.ReadyForQuery ->
-        Pair{first: leftover, second: state.finish()}
+        Pair.new(leftover, state.finish())
 
       BackendMessage.RowDescription(fields) ->
         Postgres.collect(socket, leftover, state.with_fields(fields))
@@ -158,8 +155,7 @@ struct Postgres.QueryState
   fn empty -> QueryState
     fields: List<String> = List.new()
     rows: List<List<Option<String>>> = List.new()
-    error: Option<String> = Option.None
-    QueryState{error: error, fields: fields, rows: rows, tag: ""}
+    QueryState{error: Option.None, fields: fields, rows: rows, tag: ""}
   end
 
   fn add_row(self, columns: List<Option<String>>) -> QueryState
