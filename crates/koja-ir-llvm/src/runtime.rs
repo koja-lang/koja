@@ -274,7 +274,7 @@ pub(crate) fn declare_memset_extern<'ctx>(ctx: &EmitContext<'ctx>) -> FunctionVa
 /// receives one datagram and returns a heap-allocated
 /// `[*u8 data, *u8 ip_bin, i64 port]` triple (or null on error).
 /// The `Socket.recv_from` intrinsic emitter marshals the triple
-/// into a `Pair<String, SocketAddress>` SSA value.
+/// into a `Pair<Binary, SocketAddress>` SSA value.
 pub(crate) fn declare_socket_recv_from_extern<'ctx>(
     ctx: &EmitContext<'ctx>,
 ) -> FunctionValue<'ctx> {

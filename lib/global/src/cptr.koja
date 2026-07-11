@@ -1,6 +1,7 @@
 struct CPtr<T>
   @doc """
   Allocates memory for `count` elements of type T using C's malloc.
+  Panics when `count` is negative.
   """
   @intrinsic
   fn alloc(count: Int) -> CPtr<T>
@@ -46,24 +47,16 @@ extend CPtr<UInt8>
   @doc """
   Creates a `Binary` by copying `len` bytes from this pointer.
 
-  The caller retains ownership of the pointer.
+  The caller retains ownership of the pointer. Panics when `len` is negative.
   """
   @intrinsic
   fn to_binary(self, len: Int) -> Binary
 
   @doc """
-  Reinterprets this pointer as a Koja `String`. The pointer must already
-  point to a valid length-prefixed Koja string payload (as allocated by
-  the runtime). This is a zero-cost operation.
-  """
-  @intrinsic
-  fn to_string(self) -> String
-
-  @doc """
   Wraps this pointer in a `CString` by computing the length with `strlen`.
 
-  The pointer must be a valid null-terminated C string. The caller is
-  responsible for freeing the result.
+  This does not allocate or transfer ownership. The pointer must address
+  a valid null-terminated C string.
   """
   fn to_cstring(self) -> CString
     CString{ptr: self, len: strlen(self)}

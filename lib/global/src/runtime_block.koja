@@ -1,0 +1,4 @@
+priv struct RuntimeBlock
+  @intrinsic
+  fn adopt_binary(ptr: CPtr<UInt8>) -> Binary
+end

@@ -35,10 +35,9 @@ fn cptr_struct_and_generic_methods_register() {
 
 #[test]
 fn cptr_uint8_concrete_impl_methods_register() {
-    // `to_binary` and `to_string` live on `impl CPtr<UInt8>`, plus
-    // the pure-Koja `to_cstring` and the private `strlen` extern.
+    // Byte and C-string conversion functions live on `impl CPtr<UInt8>`.
     let checked = typecheck("1\n");
-    for method in ["to_binary", "to_string", "to_cstring", "strlen"] {
+    for method in ["to_binary", "to_cstring", "strlen"] {
         assert_registered(&checked, &["CPtr", method]);
     }
 }

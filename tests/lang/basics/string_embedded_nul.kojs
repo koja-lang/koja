@@ -47,3 +47,13 @@ match Float.parse(floating)
   Result.Err(_) -> "invalid_float".print()
   Result.Ok(_) -> "wrong".print()
 end
+
+match <<255>>.to_string()
+  Result.Err(error) ->
+    match error
+      String.ConversionError.InvalidUTF8 -> "invalid_utf8".print()
+    end
+
+  Result.Ok(_) ->
+    "wrong".print()
+end

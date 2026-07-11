@@ -43,17 +43,28 @@ const O_NONBLOCK: i32 = 0x800;
 unsafe extern "C" {
     fn fcntl(fd: i32, cmd: i32, ...) -> i32;
     fn koja_socket_accept(fd: i32) -> i32;
-    fn koja_socket_connect(fd: i32, ip: *const u8, port: i64) -> i64;
+    fn koja_socket_connect(fd: i32, ip: *const u8, ip_length: i64, port: i64) -> i64;
     fn koja_socket_create(sock_type: i64) -> i32;
-    fn koja_socket_send_to(fd: i32, data: *const u8, ip: *const u8, port: i64) -> i64;
+    fn koja_socket_send_to(
+        fd: i32,
+        data: *const u8,
+        data_length: i64,
+        ip: *const u8,
+        ip_length: i64,
+        port: i64,
+    ) -> i64;
     fn koja_socket_try_accept(fd: i32) -> i32;
 }
 
 pass_through_externs! {
     errno_code => fn koja_errno_code() -> Int32;
-    last_error => fn koja_last_error() -> CPtr;
     last_error_code => fn koja_last_error_code() -> Int32;
-    socket_bind => fn koja_socket_bind(fd: Int32, ip: CPtr, port: Int64) -> Int64;
+    socket_bind => fn koja_socket_bind(
+        fd: Int32,
+        ip: CPtr,
+        ip_length: Int64,
+        port: Int64,
+    ) -> Int64;
     socket_listen => fn koja_socket_listen(fd: Int32, backlog: Int64) -> Int64;
     socket_setsockopt_reuse => fn koja_socket_setsockopt_reuse(fd: Int32) -> Int64;
 }
@@ -93,39 +104,47 @@ pub(super) fn socket_try_accept(args: &[Value]) -> Result<Value, RuntimeError> {
     Ok(Value::Int(i64::from(client)))
 }
 
-/// `koja_socket_connect(fd, ip, port)`: the one path that cannot pre-wait
+/// `koja_socket_connect(fd, ip, ip_length, port)`: the one path that cannot pre-wait
 /// for readiness (the fd is not writable until the handshake starts).
 /// Flip the fd to blocking so the native connect waits in the kernel
 /// instead of parking via the native reactor, then restore non-blocking
 /// for subsequent reads / writes.
 pub(super) fn socket_connect(args: &[Value]) -> Result<Value, RuntimeError> {
-    let [Value::Int(fd), Value::CPtr(ip), Value::Int(port)] = args else {
+    let [
+        Value::Int(fd),
+        Value::CPtr(ip),
+        Value::Int(ip_length),
+        Value::Int(port),
+    ] = args
+    else {
         return Err(type_mismatch(
             "koja_socket_connect",
-            "(fd: Int32, ip: CPtr, port: Int64)",
+            "(fd: Int32, ip: CPtr, ip_length: Int64, port: Int64)",
             args,
         ));
     };
     let fd = *fd as i32;
     set_nonblocking(fd, false);
-    let result = unsafe { koja_socket_connect(fd, *ip, *port) };
+    let result = unsafe { koja_socket_connect(fd, *ip, *ip_length, *port) };
     set_nonblocking(fd, true);
     Ok(Value::Int(result))
 }
 
-/// `koja_socket_send_to(fd, data, ip, port)`: wait for the socket to be
+/// `koja_socket_send_to(fd, data, data_length, ip, ip_length, port)`: wait for the socket to be
 /// writable, then delegate to the native sender.
 pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError> {
     let [
         Value::Int(fd),
         Value::CPtr(data),
+        Value::Int(data_length),
         Value::CPtr(ip),
+        Value::Int(ip_length),
         Value::Int(port),
     ] = args
     else {
         return Err(type_mismatch(
             "koja_socket_send_to",
-            "(fd: Int32, data: CPtr, ip: CPtr, port: Int64)",
+            "(fd: Int32, data: CPtr, data_length: Int64, ip: CPtr, ip_length: Int64, port: Int64)",
             args,
         ));
     };
@@ -133,7 +152,8 @@ pub(super) async fn socket_send_to(args: &[Value]) -> Result<Value, RuntimeError
     if reactor::io_block(*fd as i32, Interest::Writable).await {
         return Ok(Value::Int(-1));
     }
-    let sent = unsafe { koja_socket_send_to(*fd as i32, *data, *ip, *port) };
+    let sent =
+        unsafe { koja_socket_send_to(*fd as i32, *data, *data_length, *ip, *ip_length, *port) };
     Ok(Value::Int(sent))
 }
 

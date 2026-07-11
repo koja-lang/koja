@@ -105,6 +105,7 @@ fn main() {
         "Global.process",
         "Global.random",
         "Global.result",
+        "Global.runtime_block",
         "Global.set",
         "Global.string",
         "Global.system",

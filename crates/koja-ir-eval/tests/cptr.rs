@@ -5,13 +5,11 @@
 //! `String.to_cstring` + `CString.to_string` round-trip a String
 //! through a null-terminated `malloc` copy.
 //!
-//! `CPtr<UInt8>.to_string` reads the v1 length-prefixed Koja string
-//! ABI; we exercise it via `Random.bytes` (see the `random.rs` test
-//! suite) since constructing a header-prefixed buffer manually from
-//! pure Koja is awkward.
+//! Runtime-produced block adoption is covered separately through
+//! `Random.bytes`.
 
 use koja_ast::util::dedent;
-use koja_ir_eval::Value;
+use koja_ir_eval::{RuntimeError, Value};
 
 mod common;
 
@@ -49,6 +47,40 @@ fn cptr_alloc_then_free_round_trips_without_panicking() {
 }
 
 #[test]
+fn cptr_alloc_rejects_negative_count() {
+    let error = evaluate_script(&dedent(
+        r#"
+        ptr: CPtr<UInt8> = CPtr.alloc(-1)
+        ptr.null?()
+        "#,
+    ))
+    .expect_err("negative CPtr.alloc count must panic");
+    assert_eq!(
+        error,
+        RuntimeError::Panicked {
+            message: "CPtr.alloc count cannot be negative".to_string(),
+        },
+    );
+}
+
+#[test]
+fn cptr_to_binary_rejects_negative_length() {
+    let error = evaluate_script(&dedent(
+        r#"
+        ptr: CPtr<UInt8> = CPtr.null()
+        ptr.to_binary(-1)
+        "#,
+    ))
+    .expect_err("negative CPtr.to_binary length must panic");
+    assert_eq!(
+        error,
+        RuntimeError::Panicked {
+            message: "CPtr.to_binary length cannot be negative".to_string(),
+        },
+    );
+}
+
+#[test]
 fn cptr_write_then_read_round_trips_a_byte() {
     // Allocate a single-byte buffer, write a UInt8 marker, read it
     // back. Round-tripping a primitive value through a raw pointer
@@ -70,6 +102,19 @@ fn cptr_write_then_read_round_trips_a_byte() {
     ))
     .expect("write -> read -> free chain should evaluate cleanly");
     assert_eq!(outcome, Value::Int(0x42));
+}
+
+#[test]
+fn binary_ptr_borrows_underlying_bytes() {
+    let outcome = evaluate_script(&dedent(
+        r#"
+        bytes: Binary = <<10, 20>>
+        ptr = bytes.ptr()
+        ptr.offset(1).read()
+        "#,
+    ))
+    .expect("Binary.ptr should borrow readable bytes");
+    assert_eq!(outcome, Value::Int(20));
 }
 
 #[test]

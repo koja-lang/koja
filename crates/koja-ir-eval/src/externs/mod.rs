@@ -112,7 +112,6 @@ pub(crate) async fn dispatch(
         "koja_hostname" => Some(system::hostname(args)),
         "koja_io_block" => Some(fd::io_block(args).await),
         "koja_kernel_exit" => Some(kernel::exit(args)),
-        "koja_last_error" => Some(net::last_error(args)),
         "koja_last_error_code" => Some(net::last_error_code(args)),
         "koja_random_bytes" => Some(random::bytes(args)),
         "koja_random_int" => Some(random::int(args)),

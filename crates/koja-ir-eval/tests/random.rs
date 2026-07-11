@@ -1,15 +1,11 @@
 //! Eval coverage for the auto-imported `Global.random` stdlib file.
-//! `Random.bytes` flows `koja_random_bytes -> CPtr<UInt8>.to_string ->
-//! String.to_binary`; eval honors every step:
+//! `Random.bytes` adopts the runtime's managed Binary block:
 //!
 //! - `koja_random_bytes` routes through the curated extern table
 //!   into `koja-runtime`'s `koja_random_bytes`, so eval consumes
 //!   the same OS entropy as the LLVM backend.
-//! - `CPtr<UInt8>.to_string` reads the length-prefixed Koja string
-//!   ABI from the raw pointer, copies the payload out, frees the
-//!   source header chunk, and returns a `Value::String`.
-//! - `String.to_binary` is a zero-cost widening that lands as
-//!   `Value::Binary`.
+//! - `RuntimeBlock.adopt_binary` reads the payload, frees the source
+//!   runtime block, and returns a `Value::Binary`.
 //!
 //! `Random.int` is a direct extern shim; we pin both ends with
 //! `min == max` (deterministic) so the test doesn't depend on the

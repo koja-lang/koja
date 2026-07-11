@@ -9,16 +9,17 @@ enum CString.ConversionError
 end
 
 @doc """
-A null-terminated C string. Allocated with `malloc`, must be freed
-explicitly via `free()`. Use `String.to_cstring()` to create one from
-a Koja string, and `to_string()` to convert back.
+A pointer and byte length describing a null-terminated C string.
+Ownership depends on where the pointer came from: `String.to_cstring`
+allocates owned memory, while a manually wrapped C pointer may be borrowed.
 """
 struct CString
   ptr: CPtr<UInt8>
   len: Int
 
   @doc """
-  Frees the underlying C memory.
+  Frees the underlying C memory. Only call this when the descriptor owns
+  malloc-compatible storage.
   """
   fn free(self)
     self.ptr.free()

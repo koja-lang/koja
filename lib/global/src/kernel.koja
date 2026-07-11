@@ -82,6 +82,13 @@ impl Hash for Bool
   fn hash(self) -> Int
 end
 
+@doc """
+Why arbitrary bytes could not be decoded as a Koja `String`.
+"""
+enum String.ConversionError
+  InvalidUTF8
+end
+
 extend Binary
   @doc """
   Returns the byte at `index` as an `Int` in `0..255`, or
@@ -97,7 +104,8 @@ extend Binary
   fn byte_size(self) -> Int
 
   @doc """
-  Returns a raw pointer to the underlying byte data.
+  Borrows a raw pointer to the underlying byte data. The `Binary` must
+  remain live and immutable while the pointer is in use.
   """
   @intrinsic
   fn ptr(self) -> CPtr<UInt8>
@@ -118,11 +126,10 @@ extend Binary
 
   @doc """
   Attempts to interpret the binary as a UTF-8 string. Returns `Result.Ok`
-  with the string if the bytes are valid UTF-8, or `Result.Err` with a
-  diagnostic message otherwise.
+  with the string if the bytes are valid UTF-8, or `InvalidUTF8` otherwise.
   """
   @intrinsic
-  fn to_string(self) -> Result<String, String>
+  fn to_string(self) -> Result<String, String.ConversionError>
 end
 
 extend Bits

@@ -1580,15 +1580,15 @@ Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns t
 
 - `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
 - `byte_size(self) -> Int` -- returns the number of bytes.
-- `ptr(self) -> CPtr<UInt8>` -- returns a raw pointer to the underlying byte data. Useful for passing binary data to C FFI functions.
+- `ptr(self) -> CPtr<UInt8>` -- borrows a raw pointer to the underlying byte data. The `Binary` must remain live while C uses the pointer.
 - `slice(self, range: Range) -> Binary` -- copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
 - `to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
-- `to_string(self) -> Result<String, String>` -- attempts to interpret bytes as UTF-8. Returns `Result.Err` with a diagnostic if invalid.
+- `to_string(self) -> Result<String, String.ConversionError>` -- attempts to interpret bytes as UTF-8, returning `InvalidUTF8` when decoding fails.
 
 #### Conversion Functions
 
 - `String.to_binary(self) -> Binary` -- zero-cost widening from UTF-8 string to bytes.
-- `CPtr<UInt8>.to_binary(self, len: Int) -> Binary` -- creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed.
+- `CPtr<UInt8>.to_binary(self, len: Int) -> Binary` -- creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed; a negative length panics.
 - `Bits.to_binary(self) -> Result<Binary, String>` -- narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
 
 ```koja
@@ -1612,8 +1612,9 @@ end
 
 Functions:
 
-- `read(self, count: Int) -> Result<String, String>` -- reads up to `count` bytes.
-- `write(self, data: String) -> Result<Int, String>` -- writes data, returns bytes written.
+- `read(self, count: Int) -> Result<String, String>` -- reads and validates up to `count` bytes as UTF-8.
+- `read_binary(self, count: Int) -> Result<Binary, String>` -- reads up to `count` arbitrary bytes.
+- `write(self, data: Binary | String) -> Result<Int, String>` -- writes data, returns bytes written.
 - `close(self) -> Result<String, String>` -- closes the descriptor.
 
 #### `File`
@@ -1629,8 +1630,9 @@ end
 Functions:
 
 - `File.open(path: String, mode: FileMode) -> Result<File, String>` -- opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
-- `File.read(path: String) -> Result<String, String>` -- reads an entire file as a string (opens, reads, closes).
-- `File.write(path: String, content: String) -> Result<String, String>` -- writes content to a file (creates or truncates).
+- `File.read(path: String) -> Result<String, String>` -- reads an entire file as UTF-8 text (opens, reads, closes).
+- `File.read_binary(path: String) -> Result<Binary, String>` -- reads an entire file as arbitrary bytes.
+- `File.write(path: String, content: Binary | String) -> Result<String, String>` -- writes text or arbitrary bytes (creates or truncates).
 - `File.exists?(path: String) -> Bool` -- returns true if the file exists.
 - `File.delete(path: String) -> Result<String, String>` -- deletes a file.
 - `File.rename(source: String, destination: String) -> Result<String, String>` -- renames (moves) a file.
@@ -1640,6 +1642,14 @@ Functions:
 content = File.read("config.txt").unwrap()
 content.print()
 ```
+
+### Environment
+
+- `System.get_env(key: String) -> Option<String>` -- returns a UTF-8 host value or `Option.None` when absent.
+- `System.set_env(key: String, value: String)` -- sets a UTF-8 environment value.
+
+Both functions panic when a key or value contains U+0000.
+`System.get_env` also panics if the host value is not valid UTF-8.
 
 ### Console I/O
 
@@ -1898,7 +1908,9 @@ Type annotations on the variable drive generic inference for static methods like
 
 ### `CString`
 
-A null-terminated C string for FFI interop. Allocated with `malloc`, must be freed explicitly.
+A pointer-and-length descriptor for a null-terminated C string. It does
+not encode ownership: `String.to_cstring()` allocates owned memory, while
+`CPtr<UInt8>.to_cstring()` wraps an existing pointer without allocating.
 
 ```koja
 struct CString
@@ -1932,7 +1944,8 @@ allocates a null-terminated copy via `malloc` and rejects `String`
 values containing U+0000 with `InteriorNul`.
 `CString.to_string() -> Result<String, CString.ConversionError>` copies
 exactly `len` bytes and rejects invalid lengths, pointers, and UTF-8.
-The original string is unaffected by either conversion.
+It does not consume or free the C buffer. Call `free()` only when the
+descriptor owns malloc-compatible storage.
 
 ### Passing Pointers to C
 

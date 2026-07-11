@@ -6,10 +6,11 @@ use std::io;
 use std::os::fd::IntoRawFd;
 use std::path::Path;
 use std::ptr;
+use std::slice;
 
 use crate::ffi::{libc_close, libc_read, libc_write};
 use crate::reactor::{Interest, block_until_ready, io_block, release_fd};
-use crate::util::{alloc_koja_string, set_last_error};
+use crate::util::{alloc_binary, set_last_error};
 
 /// Decodes a NUL-terminated C path pointer into `&str`, recording the
 /// decode failure in the thread-local last-error slot on invalid UTF-8.
@@ -42,7 +43,7 @@ pub extern "C" fn koja_fd_close(fd: i32) -> i32 {
 
 /// Reads up to `count` bytes from a raw file descriptor. If the fd is
 /// non-blocking (sockets), suspends the process until data is available.
-/// Returns a length-prefixed string pointer, or null on error.
+/// Returns a length-prefixed Binary pointer, or null on error.
 #[unsafe(no_mangle)]
 pub extern "C" fn koja_fd_read(fd: i32, count: i64) -> *const u8 {
     let mut buf = vec![0u8; count as usize];
@@ -51,7 +52,7 @@ pub extern "C" fn koja_fd_read(fd: i32, count: i64) -> *const u8 {
     }) {
         Ok(n) => {
             buf.truncate(n as usize);
-            unsafe { alloc_koja_string(&buf) }
+            alloc_binary(&buf)
         }
         Err(e) => {
             set_last_error(e);
@@ -144,7 +145,7 @@ pub unsafe extern "C" fn koja_file_open(path_ptr: *const u8, mode: i64) -> i32 {
     }
 }
 
-/// Reads the entire contents of a file as a length-prefixed string.
+/// Reads the entire contents of a file as a length-prefixed Binary.
 ///
 /// # Safety
 /// `path_ptr` must point to a valid NUL-terminated UTF-8 string.
@@ -155,7 +156,7 @@ pub unsafe extern "C" fn koja_file_read_all(path_ptr: *const u8) -> *const u8 {
     };
 
     match fs::read(path) {
-        Ok(bytes) => unsafe { alloc_koja_string(&bytes) },
+        Ok(bytes) => alloc_binary(&bytes),
         Err(e) => {
             set_last_error(e);
             ptr::null()
@@ -187,14 +188,18 @@ pub unsafe extern "C" fn koja_file_rename(src_ptr: *const u8, dst_ptr: *const u8
 /// Writes `content` to the file at `path`, creating or truncating it.
 ///
 /// # Safety
-/// Both pointers must point to valid NUL-terminated UTF-8 strings.
+/// `path_ptr` must be a NUL-terminated UTF-8 string and `content_ptr`
+/// must point to `content_len` readable bytes.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn koja_file_write_all(path_ptr: *const u8, content_ptr: *const u8) -> i64 {
+pub unsafe extern "C" fn koja_file_write_all(
+    path_ptr: *const u8,
+    content_ptr: *const u8,
+    content_len: i64,
+) -> i64 {
     let Ok(path) = (unsafe { cstr_path(path_ptr) }) else {
         return -1;
     };
-    let content = unsafe { CStr::from_ptr(content_ptr as *const c_char) };
-    let data = content.to_bytes();
+    let data = unsafe { slice::from_raw_parts(content_ptr, content_len as usize) };
     match fs::write(path, data) {
         Ok(()) => 0,
         Err(e) => {

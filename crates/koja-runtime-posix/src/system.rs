@@ -45,7 +45,10 @@ pub unsafe extern "C" fn koja_get_env(key_ptr: *const u8) -> *const u8 {
     };
     match env::var(key) {
         Ok(val) => into_raw_cstring(val),
-        Err(_) => ptr::null(),
+        Err(env::VarError::NotPresent) => ptr::null(),
+        Err(env::VarError::NotUnicode(_)) => {
+            panic!("environment variable `{key}` is not valid UTF-8")
+        }
     }
 }
 

@@ -17,10 +17,7 @@ use crate::ffi::{
 };
 use crate::memory;
 use crate::reactor::{Interest, block_until_ready, io_block};
-use crate::util::{
-    BITS_PER_BYTE, BLOCK_HEADER_SIZE, LastError, alloc_binary, read_bit_length, set_last_error,
-    write_block_header,
-};
+use crate::util::{LastError, alloc_binary, set_last_error};
 
 /// Accepts a connection on a listening socket. If no connection is
 /// pending, suspends the process until one arrives. Returns the new
@@ -61,8 +58,12 @@ pub extern "C" fn koja_socket_try_accept(fd: i32) -> i32 {
 /// Binds a socket to a local IP address and port. Returns 0 on success,
 /// -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_socket_bind(fd: i32, ip_ptr: *const u8, port: i64) -> i64 {
-    let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, port) {
+pub extern "C" fn koja_socket_bind(fd: i32, ip_ptr: *const u8, ip_length: i64, port: i64) -> i64 {
+    let Ok(ip_length) = usize::try_from(ip_length) else {
+        set_last_error("invalid IP address length");
+        return -1;
+    };
+    let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, ip_length, port) {
         Ok(v) => v,
         Err(e) => {
             set_last_error(e);
@@ -81,8 +82,17 @@ pub extern "C" fn koja_socket_bind(fd: i32, ip_ptr: *const u8, port: i64) -> i64
 /// sockets, suspends the process until the TCP handshake completes.
 /// Returns 0 on success, -1 on error.
 #[unsafe(no_mangle)]
-pub extern "C" fn koja_socket_connect(fd: i32, ip_ptr: *const u8, port: i64) -> i64 {
-    let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, port) {
+pub extern "C" fn koja_socket_connect(
+    fd: i32,
+    ip_ptr: *const u8,
+    ip_length: i64,
+    port: i64,
+) -> i64 {
+    let Ok(ip_length) = usize::try_from(ip_length) else {
+        set_last_error("invalid IP address length");
+        return -1;
+    };
+    let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, ip_length, port) {
         Ok(v) => v,
         Err(e) => {
             set_last_error(e);
@@ -181,21 +191,16 @@ pub unsafe extern "C" fn koja_socket_recv_from(fd: i32, count: i64) -> *mut u8 {
         }
     };
 
-    let data_len = n as usize;
-    let str_alloc = BLOCK_HEADER_SIZE + data_len + 1;
-    let str_base = memory::alloc(str_alloc);
+    buf.truncate(n as usize);
+    let data = alloc_binary(&buf);
     unsafe {
-        let str_payload = write_block_header(str_base, (data_len as i64) * BITS_PER_BYTE as i64);
-        ptr::copy_nonoverlapping(buf.as_ptr(), str_payload, data_len);
-        *str_payload.add(data_len) = 0;
-
         let ip_bytes = sender_addr.sin_addr.to_ne_bytes();
         let ip_bin = alloc_binary(&ip_bytes);
         let sender_port = u16::from_be(sender_addr.sin_port) as i64;
 
         let result_size = 3 * mem::size_of::<*mut u8>();
         let result = memory::alloc(result_size);
-        *(result as *mut *mut u8) = str_payload;
+        *(result as *mut *mut u8) = data;
         *((result as *mut *mut u8).add(1)) = ip_bin;
         *((result as *mut i64).add(2)) = sender_port;
         result
@@ -260,17 +265,24 @@ pub unsafe extern "C" fn koja_socket_resolve(hostname: *const u8) -> *mut u8 {
 /// if the send buffer is full. Returns bytes sent, or -1 on error.
 ///
 /// # Safety
-/// Both pointers must point to valid Binary payloads.
+/// Both pointers must contain the corresponding number of readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn koja_socket_send_to(
     fd: i32,
     data_ptr: *const u8,
+    data_length: i64,
     ip_ptr: *const u8,
+    ip_length: i64,
     port: i64,
 ) -> i64 {
-    let data_len = (unsafe { read_bit_length(data_ptr) } / BITS_PER_BYTE as i64) as usize;
+    let (Ok(data_length), Ok(ip_length)) =
+        (usize::try_from(data_length), usize::try_from(ip_length))
+    else {
+        set_last_error("invalid socket buffer length");
+        return -1;
+    };
 
-    let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, port) {
+    let (addr, addr_len) = match build_sockaddr_from_ip(ip_ptr, ip_length, port) {
         Ok(v) => v,
         Err(e) => {
             set_last_error(e);
@@ -282,7 +294,7 @@ pub unsafe extern "C" fn koja_socket_send_to(
         libc_sendto(
             fd,
             data_ptr,
-            data_len,
+            data_length,
             0,
             &addr as *const SockaddrIn as *const u8,
             addr_len,
@@ -320,11 +332,13 @@ pub extern "C" fn koja_socket_setsockopt_reuse(fd: i32) -> i64 {
 // Private helpers
 // ---------------------------------------------------------------------------
 
-/// Constructs a `SockaddrIn` from a Binary-encoded IPv4 address and port number.
-fn build_sockaddr_from_ip(ip_ptr: *const u8, port: i64) -> Result<(SockaddrIn, u32), io::Error> {
-    let bit_len = unsafe { read_bit_length(ip_ptr) };
-    let byte_len = (bit_len / BITS_PER_BYTE as i64) as usize;
-    match byte_len {
+/// Constructs a `SockaddrIn` from an IPv4 address and port number.
+fn build_sockaddr_from_ip(
+    ip_ptr: *const u8,
+    ip_length: usize,
+    port: i64,
+) -> Result<(SockaddrIn, u32), io::Error> {
+    match ip_length {
         4 => {
             let mut ip_bytes = [0u8; 4];
             unsafe { ptr::copy_nonoverlapping(ip_ptr, ip_bytes.as_mut_ptr(), 4) };

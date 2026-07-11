@@ -8,6 +8,7 @@
 use std::cell::RefCell;
 use std::fmt;
 use std::rc::Rc;
+use std::str;
 
 use koja_ir::{IRSymbol, IRVariantTag};
 
@@ -84,16 +85,8 @@ pub enum Value {
     /// Heap-backed unique-element set. Same shape rationale as
     /// [`Value::Map`].
     Set(SetEntries),
-    /// Byte payload backing a Koja `String`. The runtime ABI
-    /// doesn't enforce UTF-8 (every Koja string is "bytes that
-    /// happen to render as UTF-8 most of the time"), so eval stores
-    /// raw bytes here too, matching v1's permissive treatment.
-    /// Chains like `Random.bytes(n).to_string().to_binary()` rely
-    /// on flowing arbitrary bytes through a `String` value without
-    /// the interpreter rejecting non-UTF-8 payloads. `Rc`-backed for
-    /// the same reason as [`Value::Binary`]: strings are immutable
-    /// and cloned constantly, so sharing the buffer matches the
-    /// LLVM runtime's refcounted heap blocks.
+    /// Valid UTF-8 bytes backing a Koja `String`. `Rc` sharing mirrors
+    /// the LLVM runtime's immutable refcounted heap blocks.
     String(Rc<Vec<u8>>),
     Struct {
         symbol: IRSymbol,
@@ -142,7 +135,12 @@ impl Value {
     /// Construct a [`Value::String`] from owned bytes or anything
     /// convertible (`String`, `Vec<u8>`, `&[u8]`, `&str`).
     pub fn string(bytes: impl Into<Vec<u8>>) -> Value {
-        Value::String(Rc::new(bytes.into()))
+        let bytes = bytes.into();
+        assert!(
+            str::from_utf8(&bytes).is_ok(),
+            "Koja String payload must be valid UTF-8",
+        );
+        Value::String(Rc::new(bytes))
     }
 
     pub fn as_bool(&self) -> Option<bool> {
@@ -183,7 +181,7 @@ impl Value {
     /// codepoint semantics surface a clean error.
     pub fn as_string(&self) -> Option<&str> {
         match self {
-            Value::String(bytes) => std::str::from_utf8(bytes).ok(),
+            Value::String(bytes) => str::from_utf8(bytes).ok(),
             _ => None,
         }
     }

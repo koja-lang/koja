@@ -55,9 +55,15 @@ byte**; the headers are reached by negative offsets.
 - Authoritative: `koja-runtime-posix/src/util.rs` (`BLOCK_HEADER_SIZE`, `LENGTH_OFFSET`; immortality is the `rc < 0`
   test in `koja_rc_inc` / `koja_rc_dec`).
 - Mirrors: `koja-ir-llvm/src/emit/heap_layout.rs` (`HEADER_BYTES`, `LENGTH_OFFSET`, `RC_IMMORTAL`),
-  `koja-ir-eval/src/intrinsics/cptr.rs` and `binary.rs`
-  (`BLOCK_HEADER_SIZE`, `LENGTH_OFFSET`).
+  `koja-ir-eval/src/abi.rs` (`BLOCK_HEADER_SIZE`, `LENGTH_OFFSET`).
 - Human spec for which IR types are heap-backed: `koja-ir/src/types.rs` doc comments.
+
+Runtime functions may transfer a fresh `rc = 1` Binary block through the
+package-private `RuntimeBlock.adopt_binary` intrinsic. Adoption consumes
+the payload pointer: LLVM returns it as the owned Binary without changing
+the refcount, while eval copies the bytes into its value representation
+and frees the runtime block. The pointer must not be used or freed after
+adoption.
 
 ## Closure environment blocks
 

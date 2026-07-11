@@ -162,46 +162,6 @@ release-mode parity coverage.
 
 ---
 
-## Raw-byte APIs can still create invalid `String` values
-
-Native `String` operations are length-aware and both `CString`
-conversion directions are checked, but the valid-UTF-8 invariant is not
-yet enforced at every raw-byte boundary. The existing public APIs were
-kept stable rather than broadening this fix into an I/O and pointer API
-redesign:
-
-- `CPtr<UInt8>.to_string() -> String` trusts that its length-prefixed
-  payload is valid UTF-8.
-- `CPtr<UInt8>.to_cstring() -> CString` trusts NUL termination and
-  computes its length with `strlen`, so an interior NUL truncates the
-  represented bytes.
-- `File.read` and `Socket.recv_from` still expose arbitrary file or
-  datagram bytes as `String`.
-- `Fd.read_binary` and `Random.bytes` temporarily route their
-  length-prefixed raw blocks through `String` before immediately
-  widening to `Binary`.
-- `System.set_env` retains its existing unit-returning API and unwraps
-  checked conversions, so an interior NUL in either argument panics.
-
-The last two transient paths do not inspect the temporary string, but
-they still violate the representation invariant. The directly exposed
-paths are more serious: invalid input can inhabit `String`, after which
-eval rejects codepoint operations while native code treats invalid
-UTF-8 as an internal invariant failure.
-
-**Deferred fix:** make kernel and network byte reads produce `Binary`,
-layer text helpers over `Binary.to_string`, and replace unchecked
-`CPtr.to_string` with a checked conversion or a genuinely internal
-length-prefixed block adoption primitive. A private specialized CPtr
-function is not sufficient today because stdlib bodies specialized from
-another package fail its visibility check; solve that compiler/runtime
-boundary without exposing a new low-level public helper. This likely
-requires breaking `File.read` / `Socket.recv_from` signatures or adding
-parallel binary APIs, so it should land as a separately reviewed API
-change.
-
----
-
 ## `koja shell` project mode
 
 `koja shell` auto-loads the project in the working directory (its `src`,

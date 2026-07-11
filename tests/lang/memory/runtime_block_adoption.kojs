@@ -1,0 +1,25 @@
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct Harness
+  fn run
+    i = 0
+
+    while i < 100
+      bytes = Random.bytes(64)
+
+      unless bytes.byte_size() == 64
+        Kernel.panic("wrong random byte length")
+      end
+
+      i += 1
+    end
+  end
+end
+
+before = Rt.koja_rt_live_blocks()
+Harness.run()
+finish = Rt.koja_rt_live_blocks()
+(before == finish).print()

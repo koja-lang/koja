@@ -80,17 +80,25 @@ struct Argon2
       salt.ptr, salt.len,
       32, buf, 128
     )
+    pwd_c.free()
     if result == 0
-      Result.Ok(buf.to_cstring().to_string().unwrap())
+      encoded = buf.to_cstring()
+      decoded = encoded.to_string().unwrap()
+      buf.free()
+      Result.Ok(decoded)
     else
-      Result.Error("argon2 failed")
+      buf.free()
+      Result.Err("argon2 failed")
     end
   end
 
   fn verify(password: String, hash: String) -> Bool
     pwd_c = password.to_cstring().unwrap()
     hash_c = hash.to_cstring().unwrap()
-    argon2id_verify(hash_c.ptr, pwd_c.ptr, pwd_c.len) == 0
+    valid = argon2id_verify(hash_c.ptr, pwd_c.ptr, pwd_c.len) == 0
+    pwd_c.free()
+    hash_c.free()
+    valid
   end
 end
 ```
@@ -159,15 +167,18 @@ koja_str = c_result.to_string().unwrap() # CString -> Koja String
 
 ### `CString` ownership (decided)
 
-- `to_cstring()` allocates with `malloc` (C-compatible). The caller
-  is responsible for freeing via `CString.free()` (which calls
-  `CPtr.free()` on the underlying pointer).
+- `CString` is a pointer-and-length descriptor; it does not track whether
+  the underlying storage is owned or borrowed.
+- `String.to_cstring()` allocates with `malloc` (C-compatible). The caller
+  owns that allocation and frees it via `CString.free()`.
+- `CPtr<UInt8>.to_cstring()` only wraps the pointer and computes `len`
+  with `strlen`; it does not allocate or transfer ownership.
 - Koja `String` values may contain U+0000, but conversion rejects it
   because a conventional null-terminated C string cannot preserve it.
 - `CString.to_string()` trusts the explicit `len`, not `strlen`, and
   rejects invalid lengths, pointers, and UTF-8.
-- C-returned pointers: wrap in a `CString` struct and call `.free()`
-  when done, or call `ptr.free()` directly on the `CPtr<UInt8>`.
+- C-returned pointers retain the C API's ownership contract. Call
+  `.free()` only for malloc-compatible storage the wrapper owns.
 - `CString` lives in auto-imported stdlib (`Global.CString`). Always
   available, since it's a type like any other.
 
@@ -257,6 +268,9 @@ they're passed by value, same as C. No ownership questions.
 For pointers (`CPtr<T>`): the pointer is a plain machine word, copied by
 value like any scalar. The Koja side retains no ownership of what's
 behind the pointer.
+
+`Binary.ptr()` borrows the Binary's stable payload address. The Binary
+must remain live and immutable for the duration of the C call.
 
 For strings: `String.to_cstring()` returns a checked `Result` and creates
 the successful copy via `malloc`. The original Koja `String` is

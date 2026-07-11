@@ -40,7 +40,7 @@ struct UDPSocket
   Sends data to the given address. Returns the number of bytes
   sent or an error if the send fails.
   """
-  fn send_to(self, data: String, addr: SocketAddress)
+  fn send_to(self, data: Binary | String, addr: SocketAddress)
     -> Result<Int, SocketError>
 
     match self.socket.send_to(data, addr)
@@ -54,7 +54,7 @@ struct UDPSocket
   and the sender's address, or an error if the receive fails.
   """
   fn recv_from(self, count: Int)
-    -> Result<Pair<String, SocketAddress>, SocketError>
+    -> Result<Pair<Binary, SocketAddress>, SocketError>
 
     match self.socket.recv_from(count)
       Result.Ok(received) -> Result.Ok(received)

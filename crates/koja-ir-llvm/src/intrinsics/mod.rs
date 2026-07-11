@@ -13,7 +13,7 @@
 //! makes the wiring step compiler-checked.
 
 use inkwell::values::FunctionValue;
-use koja_ir::{IRFunction, IRIntrinsicId, KernelMethod};
+use koja_ir::{IRFunction, IRIntrinsicId, KernelMethod, RuntimeBlockMethod};
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
@@ -36,6 +36,7 @@ mod parse;
 mod print;
 pub(crate) mod process;
 mod result;
+mod runtime_block;
 mod set;
 mod socket;
 mod string;
@@ -81,6 +82,9 @@ pub(crate) fn emit_intrinsic_body<'ctx>(
         IRIntrinsicId::Ref(method) => process::emit_ref(ctx, function, llvm_function, method),
         IRIntrinsicId::ReplyTo(method) => {
             process::emit_reply_to(ctx, function, llvm_function, method)
+        }
+        IRIntrinsicId::RuntimeBlock(RuntimeBlockMethod::AdoptBinary) => {
+            runtime_block::emit_adopt_binary(ctx, function, llvm_function)
         }
         IRIntrinsicId::Set(method) => set::emit_set(ctx, function, llvm_function, method),
         IRIntrinsicId::Socket(method) => socket::emit_socket(ctx, function, llvm_function, method),

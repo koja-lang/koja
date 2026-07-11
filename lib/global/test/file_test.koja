@@ -214,4 +214,47 @@ struct FileTest
         end
     end
   end
+
+  @test "binary write and read preserve arbitrary bytes"
+  fn test_binary_roundtrip -> Result<Bool, String>
+    path = "/tmp/koja_file_test_binary.bin"
+    expected: Binary = <<97, 0, 255>>
+
+    match File.write(path, expected)
+      Result.Err(message) -> return Result.Err("write failed: #{message}")
+      Result.Ok(_) -> ()
+    end
+
+    match File.read_binary(path)
+      Result.Err(message) ->
+        File.delete(path)
+        Result.Err("read failed: #{message}")
+
+      Result.Ok(actual) ->
+        File.delete(path)
+
+        match actual
+          <<97, 0, 255>> -> Result.Ok(true)
+          _ -> Result.Err("binary contents changed")
+        end
+    end
+  end
+
+  @test "text read rejects invalid UTF-8"
+  fn test_text_read_invalid_utf8 -> Result<Bool, String>
+    path = "/tmp/koja_file_test_invalid_utf8.bin"
+
+    match File.write(path, <<255>>)
+      Result.Err(message) -> return Result.Err("write failed: #{message}")
+      Result.Ok(_) -> ()
+    end
+
+    result = File.read(path)
+    File.delete(path)
+
+    match result
+      Result.Err(_) -> Result.Ok(true)
+      Result.Ok(_) -> Result.Err("invalid UTF-8 decoded as text")
+    end
+  end
 end

@@ -7,12 +7,9 @@
 //!   C ABI so eval consumes the same OS entropy the LLVM backend
 //!   would.
 //!
-//! `bytes` returns a length-prefixed Koja-string payload pointer
-//! (the runtime allocates `[i64 bit_length][payload…]` with `malloc`
-//! and returns the payload offset). Eval wraps it as
-//! [`crate::value::Value::CPtr`]. Consumers walk the standard
-//! `CPtr<UInt8>` chain (`.to_string().to_binary()` for the
-//! `Random.bytes` body).
+//! `bytes` returns a length-prefixed Binary payload pointer. Eval
+//! wraps it as [`crate::value::Value::CPtr`] before the private
+//! runtime-block intrinsic adopts it.
 
 use crate::externs::marshal::pass_through_externs;
 

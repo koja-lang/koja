@@ -1,7 +1,7 @@
 //! `@intrinsic` methods on `Socket` from
 //! [`koja/lib/net/src/net.koja`]:
 //!
-//! * `Socket.recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>`
+//! * `Socket.recv_from(self, count: Int) -> Result<Pair<Binary, SocketAddress>, String>`
 //! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`
 //!
 //! Both call the same runtime helpers the LLVM backend declares
@@ -54,6 +54,7 @@ pub(super) async fn dispatch<R: CallResolver>(
     resolver: &R,
 ) -> Result<Value, RuntimeError> {
     match method {
+        SocketMethod::LastError => Ok(last_error_value()),
         SocketMethod::RecvFrom => recv_from(function, args, resolver).await,
         SocketMethod::Resolve => resolve(function, args, resolver),
     }
@@ -133,7 +134,7 @@ async fn recv_from<R: CallResolver>(
     let data_payload = unsafe { *(buffer as *const *mut u8) };
     let ip_payload = unsafe { *(buffer.add(RECV_FROM_IP_OFFSET) as *const *mut u8) };
     let port = unsafe { *(buffer.add(RECV_FROM_PORT_OFFSET) as *const i64) };
-    let data = Value::string(abi::take_block_bytes(data_payload));
+    let data = Value::binary(abi::take_block_bytes(data_payload));
     let ip = Value::Struct {
         symbol: ip_symbol,
         fields: vec![Value::binary(abi::take_block_bytes(ip_payload))],
@@ -191,7 +192,7 @@ fn resolve_element_symbol<R: CallResolver>(
     }
 }
 
-/// Walk `Result<Pair<String, SocketAddress>, _>` down to the `Pair`
+/// Walk `Result<Pair<Binary, SocketAddress>, _>` down to the `Pair`
 /// struct symbol.
 fn recv_from_pair_symbol<R: CallResolver>(
     result_symbol: &IRSymbol,

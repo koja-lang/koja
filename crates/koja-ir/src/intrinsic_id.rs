@@ -70,6 +70,7 @@ pub enum IRIntrinsicId {
     /// method later a variant-add rather than a shape change, like
     /// [`KernelMethod`] / [`BitsMethod`].
     ReplyTo(ReplyToMethod),
+    RuntimeBlock(RuntimeBlockMethod),
     Set(SetMethod),
     /// `@intrinsic` methods on `Socket` from
     /// [`koja/lib/net/src/net.koja`]. Both methods bridge into the
@@ -88,6 +89,11 @@ pub enum KernelMethod {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RuntimeBlockMethod {
+    AdoptBinary,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CPtrMethod {
     Alloc,
     Free,
@@ -96,7 +102,6 @@ pub enum CPtrMethod {
     Offset,
     Read,
     ToBinary,
-    ToString,
     Write,
 }
 
@@ -208,6 +213,7 @@ pub enum ReplyToMethod {
 /// is readable); `Resolve` is a synchronous `getaddrinfo` shim.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SocketMethod {
+    LastError,
     RecvFrom,
     Resolve,
 }
@@ -389,6 +395,9 @@ impl IRIntrinsicId {
         }
         if receiver == "ReplyTo" {
             return ReplyToMethod::from_source(method).map(Self::ReplyTo);
+        }
+        if receiver == "RuntimeBlock" {
+            return RuntimeBlockMethod::from_source(method).map(Self::RuntimeBlock);
         }
         if receiver == "Set" {
             return SetMethod::from_source(method).map(Self::Set);
@@ -591,7 +600,6 @@ impl CPtrMethod {
             "offset" => Self::Offset,
             "read" => Self::Read,
             "to_binary" => Self::ToBinary,
-            "to_string" => Self::ToString,
             "write" => Self::Write,
             _ => return None,
         })
@@ -606,7 +614,6 @@ impl CPtrMethod {
             Self::Offset => "offset",
             Self::Read => "read",
             Self::ToBinary => "to_binary",
-            Self::ToString => "to_string",
             Self::Write => "write",
         }
     }
@@ -820,6 +827,7 @@ impl SetMethod {
 impl SocketMethod {
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
+            "last_error" => Self::LastError,
             "recv_from" => Self::RecvFrom,
             "resolve" => Self::Resolve,
             _ => return None,
@@ -828,8 +836,24 @@ impl SocketMethod {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::LastError => "last_error",
             Self::RecvFrom => "recv_from",
             Self::Resolve => "resolve",
+        }
+    }
+}
+
+impl RuntimeBlockMethod {
+    fn from_source(s: &str) -> Option<Self> {
+        Some(match s {
+            "adopt_binary" => Self::AdoptBinary,
+            _ => return None,
+        })
+    }
+
+    fn segment(self) -> &'static str {
+        match self {
+            Self::AdoptBinary => "adopt_binary",
         }
     }
 }
@@ -934,6 +958,7 @@ impl fmt::Display for IRIntrinsicId {
             Self::Process(m) => write!(f, "Process.{}", m.segment()),
             Self::Ref(m) => write!(f, "Ref.{}", m.segment()),
             Self::ReplyTo(m) => write!(f, "ReplyTo.{}", m.segment()),
+            Self::RuntimeBlock(m) => write!(f, "RuntimeBlock.{}", m.segment()),
             Self::Set(m) => write!(f, "Set.{}", m.segment()),
             Self::Socket(m) => write!(f, "Socket.{}", m.segment()),
             Self::String(m) => write!(f, "String.{}", m.segment()),
@@ -981,7 +1006,6 @@ mod tests {
             ("read", CPtrMethod::Read),
             ("write", CPtrMethod::Write),
             ("to_binary", CPtrMethod::ToBinary),
-            ("to_string", CPtrMethod::ToString),
         ] {
             assert_round_trip(
                 &["CPtr", method],
@@ -1055,6 +1079,7 @@ mod tests {
     #[test]
     fn socket_methods_cover_the_full_surface() {
         for (method, variant) in [
+            ("last_error", SocketMethod::LastError),
             ("recv_from", SocketMethod::RecvFrom),
             ("resolve", SocketMethod::Resolve),
         ] {
@@ -1064,6 +1089,15 @@ mod tests {
                 &format!("Socket.{method}"),
             );
         }
+    }
+
+    #[test]
+    fn runtime_block_adoption_round_trips() {
+        assert_round_trip(
+            &["RuntimeBlock", "adopt_binary"],
+            IRIntrinsicId::RuntimeBlock(RuntimeBlockMethod::AdoptBinary),
+            "RuntimeBlock.adopt_binary",
+        );
     }
 
     #[test]

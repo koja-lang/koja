@@ -250,20 +250,20 @@ Server-side handshake:
 4. `ssl_new(ctx)`, `ssl_set_fd(ssl, fd.descriptor)`
 5. Loop: call `ssl_accept(ssl)`. Same retry/error pattern as `connect`.
 
-#### `TLS.read(ssl, fd, count) -> Result<String, String>`
+#### `TLS.read_binary(ssl, fd, count) -> Result<Binary, String>`
 
 1. `CPtr.alloc(count)` for the buffer
 2. Loop: call `ssl_read(ssl, buf, count)`.
-   - `ret > 0`: convert to string via `buf.to_binary(ret).to_string()`, free buf, return Ok.
-   - `ret == 0`: EOF, free buf, return `Ok("")`.
+   - `ret > 0`: copy with `buf.to_binary(ret)`, free buf, return Ok.
+   - `ret == 0`: EOF, free buf, return `Ok(<<>>)`.
    - Error: check `ssl_get_error`. `WANT_READ`/`WANT_WRITE` -> block and retry.
      Other -> free buf, return Err.
 
 #### `TLS.write(ssl, fd, data) -> Result<Int, String>`
 
-1. Convert data to `CString`
-2. Loop: call `ssl_write(ssl, data_cs.ptr, data_cs.len)`.
-   - `ret > 0`: free CString, return `Ok(ret)`.
+1. Convert `String` data to `Binary`; preserve existing `Binary` data.
+2. Loop: call `ssl_write(ssl, bytes.ptr(), bytes.byte_size())`.
+   - `ret > 0`: return `Ok(ret)`.
    - Error: same retry pattern.
 
 #### `TLS.shutdown(ssl, ctx)`

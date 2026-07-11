@@ -1,7 +1,7 @@
 //! `@intrinsic` methods on `Socket` from
 //! [`koja/lib/net/src/net.koja`]:
 //!
-//! * `Socket.recv_from(self, count: Int) -> Result<Pair<String, SocketAddress>, String>`:
+//! * `Socket.recv_from(self, count: Int) -> Result<Pair<Binary, SocketAddress>, String>`:
 //!   datagram receive. Suspends until the fd is readable.
 //! * `Socket.resolve(hostname: String) -> Result<List<IPAddress>, String>`:
 //!   synchronous `getaddrinfo` shim.
@@ -25,7 +25,7 @@
 use inkwell::AddressSpace;
 use inkwell::IntPredicate;
 use inkwell::basic_block::BasicBlock;
-use inkwell::types::BasicType;
+use inkwell::types::{BasicType, IntType};
 use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue, StructValue};
 use koja_ir::{IRFunction, IRSymbol, IRType, IRVariantPayload, IRVariantTag, SocketMethod};
 
@@ -64,9 +64,19 @@ pub(super) fn emit_socket<'ctx>(
     let entry = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry);
     match method {
+        SocketMethod::LastError => emit_last_error(ctx),
         SocketMethod::RecvFrom => emit_recv_from(ctx, function, llvm_function),
         SocketMethod::Resolve => emit_resolve(ctx, function, llvm_function),
     }
+}
+
+fn emit_last_error(ctx: &EmitContext<'_>) -> Result<(), LlvmError> {
+    let last_error = declare_last_error_extern(ctx);
+    let message = ctx.call_basic(last_error, &[], "last_error")?;
+    ctx.builder
+        .build_return(Some(&message))
+        .or_ice()
+        .map(|_| ())
 }
 
 fn emit_resolve<'ctx>(
@@ -347,7 +357,7 @@ fn build_insert<'ctx>(
 
 fn build_gep_offset<'ctx>(
     ctx: &EmitContext<'ctx>,
-    elem_ty: inkwell::types::IntType<'ctx>,
+    elem_ty: IntType<'ctx>,
     base: PointerValue<'ctx>,
     offset: IntValue<'ctx>,
     name: &str,
@@ -361,7 +371,7 @@ fn build_gep_offset<'ctx>(
 
 fn build_load_int<'ctx>(
     ctx: &EmitContext<'ctx>,
-    ty: inkwell::types::IntType<'ctx>,
+    ty: IntType<'ctx>,
     ptr: PointerValue<'ctx>,
     name: &str,
 ) -> Result<IntValue<'ctx>, LlvmError> {
@@ -417,7 +427,7 @@ fn resolve_list_element_symbol(
     }
 }
 
-/// Walk `Result<Pair<String, SocketAddress>, _>` and pull out the
+/// Walk `Result<Pair<Binary, SocketAddress>, _>` and pull out the
 /// `IRSymbol` of the `Pair` struct. The intrinsic emitter then
 /// recursively walks the pair's fields to reach `SocketAddress`
 /// and `IPAddress`.

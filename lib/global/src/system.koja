@@ -27,15 +27,11 @@ struct System
 
   @doc """
   Returns the value of the environment variable `key`, or `Option.None`
-  if the variable is not set.
+  if the variable is not set. Panics when the key contains U+0000 or
+  the host value is not valid UTF-8.
   """
   fn get_env(key: String) -> Option<String>
-    key_cs =
-      match key.to_cstring()
-        Result.Err(_) -> return Option.None
-        Result.Ok(value) -> value
-      end
-
+    key_cs = cstring_or_panic(key, "System.get_env key")
     ptr = koja_get_env(key_cs.ptr)
     key_cs.free()
 
@@ -64,14 +60,22 @@ struct System
   end
 
   @doc """
-  Sets the environment variable `key` to `value`.
+  Sets the environment variable `key` to `value`. Panics when either
+  argument contains U+0000.
   """
   fn set_env(key: String, value: String)
-    key_cs = key.to_cstring().unwrap()
-    val_cs = value.to_cstring().unwrap()
+    key_cs = cstring_or_panic(key, "System.set_env key")
+    val_cs = cstring_or_panic(value, "System.set_env value")
     koja_set_env(key_cs.ptr, val_cs.ptr)
     key_cs.free()
     val_cs.free()
+  end
+
+  priv fn cstring_or_panic(value: String, label: String) -> CString
+    match value.to_cstring()
+      Result.Err(_) -> Kernel.panic("#{label} cannot contain U+0000")
+      Result.Ok(cstring) -> cstring
+    end
   end
 
   @extern "C"
