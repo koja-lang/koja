@@ -61,8 +61,8 @@ pub(super) enum PatternCoverage {
     /// Wildcard / binding: admits every value of the subject.
     CatchAll,
     /// `EnumUnit` / `EnumTuple` (or an `Or` of those): admits the
-    /// listed variant tags. Exhaustiveness uses every witness,
-    /// reachability uses only the `full` ones.
+    /// listed variant tags. Exhaustiveness and reachability use only
+    /// witnesses whose payload patterns are `full`.
     Variants(Vec<VariantWitness>),
     /// `TypedBinding` matched against a union subject: admits
     /// values whose runtime tag corresponds to `member`. Drives

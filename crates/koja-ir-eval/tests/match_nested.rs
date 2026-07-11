@@ -274,6 +274,7 @@ fn nested_enum_pattern_literal_matches_inner_string_literal() {
             Option.Some(TokenKind.Ident(name)) -> name
             Option.Some(TokenKind.Number(0)) -> \"zero\"
             Option.Some(TokenKind.Number(_n)) -> \"other number\"
+            Option.Some(_) -> \"unreachable\"
             Option.None -> \"none\"
           end
         end
@@ -297,6 +298,7 @@ fn nested_enum_pattern_falls_through_to_inner_binding_arm() {
             Option.Some(TokenKind.Ident(name)) -> name
             Option.Some(TokenKind.Number(0)) -> \"zero\"
             Option.Some(TokenKind.Number(_n)) -> \"other number\"
+            Option.Some(_) -> \"unreachable\"
             Option.None -> \"none\"
           end
         end
