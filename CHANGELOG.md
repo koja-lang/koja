@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## Unreleased
+
+### Fixed
+
+- `koja format` no longer moves a comment above a function, protocol method, or impl type alias inside a type body down into the body.
+- `koja format` no longer drops a comment placed after the last member of an `impl`, `extend`, or `protocol` block below the block's `end`.
+- `koja format` no longer deletes a trailing comment on a struct or enum literal field.
+
 ## [0.14.0] - 2026-07-12
 
 ### Added

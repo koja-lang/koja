@@ -256,14 +256,7 @@ impl<'a> Printer<'a> {
             body.push(hardline());
             body.push(self.function_to_doc(func, 2));
         }
-        let (mut trailing, _) = self.comments.drain_before(s.span.end.line);
-        if !trailing.is_empty() {
-            trailing.pop();
-            body.push(hardline());
-            for c in trailing {
-                body.push(c);
-            }
-        }
+        self.push_trailing_body_comments(&mut body, s.span.end.line);
         parts.push(indent(2, concat(body)));
         parts.push(hardline());
         parts.push(text("end"));
@@ -321,14 +314,7 @@ impl<'a> Printer<'a> {
             body.push(hardline());
             body.push(self.function_to_doc(func, 2));
         }
-        let (mut trailing, _) = self.comments.drain_before(e.span.end.line);
-        if !trailing.is_empty() {
-            trailing.pop();
-            body.push(hardline());
-            for c in trailing {
-                body.push(c);
-            }
-        }
+        self.push_trailing_body_comments(&mut body, e.span.end.line);
         parts.push(indent(2, concat(body)));
         parts.push(hardline());
         parts.push(text("end"));
@@ -377,6 +363,9 @@ impl<'a> Printer<'a> {
     /// line separates it from the body.
     fn function_to_doc(&mut self, f: &Function, indent_cols: u32) -> Doc {
         let mut parts = Vec::new();
+
+        let (comment_docs, _) = self.comments.drain_before(f.span.start.line);
+        parts.extend(comment_docs);
 
         if let Some(doc) = annotations_to_doc(&f.annotations) {
             parts.push(doc);
@@ -498,6 +487,7 @@ impl<'a> Printer<'a> {
             body.push(hardline());
             body.push(self.protocol_method_to_doc(method));
         }
+        self.push_trailing_body_comments(&mut body, p.span.end.line);
         parts.push(indent(2, concat(body)));
         parts.push(hardline());
         parts.push(text("end"));
@@ -507,6 +497,8 @@ impl<'a> Printer<'a> {
     /// Formats a protocol method (signature only, or with default body).
     fn protocol_method_to_doc(&mut self, m: &ProtocolMethod) -> Doc {
         let mut parts = Vec::new();
+        let (comment_docs, _) = self.comments.drain_before(m.span.start.line);
+        parts.extend(comment_docs);
         if let Some(doc) = annotations_to_doc(&m.annotations) {
             parts.push(doc);
             parts.push(hardline());
@@ -561,7 +553,7 @@ impl<'a> Printer<'a> {
             type_expr_to_doc(&block.trait_expr),
             text(" for "),
             type_expr_to_doc(&block.target),
-            self.impl_member_body_to_doc(&block.members),
+            self.impl_member_body_to_doc(&block.members, block.span.end.line),
         ])
     }
 
@@ -570,12 +562,12 @@ impl<'a> Printer<'a> {
         concat(vec![
             text("extend "),
             type_expr_to_doc(&block.target),
-            self.impl_member_body_to_doc(&block.members),
+            self.impl_member_body_to_doc(&block.members, block.span.end.line),
         ])
     }
 
     /// Shared body for `impl` and `extend`: indented members + `end`.
-    fn impl_member_body_to_doc(&mut self, members: &[ImplMember]) -> Doc {
+    fn impl_member_body_to_doc(&mut self, members: &[ImplMember], end_line: u32) -> Doc {
         let mut body = Vec::new();
         for (i, member) in members.iter().enumerate() {
             if i > 0 {
@@ -584,17 +576,34 @@ impl<'a> Printer<'a> {
             body.push(hardline());
             body.push(self.impl_member_to_doc(member));
         }
+        self.push_trailing_body_comments(&mut body, end_line);
         concat(vec![indent(2, concat(body)), hardline(), text("end")])
+    }
+
+    /// Drains comments sitting between the last member of a type body and
+    /// its `end`, appending them to `body` so they stay inside the block.
+    fn push_trailing_body_comments(&mut self, body: &mut Vec<Doc>, end_line: u32) {
+        let (mut trailing, _) = self.comments.drain_before(end_line);
+        if !trailing.is_empty() {
+            // Drop the final hardline. The block's own newline before `end`
+            // provides it.
+            trailing.pop();
+            body.push(hardline());
+            body.append(&mut trailing);
+        }
     }
 
     /// Formats a member inside an `impl` block (function or type alias).
     fn impl_member_to_doc(&mut self, member: &ImplMember) -> Doc {
         match member {
             ImplMember::Function(f) => self.function_to_doc(f, 2),
-            ImplMember::TypeAlias(ta) => concat(vec![
-                text(format!("type {} = ", ta.name)),
-                type_expr_to_doc(&ta.type_expr),
-            ]),
+            ImplMember::TypeAlias(ta) => {
+                let (comment_docs, _) = self.comments.drain_before(ta.span.start.line);
+                let mut parts = comment_docs;
+                parts.push(text(format!("type {} = ", ta.name)));
+                parts.push(type_expr_to_doc(&ta.type_expr));
+                concat(parts)
+            }
         }
     }
 

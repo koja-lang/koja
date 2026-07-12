@@ -697,6 +697,140 @@ mod tests {
     }
 
     #[test]
+    fn comment_above_member_function_stays_above_head() {
+        // A comment directly above a fn inside a type body must not be
+        // relocated below the signature.
+        assert_unchanged(
+            "
+            struct Wire
+              # Pulls a big-endian unsigned 16-bit integer off the front.
+              fn take_u16(data: Binary) -> Option<Pair<Int, Binary>>
+                Option.None
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn comment_above_annotated_impl_function_stays_above_annotation() {
+        assert_unchanged(
+            "
+            impl Display for Point
+              # Renders as a coordinate pair.
+              @doc \"Human-readable form.\"
+              fn display(self) -> String
+                \"point\"
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn comment_above_second_member_function_stays_attached() {
+        assert_unchanged(
+            "
+            enum Mode
+              Off
+              On
+
+              fn flip(self) -> Mode
+                Mode.Off
+              end
+
+              # Explains the second function.
+              fn label(self) -> String
+                \"mode\"
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn comment_above_protocol_method_stays_above_head() {
+        assert_unchanged(
+            "
+            protocol Marked
+              # Marks the value.
+              fn mark(self) -> Int
+
+              # Has a default body.
+              fn unmark(self) -> Int
+                0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn comment_above_impl_type_alias_stays_attached() {
+        assert_unchanged(
+            "
+            impl Container for Bag
+              # The element type.
+              type Elem = Int
+
+              fn size(self) -> Int
+                0
+              end
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn trailing_comment_before_end_stays_inside_impl_and_protocol() {
+        // Matches the struct/enum trailing behavior: the comment attaches
+        // directly after the last member.
+        assert_unchanged(
+            "
+            impl Display for Point
+              fn display(self) -> String
+                \"point\"
+              end
+              # trailing impl note
+            end
+
+            protocol Marked
+              fn mark(self) -> Int
+              # trailing protocol note
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn struct_literal_field_trailing_comment_survives() {
+        assert_unchanged(
+            "
+            fn f -> Point
+              Point{
+                x: 1, # horizontal
+                y: 2,
+              }
+            end
+        ",
+        );
+    }
+
+    #[test]
+    fn enum_struct_literal_field_trailing_comment_survives() {
+        assert_unchanged(
+            "
+            fn f -> Shape
+              Shape.Rect{
+                width: 1, # px
+                height: 2,
+              }
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn method_chain_short_stays_inline() {
         assert_fmt(
             r#"

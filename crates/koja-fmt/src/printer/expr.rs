@@ -326,12 +326,7 @@ impl<'a> Printer<'a> {
                 if fields.is_empty() {
                     text(format!("{}{{}}", path_str))
                 } else {
-                    let field_docs: Vec<Doc> =
-                        fields.iter().map(|fi| self.field_init_to_doc(fi)).collect();
-                    for fi in fields {
-                        self.comments.drain_trailing(fi.span.end.line);
-                    }
-                    struct_body(text(path_str), field_docs)
+                    self.construction_to_doc(text(path_str), fields)
                 }
             }
 
@@ -380,12 +375,7 @@ impl<'a> Printer<'a> {
                         ])
                     }
                     EnumConstructionData::Struct(fields) => {
-                        let field_docs: Vec<Doc> =
-                            fields.iter().map(|fi| self.field_init_to_doc(fi)).collect();
-                        for fi in fields {
-                            self.comments.drain_trailing(fi.span.end.line);
-                        }
-                        struct_body(text(prefix), field_docs)
+                        self.construction_to_doc(text(prefix), fields)
                     }
                 }
             }
@@ -430,6 +420,40 @@ impl<'a> Printer<'a> {
             ]),
             None => self.expr_to_doc(&arg.value),
         }
+    }
+
+    /// Formats a `Prefix{field: value, ...}` construction, attaching any
+    /// trailing comment on a field's line to that field. A comment forces
+    /// the multi-line layout so the fields after it aren't commented out.
+    fn construction_to_doc(&mut self, prefix: Doc, fields: &[FieldInit]) -> Doc {
+        let entries: Vec<(Doc, Option<Doc>)> = fields
+            .iter()
+            .map(|fi| {
+                let field_doc = self.field_init_to_doc(fi);
+                (field_doc, self.comments.drain_trailing(fi.span.end.line))
+            })
+            .collect();
+
+        if entries.iter().all(|(_, comment)| comment.is_none()) {
+            return struct_body(prefix, entries.into_iter().map(|(d, _)| d).collect());
+        }
+
+        let mut body = Vec::new();
+        for (field_doc, comment) in entries {
+            body.push(hardline());
+            body.push(field_doc);
+            body.push(text(","));
+            if let Some(comment) = comment {
+                body.push(comment);
+            }
+        }
+        concat(vec![
+            prefix,
+            text("{"),
+            indent(2, concat(body)),
+            hardline(),
+            text("}"),
+        ])
     }
 
     /// Formats a struct field initializer (`name: value`).
