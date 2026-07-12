@@ -1,29 +1,24 @@
-//! Runtime errors raised by the interpreter: recoverable diagnostics
-//! like division by zero, integer overflow, and type mismatches.
+//! Runtime errors raised by the interpreter. Covers panics (user
+//! `Kernel.panic` calls and arithmetic faults) and type mismatches.
 //! Anything that would indicate a malformed `IRProgram` (undefined
 //! `ValueId`, missing entry, etc.) is a seal violation upstream and
 //! panics through `koja_ir::seal`, never surfaces here.
 
 use std::fmt;
 
-use koja_ir::{IRBinOp, IRUnaryOp, ValueId};
+use koja_ir::ValueId;
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RuntimeError {
-    /// `lhs / rhs` or `lhs % rhs` with `rhs == 0`.
-    DivisionByZero { op: IRBinOp },
-    /// Integer arithmetic produced a value outside the `i64` range.
-    IntegerOverflow { lhs: i64, op: IRBinOp, rhs: i64 },
     /// A binary or unary operator received operands whose runtime
     /// types it cannot combine.
     TypeMismatch { detail: String },
-    /// A unary operator produced a value outside the `i64` range
-    /// (in practice: negating `i64::MIN`).
-    UnaryIntegerOverflow { op: IRUnaryOp, operand: i64 },
-    /// `Kernel.panic(message)` was called. The user-supplied message
-    /// is preserved verbatim so tests / callers can assert on it
-    /// (mirrors the LLVM backend's `__koja_panic` runtime helper, which
-    /// prints `** (panic) <message>` plus a backtrace before aborting).
+    /// `Kernel.panic(message)` was called, or an arithmetic fault
+    /// (overflow, zero divisor, non-finite float result) trapped.
+    /// The message is preserved verbatim so tests / callers can
+    /// assert on it (mirrors the LLVM backend's `__koja_panic`
+    /// runtime helper, which prints `** (panic) <message>` plus a
+    /// backtrace before aborting).
     Panicked { message: String },
     /// An `@intrinsic`-tagged call resolved to a mangled symbol the
     /// interpreter has no registered handler for. Indicates a missing
@@ -54,16 +49,7 @@ pub enum RuntimeError {
 impl fmt::Display for RuntimeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            RuntimeError::DivisionByZero { op } => {
-                write!(f, "{op:?} by zero")
-            }
-            RuntimeError::IntegerOverflow { lhs, op, rhs } => {
-                write!(f, "integer overflow: {lhs} {op:?} {rhs}")
-            }
             RuntimeError::TypeMismatch { detail } => write!(f, "type mismatch: {detail}"),
-            RuntimeError::UnaryIntegerOverflow { op, operand } => {
-                write!(f, "integer overflow: {op:?} {operand}")
-            }
             RuntimeError::Panicked { message } => write!(f, "** (panic) {message}"),
             RuntimeError::UnknownIntrinsic { symbol } => {
                 write!(

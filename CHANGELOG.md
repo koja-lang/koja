@@ -28,6 +28,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **Breaking**: Integer arithmetic now panics on overflow, division by zero, and `MIN / -1` instead of wrapping or producing platform-dependent results.
+- **Breaking**: `Float` and `Float32` are now finite-only: any operation whose result would be NaN or infinity (like `1.0 / 0.0`) panics.
+- **Breaking**: `bsl` and `bsr` now panic when the shift count is negative or at least the receiver's bit width.
+- **Breaking**: `Float.to_float32` now returns `Result<Float32, NumericConversionError>`, failing with `OutOfRange` when the magnitude is too large for a 32-bit float.
+- A float literal whose magnitude is too large for a 64-bit float is now a compile-time error.
+- A NaN or infinity returned by an `@extern "C"` call now panics at the call site.
 - **Breaking**: `String.to_cstring` and `CString.to_string` now return `Result<_, CString.ConversionError>`, rejecting interior NUL, malformed pointer metadata, and invalid UTF-8.
 - **Breaking**: `Binary.to_string` now returns `String.ConversionError.InvalidUTF8`, and the unchecked `CPtr.to_string` conversion has been removed.
 - **Breaking**: `Binary.ptr` has been removed in favor of `CPtr.borrow(bytes)`, which borrows a pointer for the current statement, and `CPtr.copy(bytes)`, which takes an owned copy.
@@ -47,6 +53,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Native `String` equality, matching, indexing, slicing, length, parsing, and UDP sends now honor the full length-prefixed payload, including embedded NUL.
 - Negative `CPtr.alloc` and `CPtr.to_binary` counts now panic on both backends instead of diverging.
+- Comparison, division, and modulo on `UInt64` values above `Int.max` now produce correct unsigned results.
 - Enum matches with partial payload patterns now report the uncovered outer variant at compile time instead of reaching an unreachable runtime path.
 - Negative process timeouts and delayed sends now behave as zero on both execution backends instead of becoming near-infinite waits in compiled programs.
 - Generic call arguments such as `Option.None` and `Result.Err` now infer missing type parameters from the call's enclosing expected return type.

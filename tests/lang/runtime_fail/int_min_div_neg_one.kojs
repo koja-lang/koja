@@ -1,0 +1,7 @@
+# Int.min / -1 has no 64-bit representation (previously UB under
+# LLVM) and traps as an integer overflow.
+
+max = 9223372036854775807
+min = -max - 1
+d = -1
+(min / d).print()

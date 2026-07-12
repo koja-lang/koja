@@ -1,0 +1,5 @@
+# Unary - on Int.min overflows two's complement and traps.
+
+max = 9223372036854775807
+min = -max - 1
+(-min).print()

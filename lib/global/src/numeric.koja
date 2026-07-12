@@ -18,8 +18,7 @@ end
 
 impl Equality for Float
   @doc """
-  IEEE 754 ordered equality for 64-bit floats: `+0.0 == -0.0` is
-  `true`, and `NaN == NaN` is `false`.
+  IEEE 754 equality for 64-bit floats. `+0.0 == -0.0` is `true`.
   """
   @intrinsic
   fn eq(self, other: Float) -> Bool
@@ -27,8 +26,7 @@ end
 
 impl Equality for Float32
   @doc """
-  IEEE 754 ordered equality for 32-bit floats: `+0.0 == -0.0` is
-  `true`, and `NaN == NaN` is `false`.
+  IEEE 754 equality for 32-bit floats. `+0.0 == -0.0` is `true`.
   """
   @intrinsic
   fn eq(self, other: Float32) -> Bool
@@ -228,10 +226,11 @@ extend Float
 
   @doc """
   Converts to a 32-bit float, rounding to the nearest representable
-  value. Total — out-of-range magnitudes become infinities.
+  value. Returns `Result.Err(NumericConversionError.OutOfRange)` when
+  the magnitude is too large for a 32-bit float.
   """
   @intrinsic
-  fn to_float32(self) -> Float32
+  fn to_float32(self) -> Result<Float32, NumericConversionError>
 end
 
 extend UInt64

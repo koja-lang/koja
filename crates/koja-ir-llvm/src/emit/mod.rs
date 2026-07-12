@@ -63,7 +63,7 @@ pub(crate) mod heap_layout;
 mod indirect;
 mod instruction;
 mod locals;
-mod ops;
+pub(crate) mod ops;
 pub(crate) mod process;
 mod structs;
 mod unions;

@@ -76,7 +76,7 @@ pub use struct_decl::{IRStructDecl, IRStructField, StructFieldInit};
 pub use tail_calls::function_has_tail_call;
 pub use types::{
     BinaryEndian, BinarySign, ConcatKind, ConstValue, IRBinOp, IRType, IRUnaryOp,
-    LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment, ResolvedBinaryLayout,
-    ValueId,
+    LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment, NEG_OVERFLOW_MESSAGE,
+    ResolvedBinaryLayout, ValueId,
 };
 pub use union_decl::{IRUnionDecl, size_in_bytes};

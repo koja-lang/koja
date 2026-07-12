@@ -1,0 +1,4 @@
+# Shifting an Int by its full bit width is out of range and traps.
+
+n = 1
+n.bsl(64).print()

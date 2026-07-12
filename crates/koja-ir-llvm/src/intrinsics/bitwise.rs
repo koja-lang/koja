@@ -7,19 +7,19 @@
 //! types logical-shift).
 //!
 //! Shift count parameters are typed `Int` in source, which means
-//! `Int64` at the IR layer. LLVM requires the count to match the
-//! operand's int type, so the emitter truncates the count down to
-//! the operand width before issuing the shift. Truncation is safe:
-//! the typecheck doesn't reject negative or wide-magnitude shifts
-//! today, but LLVM's shift-by-N≥width is poison anyway, and the
-//! truncate just collapses the same poison into the operand's
-//! native shape.
+//! `Int64` at the IR layer. A count outside `0 <= n < width` traps
+//! (an `ArithmeticError` panic, matching the eval backend) before
+//! the emitter truncates the count down to the operand width LLVM
+//! requires, so the shift instruction never sees a poison-producing
+//! count.
 
+use inkwell::IntPredicate;
 use inkwell::types::BasicTypeEnum;
 use inkwell::values::{FunctionValue, IntValue};
 use koja_ir::{BitOp, IRFunction, IntType};
 
 use crate::ctx::EmitContext;
+use crate::emit::ops::emit_fault_guard;
 use crate::error::{IceExt, LlvmError};
 use crate::types::ir_basic_type;
 
@@ -45,11 +45,11 @@ pub(super) fn emit_bitwise<'ctx>(
             ctx.builder.build_or(lhs, rhs, "bor").or_ice()?
         }
         BitOp::Bsl => {
-            let count = shift_count(ctx, function, llvm_function, &lhs)?;
+            let count = shift_count(ctx, function, llvm_function, ty, op, &lhs)?;
             ctx.builder.build_left_shift(lhs, count, "bsl").or_ice()?
         }
         BitOp::Bsr => {
-            let count = shift_count(ctx, function, llvm_function, &lhs)?;
+            let count = shift_count(ctx, function, llvm_function, ty, op, &lhs)?;
             ctx.builder
                 .build_right_shift(lhs, count, ty.is_signed(), "bsr")
                 .or_ice()?
@@ -94,22 +94,42 @@ fn other_param<'ctx>(function: &IRFunction, llvm_function: FunctionValue<'ctx>) 
         .into_int_value()
 }
 
-/// Mint a same-width shift-count for `bsl` / `bsr`. The source
-/// signature types `n: Int` (Int64). LLVM requires the count to
-/// match the operand's int type, so we truncate down to the
-/// receiver's native width. No-op when the receiver is already
-/// `Int64`.
+/// Mint a validated, same-width shift-count for `bsl` / `bsr`. The
+/// source signature types `n: Int` (Int64). A count outside
+/// `0 <= n < width` traps before the truncate down to the
+/// receiver's native width LLVM requires.
 fn shift_count<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
+    ty: IntType,
+    op: BitOp,
     receiver: &IntValue<'ctx>,
 ) -> Result<IntValue<'ctx>, LlvmError> {
     let raw = llvm_function
         .get_nth_param(1)
         .unwrap_or_else(|| panic!("bitwise shift `{}` missing `n` param", function.symbol))
         .into_int_value();
-    if raw.get_type() == receiver.get_type() {
+    let count_type = raw.get_type();
+    let negative = ctx
+        .builder
+        .build_int_compare(IntPredicate::SLT, raw, count_type.const_zero(), "negative")
+        .or_ice()?;
+    let too_wide = ctx
+        .builder
+        .build_int_compare(
+            IntPredicate::SGE,
+            raw,
+            count_type.const_int(ty.bit_width() as u64, false),
+            "too_wide",
+        )
+        .or_ice()?;
+    let out_of_range = ctx
+        .builder
+        .build_or(negative, too_wide, "out_of_range")
+        .or_ice()?;
+    emit_fault_guard(ctx, out_of_range, op.shift_count_message(), "shift_count")?;
+    if count_type == receiver.get_type() {
         return Ok(raw);
     }
     let target = match ir_basic_type(ctx, &function.params[0].ty)? {

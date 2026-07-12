@@ -88,77 +88,53 @@ only the uppercase path form.
 
 ---
 
-## Arithmetic fault semantics undefined (ArithmeticError)
+## No wrapping-arithmetic escape hatch
 
-Investigated 2026-06-10. The fault behavior of `+ - * / %` and unary
-`-` was never pinned down, and the two backends improvised
-differently:
+Integer arithmetic always traps on overflow (2026-07). There are no
+`wrapping_add` / `wrapping_mul` style operations, and the Erlang idiom
+of masking after the math does not transfer, since the operation traps
+before a `band` can run. Consequence: a 64-bit wrapping multiply is
+inexpressible in pure Koja, which locks out most non-cryptographic hash
+functions (FNV, xxHash, SplitMix). 32-bit wrapping can be simulated by
+computing in `Int` and masking.
 
-| Fault                             | Eval                                            | LLVM                                                                 |
-| --------------------------------- | ----------------------------------------------- | -------------------------------------------------------------------- |
-| Int `/` `%` by zero               | `RuntimeError::DivisionByZero`                  | raw `sdiv`/`srem` -- **UB** (SIGFPE on x86, silent garbage on ARM64) |
-| `i64::MIN / -1`                   | overflow error via `checked_div`                | raw `sdiv` -- **UB**                                                 |
-| Int overflow (`+ - *`, unary `-`) | `RuntimeError::IntegerOverflow` via `checked_*` | wraps (no `nsw`/`nuw`)                                               |
-| Float ops producing `inf`/`NaN`   | allowed (IEEE)                                  | allowed (IEEE)                                                       |
+**Fix path:** a named-operation family on the integer types, following
+the `Bitwise` precedent (the specialized algebra gets words, not
+symbols). Both backends already thread the operand type through
+`BinaryOp`, so codegen is the existing arithmetic minus the overflow
+guard.
 
-The doc comment on `IRBinOp` in `koja-ir/src/types.rs` declares
-two's-complement wrap the intended contract, with aligning eval "a
-follow-up" -- that contract is now in question (see direction below).
+---
 
-The float row contradicts the finite-only stance adopted for
-`Float.parse` (2026-06-10, `NumericConversionError`): `1.0 / 0.0`
-quietly produces `inf` at runtime, `Debug.format` prints it as `inf`,
-and `Float.parse` then refuses to read that text back. Finite text
-in, non-finite values out -- a format/parse round-trip asymmetry.
+## `CPtr` float reads bypass the finite-only invariant
 
-**Proposed direction** -- an `ArithmeticError` trap, the Erlang
-`badarith` analogue:
+A non-finite float returned by an `@extern "C"` call traps at the call
+site, but `CPtr<Float64>.read()` (and `Float32`) does not. A NaN or
+infinity sitting in a C-filled buffer walks straight into a `Float`,
+silently breaking the invariant. This is consistent with the FFI
+stance that safety is the wrapper author's responsibility, but it is
+currently undocumented rather than decided.
 
-- Int div/mod by zero (and `i64::MIN / -1`) traps on both backends.
-  This much is mandatory regardless of the rest: the LLVM behavior
-  today is UB, not a semantic choice.
-- A float op whose result is non-finite (`inf` from overflow or
-  `x / 0.0`, `NaN` from `0.0 / 0.0` or `x % 0.0`) traps, restoring
-  the finite-only invariant end to end. With that invariant, `NaN`
-  can never reach comparisons, so the ordered-predicate semantics
-  stay as-is.
-- The trap mechanism must be a panic: binops return bare values, so
-  there is no `Result` to thread an error through. User panics now
-  unwind only the current process into `ExitReason.Crashed`; a PID 1
-  panic exits the OS process non-zero. `ArithmeticError` should use
-  that same path.
-- LLVM-side shape: a shared guard helper in `emit/ops.rs` -- compare
-  (or `llvm.*.with.overflow`), `build_conditional_branch` to a panic
-  block calling `__koja_panic` with a constant message, mirroring the
-  `intrinsics/numeric.rs` range-check pattern.
+**Fix path options:** guard `read` (costs a check on the bulk-transfer
+path), document `CPtr` as an unchecked boundary, or offer both a
+checked and an unchecked read. A carrier type for full IEEE values
+(the `Binary`-to-`String` pattern applied to floats) would subsume
+this: pointer reads and extern returns typed as IEEE floats make no
+finiteness promise, and the checked crossing moves to an explicit
+conversion.
 
-**Open questions:**
+---
 
-1. Int overflow: trap (eval's current behavior, one overflow-flag
-   branch per native int op) vs keep wrapping (the `types.rs`
-   contract, align eval to wrap). Deliberately unresolved.
-2. `Float.to_float32` documents "total -- out-of-range magnitudes
-   become infinities", a backdoor minting non-finite `Float32`.
-   Candidate fix: checked
-   `Result<Float32, NumericConversionError.OutOfRange>` like the
-   other narrowing methods.
-3. Whether a float literal that overflows `f64` (`1e999` in source)
-   should be a compile-time `OutOfRange` diagnostic to match the
-   parse behavior.
+## No exponent notation in numeric literals
 
-Reconfirmed 2026-07-10 with executable scripts: `Int.max + 1` traps in
-eval but wraps to `Int.min` under LLVM, while `1 / 0` traps in eval but
-returned `0` in the tested arm64 LLVM build. The latter is one possible
-manifestation of LLVM UB, not a stable result.
+The lexer does not accept `1e9` / `1.5e-3`. Large or small float
+literals must be written with every digit (the arithmetic-fault test
+fixtures write 160-digit literals). `Float.parse("1e999")` handles the
+notation at runtime, so the gap is literal syntax only.
 
-**Bit-shift extension (found 2026-07-10):** `Bitwise.bsl` / `bsr` also
-lack fault semantics. Typecheck accepts negative and width-sized counts;
-eval uses Rust's `wrapping_shl` / `wrapping_shr`, while LLVM emits a raw
-shift whose out-of-range count is poison. A repro using `1.bsl(64)` and
-`1.bsl(-1)` appeared hardware-masked in eval and debug LLVM, then
-produced unrelated values under release LLVM. Define whether counts
-trap, mask, or saturate, enforce the same rule in both backends, and add
-release-mode parity coverage.
+**Fix path:** lexer support for an optional exponent suffix on float
+literals, plus the same round-to-infinity `OutOfRange` check float
+literals already get.
 
 ---
 

@@ -169,7 +169,7 @@ fn literal_to_const(value: &Literal, target: Option<NumericLiteralWidth>) -> Con
             (Err(_), _) => ConstValue::Float64(0.0),
         },
         Literal::Int(text) => match parse_int_literal(text) {
-            Ok(parsed) => int_const_at_width(parsed as i128, target),
+            Ok(parsed) => int_const_at_width(parsed, target),
             Err(_) => ConstValue::Int64(0),
         },
         Literal::String(s) => ConstValue::String(s.clone()),
@@ -197,7 +197,7 @@ fn fold_negated_literal_inner(operand: &Expr, target: NumericLiteralWidth) -> Op
             value: Literal::Int(text),
         } => parse_int_literal(text)
             .ok()
-            .and_then(|n| (n as i128).checked_neg())
+            .and_then(i128::checked_neg)
             .map(|neg| int_const_at_width(neg, Some(target))),
         ExprKind::Literal {
             value: Literal::Float(text),

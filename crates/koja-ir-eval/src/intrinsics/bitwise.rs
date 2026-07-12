@@ -2,46 +2,68 @@
 //!
 //! Eval collapses every integer width (`Int{8,16,32,64}` /
 //! `UInt{8,16,32,64}`) to [`Value::Int(i64)`](crate::Value::Int),
-//! so the AND/OR/XOR/NOT/SHL ops are width-agnostic at this layer
-//! and operate directly on i64. Right shift is the only op where
-//! the receiver type matters: signed types use arithmetic shift
-//! (sign-extend, native `i64 >> n`), unsigned types use logical
-//! shift (cast through `u64 >> n`). [`IntType::is_signed`] supplies
-//! the answer. The typed dispatch payload threads it through
-//! without re-parsing strings.
+//! so the AND/OR/XOR ops are width-agnostic at this layer and
+//! operate directly on i64. `bnot` and the shifts are computed at
+//! the receiver's width ([`IntType`] carries it), with results
+//! masked and re-extended to match the LLVM backend's native
+//! narrow-int instructions. Shift counts outside `0 <= n < width`
+//! trap with the shared [`BitOp::shift_count_message`] panic.
 
 use koja_ir::{BitOp, IntType};
 
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-/// Run a bitwise intrinsic. `ty` selects right-shift signedness.
-/// Every other op is width-agnostic on the eval `Value::Int(i64)`
-/// representation.
+/// Run a bitwise intrinsic. `ty` selects shift signedness and the
+/// width used for count validation and result normalization.
 pub(super) fn dispatch(ty: IntType, op: BitOp, args: &[Value]) -> Result<Value, RuntimeError> {
     let lhs = arg_int(args, 0, op)?;
     let result = match op {
         BitOp::Band => lhs & arg_int(args, 1, op)?,
-        BitOp::Bnot => !lhs,
+        BitOp::Bnot => normalize(ty, !lhs),
         BitOp::Bor => lhs | arg_int(args, 1, op)?,
         BitOp::Bsl => {
-            let n = arg_int(args, 1, op)?;
-            // Cast to u32 for the Rust shift. Out-of-range counts
-            // are undefined in LLVM and saturate-to-zero in this
-            // interpreter (panics worse than mismatched semantics).
-            lhs.wrapping_shl(n as u32)
+            let count = shift_count(ty, op, arg_int(args, 1, op)?)?;
+            normalize(ty, lhs.wrapping_shl(count))
         }
         BitOp::Bsr => {
-            let n = arg_int(args, 1, op)?;
+            let count = shift_count(ty, op, arg_int(args, 1, op)?)?;
             if ty.is_signed() {
-                lhs.wrapping_shr(n as u32)
+                lhs.wrapping_shr(count)
             } else {
-                ((lhs as u64).wrapping_shr(n as u32)) as i64
+                normalize(ty, ((lhs as u64).wrapping_shr(count)) as i64)
             }
         }
         BitOp::Bxor => lhs ^ arg_int(args, 1, op)?,
     };
     Ok(Value::Int(result))
+}
+
+/// Validate a shift count against the receiver width, trapping on
+/// negative or width-and-larger counts like the LLVM backend.
+fn shift_count(ty: IntType, op: BitOp, count: i64) -> Result<u32, RuntimeError> {
+    if count < 0 || count >= ty.bit_width() as i64 {
+        return Err(RuntimeError::Panicked {
+            message: op.shift_count_message().to_string(),
+        });
+    }
+    Ok(count as u32)
+}
+
+/// Re-establish the `Value::Int` storage convention after an op that
+/// can spill past the receiver's width. Masks to `width` bits, then
+/// sign-extends signed receivers (unsigned stay zero-extended).
+fn normalize(ty: IntType, value: i64) -> i64 {
+    let width = ty.bit_width();
+    if width == 64 {
+        return value;
+    }
+    let masked = (value as u64) & ((1u64 << width) - 1);
+    if ty.is_signed() && masked >> (width - 1) == 1 {
+        (masked as i64) - (1i64 << width)
+    } else {
+        masked as i64
+    }
 }
 
 fn arg_int(args: &[Value], index: usize, op: BitOp) -> Result<i64, RuntimeError> {

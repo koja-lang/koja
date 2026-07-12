@@ -301,6 +301,10 @@ fn segment_fixed_width(segment: &BinarySegment, diagnostics: &mut Vec<Diagnostic
             "Int16" | "UInt16" => Some(16),
             "Int32" | "UInt32" => Some(32),
             "Int64" | "UInt64" => Some(64),
+            // When float extraction lands, a segment decoding to a
+            // non-finite value must fail the match (fall through to
+            // the next arm, Erlang-style) to uphold the finite-only
+            // `Float` invariant.
             "Float32" | "Float64" => {
                 diagnostics.push(Diagnostic::error(
                     "typecheck does not yet support float-extract binary pattern \

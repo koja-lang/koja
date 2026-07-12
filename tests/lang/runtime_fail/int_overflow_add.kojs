@@ -1,0 +1,5 @@
+# Int.max + 1 overflows 64 bits and traps instead of wrapping.
+
+a = 9223372036854775807
+b = 1
+(a + b).print()

@@ -749,6 +749,7 @@ fn emit_result_tag_branch(
             dest: is_ok,
             lhs: tag,
             op: IRBinOp::Eq,
+            operand_ty: IRType::Int8,
             rhs: ok_tag,
         },
     );
@@ -894,6 +895,7 @@ fn emit_priority_tag_branch(
             dest: matches,
             lhs: tag,
             op: IRBinOp::Eq,
+            operand_ty: IRType::Int8,
             rhs: expected,
         },
     );

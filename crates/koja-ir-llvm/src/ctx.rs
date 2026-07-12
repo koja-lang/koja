@@ -80,6 +80,11 @@ pub(crate) struct EmitContext<'ctx> {
     /// emission goes through [`Self::declared_function`] /
     /// [`Self::register_declared_function`] instead.
     declared_functions: RefCell<BTreeMap<IRSymbol, FunctionValue<'ctx>>>,
+    /// `@extern "C"` declarations returning `Float` / `Float32`,
+    /// mapped to their C-visible name. Call sites consult this to
+    /// emit the finiteness trap that keeps foreign NaN / inf out of
+    /// the finite-only `Float` types.
+    extern_float_returns: RefCell<BTreeMap<IRSymbol, String>>,
     /// Per-function closure-emit frame, set while a
     /// `FunctionKind::Closure` body is being defined and cleared
     /// when it returns. `LoadCapture` reads `env_ptr` + `env_struct`
@@ -166,6 +171,7 @@ impl<'ctx> EmitContext<'ctx> {
             constant_pool: RefCell::new(None),
             load_const_cache: RefCell::new(BTreeMap::new()),
             declared_functions: RefCell::new(BTreeMap::new()),
+            extern_float_returns: RefCell::new(BTreeMap::new()),
             closure_frame: RefCell::new(None),
             current_block_map: RefCell::new(None),
             tco_frame: RefCell::new(None),
@@ -376,6 +382,22 @@ impl<'ctx> EmitContext<'ctx> {
     /// supposed to run before any body emission.
     pub(crate) fn declared_function(&self, symbol: &IRSymbol) -> Option<FunctionValue<'ctx>> {
         self.declared_functions.borrow().get(symbol).copied()
+    }
+
+    /// Record an `@extern "C"` declaration whose return type is
+    /// `Float` / `Float32`, keyed by its call-site resolution
+    /// symbol. `c_name` is the C-visible name used in the trap
+    /// message.
+    pub(crate) fn register_extern_float_return(&self, symbol: IRSymbol, c_name: String) {
+        self.extern_float_returns
+            .borrow_mut()
+            .insert(symbol, c_name);
+    }
+
+    /// The C-visible name of `symbol` when it is a float-returning
+    /// extern, `None` otherwise.
+    pub(crate) fn extern_float_return(&self, symbol: &IRSymbol) -> Option<String> {
+        self.extern_float_returns.borrow().get(symbol).cloned()
     }
 
     /// Wire the flattened constant pool built from input packages.

@@ -36,3 +36,12 @@ match 300.to_int8()
   Result.Ok(v) -> "unreachable".print()
   Result.Err(e) -> "narrow rejected".print()
 end
+
+# Float narrowing is checked too: a magnitude past Float32's range
+# (here 1e40) is OutOfRange instead of rounding to infinity.
+2.5.to_float32().unwrap().print()
+
+match 10000000000000000000000000000000000000000.0.to_float32()
+  Result.Ok(v) -> "unreachable".print()
+  Result.Err(e) -> "float narrow rejected".print()
+end

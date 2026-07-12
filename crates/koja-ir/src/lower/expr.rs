@@ -167,7 +167,8 @@ fn lower_expr_inner(
                 return Ok((dest, block));
             }
             let ir_op = lower_bin_op(*op, expr.span, &mut output.diagnostics)?;
-            let result_ty = bin_op_result_type(ir_op, ctx.type_of(lhs));
+            let operand_ty = ctx.type_of(lhs);
+            let result_ty = bin_op_result_type(ir_op, operand_ty.clone());
             let dest = ctx.fresh_value(result_ty);
             ctx.cfg.append(
                 block,
@@ -175,6 +176,7 @@ fn lower_expr_inner(
                     dest,
                     lhs,
                     op: ir_op,
+                    operand_ty,
                     rhs,
                 },
             );
@@ -380,7 +382,8 @@ fn lower_expr_inner(
             }
             let (operand, block) = lower_expr(operand, ctx, block, registry, output)?;
             let ir_op = lower_unary_op(*op);
-            let result_ty = unary_op_result_type(ir_op, ctx.type_of(operand));
+            let operand_ty = ctx.type_of(operand);
+            let result_ty = unary_op_result_type(ir_op, operand_ty.clone());
             let dest = ctx.fresh_value(result_ty);
             ctx.cfg.append(
                 block,
@@ -388,6 +391,7 @@ fn lower_expr_inner(
                     dest,
                     op: ir_op,
                     operand,
+                    operand_ty,
                 },
             );
             Ok((dest, block))
@@ -654,7 +658,7 @@ fn fold_negated_literal_const(operand: &Expr, target: NumericLiteralWidth) -> Op
             value: Literal::Int(text),
         } => parse_int_literal(text)
             .ok()
-            .and_then(|n| (n as i128).checked_neg())
+            .and_then(i128::checked_neg)
             .map(|neg| int_const_at_width(neg, Some(target))),
         ExprKind::Literal {
             value: Literal::Float(text),

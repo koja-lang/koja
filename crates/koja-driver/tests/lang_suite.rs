@@ -220,10 +220,12 @@ fn run_compile_fail_dir(dir: &Path, label: &str) {
     }
 }
 
-/// LLVM-only: the two backends surface runtime faults through different
-/// channels (an LLVM panic stacktrace vs. the interpreter's
-/// `RuntimeError`), so the expected-stderr pattern is backend-specific
-/// rather than a cross-backend parity assertion.
+/// Runtime-fault fixtures run under both backends: panic messages are
+/// shared constants (`** (panic) <message>` from LLVM's `__koja_panic`
+/// and the interpreter's `RuntimeError::Panicked` alike), so the same
+/// expected-stderr pattern pins cross-backend fault parity. The
+/// backtrace-frames assertion stays in the LLVM-only
+/// `lang_panic_backtrace` test.
 fn run_runtime_fail_dir(dir: &Path, label: &str) {
     if !dir.exists() {
         return;
@@ -240,24 +242,26 @@ fn run_runtime_fail_dir(dir: &Path, label: &str) {
             failures.push(format!("{test_name}: missing .stderr file"));
             continue;
         }
-
-        let (_stdout, stderr, code) = run_koja(file);
-
-        if code == 0 {
-            failures.push(format!(
-                "{test_name}: expected runtime failure but exited with 0"
-            ));
-            continue;
-        }
-
         let expected = fs::read_to_string(&expected_path).unwrap();
         let pattern = expected.trim();
-        if !stderr.contains(pattern) {
-            failures.push(format!(
-                "{test_name}: stderr does not contain expected pattern\n\
-                 expected pattern: {pattern:?}\n\
-                 actual stderr:\n{stderr}"
-            ));
+
+        for &backend in backends_for(file) {
+            let (_stdout, stderr, code) = run_koja_backend(file, backend);
+
+            if code == 0 {
+                failures.push(format!(
+                    "{test_name} ({backend}): expected runtime failure but exited with 0"
+                ));
+                continue;
+            }
+
+            if !stderr.contains(pattern) {
+                failures.push(format!(
+                    "{test_name} ({backend}): stderr does not contain expected pattern\n\
+                     expected pattern: {pattern:?}\n\
+                     actual stderr:\n{stderr}"
+                ));
+            }
         }
     }
 
@@ -460,18 +464,13 @@ lang_test_dir!(lang_process_priority, "process_priority", project);
 lang_test_dir!(lang_process_argv, "process_argv", project, "hello", "world");
 lang_test_dir!(lang_receive_after, "receive_after", project);
 
-/// LLVM-only: links a user-provided C static library (`@link`), which the
-/// interpreter cannot resolve (no linker / dlopen path for arbitrary
-/// symbols).
-#[test]
-fn lang_ffi() {
-    let dir = lang_dir().join("ffi");
-    assert!(dir.exists(), "test fixture ffi/ not found");
-
-    let c_src = dir.join("ffi_helper.c");
+/// Compile `ffi/ffi_helper.c` into `libffi_helper.a` inside `dir`
+/// and return the archive's path. Callers remove it when done.
+fn build_ffi_helper_lib(dir: &Path) -> PathBuf {
+    let c_src = lang_dir().join("ffi").join("ffi_helper.c");
     let lib_path = dir.join("libffi_helper.a");
-
     let obj = dir.join("ffi_helper.o");
+
     let cc_status = Command::new("cc")
         .args(["-c", "-o"])
         .arg(&obj)
@@ -489,7 +488,12 @@ fn lang_ffi() {
     assert!(ar_status.success(), "ar failed");
 
     let _ = fs::remove_file(&obj);
+    lib_path
+}
 
+/// `koja run --backend=llvm` in a project fixture `dir` with
+/// `libffi_helper.a` on the library path.
+fn run_ffi_project(dir: &Path) -> (String, String, i32) {
     let ffi_lib_path = match library_path() {
         Some(existing) => format!("{}:{}", dir.display(), existing),
         None => dir.display().to_string(),
@@ -497,7 +501,7 @@ fn lang_ffi() {
     let output = Command::new(koja_bin())
         .arg("run")
         .arg("--backend=llvm")
-        .current_dir(&dir)
+        .current_dir(dir)
         .env("LIBRARY_PATH", &ffi_lib_path)
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
@@ -506,7 +510,19 @@ fn lang_ffi() {
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
     let code = output.status.code().unwrap_or(-1);
+    (stdout, stderr, code)
+}
 
+/// LLVM-only: links a user-provided C static library (`@link`), which the
+/// interpreter cannot resolve (no linker / dlopen path for arbitrary
+/// symbols).
+#[test]
+fn lang_ffi() {
+    let dir = lang_dir().join("ffi");
+    assert!(dir.exists(), "test fixture ffi/ not found");
+
+    let lib_path = build_ffi_helper_lib(&dir);
+    let (stdout, stderr, code) = run_ffi_project(&dir);
     let _ = fs::remove_file(&lib_path);
 
     assert!(
@@ -519,6 +535,30 @@ fn lang_ffi() {
         let diff = diff_lines(&stdout, &expected);
         panic!("\n--- FAIL: ffi ---\n{diff}");
     }
+}
+
+/// A NaN handed back by an `@extern "C"` call must trap at the call
+/// site — the FFI boundary is the one remaining producer of
+/// non-finite floats, and the finite-only `Float` invariant closes
+/// it there. LLVM-only for the same `@link` reason as `lang_ffi`.
+#[test]
+fn lang_ffi_nan_return_traps() {
+    let dir = lang_dir().join("ffi_nan_trap");
+    assert!(dir.exists(), "test fixture ffi_nan_trap/ not found");
+
+    let lib_path = build_ffi_helper_lib(&dir);
+    let (stdout, stderr, code) = run_ffi_project(&dir);
+    let _ = fs::remove_file(&lib_path);
+
+    assert!(
+        code != 0,
+        "ffi_nan_trap: expected a fault exit, got 0\nstdout:\n{stdout}"
+    );
+    let pattern = "** (panic) non-finite float returned by nan_c";
+    assert!(
+        stderr.contains(pattern),
+        "ffi_nan_trap: stderr missing {pattern:?}\nstderr:\n{stderr}"
+    );
 }
 
 /// Lifecycle signal delivery under both backends: the compiled binary
@@ -999,6 +1039,38 @@ fn lang_release_build_test() {
     );
 
     let _ = std::fs::remove_file(&binary_path);
+}
+
+/// Arithmetic faults must trap in release mode exactly as in debug:
+/// the guards are explicit branches in the emitted IR, not
+/// debug-only checks. The bit-shift fault is the historical repro —
+/// it only misbehaved under release-mode LLVM optimization.
+#[test]
+fn lang_release_fault_parity_test() {
+    let fixtures = [
+        ("int_overflow_add.kojs", "** (panic) integer overflow in +"),
+        (
+            "shift_count_bsl.kojs",
+            "** (panic) shift count out of range in bsl",
+        ),
+    ];
+    for (fixture, pattern) in fixtures {
+        let file = lang_dir().join("runtime_fail").join(fixture);
+        let (_stdout, stderr, code) = run_with_timeout(|cmd| {
+            cmd.arg("run")
+                .arg("--backend=llvm")
+                .arg("--release")
+                .arg(&file);
+        });
+        assert!(
+            code != 0,
+            "release run of {fixture}: expected a fault exit, got 0"
+        );
+        assert!(
+            stderr.contains(pattern),
+            "release run of {fixture}: stderr missing {pattern:?}\nstderr:\n{stderr}"
+        );
+    }
 }
 
 /// Run `koja test <extra args>` in the `test_trace` fixture and return
