@@ -12,20 +12,24 @@ end
 
 fn multi_trip -> Int
   i = 0
+
   while i < 4
     s = "iteration #{i}"
     i += 1
   end
+
   s = "after multi"
   s.length()
 end
 
 fn zero_trip -> Int
   i = 5
+
   while i < 3
     s = "never #{i}"
     i += 1
   end
+
   s = "after zero"
   s.length()
 end
