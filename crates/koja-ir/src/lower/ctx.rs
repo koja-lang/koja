@@ -24,13 +24,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use koja_ast::ast::Diagnostic;
 use koja_ast::identifier::LocalId;
 
-/// Snapshot of the declared-local map captured at a control-flow
+/// Snapshot of the live-slot map captured at a control-flow
 /// construct's entry. Used by `match` / `cond` / `if` / `unless` /
 /// ternary lowering to reset per-arm state and to merge post-arm
 /// states into a joined post-construct state. See
-/// [`FnLowerCtx::snapshot_slot_states`]. Maps each declared
+/// [`FnLowerCtx::snapshot_slot_states`]. Maps each live
 /// [`IRLocalId`] to the slot's [`IRType`] (pinned at its `LocalDecl`),
-/// which the future drop-glue pass consults.
+/// which the drop-glue emission consults.
 pub(crate) type SlotStateSnapshot = BTreeMap<IRLocalId, IRType>;
 
 use crate::cfg::CFGBuilder;
@@ -99,9 +99,13 @@ pub(crate) enum FlowResult {
 /// step can append [`crate::function::IRInstruction::LocalDecl`]s
 /// into the entry regardless of the currently-open block.
 ///
-/// `locals` is the canonical "declared local" set: presence in the
-/// map means a `LocalDecl` was emitted in the entry block. Each entry
-/// carries the slot's [`IRType`] for the future drop-glue pass.
+/// `declared` and `locals` split the local-slot bookkeeping.
+/// `declared` is monotonic. Presence means a `LocalDecl` was emitted
+/// in the entry block, and it never shrinks, so a write after a
+/// loop/branch boundary can't re-declare the slot. `locals` is the
+/// path-sensitive live-slot map, with each entry carrying the slot's
+/// [`IRType`] for drop-glue emission. Control-flow lowering
+/// snapshots, restores, and merges it per arm.
 ///
 /// One context per `IRFunction` (or per script body). Discarded after
 /// the function's blocks are extracted via [`Self::into_blocks`];
@@ -112,6 +116,7 @@ pub(crate) struct FnLowerCtx {
     next_block: u32,
     value_types: BTreeMap<ValueId, IRType>,
     entry_block: Option<IRBlockId>,
+    declared: BTreeSet<IRLocalId>,
     locals: BTreeMap<IRLocalId, IRType>,
     closures: ClosureState,
     /// Stack of pending loop-exit blocks — one entry per enclosing
@@ -192,6 +197,7 @@ impl FnLowerCtx {
             next_block: 0,
             value_types: BTreeMap::new(),
             entry_block: None,
+            declared: BTreeSet::new(),
             locals: BTreeMap::new(),
             closures: ClosureState::default(),
             loop_exit: Vec::new(),
@@ -213,8 +219,8 @@ impl FnLowerCtx {
         self.owned_values.contains(&value)
     }
 
-    /// The heap-managed local slots declared in this function, in
-    /// reverse declaration order (LIFO drop). Used by the drop-glue
+    /// The heap-managed local slots live on this path, in reverse
+    /// declaration order (LIFO drop). Used by the drop-glue
     /// lowering to free every owning slot at a control-flow exit.
     pub(crate) fn heap_managed_slots(&self) -> Vec<(IRLocalId, IRType)> {
         let mut slots: Vec<(IRLocalId, IRType)> = self
@@ -227,8 +233,8 @@ impl FnLowerCtx {
         slots
     }
 
-    /// The heap-managed local slots declared since `snapshot` was
-    /// captured, in reverse declaration order (LIFO drop). Loop
+    /// The heap-managed local slots that became live since `snapshot`
+    /// was captured, in reverse declaration order (LIFO drop). Loop
     /// lowering ([`super::loops`]) uses this to release body-scoped
     /// bindings at the end of each iteration: such bindings leave
     /// scope at the back-edge, so they must be dropped there and kept
@@ -344,23 +350,39 @@ impl FnLowerCtx {
 
     /// Has `local` been declared yet in this function? `LocalWrite`s
     /// without a prior `LocalDecl` need to seed one in the entry
-    /// block; subsequent writes skip the seed.
+    /// block, and subsequent writes skip the seed. Monotonic. A
+    /// slot stays declared even after a loop/branch boundary drops
+    /// it from the live set, so it is never `LocalDecl`'d twice.
     pub(crate) fn local_is_declared(&self, local: IRLocalId) -> bool {
-        self.locals.contains_key(&local)
+        self.declared.contains(&local)
     }
 
     /// Record that `local` has been declared with type `ty`. The
     /// caller should emit the `LocalDecl` when this is the first
     /// declaration; subsequent calls are no-ops.
     pub(crate) fn mark_local_declared(&mut self, local: IRLocalId, ty: IRType) -> bool {
-        if self.locals.contains_key(&local) {
+        if !self.declared.insert(local) {
             return false;
         }
         self.locals.insert(local, ty);
         true
     }
 
-    /// Clone the entire declared-local map. Control-flow
+    /// Does `local` currently hold a value on this lowering path?
+    /// False for a declared slot that fell out of the live set at a
+    /// loop/branch boundary. Reassigning such a slot must skip both
+    /// the re-decl and the stale-value drop.
+    pub(crate) fn local_is_live(&self, local: IRLocalId) -> bool {
+        self.locals.contains_key(&local)
+    }
+
+    /// Return a declared-but-dead slot to the live set so later
+    /// drop-glue emission sees it again.
+    pub(crate) fn mark_local_live(&mut self, local: IRLocalId, ty: IRType) {
+        self.locals.insert(local, ty);
+    }
+
+    /// Clone the entire live-slot map. Control-flow
     /// lowering (`match`, `cond`, `if`/`else`, `unless`, ternary)
     /// captures this at the construct's entry so each arm can be
     /// lowered from a fresh baseline rather than inheriting the
@@ -370,8 +392,9 @@ impl FnLowerCtx {
         self.locals.clone()
     }
 
-    /// Reset the slot-state map to `snapshot`. Discards any per-arm
-    /// declarations stamped on top of the entry-snapshot.
+    /// Reset the live-slot map to `snapshot`. Discards any per-arm
+    /// slot state stamped on top of the entry-snapshot. The
+    /// monotonic declared set is untouched.
     pub(crate) fn restore_slot_states(&mut self, snapshot: SlotStateSnapshot) {
         self.locals = snapshot;
     }

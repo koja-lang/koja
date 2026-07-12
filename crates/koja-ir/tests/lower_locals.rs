@@ -11,6 +11,9 @@
 //!   the same `IRLocalId` the writes target.
 //! - The entry block stays the home of every `LocalDecl` (LLVM relies
 //!   on this for single-`alloca` hoisting).
+//! - Reassigning a local first declared inside a loop or branch
+//!   reuses the slot instead of re-declaring it, and skips the
+//!   stale-value drop (the slot may be uninitialized on that path).
 
 use koja_ast::util::dedent;
 use koja_ir::{IRBasicBlock, IRInstruction, IRType};
@@ -173,6 +176,128 @@ fn param_promotion_emits_local_decl_and_local_write_in_entry() {
     });
     let read_ty = read.expect("body reference should lower to LocalRead on the param's slot");
     assert_eq!(*read_ty, IRType::Int64);
+}
+
+/// Every `LocalDecl` in the function must target a distinct slot.
+/// Mirrors the seal invariant that panicked before the declared set
+/// became monotonic.
+fn assert_decl_slots_unique(blocks: &[IRBasicBlock]) {
+    let mut seen = Vec::new();
+    for inst in local_decls(blocks) {
+        let IRInstruction::LocalDecl { local, .. } = inst else {
+            unreachable!()
+        };
+        assert!(
+            !seen.contains(local),
+            "slot {local} is LocalDecl'd more than once",
+        );
+        seen.push(*local);
+    }
+}
+
+#[test]
+fn reassign_after_while_reuses_slot_and_skips_stale_drop() {
+    // `s` is first declared inside the loop body. The write after
+    // the loop must reuse the slot (no second LocalDecl) and must
+    // not drop the slot's prior value. On a zero-trip path the slot
+    // is uninitialized, and a completed loop already dropped the
+    // last iteration's value at the back-edge.
+    let source = "
+        i = 5
+        while i < 3
+          s = \"loop\"
+          i = i + 1
+        end
+        s = \"after\"
+        s
+        ";
+
+    let script = lower(&dedent(source));
+    assert_decl_slots_unique(&script.blocks);
+
+    let string_slot = local_decls(&script.blocks)
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::LocalDecl { local, ty } if *ty == IRType::String => Some(*local),
+            _ => None,
+        })
+        .expect("expected a String LocalDecl for `s`");
+
+    let (write_block, write_pos) = script
+        .blocks
+        .iter()
+        .flat_map(|block| {
+            block
+                .instructions
+                .iter()
+                .enumerate()
+                .map(move |(pos, inst)| (block, pos, inst))
+        })
+        .filter_map(|(block, pos, inst)| match inst {
+            IRInstruction::LocalWrite { local, .. } if *local == string_slot => Some((block, pos)),
+            _ => None,
+        })
+        .last()
+        .expect("expected a LocalWrite for the post-loop reassignment");
+
+    let stale_read = write_block.instructions[..write_pos]
+        .iter()
+        .find_map(|inst| match inst {
+            IRInstruction::LocalRead { dest, local, .. } if *local == string_slot => Some(*dest),
+            _ => None,
+        });
+    if let Some(stale) = stale_read {
+        let dropped = write_block.instructions[..write_pos]
+            .iter()
+            .any(|inst| matches!(inst, IRInstruction::DropValue { value, .. } if *value == stale));
+        assert!(
+            !dropped,
+            "reassignment of a not-live slot must not drop the uninitialized prior value",
+        );
+    }
+}
+
+#[test]
+fn reassign_after_if_branch_declaration_reuses_slot() {
+    let source = "
+        c = true
+        if c
+          n = 1
+        end
+        n = 2
+        n
+        ";
+
+    let script = lower(&dedent(source));
+    assert_decl_slots_unique(&script.blocks);
+}
+
+#[test]
+fn reassign_in_match_arms_after_loop_declaration_reuses_slot() {
+    // The shape that surfaced the panic. The loop declares `n`, and
+    // both match arms reassign it (resolve still sees the loop's `n`
+    // in scope, so all three sites share one slot).
+    let source = "
+        i = 0
+        while i < 6
+          n = i * 2
+          i = i + n + 1
+        end
+        r = match i
+          1 ->
+            n = 100
+            n
+          2 ->
+            n = 200
+            n
+          _ ->
+            0
+        end
+        r
+        ";
+
+    let script = lower(&dedent(source));
+    assert_decl_slots_unique(&script.blocks);
 }
 
 #[test]

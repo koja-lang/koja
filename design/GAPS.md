@@ -151,27 +151,32 @@ Workaround: return `Result<Bool, E>`.
 
 ---
 
-## Same local name in sibling `match` arms panics the compiler
+## No definite-assignment analysis for locals
 
-Found 2026-07-12 (postgres driver). Two arms of one `match` each
-declaring a local with the same name:
+Found 2026-07-12 while fixing the duplicate-`LocalDecl` seal panic.
+Locals are function-scoped and nothing verifies that every path to a
+read actually assigned the local first. A read after a
+conditionally-executed first assignment compiles and reads an
+uninitialized slot (verified on 0.14.0):
 
 ```koja
-match size - i
-  1 ->
-    n = Base64.combine(data, i, 1)
-    # ...
-  2 ->
-    n = Base64.combine(data, i, 2)
-    # ...
+i = 5
+while i < 3   # never executes
+  n = i * 2
 end
+n.print()     # uninitialized read. Garbage Int, or a crash for
+              # heap-managed types.
 ```
 
-panics the compiler (not a diagnostic):
-`IR seal violation: function ... declares local slot 'local_4' more
-than once` (`koja-ir/src/seal/mod.rs:283`). Arms are disjoint scopes,
-so this should either be legal or a proper error. Workaround: give the
-locals distinct names per arm.
+The IR side already defends itself. `merge_slot_states` keeps a slot
+in the live set only when every branch assigned it, so no exit-drop is
+emitted for a maybe-uninitialized slot. The surface language should
+match with a proper diagnostic. The likely fix is a
+definite-assignment dataflow pass in typecheck (a read is an error
+unless every path from function entry assigns first, with `if`/`else`
+where both arms assign counting as assigned and loop bodies counting
+as maybe-assigned). Needs LANGUAGE.md wording and will flag existing
+code that relies on a loop always executing at least once.
 
 ---
 

@@ -1,0 +1,53 @@
+# Regression guard for reassigning a local first declared inside a
+# loop or branch. IR lowering used to re-declare the slot and panic
+# with an IR seal violation.
+
+# Reassignment after a multi-trip while loop.
+i = 0
+while i < 3
+  n = i * 2
+  i += 1
+end
+n = 42
+n.print()
+
+# Reassignment after a zero-trip while loop. The slot is
+# uninitialized, so the write must not drop a prior value.
+j = 5
+while j < 3
+  m = j * 2
+  j += 1
+end
+m = 7
+m.print()
+
+# Reassignment inside sibling match arms after a loop declaration.
+# Resolve still sees the loop's `t` in scope, so all three sites
+# share one slot.
+k = 0
+size = 7
+while k + 3 <= size
+  t = 3
+  k += t
+end
+r = match size - k
+  1 ->
+    t = 100
+    t
+
+  2 ->
+    t = 200
+    t
+
+  _ ->
+    0
+end
+r.print()
+
+# Reassignment after an if-branch declaration.
+c = true
+if c
+  q = 1
+end
+q = 9
+q.print()
