@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.14.1] - 2026-07-12
 
 ### Added
 
@@ -14,11 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- Panics on Linux arm64 now print their message and backtrace instead of crashing the program with a segmentation fault.
 - Functions can now return `Result<(), E>` and use `()` in any generic position, including enum payloads, collections, and closures.
 - Assigning to a variable after it was first assigned inside a `while`, `loop`, `if`, or `match` arm no longer crashes the compiler.
 - Builder functions that assign to a field of `self` and then return `self` no longer crash or produce corrupted values.
 - Reassigning a struct field that holds a list, map, set, struct, or enum no longer leaks memory.
+- Panics on Linux arm64 now print their message and backtrace instead of crashing the program with a segmentation fault.
 - `koja format` now keeps a comment above a function, protocol method, or type alias inside a type body attached to it instead of moving it into the body.
 - `koja format` no longer moves a comment before an `impl`, `extend`, or `protocol` block's `end` outside the block.
 - `koja format` no longer deletes comments placed after struct or enum literal fields.
