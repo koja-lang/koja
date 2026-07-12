@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Releases now include a prebuilt Linux arm64 tarball.
 - The unit value `()` can now be printed and interpolated into strings, rendering as `()`.
 
 ### Fixed

@@ -51,6 +51,8 @@ jobs:
         include:
           - os: ubuntu-24.04
             target: linux-x86_64
+          - os: ubuntu-24.04-arm
+            target: linux-arm64
           - os: macos-15
             target: darwin-arm64
     env:
@@ -116,7 +118,7 @@ jobs:
               exit 1
             fi
           done
-          ldd target/release/koja | awk '/=>/ {print $1}' | sort -u > runtime-deps-linux.txt
+          ldd target/release/koja | awk '/=>/ {print $1}' | sort -u > "runtime-deps-${TARGET}.txt"
 
       - name: Package tarball
         run: |
@@ -132,7 +134,7 @@ jobs:
           path: |
             koja-v*.tar.gz
             koja-v*.tar.gz.sha256
-            runtime-deps-linux.txt
+            runtime-deps-*.txt
           if-no-files-found: error
 
   publish:
