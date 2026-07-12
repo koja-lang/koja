@@ -1,13 +1,12 @@
 # A C function that returns NaN must trap at the call site: Float
 # is finite-only and FFI is the one boundary where foreign
 # non-finite values could otherwise leak in.
-
 alias Process.Step
 alias Process.StopReason
 
 struct FFI
   @extern "C" @link "ffi_helper"
-  fn nan_c() -> Float64
+  fn nan_c -> Float64
 end
 
 struct App
