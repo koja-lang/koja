@@ -783,7 +783,7 @@ mod tests {
 
     #[test]
     fn trailing_comment_before_end_stays_inside_impl_and_protocol() {
-        // Matches the struct/enum trailing behavior: the comment attaches
+        // Matches the struct/enum trailing behavior. The comment attaches
         // directly after the last member.
         assert_unchanged(
             "

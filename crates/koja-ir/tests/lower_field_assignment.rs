@@ -16,9 +16,11 @@
 //!   with `FieldSet`.
 //! - Heap-typed leaf overwrite (`s.name = "new"`) emits a synthetic
 //!   `DropValue` of the prior payload before the rebuild.
+//! - Composite leaf overwrite (`h.items = other`) acquires the rhs
+//!   through clone glue and releases the overwritten value.
 
 use koja_ast::util::dedent;
-use koja_ir::{IRBasicBlock, IRInstruction};
+use koja_ir::{IRBasicBlock, IRInstruction, IRType};
 
 mod common;
 
@@ -174,6 +176,57 @@ fn compound_assign_on_field_emits_field_get_binary_op_field_set() {
     assert!(
         binary_op_count >= 1,
         "expected at least one BinaryOp from `p.x += 5`, got {binary_op_count}",
+    );
+}
+
+#[test]
+fn composite_leaf_overwrite_acquires_rhs_and_drops_stale_value() {
+    // Without the rhs acquire, the field aliases the source slot and
+    // function-exit drops over-release the shared list. This is the
+    // builder-shape regression.
+    let source = "
+        struct Holder
+          items: List<Int>
+        end
+
+        h = Holder{items: [1]}
+        other = [2, 3]
+        h.items = other
+        1
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let instructions = instructions(&script.blocks);
+
+    // Elaborate has already rewritten the composite Clone / DropValue
+    // markers into glue calls, so match those.
+    let list_clone = instructions.iter().any(|inst| {
+        matches!(inst, IRInstruction::Call { callee, .. } if callee.mangled() == "List_$Int64$.$clone$")
+    });
+    assert!(
+        list_clone,
+        "expected a clone-glue call acquiring the rhs list of the composite \
+         field overwrite, got {instructions:?}",
+    );
+
+    // Pin the drop whose argument is the stale leaf's FieldGet dest.
+    let stale_leaf = instructions.iter().find_map(|inst| match inst {
+        IRInstruction::FieldGet {
+            dest, field_type, ..
+        } if matches!(field_type, IRType::List(_)) => Some(*dest),
+        _ => None,
+    });
+    let stale_leaf = stale_leaf.expect("expected a FieldGet reading the overwritten list field");
+    let stale_drop = instructions.iter().any(|inst| {
+        matches!(
+            inst,
+            IRInstruction::Call { callee, args, .. }
+                if callee.mangled() == "List_$Int64$.$drop$" && args == &[stale_leaf],
+        )
+    });
+    assert!(
+        stale_drop,
+        "expected a drop-glue call releasing the overwritten list, got {instructions:?}",
     );
 }
 

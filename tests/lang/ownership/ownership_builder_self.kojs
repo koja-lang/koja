@@ -1,0 +1,82 @@
+# Regression guard for the mutate-`self`-then-return-`self` builder
+# shape. The field write must acquire its own reference to the rhs
+# (or function-exit drops over-release the value shared with the
+# param slot — segfault / corruption) and must release the
+# overwritten value (or it leaks).
+
+struct Rt
+  @extern "C"
+  fn koja_rt_live_blocks -> Int64
+end
+
+struct State
+  fields: List<String>
+  rows: List<String>
+  tag: String
+
+  fn empty -> State
+    fields: List<String> = List.new()
+    rows: List<String> = List.new()
+    State{fields: fields, rows: rows, tag: ""}
+  end
+
+  fn with_fields(self, fields: List<String>) -> State
+    self.fields = fields
+    self
+  end
+
+  fn add_row(self, row: String) -> State
+    self.rows = self.rows.append(row)
+    self
+  end
+
+  fn with_tag(self, tag: String) -> State
+    self.tag = tag
+    self
+  end
+end
+
+# The recursive accumulator-threading loop the crash was found in.
+fn collect(state: State, remaining: Int) -> State
+  if remaining <= 0
+    return state
+  end
+
+  collect(state.add_row("row #{remaining}"), remaining - 1)
+end
+
+fn run_once -> Int
+  fields = ["a" <> "x", "b" <> "y"]
+  state = State.empty().with_fields(fields)
+  state = collect(state, 8)
+  state = state.with_tag("SELECT" <> " 8")
+  state.fields.length() + state.rows.length() + state.tag.length()
+end
+
+# Values come through the builders intact...
+state = State.empty()
+  .with_fields(["one", "two"])
+  .add_row("r1")
+  .add_row("r2")
+  .with_tag("DONE")
+state.fields.length().print()
+state.rows.length().print()
+state.tag.print()
+
+# ...and a warmed loop holds the live-block count steady (no leak
+# from the overwritten fields, no double free of the shared rhs).
+run_once()
+start = Rt.koja_rt_live_blocks()
+i = 0
+
+loop
+  run_once()
+  i += 1
+
+  if i >= 200
+    break
+  end
+end
+
+finish = Rt.koja_rt_live_blocks()
+(finish == start ? "steady: ok" : "steady: LEAK").print()
