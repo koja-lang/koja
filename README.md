@@ -63,7 +63,7 @@ fn describe(event: Event) -> String
   end
 end
 
-describe(Event.Joined(User{name: "Ada"})).print()
+describe(Event.Joined(User{name: "Henry"})).print()
 ```
 
 ### Value Semantics

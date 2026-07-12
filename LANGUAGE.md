@@ -6,21 +6,21 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 
 ## Table of Contents
 
-- [Lexical Structure](#lexical-structure) -- Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
-- [Variables and Constants](#variables-and-constants) -- Assignment, Type Annotations, Compound Assignment, Constants
-- [Functions](#functions) -- Declaration, Private Declarations, `return`, Parameters
-- [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
-- [Types](#types) -- Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Union Types, Generics
-- [Pattern Matching](#pattern-matching) -- `match`, OR Patterns, `cond`
-- [Closures and Function Types](#closures-and-function-types) -- Block Closures, Short Closures, Capture Semantics, Function Types
-- [Value Semantics](#value-semantics) -- Rules, Copy Cost, Field Access
-- [Protocols](#protocols) -- Behavioral Contracts, Static Dispatch
-- [Modules](#modules) -- Transparent Files, Visibility, Aliases
-- [Concurrency](#concurrency) -- Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
-- [Standard Library](#standard-library) -- Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Protocols
-- [C FFI](#c-ffi) -- `@extern "C"`, `CPtr<T>`, `CString`
-- [Annotations](#annotations) -- `@doc`
-- [Tooling](#tooling) -- CLI Commands, LSP, Formatter
+- [Lexical Structure](#lexical-structure): Comments, Identifiers, Keywords, Operators, Numeric Literals, Line Continuation
+- [Variables and Constants](#variables-and-constants): Assignment, Type Annotations, Compound Assignment, Constants
+- [Functions](#functions): Declaration, Private Declarations, `return`, Parameters
+- [Control Flow](#control-flow): `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
+- [Types](#types): Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Union Types, Generics
+- [Pattern Matching](#pattern-matching): `match`, OR Patterns, `cond`
+- [Closures and Function Types](#closures-and-function-types): Block Closures, Short Closures, Capture Semantics, Function Types
+- [Value Semantics](#value-semantics): Rules, Copy Cost, Field Access
+- [Protocols](#protocols): Behavioral Contracts, Static Dispatch
+- [Modules](#modules): Transparent Files, Visibility, Aliases
+- [Concurrency](#concurrency): Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
+- [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Protocols
+- [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
+- [Annotations](#annotations): `@doc`
+- [Tooling](#tooling): CLI Commands, LSP, Formatter
 
 ---
 
@@ -70,7 +70,7 @@ Precedence from lowest to highest:
 evaluates `b` only when `a` is `true`. `a or b` evaluates `b` only when
 `a` is `false`. Both operands are still typechecked as `Bool`.
 
-`<>` concatenates `String`, `Binary`, and `Bits` values. Both operands must be the same type -- no cross-type mixing.
+`<>` concatenates `String`, `Binary`, and `Bits` values. Both operands must be the same type, with no cross-type mixing.
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 
@@ -85,9 +85,9 @@ Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 0xFF_FF     # underscores in hex
 ```
 
-Numeric literals coerce to any same-category type annotation. Integer literals coerce to any integer type (`x: UInt8 = 4`). Float literals coerce to any float type (`f: Float32 = 3.14`). Cross-category coercion (int to float or vice versa) is an error. Non-literal sized values widen implicitly into `Int` / `Float` -- see [Numeric Widening](#numeric-widening).
+Numeric literals coerce to any same-category type annotation. Integer literals coerce to any integer type (`x: UInt8 = 4`). Float literals coerce to any float type (`f: Float32 = 3.14`). Cross-category coercion (int to float or vice versa) is an error. Non-literal sized values widen implicitly into `Int` / `Float`. See [Numeric Widening](#numeric-widening).
 
-A literal must fit its type. An integer literal outside the target's range is a compile-time error, and so is a float literal whose magnitude is too large for a 64-bit float (one that would round to infinity) -- `Float` values are always finite (see [Arithmetic Faults](#arithmetic-faults)).
+A literal must fit its type. An integer literal outside the target's range is a compile-time error, and so is a float literal whose magnitude is too large for a 64-bit float (one that would round to infinity). `Float` values are always finite (see [Arithmetic Faults](#arithmetic-faults)).
 
 ### Line Continuation
 
@@ -141,10 +141,10 @@ Every binding holds an independent value. Assignment copies, and the original st
 ```koja
 p1 = Point{x: 1, y: 2}
 p2 = p1
-p1.x    # still valid -- p2 is an independent copy
+p1.x    # still valid, p2 is an independent copy
 ```
 
-Copies are observably independent for every type: mutating one binding never affects another, and a value remains usable for as long as it is in scope.
+Copies are observably independent for every type. Mutating one binding never affects another, and a value remains usable for as long as it is in scope.
 
 ### Constants
 
@@ -240,7 +240,7 @@ end
 
 ### Parameters
 
-Parameters are passed by value -- the callee receives its own independent copy and the caller's binding stays usable afterward:
+Parameters are passed by value. The callee receives its own independent copy and the caller's binding stays usable afterward:
 
 ```koja
 fn describe(c: Config) -> String
@@ -248,7 +248,7 @@ fn describe(c: Config) -> String
 end
 ```
 
-There is no parameter-passing modifier: every parameter is a value. (Earlier releases had a `move` keyword. It has been removed, since value semantics make it meaningless.)
+There is no parameter-passing modifier. Every parameter is a value. (Earlier releases had a `move` keyword. It has been removed, since value semantics make it meaningless.)
 
 ---
 
@@ -305,7 +305,7 @@ for item in list
 end
 ```
 
-The loop variable is bound directly to each element -- no unwrapping needed.
+The loop variable is bound directly to each element. No unwrapping needed.
 
 ### Ternary
 
@@ -341,16 +341,16 @@ Nested ternaries are disallowed.
 | `()`      | Unit type (empty value)                            |
 
 Every `String` is valid UTF-8 and carries an authoritative byte length.
-U+0000 is a valid character; trailing NUL storage is never used to
+U+0000 is a valid character. Trailing NUL storage is never used to
 determine a string's contents.
 
 Every `Float` and `Float32` is finite. NaN and the infinities are not
-representable in Koja -- every operation that would produce one traps
+representable in Koja. Every operation that would produce one traps
 instead (see [Arithmetic Faults](#arithmetic-faults)), the same way
 every `String` is valid UTF-8 by construction. Float equality is
 therefore a true equivalence relation, and comparisons are total.
 
-All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
+All types have value semantics. Assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
 
 ### Numeric Widening
 
@@ -367,13 +367,13 @@ count(small)        # Int32 widens to Int, value stays -7
 
 Widening applies wherever a value flows into a typed slot: call arguments, struct fields, enum payloads, return values, annotated bindings, and constant initializers. It does **not** apply to:
 
-- **Binary operators** -- operands must be the same width. `Int32 + Int` is an error. Widen explicitly first.
-- **Sideways conversions** -- `Int8` does not widen to `Int16`, `UInt8` does not widen to `UInt16`. Each source type has exactly one implicit target.
-- **`UInt64`** -- it does not fit in `Int`. Use the checked `to_int` method.
-- **Generic inference** -- `T` binds to the actual type. `identity(small)` infers `T = Int32`, not `Int`.
-- **Narrowing or cross-category conversion** -- `Int` never implicitly becomes `Int32`, and ints never become floats.
+- **Binary operators**: operands must be the same width. `Int32 + Int` is an error. Widen explicitly first.
+- **Sideways conversions**: `Int8` does not widen to `Int16`, `UInt8` does not widen to `UInt16`. Each source type has exactly one implicit target.
+- **`UInt64`**: it does not fit in `Int`. Use the checked `to_int` method.
+- **Generic inference**: `T` binds to the actual type. `identity(small)` infers `T = Int32`, not `Int`.
+- **Narrowing or cross-category conversion**: `Int` never implicitly becomes `Int32`, and ints never become floats.
 
-The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each returning `Result<TargetType, NumericConversionError>` -- `Result.Err(NumericConversionError.OutOfRange)` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` rounds to the nearest representable value, with `OutOfRange` for magnitudes too large for a 32-bit float:
+The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each returning `Result<TargetType, NumericConversionError>`, with `Result.Err(NumericConversionError.OutOfRange)` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` rounds to the nearest representable value, with `OutOfRange` for magnitudes too large for a 32-bit float:
 
 ```koja
 match 300.to_int8()
@@ -386,7 +386,7 @@ Sized-to-sized conversions route through `Int`: widen up implicitly, then narrow
 
 ### Arithmetic Faults
 
-Arithmetic never wraps, saturates, or produces a non-finite float. An operation without a representable result panics with an `ArithmeticError` -- Erlang's `badarith`, not C's undefined behavior. The panic is identical on both backends and in `--release` builds, and it follows the standard crash path: the faulting process crashes (`ExitReason.Crashed`), and a fault in the root process exits the program non-zero.
+Arithmetic never wraps, saturates, or produces a non-finite float. An operation without a representable result panics with an `ArithmeticError` (Erlang's `badarith`, not C's undefined behavior). The panic is identical on both backends and in `--release` builds, and it follows the standard crash path. The faulting process crashes (`ExitReason.Crashed`), and a fault in the root process exits the program non-zero.
 
 | Operation                  | Fault                                        |
 | -------------------------- | -------------------------------------------- |
@@ -395,9 +395,9 @@ Arithmetic never wraps, saturates, or produces a non-finite float. An operation 
 | `bsl` / `bsr`              | shift count outside `0 <= n < bit width`     |
 | Float `+` `-` `*` `/` `%`  | IEEE result is non-finite (NaN or infinity)  |
 
-Integer faults are checked at the operand's declared width and signedness: `UInt8` arithmetic traps past 255, not past `Int.max`. Comparisons never fault.
+Integer faults are checked at the operand's declared width and signedness. `UInt8` arithmetic traps past 255, not past `Int.max`. Comparisons never fault.
 
-The float row is what makes the finite-only invariant airtight: `1.0 / 0.0` and `0.0 / 0.0` trap instead of minting `inf` / `NaN`. The remaining boundaries are closed to match -- float literals that would round to infinity are compile-time errors, `Float.parse` classifies them as `OutOfRange`, `Float.to_float32` is checked, and a non-finite float returned by an `@extern "C"` call traps at the call site.
+The float row is what makes the finite-only invariant airtight. `1.0 / 0.0` and `0.0 / 0.0` trap instead of minting `inf` / `NaN`. The remaining boundaries are closed to match. Float literals that would round to infinity are compile-time errors, `Float.parse` classifies them as `OutOfRange`, `Float.to_float32` is checked, and a non-finite float returned by an `@extern "C"` call traps at the call site.
 
 ```koja
 a = 9223372036854775807
@@ -504,7 +504,7 @@ p.distance_squared().print()
 Point.origin().x.print()
 ```
 
-Methods receive `self` by value. A "mutating" method does not change the receiver in place -- it computes a new value and returns it, and the caller rebinds:
+Methods receive `self` by value. A "mutating" method does not change the receiver in place. It computes a new value and returns it, and the caller rebinds:
 
 ```koja
 struct Counter
@@ -568,7 +568,7 @@ end
 `to_cstring` is only available on `CPtr<UInt8>`, not on `CPtr<Int32>` or other instantiations. Calling a specialized method on the wrong type argument produces a compile error with a hint showing which specialization provides the method.
 
 This pointer conversion is distinct from checked
-`String.to_cstring()`: it assumes a readable NUL-terminated C buffer
+`String.to_cstring()`. It assumes a readable NUL-terminated C buffer
 and computes `CString.len` with `strlen`.
 
 Mixing concrete types and type parameters in the same `extend` block is not allowed:
@@ -681,7 +681,7 @@ c = Cat{name: "Whiskers"}
 pet: Pet = c
 ```
 
-Order doesn't matter -- `Post | Comment` and `Comment | Post` are the same type.
+Order doesn't matter. `Post | Comment` and `Comment | Post` are the same type.
 
 ### Generics
 
@@ -742,7 +742,7 @@ list: List<Int32> = List.new()  # infers T = Int32
 
 #### Implementation
 
-Generics compile via monomorphization -- the compiler generates specialized native code for each concrete type instantiation. Unused instantiations produce no binary output.
+Generics compile via monomorphization. The compiler generates specialized native code for each concrete type instantiation. Unused instantiations produce no binary output.
 
 ---
 
@@ -776,7 +776,7 @@ patterns match every payload value. A literal or nested pattern such as
 payload arms are not combined, so bind the payload and use an inner
 `match`, or add a full payload arm such as `Option.Some(_)`.
 
-Struct destructuring works for both plain structs and enum-struct variants. Field syntax is always `name: pattern` -- there is no shorthand form. To bind a field under its own name, write `x: x`. Unlisted fields are implicit wildcards, and an empty `{}` matches any value of that type:
+Struct destructuring works for both plain structs and enum-struct variants. Field syntax is always `name: pattern`. There is no shorthand form. To bind a field under its own name, write `x: x`. Unlisted fields are implicit wildcards, and an empty `{}` matches any value of that type:
 
 ```koja
 struct Point
@@ -888,7 +888,7 @@ Works at inline call sites including generic methods. For multi-parameter or mul
 
 ### Capture Semantics
 
-Closures capture variables from their enclosing scope by value -- each captured variable is copied into the closure's environment, and the original stays usable:
+Closures capture variables from their enclosing scope by value. Each captured variable is copied into the closure's environment, and the original stays usable:
 
 ```koja
 multiplier = 3
@@ -916,20 +916,20 @@ apply(5, fn (n: Int32) -> Int32 n * 2 end).print()
 
 ## Value Semantics
 
-Koja uses value semantics: every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime.
+Koja uses value semantics. Every binding, parameter, return, and field is an independent value, with memory managed automatically by the runtime.
 
 ### Rules
 
 1. Assignment copies. The source remains usable.
 2. Function and closure parameters are passed by value. The caller's binding survives the call.
-3. There is no aliasing: mutating one binding never affects another.
+3. There is no aliasing. Mutating one binding never affects another.
 4. A value is usable for as long as it is in scope.
 
-> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting. Blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector: there are no pauses and no background collector. See the README for production-readiness status.
+> Memory note: heap-backed values (strings, collections, composites) are reclaimed by reference counting. Blocks are shared while live and freed deterministically at scope exit when the last owner drops. This is scope-bound, not a garbage collector. There are no pauses and no background collector. See the README for production-readiness status.
 
 ### Copy Cost
 
-All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap: the block is reference-counted and shared, with a copy made lazily only if a shared value is mutated (copy-on-write). The result is always an independent value:
+All types copy on assignment. Numeric primitives, `Bool`, `()`, and function pointers copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums are heap-backed, but the copy is cheap. The block is reference-counted and shared, with a copy made lazily only if a shared value is mutated (copy-on-write). The result is always an independent value:
 
 ```koja
 a = 42
@@ -955,7 +955,7 @@ w.name.print()
 This extends to chained access and method calls:
 
 ```koja
-w.name.length()   # reads name, calls length -- w is still live
+w.name.length()   # reads name, calls length. w is still live
 ```
 
 To mutate a field, use reassignment. The right-hand side transforms the current field value and the result is written back:
@@ -1009,7 +1009,7 @@ fn describe_and_greet<T: Greeter & Description>(animal: T) -> String
 end
 ```
 
-Bounds are verified at call sites -- if a concrete type doesn't implement a required protocol, the compiler emits an error:
+Bounds are verified at call sites. If a concrete type doesn't implement a required protocol, the compiler emits an error:
 
 ```
 type `Cat` does not implement protocol `Description` (required by type parameter `T` in `describe_and_greet`)
@@ -1021,13 +1021,13 @@ Unbounded type parameters (`<T>`) remain valid and backwards compatible.
 
 ### Dispatch
 
-Protocol dispatch is static via monomorphization -- no vtables, no dynamic dispatch.
+Protocol dispatch is static via monomorphization. No vtables, no dynamic dispatch.
 
 ---
 
 ## Modules
 
-Each `.koja` file is a module. In a project (defined by `koja.toml`), all types and public functions across all files are visible in every file -- no imports needed.
+Each `.koja` file is a module. In a project (defined by `koja.toml`), all types and public functions across all files are visible in every file. No imports needed.
 
 ```koja
 # src/helper.koja
@@ -1060,10 +1060,10 @@ end
 Access control is at the declaration level (`priv`), not the module level:
 
 - A top-level `priv` declaration (`fn`, `struct`, `enum`, `const`, `type`,
-  `protocol`) is **package-private** -- usable from any file in the same
+  `protocol`) is **package-private**: usable from any file in the same
   package, rejected from other packages.
 - `priv fn` declared inside a `struct`, `enum`, `extend`, or `impl` body
-  is **type-private** -- callable from any other method on the same target
+  is **type-private**: callable from any other method on the same target
   type (across the decl block and any `extend` or `impl Protocol for Type`
   block on that type), rejected everywhere else.
 
@@ -1083,7 +1083,7 @@ conn = TCPSocket.connect("example.com", 80)
 
 `alias Net.TCPSocket` makes `TCPSocket` available as a local name. `alias JSON.Encoder as JSONEncoder` binds a custom local name. Aliases are scoped to the declaring file and don't affect other modules.
 
-Aliases name types only. Package-level functions are called with qualified syntax directly -- no alias needed:
+Aliases name types only. Package-level functions are called with qualified syntax directly, no alias needed:
 
 ```koja
 response = HTTP.get("https://example.com")
@@ -1091,10 +1091,10 @@ response = HTTP.get("https://example.com")
 
 ### Standard library visibility
 
-The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, etc.) -- no alias needed. Domain-specific packages require qualified access:
+The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, etc.) with no alias needed. Domain-specific packages require qualified access:
 
-- **`Crypto`** -- `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
-- **`Net`** -- `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
+- **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
+- **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
 
 Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
@@ -1102,7 +1102,7 @@ Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
 ## Concurrency
 
-Koja uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are passed by value (each process receives its own copy) -- there is no shared mutable state.
+Koja uses a message-passing actor model inspired by Erlang/Elixir. Processes have isolated memory and communicate exclusively through typed messages. Messages are passed by value (each process receives its own copy), so there is no shared mutable state.
 
 Process timeout and delay values are measured in milliseconds. Negative
 values behave as zero.
@@ -1241,12 +1241,12 @@ end
 
 Operations on a process handle:
 
-- `cast(msg: M)` -- fire-and-forget. The handler receives `from = Option.None`.
-- `call(msg: M, timeout: Int) -> Result<R, CallError>` -- sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)` if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)` if the process is dead.
-- `signal(event: Lifecycle)` -- sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
-- `kill()` -- immediately terminates the process. No signal is sent.
-- `alive?() -> Bool` -- returns `true` if the process is still running.
-- `send_after(msg: M, delay_ms: Int)` -- schedules `msg` for delivery after `delay_ms` milliseconds. The message is copied immediately. Delivery happens asynchronously when the timer fires. Useful for periodic ticks and timeouts inside a process loop.
+- `cast(msg: M)`: fire-and-forget. The handler receives `from = Option.None`.
+- `call(msg: M, timeout: Int) -> Result<R, CallError>`: sends a message and blocks up to `timeout` milliseconds for a reply. Returns `Result.Ok(reply)` on success, `Result.Err(CallError.Timeout)` if the process didn't reply in time, or `Result.Err(CallError.ProcessDown)` if the process is dead.
+- `signal(event: Lifecycle)`: sends a lifecycle signal to the process (e.g. `Lifecycle.Shutdown`). Delivered to `handle_signal`.
+- `kill()`: immediately terminates the process. No signal is sent.
+- `alive?() -> Bool`: returns `true` if the process is still running.
+- `send_after(msg: M, delay_ms: Int)`: schedules `msg` for delivery after `delay_ms` milliseconds. The message is copied immediately. Delivery happens asynchronously when the timer fires. Useful for periodic ticks and timeouts inside a process loop.
 
 `Ref.self_ref()` returns a typed handle to the current process. It must be called from within a running process (inside `start`, `handle`, or `handle_signal`). The type parameters are inferred from the binding's annotation:
 
@@ -1272,7 +1272,7 @@ struct ReplyTo<R>
 end
 ```
 
-- `send(reply: R)` -- sends the reply back to the caller.
+- `send(reply: R)`: sends the reply back to the caller.
 
 `ReplyTo.reply(from, value)` is a convenience on `ReplyTo<R>` that handles the common pattern of replying only when a caller is present (skips silently for `cast` messages):
 
@@ -1310,7 +1310,7 @@ after 5000
 end
 ```
 
-In most cases you won't use `receive` directly -- the `Process` protocol's default `run` implementation handles it for you.
+In most cases you won't use `receive` directly. The `Process` protocol's default `run` implementation handles it for you.
 
 ---
 
@@ -1445,16 +1445,16 @@ list.empty?().print()   # false
 
 Functions:
 
-- `new() -> List<T>` -- creates an empty list.
-- `append(self, item: T) -> List<T>` -- appends an element.
-- `last(self) -> Option<T>` -- returns the last element, or `None` if empty.
-- `length(self) -> Int` -- returns the number of elements.
-- `get(self, index: Int) -> Option<T>` -- returns the element at `index`, or `None` if out of bounds.
-- `empty?(self) -> Bool` -- returns `true` if the list has no elements.
-- `map(self, f: fn (T) -> U) -> List<U>` -- returns a new list with `f` applied to each element.
-- `filter(self, f: fn (T) -> Bool) -> List<T>` -- returns elements for which `f` returns `true`.
-- `any?(self, f: fn (T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for at least one element.
-- `all?(self, f: fn (T) -> Bool) -> Bool` -- returns `true` if `f` returns `true` for every element. Returns `true` for an empty list.
+- `new() -> List<T>`: creates an empty list.
+- `append(self, item: T) -> List<T>`: appends an element.
+- `last(self) -> Option<T>`: returns the last element, or `None` if empty.
+- `length(self) -> Int`: returns the number of elements.
+- `get(self, index: Int) -> Option<T>`: returns the element at `index`, or `None` if out of bounds.
+- `empty?(self) -> Bool`: returns `true` if the list has no elements.
+- `map(self, f: fn (T) -> U) -> List<U>`: returns a new list with `f` applied to each element.
+- `filter(self, f: fn (T) -> Bool) -> List<T>`: returns elements for which `f` returns `true`.
+- `any?(self, f: fn (T) -> Bool) -> Bool`: returns `true` if `f` returns `true` for at least one element.
+- `all?(self, f: fn (T) -> Bool) -> Bool`: returns `true` if `f` returns `true` for every element. Returns `true` for an empty list.
 
 ```koja
 nums = [1, 2, 3, 4, 5]
@@ -1482,13 +1482,13 @@ m.length().print()           # 2
 
 Functions:
 
-- `new() -> Map<K, V>` -- creates an empty map.
-- `put(self, key: K, value: V) -> Map<K, V>` -- inserts or updates a key-value pair.
-- `get(self, key: K) -> Option<V>` -- returns `Option.Some(value)` if the key exists, `Option.None` otherwise.
-- `has?(self, key: K) -> Bool` -- returns `true` if the key exists.
-- `remove(self, key: K) -> Map<K, V>` -- removes the entry for the key. Returns the map unchanged if the key is absent.
-- `length(self) -> Int` -- returns the number of entries.
-- `empty?(self) -> Bool` -- returns `true` if the map has no entries.
+- `new() -> Map<K, V>`: creates an empty map.
+- `put(self, key: K, value: V) -> Map<K, V>`: inserts or updates a key-value pair.
+- `get(self, key: K) -> Option<V>`: returns `Option.Some(value)` if the key exists, `Option.None` otherwise.
+- `has?(self, key: K) -> Bool`: returns `true` if the key exists.
+- `remove(self, key: K) -> Map<K, V>`: removes the entry for the key. Returns the map unchanged if the key is absent.
+- `length(self) -> Int`: returns the number of entries.
+- `empty?(self) -> Bool`: returns `true` if the map has no entries.
 
 `Map` does not currently support iteration. To iterate over entries, use `List<Pair<K, V>>` as an ordered key-value collection instead.
 
@@ -1510,17 +1510,17 @@ s.has?(1).print()     # true
 
 Functions:
 
-- `new() -> Set<T>` -- creates an empty set.
-- `insert(self, item: T) -> Set<T>` -- adds an element. Returns unchanged if already present.
-- `has?(self, item: T) -> Bool` -- returns `true` if the element exists.
-- `remove(self, item: T) -> Set<T>` -- removes the element. Returns unchanged if absent.
-- `length(self) -> Int` -- returns the number of elements.
-- `empty?(self) -> Bool` -- returns `true` if the set has no elements.
+- `new() -> Set<T>`: creates an empty set.
+- `insert(self, item: T) -> Set<T>`: adds an element. Returns unchanged if already present.
+- `has?(self, item: T) -> Bool`: returns `true` if the element exists.
+- `remove(self, item: T) -> Set<T>`: removes the element. Returns unchanged if absent.
+- `length(self) -> Int`: returns the number of elements.
+- `empty?(self) -> Bool`: returns `true` if the set has no elements.
 
 `Set<T>` implements `ListLiteral<T>`, so list literal syntax constructs a set when the target type is `Set<T>`:
 
 ```koja
-names: Set<String> = ["alice", "bob", "alice"]  # Set with 2 elements
+names: Set<String> = ["alice", "bob", "alice"]  # Set with 3 elements
 ```
 
 ### String Methods
@@ -1535,32 +1535,32 @@ end
 
 Functions:
 
-- `length(self) -> Int` -- returns the number of Unicode codepoints.
-- `get(self, index: Int) -> Option<String>` -- returns the single-character string at the given index, or `None` if out of bounds.
-- `alpha?(self) -> Bool` -- returns `true` if the string contains only ASCII alphabetic characters (a-z, A-Z).
-- `at(self, index: Int) -> Option<String>` -- alias for `get`.
-- `byte_length(self) -> Int` -- returns the number of bytes in the UTF-8 encoding.
-- `codepoints(self) -> List<String>` -- returns each Unicode codepoint as a single-character string in a list.
-- `contains?(self, other: String) -> Bool` -- returns `true` if the string contains `other` as a substring.
-- `digit?(self) -> Bool` -- returns `true` if the string contains only numeric characters (`0`-`9`).
-- `downcase(self) -> String` -- returns a copy with ASCII uppercase letters converted to lowercase.
-- `empty?(self) -> Bool` -- returns `true` if the string has zero length.
-- `ends_with?(self, suffix: String) -> Bool` -- returns `true` if the string ends with `suffix`.
-- `graphemes(self) -> List<String>` -- returns each grapheme cluster as a string in a list. Currently equivalent to `codepoints()`.
-- `join(parts: List<String>, separator: String) -> String` -- static. Joins a list of strings with `separator` between each element.
-- `replace(self, old: String, new: String) -> String` -- replaces all occurrences of `old` with `new`.
-- `reverse(self) -> String` -- returns a copy with the codepoints in reverse order.
-- `slice(self, range: Range) -> String` -- returns a substring spanning the given inclusive range of character indices. Clamps out-of-bounds endpoints.
-- `split(self, separator: String) -> List<String>` -- splits on each occurrence of `separator`. An empty separator splits into individual characters.
-- `starts_with?(self, prefix: String) -> Bool` -- returns `true` if the string starts with `prefix`.
-- `to_binary(self) -> Binary` -- zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
-- `to_float(self) -> Result<Float, NumericConversionError>` -- parses the string as a 64-bit float (see [Parsing](#parsing)).
-- `to_int(self) -> Result<Int, NumericConversionError>` -- parses the string as a 64-bit signed integer (see [Parsing](#parsing)).
-- `trim(self) -> String` -- returns a copy with leading and trailing whitespace removed.
-- `trim_end(self) -> String` -- returns a copy with trailing whitespace removed.
-- `trim_start(self) -> String` -- returns a copy with leading whitespace removed.
-- `upcase(self) -> String` -- returns a copy with ASCII lowercase letters converted to uppercase.
-- `whitespace?(self) -> Bool` -- returns `true` if the string contains only whitespace characters (space, `\n`, `\r`, `\t`).
+- `length(self) -> Int`: returns the number of Unicode codepoints.
+- `get(self, index: Int) -> Option<String>`: returns the single-character string at the given index, or `None` if out of bounds.
+- `alpha?(self) -> Bool`: returns `true` if the string contains only ASCII alphabetic characters (a-z, A-Z).
+- `at(self, index: Int) -> Option<String>`: alias for `get`.
+- `byte_length(self) -> Int`: returns the number of bytes in the UTF-8 encoding.
+- `codepoints(self) -> List<String>`: returns each Unicode codepoint as a single-character string in a list.
+- `contains?(self, other: String) -> Bool`: returns `true` if the string contains `other` as a substring.
+- `digit?(self) -> Bool`: returns `true` if the string contains only numeric characters (`0`-`9`).
+- `downcase(self) -> String`: returns a copy with ASCII uppercase letters converted to lowercase.
+- `empty?(self) -> Bool`: returns `true` if the string has zero length.
+- `ends_with?(self, suffix: String) -> Bool`: returns `true` if the string ends with `suffix`.
+- `graphemes(self) -> List<String>`: returns each grapheme cluster as a string in a list. Currently equivalent to `codepoints()`.
+- `join(parts: List<String>, separator: String) -> String`: static. Joins a list of strings with `separator` between each element.
+- `replace(self, old: String, new: String) -> String`: replaces all occurrences of `old` with `new`.
+- `reverse(self) -> String`: returns a copy with the codepoints in reverse order.
+- `slice(self, range: Range) -> String`: returns a substring spanning the given inclusive range of character indices. Clamps out-of-bounds endpoints.
+- `split(self, separator: String) -> List<String>`: splits on each occurrence of `separator`. An empty separator splits into individual characters.
+- `starts_with?(self, prefix: String) -> Bool`: returns `true` if the string starts with `prefix`.
+- `to_binary(self) -> Binary`: zero-cost conversion to `Binary` (every valid UTF-8 string is a valid byte sequence).
+- `to_float(self) -> Result<Float, NumericConversionError>`: parses the string as a 64-bit float (see [Parsing](#parsing)).
+- `to_int(self) -> Result<Int, NumericConversionError>`: parses the string as a 64-bit signed integer (see [Parsing](#parsing)).
+- `trim(self) -> String`: returns a copy with leading and trailing whitespace removed.
+- `trim_end(self) -> String`: returns a copy with trailing whitespace removed.
+- `trim_start(self) -> String`: returns a copy with leading whitespace removed.
+- `upcase(self) -> String`: returns a copy with ASCII lowercase letters converted to uppercase.
+- `whitespace?(self) -> Bool`: returns `true` if the string contains only whitespace characters (space, `\n`, `\r`, `\t`).
 
 ```koja
 s = "hello world"
@@ -1611,17 +1611,17 @@ Float-extract segments (`x: Float32` in a pattern) are not supported yet. When t
 
 #### Functions
 
-- `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
-- `byte_size(self) -> Int` -- returns the number of bytes.
-- `slice(self, range: Range) -> Binary` -- copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
-- `to_bits(self) -> Bits` -- zero-cost widening from bytes to bits.
-- `to_string(self) -> Result<String, String.ConversionError>` -- attempts to interpret bytes as UTF-8, returning `InvalidUTF8` when decoding fails.
+- `at(self, index: Int) -> Option<Int>`: returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
+- `byte_size(self) -> Int`: returns the number of bytes.
+- `slice(self, range: Range) -> Binary`: copies the inclusive byte range `[start, stop]`. Endpoints clamp to the binary's bounds.
+- `to_bits(self) -> Bits`: zero-cost widening from bytes to bits.
+- `to_string(self) -> Result<String, String.ConversionError>`: attempts to interpret bytes as UTF-8, returning `InvalidUTF8` when decoding fails.
 
 #### Conversion Functions
 
-- `String.to_binary(self) -> Binary` -- zero-cost widening from UTF-8 string to bytes.
-- `CPtr<UInt8>.to_binary(self, len: Int) -> Binary` -- creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed; a negative length panics.
-- `Bits.to_binary(self) -> Result<Binary, String>` -- narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
+- `String.to_binary(self) -> Binary`: zero-cost widening from UTF-8 string to bytes.
+- `CPtr<UInt8>.to_binary(self, len: Int) -> Binary`: creates a `Binary` by copying `len` bytes from the pointer. The pointer is not freed. A negative length panics.
+- `Bits.to_binary(self) -> Result<Binary, String>`: narrows bits to bytes. Returns `Result.Err` if the bit length is not divisible by 8.
 
 ```koja
 bin = "hello".to_binary()
@@ -1644,10 +1644,10 @@ end
 
 Functions:
 
-- `read(self, count: Int) -> Result<String, String>` -- reads and validates up to `count` bytes as UTF-8.
-- `read_binary(self, count: Int) -> Result<Binary, String>` -- reads up to `count` arbitrary bytes.
-- `write(self, data: Binary | String) -> Result<Int, String>` -- writes data, returns bytes written.
-- `close(self) -> Result<String, String>` -- closes the descriptor.
+- `read(self, count: Int) -> Result<String, String>`: reads and validates up to `count` bytes as UTF-8.
+- `read_binary(self, count: Int) -> Result<Binary, String>`: reads up to `count` arbitrary bytes.
+- `write(self, data: Binary | String) -> Result<Int, String>`: writes data, returns bytes written.
+- `close(self) -> Result<String, String>`: closes the descriptor.
 
 #### `File`
 
@@ -1661,14 +1661,14 @@ end
 
 Functions:
 
-- `File.open(path: String, mode: FileMode) -> Result<File, String>` -- opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
-- `File.read(path: String) -> Result<String, String>` -- reads an entire file as UTF-8 text (opens, reads, closes).
-- `File.read_binary(path: String) -> Result<Binary, String>` -- reads an entire file as arbitrary bytes.
-- `File.write(path: String, content: Binary | String) -> Result<String, String>` -- writes text or arbitrary bytes (creates or truncates).
-- `File.exists?(path: String) -> Bool` -- returns true if the file exists.
-- `File.delete(path: String) -> Result<String, String>` -- deletes a file.
-- `File.rename(source: String, destination: String) -> Result<String, String>` -- renames (moves) a file.
-- `close(self) -> Result<String, String>` -- closes the file handle.
+- `File.open(path: String, mode: FileMode) -> Result<File, String>`: opens a file with the given mode (`FileMode.Read`, `FileMode.Write`, `FileMode.Append`).
+- `File.read(path: String) -> Result<String, String>`: reads an entire file as UTF-8 text (opens, reads, closes).
+- `File.read_binary(path: String) -> Result<Binary, String>`: reads an entire file as arbitrary bytes.
+- `File.write(path: String, content: Binary | String) -> Result<String, String>`: writes text or arbitrary bytes (creates or truncates).
+- `File.exists?(path: String) -> Bool`: returns true if the file exists.
+- `File.delete(path: String) -> Result<String, String>`: deletes a file.
+- `File.rename(source: String, destination: String) -> Result<String, String>`: renames (moves) a file.
+- `close(self) -> Result<String, String>`: closes the file handle.
 
 ```koja
 content = File.read("config.txt").unwrap()
@@ -1677,8 +1677,8 @@ content.print()
 
 ### Environment
 
-- `System.get_env(key: String) -> Option<String>` -- returns a UTF-8 host value or `Option.None` when absent.
-- `System.set_env(key: String, value: String)` -- sets a UTF-8 environment value.
+- `System.get_env(key: String) -> Option<String>`: returns a UTF-8 host value or `Option.None` when absent.
+- `System.set_env(key: String, value: String)`: sets a UTF-8 environment value.
 
 Both functions panic when a key or value contains U+0000.
 `System.get_env` also panics if the host value is not valid UTF-8.
@@ -1689,10 +1689,10 @@ Both functions panic when a key or value contains U+0000.
 
 Functions:
 
-- `IO.puts(message: String)` -- writes to stdout with a trailing newline.
-- `IO.warn(message: String)` -- writes to stderr with a trailing newline.
-- `IO.write(message: String)` -- writes to stdout without a trailing newline.
-- `IO.gets(prompt: String) -> String` -- prints `prompt` and reads a line from stdin (without the trailing newline).
+- `IO.puts(message: String)`: writes to stdout with a trailing newline.
+- `IO.warn(message: String)`: writes to stderr with a trailing newline.
+- `IO.write(message: String)`: writes to stdout without a trailing newline.
+- `IO.gets(prompt: String) -> String`: prints `prompt` and reads a line from stdin (without the trailing newline).
 
 ```koja
 IO.puts("hello")
@@ -1704,10 +1704,10 @@ IO.puts("Hello, #{name}!")
 
 Static functions on `Int` and `Float` for parsing strings:
 
-- `Int.parse(input: String) -> Result<Int, NumericConversionError>` -- parses a string as a 64-bit signed integer.
-- `Float.parse(input: String) -> Result<Float, NumericConversionError>` -- parses a string as a 64-bit float.
+- `Int.parse(input: String) -> Result<Int, NumericConversionError>`: parses a string as a 64-bit signed integer.
+- `Float.parse(input: String) -> Result<Float, NumericConversionError>`: parses a string as a 64-bit float.
 
-Failures distinguish malformed text from values that don't fit: `NumericConversionError.InvalidFormat` for text that isn't a number, `NumericConversionError.OutOfRange` for a well-formed number outside the target's range (an integer overflowing 64 bits, or a float magnitude like `1e999` that would round to infinity). Only finite floats parse -- there is no literal syntax for infinities or NaN. This is the same error enum the checked narrowing methods use (see [Numeric Widening](#numeric-widening)).
+Failures distinguish malformed text from values that don't fit: `NumericConversionError.InvalidFormat` for text that isn't a number, `NumericConversionError.OutOfRange` for a well-formed number outside the target's range (an integer overflowing 64 bits, or a float magnitude like `1e999` that would round to infinity). Only finite floats parse. There is no literal syntax for infinities or NaN. This is the same error enum the checked narrowing methods use (see [Numeric Widening](#numeric-widening)).
 
 ```koja
 x = Int.parse("42").unwrap()
@@ -1740,11 +1740,11 @@ end
 
 Functions:
 
-- `URI.parse(input: String) -> Result<URI, URI.Error>` -- parses and validates an absolute or relative URI. The scheme is lowercased, and a known scheme's default port fills `port` when the input has none. Errors carry the offending part of the input.
-- `to_string(self) -> String` -- reassembles the URI, omitting the port when it equals the scheme's default.
-- `URI.encode(input: String) -> String` -- percent-encodes every character that is neither reserved nor unreserved.
-- `URI.decode(input: String) -> Result<String, URI.Error>` -- percent-unescapes, rejecting malformed `%XX` sequences and invalid UTF-8.
-- `URI.default_port(scheme: String) -> Option<Int>` -- the well-known port for a scheme (`"https"` gives `443`), or `Option.None`.
+- `URI.parse(input: String) -> Result<URI, URI.Error>`: parses and validates an absolute or relative URI. The scheme is lowercased, and a known scheme's default port fills `port` when the input has none. Errors carry the offending part of the input.
+- `to_string(self) -> String`: reassembles the URI, omitting the port when it equals the scheme's default.
+- `URI.encode(input: String) -> String`: percent-encodes every character that is neither reserved nor unreserved.
+- `URI.decode(input: String) -> Result<String, URI.Error>`: percent-unescapes, rejecting malformed `%XX` sequences and invalid UTF-8.
+- `URI.default_port(scheme: String) -> Option<Int>`: the well-known port for a scheme (`"https"` gives `443`), or `Option.None`.
 
 `URI` implements `Equality` (component-wise) and `Debug` (`format` renders the assembled URI string, so interpolation produces the URL).
 
@@ -1823,7 +1823,7 @@ protocol Debug
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`). The receiver stays live and the call returns `()`. `inspect` is the chainable variant -- it prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, `Binary`, `Bits`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`). The receiver stays live and the call returns `()`. `inspect` is the chainable variant. It prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, `Binary`, `Bits`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
 
 `Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 
@@ -1847,7 +1847,7 @@ IO.puts(p.format())             # Point{x: 1, y: 2}
 
 List and map literals are backed by protocols, allowing custom types to opt into literal syntax.
 
-**`ListLiteral<T>`** -- the compiler builds a `List<T>` from `[a, b, c]` and passes it to `from_list`:
+**`ListLiteral<T>`**: the compiler builds a `List<T>` from `[a, b, c]` and passes it to `from_list`:
 
 ```koja
 protocol ListLiteral<T>
@@ -1857,7 +1857,7 @@ end
 
 `List<T>` and `Set<T>` implement `ListLiteral<T>`.
 
-**`MapLiteral<K, V>`** -- the compiler builds a `Map<K, V>` from `[k: v, ...]` and passes it to `from_map`:
+**`MapLiteral<K, V>`**: the compiler builds a `Map<K, V>` from `[k: v, ...]` and passes it to `from_map`:
 
 ```koja
 protocol MapLiteral<K, V>
@@ -1871,7 +1871,7 @@ end
 
 ## C FFI
 
-Koja can call C functions via the `@extern "C"` annotation. FFI declarations live on structs (types are namespaces). No `unsafe` keyword -- safety is the wrapper author's responsibility.
+Koja can call C functions via the `@extern "C"` annotation. FFI declarations live on structs (types are namespaces). No `unsafe` keyword. Safety is the wrapper author's responsibility.
 
 ### Declaring Extern Functions
 
@@ -1890,11 +1890,11 @@ result = FFI.add_numbers(3, 4)
 result.print()
 ```
 
-Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
+Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct. Use `priv fn` on the extern declarations and expose safe public wrappers.
 
 A `Float32` / `Float64` value returned by an extern call is checked at the call site: a NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)).
 
-Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest: a C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
+Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest. A C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
 
 ### Symbol Naming
 
@@ -1914,7 +1914,7 @@ end
 
 ### `CPtr<T>`
 
-A raw C pointer type. `Copy` semantics (just a machine word). No ownership tracking -- the compiler will not auto-free memory behind a `CPtr<T>`.
+A raw C pointer type. `Copy` semantics (just a machine word). No ownership tracking. The compiler will not auto-free memory behind a `CPtr<T>`.
 
 ```koja
 struct CPtr<T>
@@ -1944,8 +1944,8 @@ Type annotations on the variable drive generic inference for static methods like
 
 `CPtr<UInt8>` additionally provides the two ways to get a pointer to a `Binary`'s bytes:
 
-- `CPtr.borrow(bytes: Binary) -> CPtr<UInt8>` -- zero-cost view of the binary's payload. The result cannot be bound to a variable, returned, or stored; it may only be consumed within the statement that borrows it (as a call argument or chained receiver), where the source `Binary` is guaranteed to be live.
-- `CPtr.copy(bytes: Binary) -> CPtr<UInt8>` -- malloc'd owned copy of the bytes. Nameable like any value; the caller frees it. Use this when a C API retains the pointer past the call.
+- `CPtr.borrow(bytes: Binary) -> CPtr<UInt8>`: zero-cost view of the binary's payload. The result cannot be bound to a variable, returned, or stored. It may only be consumed within the statement that borrows it (as a call argument or chained receiver), where the source `Binary` is guaranteed to be live.
+- `CPtr.copy(bytes: Binary) -> CPtr<UInt8>`: malloc'd owned copy of the bytes. Nameable like any value. The caller frees it. Use this when a C API retains the pointer past the call.
 
 ```koja
 digest = CPtr.alloc(32)
@@ -1958,7 +1958,7 @@ owned = CPtr.copy(data)  # owned copy, free it when C is done
 ### `CString`
 
 A pointer-and-length descriptor for a null-terminated C string. It does
-not encode ownership: `String.to_cstring()` allocates owned memory, while
+not encode ownership. `String.to_cstring()` allocates owned memory, while
 `CPtr<UInt8>.to_cstring()` wraps an existing pointer without allocating.
 
 ```koja
@@ -2111,11 +2111,11 @@ version = "0.1.0"
 
 Fields:
 
-- `name` -- project name (used as the binary output name).
-- `version` -- semantic version string.
-- `entry` -- the type implementing `Process` that the program starts (required for `build`/`run`).
-- `src` -- source directories (default `["src"]`).
-- `test` -- test directories (default `["test"]`).
+- `name`: project name (used as the binary output name).
+- `version`: semantic version string.
+- `entry`: the type implementing `Process` that the program starts (required for `build`/`run`).
+- `src`: source directories (default `["src"]`).
+- `test`: test directories (default `["test"]`).
 
 ### Language Server (LSP)
 

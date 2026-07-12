@@ -88,6 +88,56 @@ only the uppercase path form.
 
 ---
 
+## No wrapping-arithmetic escape hatch
+
+Integer arithmetic always traps on overflow (2026-07). There are no
+`wrapping_add` / `wrapping_mul` style operations, and the Erlang idiom
+of masking after the math does not transfer, since the operation traps
+before a `band` can run. Consequence: a 64-bit wrapping multiply is
+inexpressible in pure Koja, which locks out most non-cryptographic hash
+functions (FNV, xxHash, SplitMix). 32-bit wrapping can be simulated by
+computing in `Int` and masking.
+
+**Fix path:** a named-operation family on the integer types, following
+the `Bitwise` precedent (the specialized algebra gets words, not
+symbols). Both backends already thread the operand type through
+`BinaryOp`, so codegen is the existing arithmetic minus the overflow
+guard.
+
+---
+
+## `CPtr` float reads bypass the finite-only invariant
+
+A non-finite float returned by an `@extern "C"` call traps at the call
+site, but `CPtr<Float64>.read()` (and `Float32`) does not. A NaN or
+infinity sitting in a C-filled buffer walks straight into a `Float`,
+silently breaking the invariant. This is consistent with the FFI
+stance that safety is the wrapper author's responsibility, but it is
+currently undocumented rather than decided.
+
+**Fix path options:** guard `read` (costs a check on the bulk-transfer
+path), document `CPtr` as an unchecked boundary, or offer both a
+checked and an unchecked read. A carrier type for full IEEE values
+(the `Binary`-to-`String` pattern applied to floats) would subsume
+this: pointer reads and extern returns typed as IEEE floats make no
+finiteness promise, and the checked crossing moves to an explicit
+conversion.
+
+---
+
+## No exponent notation in numeric literals
+
+The lexer does not accept `1e9` / `1.5e-3`. Large or small float
+literals must be written with every digit (the arithmetic-fault test
+fixtures write 160-digit literals). `Float.parse("1e999")` handles the
+notation at runtime, so the gap is literal syntax only.
+
+**Fix path:** lexer support for an optional exponent suffix on float
+literals, plus the same round-to-infinity `OutOfRange` check float
+literals already get.
+
+---
+
 ## `koja shell` project mode
 
 `koja shell` auto-loads the project in the working directory (its `src`,
