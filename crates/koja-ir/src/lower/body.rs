@@ -294,10 +294,10 @@ fn lower_assignment(
 }
 
 /// Lower `head.f1.f2 = value` (any depth `>= 2`) into the SSA-pure
-/// rebuild chain: `LocalRead` the head; `FieldGet` down each non-
-/// leaf segment; lower and acquire the rhs (with a synthetic drop of
-/// the overwritten heap-managed leaf); `FieldSet` back up to the
-/// root; `LocalWrite` the new root into the head slot.
+/// rebuild chain. `LocalRead` the head, `FieldGet` down each non-leaf
+/// segment, lower and acquire the rhs (with a synthetic drop of the
+/// overwritten heap-managed leaf), then `FieldSet` back up to the
+/// root and `LocalWrite` the new root into the head slot.
 ///
 /// The walker derives each segment's struct decl + field index by
 /// substituting the previous level's `type_args` into the declared
