@@ -1,0 +1,5 @@
+# A negative shift count is out of range and traps.
+
+n = 8
+count = -1
+n.bsr(count).print()

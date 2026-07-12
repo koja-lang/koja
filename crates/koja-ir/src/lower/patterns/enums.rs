@@ -169,6 +169,7 @@ fn emit_enum_tag_eq_with(
             dest: cond,
             lhs: tag_value,
             op: IRBinOp::Eq,
+            operand_ty: IRType::Int8,
             rhs: const_dest,
         },
     );

@@ -243,6 +243,26 @@ fn float_does_not_narrow_to_float32() {
 }
 
 #[test]
+fn float_literal_rounding_to_infinity_is_rejected() {
+    // ~1e400, past f64's ~1.8e308 maximum.
+    let huge = format!("1{}.0", "0".repeat(400));
+    let source = format!(
+        "
+        x: Float = {huge}
+        x
+        "
+    );
+    let failure = typecheck_script_fail(&dedent(&source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("float literal is out of range")),
+        "expected an out-of-range float literal diagnostic, got: {messages:?}",
+    );
+}
+
+#[test]
 fn binary_operators_do_not_promote() {
     let source = "
         small: Int32 = 1

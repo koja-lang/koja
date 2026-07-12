@@ -46,9 +46,9 @@ pub enum IRIntrinsicId {
     List(ListMethod),
     Map(MapMethod),
     /// Explicit conversions out of the hub types — the inverse of
-    /// implicit hub widening. `Int.to_<width>` and `UInt64.to_int`
-    /// are checked (`Result<T, NumericConversionError>`); `Float.to_float32`
-    /// is total (rounds to nearest).
+    /// implicit hub widening. All return
+    /// `Result<T, NumericConversionError>` and fail with `OutOfRange`
+    /// when the receiver does not fit the target.
     NumericConvert(NumericConvert),
     Parse(ParseTarget),
     /// Transitional. The script-mode test fixture's `@intrinsic fn
@@ -311,8 +311,8 @@ pub enum BitOp {
 
 /// One explicit numeric conversion method. `IntNarrow` covers the
 /// seven `Int.to_*` methods (target width carried here, not read
-/// back out of the return type); `UInt64ToInt` is the one sized
-/// type with no implicit path to the hub; `FloatToFloat32` is the
+/// back out of the return type). `UInt64ToInt` is the one sized
+/// type with no implicit path to the hub. `FloatToFloat32` is the
 /// float counterpart.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NumericConvert {
@@ -434,6 +434,17 @@ impl IRIntrinsicId {
 }
 
 impl IntType {
+    /// Bit width of the receiver type. Shift counts must satisfy
+    /// `0 <= n < bit_width()` or the shift traps.
+    pub fn bit_width(self) -> u32 {
+        match self {
+            Self::Int | Self::UInt64 => 64,
+            Self::Int8 | Self::UInt8 => 8,
+            Self::Int16 | Self::UInt16 => 16,
+            Self::Int32 | Self::UInt32 => 32,
+        }
+    }
+
     /// Whether the receiver's right-shift should preserve the sign
     /// bit. Signed integers (`Int`/`IntN`) use arithmetic shift;
     /// unsigned (`UIntN`) use logical shift.
@@ -559,6 +570,17 @@ impl HashImpl {
 }
 
 impl BitOp {
+    /// Panic message for a negative or width-and-larger shift
+    /// count. Only `Bsl` / `Bsr` fault. Shared verbatim by both
+    /// backends.
+    pub fn shift_count_message(self) -> &'static str {
+        match self {
+            Self::Bsl => "shift count out of range in bsl",
+            Self::Bsr => "shift count out of range in bsr",
+            other => unreachable!("shift_count_message called with non-shift op {other:?}"),
+        }
+    }
+
     fn from_source(s: &str) -> Option<Self> {
         Some(match s {
             "band" => Self::Band,

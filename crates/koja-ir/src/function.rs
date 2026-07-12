@@ -364,11 +364,15 @@ impl BranchTarget {
 /// [`IRLocalId`] and produce no value (see [`IRInstruction::dest`]).
 #[derive(Debug, Clone, PartialEq)]
 pub enum IRInstruction {
-    /// `dest = lhs <op> rhs`.
+    /// `dest = lhs <op> rhs`. `operand_ty` is the shared type of
+    /// both operands (typecheck guarantees they agree), carried so
+    /// backends pick width- and signedness-correct instructions and
+    /// arithmetic fault guards.
     BinaryOp {
         dest: ValueId,
         lhs: ValueId,
         op: IRBinOp,
+        operand_ty: IRType,
         rhs: ValueId,
     },
     /// `dest = <<segments>>` — assemble a `Binary` (when
@@ -667,11 +671,14 @@ pub enum IRInstruction {
         fields: Vec<StructFieldInit>,
         ty: IRSymbol,
     },
-    /// `dest = <op> operand`.
+    /// `dest = <op> operand`. `operand_ty` mirrors
+    /// [`IRInstruction::BinaryOp`]'s field. Backends key negation
+    /// width, signedness, and the `-MIN` overflow guard on it.
     UnaryOp {
         dest: ValueId,
         op: IRUnaryOp,
         operand: ValueId,
+        operand_ty: IRType,
     },
     /// `dest = spawn wrapper(config)`. Materialize a new process
     /// running `wrapper` with `config` as its `i8*` payload. The

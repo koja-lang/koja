@@ -593,6 +593,7 @@ impl Synthesizer {
                     dest: matches,
                     lhs: tag,
                     op: IRBinOp::Eq,
+                    operand_ty: IRType::Int8,
                     rhs: constant,
                 },
             );

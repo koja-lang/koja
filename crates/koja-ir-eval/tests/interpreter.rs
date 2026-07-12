@@ -72,9 +72,14 @@ fn script_mode_arithmetic_matches_project_mode() {
 }
 
 #[test]
-fn division_by_zero_surfaces_as_runtime_error() {
+fn division_by_zero_panics() {
     let err = evaluate("fn main -> Int\n  10 / 0\nend\n").expect_err("should fail at runtime");
-    assert!(matches!(err, RuntimeError::DivisionByZero { .. }));
+    assert_eq!(
+        err,
+        RuntimeError::Panicked {
+            message: "division by zero in /".to_string(),
+        },
+    );
 }
 
 #[test]

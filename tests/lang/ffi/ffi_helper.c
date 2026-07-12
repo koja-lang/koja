@@ -6,6 +6,14 @@ int32_t add_c(int32_t a, int32_t b) {
     return a + b;
 }
 
+double half_c(double x) {
+    return x / 2.0;
+}
+
+double nan_c(void) {
+    return 0.0 / 0.0;
+}
+
 int32_t mul_c(int32_t a, int32_t b) {
     return a * b;
 }

@@ -66,12 +66,12 @@ pub enum ConstValue {
 /// directly to control flow, so eager logical operators cannot reach
 /// the sealed IR.
 ///
-/// **Overflow contract**: integer arithmetic (`Add`/`Sub`/`Mul`/`Div`/`Mod`)
-/// wraps on overflow (two's-complement). The interpreter currently
-/// flags overflow as a `RuntimeError::IntegerOverflow` (transient
-/// safety net); native LLVM emission uses plain `add`/`sub`/`mul`
-/// without `nsw`/`nuw` flags — wrapping semantics. Aligning the
-/// interpreter to wrap-on-overflow is a follow-up.
+/// **Fault contract**: arithmetic traps as an `ArithmeticError`
+/// panic on both backends, at the operand type's width and
+/// signedness. Integer `Add`/`Sub`/`Mul` trap on overflow. `Div`/
+/// `Mod` trap on a zero divisor and on `MIN / -1`. Float arithmetic
+/// traps when the IEEE result is non-finite, upholding the
+/// finite-only `Float` invariant. Comparisons never trap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IRBinOp {
     Add,
@@ -87,8 +87,50 @@ pub enum IRBinOp {
     Sub,
 }
 
-/// Unary operators the IR supports: boolean negation and integer
-/// negation.
+/// `ArithmeticError` panic message for negating a signed type's
+/// minimum value. Shared verbatim by both backends.
+pub const NEG_OVERFLOW_MESSAGE: &str = "integer overflow in unary -";
+
+impl IRBinOp {
+    /// Panic message for a zero divisor (`Div` / `Mod` only).
+    pub fn division_by_zero_message(&self) -> String {
+        format!("division by zero in {}", self.surface_symbol())
+    }
+
+    /// Panic message for a non-finite float result.
+    pub fn non_finite_message(&self) -> String {
+        format!("non-finite float result in {}", self.surface_symbol())
+    }
+
+    /// Panic message for an integer overflow fault (including
+    /// `MIN / -1` and `MIN % -1`).
+    pub fn overflow_message(&self) -> String {
+        format!("integer overflow in {}", self.surface_symbol())
+    }
+
+    /// Koja surface spelling, used in `ArithmeticError` panics.
+    pub fn surface_symbol(&self) -> &'static str {
+        match self {
+            IRBinOp::Add => "+",
+            IRBinOp::Div => "/",
+            IRBinOp::Eq => "==",
+            IRBinOp::Gt => ">",
+            IRBinOp::GtEq => ">=",
+            IRBinOp::Lt => "<",
+            IRBinOp::LtEq => "<=",
+            IRBinOp::Mod => "%",
+            IRBinOp::Mul => "*",
+            IRBinOp::NotEq => "!=",
+            IRBinOp::Sub => "-",
+        }
+    }
+}
+
+/// Unary operators the IR supports: boolean negation and numeric
+/// negation. `Neg` on an integer traps as an `ArithmeticError`
+/// panic when the operand is the type's minimum (two's-complement
+/// `-MIN` overflows). Float negation never traps (every finite
+/// float has a representable negative).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IRUnaryOp {
     Neg,
@@ -514,6 +556,26 @@ impl IRType {
             | Self::UInt32
             | Self::UInt64
             | Self::Unit => false,
+        }
+    }
+
+    /// Bit width of an integer-family variant, `None` otherwise.
+    pub fn int_bit_width(&self) -> Option<u32> {
+        match self {
+            Self::Int8 | Self::UInt8 => Some(8),
+            Self::Int16 | Self::UInt16 => Some(16),
+            Self::Int32 | Self::UInt32 => Some(32),
+            Self::Int64 | Self::UInt64 => Some(64),
+            _ => None,
+        }
+    }
+
+    /// Signedness of an integer-family variant, `None` otherwise.
+    pub fn int_sign(&self) -> Option<BinarySign> {
+        match self {
+            Self::Int8 | Self::Int16 | Self::Int32 | Self::Int64 => Some(BinarySign::Signed),
+            Self::UInt8 | Self::UInt16 | Self::UInt32 | Self::UInt64 => Some(BinarySign::Unsigned),
+            _ => None,
         }
     }
 

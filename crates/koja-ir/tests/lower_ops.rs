@@ -139,6 +139,7 @@ fn not_lowers_to_unary_op_not() {
                 dest: ValueId(1),
                 op: IRUnaryOp::Not,
                 operand: ValueId(0),
+                operand_ty: IRType::Bool,
             },
         ],
     );
@@ -165,6 +166,7 @@ fn neg_lowers_to_unary_op_neg() {
                 dest: ValueId(1),
                 op: IRUnaryOp::Neg,
                 operand: ValueId(0),
+                operand_ty: IRType::Int64,
             },
         ],
     );
@@ -271,6 +273,7 @@ fn float_arithmetic_lowers_with_float64_operand_type() {
                 dest: ValueId(2),
                 lhs: ValueId(0),
                 op: IRBinOp::Add,
+                operand_ty: IRType::Float64,
                 rhs: ValueId(1),
             },
         ],

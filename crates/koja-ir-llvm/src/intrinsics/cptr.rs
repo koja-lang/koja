@@ -22,10 +22,10 @@ use inkwell::values::{BasicValueEnum, FunctionValue, IntValue, PointerValue};
 use koja_ir::{CPtrMethod, IRFunction, IRType};
 
 use crate::ctx::EmitContext;
-use crate::emit::constants::emit_string_literal_payload;
 use crate::emit::heap_layout::{block_alloc_size, init_heap_block, load_bit_length};
+use crate::emit::ops::emit_fault_guard;
 use crate::error::{IceExt, LlvmError};
-use crate::runtime::{declare_free_extern, declare_malloc_extern, declare_panic_extern};
+use crate::runtime::{declare_free_extern, declare_malloc_extern};
 use crate::types::ir_basic_type;
 
 pub(super) fn emit_cptr<'ctx>(
@@ -91,12 +91,7 @@ fn emit_alloc<'ctx>(
         ))
     })?;
     let count = nth_int(function, llvm_function, 0, "count")?;
-    guard_nonnegative(
-        ctx,
-        llvm_function,
-        count,
-        b"CPtr.alloc count cannot be negative",
-    )?;
+    guard_nonnegative(ctx, count, "CPtr.alloc count cannot be negative")?;
     let total = ctx
         .builder
         .build_int_mul(count, element_size, "alloc_bytes")
@@ -276,12 +271,7 @@ fn emit_to_binary<'ctx>(
 
     let src_ptr = nth_pointer(function, llvm_function, 0, "self")?;
     let byte_len = nth_int(function, llvm_function, 1, "len")?;
-    guard_nonnegative(
-        ctx,
-        llvm_function,
-        byte_len,
-        b"CPtr.to_binary length cannot be negative",
-    )?;
+    guard_nonnegative(ctx, byte_len, "CPtr.to_binary length cannot be negative")?;
 
     let total = block_alloc_size(ctx, byte_len, false, "total")?;
     let malloc = declare_malloc_extern(ctx);
@@ -324,9 +314,8 @@ fn emit_to_binary<'ctx>(
 
 fn guard_nonnegative<'ctx>(
     ctx: &EmitContext<'ctx>,
-    llvm_function: FunctionValue<'ctx>,
     value: IntValue<'ctx>,
-    message: &[u8],
+    message: &str,
 ) -> Result<(), LlvmError> {
     let negative = ctx
         .builder
@@ -337,24 +326,7 @@ fn guard_nonnegative<'ctx>(
             "negative",
         )
         .or_ice()?;
-    let panic_block = ctx
-        .context
-        .append_basic_block(llvm_function, "negative_panic");
-    let valid_block = ctx.context.append_basic_block(llvm_function, "nonnegative");
-    ctx.builder
-        .build_conditional_branch(negative, panic_block, valid_block)
-        .or_ice()?;
-
-    ctx.builder.position_at_end(panic_block);
-    let panic_message = emit_string_literal_payload(ctx, message, "negative_count");
-    let panic = declare_panic_extern(ctx);
-    ctx.builder
-        .build_call(panic, &[panic_message.into()], "")
-        .or_ice()?;
-    ctx.builder.build_unreachable().or_ice()?;
-
-    ctx.builder.position_at_end(valid_block);
-    Ok(())
+    emit_fault_guard(ctx, negative, message, "negative")
 }
 
 fn nth_pointer<'ctx>(

@@ -1045,10 +1045,16 @@ fn execute_instruction<'a, R: CallResolver>(
                 frame.values.insert(*dest, value);
                 Ok(())
             }
-            IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
+            IRInstruction::BinaryOp {
+                dest,
+                lhs,
+                op,
+                operand_ty,
+                rhs,
+            } => {
                 let lhs_value = lookup(&frame.values, *lhs)?;
                 let rhs_value = lookup(&frame.values, *rhs)?;
-                let result = apply_binary_op(*op, lhs_value, rhs_value)?;
+                let result = apply_binary_op(*op, operand_ty, lhs_value, rhs_value)?;
                 frame.values.insert(*dest, result);
                 Ok(())
             }
@@ -1276,9 +1282,14 @@ fn execute_instruction<'a, R: CallResolver>(
                 );
                 Ok(())
             }
-            IRInstruction::UnaryOp { dest, op, operand } => {
+            IRInstruction::UnaryOp {
+                dest,
+                op,
+                operand,
+                operand_ty,
+            } => {
                 let operand_value = lookup(&frame.values, *operand)?;
-                let result = apply_unary_op(*op, operand_value)?;
+                let result = apply_unary_op(*op, operand_ty, operand_value)?;
                 frame.values.insert(*dest, result);
                 Ok(())
             }

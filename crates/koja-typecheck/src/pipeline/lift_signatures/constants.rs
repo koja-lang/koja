@@ -17,7 +17,9 @@ use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
 
 use crate::pipeline::aliases::rewrite_through_aliases;
-use crate::pipeline::resolve::coercion::{Mismatch, check_compatible_stamping};
+use crate::pipeline::resolve::coercion::{
+    Mismatch, check_compatible_stamping, check_float_literal_finite,
+};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -94,7 +96,10 @@ fn resolve_constant_value(
     diagnostics: &mut Vec<Diagnostic>,
 ) -> ResolvedType {
     let ty = match &mut expr.kind {
-        ExprKind::Literal { value } => scope.registry.literal_type(value),
+        ExprKind::Literal { value } => {
+            check_float_literal_finite(value, expr.span, diagnostics);
+            scope.registry.literal_type(value)
+        }
         ExprKind::String { parts, .. } => {
             string_literal_type(parts, expr.span, scope.registry, diagnostics)
         }

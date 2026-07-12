@@ -5,7 +5,9 @@
 //! the `i64` receiver and truncates on success. `UInt64.to_int(self)
 //! -> Result<Int, NumericConversionError>` accepts any bit pattern at or
 //! below `i64::MAX` (i.e. non-negative under a signed view).
-//! `Float.to_float32(self) -> Float32` is a total `fptrunc`.
+//! `Float.to_float32(self)` is a `fptrunc` whose result must stay
+//! finite, so magnitudes beyond `Float32`'s range are `OutOfRange`
+//! rather than infinities (the finite-only `Float` invariant).
 //!
 //! The checked conversions mint `NumericConversionError.OutOfRange` on the
 //! failure path. The error enum's symbol is recovered from the
@@ -21,6 +23,7 @@ use koja_ir::{
 
 use crate::ctx::EmitContext;
 use crate::emit::enums::build_enum_value;
+use crate::emit::ops::emit_is_finite;
 use crate::error::{IceExt, LlvmError};
 
 /// `enum Result<T, E>` variant tags: declaration order in
@@ -43,15 +46,6 @@ pub(super) fn emit_numeric_convert<'ctx>(
         ))
     })?;
 
-    if matches!(convert, NumericConvert::FloatToFloat32) {
-        let narrowed = ctx
-            .builder
-            .build_float_trunc(receiver.into_float_value(), ctx.context.f32_type(), "f32")
-            .or_ice()?;
-        ctx.builder.build_return(Some(&narrowed)).or_ice()?;
-        return Ok(());
-    }
-
     let result_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
         other => {
@@ -61,6 +55,10 @@ pub(super) fn emit_numeric_convert<'ctx>(
             )));
         }
     };
+
+    if matches!(convert, NumericConvert::FloatToFloat32) {
+        return emit_float_to_float32(ctx, llvm_function, receiver, &result_symbol);
+    }
 
     let value = receiver.into_int_value();
     let in_range = emit_range_check(ctx, convert, value)?;
@@ -72,6 +70,34 @@ pub(super) fn emit_numeric_convert<'ctx>(
 
     emit_ok_branch(ctx, ok_bb, convert, value, &result_symbol)?;
     emit_err_branch(ctx, err_bb, &result_symbol)
+}
+
+/// `fptrunc` the `f64` receiver, then `Ok(f32)` when the rounded
+/// result is still finite and `Err(OutOfRange)` otherwise. The
+/// receiver itself is finite by the `Float` invariant, so only the
+/// narrowing can overflow.
+fn emit_float_to_float32<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    llvm_function: FunctionValue<'ctx>,
+    receiver: BasicValueEnum<'ctx>,
+    result_symbol: &IRSymbol,
+) -> Result<(), LlvmError> {
+    let narrowed = ctx
+        .builder
+        .build_float_trunc(receiver.into_float_value(), ctx.context.f32_type(), "f32")
+        .or_ice()?;
+    let finite = emit_is_finite(ctx, narrowed)?;
+    let ok_bb = ctx.context.append_basic_block(llvm_function, "ok");
+    let err_bb = ctx.context.append_basic_block(llvm_function, "err");
+    ctx.builder
+        .build_conditional_branch(finite, ok_bb, err_bb)
+        .or_ice()?;
+
+    ctx.builder.position_at_end(ok_bb);
+    let ok = build_enum_value(ctx, result_symbol, RESULT_OK_TAG, &[narrowed.into()])?;
+    ctx.builder.build_return(Some(&ok)).or_ice()?;
+
+    emit_err_branch(ctx, err_bb, result_symbol)
 }
 
 /// `min <= value <= max` under signed `i64` comparison. The bounds
@@ -190,7 +216,7 @@ fn conversion_error_symbol<'ctx>(
 /// conversion to succeed.
 fn checked_bounds(convert: NumericConvert) -> (i64, i64) {
     match convert {
-        NumericConvert::FloatToFloat32 => unreachable!("total conversion has no bounds"),
+        NumericConvert::FloatToFloat32 => unreachable!("float path handled separately"),
         NumericConvert::IntNarrow(target) => match target {
             IntNarrowTarget::Int8 => (i64::from(i8::MIN), i64::from(i8::MAX)),
             IntNarrowTarget::Int16 => (i64::from(i16::MIN), i64::from(i16::MAX)),

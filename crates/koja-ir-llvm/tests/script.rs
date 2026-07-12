@@ -231,11 +231,11 @@ fn call_to_helper_emits_call_in_user_main_body() {
     );
     // inkwell does not const-fold across the call boundary: the
     // callee's return value lands in a fresh SSA name (`%call`)
-    // and gets `add`-ed against `i64 1`. Pin the SSA-shaped
+    // and feeds the checked add against `i64 1`. Pin the SSA-shaped
     // invocation so a regression that drops the call or rewires
     // it through const-fold surfaces here.
     assert!(
-        user_body.contains("add i64 %call, 1"),
-        "expected `add i64 %call, 1` in `__koja_user_main`:\n{user_body}",
+        user_body.contains("@llvm.sadd.with.overflow.i64(i64 %call, i64 1)"),
+        "expected a checked `%call + 1` add in `__koja_user_main`:\n{user_body}",
     );
 }

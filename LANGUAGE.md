@@ -10,7 +10,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Variables and Constants](#variables-and-constants) -- Assignment, Type Annotations, Compound Assignment, Constants
 - [Functions](#functions) -- Declaration, Private Declarations, `return`, Parameters
 - [Control Flow](#control-flow) -- `if`/`else`, `while`, `loop`/`break`, `for`...`in`, Ternary
-- [Types](#types) -- Primitives, Numeric Widening, Unit, Strings, Structs, Enums, Union Types, Generics
+- [Types](#types) -- Primitives, Numeric Widening, Arithmetic Faults, Unit, Strings, Structs, Enums, Union Types, Generics
 - [Pattern Matching](#pattern-matching) -- `match`, OR Patterns, `cond`
 - [Closures and Function Types](#closures-and-function-types) -- Block Closures, Short Closures, Capture Semantics, Function Types
 - [Value Semantics](#value-semantics) -- Rules, Copy Cost, Field Access
@@ -86,6 +86,8 @@ Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`.
 ```
 
 Numeric literals coerce to any same-category type annotation. Integer literals coerce to any integer type (`x: UInt8 = 4`). Float literals coerce to any float type (`f: Float32 = 3.14`). Cross-category coercion (int to float or vice versa) is an error. Non-literal sized values widen implicitly into `Int` / `Float` -- see [Numeric Widening](#numeric-widening).
+
+A literal must fit its type. An integer literal outside the target's range is a compile-time error, and so is a float literal whose magnitude is too large for a 64-bit float (one that would round to infinity) -- `Float` values are always finite (see [Arithmetic Faults](#arithmetic-faults)).
 
 ### Line Continuation
 
@@ -319,28 +321,34 @@ Nested ternaries are disallowed.
 
 ### Primitive Types
 
-| Type      | Description                               |
-| --------- | ----------------------------------------- |
-| `Int`     | 64-bit signed integer (alias for `Int64`) |
-| `Int8`    | 8-bit signed integer                      |
-| `Int16`   | 16-bit signed integer                     |
-| `Int32`   | 32-bit signed integer                     |
-| `Int64`   | 64-bit signed integer (same as `Int`)     |
-| `UInt8`   | 8-bit unsigned integer                    |
-| `UInt16`  | 16-bit unsigned integer                   |
-| `UInt32`  | 32-bit unsigned integer                   |
-| `UInt64`  | 64-bit unsigned integer                   |
-| `Float`   | 64-bit IEEE 754 (alias for `Float64`)     |
-| `Float32` | 32-bit IEEE 754                           |
-| `Bool`    | `true` or `false`                         |
-| `String`  | UTF-8 string                              |
-| `Binary`  | Arbitrary byte sequence                   |
-| `Bits`    | Arbitrary bit sequence                    |
-| `()`      | Unit type (empty value)                   |
+| Type      | Description                                        |
+| --------- | -------------------------------------------------- |
+| `Int`     | 64-bit signed integer (alias for `Int64`)          |
+| `Int8`    | 8-bit signed integer                               |
+| `Int16`   | 16-bit signed integer                              |
+| `Int32`   | 32-bit signed integer                              |
+| `Int64`   | 64-bit signed integer (same as `Int`)              |
+| `UInt8`   | 8-bit unsigned integer                             |
+| `UInt16`  | 16-bit unsigned integer                            |
+| `UInt32`  | 32-bit unsigned integer                            |
+| `UInt64`  | 64-bit unsigned integer                            |
+| `Float`   | 64-bit IEEE 754, finite-only (alias for `Float64`) |
+| `Float32` | 32-bit IEEE 754, finite-only                       |
+| `Bool`    | `true` or `false`                                  |
+| `String`  | UTF-8 string                                       |
+| `Binary`  | Arbitrary byte sequence                            |
+| `Bits`    | Arbitrary bit sequence                             |
+| `()`      | Unit type (empty value)                            |
 
 Every `String` is valid UTF-8 and carries an authoritative byte length.
 U+0000 is a valid character; trailing NUL storage is never used to
 determine a string's contents.
+
+Every `Float` and `Float32` is finite. NaN and the infinities are not
+representable in Koja -- every operation that would produce one traps
+instead (see [Arithmetic Faults](#arithmetic-faults)), the same way
+every `String` is valid UTF-8 by construction. Float equality is
+therefore a true equivalence relation, and comparisons are total.
 
 All types have value semantics -- assignment produces an independent copy. Numeric primitives and `Bool` copy bit-for-bit. `String`, `Binary`, `Bits`, `List`, `Map`, `Set`, structs, and enums copy their contents. The distinction is only one of cost, never of semantics.
 
@@ -365,7 +373,7 @@ Widening applies wherever a value flows into a typed slot: call arguments, struc
 - **Generic inference** -- `T` binds to the actual type. `identity(small)` infers `T = Int32`, not `Int`.
 - **Narrowing or cross-category conversion** -- `Int` never implicitly becomes `Int32`, and ints never become floats.
 
-The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each returning `Result<TargetType, NumericConversionError>` -- `Result.Err(NumericConversionError.OutOfRange)` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` is total (rounds to the nearest representable value):
+The inverse direction is explicit and checked. `Int` provides `to_int8`, `to_int16`, `to_int32`, `to_uint8`, `to_uint16`, `to_uint32`, and `to_uint64`, each returning `Result<TargetType, NumericConversionError>` -- `Result.Err(NumericConversionError.OutOfRange)` when the value does not fit. `UInt64.to_int` is the checked bridge back to the hub, and `Float.to_float32` rounds to the nearest representable value, with `OutOfRange` for magnitudes too large for a 32-bit float:
 
 ```koja
 match 300.to_int8()
@@ -375,6 +383,29 @@ end
 ```
 
 Sized-to-sized conversions route through `Int`: widen up implicitly, then narrow down explicitly.
+
+### Arithmetic Faults
+
+Arithmetic never wraps, saturates, or produces a non-finite float. An operation without a representable result panics with an `ArithmeticError` -- Erlang's `badarith`, not C's undefined behavior. The panic is identical on both backends and in `--release` builds, and it follows the standard crash path: the faulting process crashes (`ExitReason.Crashed`), and a fault in the root process exits the program non-zero.
+
+| Operation                  | Fault                                        |
+| -------------------------- | -------------------------------------------- |
+| Int `+` `-` `*`, unary `-` | result does not fit the operand type's width |
+| Int `/` `%`                | zero divisor, or `MIN / -1`                  |
+| `bsl` / `bsr`              | shift count outside `0 <= n < bit width`     |
+| Float `+` `-` `*` `/` `%`  | IEEE result is non-finite (NaN or infinity)  |
+
+Integer faults are checked at the operand's declared width and signedness: `UInt8` arithmetic traps past 255, not past `Int.max`. Comparisons never fault.
+
+The float row is what makes the finite-only invariant airtight: `1.0 / 0.0` and `0.0 / 0.0` trap instead of minting `inf` / `NaN`. The remaining boundaries are closed to match -- float literals that would round to infinity are compile-time errors, `Float.parse` classifies them as `OutOfRange`, `Float.to_float32` is checked, and a non-finite float returned by an `@extern "C"` call traps at the call site.
+
+```koja
+a = 9223372036854775807
+a + 1        # panics: integer overflow in +
+
+b = 0.0
+1.0 / b      # panics: non-finite float result in /
+```
 
 ### Unit Expression
 
@@ -1576,6 +1607,8 @@ end
 
 Greedy rest capture with `rest: Binary` consumes all remaining bytes. Patterns that don't match the data length fall through to the next arm.
 
+Float-extract segments (`x: Float32` in a pattern) are not supported yet. When they land, a segment decoding to NaN or infinity will fail the match and fall through to the next arm, Erlang-style, preserving the finite-only float invariant (see [Arithmetic Faults](#arithmetic-faults)).
+
 #### Functions
 
 - `at(self, index: Int) -> Option<Int>` -- returns the byte at `index` as an `Int` in `0..255`, or `Option.None` out of bounds. O(1). Prefer this over `String.get` for scanning large inputs (`String.get` is O(n) per call because it counts UTF-8 codepoints from the start).
@@ -1770,6 +1803,8 @@ end
 
 Bitwise operations are methods rather than symbolic operators. Koja reserves `<<`/`>>` for binary literals, `|` for union types, and `&` for protocol composition in trait bounds. All integer types implement `Bitwise`.
 
+`bsl` and `bsr` panic when the shift count is negative or at least the receiver's bit width (`1.bsl(64)` on an `Int`), matching the [arithmetic fault](#arithmetic-faults) contract. The other four operations never fault.
+
 ```koja
 flags = 0b1010
 (flags.band(0b1100)).print()  # 8  (0b1000)
@@ -1856,6 +1891,8 @@ result.print()
 ```
 
 Extern functions have no body. Parameter and return types must be FFI-compatible: explicit-width primitives (`Int32`, `UInt8`, `Float32`, etc.), `Bool`, `CPtr<T>`, or `()`. Extern functions can coexist with normal Koja functions in the same struct -- use `priv fn` on the extern declarations and expose safe public wrappers.
+
+A `Float32` / `Float64` value returned by an extern call is checked at the call site: a NaN or infinity handed back by C panics with an `ArithmeticError` (`non-finite float returned by <name>`), keeping the finite-only float invariant intact across the FFI boundary (see [Arithmetic Faults](#arithmetic-faults)).
 
 Declare C return types at their true width and let [numeric widening](#numeric-widening) do the rest: a C `int` bound as `Int32` flows directly into `Int` contexts with correct sign extension, so negative error codes survive the trip. Reading a C `int` as `Int` would zero-extend the upper 32 bits and corrupt negative values.
 

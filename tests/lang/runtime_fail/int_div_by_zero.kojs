@@ -1,0 +1,5 @@
+# Integer division by a zero divisor traps as an ArithmeticError panic.
+
+a = 10
+b = 0
+(a / b).print()

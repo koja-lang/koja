@@ -34,8 +34,9 @@ call-resolution closure differs (`IRProgram::function` vs
 [`RuntimeError`] covers only conditions the program can reach at runtime
 without a compiler bug:
 
-- `DivisionByZero { op }` — `lhs / rhs` or `lhs % rhs` with `rhs == 0`.
-- `IntegerOverflow { lhs, op, rhs }` — `i64` arithmetic outside range.
+- `Panicked { message }` — `Kernel.panic` calls and arithmetic faults
+  (overflow, zero divisors, non-finite float results). Fault messages are
+  the shared `koja_ir` constants, identical to the LLVM backend's panics.
 - `TypeMismatch { detail }` — a binary operator received operands whose
   runtime types it can't combine.
 - `Unsupported { detail }` — IR shapes the interpreter doesn't yet handle.

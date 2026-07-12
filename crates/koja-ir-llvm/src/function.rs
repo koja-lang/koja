@@ -80,9 +80,16 @@ pub(crate) fn declare_function<'ctx>(
             .add_function(&llvm_name, signature, Some(Linkage::External)),
     };
     ctx.register_declared_function(function.symbol.clone(), llvm_function);
-    // FFI declarations carry no body we define. Everything else gets a
-    // maintained frame pointer so panic backtraces can walk it.
-    if !matches!(function.kind, FunctionKind::Extern(_)) {
+    if matches!(function.kind, FunctionKind::Extern(_)) {
+        // Foreign code can hand back NaN / inf; the call site traps
+        // on those to uphold the finite-only `Float` invariant.
+        if matches!(function.return_type, IRType::Float32 | IRType::Float64) {
+            ctx.register_extern_float_return(function.symbol.clone(), llvm_name.clone());
+        }
+    } else {
+        // FFI declarations carry no body we define. Everything else
+        // gets a maintained frame pointer so panic backtraces can
+        // walk it.
         ctx.set_frame_pointer(llvm_function);
     }
     ctx.declare_function_debug(

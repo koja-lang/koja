@@ -2,81 +2,105 @@
 //! return the [`Value`] produced by an [`IRBinOp`] / [`IRUnaryOp`].
 //! No frame, no IR walking, no resolver: every input is concrete.
 //!
-//! Errors surface as [`RuntimeError::TypeMismatch`] (mismatched
-//! widths / shapes, guarded against by typecheck but kept defensive
-//! here) and the arithmetic overflow / division-by-zero variants.
+//! The instruction's `operand_ty` drives numeric shape. Integer
+//! arithmetic runs at the operand type's width and signedness (in
+//! `i128`, then range-checked back), and comparisons pick signed or
+//! unsigned ordering from it. Arithmetic faults (overflow, zero
+//! divisors, `MIN / -1`, non-finite float results) surface as
+//! [`RuntimeError::Panicked`] with the shared `koja_ir` message
+//! constants, matching the LLVM backend's `__koja_panic` output
+//! verbatim.
 //!
-//! The dispatcher [`apply_binary_op`] fans out to one helper per
-//! operator family + numeric shape (integer / float arithmetic,
-//! integer / float comparison, equality) so each
-//! helper stays exhaustive over the operators it owns and panics
-//! with `unreachable!` if the dispatch ever drifts. Numeric shape
-//! (`Int` vs `Float32` / `Float64`) is decided at the
-//! `apply_binary_op` seam by peeking the operand variants. Typecheck
-//! guarantees both sides agree, including width.
+//! Type mismatches (guarded against by typecheck but kept defensive
+//! here) surface as [`RuntimeError::TypeMismatch`].
 
 use std::ops::{Add, Div, Mul, Rem, Sub};
 
-use koja_ir::{IRBinOp, IRUnaryOp};
+use koja_ir::{BinarySign, IRBinOp, IRType, IRUnaryOp, NEG_OVERFLOW_MESSAGE};
 
 use crate::error::RuntimeError;
 use crate::value::Value;
 
-pub(crate) fn apply_binary_op(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+pub(crate) fn apply_binary_op(
+    op: IRBinOp,
+    operand_ty: &IRType,
+    lhs: Value,
+    rhs: Value,
+) -> Result<Value, RuntimeError> {
     match op {
         IRBinOp::Add | IRBinOp::Div | IRBinOp::Mod | IRBinOp::Mul | IRBinOp::Sub => {
-            if is_float(&lhs) || is_float(&rhs) {
+            if operand_ty.is_float() {
                 apply_float_arith(op, lhs, rhs)
             } else {
-                apply_int_arith(op, lhs, rhs)
+                apply_int_arith(op, operand_ty, lhs, rhs)
             }
         }
         IRBinOp::Eq | IRBinOp::NotEq => apply_equality(op, lhs, rhs),
         IRBinOp::Gt | IRBinOp::GtEq | IRBinOp::Lt | IRBinOp::LtEq => {
-            if is_float(&lhs) || is_float(&rhs) {
+            if operand_ty.is_float() {
                 apply_float_compare(op, lhs, rhs)
             } else {
-                apply_int_compare(op, lhs, rhs)
+                apply_int_compare(op, operand_ty, lhs, rhs)
             }
         }
     }
 }
 
-fn is_float(value: &Value) -> bool {
-    matches!(value, Value::Float32(_) | Value::Float64(_))
+/// Inclusive value range of the integer type, computed from width +
+/// signedness. `Value::Int` stores every width in an `i64` (unsigned
+/// 64-bit values bit-preserved), so faults are detected by exact
+/// `i128` arithmetic against this range.
+fn int_range(ty: &IRType) -> (i128, i128) {
+    let width = ty.int_bit_width().unwrap_or(64);
+    match ty.int_sign() {
+        Some(BinarySign::Unsigned) => (0, (1i128 << width) - 1),
+        _ => (-(1i128 << (width - 1)), (1i128 << (width - 1)) - 1),
+    }
 }
 
-fn apply_int_arith(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+/// The operand's mathematical value. Signed operands read the stored
+/// `i64` directly, unsigned operands reinterpret its bit pattern
+/// (`UInt64` values above `i64::MAX` are stored as negative `i64`).
+fn int_operand(ty: &IRType, stored: i64) -> i128 {
+    match ty.int_sign() {
+        Some(BinarySign::Unsigned) => (stored as u64) as i128,
+        _ => stored as i128,
+    }
+}
+
+fn apply_int_arith(
+    op: IRBinOp,
+    ty: &IRType,
+    lhs: Value,
+    rhs: Value,
+) -> Result<Value, RuntimeError> {
     let (a, b) = require_ints(op, &lhs, &rhs)?;
-    let checked = match op {
-        IRBinOp::Add => a.checked_add(b),
-        IRBinOp::Div => {
-            if b == 0 {
-                return Err(RuntimeError::DivisionByZero { op });
-            }
-            a.checked_div(b)
-        }
-        IRBinOp::Mod => {
-            if b == 0 {
-                return Err(RuntimeError::DivisionByZero { op });
-            }
-            a.checked_rem(b)
-        }
-        IRBinOp::Mul => a.checked_mul(b),
-        IRBinOp::Sub => a.checked_sub(b),
+    let (a, b) = (int_operand(ty, a), int_operand(ty, b));
+    if matches!(op, IRBinOp::Div | IRBinOp::Mod) && b == 0 {
+        return Err(RuntimeError::Panicked {
+            message: op.division_by_zero_message(),
+        });
+    }
+    let exact = match op {
+        IRBinOp::Add => a + b,
+        IRBinOp::Div => a / b,
+        IRBinOp::Mod => a % b,
+        IRBinOp::Mul => a * b,
+        IRBinOp::Sub => a - b,
         _ => unreachable!("apply_int_arith dispatched with non-arith op {op:?}"),
     };
-    checked
-        .map(Value::Int)
-        .ok_or(RuntimeError::IntegerOverflow { lhs: a, op, rhs: b })
+    let (min, max) = int_range(ty);
+    if exact < min || exact > max {
+        return Err(RuntimeError::Panicked {
+            message: op.overflow_message(),
+        });
+    }
+    Ok(Value::Int(exact as u64 as i64))
 }
 
 fn apply_equality(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     let equal = match (&lhs, &rhs) {
         (Value::Bool(a), Value::Bool(b)) => a == b,
-        // IEEE 754: `NaN == NaN` is false. `Float64::partial_cmp`
-        // routes through the `==` operator on `f64` which already
-        // honours that. Same for `Float32`.
         (Value::Float32(a), Value::Float32(b)) => a == b,
         (Value::Float64(a), Value::Float64(b)) => a == b,
         (Value::Int(a), Value::Int(b)) => a == b,
@@ -96,8 +120,14 @@ fn apply_equality(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeE
     Ok(Value::Bool(result))
 }
 
-fn apply_int_compare(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
+fn apply_int_compare(
+    op: IRBinOp,
+    ty: &IRType,
+    lhs: Value,
+    rhs: Value,
+) -> Result<Value, RuntimeError> {
     let (a, b) = require_ints(op, &lhs, &rhs)?;
+    let (a, b) = (int_operand(ty, a), int_operand(ty, b));
     let result = match op {
         IRBinOp::Gt => a > b,
         IRBinOp::GtEq => a >= b,
@@ -109,20 +139,27 @@ fn apply_int_compare(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, Runti
 }
 
 /// Float arithmetic, computed at the operands' own width so results
-/// match the LLVM backend's native `float` / `double` ops. Diverges
-/// from [`apply_int_arith`] in two IEEE-754-flavored ways: division /
-/// modulo by zero produce `inf` / `NaN` (no `DivisionByZero` raise),
-/// and overflow saturates to `±inf` (no `Overflow` raise).
+/// match the LLVM backend's native `float` / `double` ops. A
+/// non-finite IEEE result (overflow to ±inf, `0.0 / 0.0`, …) traps,
+/// upholding the finite-only `Float` invariant.
 fn apply_float_arith(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
-    Ok(match require_floats(op, &lhs, &rhs)? {
-        Floats::F32(a, b) => Value::Float32(float_arith(op, a, b)),
-        Floats::F64(a, b) => Value::Float64(float_arith(op, a, b)),
+    let result = match require_floats(op, &lhs, &rhs)? {
+        Floats::F32(a, b) => {
+            let v = float_arith(op, a, b);
+            v.is_finite().then_some(Value::Float32(v))
+        }
+        Floats::F64(a, b) => {
+            let v = float_arith(op, a, b);
+            v.is_finite().then_some(Value::Float64(v))
+        }
+    };
+    result.ok_or_else(|| RuntimeError::Panicked {
+        message: op.non_finite_message(),
     })
 }
 
-/// Float comparisons. `NaN` on either side returns `false` from
-/// every ordered predicate (matches LLVM's `OEQ`/`OLT`/etc., which
-/// are the predicates emit-side picks).
+/// Float comparisons. With NaN unrepresentable, ordered comparison
+/// is total (matches LLVM's `OEQ`/`OLT`/etc. predicates emit-side).
 fn apply_float_compare(op: IRBinOp, lhs: Value, rhs: Value) -> Result<Value, RuntimeError> {
     Ok(Value::Bool(match require_floats(op, &lhs, &rhs)? {
         Floats::F32(a, b) => float_compare(op, a, b),
@@ -182,18 +219,27 @@ fn require_floats(op: IRBinOp, lhs: &Value, rhs: &Value) -> Result<Floats, Runti
     }
 }
 
-pub(crate) fn apply_unary_op(op: IRUnaryOp, operand: Value) -> Result<Value, RuntimeError> {
+pub(crate) fn apply_unary_op(
+    op: IRUnaryOp,
+    operand_ty: &IRType,
+    operand: Value,
+) -> Result<Value, RuntimeError> {
     match op {
         IRUnaryOp::Neg => match operand {
-            // IEEE 754 negation never traps (every float has a
-            // representable negative). Diverges from the int arm's
-            // `i64::MIN` overflow check.
+            // Float negation never traps. Every finite float has a
+            // representable negative.
             Value::Float32(v) => Ok(Value::Float32(-v)),
             Value::Float64(v) => Ok(Value::Float64(-v)),
-            Value::Int(n) => n
-                .checked_neg()
-                .map(Value::Int)
-                .ok_or(RuntimeError::UnaryIntegerOverflow { op, operand: n }),
+            Value::Int(n) => {
+                let negated = -(n as i128);
+                let (min, max) = int_range(operand_ty);
+                if negated < min || negated > max {
+                    return Err(RuntimeError::Panicked {
+                        message: NEG_OVERFLOW_MESSAGE.to_string(),
+                    });
+                }
+                Ok(Value::Int(negated as i64))
+            }
             other => Err(RuntimeError::TypeMismatch {
                 detail: format!("unary `-` expects an Int or Float operand, got {other}"),
             }),

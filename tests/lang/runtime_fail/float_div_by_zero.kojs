@@ -1,0 +1,6 @@
+# 1.0 / 0.0 would be +inf under IEEE; Float is finite-only, so it
+# traps.
+
+a = 1.0
+b = 0.0
+(a / b).print()

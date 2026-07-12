@@ -29,12 +29,31 @@
 //! (`0xFF`, `0b1010`) parse to positive integers, the bit-pattern
 //! escape hatch for unsigned targets where `-1: UInt8` is rejected.
 
-use koja_ast::ast::{Expr, ExprKind, Literal, UnaryOp};
+use koja_ast::ast::{Diagnostic, Expr, ExprKind, Literal, UnaryOp};
 use koja_ast::coercion::{Coercion, LiteralCoercion, NumericLiteralWidth};
 use koja_ast::identifier::ResolvedType;
+use koja_ast::span::Span;
 
 use super::types::{is_primitive, peel_alias, types_equivalent};
 use crate::registry::GlobalRegistry;
+
+/// Reject a float literal whose decimal text rounds to infinity
+/// under `f64`, upholding the finite-only `Float` invariant at the
+/// source. Same `OutOfRange` classification as `Float.parse`.
+pub(crate) fn check_float_literal_finite(
+    value: &Literal,
+    span: Span,
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let Literal::Float(text) = value else { return };
+    if text.parse::<f64>().is_ok_and(f64::is_finite) {
+        return;
+    }
+    diagnostics.push(Diagnostic::error(
+        "float literal is out of range (magnitude too large for a 64-bit `Float`)".to_string(),
+        span,
+    ));
+}
 
 /// Outcome of comparing an actual expression's resolved type
 /// against an expected type with coercion considered. The arms map

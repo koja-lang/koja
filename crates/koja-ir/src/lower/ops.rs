@@ -43,7 +43,22 @@ pub(super) fn lower_literal(
             }
         },
         Literal::Int(text) => match parse_int_literal(text) {
-            Ok(parsed) => Ok(int_const_at_width(parsed as i128, target)),
+            // Widths other than the default `Int64` head carry a
+            // typecheck-stamped coercion, which already range-checked
+            // the value. The bare `Int` head is only guarded here.
+            Ok(parsed) => {
+                let fits_default = !matches!(target, None | Some(NumericLiteralWidth::Int64))
+                    || i64::try_from(parsed).is_ok();
+                if fits_default {
+                    Ok(int_const_at_width(parsed, target))
+                } else {
+                    diagnostics.push(Diagnostic::error(
+                        format!("invalid Int literal `{text}`: value does not fit in `Int`"),
+                        span,
+                    ));
+                    Err(())
+                }
+            }
             Err(detail) => {
                 diagnostics.push(Diagnostic::error(
                     format!("invalid Int literal `{text}`: {detail}"),
@@ -61,12 +76,10 @@ pub(super) fn lower_literal(
 
 /// Build a [`ConstValue`] integer at the typecheck-recorded width.
 /// Falls back to `Int64` when `target` is `None` (no coercion at
-/// the site). Wider-than-64-bit values can't reach this helper —
-/// the lexer parses to `i64`, and `parse_int_literal_text` fits
-/// the result into `i128` for the typecheck range check; here we
-/// truncate-and-cast, which is safe because the typecheck pass
-/// already rejected out-of-range literals before recording the
-/// coercion.
+/// the site). The truncate-and-cast is safe because the typecheck
+/// pass already range-checked the literal before recording the
+/// coercion (and [`lower_literal`] guards the un-coerced `Int64`
+/// head).
 pub(super) fn int_const_at_width(value: i128, target: Option<NumericLiteralWidth>) -> ConstValue {
     match target {
         None | Some(NumericLiteralWidth::Int64) => ConstValue::Int64(value as i64),
@@ -100,26 +113,28 @@ fn float_const_at_width(value: f64, target: Option<NumericLiteralWidth>) -> Cons
     }
 }
 
-/// Parse an `IntLit` token's raw text into `i64`. The lexer
+/// Parse an `IntLit` token's raw text into `i128`. The lexer
 /// preserves prefixes (`0x` / `0b`) and underscore separators
-/// verbatim, but `i64::from_str` is decimal-only and rejects both —
-/// strip underscores first, then dispatch to the right radix based
-/// on the prefix. `0X` / `0B` are accepted to match the lexer,
-/// which treats them identically to the lowercase forms.
-pub(super) fn parse_int_literal(text: &str) -> Result<i64, String> {
+/// verbatim, but `from_str_radix` is decimal-only by default and
+/// rejects both — strip underscores first, then dispatch to the
+/// right radix based on the prefix. `0X` / `0B` are accepted to
+/// match the lexer, which treats them identically to the lowercase
+/// forms. `i128` so a `UInt64` literal above `i64::MAX` (typecheck
+/// stamps the width coercion) survives to [`int_const_at_width`].
+pub(super) fn parse_int_literal(text: &str) -> Result<i128, String> {
     let cleaned: String = text.chars().filter(|c| *c != '_').collect();
     if let Some(hex) = cleaned
         .strip_prefix("0x")
         .or_else(|| cleaned.strip_prefix("0X"))
     {
-        i64::from_str_radix(hex, 16).map_err(|e| e.to_string())
+        i128::from_str_radix(hex, 16).map_err(|e| e.to_string())
     } else if let Some(bin) = cleaned
         .strip_prefix("0b")
         .or_else(|| cleaned.strip_prefix("0B"))
     {
-        i64::from_str_radix(bin, 2).map_err(|e| e.to_string())
+        i128::from_str_radix(bin, 2).map_err(|e| e.to_string())
     } else {
-        cleaned.parse::<i64>().map_err(|e| e.to_string())
+        cleaned.parse::<i128>().map_err(|e| e.to_string())
     }
 }
 

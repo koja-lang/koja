@@ -9,7 +9,8 @@ use koja_ast::identifier::ResolvedType;
 use koja_ast::span::Span;
 
 use super::super::coercion::{
-    float_value_fits, int_value_fits, narrow_numeric_target, parse_int_literal_text,
+    check_float_literal_finite, float_value_fits, int_value_fits, narrow_numeric_target,
+    parse_int_literal_text,
 };
 use super::super::ctx::Resolver;
 use super::super::types::{display_resolution, is_primitive};
@@ -32,6 +33,7 @@ pub(super) fn check_literal_matches_subject(
     if !subject_ty.is_resolved() {
         return;
     }
+    check_float_literal_finite(value, span, diagnostics);
     let lit_ty = resolver.registry.literal_type(value);
     if &lit_ty == subject_ty {
         return;

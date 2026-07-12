@@ -8,11 +8,15 @@ use koja_ir::{IRSymbol, ValueId};
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 
+use super::ops::emit_finite_guard;
 use super::{ValueMap, lookup};
 
 /// Call the function registered on `ctx.module` under the callee's
 /// mangled symbol. Returns `None` for `Unit`-returning callees (LLVM
 /// `void` calls), and the caller skips the value-map insert then.
+/// Float-returning `@extern "C"` callees get a finiteness trap on
+/// the result, keeping foreign NaN / inf out of the finite-only
+/// `Float` types.
 pub(super) fn emit_call<'ctx>(
     ctx: &EmitContext<'ctx>,
     args: &[ValueId],
@@ -34,5 +38,12 @@ pub(super) fn emit_call<'ctx>(
         .builder
         .build_call(function, &arg_values, "call")
         .or_ice()?;
-    Ok(call_site.try_as_basic_value().basic())
+    let result = call_site.try_as_basic_value().basic();
+    if let (Some(BasicValueEnum::FloatValue(float)), Some(c_name)) =
+        (result, ctx.extern_float_return(callee))
+    {
+        let message = format!("non-finite float returned by {c_name}");
+        emit_finite_guard(ctx, float, &message)?;
+    }
+    Ok(result)
 }

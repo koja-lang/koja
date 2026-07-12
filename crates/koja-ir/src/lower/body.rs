@@ -538,13 +538,14 @@ fn lower_compound_assignment(
             },
         );
         let ir_op = compound_to_ir(op);
-        let result = ctx.fresh_value(bin_op_result_type(ir_op, ty));
+        let result = ctx.fresh_value(bin_op_result_type(ir_op, ty.clone()));
         ctx.cfg.append(
             current,
             IRInstruction::BinaryOp {
                 dest: result,
                 lhs: read_dest,
                 op: ir_op,
+                operand_ty: ty,
                 rhs,
             },
         );
@@ -624,6 +625,7 @@ fn lower_compound_assignment(
             dest: combined,
             lhs: leaf_value,
             op: ir_op,
+            operand_ty: leaf_step.field_ir_type.clone(),
             rhs,
         },
     );

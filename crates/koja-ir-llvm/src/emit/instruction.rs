@@ -44,10 +44,16 @@ pub(crate) fn emit_instruction<'ctx>(
             values.insert(*dest, result.into());
             Ok(())
         }
-        IRInstruction::BinaryOp { dest, lhs, op, rhs } => {
+        IRInstruction::BinaryOp {
+            dest,
+            lhs,
+            op,
+            operand_ty,
+            rhs,
+        } => {
             let lhs_value = lookup(values, *lhs)?;
             let rhs_value = lookup(values, *rhs)?;
-            let result = ops::emit_binary_op(ctx, *op, lhs_value, rhs_value)?;
+            let result = ops::emit_binary_op(ctx, *op, operand_ty, lhs_value, rhs_value)?;
             values.insert(*dest, result);
             Ok(())
         }
@@ -209,9 +215,14 @@ pub(crate) fn emit_instruction<'ctx>(
             values.insert(*dest, result);
             Ok(())
         }
-        IRInstruction::UnaryOp { dest, op, operand } => {
+        IRInstruction::UnaryOp {
+            dest,
+            op,
+            operand,
+            operand_ty,
+        } => {
             let operand_value = lookup(values, *operand)?;
-            let result = ops::emit_unary_op(ctx, *op, operand_value)?;
+            let result = ops::emit_unary_op(ctx, *op, operand_ty, operand_value)?;
             values.insert(*dest, result);
             Ok(())
         }

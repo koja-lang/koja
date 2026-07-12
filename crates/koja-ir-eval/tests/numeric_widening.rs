@@ -130,13 +130,25 @@ fn uint64_to_int_succeeds_for_small_values() {
 }
 
 #[test]
-fn float_to_float32_rounds_and_returns_directly() {
+fn float_to_float32_rounds_in_range() {
     let source = "
-        (2.5).to_float32()
+        (2.5).to_float32().unwrap()
         ";
     let value = evaluate_script(source);
     let Value::Float32(v) = value else {
         panic!("expected Value::Float32, got {value:?}");
     };
     assert_eq!(v, 2.5);
+}
+
+#[test]
+fn float_to_float32_out_of_range_is_err() {
+    // 1e40, comfortably past Float32's ~3.4e38 maximum.
+    let source = "
+        match 10000000000000000000000000000000000000000.0.to_float32()
+          Result.Ok(v) -> 0
+          Result.Err(e) -> 1
+        end
+        ";
+    assert_eq!(expect_int(evaluate_script(source)), 1);
 }

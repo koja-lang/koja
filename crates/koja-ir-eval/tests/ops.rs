@@ -6,7 +6,7 @@
 //! faithful to the control flow and IR instruction shapes lowering
 //! produces.
 
-use koja_ir_eval::Value;
+use koja_ir_eval::{RuntimeError, Value};
 
 mod common;
 
@@ -123,25 +123,28 @@ fn float_arithmetic_evaluates_natively() {
 }
 
 #[test]
-fn float_division_by_zero_returns_inf() {
-    let value = evaluate_script("1.0 / 0.0\n").unwrap();
-    let Value::Float64(v) = value else {
-        panic!("expected Float64, got {value:?}");
-    };
-    assert!(v.is_infinite() && v.is_sign_positive());
+fn float_division_by_zero_panics() {
+    // `1.0 / 0.0` would be `+inf` under raw IEEE; the finite-only
+    // `Float` invariant traps it instead.
+    let error = evaluate_script("1.0 / 0.0\n").expect_err("non-finite result must trap");
+    assert_eq!(
+        error,
+        RuntimeError::Panicked {
+            message: "non-finite float result in /".to_string(),
+        },
+    );
 }
 
 #[test]
-fn nan_comparisons_return_false() {
-    // `0.0 / 0.0` is `NaN`; every ordered predicate against `NaN`
-    // must return `false` (matches IEEE 754 + LLVM `OEQ`/`OLT`).
+fn float_nan_producing_division_panics() {
+    // `0.0 / 0.0` would be `NaN`; with the finite-only invariant it
+    // traps, so NaN is unrepresentable in Koja.
+    let error = evaluate_script("0.0 / 0.0\n").expect_err("NaN result must trap");
     assert_eq!(
-        evaluate_script("(0.0 / 0.0) == (0.0 / 0.0)\n").unwrap(),
-        Value::Bool(false),
-    );
-    assert_eq!(
-        evaluate_script("(0.0 / 0.0) < 1.0\n").unwrap(),
-        Value::Bool(false),
+        error,
+        RuntimeError::Panicked {
+            message: "non-finite float result in /".to_string(),
+        },
     );
 }
 

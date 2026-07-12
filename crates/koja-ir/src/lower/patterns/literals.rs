@@ -34,7 +34,7 @@ pub(super) fn emit_literal_eq(
     let target = coercion.and_then(LiteralCoercion::numeric_width);
     let const_value = lower_literal(value, span, target, diagnostics)?;
     let const_ty = const_value_type(&const_value);
-    let const_dest = ctx.fresh_value(const_ty);
+    let const_dest = ctx.fresh_value(const_ty.clone());
     ctx.cfg.append(
         block,
         IRInstruction::Const {
@@ -49,6 +49,7 @@ pub(super) fn emit_literal_eq(
             dest: cond,
             lhs: subject,
             op: IRBinOp::Eq,
+            operand_ty: const_ty,
             rhs: const_dest,
         },
     );

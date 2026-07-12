@@ -150,9 +150,9 @@ fn nested_struct_binding_chain_extracts_through_payload_then_field_in_body() {
     let ir_text = emit_script_llvm_ir(&script, APP_NAME).expect("emit_script_llvm_ir");
     assert_main_shape(&ir_text);
     assert_contains(&ir_text, "match_body_0");
-    // Enum tag check (i8) followed by integer arithmetic (i64
-    // add) for the body. The presence of `add i64` confirms the
+    // Enum tag check (i8) followed by integer arithmetic for the
+    // body. The presence of the checked i64 add confirms the
     // chained bind reached the body's `xb + yb` expression.
     assert_contains(&ir_text, "icmp eq i8");
-    assert_contains(&ir_text, "add i64");
+    assert_contains(&ir_text, "@llvm.sadd.with.overflow.i64");
 }

@@ -545,6 +545,7 @@ mod block_param_tests {
                 dest: unary_dest,
                 op: crate::types::IRUnaryOp::Neg,
                 operand: merge_param,
+                operand_ty: IRType::Int64,
             }],
             terminator: IRTerminator::Return {
                 value: Some(unary_dest),

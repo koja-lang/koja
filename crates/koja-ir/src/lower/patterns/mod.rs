@@ -187,6 +187,7 @@ fn emit_union_tag_eq(
             dest: cond,
             lhs: tag_value,
             op: IRBinOp::Eq,
+            operand_ty: IRType::Int8,
             rhs: const_dest,
         },
     );

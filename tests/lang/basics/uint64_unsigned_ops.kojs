@@ -1,0 +1,19 @@
+# Unsigned semantics for UInt64 values at or above 2^63, whose bit
+# patterns are negative under a signed view. Comparisons, division,
+# and modulo must all use unsigned instructions (a signed sdiv or
+# icmp sgt here would produce garbage).
+
+big: UInt64 = 9223372036854775808
+small: UInt64 = 1000
+
+(big > small).print()
+(small < big).print()
+(big >= big).print()
+
+# 2^63 / 2 = 2^62; sdiv would yield a negative quotient.
+half: UInt64 = 2
+(big / half).print()
+
+# 2^63 % 3 = 2 (2^63 = 3 * 3074457345618258602 + 2).
+three: UInt64 = 3
+(big % three).print()

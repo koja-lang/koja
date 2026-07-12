@@ -144,7 +144,7 @@ fn lower_segment(
                 bit_offset,
                 endian,
                 sign,
-                value: parsed as i128,
+                value: parsed,
                 width,
             }),
         ExprKind::Unary {
@@ -158,7 +158,7 @@ fn lower_segment(
                     bit_offset,
                     endian,
                     sign,
-                    value: -(parsed as i128),
+                    value: -parsed,
                     width,
                 }
             }),

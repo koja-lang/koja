@@ -48,12 +48,16 @@ protocol Bitwise
   @doc """
   Returns `self` shifted left by `n` bit positions.
 
+  Panics unless `0 <= n < bit width of Self`.
+
       1.bsl(4)  # => 16
   """
   fn bsl(self, n: Int) -> Self
 
   @doc """
   Returns `self` shifted right by `n` bit positions.
+
+  Panics unless `0 <= n < bit width of Self`.
 
       16.bsr(4)  # => 1
   """

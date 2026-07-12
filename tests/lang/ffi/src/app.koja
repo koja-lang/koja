@@ -9,6 +9,9 @@ struct FFI
   fn mul_c(a: Int32, b: Int32) -> Int32
 
   @extern "C" @link "ffi_helper"
+  fn half_c(x: Float64) -> Float64
+
+  @extern "C" @link "ffi_helper"
   fn fill_array(buf: CPtr<Int32>, count: Int32, value: Int32)
 
   @extern "C" @link "ffi_helper"
@@ -40,6 +43,10 @@ impl Process<(), (), ()> for App
 
     product = FFI.mul_c(5, 6)
     product.print()
+
+    # A finite float return passes the FFI finiteness trap.
+    halved: Float = FFI.half_c(3.0)
+    halved.print()
 
     # Phase 2: pointer FFI
     # Allocate a buffer, let C fill it, read it back
