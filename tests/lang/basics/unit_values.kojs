@@ -46,7 +46,8 @@ match r
     u = v
     u.print()
 
-  Result.Err(e) -> e.print()
+  Result.Err(e) ->
+    e.print()
 end
 
 r.print()
@@ -71,9 +72,8 @@ m = m.put("k", ())
 m.has?("k").print()
 
 # Closure with a unit param.
-f = fn (u: ()) -> Int
-  9
-end
+f = fn (u: ()) -> Int 9 end
+
 f(()).print()
 
 # Generic identity pinned to unit. The monomorphized fn returns
