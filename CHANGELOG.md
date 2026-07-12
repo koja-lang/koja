@@ -9,10 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Releases now include a prebuilt Linux arm64 tarball.
 - The unit value `()` can now be printed and interpolated into strings, rendering as `()`.
 
 ### Fixed
 
+- Panics on Linux arm64 now print their message and backtrace instead of crashing the program with a segmentation fault.
 - Functions can now return `Result<(), E>` and use `()` in any generic position, including enum payloads, collections, and closures.
 - Assigning to a variable after it was first assigned inside a `while`, `loop`, `if`, or `match` arm no longer crashes the compiler.
 - Builder functions that assign to a field of `self` and then return `self` no longer crash or produce corrupted values.

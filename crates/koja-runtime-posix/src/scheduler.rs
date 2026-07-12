@@ -19,7 +19,7 @@ use koja_runtime_core::{
     ProcessTable, Reclaim, SignalSource, duration_from_user_millis, slot_index,
 };
 
-use crate::ffi::{fflush, koja_context_switch, koja_seed_reductions, setvbuf};
+use crate::ffi::{fflush, koja_context_switch, koja_process_start, koja_seed_reductions, setvbuf};
 use crate::mailbox::WaitTarget;
 use crate::memory;
 use crate::panic;
@@ -102,18 +102,27 @@ pub(crate) type ProcessFn = extern "C-unwind" fn(*const u8);
 // ---------------------------------------------------------------------------
 // Platform-specific initial-frame layout constants
 // ---------------------------------------------------------------------------
+//
+// The offsets mirror the save/restore layout in `src/arch/*.s`.
+// `RET_ADDR_OFFSET` is where the first switch's `ret` reads its target
+// (always `koja_process_start`). `ENTRY_REG_OFFSET` is the slot of the
+// callee-saved register (`x19` / `rbx`) the shim dispatches through.
 
-// Apple Silicon
+// arm64 (macOS and Linux)
 #[cfg(target_arch = "aarch64")]
 const INIT_FRAME_SIZE: usize = 160;
 #[cfg(target_arch = "aarch64")]
 const RET_ADDR_OFFSET: usize = 88;
+#[cfg(target_arch = "aarch64")]
+const ENTRY_REG_OFFSET: usize = 0;
 
 // x86_64 (SysV ABI)
 #[cfg(target_arch = "x86_64")]
 const INIT_FRAME_SIZE: usize = 64;
 #[cfg(target_arch = "x86_64")]
 const RET_ADDR_OFFSET: usize = 48;
+#[cfg(target_arch = "x86_64")]
+const ENTRY_REG_OFFSET: usize = 40;
 
 // ---------------------------------------------------------------------------
 // Process & scheduler state
@@ -481,14 +490,18 @@ fn reply_or_expire(pid: i64, token: i64, envelope: Envelope) -> i64 {
 }
 
 /// Prepares a fresh process stack so the first `koja_context_switch`
-/// into it will "return" to `entry`. Zeroes the initial frame and
-/// writes the trampoline address at the platform-specific return slot.
+/// into it "returns" to the `koja_process_start` asm shim, which
+/// dispatches to `entry` via the callee-saved slot. The shim's CFI
+/// marks the stack bottom so DWARF unwinders (glibc `backtrace`,
+/// `_Unwind`) terminate here instead of walking off the fabricated
+/// frame, which segfaulted panic backtraces on Linux arm64.
 unsafe fn init_process_stack(stack_top: *mut u8, entry: unsafe extern "C" fn()) -> *mut u8 {
     unsafe {
         let sp = stack_top.sub(INIT_FRAME_SIZE);
         ptr::write_bytes(sp, 0, INIT_FRAME_SIZE);
-        let ret_slot = sp.add(RET_ADDR_OFFSET) as *mut usize;
-        *ret_slot = entry as usize;
+        *(sp.add(RET_ADDR_OFFSET) as *mut usize) =
+            koja_process_start as unsafe extern "C" fn() as usize;
+        *(sp.add(ENTRY_REG_OFFSET) as *mut usize) = entry as usize;
         sp
     }
 }
