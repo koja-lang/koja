@@ -27,7 +27,7 @@ use crate::emit::process::{emit_process_entry_wrapper_body, emit_spawn_wrapper_b
 use crate::emit::{self, BlockMap, ValueMap};
 use crate::error::{IceExt, LlvmError};
 use crate::intrinsics;
-use crate::types::{closure_body_signature, env_struct_type, ir_basic_type, value_basic_type};
+use crate::types::{closure_body_signature, env_struct_type, ir_basic_type};
 
 /// Declare an LLVM function for `function`. The signature mirrors
 /// the IR exactly: each [`koja_ir::IRFunctionParam::ty`]
@@ -148,7 +148,7 @@ fn function_signature<'ctx>(
     let mut param_types: Vec<BasicMetadataTypeEnum<'ctx>> =
         Vec::with_capacity(function.params.len());
     for param in &function.params {
-        param_types.push(value_basic_type(ctx, &param.ty)?.into());
+        param_types.push(ir_basic_type(ctx, &param.ty)?.into());
     }
     Ok(if matches!(function.return_type, IRType::Unit) {
         ctx.context.void_type().fn_type(&param_types, false)
@@ -322,7 +322,7 @@ fn preregister_local_slots<'ctx>(
             let IRInstruction::LocalDecl { local, ty } = instruction else {
                 continue;
             };
-            let llvm_ty = value_basic_type(ctx, ty)?;
+            let llvm_ty = ir_basic_type(ctx, ty)?;
             let slot = ctx.build_entry_alloca(llvm_ty, &local.to_string());
             ctx.register_local_slot(*local, slot);
             if !param_slots.iter().any(|(param, _)| param == local) {

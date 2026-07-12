@@ -48,7 +48,7 @@ use crate::intrinsics::process::payload_drop_glue;
 use crate::runtime::{
     declare_rt_build_argv_extern, declare_rt_main_done_extern, declare_rt_spawn_extern,
 };
-use crate::types::value_basic_type;
+use crate::types::ir_basic_type;
 
 const APP_NAME_SYMBOL: &str = "__koja_app_name";
 const ENTRY_SYMBOL: &str = "main";
@@ -213,9 +213,7 @@ pub(crate) fn emit_process_entry_main<'ctx>(
     ctx.builder.position_at_end(entry_bb);
     ctx.enter_synthetic_debug();
 
-    // `value_basic_type` so a `Process<(), _, _>` entry's Unit config
-    // allocates as the inert `i8` placeholder.
-    let config_llvm_type = value_basic_type(ctx, config_type)?;
+    let config_llvm_type = ir_basic_type(ctx, config_type)?;
     let config_alloca = ctx
         .builder
         .build_alloca(config_llvm_type, "entry_config")

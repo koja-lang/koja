@@ -12,7 +12,7 @@ use koja_ir::IRStructDecl;
 
 use crate::ctx::EmitContext;
 use crate::error::LlvmError;
-use crate::types::value_basic_type;
+use crate::types::ir_basic_type;
 
 pub(crate) fn declare_struct_type<'ctx>(ctx: &EmitContext<'ctx>, decl: &IRStructDecl) {
     let llvm_struct = ctx.context.opaque_struct_type(decl.symbol.mangled());
@@ -29,7 +29,7 @@ pub(crate) fn define_struct_body<'ctx>(
 ) -> Result<(), LlvmError> {
     let mut body: Vec<BasicTypeEnum<'ctx>> = Vec::with_capacity(decl.fields.len());
     for field in &decl.fields {
-        body.push(value_basic_type(ctx, &field.ir_type)?);
+        body.push(ir_basic_type(ctx, &field.ir_type)?);
     }
     let llvm_struct = ctx.layouts.struct_type(decl.symbol.mangled());
     llvm_struct.set_body(&body, false);

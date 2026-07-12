@@ -219,15 +219,15 @@ fn string_interpolation_struct_wraps_in_format() {
 
 #[test]
 fn string_interpolation_without_format_method_diagnoses() {
-    // `Unit` has no `impl Debug for Unit` in `lib/global/src/debug.koja`,
-    // so wrapping a Unit-typed interp in `.format()` surfaces the
-    // standard method-lookup diagnostic from the call resolver.
+    // Function types have no `Debug` impl, so wrapping a
+    // closure-typed interp in `.format()` surfaces the standard
+    // receiver-shape diagnostic from the call resolver.
     let source = "
-        priv fn returns_unit
-        end
-
         priv fn render -> String
-          \"x = #{returns_unit()}\"
+          f = fn (x: Int) -> Int
+            x
+          end
+          \"f = #{f}\"
         end
         ";
 
@@ -235,7 +235,9 @@ fn string_interpolation_without_format_method_diagnoses() {
         .expect_err("expected typecheck to fail when the interp receiver has no `format` method");
     let messages = diagnostic_messages(&failure);
     assert!(
-        messages.iter().any(|m| m.contains("format")),
-        "expected a method-lookup diagnostic mentioning `format`, got {messages:?}",
+        messages
+            .iter()
+            .any(|m| m.contains("receiver must have a struct or enum type")),
+        "expected a receiver-shape diagnostic from the `.format()` wrap, got {messages:?}",
     );
 }

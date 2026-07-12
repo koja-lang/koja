@@ -10,7 +10,7 @@ use koja_ir::{IRSymbol, IRType, StructFieldInit};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::types::value_basic_type;
+use crate::types::ir_basic_type;
 
 use super::indirect::{emit_box_value, emit_unbox_value};
 use super::{ValueMap, lookup};
@@ -71,9 +71,7 @@ pub(super) fn emit_field_get<'ctx>(
         .builder
         .build_struct_gep(struct_type, alloca, field_index, &label)
         .or_ice()?;
-    // `value_basic_type` so a Unit-typed field (e.g. the message of
-    // a `Pair<(), _>` envelope) loads as the inert `i8` placeholder.
-    let field_llvm_type = value_basic_type(ctx, &declared_ty)?;
+    let field_llvm_type = ir_basic_type(ctx, &declared_ty)?;
     let loaded = ctx
         .builder
         .build_load(field_llvm_type, field_ptr, &label)

@@ -10,7 +10,7 @@ use koja_ir::{IRLocalId, IRType, ValueId};
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
 use crate::runtime::declare_rc_dec_extern;
-use crate::types::value_basic_type;
+use crate::types::ir_basic_type;
 
 use super::heap_layout::block_base;
 use super::{ValueMap, closures, lookup};
@@ -34,7 +34,7 @@ pub(super) fn emit_local_decl<'ctx>(
     local: IRLocalId,
     ty: &IRType,
 ) -> Result<(), LlvmError> {
-    let llvm_ty = value_basic_type(ctx, ty)?;
+    let llvm_ty = ir_basic_type(ctx, ty)?;
     let slot = match ctx.try_local_slot(local) {
         Some(existing) => existing,
         None => {
@@ -58,7 +58,7 @@ pub(super) fn emit_local_read<'ctx>(
     ty: &IRType,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let slot = ctx.local_slot(local);
-    let llvm_ty = value_basic_type(ctx, ty)?;
+    let llvm_ty = ir_basic_type(ctx, ty)?;
     ctx.builder
         .build_load(llvm_ty, slot, &local.to_string())
         .or_ice()

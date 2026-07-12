@@ -77,9 +77,13 @@ pub(crate) fn ir_int_type<'ctx>(
     }
 }
 
-/// LLVM basic type for any [`IRType`] that has a value-level
-/// representation. `Unit` is rejected (no value form at this layer,
-/// see [`value_basic_type`] for the placeholder-friendly variant).
+/// LLVM basic type for any value-position [`IRType`]. `Unit` maps
+/// to an inert `i8` placeholder so generic instantiations that pin a
+/// type param to `Unit` (enum payloads, collection elements, struct
+/// fields, params) lay out cleanly. The byte is never observed at
+/// runtime. Unit constants emit `i8 0` and Unit
+/// returns still route through `void` in
+/// [`crate::function::function_signature`].
 /// Ints / `Bool` route through [`ir_int_type`]. `Float32` / `Float64`
 /// map to `f32` / `f64`. `String` is a default-AS pointer.
 /// `Struct(symbol)` resolves through [`EmitContext::struct_type`]
@@ -115,28 +119,8 @@ pub(crate) fn ir_basic_type<'ctx>(
         IRType::Map { .. } | IRType::Set(_) => Ok(hashtable_value_type(ctx).into()),
         IRType::Struct(symbol) => Ok(ctx.layouts.struct_type(symbol.mangled()).into()),
         IRType::Union { mangled, .. } => Ok(ctx.layouts.union_outer(mangled.mangled()).0.into()),
-        IRType::Unit => Err(LlvmError::Codegen(
-            "expected a value-level IRType, got `Unit`".to_string(),
-        )),
+        IRType::Unit => Ok(ctx.context.i8_type().into()),
     }
-}
-
-/// [`ir_basic_type`] with `Unit` mapped to an `i8` placeholder. Use
-/// at every site that needs an LLVM type for a value-position slot
-/// (function params, local allocas, struct fields) so generic
-/// instantiations that pin a type-param to `Unit` lay out cleanly.
-/// The byte is inert at runtime: Unit constants emit `i8 0` (see
-/// [`crate::emit::constants::emit_const_instruction`]) and Unit
-/// returns still route through `void` in
-/// [`crate::function::function_signature`].
-pub(crate) fn value_basic_type<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    ty: &IRType,
-) -> Result<BasicTypeEnum<'ctx>, LlvmError> {
-    if matches!(ty, IRType::Unit) {
-        return Ok(ctx.context.i8_type().into());
-    }
-    ir_basic_type(ctx, ty)
 }
 
 /// ABI byte size of `ty` on the host triple. Routes through

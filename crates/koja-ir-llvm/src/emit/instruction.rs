@@ -58,9 +58,8 @@ pub(crate) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::Call { dest, callee, args } => {
-            if let Some(result) = calls::emit_call(ctx, args, callee, values)? {
-                values.insert(*dest, result);
-            }
+            let result = calls::emit_call(ctx, args, callee, values)?;
+            values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::CallClosure {
@@ -69,11 +68,8 @@ pub(crate) fn emit_instruction<'ctx>(
             dest,
             result_ty,
         } => {
-            if let Some(result) =
-                closures::emit_call_closure(ctx, *callee, args, result_ty, values)?
-            {
-                values.insert(*dest, result);
-            }
+            let result = closures::emit_call_closure(ctx, *callee, args, result_ty, values)?;
+            values.insert(*dest, result);
             Ok(())
         }
         IRInstruction::Clone { dest, source, ty } => {
@@ -95,9 +91,8 @@ pub(crate) fn emit_instruction<'ctx>(
             Ok(())
         }
         IRInstruction::Const { dest, value } => {
-            if let Some(constant) = constants::emit_const_instruction(ctx, value)? {
-                values.insert(*dest, constant);
-            }
+            let constant = constants::emit_const(ctx, value)?;
+            values.insert(*dest, constant);
             Ok(())
         }
         IRInstruction::DropLocal { local, ty } => locals::emit_drop_local(ctx, *local, ty),

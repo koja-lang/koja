@@ -53,7 +53,7 @@ use crate::runtime::{
     declare_rt_set_priority_extern, declare_rt_spawn_extern, declare_rt_yield_check_extern,
     reductions_counter_global,
 };
-use crate::types::{ir_basic_type, value_basic_type};
+use crate::types::ir_basic_type;
 
 use super::{ValueMap, lookup};
 
@@ -125,9 +125,7 @@ fn emit_wrapper_shim<'ctx>(
             function.symbol,
         ))
     })?;
-    // `value_basic_type` so a `Process<(), _, _>` entry's Unit config
-    // loads as the inert `i8` placeholder.
-    let config_llvm_type = value_basic_type(ctx, config_ir_type)?;
+    let config_llvm_type = ir_basic_type(ctx, config_ir_type)?;
 
     let entry_bb = ctx.context.append_basic_block(llvm_function, "entry");
     ctx.builder.position_at_end(entry_bb);
@@ -212,7 +210,7 @@ pub(super) fn emit_spawn<'ctx>(
     wrapper: &IRSymbol,
     values: &mut ValueMap<'ctx>,
 ) -> Result<(), LlvmError> {
-    let config_llvm_type = value_basic_type(ctx, config_type)?;
+    let config_llvm_type = ir_basic_type(ctx, config_type)?;
     let config_value = lookup(values, config)?;
 
     let (config_ptr, config_size) =
