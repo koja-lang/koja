@@ -151,43 +151,6 @@ Workaround: return `Result<Bool, E>`.
 
 ---
 
-## Mutate-`self`-then-return-`self` builders miscompile under LLVM
-
-Found 2026-07-12 (postgres driver). The idiomatic builder shape from
-LANGUAGE.md:
-
-```koja
-fn with_fields(self, fields: List<String>) -> QueryState
-  self.fields = fields
-  self
-end
-```
-
-miscompiles under the LLVM backend. Two observed symptoms on the same
-driver code:
-
-- SIGSEGV in `koja_rc_dec` via the type's `$drop$` glue
-  (`koja_rc_dec ← List_$String$.$drop$ ← QueryState.$drop$ ←
-QueryState.with_fields`) when the builder runs in a recursive
-  message-collect loop.
-- Silent `String` field corruption without a crash: a
-  field-assign-then-return helper (early-return `if` arms assigning
-  one field of a param then returning it) produced garbage values
-  pointing into unrelated memory (e.g. a SQLSTATE decoding as
-  `anner_yyerror`, a fragment of a libpq-adjacent symbol).
-
-Context-sensitive: the identical code path ran correctly in a plain
-`koja run` app binary but failed inside a `koja test` harness binary,
-so surrounding-function shape affects reproduction — likely a drop /
-RC-transfer issue on the `self` param rather than the call itself.
-
-Workaround: construct a fresh struct literal with every field spelled
-out instead of mutating `self` (applied in the postgres driver's
-`QueryState` builders, `Config.with_password`, and the error-field
-scanner).
-
----
-
 ## Same local name in sibling `match` arms panics the compiler
 
 Found 2026-07-12 (postgres driver). Two arms of one `match` each

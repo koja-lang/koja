@@ -295,9 +295,9 @@ fn lower_assignment(
 
 /// Lower `head.f1.f2 = value` (any depth `>= 2`) into the SSA-pure
 /// rebuild chain: `LocalRead` the head; `FieldGet` down each non-
-/// leaf segment; lower the rhs (with a synthetic drop on heap-typed
-/// leaf overwrite); `FieldSet` back up to the root; `LocalWrite` the
-/// new root into the head slot.
+/// leaf segment; lower and acquire the rhs (with a synthetic drop of
+/// the overwritten heap-managed leaf); `FieldSet` back up to the
+/// root; `LocalWrite` the new root into the head slot.
 ///
 /// The walker derives each segment's struct decl + field index by
 /// substituting the previous level's `type_args` into the declared
@@ -361,7 +361,15 @@ fn lower_field_assignment(
 
     let (rhs_value, current) = lower_expr(value, ctx, block, registry, output)?;
 
-    if is_heap_owned(&leaf_step.field_ir_type) {
+    // Acquire the rhs as an owned value: the rebuilt struct's field must
+    // hold an independent reference the slot's drop glue can release
+    // without disturbing the source (a param slot, another local, or the
+    // old field itself). The clone is taken before the overwrite-drop,
+    // so a self-assign (`s.x = s.x`) copies the old payload before
+    // freeing it — same discipline as single-segment reassignment.
+    let owned_rhs = materialize_owned(ctx, current, rhs_value, &leaf_step.field_ir_type);
+
+    if leaf_step.field_ir_type.is_heap_managed() {
         let stale_leaf = ctx.fresh_value(leaf_step.field_ir_type.clone());
         ctx.cfg.append(
             current,
@@ -382,7 +390,7 @@ fn lower_field_assignment(
         );
     }
 
-    let mut new_value = rhs_value;
+    let mut new_value = owned_rhs;
     for (depth_from_leaf, step) in plan.iter().enumerate().rev() {
         let parent = parent_values[depth_from_leaf];
         let parent_ir_type = if depth_from_leaf == 0 {
@@ -495,14 +503,6 @@ fn registry_struct(
         );
     };
     definition
-}
-
-/// True when `ty` is a heap-allocated primitive whose `Owned` slot
-/// values must be `DropLocal`-freed before being overwritten. Mirrors
-/// the heap-typed leaf condition in the local-reassignment overwrite
-/// drop above.
-fn is_heap_owned(ty: &IRType) -> bool {
-    matches!(ty, IRType::String | IRType::Binary | IRType::Bits)
 }
 
 /// Lower `target op= value` to `LocalRead + (FieldGet*) + BinaryOp +

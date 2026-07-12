@@ -9,9 +9,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- `koja format` no longer moves a comment above a function, protocol method, or impl type alias inside a type body down into the body.
-- `koja format` no longer drops a comment placed after the last member of an `impl`, `extend`, or `protocol` block below the block's `end`.
-- `koja format` no longer deletes a trailing comment on a struct or enum literal field.
+- Builder functions that assign to a field of `self` and then return `self` no longer crash or produce corrupted values.
+- Reassigning a struct field that holds a list, map, set, struct, or enum no longer leaks memory.
+- `koja format` now keeps a comment above a function, protocol method, or type alias inside a type body attached to it instead of moving it into the body.
+- `koja format` no longer moves a comment before an `impl`, `extend`, or `protocol` block's `end` outside the block.
+- `koja format` no longer deletes comments placed after struct or enum literal fields.
 
 ## [0.14.0] - 2026-07-12
 
