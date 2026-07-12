@@ -80,6 +80,16 @@ impl Debug for String
   end
 end
 
+impl Debug for Unit
+  @doc """
+  Renders the unit value as `()` so generic containers carrying it
+  (`Result<(), E>`, `Option<()>`, …) have a usable `format`.
+  """
+  fn format(self) -> String
+    "()"
+  end
+end
+
 impl Debug for Binary
   @doc """
   Renders `Binary` as an opaque `<binary>` placeholder so generic

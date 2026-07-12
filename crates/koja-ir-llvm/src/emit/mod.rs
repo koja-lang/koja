@@ -41,13 +41,11 @@ use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use inkwell::basic_block::BasicBlock;
 use inkwell::values::{BasicValueEnum, IntValue, PhiValue};
-use koja_ir::{
-    BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRTerminator, IRType, ValueId,
-};
+use koja_ir::{BranchTarget, IRBasicBlock, IRBlockId, IRInstruction, IRTerminator, ValueId};
 
 use crate::ctx::EmitContext;
 use crate::error::{IceExt, LlvmError};
-use crate::types::{ir_basic_type, value_basic_type};
+use crate::types::ir_basic_type;
 
 mod binary_construct;
 mod binary_match;
@@ -82,16 +80,9 @@ pub(crate) type BlockMap<'ctx> = BTreeMap<IRBlockId, BasicBlock<'ctx>>;
 /// map post-`build_*_branch` to call `add_incoming` for every
 /// (phi, branch-arg) pair on each [`BranchTarget`]. Empty for blocks
 /// with no params (i.e. most blocks that aren't if/else/cond merges).
-///
-/// `None` entries in the per-block `Vec` are placeholders for
-/// `IRType::Unit` block params: Unit has no value-level LLVM
-/// representation (see [`crate::types::ir_basic_type`]'s `Unit`
-/// arm), so we don't emit a phi and don't bind anything in the
-/// `ValueMap`. The slot stays in the vec so the per-edge arg list
-/// stays index-aligned with the target block's `params`, and the
-/// terminator walk skips `None` slots without looking up the
-/// corresponding arg.
-pub(crate) type PhiMap<'ctx> = BTreeMap<IRBlockId, Vec<Option<PhiValue<'ctx>>>>;
+/// Unit-typed params get a real `i8` phi like any other value
+/// position (see [`crate::types::ir_basic_type`]'s `Unit` arm).
+pub(crate) type PhiMap<'ctx> = BTreeMap<IRBlockId, Vec<PhiValue<'ctx>>>;
 
 /// Compute the set of [`IRBlockId`]s reachable from the entry block
 /// (`blocks[0]`) via the terminator-edge graph. Used by the LLVM
@@ -236,26 +227,17 @@ pub(crate) fn declare_block_param_phis<'ctx>(
 ) -> Result<PhiMap<'ctx>, LlvmError> {
     let mut phi_map: PhiMap<'ctx> = PhiMap::new();
     for block in blocks {
-        let mut phis: Vec<Option<PhiValue<'ctx>>> = Vec::with_capacity(block.params.len());
+        let mut phis: Vec<PhiValue<'ctx>> = Vec::with_capacity(block.params.len());
         if !block.params.is_empty() {
             let llvm_block = lookup_block(block_map, block.id)?;
             ctx.builder.position_at_end(llvm_block);
         }
         for (index, param) in block.params.iter().enumerate() {
-            // Unit-typed params have no LLVM representation. Push a
-            // placeholder so the per-edge wiring later skips both
-            // the phi and the corresponding arg without index drift.
-            // Eval handles Unit BlockParams natively (`Value::Unit`);
-            // only LLVM needs this guard.
-            if matches!(param.ty, IRType::Unit) {
-                phis.push(None);
-                continue;
-            }
             let llvm_ty = ir_basic_type(ctx, &param.ty)?;
             let name = format!("param_{}_{}", block.id, index);
             let phi = ctx.builder.build_phi(llvm_ty, &name).or_ice()?;
             values.insert(param.dest, phi.as_basic_value());
-            phis.push(Some(phi));
+            phis.push(phi);
         }
         phi_map.insert(block.id, phis);
     }
@@ -394,7 +376,7 @@ fn emit_tail_call<'ctx>(
         ctx.builder.build_store(slot, value).or_ice()?;
     }
     for (local, ty) in &frame.body_slots {
-        let llvm_ty = value_basic_type(ctx, ty)?;
+        let llvm_ty = ir_basic_type(ctx, ty)?;
         let slot = ctx.local_slot(*local);
         ctx.builder
             .build_store(slot, llvm_ty.const_zero())
@@ -406,11 +388,8 @@ fn emit_tail_call<'ctx>(
         .map(|_| ())
 }
 
-/// For each non-`None` phi, look up the matching branch arg's LLVM
-/// equivalent and hand it to the phi via `add_incoming`. `None`
-/// slots correspond to Unit-typed [`koja_ir::BlockParam`]s
-/// (no LLVM representation, no value-map binding), so we skip the
-/// arg entirely without complaining when its lookup would fail.
+/// For each phi, look up the matching branch arg's LLVM equivalent
+/// and hand it to the phi via `add_incoming`.
 ///
 /// The per-edge arity is checked at IR seal time, so a length
 /// mismatch here is a compiler bug. We panic with a clear message
@@ -445,13 +424,6 @@ fn wire_phi_incomings<'ctx>(
         LlvmError::Codegen("phi incoming wiring with no active block".to_string())
     })?;
     for (phi, arg) in phis.iter().zip(target.args.iter()) {
-        let Some(phi) = phi else {
-            // Unit-typed BlockParam: no phi to wire, no LLVM value
-            // for the arg to look up. The IR-level Const::Unit that
-            // produced `arg` is structurally consistent at the
-            // IR boundary. LLVM just elides the whole pair.
-            continue;
-        };
         let arg_value = lookup(values, *arg)?;
         phi.add_incoming(&[(&arg_value, pred_block)]);
     }

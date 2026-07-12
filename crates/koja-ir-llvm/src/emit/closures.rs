@@ -81,15 +81,16 @@ fn env_glue_ptr<'ctx>(ctx: &EmitContext<'ctx>, glue: &IRSymbol) -> PointerValue<
 /// Indirect call through a fat-pointer closure value. Splits the
 /// fat pointer into `fn_ptr` + `env_ptr`, prepends `env_ptr` to the
 /// user-visible args, and dispatches via `build_indirect_call` with
-/// the closure-body signature. Returns `None` for `Unit`-returning
-/// callees so the caller skips the value-map insert.
+/// the closure-body signature. `Unit`-returning callees compile to
+/// `void` calls, so their result is the inert `i8 0` unit
+/// placeholder.
 pub(super) fn emit_call_closure<'ctx>(
     ctx: &EmitContext<'ctx>,
     callee: ValueId,
     args: &[ValueId],
     result_ty: &IRType,
     values: &ValueMap<'ctx>,
-) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
+) -> Result<BasicValueEnum<'ctx>, LlvmError> {
     let callee_value = lookup(values, callee)?;
     let mut user_param_types: Vec<IRType> = Vec::with_capacity(args.len());
     let mut user_args: Vec<BasicMetadataValueEnum<'ctx>> = Vec::with_capacity(args.len());
@@ -128,7 +129,10 @@ pub(super) fn emit_call_closure<'ctx>(
         .builder
         .build_indirect_call(signature, fn_ptr, &all_args, "closure_call")
         .or_ice()?;
-    Ok(call_site.try_as_basic_value().basic())
+    Ok(call_site
+        .try_as_basic_value()
+        .basic()
+        .unwrap_or_else(|| ctx.context.i8_type().const_zero().into()))
 }
 
 /// Read a single captured value from the active closure body's env

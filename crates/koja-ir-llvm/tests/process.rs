@@ -490,12 +490,11 @@ fn ref_send_after_emits_pair_envelope_and_passes_delay_to_runtime() {
 
 /// Pins the Unit-as-msg-payload codegen surface used by
 /// `Task<R>` (where the public-API `Ref<(), R>` pins `M = Unit`).
-/// Unit at the IR layer has no value-level type — the LLVM
-/// boundary maps it to an `i8` placeholder in every value
-/// position (param, struct field, local) so the Pair envelope
-/// still lays out cleanly. Catches regressions in any of:
-/// `function::function_signature`, `types::value_basic_type`,
-/// or the `Ref.cast` intrinsic's `value_basic_type` lookup.
+/// The LLVM boundary maps Unit to an `i8` placeholder in every
+/// value position (param, struct field, local) so the Pair
+/// envelope still lays out cleanly. Catches regressions in
+/// `function::function_signature` and the `types::ir_basic_type`
+/// Unit mapping.
 #[test]
 fn ref_cast_with_unit_message_uses_i8_placeholder_in_envelope() {
     let unit_process = "

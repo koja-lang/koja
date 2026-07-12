@@ -1,0 +1,81 @@
+# Unit (`()`) as a first-class value: enum payloads, collection
+# elements, closure params, and generic instantiation. The LLVM
+# backend maps unit to an inert i8 placeholder while keeping void
+# returns at ABI boundaries, so every shape here must run under
+# both backends.
+
+struct Conn
+  id: Int
+
+  fn close(self) -> Result<(), String>
+    if self.id > 0
+      Result.Ok(())
+    else
+      Result.Err("bad id")
+    end
+  end
+end
+
+struct Util
+  fn identity<T>(x: T) -> T
+    x
+  end
+end
+
+# Result<(), E> return, match, and unwrap.
+c = Conn{id: 1}
+
+match c.close()
+  Result.Ok(_) -> "closed".print()
+  Result.Err(e) -> e.print()
+end
+
+c.close().unwrap()
+"unwrapped".print()
+
+match Conn{id: 0}.close()
+  Result.Ok(_) -> "closed".print()
+  Result.Err(e) -> e.print()
+end
+
+# Binding the unit payload and printing the whole Result.
+r: Result<(), String> = Result.Ok(())
+
+match r
+  Result.Ok(v) ->
+    u = v
+    u.print()
+
+  Result.Err(e) -> e.print()
+end
+
+r.print()
+
+# Option<()>.
+o: Option<()> = Option.Some(())
+
+match o
+  Option.Some(_) -> "some".print()
+  Option.None -> "none".print()
+end
+
+# List<()> append and length.
+l: List<()> = List.new()
+l = l.append(())
+l = l.append(())
+l.length().print()
+
+# Map<String, ()> put and has.
+m: Map<String, ()> = Map.new()
+m = m.put("k", ())
+m.has?("k").print()
+
+# Closure with a unit param.
+f = fn (u: ()) -> Int
+  9
+end
+f(()).print()
+
+# Generic identity pinned to unit. The monomorphized fn returns
+# void under LLVM, so its result must still bind and flow onward.
+Util.identity(()).print()

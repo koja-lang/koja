@@ -49,24 +49,6 @@ pub(super) fn emit_load_const<'ctx>(
     Ok(materialized)
 }
 
-/// Lower a scalar `IRInstruction::Const`. `ConstValue::Unit` binds
-/// an `i8 0` placeholder so downstream consumers (call args into
-/// generic intrinsics with Unit-pinned params, `Pair<Unit, _>` field
-/// reads) get a defined LLVM value rather than a lookup miss. The
-/// placeholder pairs with the matching `i8` slot minted in
-/// [`crate::function::function_signature`] /
-/// [`crate::layout::structs::define_struct_body`]. Unit values are
-/// inert at runtime, so the byte itself is never observed.
-pub(super) fn emit_const_instruction<'ctx>(
-    ctx: &EmitContext<'ctx>,
-    value: &ConstValue,
-) -> Result<Option<BasicValueEnum<'ctx>>, LlvmError> {
-    if matches!(value, ConstValue::Unit) {
-        return Ok(Some(ctx.context.i8_type().const_zero().into()));
-    }
-    Ok(Some(emit_const(ctx, value)?))
-}
-
 /// Recursively materialize an [`IRConstantValue`] pool entry into a
 /// const LLVM SSA value (`StructValue`, enum outer aggregate built
 /// the same path as [`enums::emit_enum_construct`], string payload
@@ -91,7 +73,10 @@ fn emit_ir_constant_aggregate<'ctx>(
     }
 }
 
-fn emit_const<'ctx>(
+/// Lower a scalar [`ConstValue`] to a const LLVM value.
+/// `ConstValue::Unit` binds the inert `i8 0` placeholder that pairs
+/// with the `i8` slots minted by [`crate::types::ir_basic_type`].
+pub(super) fn emit_const<'ctx>(
     ctx: &EmitContext<'ctx>,
     value: &ConstValue,
 ) -> Result<BasicValueEnum<'ctx>, LlvmError> {

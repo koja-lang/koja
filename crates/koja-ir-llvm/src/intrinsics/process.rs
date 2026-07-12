@@ -29,7 +29,7 @@ use crate::runtime::{
     declare_rt_parent_extern, declare_rt_reply_extern, declare_rt_self_extern,
     declare_rt_send_after_extern, declare_rt_send_extern, declare_rt_send_lifecycle_extern,
 };
-use crate::types::{ir_basic_type, value_basic_type};
+use crate::types::ir_basic_type;
 
 pub(super) fn emit_ref<'ctx>(
     ctx: &EmitContext<'ctx>,
@@ -126,7 +126,7 @@ fn emit_cast<'ctx>(
 
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
-    let msg_llvm = value_basic_type(ctx, msg_ir_type)?;
+    let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) =
         build_pair_envelope_alloca(ctx, "cast_envelope", msg_llvm, msg_value, none_payload)?;
@@ -163,7 +163,7 @@ fn emit_send_after<'ctx>(
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
     let (delay_value, _) = nth_param(function, llvm_function, 2)?;
-    let msg_llvm = value_basic_type(ctx, msg_ir_type)?;
+    let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
     let none_payload = option_none_payload(ctx);
     let (envelope_ptr, envelope_size) = build_pair_envelope_alloca(
         ctx,
@@ -219,7 +219,7 @@ fn emit_call<'ctx>(
     let (msg_value, msg_ir_type) = nth_param(function, llvm_function, 1)?;
     let (timeout_value, _) = nth_param(function, llvm_function, 2)?;
     let timeout = timeout_value.into_int_value();
-    let msg_llvm = value_basic_type(ctx, msg_ir_type)?;
+    let msg_llvm = ir_basic_type(ctx, msg_ir_type)?;
 
     let result_symbol = match &function.return_type {
         IRType::Enum(symbol) => symbol.clone(),
@@ -231,7 +231,7 @@ fn emit_call<'ctx>(
         }
     };
     let reply_ir_type = ok_payload_field_type(ctx, &result_symbol)?;
-    let reply_llvm = value_basic_type(ctx, &reply_ir_type)?;
+    let reply_llvm = ir_basic_type(ctx, &reply_ir_type)?;
     let call_error_symbol = global_primitive_symbol(&["Process", "CallError"]);
 
     let self_fn = declare_rt_self_extern(ctx);
@@ -644,7 +644,7 @@ fn emit_reply_send<'ctx>(
     let pid = pid_from_self(ctx, llvm_function, function)?;
     let token = token_from_self(ctx, llvm_function, function)?;
     let (reply_value, reply_ir_type) = nth_param(function, llvm_function, 1)?;
-    let reply_llvm = value_basic_type(ctx, reply_ir_type)?;
+    let reply_llvm = ir_basic_type(ctx, reply_ir_type)?;
     let (reply_ptr, reply_len) = serialize_to_stack(ctx, "reply_msg", reply_llvm, reply_value)?;
     let drop_glue = payload_drop_glue(ctx, reply_ir_type)?;
 

@@ -138,19 +138,6 @@ literals already get.
 
 ---
 
-## `Result<(), E>` fails LLVM codegen
-
-Found 2026-07-12 (postgres driver). A function whose return type
-instantiates a generic enum with `()` (e.g.
-`fn close(self) -> Result<(), Error>` returning `Result.Ok(())`) fails
-LLVM codegen with `expected a value-level IRType, got Unit`
-(`types.rs`). `()` works as a `Process` type parameter
-(`Process<(), (), ()>` is the scaffold default), so the gap is specific
-to unit flowing through a value-level slot such as an enum payload.
-Workaround: return `Result<Bool, E>`.
-
----
-
 ## No definite-assignment analysis for locals
 
 Found 2026-07-12 while fixing the duplicate-`LocalDecl` seal panic.
