@@ -138,6 +138,96 @@ literals already get.
 
 ---
 
+## `Result<(), E>` fails LLVM codegen
+
+Found 2026-07-12 (postgres driver). A function whose return type
+instantiates a generic enum with `()` (e.g.
+`fn close(self) -> Result<(), Error>` returning `Result.Ok(())`) fails
+LLVM codegen with `expected a value-level IRType, got Unit`
+(`types.rs`). `()` works as a `Process` type parameter
+(`Process<(), (), ()>` is the scaffold default), so the gap is specific
+to unit flowing through a value-level slot such as an enum payload.
+Workaround: return `Result<Bool, E>`.
+
+---
+
+## Mutate-`self`-then-return-`self` builders miscompile under LLVM
+
+Found 2026-07-12 (postgres driver). The idiomatic builder shape from
+LANGUAGE.md:
+
+```koja
+fn with_fields(self, fields: List<String>) -> QueryState
+  self.fields = fields
+  self
+end
+```
+
+miscompiles under the LLVM backend. Two observed symptoms on the same
+driver code:
+
+- SIGSEGV in `koja_rc_dec` via the type's `$drop$` glue
+  (`koja_rc_dec ← List_$String$.$drop$ ← QueryState.$drop$ ←
+QueryState.with_fields`) when the builder runs in a recursive
+  message-collect loop.
+- Silent `String` field corruption without a crash: a
+  field-assign-then-return helper (early-return `if` arms assigning
+  one field of a param then returning it) produced garbage values
+  pointing into unrelated memory (e.g. a SQLSTATE decoding as
+  `anner_yyerror`, a fragment of a libpq-adjacent symbol).
+
+Context-sensitive: the identical code path ran correctly in a plain
+`koja run` app binary but failed inside a `koja test` harness binary,
+so surrounding-function shape affects reproduction — likely a drop /
+RC-transfer issue on the `self` param rather than the call itself.
+
+Workaround: construct a fresh struct literal with every field spelled
+out instead of mutating `self` (applied in the postgres driver's
+`QueryState` builders, `Config.with_password`, and the error-field
+scanner).
+
+---
+
+## Same local name in sibling `match` arms panics the compiler
+
+Found 2026-07-12 (postgres driver). Two arms of one `match` each
+declaring a local with the same name:
+
+```koja
+match size - i
+  1 ->
+    n = Base64.combine(data, i, 1)
+    # ...
+  2 ->
+    n = Base64.combine(data, i, 2)
+    # ...
+end
+```
+
+panics the compiler (not a diagnostic):
+`IR seal violation: function ... declares local slot 'local_4' more
+than once` (`koja-ir/src/seal/mod.rs:283`). Arms are disjoint scopes,
+so this should either be legal or a proper error. Workaround: give the
+locals distinct names per arm.
+
+---
+
+## `koja format` comment edge cases
+
+Two known comment-placement gaps remain in the formatter (found
+2026-07-12 during the comment-relocation fix; both are fiddly and low
+value):
+
+- A trailing comment on a declaration header line
+  (`fn foo(x: Int) # note`) is claimed by the first body statement's
+  leading drain and moves into the body. Signatures can wrap across
+  lines, so the header's true end line isn't tracked.
+- A leading comment above a field inside a multi-line enum struct
+  variant leaks to before the next variant (`enum_variant_to_doc`
+  doesn't drain per inner field).
+
+---
+
 ## `koja shell` project mode
 
 `koja shell` auto-loads the project in the working directory (its `src`,
