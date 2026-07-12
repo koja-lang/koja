@@ -6,17 +6,14 @@ enum M
 end
 
 impl Process<W, M, Int> for W
-  fn start(config: W) -> Result<Self, StopReason>
+  fn start(config: W) -> Result<Self, Process.StopReason>
     Result.Ok(W{})
   end
 
-  fn handle(self, msg: M, from: Option<ReplyTo<Int>>) -> Step<Self>
-    match from
-      Option.Some(reply) -> reply.send(1)
-      Option.None -> ()
-    end
+  fn handle(self, msg: M, from: Option<ReplyTo<Int>>) -> Process.Step<Self>
+    _ = ReplyTo.reply(from, 1)
 
-    Step.Continue(self)
+    Process.Step.Continue(self)
   end
 end
 
