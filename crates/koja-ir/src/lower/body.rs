@@ -361,12 +361,11 @@ fn lower_field_assignment(
 
     let (rhs_value, current) = lower_expr(value, ctx, block, registry, output)?;
 
-    // Acquire the rhs as an owned value: the rebuilt struct's field must
-    // hold an independent reference the slot's drop glue can release
-    // without disturbing the source (a param slot, another local, or the
-    // old field itself). The clone is taken before the overwrite-drop,
-    // so a self-assign (`s.x = s.x`) copies the old payload before
-    // freeing it — same discipline as single-segment reassignment.
+    // Acquire the rhs as an owned value. The rebuilt struct's field
+    // must hold a reference its drop glue can release without
+    // disturbing the source. The clone is taken before the
+    // overwrite-drop, so a self-assign (`s.x = s.x`) copies the old
+    // payload before freeing it, mirroring single-segment reassignment.
     let owned_rhs = materialize_owned(ctx, current, rhs_value, &leaf_step.field_ir_type);
 
     if leaf_step.field_ir_type.is_heap_managed() {

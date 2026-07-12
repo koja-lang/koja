@@ -16,6 +16,8 @@
 //!   with `FieldSet`.
 //! - Heap-typed leaf overwrite (`s.name = "new"`) emits a synthetic
 //!   `DropValue` of the prior payload before the rebuild.
+//! - Composite leaf overwrite (`h.items = other`) acquires the rhs
+//!   through clone glue and releases the overwritten value.
 
 use koja_ast::util::dedent;
 use koja_ir::{IRBasicBlock, IRInstruction, IRType};
@@ -179,11 +181,9 @@ fn compound_assign_on_field_emits_field_get_binary_op_field_set() {
 
 #[test]
 fn composite_leaf_overwrite_acquires_rhs_and_drops_stale_value() {
-    // The mutate-then-return builder shape: the struct field must
-    // acquire its own reference to the rhs (here a borrowed local
-    // read), and the overwritten list must be released. Without the
-    // acquire, the field aliases the source slot and function-exit
-    // drops over-release the shared list.
+    // Without the rhs acquire, the field aliases the source slot and
+    // function-exit drops over-release the shared list. This is the
+    // builder-shape regression.
     let source = "
         struct Holder
           items: List<Int>
@@ -209,8 +209,7 @@ fn composite_leaf_overwrite_acquires_rhs_and_drops_stale_value() {
          field overwrite, got {instructions:?}",
     );
 
-    // The stale leaf is read back out of the struct via FieldGet and
-    // released; pin the drop whose argument is that FieldGet's dest.
+    // Pin the drop whose argument is the stale leaf's FieldGet dest.
     let stale_leaf = instructions.iter().find_map(|inst| match inst {
         IRInstruction::FieldGet {
             dest, field_type, ..
