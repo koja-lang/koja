@@ -5,59 +5,58 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## Unreleased
+## [0.14.0] - 2026-07-12
 
 ### Added
 
-- Types can now be nested under an owning type and referenced by a qualified path (`Owner.Nested`, e.g. `struct GitHub.Repo` or `struct Process.ExitSignal`), including generic nested types, `impl`/`extend`/`alias` on them, and `Debug` rendering.
-- `koja.toml` now accepts a `bin` field under `[project]` to name the output binary independently of the package name. When omitted it defaults to the lowercased package name.
-- The `[project]` table accepts `authors`, `description`, and `license` metadata fields, though unused.
-- `koja shell` now properly loads project files when launched inside a project directory.
-- `koja shell` now tab-completes keywords, types, functions, session variables, `Type.` members, and `value.` methods and fields.
-- New auto-imported `URI` type: parse and validate RFC 3986 URIs with `URI.parse`, reassemble them with `to_string`, and percent-encode/decode strings with `URI.encode` / `URI.decode`.
-- Watch another process with `Process.monitor(pid)`. When it exits, you receive a `Process.ExitSignal` message telling you which process died and why.
-- Cancel a monitor with `Process.demonitor(ref)`.
-- Calling `Process.monitor` from a process whose message type can't receive `Process.ExitSignal` is a compile error.
-- Every process now dies with the process that spawned it. When a parent exits for any reason, its children (and their children, transitively) are killed, so orphaned processes can no longer accumulate.
-- `Process.parent()` returns the pid of the process that spawned the caller, or `Option.None` in the entry process.
-- The runtime-internal `ExitStatus` protocol is no longer part of the public `Global` API.
-- `priv` now works on top-level `struct`, `enum`, `const`, `type`, and `protocol` declarations, hiding them from other packages.
-- A public declaration whose signature mentions a private type is now a compile error.
-- `@doc` on a private declaration is now a compile error, since private items never appear in generated documentation.
+- Types can now be nested under an owning type and referenced by a qualified path such as `GitHub.Repo` or `Process.ExitSignal`, with support for generics, implementations, extensions, aliases, and `Debug` output.
+- Processes now form a lifecycle hierarchy, so exiting a parent automatically stops all of its descendants and prevents orphaned processes from accumulating.
+- `Process.monitor(pid)` watches another process and delivers a `Process.ExitSignal` describing which process exited and why.
+- `Process.demonitor(ref)` cancels an active process monitor.
+- Calling `Process.monitor` now requires the process message type to accept `Process.ExitSignal`.
+- `Process.parent()` returns the pid of the process that spawned the caller, or `Option.None` for the entry process.
+- `priv` can now hide top-level `struct`, `enum`, `const`, `type`, and `protocol` declarations from other packages.
+- Public declarations can no longer expose private types in their signatures.
+- Private declarations can no longer use `@doc` because they do not appear in generated documentation.
+- `koja shell` now tab-completes keywords, types, functions, session variables, type members, methods, and fields.
+- The new auto-imported `URI` type parses and validates RFC 3986 URIs, converts them back to strings, and percent-encodes or decodes text.
+- `koja.toml` now accepts a `bin` field under `[project]` for naming the output binary independently of the package name, defaulting to the lowercase package name when omitted.
+- The `[project]` table now accepts `authors`, `description`, and `license` metadata.
 - A boolean expression can now continue on the next line when that line starts with `and` or `or`.
 
 ### Changed
 
-- **Breaking**: Integer arithmetic now panics on overflow, division by zero, and `MIN / -1` instead of wrapping or producing platform-dependent results.
-- **Breaking**: `Float` and `Float32` are now finite-only: any operation whose result would be NaN or infinity (like `1.0 / 0.0`) panics.
-- **Breaking**: `bsl` and `bsr` now panic when the shift count is negative or at least the receiver's bit width.
-- **Breaking**: `Float.to_float32` now returns `Result<Float32, NumericConversionError>`, failing with `OutOfRange` when the magnitude is too large for a 32-bit float.
-- A float literal whose magnitude is too large for a 64-bit float is now a compile-time error.
-- A NaN or infinity returned by an `@extern "C"` call now panics at the call site.
-- **Breaking**: `String.to_cstring` and `CString.to_string` now return `Result<_, CString.ConversionError>`, rejecting interior NUL, malformed pointer metadata, and invalid UTF-8.
-- **Breaking**: `Binary.to_string` now returns `String.ConversionError.InvalidUTF8`, and the unchecked `CPtr.to_string` conversion has been removed.
-- **Breaking**: `Binary.ptr` has been removed in favor of `CPtr.borrow(bytes)`, which borrows a pointer for the current statement, and `CPtr.copy(bytes)`, which takes an owned copy.
-- **Breaking**: File and UDP byte APIs now use `Binary`: `File.read_binary` is available, `File.write` and UDP sends accept `Binary | String`, and UDP receives return `Binary`.
+- **Breaking change.** Several standard library types now live under their owning type instead of being auto-imported, including `Process.Priority`, `Process.StopReason`, `Process.ExitReason`, `Process.Step`, `Process.CallError`, `Process.Lifecycle`, `IO.Ready`, `File.Mode`, `Net.Socket.Kind`, `Net.Socket.Address`, `Net.Socket.Error`, `Net.TCPServer.Config`, `Net.TCPServer.Msg`, and `Net.TCPServer.Event`.
+- **Breaking change.** Integer arithmetic now panics on overflow, division by zero, and `MIN / -1` instead of wrapping or producing platform-dependent results.
+- **Breaking change.** `Float` and `Float32` operations now panic when they would produce NaN or infinity.
+- **Breaking change.** `bsl` and `bsr` now panic when the shift count is negative or at least the receiver's bit width.
+- **Breaking change.** `Float.to_float32` now returns `Result<Float32, NumericConversionError>` and reports `OutOfRange` when the value is too large for a 32-bit float.
+- **Breaking change.** `String.to_cstring` and `CString.to_string` now return `Result<_, CString.ConversionError>` and reject interior NUL bytes, invalid pointer metadata, and invalid UTF-8.
+- **Breaking change.** `Binary.to_string` now reports invalid UTF-8 as `String.ConversionError.InvalidUTF8`, and the unchecked `CPtr.to_string` conversion has been removed.
+- **Breaking change.** `Binary.ptr` has been replaced by `CPtr.borrow(bytes)` for statement-scoped access and `CPtr.copy(bytes)` for an owned copy.
+- **Breaking change.** File and UDP byte APIs now use `Binary`, with `File.read_binary` for binary reads, `Binary | String` accepted by file and UDP writes, and `Binary` returned by UDP receives.
+- Panics in spawned processes are now contained to the process that crashed, while a panic in the main process still exits the program with a nonzero status.
 - `and` and `or` now short-circuit from left to right, so the right-hand expression is skipped when the result is already determined.
-- `koja format` no longer separates a `#` comment from the declaration below it in package files.
-- `koja format` now wraps a long `if`/`unless`/`while` condition by starting each continuation line with the operator, indented two past the keyword, with a blank line before the body.
-- `koja format` now indents the continuation lines of a wrapped binary expression two past where the expression started, so wrapped chains no longer align with sibling statements.
-
+- `ReplyTo.send` now returns `ReplyTo.Delivery.Delivered` or `ReplyTo.Delivery.Expired` to indicate whether the caller was still waiting, and handlers may ignore this advisory result.
+- `.print()` and `Debug` now include the full type path when rendering structs and enum variants, such as `Shape.Circle` and `Process.StopReason.Normal`.
+- Float literals that are too large for a 64-bit float are now rejected at compile time.
+- NaN or infinity returned by an `@extern "C"` call now panics at the call site.
 - Parse errors now describe tokens as they appear in source (``expected `)`, found end of file``) instead of internal compiler names (`expected RParen, found EndOfFile`).
-- A `panic()` in a spawned process is now contained to that process — the runtime prints the crash and keeps running, while a panic in the main process still exits non-zero.
-- `ReplyTo.send` now returns `ReplyTo.Delivery` (`Delivered`/`Expired`), reporting `Expired` when the caller already gave up on the reply; the result is advisory and handlers may ignore it.
-- `.print()` and `Debug` now render structs and enum variants with their full type path (e.g. `Shape.Circle`, `Process.StopReason.Normal`) instead of just the leaf name.
-- **Breaking**: Several stdlib types moved into their owner's namespace and are no longer auto-imported under their bare names: use `Process.Priority`, `Process.StopReason`, `Process.ExitReason`, `Process.Step`, `Process.CallError`, `Process.Lifecycle`, `IO.Ready`, `File.Mode`, and `Net.Socket.Kind` / `Net.Socket.Address` / `Net.Socket.Error` / `Net.TCPServer.Config` / `Net.TCPServer.Msg` / `Net.TCPServer.Event`.
+- `koja format` now keeps a `#` comment attached to the declaration below it in package files.
+- `koja format` now wraps long `if`, `unless`, and `while` conditions with operators at the start of each continuation line and a blank line before the body.
+- `koja format` now gives wrapped binary expressions additional indentation so they remain visually distinct from sibling statements.
+- The internal `ExitStatus` protocol is no longer exposed through the public `Global` API.
 
 ### Fixed
 
-- Native `String` equality, matching, indexing, slicing, length, parsing, and UDP sends now honor the full length-prefixed payload, including embedded NUL.
-- Negative `CPtr.alloc` and `CPtr.to_binary` counts now panic on both backends instead of diverging.
-- Comparison, division, and modulo on `UInt64` values above `Int.max` now produce correct unsigned results.
+- `String` equality, matching, indexing, slicing, length, parsing, and UDP sends now handle the complete string, including embedded NUL bytes.
+- Comparison, division, and modulo now produce correct results for `UInt64` values above `Int.max`.
+- Negative process timeouts and delayed sends now behave as zero instead of becoming extremely long waits in compiled programs.
 - Enum matches with partial payload patterns now report the uncovered outer variant at compile time instead of reaching an unreachable runtime path.
-- Negative process timeouts and delayed sends now behave as zero on both execution backends instead of becoming near-infinite waits in compiled programs.
 - Generic call arguments such as `Option.None` and `Result.Err` now infer missing type parameters from the call's enclosing expected return type.
-- `koja shell` now prints results the same way `.print()` does — structs with named fields, enums with their variant names, strings quoted — instead of garbled internal type names.
+- `koja shell` now loads project files when launched inside a project directory.
+- `koja shell` now prints results consistently with `.print()`, including named struct fields, enum variant names, and quoted strings.
+- Negative `CPtr.alloc` and `CPtr.to_binary` counts now consistently panic.
 
 ## [0.13.0] - 2026-06-24
 
