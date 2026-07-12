@@ -7,7 +7,27 @@
 
 .global _koja_context_switch
 .global koja_context_switch
+.global _koja_process_start
+.global koja_process_start
 .p2align 4
+
+// koja_process_start is the landing pad for the first switch onto a
+// fresh process stack. Its CFI marks the frame pointer (rbp, DWARF 6)
+// and return address (DWARF 16) undefined so DWARF unwinders (glibc
+// backtrace, _Unwind) stop here instead of walking off the fabricated
+// bottom frame. Dispatches to the process entry stashed in rbx by
+// init_process_stack. The push re-aligns rsp to the SysV 16-byte call
+// boundary, and since rbp is zero here it doubles as a null frame
+// record. The entry never returns. ud2 traps if it ever does.
+_koja_process_start:
+koja_process_start:
+    .cfi_startproc
+    .cfi_undefined 6
+    .cfi_undefined 16
+    pushq  %rbp
+    callq  *%rbx
+    ud2
+    .cfi_endproc
 
 _koja_context_switch:
 koja_context_switch:

@@ -285,6 +285,14 @@ fn should_skip_frame(name: &str, origin: PanicOrigin) -> bool {
         return false;
     }
 
+    // The asm stack-bottom shim resolves as `koja_process_start` where
+    // its symbol is visible (Mach-O) and as `<unknown>` where only the
+    // .s line info survives (ELF). Neither is useful in a diagnostic.
+    // Every koja and runtime frame that matters carries a real symbol.
+    if name.starts_with("koja_process_start") || name == "<unknown>" {
+        return true;
+    }
+
     if name.starts_with("koja_rt_")
         || name.starts_with("koja_panic")
         || is_runtime_frame(name)

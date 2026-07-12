@@ -7,7 +7,25 @@
 
 .global _koja_context_switch
 .global koja_context_switch
+.global _koja_process_start
+.global koja_process_start
 .p2align 2
+
+// koja_process_start is the landing pad for the first switch onto a
+// fresh process stack. Its CFI marks the frame pointer (x29, DWARF 29)
+// and return address (x30, DWARF 30) undefined so DWARF unwinders
+// (glibc backtrace, _Unwind) stop here instead of walking off the
+// fabricated bottom frame into unmapped memory. Dispatches to the
+// process entry stashed in x19 by init_process_stack. The entry never
+// returns. brk traps if it ever does.
+_koja_process_start:
+koja_process_start:
+    .cfi_startproc
+    .cfi_undefined 29
+    .cfi_undefined 30
+    blr  x19
+    brk  #0
+    .cfi_endproc
 
 _koja_context_switch:
 koja_context_switch:

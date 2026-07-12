@@ -8,6 +8,13 @@ fn main() {
         _ => panic!("unsupported target: {arch}-{os}"),
     };
 
+    // `cc` emits rerun-if-env-changed directives, which disables
+    // cargo's rerun-on-any-package-change default. The native sources
+    // must be declared explicitly or edits to them silently keep the
+    // stale objects.
+    println!("cargo:rerun-if-changed=src/arch");
+    println!("cargo:rerun-if-changed=src/reductions.c");
+
     let mut build = cc::Build::new();
     build.file(src);
     build.file("src/reductions.c");
