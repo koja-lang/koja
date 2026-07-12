@@ -248,8 +248,7 @@ fn lower_assignment(
     // copies the old payload before freeing it.
     let owned_value = materialize_owned(ctx, current, value_id, &value_ty);
 
-    let first_declaration = !ctx.local_is_declared(ir_local);
-    if first_declaration {
+    if !ctx.local_is_declared(ir_local) {
         let entry = ctx.entry_block();
         ctx.cfg.append(
             entry,
@@ -259,10 +258,18 @@ fn lower_assignment(
             },
         );
         ctx.mark_local_declared(ir_local, value_ty.clone());
+    } else if !ctx.local_is_live(ir_local) {
+        // The slot was declared but fell out of the live set at a
+        // loop or branch boundary. Skip the re-decl and the stale
+        // drop. On a zero-trip path the slot is uninitialized, and
+        // on a completed loop the back-edge already dropped the
+        // last iteration's value. Re-mark it live so drop-glue
+        // emission tracks the new value.
+        ctx.mark_local_live(ir_local, value_ty.clone());
     } else if value_ty.is_heap_managed() {
-        // Reassignment of a heap-managed slot: free the prior owned
-        // value before overwriting so the old allocation doesn't
-        // leak (a heap-leaf `rc--`, a composite `drop_T`).
+        // Reassignment of a live heap-managed slot. Free the prior
+        // owned value before overwriting so the old allocation
+        // doesn't leak (a heap-leaf `rc--`, a composite `drop_T`).
         let stale = ctx.fresh_value(value_ty.clone());
         ctx.cfg.append(
             current,

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Assigning to a variable after it was first assigned inside a `while`, `loop`, `if`, or `match` arm no longer crashes the compiler.
 - Builder functions that assign to a field of `self` and then return `self` no longer crash or produce corrupted values.
 - Reassigning a struct field that holds a list, map, set, struct, or enum no longer leaks memory.
 - `koja format` now keeps a comment above a function, protocol method, or type alias inside a type body attached to it instead of moving it into the body.
