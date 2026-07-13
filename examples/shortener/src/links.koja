@@ -132,7 +132,8 @@ struct LinkStore
 
     code = generate_code(CODE_LENGTH, "")
     outcome = conn.simple_query(
-      "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <> lit(url) <>
+      "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <>
+        lit(url) <>
         ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
     )
 
@@ -152,11 +153,7 @@ struct LinkStore
     -> Pair<Postgres, Result<Option<Link>, String>>
 
     outcome = conn.simple_query(sql)
-
-    Pair.new(outcome.first, match outcome.second
-        Result.Ok(qr) -> Result.Ok(first_link(qr))
-        Result.Err(e) -> Result.Err(e)
-      end)
+    Pair.new(outcome.first, outcome.second.map(qr -> first_link(qr)))
   end
 
   priv fn map_rows(
@@ -174,18 +171,11 @@ struct LinkStore
   end
 
   priv fn first_link(qr: QueryResult) -> Option<Link>
-    match qr.rows.get(0)
-      Option.Some(row) -> Option.Some(row_to_link(row))
-      Option.None -> Option.None
-    end
+    qr.rows.get(0).map(row -> row_to_link(row))
   end
 
   priv fn row_to_link(row: List<Option<String>>) -> Link
-    hits =
-      match col(row, 3).to_int()
-        Result.Ok(n) -> n
-        Result.Err(_) -> 0
-      end
+    hits = col(row, 3).to_int().or(0)
 
     Link{
       code: col(row, 0),

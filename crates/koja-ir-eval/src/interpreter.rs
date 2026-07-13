@@ -16,7 +16,7 @@ use koja_ir::{
     IRBasicBlock, IRBlockId, IRConstantValue, IREnumDecl, IRFunction, IRInstruction, IRLocalId,
     IRProgram, IRScript, IRStructDecl, IRSymbol, IRTerminator, IRType, IRVariantPayload,
     IRVariantTag, LoweredBinaryMatchLayout, LoweredBinaryPattern, LoweredBinarySegment,
-    ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId,
+    ReceiveAfter, ReceiveArm, ReceiveTag, ResolvedBinaryLayout, ValueId, pack_integer_segment,
 };
 use koja_runtime_core::{
     CrashInfo, Driver, ExitNotice, ExitReason, Readiness, Tag, duration_from_user_millis,
@@ -1711,11 +1711,10 @@ fn append_bits(dest: &mut [u8], start_bit: u64, src: &[u8], length: u64) {
 
 /// Build a `<<segments>>` literal as a runtime [`Value::Binary`] (when
 /// `layout.byte_aligned`) or [`Value::Bits`] (otherwise). Segments
-/// are packed in source order at their pre-computed `bit_offset`s;
-/// integer / float bytes get endian-shuffled, string segments
-/// `memcpy` their payload, sub-byte segments funnel through
-/// [`pack_bits_into`] (the eval-side mirror of the
-/// `__koja_pack_bits` runtime helper). The buffer is
+/// are packed in source order at their pre-computed `bit_offset`s.
+/// Integer and float bytes get endian-shuffled, string segments
+/// `memcpy` their payload, and sub-byte segments funnel through the
+/// shared [`pack_integer_segment`] bit packer. The buffer is
 /// pre-zeroed so unused trailing bits in the last byte stay zero.
 fn construct_binary_literal(
     layout: ResolvedBinaryLayout,
@@ -1796,59 +1795,6 @@ fn construct_binary_literal(
         Ok(Value::binary(buffer))
     } else {
         Ok(Value::bits(buffer, layout.total_bits))
-    }
-}
-
-/// Pack the low `width` bits of `value` into `buffer` starting at
-/// `start_bit`, byte-flipping per `endian`. The byte-aligned fast
-/// path collapses to a per-byte `or` (mirrors the LLVM backend's
-/// `emit_byte_packing` shape). The sub-byte path delegates to
-/// [`pack_bits_into`] so the integer / float arms share one
-/// bit-stream packer.
-fn pack_integer_segment(
-    buffer: &mut [u8],
-    value: u64,
-    width: u64,
-    endian: BinaryEndian,
-    start_bit: u64,
-) {
-    if width == 0 {
-        return;
-    }
-    if start_bit.is_multiple_of(8) && width.is_multiple_of(8) {
-        let num_bytes = (width / 8) as usize;
-        let start_byte = (start_bit / 8) as usize;
-        for i in 0..num_bytes {
-            let shift = match endian {
-                BinaryEndian::Little => (i as u32) * 8,
-                BinaryEndian::Big => ((num_bytes - 1 - i) as u32) * 8,
-            };
-            buffer[start_byte + i] = (value >> shift) as u8;
-        }
-        return;
-    }
-    // Sub-byte: write the low `width` bits MSB-first, mirroring the
-    // runtime `__koja_pack_bits` helper. Endianness is meaningless
-    // for non-byte-multiple widths in v1, so we only honour the
-    // high-order-first convention.
-    pack_bits_into(buffer, value, width, start_bit);
-}
-
-/// Eval-side mirror of the `__koja_pack_bits` runtime helper:
-/// write the low `width` bits of `value` (MSB first) into `buffer`
-/// at bit offset `start_bit`. `buffer` is assumed pre-zeroed, and we
-/// `or` rather than overwrite so adjacent segments that share a
-/// byte don't clobber each other.
-fn pack_bits_into(buffer: &mut [u8], value: u64, width: u64, start_bit: u64) {
-    for i in 0..width {
-        let bit = ((value >> (width - 1 - i)) & 1) as u8;
-        if bit == 0 {
-            continue;
-        }
-        let bit_pos = start_bit + i;
-        let byte = (bit_pos / 8) as usize;
-        let bit_in_byte = 7 - (bit_pos % 8) as u32;
-        buffer[byte] |= 1 << bit_in_byte;
     }
 }
 

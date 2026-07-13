@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Constants can now be initialized with binary literals, e.g. `const SYNC: Binary = <<0x53::8, 4::32>>`.
+
+### Fixed
+
+- `koja format` now packs wrapped operator chains such as `<>` and `+` with as many operands per line as fit, instead of one per line after the first break.
+- `koja format` now packs the segments of a long binary literal or pattern like list elements, instead of one segment per line.
+
 ## [0.14.1] - 2026-07-12
 
 ### Added

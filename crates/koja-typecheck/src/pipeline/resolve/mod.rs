@@ -46,7 +46,7 @@ mod enums;
 mod expr;
 mod idents;
 mod inference;
-mod literals;
+pub(crate) mod literals;
 mod match_expr;
 mod ops;
 mod patterns;

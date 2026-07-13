@@ -95,21 +95,21 @@ pub(super) fn lower_binary_literal(
     Ok((dest, current_block))
 }
 
-enum ClassifiedSegment {
+pub(super) enum ClassifiedSegment {
     Integer { width: u64 },
     Float { width: u64 },
     String { byte_length: u64 },
 }
 
-/// Per-segment kind + width derivation. Mirrors
-/// [`koja_typecheck::pipeline::resolve::binary_literal::resolve_segment`]
-/// — both call sites need the same width arithmetic to agree, so
-/// the rules live in two places (typecheck side rejects bad
-/// shapes; lower side assumes typecheck has already passed and
-/// just transcribes). On a typecheck/lower mismatch we still
-/// surface a diagnostic rather than panicking, so a regression
-/// surfaces as a build-time error instead of a runtime crash.
-fn classify_segment(
+/// Per-segment kind + width derivation. Mirrors typecheck's
+/// `resolve_segment`, since both call sites need the same width
+/// arithmetic to agree. The typecheck side rejects bad shapes while
+/// this side assumes typecheck has already passed and just
+/// transcribes. On a typecheck/lower mismatch we still surface a
+/// diagnostic rather than panicking, so a regression surfaces as a
+/// build-time error instead of a runtime crash. Constant folding
+/// classifies through the same function.
+pub(super) fn classify_segment(
     segment: &BinarySegment,
     literal_span: Span,
     diagnostics: &mut Vec<Diagnostic>,
@@ -193,7 +193,7 @@ fn string_segment_byte_length(value: &Expr) -> Option<u64> {
     Some(byte_length)
 }
 
-fn ast_endianness_to_ir(endian: Option<BinaryEndianness>) -> BinaryEndian {
+pub(super) fn ast_endianness_to_ir(endian: Option<BinaryEndianness>) -> BinaryEndian {
     match endian.unwrap_or(BinaryEndianness::Big) {
         BinaryEndianness::Big => BinaryEndian::Big,
         BinaryEndianness::Little => BinaryEndian::Little,

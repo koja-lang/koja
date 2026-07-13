@@ -285,11 +285,7 @@ pub(super) fn pattern_to_doc(pat: &Pattern) -> Doc {
                 text("<<>>")
             } else {
                 let seg_docs: Vec<Doc> = segments.iter().map(binary_segment_pat_to_doc).collect();
-                concat(vec![
-                    text("<<"),
-                    intersperse(seg_docs, text(", ")),
-                    text(">>"),
-                ])
+                fill_bracket_list("<<", ">>", seg_docs)
             }
         }
         Pattern::Or { patterns, .. } => {

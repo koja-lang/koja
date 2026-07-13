@@ -37,7 +37,7 @@ use crate::registry::GlobalRegistry;
 /// Carrying the kind alongside the bit width lets the typecheck
 /// pass return one structured result per segment without committing
 /// the IR vocabulary into the typecheck crate.
-enum SegmentKind {
+pub(crate) enum SegmentKind {
     Integer,
     Float,
     String,
@@ -57,14 +57,11 @@ enum IntSign {
 /// total bit count (`byte_length * 8` for strings, the explicit
 /// `::N` for sized integers, the type-annotation width for floats /
 /// typed-integer forms, or `8` for an unmodified integer segment).
-/// `kind` is kept for future binary-pattern reuse: pattern
-/// resolution will need to know the kind to decide what shape of
-/// bound variable to mint, and the typecheck-side classifier is
-/// the single canonical place that decides.
-struct SegmentInfo {
-    #[allow(dead_code)]
-    kind: SegmentKind,
-    width_bits: u64,
+/// `kind` lets the constant lift cross-check that a segment's
+/// literal value agrees with its declared shape.
+pub(crate) struct SegmentInfo {
+    pub(crate) kind: SegmentKind,
+    pub(crate) width_bits: u64,
 }
 
 /// Resolve a `<<segments>>` literal. Walks each segment (recursing
@@ -103,7 +100,9 @@ pub(in super::super) fn resolve_binary_literal(
 /// Validate one segment and produce its [`SegmentInfo`] (`None` plus
 /// a diagnostic on failure). Surfaces feature-gap diagnostics for
 /// the v1 dynamic-width form (`::n` where `n` is a runtime int).
-fn resolve_segment(
+/// Also called by the constant lift, which stamps segment value
+/// resolutions itself before delegating the width and fit rules here.
+pub(crate) fn resolve_segment(
     segment: &BinarySegment,
     registry: &GlobalRegistry,
     diagnostics: &mut Vec<Diagnostic>,

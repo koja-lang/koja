@@ -41,16 +41,25 @@ impl<'a> Printer<'a> {
                 indent(2, fill(items))
             }
 
-            // Other binary operators keep the operator trailing (a leading
-            // operator would not parse) but hang continuations the same two.
-            ExprKind::Binary { op, left, right } => {
+            // Other binary operators pack the same way but keep the
+            // operator trailing (a leading operator would not parse), so
+            // a wrapped chain leaves the operator at the end of the line.
+            ExprKind::Binary { op, .. } => {
                 let op_str = binop_str(op);
-                group(concat(vec![
-                    self.expr_to_doc(left),
-                    text(" "),
-                    text(op_str),
-                    indent(2, concat(vec![line(), self.expr_to_doc(right)])),
-                ]))
+                let operands = self.flatten_binop_chain(expr, op);
+                let last = operands.len() - 1;
+                let items: Vec<Doc> = operands
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, doc)| {
+                        if i == last {
+                            doc
+                        } else {
+                            concat(vec![doc, text(" "), text(op_str)])
+                        }
+                    })
+                    .collect();
+                indent(2, fill(items))
             }
 
             ExprKind::Unary { op, operand } => {
@@ -338,18 +347,7 @@ impl<'a> Printer<'a> {
                         .iter()
                         .map(|seg| self.binary_segment_to_doc(seg))
                         .collect();
-                    group(concat(vec![
-                        text("<<"),
-                        indent(
-                            2,
-                            concat(vec![
-                                softline(),
-                                intersperse(seg_docs, concat(vec![text(","), line()])),
-                            ]),
-                        ),
-                        softline(),
-                        text(">>"),
-                    ]))
+                    fill_bracket_list("<<", ">>", seg_docs)
                 }
             }
 
