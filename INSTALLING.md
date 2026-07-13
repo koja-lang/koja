@@ -4,7 +4,7 @@ This document covers installing prebuilt Koja binaries and building the compiler
 
 ## Prebuilt binaries
 
-Releases from v0.12.1 onward ship prebuilt binaries for macOS arm64 (Apple Silicon) and Linux x86_64 (glibc). Each tarball contains the `koja` compiler and the `koja-lsp` language server. If you're on one of these platforms and don't plan to modify the compiler, this is the recommended path — no Rust or LLVM toolchain required.
+Releases from v0.12.1 onward ship prebuilt binaries for macOS arm64 (Apple Silicon) and Linux x86_64 (glibc), and releases from v0.14.1 onward add Linux arm64 (glibc). Each tarball contains the `koja` compiler and the `koja-lsp` language server. If you're on one of these platforms and don't plan to modify the compiler, this is the recommended path — no Rust or LLVM toolchain required.
 
 ### Via asdf (recommended)
 
@@ -25,7 +25,7 @@ tar -xzf koja-v0.12.1-darwin-arm64.tar.gz
 cp koja-v0.12.1-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
 ```
 
-(Use `sha256sum -c` on Linux, and substitute `linux-x86_64` for `darwin-arm64`.)
+(Use `sha256sum -c` on Linux, and substitute `linux-x86_64` or `linux-arm64` for `darwin-arm64`.)
 
 ## Building from source
 

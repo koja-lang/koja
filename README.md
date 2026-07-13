@@ -16,7 +16,7 @@ For the full language specification, see [LANGUAGE.md](LANGUAGE.md).
 
 The easiest way to install Koja is with [asdf](https://asdf-vm.com). This
 ships the `koja` compiler and `koja-lsp` language server for Apple Silicon
-and x86-64 Linux.
+and x86-64 and arm64 Linux.
 
 ```sh
 asdf plugin add koja https://github.com/koja-lang/asdf-koja.git
