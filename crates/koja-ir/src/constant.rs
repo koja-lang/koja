@@ -1,6 +1,6 @@
-//! Pooled compound constants — strings, unit enum variants, and
-//! structs of literals. One entry per top-level
-//! `const NAME = <compound-rhs>` declaration; primitives don't pool
+//! Pooled compound constants. Strings, binaries, unit enum variants,
+//! and structs of literals get one entry per top-level
+//! `const NAME = <compound-rhs>` declaration. Primitives don't pool
 //! (they inline as [`crate::IRInstruction::Const`] at every use).
 //!
 //! Each [`IRPackage`] owns its constants pool keyed by the
@@ -28,11 +28,10 @@ pub enum IRConstantValue {
     /// variant roster (mirrors [`crate::IRInstruction::EnumConstruct`]'s
     /// `tag`).
     EnumVariant { tag: IRVariantTag, ty: IRSymbol },
-    /// A scalar constant — a numeric / boolean / unit / string literal
-    /// nested inside a compound. Top-level primitive constants do not
-    /// pool (they inline at use sites); this variant only appears as
-    /// a field of [`IRConstantValue::Struct`] or as a string-typed
-    /// pool entry standalone.
+    /// A scalar constant nested inside a compound, or a standalone
+    /// heap-payload pool entry (string, binary, bits). Top-level
+    /// scalar primitive constants do not pool (they inline at use
+    /// sites).
     Primitive(ConstValue),
     /// `<ty>{<fields>}` — a struct literal whose fields are themselves
     /// constant values. Field order matches declaration order

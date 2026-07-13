@@ -132,7 +132,8 @@ struct LinkStore
 
     code = generate_code(CODE_LENGTH, "")
     outcome = conn.simple_query(
-      "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <> lit(url) <>
+      "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <>
+        lit(url) <>
         ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
     )
 

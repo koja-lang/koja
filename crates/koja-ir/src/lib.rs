@@ -28,6 +28,7 @@
 //! [`IRPackage`], [`IRFunction`], [`IRInstruction`], [`IRTerminator`],
 //! …) is fresh and self-contained.
 
+mod binary_packing;
 mod cfg;
 mod constant;
 mod cycle;
@@ -53,6 +54,7 @@ mod types;
 mod union_decl;
 mod yield_checks;
 
+pub use binary_packing::{pack_bits_into, pack_integer_segment};
 pub use constant::IRConstantValue;
 pub use elaborate::needs_drop;
 pub use enum_decl::{EnumPayloadInit, IREnumDecl, IREnumVariant, IRVariantPayload, IRVariantTag};

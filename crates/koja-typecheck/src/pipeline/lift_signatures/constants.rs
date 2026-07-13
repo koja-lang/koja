@@ -4,14 +4,16 @@
 //! [`crate::registry::ConstantDefinition`] on the constant entry.
 //!
 //! The constant value surface is intentionally narrow: literals,
-//! negated numerics, unit enum variants, and structs of literals.
+//! negated numerics, unit enum variants, structs of literals, and
+//! all-literal binary literals.
 //! Resolve never visits these expressions (the walker explicitly
 //! skips `Item::Constant`). Lift owns the entire resolution. That
 //! keeps the constant slice self-contained and lets seal verify
 //! `Constant(Some(_))` without re-walking the AST.
 
 use koja_ast::ast::{
-    Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, StringPart, UnaryOp,
+    BinarySegment, Constant, Diagnostic, EnumConstructionData, Expr, ExprKind, FieldInit, Literal,
+    StringPart, UnaryOp,
 };
 use koja_ast::identifier::{Identifier, Resolution, ResolvedType};
 use koja_ast::span::Span;
@@ -20,6 +22,7 @@ use crate::pipeline::aliases::rewrite_through_aliases;
 use crate::pipeline::resolve::coercion::{
     Mismatch, check_compatible_stamping, check_float_literal_finite,
 };
+use crate::pipeline::resolve::literals::{SegmentKind, resolve_segment};
 use crate::registry::{
     ConstantDefinition, GlobalKind, GlobalRegistry, ResolvedStructField, ResolvedVariantData,
 };
@@ -115,13 +118,14 @@ fn resolve_constant_value(
         ExprKind::StructConstruction { type_path, fields } => {
             struct_construction_type(type_path, fields, expr.span, scope, diagnostics)
         }
+        ExprKind::BinaryLiteral { segments } => binary_literal_type(segments, scope, diagnostics),
         ExprKind::Group { expr: inner } => {
             resolve_constant_value(inner, expected, scope, diagnostics)
         }
         _ => {
             diagnostics.push(Diagnostic::error(
                 "constant values are limited to literals, negated numerics, unit enum \
-                 variants, and structs of literals",
+                 variants, structs of literals, and binary literals",
                 expr.span,
             ));
             ResolvedType::unresolved()
@@ -163,6 +167,104 @@ fn resolve_constant_value(
 
     expr.resolution = ty.clone();
     ty
+}
+
+/// Validate a `<<...>>` constant RHS. Every segment value must be a
+/// direct literal so the IR layer can fold the whole literal into
+/// bytes at compile time. Width and fit rules are shared with the
+/// resolve phase through [`resolve_segment`]. Yields `Binary` for a
+/// byte-aligned total and `Bits` otherwise.
+fn binary_literal_type(
+    segments: &mut [BinarySegment],
+    scope: ResolutionScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> ResolvedType {
+    let mut total_bits: u64 = 0;
+    let mut all_resolved = true;
+    for segment in segments.iter_mut() {
+        if !stamp_constant_segment_value(&mut segment.value, scope, diagnostics) {
+            all_resolved = false;
+            continue;
+        }
+        let Some(info) = resolve_segment(segment, scope.registry, diagnostics) else {
+            all_resolved = false;
+            continue;
+        };
+        if !segment_kind_matches_literal(&info.kind, &segment.value) {
+            diagnostics.push(Diagnostic::error(
+                "binary segment value does not match the segment's declared shape \
+                 (integer segments take int literals, float segments take float literals)",
+                segment.value.span,
+            ));
+            all_resolved = false;
+            continue;
+        }
+        total_bits += info.width_bits;
+    }
+    if !all_resolved {
+        return ResolvedType::unresolved();
+    }
+    let primitive_name = if total_bits.is_multiple_of(8) {
+        "Binary"
+    } else {
+        "Bits"
+    };
+    scope.registry.primitive(primitive_name)
+}
+
+/// Stamp a constant binary segment's value with its literal type.
+/// Only direct literals are allowed, since the value must fold at
+/// compile time.
+fn stamp_constant_segment_value(
+    value: &mut Expr,
+    scope: ResolutionScope<'_>,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> bool {
+    match &value.kind {
+        ExprKind::Literal { value: literal } => {
+            check_float_literal_finite(literal, value.span, diagnostics);
+            value.resolution = scope.registry.literal_type(literal);
+            true
+        }
+        ExprKind::String { parts, .. } => {
+            let ty = string_literal_type(parts, value.span, scope.registry, diagnostics);
+            if !ty.is_resolved() {
+                return false;
+            }
+            value.resolution = ty;
+            true
+        }
+        _ => {
+            diagnostics.push(Diagnostic::error(
+                "binary segment values in a constant must be literals",
+                value.span,
+            ));
+            false
+        }
+    }
+}
+
+/// True when the segment's classified kind agrees with the literal
+/// the value holds. [`resolve_segment`] does not cross-check the
+/// value type for `: Type`-annotated segments, so the constant path
+/// pins it here (a float segment folds a float literal's bits and
+/// nothing else).
+fn segment_kind_matches_literal(kind: &SegmentKind, value: &Expr) -> bool {
+    match kind {
+        SegmentKind::Integer => matches!(
+            &value.kind,
+            ExprKind::Literal {
+                value: Literal::Int(_)
+            }
+        ),
+        SegmentKind::Float => matches!(
+            &value.kind,
+            ExprKind::Literal {
+                value: Literal::Float(_)
+            }
+        ),
+        SegmentKind::String => true,
+    }
 }
 
 fn string_literal_type(

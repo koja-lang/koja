@@ -92,6 +92,94 @@ fn interpolated_string_constant_diagnoses() {
 }
 
 #[test]
+fn binary_literal_constants_typecheck() {
+    let source = "
+        const SYNC: Binary = <<0x53::8, 4::32>>
+        const GREETING = <<\"hi\", 0::8>>
+        const FLAGS: Bits = <<5::3>>
+
+        SYNC
+        ";
+    typecheck(&dedent(source));
+}
+
+#[test]
+fn binary_constant_with_non_literal_segment_diagnoses() {
+    let source = "
+        const TAG = 5
+        const FRAME: Binary = <<TAG::8>>
+
+        FRAME
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("binary segment values in a constant must be literals")),
+        "expected non-literal segment diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn binary_constant_segment_out_of_range_diagnoses() {
+    let source = "
+        const FRAME: Binary = <<300::8>>
+
+        FRAME
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("does not fit in 8 unsigned bits")),
+        "expected out-of-range segment diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn binary_constant_segment_kind_mismatch_diagnoses() {
+    // A float-annotated segment folds a float literal's bits and
+    // nothing else. resolve_segment already rejects `1.5::8` on its
+    // own, so the int-into-float direction is the interesting one.
+    let source = "
+        const FRAME: Binary = <<7: Float32>>
+
+        FRAME
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("does not match the segment's declared shape")),
+        "expected segment shape diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
+fn bits_valued_binary_constant_with_binary_annotation_diagnoses() {
+    let source = "
+        const FLAGS: Binary = <<5::3>>
+
+        FLAGS
+        ";
+
+    let failure = typecheck_fail(&dedent(source));
+    let messages = diagnostic_messages(&failure);
+    assert!(
+        messages.iter().any(|m| {
+            m.contains("constant value type") && m.contains("does not match annotation")
+        }),
+        "expected annotation mismatch diagnostic, got {messages:?}",
+    );
+}
+
+#[test]
 fn duplicate_constant_collides_like_other_globals() {
     let source = "
         const SAME = 1

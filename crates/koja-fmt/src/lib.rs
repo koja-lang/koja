@@ -282,6 +282,47 @@ mod tests {
     }
 
     #[test]
+    fn long_binary_literal_packs_like_fill() {
+        // Segments pack densely like list elements instead of one per
+        // line, so a long frame stays a readable byte sequence.
+        assert_fmt_script(
+            "
+            frame = <<0x53::8, 0x51::8, 0x58::8, 0x70::8, 0x50::8, 0x42::8, 0x44::8, 0x45::8, 0x54::8, 0x43::8, 0x5a::8, 0x49::8>>
+        ",
+            "
+            frame = <<
+              0x53::8, 0x51::8, 0x58::8, 0x70::8, 0x50::8, 0x42::8, 0x44::8, 0x45::8,
+              0x54::8, 0x43::8, 0x5a::8, 0x49::8
+            >>
+        ",
+        );
+    }
+
+    #[test]
+    fn long_binary_pattern_packs_like_fill() {
+        assert_fmt_script(
+            "
+            match data
+              <<first_field::32, second_field::32, third_field::32, fourth_field::16, fifth_field::16, rest: Binary>> -> rest
+              _ -> data
+            end
+        ",
+            "
+            match data
+              <<
+                first_field::32, second_field::32, third_field::32, fourth_field::16,
+                fifth_field::16, rest: Binary
+              >> ->
+                rest
+
+              _ ->
+                data
+            end
+        ",
+        );
+    }
+
+    #[test]
     fn concat_operator() {
         assert_fmt_script(
             r#"
@@ -289,6 +330,21 @@ mod tests {
         "#,
             r#"
             s = "hello" <> " " <> "world"
+        "#,
+        );
+    }
+
+    #[test]
+    fn long_concat_chain_packs_like_fill() {
+        // A wrapped trailing-operator chain packs operands fill-style
+        // instead of one per line after the first break.
+        assert_fmt_script(
+            r#"
+            params = cstring("user") <> cstring(user) <> cstring("database") <> cstring(database) <> terminator
+        "#,
+            r#"
+            params = cstring("user") <> cstring(user) <> cstring("database") <>
+              cstring(database) <> terminator
         "#,
         );
     }

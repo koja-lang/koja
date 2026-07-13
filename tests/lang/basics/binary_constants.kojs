@@ -1,0 +1,55 @@
+# Binary and bits literals as package constants. The all-literal
+# segments fold to bytes at compile time, so every pooled constant
+# here must match, concatenate, and destructure exactly like the
+# same literal constructed at runtime, under both backends.
+
+const SYNC: Binary = <<0x53::8, 4::32>>
+const FRAME: Binary = <<0x01::8, 258::16 little, "hi">>
+const FLAGS: Bits = <<5::3>>
+
+struct Proto
+  header: Binary
+  version: Int
+end
+
+const DEFAULT: Proto = Proto{header: <<0x53::8, 4::32>>, version: 3}
+
+SYNC.byte_size().print()
+
+match SYNC
+  <<tag::8, len::32>> ->
+    tag.print()
+    len.print()
+
+  _ ->
+    "no match".print()
+end
+
+# The little-endian segment and the string bytes round-trip.
+match FRAME
+  <<tag::8, code::16 little, rest: Binary>> ->
+    tag.print()
+    code.print()
+    rest.byte_size().print()
+
+  _ ->
+    "no match".print()
+end
+
+# The bits constant carries its 3 packed bits and exact bit length.
+# Padding to a byte yields 0b1010_0000. (A direct sub-byte binding
+# match is still an LLVM backend gap, so the check goes through a
+# byte-aligning concat instead.)
+padded = FLAGS <> <<0::5>>
+
+match padded
+  <<byte::8>> -> byte.print()
+  _ -> "no match".print()
+end
+
+# A pooled constant concatenates with a runtime binary.
+payload = <<0::16>>
+(SYNC <> payload).byte_size().print()
+
+DEFAULT.header.byte_size().print()
+DEFAULT.version.print()

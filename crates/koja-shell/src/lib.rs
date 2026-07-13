@@ -38,8 +38,8 @@ mod complete;
 /// pipeline on every step; the package label flows through into any
 /// helper functions the user defines via top-level `fn` items. In a
 /// project the driver passes the project's package name instead, so
-/// project modules resolve unqualified (`Cli.usage()`) just as they do
-/// from the project's own files.
+/// the project's declarations resolve unqualified (`Cli.usage()`)
+/// just as they do from the project's own files.
 pub const SESSION_PACKAGE: &str = "REPL";
 
 const BANNER: &str = "koja shell -- IR interpreter\n\

@@ -4,11 +4,21 @@
 
 use koja_ast::util::dedent;
 
-use koja_ir::{IRInstruction, IRScript};
+use koja_ir::{ConstValue, IRConstantValue, IRInstruction, IRScript};
 
 mod common;
 
 use common::{PACKAGE, lower_script_source};
+
+/// The test package's pooled constant values, in pool order.
+fn pooled_values(script: &IRScript) -> Vec<&IRConstantValue> {
+    script
+        .packages
+        .iter()
+        .filter(|p| p.package == PACKAGE)
+        .flat_map(|p| p.constants.values())
+        .collect()
+}
 
 /// Counts `LoadConst` instructions reachable from the test package —
 /// both the script body and any user-package helper fns. Stdlib
@@ -89,4 +99,71 @@ fn primitive_constant_does_not_pool_or_emit_load_const() {
     let script = lower_script_source(&dedent(source));
     assert_eq!(pooled_constants_len(&script), 0);
     assert_eq!(count_load_const(&script), 0);
+}
+
+#[test]
+fn binary_literal_constant_folds_to_exact_bytes() {
+    // Mixed widths, a little-endian segment, and a string segment
+    // must fold byte-identically to a runtime construction.
+    let source = "
+        const FRAME: Binary = <<0x53::8, 258::16 little, \"hi\", 4::32>>
+
+        FRAME.byte_size()
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let values = pooled_values(&script);
+    assert_eq!(values.len(), 1, "expected one pooled binary constant");
+    let IRConstantValue::Primitive(ConstValue::Binary(bytes)) = values[0] else {
+        panic!("expected a folded ConstValue::Binary, got {:?}", values[0]);
+    };
+    assert_eq!(bytes, &[0x53, 0x02, 0x01, b'h', b'i', 0, 0, 0, 4]);
+    assert_eq!(count_load_const(&script), 1);
+}
+
+#[test]
+fn bits_constant_folds_with_bit_length() {
+    // A non-byte-aligned total folds to Bits with MSB-first packing
+    // (101 in the top three bits) and the exact bit length.
+    let source = "
+        const FLAGS: Bits = <<5::3>>
+
+        FLAGS
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let values = pooled_values(&script);
+    assert_eq!(values.len(), 1, "expected one pooled bits constant");
+    let IRConstantValue::Primitive(ConstValue::Bits { bytes, bit_length }) = values[0] else {
+        panic!("expected a folded ConstValue::Bits, got {:?}", values[0]);
+    };
+    assert_eq!(bytes, &[0b1010_0000]);
+    assert_eq!(*bit_length, 3);
+}
+
+#[test]
+fn struct_constant_with_binary_field_folds_the_field() {
+    let source = "
+        struct Frame
+          header: Binary
+          version: Int
+        end
+
+        const DEFAULT: Frame = Frame{header: <<0x53::8>>, version: 3}
+
+        DEFAULT.version
+        ";
+
+    let script = lower_script_source(&dedent(source));
+    let values = pooled_values(&script);
+    assert_eq!(values.len(), 1, "expected one pooled struct constant");
+    let IRConstantValue::Struct { fields, .. } = values[0] else {
+        panic!("expected a pooled struct constant, got {:?}", values[0]);
+    };
+    assert!(
+        fields.iter().any(
+            |f| matches!(f, IRConstantValue::Primitive(ConstValue::Binary(b)) if b == &[0x53])
+        ),
+        "expected a folded Binary field, got {fields:?}",
+    );
 }

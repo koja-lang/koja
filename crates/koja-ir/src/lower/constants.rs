@@ -1,18 +1,20 @@
 //! Package-level `const` pool lowering and registry -> [`IRConstantValue`] translation.
-//! Primitives inline at use sites as [`IRInstruction::Const`](crate::function::IRInstruction::Const);
-//! strings, unit enum variants, and struct literals pool on
+//! Primitives inline at use sites as [`IRInstruction::Const`](crate::function::IRInstruction::Const).
+//! Strings, binaries, unit enum variants, and struct literals pool on
 //! [`IRPackage::constants`](crate::package::IRPackage::constants) and load through
 //! [`IRInstruction::LoadConst`](crate::function::IRInstruction::LoadConst).
 
-use koja_ast::ast::{Constant, Expr, ExprKind, Literal, StringPart, UnaryOp};
+use koja_ast::ast::{BinarySegment, Constant, Expr, ExprKind, Literal, StringPart, UnaryOp};
 use koja_ast::identifier::{GlobalRegistryId, Identifier, Resolution, ResolvedType};
 use koja_typecheck::{GlobalKind, GlobalRegistry, LiteralCoercion, NumericLiteralWidth};
 
+use crate::binary_packing::pack_integer_segment;
 use crate::constant::IRConstantValue;
 use crate::enum_decl::IRVariantTag;
 use crate::function::IRSymbol;
 use crate::types::ConstValue;
 
+use super::binary_literal::{ClassifiedSegment, ast_endianness_to_ir, classify_segment};
 use super::ops::{int_const_at_width, parse_int_literal};
 
 /// Translate a top-level `const NAME = <rhs>` into a pool entry, or
@@ -39,15 +41,17 @@ pub(super) fn lower_constant_pool_entry(
 
 /// True when an [`IRConstantValue`] should live in the package
 /// constant pool (vs. inlining at the use site as
-/// [`IRInstruction::Const`](crate::function::IRInstruction::Const)). Strings, unit enum variants, and
-/// structs of literals pool; scalar numeric / bool / unit primitives
-/// inline. Mirrors v1's `ConstantTables` admission rule — the binary
-/// size win is on compound constants, not on primitives that fit in
-/// a register.
+/// [`IRInstruction::Const`](crate::function::IRInstruction::Const)). Heap payloads (strings, binaries,
+/// bits), unit enum variants, and structs of literals pool. Scalar
+/// numeric / bool / unit primitives inline. Mirrors v1's
+/// `ConstantTables` admission rule, where the binary size win is on
+/// compound constants rather than primitives that fit in a register.
 pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
     match value {
         IRConstantValue::EnumVariant { .. } | IRConstantValue::Struct { .. } => true,
-        IRConstantValue::Primitive(ConstValue::String(_)) => true,
+        IRConstantValue::Primitive(
+            ConstValue::Binary(_) | ConstValue::Bits { .. } | ConstValue::String(_),
+        ) => true,
         IRConstantValue::Primitive(_) => false,
     }
 }
@@ -90,6 +94,7 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
                 value.clone(),
             )))
         }
+        ExprKind::BinaryLiteral { segments } => fold_binary_literal(segments),
         ExprKind::Unary {
             op: UnaryOp::Neg,
             operand,
@@ -149,6 +154,94 @@ fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRCons
         }
         _ => None,
     }
+}
+
+/// Fold an all-literal `<<...>>` constant into its packed bytes.
+/// Typecheck restricted every segment value to a literal, so the
+/// fold reuses the runtime classifier and the shared bit packer to
+/// stay byte-identical with a runtime construction of the same
+/// literal. Returns `None` on any shape the lift should have
+/// rejected.
+fn fold_binary_literal(segments: &[BinarySegment]) -> Option<IRConstantValue> {
+    let mut scratch_diagnostics = Vec::new();
+    let mut classified = Vec::with_capacity(segments.len());
+    let mut total_bits: u64 = 0;
+    for segment in segments {
+        let kind = classify_segment(segment, segment.span, &mut scratch_diagnostics).ok()?;
+        let width = match &kind {
+            ClassifiedSegment::Integer { width } | ClassifiedSegment::Float { width } => *width,
+            ClassifiedSegment::String { byte_length } => byte_length * 8,
+        };
+        classified.push((kind, total_bits));
+        total_bits += width;
+    }
+
+    let mut buffer = vec![0u8; total_bits.div_ceil(8) as usize];
+    for (segment, (kind, bit_offset)) in segments.iter().zip(classified) {
+        let endian = ast_endianness_to_ir(segment.endianness);
+        match kind {
+            ClassifiedSegment::Integer { width } => {
+                let bits = segment_int_bits(&segment.value)?;
+                pack_integer_segment(&mut buffer, bits, width, endian, bit_offset);
+            }
+            ClassifiedSegment::Float { width } => {
+                let bits = segment_float_bits(&segment.value, width)?;
+                pack_integer_segment(&mut buffer, bits, width, endian, bit_offset);
+            }
+            ClassifiedSegment::String { byte_length } => {
+                let bytes = segment_string_bytes(&segment.value)?;
+                let start = (bit_offset / 8) as usize;
+                buffer[start..start + byte_length as usize].copy_from_slice(&bytes);
+            }
+        }
+    }
+
+    if total_bits.is_multiple_of(8) {
+        Some(IRConstantValue::Primitive(ConstValue::Binary(buffer)))
+    } else {
+        Some(IRConstantValue::Primitive(ConstValue::Bits {
+            bit_length: total_bits,
+            bytes: buffer,
+        }))
+    }
+}
+
+fn segment_int_bits(value: &Expr) -> Option<u64> {
+    let ExprKind::Literal {
+        value: Literal::Int(text),
+    } = &value.kind
+    else {
+        return None;
+    };
+    parse_int_literal(text).ok().map(|parsed| parsed as u64)
+}
+
+fn segment_float_bits(value: &Expr, width: u64) -> Option<u64> {
+    let ExprKind::Literal {
+        value: Literal::Float(text),
+    } = &value.kind
+    else {
+        return None;
+    };
+    let parsed = text.parse::<f64>().ok()?;
+    Some(match width {
+        32 => u64::from((parsed as f32).to_bits()),
+        _ => parsed.to_bits(),
+    })
+}
+
+fn segment_string_bytes(value: &Expr) -> Option<Vec<u8>> {
+    let ExprKind::String { parts, .. } = &value.kind else {
+        return None;
+    };
+    let mut bytes = Vec::new();
+    for part in parts {
+        let StringPart::Literal { value, .. } = part else {
+            return None;
+        };
+        bytes.extend_from_slice(value.as_bytes());
+    }
+    Some(bytes)
 }
 
 /// Pull the typecheck-stamped numeric width off `expr`'s

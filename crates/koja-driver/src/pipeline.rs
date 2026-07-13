@@ -177,13 +177,13 @@ fn resolve_source_shape(file: Option<&str>) -> Result<SourceShape, String> {
 }
 
 /// Bail when the user asks `cmd_build` / `cmd_run` to execute a
-/// standalone `.koja` file. `.koja` files are project modules —
-/// program entry points are `Process` types named by a manifest's
+/// standalone `.koja` file. `.koja` files belong to a package.
+/// Program entry points are `Process` types named by a manifest's
 /// `entry` field, so a bare file has no entry-point story. Scripts
 /// (`.kojs`) cover the zero-ceremony case.
 fn bail_program_execution(path: &Path) -> ! {
     eprintln!(
-        "error: `{}` is a `.koja` project module and cannot be run directly. \
+        "error: `{}` is a `.koja` package source file and cannot be run directly. \
          Use a `.kojs` script for standalone programs, or create a `koja.toml` \
          with a `Process` entry type.",
         path.display()
