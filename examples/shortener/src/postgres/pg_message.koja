@@ -183,10 +183,7 @@ struct PgMessage
         PgMessage.read_columns(
           split.second,
           remaining - 1,
-          acc.append(match split.first.to_string()
-              Result.Ok(s) -> Option.Some(s)
-              Result.Err(_) -> Option.None
-            end),
+          acc.append(split.first.to_string().ok()),
         )
 
       Option.None ->
