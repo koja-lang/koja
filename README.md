@@ -3,6 +3,7 @@
 [![CI](https://github.com/koja-lang/koja/actions/workflows/ci.yml/badge.svg)](https://github.com/koja-lang/koja/actions/workflows/ci.yml)
 [![GitHub Release](https://img.shields.io/github/v/release/koja-lang/koja)](https://github.com/koja-lang/koja/releases)
 [![Last Updated](https://img.shields.io/github/last-commit/koja-lang/koja.svg)](https://github.com/koja-lang/koja/commits/main)
+[![Discord](https://img.shields.io/discord/1509952438545940642?label=discord&color=%235865F2)](https://discord.gg/QB2DMTxRSh)
 
 Koja is a statically typed language for building readable, reliable
 services. It pairs Ruby-inspired syntax and Erlang-style concurrency
