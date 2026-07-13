@@ -20,7 +20,7 @@ use super::ops::{int_const_at_width, parse_int_literal};
 /// Translate a top-level `const NAME = <rhs>` into a pool entry, or
 /// `None` for primitives (which inline at use sites). Each
 /// `Expr.literal_coercion` annotation drives the matching narrow
-/// `ConstValue::*` head — e.g. `const PI: Float32 = 3.14` lowers
+/// `ConstValue::*` head, e.g. `const PI: Float32 = 3.14` lowers
 /// as `ConstValue::Float32` rather than the default 64-bit form.
 pub(super) fn lower_constant_pool_entry(
     constant: &Constant,
@@ -58,9 +58,9 @@ pub(super) fn pools_in_constant_pool(value: &IRConstantValue) -> bool {
 
 /// Walk the registry's stamped [`ConstantDefinition`](koja_typecheck::registry::ConstantDefinition) for `id` into
 /// an [`IRConstantValue`]. Reads the stamped definition rather than
-/// any AST `Constant.value` — both are correct, but the registry
+/// any AST `Constant.value`. Both are correct, but the registry
 /// copy is what IR considers authoritative (the AST may be
-/// substituted at monomorphization time; the registry is not).
+/// substituted at monomorphization time while the registry is not).
 pub(super) fn constant_value_from_registry(
     id: GlobalRegistryId,
     registry: &GlobalRegistry,
@@ -74,10 +74,10 @@ pub(super) fn constant_value_from_registry(
 
 /// Recursively translate an already-resolved constant `Expr` into an
 /// [`IRConstantValue`]. Returns `None` on shapes the lift pass should
-/// have rejected — IR treats those as compiler bugs (the typecheck
+/// have rejected. IR treats those as compiler bugs (the typecheck
 /// seal would have caught them otherwise). Each subexpression's
 /// `literal_coercion` annotation drives the resulting `ConstValue::*`
-/// width; absent annotation, primitives keep their default 64-bit
+/// width. Absent annotation, primitives keep their default 64-bit
 /// head.
 fn lower_constant_value(expr: &Expr, registry: &GlobalRegistry) -> Option<IRConstantValue> {
     match &expr.kind {
@@ -167,10 +167,13 @@ fn fold_binary_literal(segments: &[BinarySegment]) -> Option<IRConstantValue> {
     let mut classified = Vec::with_capacity(segments.len());
     let mut total_bits: u64 = 0;
     for segment in segments {
-        let kind = classify_segment(segment, segment.span, &mut scratch_diagnostics).ok()?;
+        let kind = classify_segment(segment, segment.span, None, &mut scratch_diagnostics).ok()?;
         let width = match &kind {
             ClassifiedSegment::Integer { width } | ClassifiedSegment::Float { width } => *width,
             ClassifiedSegment::String { byte_length } => byte_length * 8,
+            // Splices are dynamic and never constant. Typecheck's
+            // lift rejected them, so reaching one here is a bug.
+            ClassifiedSegment::Splice => return None,
         };
         classified.push((kind, total_bits));
         total_bits += width;
@@ -193,6 +196,8 @@ fn fold_binary_literal(segments: &[BinarySegment]) -> Option<IRConstantValue> {
                 let start = (bit_offset / 8) as usize;
                 buffer[start..start + byte_length as usize].copy_from_slice(&bytes);
             }
+            // The classification loop above already bailed on splices.
+            ClassifiedSegment::Splice => return None,
         }
     }
 
@@ -275,8 +280,8 @@ fn literal_to_const(value: &Literal, target: Option<NumericLiteralWidth>) -> Con
 /// `ConstValue` at the recorded width, with the negation applied
 /// at fold time. Returns `None` for shapes the typecheck pass would
 /// never have annotated (non-literal operand, group-wrapped
-/// non-literal, etc.) — caller falls back to the regular recursive
-/// path.
+/// non-literal, etc.). The caller falls back to the regular
+/// recursive path.
 fn fold_negated_literal(operand: &Expr, target: NumericLiteralWidth) -> Option<ConstValue> {
     match &operand.kind {
         ExprKind::Group { expr } => fold_negated_literal_inner(expr, target),

@@ -1,0 +1,61 @@
+# Binary values spliced into construction literals, bare and tagged
+# `: Binary`. Splices desugar to per-run constructs joined by binary
+# concat, so every placement (start, middle, end, adjacent,
+# splice-only, empty) must produce byte-identical results under both
+# backends.
+
+payload = <<1, 2, 3>>
+
+# Bare splice in the middle of a framed message.
+frame = <<0x51, (payload.byte_size() + 4)::32, payload>>
+frame.byte_size().print()
+
+match frame
+  <<tag::8, len::32, rest: Binary>> ->
+    tag.print()
+    len.print()
+    rest.byte_size().print()
+
+  _ ->
+    "no match".print()
+end
+
+# Tagged splice, byte-exact round trip.
+match <<0xaa, payload: Binary>>
+  <<0xaa::8, 1::8, 2::8, 3::8>> -> "tagged ok".print()
+  _ -> "tagged mismatch".print()
+end
+
+# Splices at the start and end, plus adjacent splices.
+a = <<0x0a>>
+b = <<0x0b>>
+
+match <<a, 0xff, b>>
+  <<0x0a::8, 0xff::8, 0x0b::8>> -> "ends ok".print()
+  _ -> "ends mismatch".print()
+end
+
+match <<a, b>>
+  <<0x0a::8, 0x0b::8>> -> "adjacent ok".print()
+  _ -> "adjacent mismatch".print()
+end
+
+# A splice-only literal copies the value. The source stays live
+# and independent.
+only = <<payload>>
+only.byte_size().print()
+payload.byte_size().print()
+
+# Empty splice contributes nothing.
+empty: Binary = <<>>
+(<<0x01, empty, 0x02>>).byte_size().print()
+
+# A multi-byte run around a splice, little-endian and string
+# segments included.
+mixed = <<"ok", 258::16 little, payload, 0::8>>
+mixed.byte_size().print()
+
+match mixed
+  <<"ok", code::16 little, 1::8, 2::8, 3::8, 0::8>> -> code.print()
+  _ -> "mixed mismatch".print()
+end

@@ -1,12 +1,15 @@
 //! Lowering coverage for `<<segments>>` binary literals.
 //!
-//! Every literal lowers to a single
+//! A pure fixed-width literal lowers to a single
 //! [`IRInstruction::BinaryConstruct`] whose `layout.total_bits`
 //! matches the sum of segment widths and whose `segments` carry
-//! per-segment `bit_offset`s in source order.
+//! per-segment `bit_offset`s in source order. `Binary` splices
+//! desugar into per-run constructs joined by
+//! [`IRInstruction::Concat`]. No splice-specific IR exists.
 
 use koja_ir::{
-    BinaryEndian, IRBasicBlock, IRInstruction, IRType, LoweredBinarySegment, ResolvedBinaryLayout,
+    BinaryEndian, ConcatKind, IRBasicBlock, IRInstruction, IRType, LoweredBinarySegment,
+    ResolvedBinaryLayout,
 };
 
 mod common;
@@ -19,6 +22,14 @@ fn first_construct(blocks: &[IRBasicBlock]) -> &IRInstruction {
         .flat_map(|b| b.instructions.iter())
         .find(|i| matches!(i, IRInstruction::BinaryConstruct { .. }))
         .expect("body should contain at least one BinaryConstruct instruction")
+}
+
+fn count_matching(blocks: &[IRBasicBlock], predicate: impl Fn(&IRInstruction) -> bool) -> usize {
+    blocks
+        .iter()
+        .flat_map(|b| b.instructions.iter())
+        .filter(|inst| predicate(inst))
+        .count()
 }
 
 fn unpack(inst: &IRInstruction) -> (ResolvedBinaryLayout, &[LoweredBinarySegment]) {
@@ -113,4 +124,47 @@ fn little_endian_modifier_propagates_to_ir() {
         panic!("expected Integer segment");
     };
     assert_eq!(endian, BinaryEndian::Little);
+}
+
+#[test]
+fn splice_desugars_to_run_constructs_joined_by_concat() {
+    // `<<0x51::8, b, 0x02::8>>` splits into two one-byte runs around
+    // the splice. Three constructs total (one is `b`'s own literal),
+    // two binary concats, and no splice-specific instruction.
+    let script = lower("b = <<1, 2>>\n  <<0x51::8, b, 0x02::8>>\n");
+
+    let constructs = count_matching(&script.blocks, |i| {
+        matches!(i, IRInstruction::BinaryConstruct { .. })
+    });
+    let concats = count_matching(&script.blocks, |i| {
+        matches!(
+            i,
+            IRInstruction::Concat {
+                kind: ConcatKind::Binary,
+                ..
+            }
+        )
+    });
+    assert_eq!(constructs, 3);
+    assert_eq!(concats, 2);
+    assert_eq!(script.return_type, IRType::Binary);
+}
+
+#[test]
+fn splice_only_literal_clones_instead_of_concatenating() {
+    // `<<b>>` has no static run, so the lone spliced value is cloned
+    // into an owned result. No concat is emitted.
+    let script = lower("b = <<1>>\n  <<b>>\n");
+
+    let constructs = count_matching(&script.blocks, |i| {
+        matches!(i, IRInstruction::BinaryConstruct { .. })
+    });
+    let concats = count_matching(&script.blocks, |i| {
+        matches!(i, IRInstruction::Concat { .. })
+    });
+    let clones = count_matching(&script.blocks, |i| matches!(i, IRInstruction::Clone { .. }));
+    assert_eq!(constructs, 1, "only `b`'s own literal constructs");
+    assert_eq!(concats, 0);
+    assert_eq!(clones, 1);
+    assert_eq!(script.return_type, IRType::Binary);
 }

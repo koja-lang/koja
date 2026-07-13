@@ -138,31 +138,6 @@ literals already get.
 
 ---
 
-## `Binary` values cannot be spliced into construction literals
-
-Found 2026-07-12 while writing the Postgres wire protocol driver.
-Binary construction literals only accept fixed-width integer segments.
-The `name: Binary` rest segment is pattern-only, so a message with a
-computed body cannot be built in one literal:
-
-```koja
-<<0x51::8, (payload.byte_size() + 4)::32>> <> payload   # today
-<<0x51::8, (payload.byte_size() + 4)::32, payload: Binary>>   # rejected
-```
-
-Elixir allows `<<tag, len::32, payload::binary>>` in construction.
-Without it, every framed message is a `<>` concatenation chain, and
-wire-protocol code is noticeably noisier than the pattern side of the
-same message.
-
-**Fix path:** accept `expr: Binary` (and plausibly `expr: String`)
-segments in construction position and desugar to concatenation, or
-lower directly to a sized copy in the binary builder. The pattern
-grammar already has the segment shape, so the parser change is
-symmetric.
-
----
-
 ## `Binary` has no `==` and an opaque `Debug` format
 
 Found 2026-07-12 while testing the Postgres driver. `Binary` does not

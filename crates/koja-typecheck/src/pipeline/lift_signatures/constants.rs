@@ -1,6 +1,6 @@
-//! Constant lifting: resolve the optional `: Type` annotation on
-//! `const NAME[: Type] = expr`, validate the RHS shape, stamp every
-//! `Expr.resolution` slot in the value subtree, and register the
+//! Constant lifting resolves the optional `: Type` annotation on
+//! `const NAME[: Type] = expr`, validates the RHS shape, stamps every
+//! `Expr.resolution` slot in the value subtree, and registers the
 //! [`crate::registry::ConstantDefinition`] on the constant entry.
 //!
 //! The constant value surface is intentionally narrow: literals,
@@ -65,7 +65,7 @@ pub(super) fn lift_constant(
     );
 
     // Pin the constant's stamped type at the annotation when the
-    // RHS is a coerced literal: `inferred` is still the literal's
+    // RHS is a coerced literal. `inferred` is still the literal's
     // default `Int` / `Float` head, but the coercion table now
     // carries the literal at the narrower target width and the
     // registry should reflect the visible type. When no annotation
@@ -199,7 +199,14 @@ fn binary_literal_type(
             all_resolved = false;
             continue;
         }
-        total_bits += info.width_bits;
+        // Every constant segment is a literal, so its width is
+        // static. A dynamic-width splice cannot reach here because
+        // `stamp_constant_segment_value` already rejected the value.
+        let Some(width_bits) = info.width_bits else {
+            all_resolved = false;
+            continue;
+        };
+        total_bits += width_bits;
     }
     if !all_resolved {
         return ResolvedType::unresolved();
@@ -263,6 +270,7 @@ fn segment_kind_matches_literal(kind: &SegmentKind, value: &Expr) -> bool {
                 value: Literal::Float(_)
             }
         ),
+        SegmentKind::Splice => false,
         SegmentKind::String => true,
     }
 }
