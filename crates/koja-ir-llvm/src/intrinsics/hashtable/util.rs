@@ -547,6 +547,8 @@ fn hash_receiver_symbol(key_ty: &IRType) -> Option<IRSymbol> {
         IRType::UInt16 => global_primitive_symbol(&["UInt16"]),
         IRType::UInt32 => global_primitive_symbol(&["UInt32"]),
         IRType::UInt64 => global_primitive_symbol(&["UInt64"]),
+        IRType::Binary => global_primitive_symbol(&["Binary"]),
+        IRType::Bits => global_primitive_symbol(&["Bits"]),
         IRType::String => global_primitive_symbol(&["String"]),
         IRType::Struct(symbol) => symbol.clone(),
         _ => return None,

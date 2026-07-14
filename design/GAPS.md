@@ -138,21 +138,6 @@ literals already get.
 
 ---
 
-## `Binary` has no `==` and an opaque `Debug` format
-
-Found 2026-07-12 while testing the Postgres driver. `Binary` does not
-implement `Equality`, so two binaries cannot be compared with `==`,
-and its `Debug` impl renders every value as `<binary>`. Tests that
-build wire messages have to pattern match byte-by-byte to assert
-equality, and a failing assertion cannot show which bytes differ.
-
-**Fix path:** implement `Equality` as a length check plus byte
-compare, and make `Debug` render the byte-list form
-(`<<83, 0, 0, 0, 4>>`), truncated past some length so a megabyte
-payload does not flood the terminal.
-
----
-
 ## No definite-assignment analysis for locals
 
 Found 2026-07-12 while fixing the duplicate-`LocalDecl` seal panic.

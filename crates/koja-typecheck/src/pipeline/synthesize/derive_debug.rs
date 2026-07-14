@@ -29,14 +29,14 @@
 //! ## Opaque field types
 //!
 //! Fields whose type is opaque to the synthesizer (`CPtr<T>`,
-//! `Indirect<T>`, `Pointer<T>`, `Binary`, `Bits`, function /
-//! self / union / unit) render as the literal `"..."` placeholder
-//! instead of an interpolated `.format()` call. These types either
-//! have no `Debug` impl (CPtr / Indirect / Pointer / Binary / Bits)
-//! or carry no value to format (function / self-recursion / union /
-//! unit), so the field-level fallback keeps the synthesizer total
-//! without dragging the universal-Debug fallback into compiler-
-//! internal types.
+//! `Indirect<T>`, `Pointer<T>`, function / self / union / unit)
+//! render as the literal `"..."` placeholder instead of an
+//! interpolated `.format()` call. These types either have no
+//! `Debug` impl (CPtr / Indirect / Pointer) or carry no value to
+//! format (function / self-recursion / union / unit), so the
+//! field-level fallback keeps the synthesizer total without
+//! dragging the universal-Debug fallback into compiler-internal
+//! types.
 
 use koja_ast::ast::{
     Annotation, Arg, EnumDecl, EnumVariant, EnumVariantData, Expr, ExprKind, FieldPattern, File,
@@ -354,8 +354,6 @@ fn field_format_part(field_name: &str, field_type: &TypeExpr, span: Span) -> Str
 ///
 /// - Compiler-internal recursion-break wrappers (`Indirect`,
 ///   `Pointer`, `CPtr`).
-/// - Stdlib primitives without a `Debug` impl yet (`Binary`,
-///   `Bits`).
 /// - Anything that isn't a plain named or generic type
 ///   ([`TypeExpr::Function`], [`TypeExpr::Self_`], [`TypeExpr::Union`],
 ///   [`TypeExpr::Unit`]): functions / unions / etc. don't carry
@@ -373,7 +371,7 @@ pub(super) fn is_opaque_type(te: &TypeExpr) -> bool {
     match te {
         TypeExpr::Named { path, .. } => matches!(
             path.last().map(String::as_str),
-            Some("CPtr") | Some("Indirect") | Some("Pointer") | Some("Binary") | Some("Bits")
+            Some("CPtr") | Some("Indirect") | Some("Pointer")
         ),
         TypeExpr::Generic { path, .. } => matches!(
             path.last().map(String::as_str),

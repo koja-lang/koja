@@ -1,0 +1,56 @@
+# Binary Equality, Hash (via Map/Set keys), and byte-list Debug.
+
+struct Frame
+  tag: Int
+  payload: Binary
+end
+
+a = <<83, 0, 0, 0, 4>>
+b = <<83, 0, 0, 0, 4>>
+shorter = <<83, 0, 0, 0>>
+differs = <<83, 0, 0, 0, 5>>
+
+(a == b).print()
+(a == shorter).print()
+(a == differs).print()
+(a != differs).print()
+(<<>> == <<>>).print()
+
+# Byte-list Debug rendering.
+a.print()
+<<>>.print()
+"frame: #{a}".print()
+
+# Truncation past 64 bytes.
+big: Binary = <<>>
+i = 0
+while i < 70
+  big = <<big, i>>
+  i += 1
+end
+big.print()
+
+# Exactly 64 bytes renders in full, with no truncation marker.
+exact = big.slice(Range{start: 0, stop: 63})
+exact.byte_size().print()
+exact.print()
+
+# Binary keys in hash collections.
+m: Map<Binary, String> = Map.new()
+m = m.put(a, "sync")
+m = m.put(differs, "other")
+m.get(b).print()
+m.get(shorter).print()
+
+s: Set<Binary> = Set.new()
+s = s.insert(a)
+s.has?(b).print()
+s.has?(shorter).print()
+
+# Derived struct Debug and Equality include Binary fields.
+left = Frame{tag: 1, payload: a}
+right = Frame{tag: 1, payload: b}
+other = Frame{tag: 1, payload: differs}
+(left == right).print()
+(left == other).print()
+left.print()

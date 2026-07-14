@@ -1,0 +1,58 @@
+# Bits Equality, Hash (via Map/Set keys), and literal-form Debug.
+
+struct Header
+  version: Int
+  flags: Bits
+end
+
+a = <<72, 101, 5::3>>
+b = <<72, 101, 5::3>>
+shorter = <<72, 101>>.to_bits()
+differs = <<72, 101, 4::3>>
+
+(a == b).print()
+(a == shorter).print()
+(a == differs).print()
+(a != differs).print()
+(<<>>.to_bits() == <<>>.to_bits()).print()
+
+# Same storage byte, different bit lengths must not compare equal.
+byte_wide = <<16>>.to_bits()
+nibble = <<1::4>>
+(byte_wide == nibble).print()
+
+# Literal-form Debug rendering.
+a.print()
+shorter.print()
+<<>>.to_bits().print()
+<<5::3>>.print()
+"header: #{a}".print()
+
+# Truncation past 64 bytes drops the partial byte with the marker.
+big: Binary = <<>>
+i = 0
+while i < 70
+  big = <<big, i>>
+  i += 1
+end
+(big.to_bits() <> <<1::1>>).print()
+
+# Bits keys in hash collections.
+m: Map<Bits, String> = Map.new()
+m = m.put(a, "partial")
+m = m.put(byte_wide, "byte")
+m.get(b).print()
+m.get(nibble).print()
+
+s: Set<Bits> = Set.new()
+s = s.insert(a)
+s.has?(b).print()
+s.has?(differs).print()
+
+# Derived struct Debug and Equality include Bits fields.
+left = Header{version: 1, flags: a}
+right = Header{version: 1, flags: b}
+other = Header{version: 1, flags: differs}
+(left == right).print()
+(left == other).print()
+left.print()

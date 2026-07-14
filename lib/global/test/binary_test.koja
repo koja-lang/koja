@@ -1,8 +1,6 @@
 struct BinaryTest
   @test "empty binary literal has byte_size 0"
   fn test_empty_binary_literal -> Result<Bool, String>
-    # --- binary_literal.koja ---
-
     empty: Binary = <<>>
 
     unless empty.byte_size() == 0
@@ -482,5 +480,218 @@ struct BinaryTest
       Result.Err(msg) ->
         Result.Err("aligned to_binary: #{msg}")
     end
+  end
+
+  @test "Binary equality compares length and bytes"
+  fn test_binary_equality -> Result<Bool, String>
+    a = <<83, 0, 0, 0, 4>>
+    b = <<83, 0, 0, 0, 4>>
+
+    unless a == b
+      return Result.Err("equal binaries compared unequal")
+    end
+
+    unless a != <<83, 0, 0, 0>>
+      return Result.Err("prefix compared equal")
+    end
+
+    unless a != <<83, 0, 0, 0, 5>>
+      return Result.Err("differing byte compared equal")
+    end
+
+    empty: Binary = <<>>
+
+    unless empty == <<>>
+      return Result.Err("empty binaries compared unequal")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Binary hash is byte-stable and length-sensitive"
+  fn test_binary_hash -> Result<Bool, String>
+    a = <<1, 2, 3>>
+    b = <<1, 2, 3>>
+
+    unless a.hash() == b.hash()
+      return Result.Err("equal binaries hashed differently")
+    end
+
+    unless a.hash() != <<1, 2>>.hash()
+      return Result.Err("prefix hashed identically")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Binary keys work in Map and Set"
+  fn test_binary_hash_collections -> Result<Bool, String>
+    key = <<0x51, 0x00>>
+    m: Map<Binary, String> = Map.new()
+    m = m.put(key, "query")
+
+    unless m.get(<<0x51, 0x00>>) == Option.Some("query")
+      return Result.Err("map lookup by equal key missed")
+    end
+
+    s: Set<Binary> = Set.new()
+    s = s.insert(key)
+
+    unless s.has?(<<0x51, 0x00>>)
+      return Result.Err("set membership by equal key missed")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Binary format renders the byte list, truncated past 64"
+  fn test_binary_format -> Result<Bool, String>
+    unless <<83, 0, 0, 0, 4>>.format() == "<<83, 0, 0, 0, 4>>"
+      return Result.Err("short format: #{<<83, 0, 0, 0, 4>>.format()}")
+    end
+
+    empty: Binary = <<>>
+
+    unless empty.format() == "<<>>"
+      return Result.Err("empty format: #{empty.format()}")
+    end
+
+    big: Binary = <<>>
+    i = 0
+
+    while i < 65
+      big = <<big, 7>>
+      i += 1
+    end
+
+    unless big.format().ends_with?(", ...>>")
+      return Result.Err("expected truncation marker: #{big.format()}")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Bits.bit_size counts bits including a partial byte"
+  fn test_bits_bit_size -> Result<Bool, String>
+    unless <<0x48, 0x65, 5::3>>.bit_size() == 19
+      return Result.Err("partial bit_size")
+    end
+
+    unless <<0x01, 0x02>>.to_bits().bit_size() == 16
+      return Result.Err("aligned bit_size")
+    end
+
+    empty: Binary = <<>>
+
+    unless empty.to_bits().bit_size() == 0
+      return Result.Err("empty bit_size")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Bits.byte_at reads storage bytes and rejects out-of-bounds"
+  fn test_bits_byte_at -> Result<Bool, String>
+    bits = <<0x48, 0x65, 5::3>>
+
+    unless bits.byte_at(0) == Option.Some(0x48)
+      return Result.Err("byte_at(0)")
+    end
+
+    # The partial byte stores its bits MSB-first with zero padding.
+    unless bits.byte_at(2) == Option.Some(0xA0)
+      return Result.Err("byte_at(2) partial")
+    end
+
+    match bits.byte_at(3)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("byte_at(3) past end")
+    end
+
+    match bits.byte_at(0 - 1)
+      Option.None -> ()
+      Option.Some(_) -> return Result.Err("byte_at(-1)")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Bits equality compares bit length and bits"
+  fn test_bits_equality -> Result<Bool, String>
+    unless <<5::3>> == <<5::3>>
+      return Result.Err("equal bits compared unequal")
+    end
+
+    unless <<5::3>> != <<4::3>>
+      return Result.Err("differing bits compared equal")
+    end
+
+    # Same storage byte 0x10, different bit lengths.
+    unless <<16>>.to_bits() != <<1::4>>
+      return Result.Err("same bytes at different lengths compared equal")
+    end
+
+    empty: Binary = <<>>
+
+    unless empty.to_bits() == empty.to_bits()
+      return Result.Err("empty bits compared unequal")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Bits hash is bit-stable and length-sensitive"
+  fn test_bits_hash -> Result<Bool, String>
+    unless <<5::3>>.hash() == <<5::3>>.hash()
+      return Result.Err("equal bits hashed differently")
+    end
+
+    unless <<16>>.to_bits().hash() != <<1::4>>.hash()
+      return Result.Err("same bytes at different lengths hashed identically")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Bits keys work in Map and Set"
+  fn test_bits_hash_collections -> Result<Bool, String>
+    m: Map<Bits, String> = Map.new()
+    m = m.put(<<5::3>>, "partial")
+
+    unless m.get(<<5::3>>) == Option.Some("partial")
+      return Result.Err("map lookup by equal key missed")
+    end
+
+    s: Set<Bits> = Set.new()
+    s = s.insert(<<5::3>>)
+
+    unless s.has?(<<5::3>>)
+      return Result.Err("set membership by equal key missed")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "Bits format renders the round-trippable literal form"
+  fn test_bits_format -> Result<Bool, String>
+    unless <<72, 101, 5::3>>.format() == "<<72, 101, 5::3>>"
+      return Result.Err("partial format: #{<<72, 101, 5::3>>.format()}")
+    end
+
+    unless <<72, 101>>.to_bits().format() == "<<72, 101>>"
+      return Result.Err("aligned format: #{<<72, 101>>.to_bits().format()}")
+    end
+
+    empty: Binary = <<>>
+
+    unless empty.to_bits().format() == "<<>>"
+      return Result.Err("empty format: #{empty.to_bits().format()}")
+    end
+
+    unless <<5::3>>.format() == "<<5::3>>"
+      return Result.Err("partial-only format: #{<<5::3>>.format()}")
+    end
+
+    Result.Ok(true)
   end
 end

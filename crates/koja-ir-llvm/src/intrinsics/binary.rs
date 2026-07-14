@@ -16,6 +16,10 @@
 //!   UTF-8 via the `koja_utf8_validate` runtime helper, then
 //!   heap-copies into a NUL-terminated `String` payload on success.
 //!   The error branch returns `String.ConversionError.InvalidUTF8`.
+//! - `Bits.bit_size(self) -> Int`: returns the header verbatim.
+//! - `Bits.byte_at(self, index: Int) -> Option<Int>`: like
+//!   `Binary.at`, but bounds span `ceil(bit_length / 8)` bytes so
+//!   the trailing partial byte stays addressable.
 //! - `Bits.to_binary(self) -> Result<Binary, String>`: checks
 //!   `bit_length & 7 == 0` and returns `Result.Ok(self)` (zero-cost
 //!   reinterpret, both layouts are identical) when aligned, or
@@ -73,6 +77,8 @@ pub(super) fn emit_bits<'ctx>(
     ctx.builder.position_at_end(entry);
 
     match method {
+        BitsMethod::BitSize => emit_bit_size(ctx, function, llvm_function),
+        BitsMethod::ByteAt => emit_bits_byte_at(ctx, function, llvm_function),
         BitsMethod::ToBinary => emit_to_binary(ctx, function, llvm_function),
     }
 }
@@ -99,13 +105,36 @@ fn emit_at<'ctx>(
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
 ) -> Result<(), LlvmError> {
+    emit_byte_lookup(ctx, function, llvm_function, false)
+}
+
+/// `Bits.byte_at(self, index) -> Option<Int>`: same shape as
+/// [`emit_at`], but the payload spans `ceil(bit_length / 8)` bytes
+/// so a trailing partial byte stays addressable.
+fn emit_bits_byte_at<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    emit_byte_lookup(ctx, function, llvm_function, true)
+}
+
+/// Shared body for the indexed byte reads. `ceil_bytes` selects the
+/// bounds arithmetic: floor for `Binary` (always byte-aligned), ceil
+/// for `Bits` (the last byte may be partial).
+fn emit_byte_lookup<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+    ceil_bytes: bool,
+) -> Result<(), LlvmError> {
     let option_symbol = expect_enum_symbol(&function.return_type, function)?;
     let payload = heap_payload::pointer_param(function, llvm_function)?;
     let index = llvm_function
         .get_nth_param(1)
         .ok_or_else(|| {
             LlvmError::Codegen(format!(
-                "Binary.at missing `index` param on `{}`",
+                "byte lookup missing `index` param on `{}`",
                 function.symbol,
             ))
         })?
@@ -114,9 +143,16 @@ fn emit_at<'ctx>(
     let i64_ty = ctx.context.i64_type();
     let i8_ty = ctx.context.i8_type();
     let bit_length = load_bit_length(ctx, payload, "bit_length")?;
+    let shift_input = if ceil_bytes {
+        ctx.builder
+            .build_int_add(bit_length, i64_ty.const_int(7, false), "bits_rounded")
+            .or_ice()?
+    } else {
+        bit_length
+    };
     let byte_count = ctx
         .builder
-        .build_right_shift(bit_length, i64_ty.const_int(3, false), false, "byte_count")
+        .build_right_shift(shift_input, i64_ty.const_int(3, false), false, "byte_count")
         .or_ice()?;
     let nonnegative = ctx
         .builder
@@ -196,6 +232,21 @@ fn emit_slice<'ctx>(
         "sliced",
     )?;
     ctx.builder.build_return(Some(&sliced)).or_ice().map(|_| ())
+}
+
+/// `Bits.bit_size` returns the i64 header at `payload_ptr - 8`
+/// verbatim, with no byte conversion.
+fn emit_bit_size<'ctx>(
+    ctx: &EmitContext<'ctx>,
+    function: &IRFunction,
+    llvm_function: FunctionValue<'ctx>,
+) -> Result<(), LlvmError> {
+    let payload = heap_payload::pointer_param(function, llvm_function)?;
+    let bit_length = load_bit_length(ctx, payload, "bit_length")?;
+    ctx.builder
+        .build_return(Some(&bit_length))
+        .or_ice()
+        .map(|_| ())
 }
 
 /// `byte_size = bit_length / 8`. Reads the i64 header at

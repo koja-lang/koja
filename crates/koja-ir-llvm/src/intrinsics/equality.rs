@@ -1,8 +1,9 @@
 //! `Equality.eq` family. `Bool` + the 8 integer cells share an
 //! `icmp eq` emitter (eval flattens both to fixed-width integers).
 //! `Float` / `Float32` use `fcmp oeq` (ordered: `NaN == NaN` is
-//! false, matching IEEE 754 and source-level `==`). `String.eq`
-//! delegates to the runtime's length-aware byte comparison.
+//! false, matching IEEE 754 and source-level `==`). `String.eq` and
+//! `Binary.eq` share the runtime's length-aware byte comparison,
+//! since both types carry the same `[rc][bit_length][bytes]` payload.
 
 use inkwell::values::{BasicValueEnum, FloatValue, FunctionValue, IntValue};
 use inkwell::{FloatPredicate, IntPredicate};
@@ -21,11 +22,14 @@ pub(super) fn emit_eq<'ctx>(
     match impl_ {
         EqualityImpl::Bool | EqualityImpl::Int(_) => emit_int_eq(ctx, function, llvm_function),
         EqualityImpl::Float(_) => emit_float_eq(ctx, function, llvm_function),
-        EqualityImpl::String => emit_string_eq(ctx, function, llvm_function),
+        EqualityImpl::Binary | EqualityImpl::String => emit_bytes_eq(ctx, function, llvm_function),
     }
 }
 
-fn emit_string_eq<'ctx>(
+/// Length-plus-byte comparison shared by `String.eq` and
+/// `Binary.eq`. Both receivers carry the same payload layout, so the
+/// runtime helper serves either.
+fn emit_bytes_eq<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
@@ -34,13 +38,13 @@ fn emit_string_eq<'ctx>(
     ctx.builder.position_at_end(entry);
     let lhs = llvm_function.get_nth_param(0).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "String.eq missing `self` param on `{}`",
+            "bytes eq missing `self` param on `{}`",
             function.symbol,
         ))
     })?;
     let rhs = llvm_function.get_nth_param(1).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "String.eq missing `other` param on `{}`",
+            "bytes eq missing `other` param on `{}`",
             function.symbol,
         ))
     })?;

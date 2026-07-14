@@ -1,7 +1,8 @@
 //! `Hash.hash` family: `Bool` and the 8 integer cells zero-extend
-//! to `i64` and feed the [SplitMix64] finalizer. `String.hash`
-//! reads the payload's bit-length header, walks the byte range, and
-//! folds each byte through the FNV-1a recurrence.
+//! to `i64` and feed the [SplitMix64] finalizer. `String.hash` and
+//! `Binary.hash` share one emitter that reads the payload's
+//! bit-length header, walks the byte range, and folds each byte
+//! through the FNV-1a recurrence.
 //!
 //! [SplitMix64]: https://prng.di.unimi.it/splitmix64.c
 
@@ -24,11 +25,14 @@ pub(super) fn emit_hash<'ctx>(
 ) -> Result<(), LlvmError> {
     match impl_ {
         HashImpl::Bool | HashImpl::Int(_) => emit_int_hash(ctx, function, llvm_function),
-        HashImpl::String => emit_string_hash(ctx, function, llvm_function),
+        HashImpl::Binary | HashImpl::String => emit_bytes_hash(ctx, function, llvm_function),
     }
 }
 
-fn emit_string_hash<'ctx>(
+/// FNV-1a over the payload bytes, shared by `String.hash` and
+/// `Binary.hash`. Both receivers carry the same
+/// `[rc][bit_length][bytes]` layout, so one emitter serves either.
+fn emit_bytes_hash<'ctx>(
     ctx: &EmitContext<'ctx>,
     function: &IRFunction,
     llvm_function: FunctionValue<'ctx>,
@@ -40,7 +44,7 @@ fn emit_string_hash<'ctx>(
 
     let raw = llvm_function.get_nth_param(0).ok_or_else(|| {
         LlvmError::Codegen(format!(
-            "String.hash missing payload pointer on `{}`",
+            "bytes hash missing payload pointer on `{}`",
             function.symbol,
         ))
     })?;
@@ -48,7 +52,7 @@ fn emit_string_hash<'ctx>(
         BasicValueEnum::PointerValue(p) => p,
         other => {
             return Err(LlvmError::Codegen(format!(
-                "String.hash expected pointer receiver on `{}`, got `{other:?}`",
+                "bytes hash expected pointer receiver on `{}`, got `{other:?}`",
                 function.symbol,
             )));
         }

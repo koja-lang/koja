@@ -57,10 +57,10 @@ macro_rules! intrinsic_methods {
 /// at lift via [`IRIntrinsicId::from_identifier`]; consumed by both
 /// backend dispatch tables via exhaustive `match`.
 ///
-/// Single-method namespaces (`Kernel`, `CString`, `Bits`) still wrap
-/// their inner method enum even though it has one variant today,
-/// so adding a sibling method later is a variant-add rather than a
-/// shape change.
+/// Single-method namespaces (`Kernel`, `CString`) still wrap their
+/// inner method enum even though it has one variant today, so adding
+/// a sibling method later is a variant-add rather than a shape
+/// change.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IRIntrinsicId {
     Binary(BinaryMethod),
@@ -100,7 +100,7 @@ pub enum IRIntrinsicId {
     /// `@intrinsic` method on `ReplyTo<R>`. Single-method namespace
     /// today (`send`); the wrapper enum keeps adding a sibling
     /// method later a variant-add rather than a shape change, like
-    /// [`KernelMethod`] / [`BitsMethod`].
+    /// [`KernelMethod`] / [`CStringMethod`].
     ReplyTo(ReplyToMethod),
     RuntimeBlock(RuntimeBlockMethod),
     Set(SetMethod),
@@ -125,6 +125,8 @@ intrinsic_methods! {
     }
 
     BitsMethod {
+        BitSize => "bit_size",
+        ByteAt => "byte_at",
         ToBinary => "to_binary",
     }
 
@@ -243,7 +245,7 @@ intrinsic_methods! {
 
     /// `@intrinsic`-flagged method on `ReplyTo<R>`. Single-variant today
     /// (`send`); kept as a wrapper enum so adding a sibling later is a
-    /// variant-add, not a shape change. Mirrors [`BitsMethod`] /
+    /// variant-add, not a shape change. Mirrors [`CStringMethod`] /
     /// [`KernelMethod`].
     ReplyToMethod {
         Send => "send",
@@ -310,11 +312,14 @@ pub enum DebugImpl {
 
 /// Receiver shape for `Equality.eq` impls. One variant per emitter
 /// shape: `icmp` for `Bool` + integers, `fcmp` for floats, and a
-/// length-aware runtime helper for `String`. Numeric widths are folded
-/// into nested [`IntType`] / [`FloatType`] enums (each width its own emitter
-/// cell) so the outer arms stay one-to-one with the emitter family.
+/// length-aware runtime helper for `String` / `Binary` (both share
+/// the `[rc][bit_length][bytes]` payload layout). Numeric widths are
+/// folded into nested [`IntType`] / [`FloatType`] enums (each width
+/// its own emitter cell) so the outer arms stay one-to-one with the
+/// emitter family.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EqualityImpl {
+    Binary,
     Bool,
     Float(FloatType),
     Int(IntType),
@@ -323,9 +328,10 @@ pub enum EqualityImpl {
 
 /// Mirrors [`EqualityImpl`] for the `Hash.hash` family. Each variant
 /// keeps its own emitter cell (SplitMix64 on the boolean extension,
-/// SplitMix64 on the value bits, FNV-style on string bytes).
+/// SplitMix64 on the value bits, FNV-style on string / binary bytes).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HashImpl {
+    Binary,
     Bool,
     Int(IntType),
     String,
@@ -467,13 +473,14 @@ impl DebugImpl {
 impl EqualityImpl {
     /// Map a receiver-type name (`"Bool"`, `"Int"`, `"Float"`,
     /// `"String"`, …) to the matching impl cell. Returns `None` for
-    /// receivers outside the four families (`Bool` / numeric /
-    /// `String` / struct types).
+    /// receivers outside the five families (`Bool` / numeric /
+    /// `String` / `Binary` / struct types).
     pub fn from_receiver(receiver: &str) -> Option<Self> {
         if let Some(ty) = FloatType::from_source(receiver) {
             return Some(Self::Float(ty));
         }
         Some(match receiver {
+            "Binary" => Self::Binary,
             "Bool" => Self::Bool,
             "String" => Self::String,
             other => Self::Int(IntType::from_source(other)?),
@@ -482,6 +489,7 @@ impl EqualityImpl {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::Binary => "Binary",
             Self::Bool => "Bool",
             Self::Float(ty) => ty.segment(),
             Self::Int(ty) => ty.segment(),
@@ -495,6 +503,7 @@ impl HashImpl {
     /// share the same receiver surface today.
     pub fn from_receiver(receiver: &str) -> Option<Self> {
         Some(match receiver {
+            "Binary" => Self::Binary,
             "Bool" => Self::Bool,
             "String" => Self::String,
             other => Self::Int(IntType::from_source(other)?),
@@ -503,6 +512,7 @@ impl HashImpl {
 
     fn segment(self) -> &'static str {
         match self {
+            Self::Binary => "Binary",
             Self::Bool => "Bool",
             Self::Int(ty) => ty.segment(),
             Self::String => "String",
@@ -621,6 +631,8 @@ mod tests {
             ("Binary", "slice", Id::Binary(BinaryMethod::Slice)),
             ("Binary", "to_bits", Id::Binary(BinaryMethod::ToBits)),
             ("Binary", "to_string", Id::Binary(BinaryMethod::ToString)),
+            ("Bits", "bit_size", Id::Bits(BitsMethod::BitSize)),
+            ("Bits", "byte_at", Id::Bits(BitsMethod::ByteAt)),
             ("Bits", "to_binary", Id::Bits(BitsMethod::ToBinary)),
             ("CPtr", "alloc", Id::CPtr(CPtrMethod::Alloc)),
             ("CPtr", "borrow", Id::CPtr(CPtrMethod::Borrow)),
@@ -776,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn equality_and_hash_cover_bool_int_and_string() {
+    fn equality_and_hash_cover_bool_int_string_and_binary() {
         for ty_str in [
             "Int", "Int8", "Int16", "Int32", "UInt8", "UInt16", "UInt32", "UInt64",
         ] {
@@ -819,6 +831,16 @@ mod tests {
             &["String", "hash"],
             IRIntrinsicId::Hash(HashImpl::String),
             "String.hash",
+        );
+        assert_round_trip(
+            &["Binary", "eq"],
+            IRIntrinsicId::Equality(EqualityImpl::Binary),
+            "Binary.eq",
+        );
+        assert_round_trip(
+            &["Binary", "hash"],
+            IRIntrinsicId::Hash(HashImpl::Binary),
+            "Binary.hash",
         );
     }
 

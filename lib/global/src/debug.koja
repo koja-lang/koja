@@ -92,23 +92,96 @@ end
 
 impl Debug for Binary
   @doc """
-  Renders `Binary` as an opaque `<binary>` placeholder so generic
-  containers carrying it (`Result<Binary, _>`, `Option<Binary>`, …)
-  have a usable `format` without committing to a byte-level
-  rendering. A future slice can swap in a hex / base64 /
-  `<N bytes>` shape once binary debugging needs warrant it.
+  Renders the byte-list form, `<<83, 0, 0, 0, 4>>`. Truncates after
+  64 bytes with a trailing `...` so a large payload cannot flood the
+  terminal.
   """
   fn format(self) -> String
-    "<binary>"
+    limit = 64
+    size = self.byte_size()
+
+    shown =
+      if size > limit
+        limit
+      else
+        size
+      end
+
+    out = "<<"
+    i = 0
+
+    while i < shown
+      byte = self.at(i).or(0)
+
+      out =
+        if i == 0
+          out <> "#{byte}"
+        else
+          out <> ", #{byte}"
+        end
+
+      i += 1
+    end
+
+    if size > limit
+      out = out <> ", ..."
+    end
+
+    out <> ">>"
   end
 end
 
 impl Debug for Bits
   @doc """
-  Renders `Bits` as an opaque `<bits>` placeholder. See
-  `Debug for Binary` for the rationale.
+  Renders the round-trippable literal form. Whole bytes print as
+  decimals and a trailing partial byte prints as `value::width`, so
+  `<<72, 101, 5::3>>` reads back as the same bitstring. Truncates
+  after 64 bytes with a trailing `...` like `Debug for Binary`.
   """
   fn format(self) -> String
-    "<bits>"
+    limit = 64
+    size = self.bit_size()
+    whole = size / 8
+    rem = size % 8
+
+    shown =
+      if whole > limit
+        limit
+      else
+        whole
+      end
+
+    out = "<<"
+    i = 0
+
+    while i < shown
+      byte = self.byte_at(i).or(0)
+
+      out =
+        if i == 0
+          out <> "#{byte}"
+        else
+          out <> ", #{byte}"
+        end
+
+      i += 1
+    end
+
+    if whole > limit
+      out = out <> ", ..."
+    else
+      if rem > 0
+        partial = self.byte_at(whole).or(0).bsr(8 - rem)
+
+        out =
+          if whole == 0
+            out <> "#{partial}::#{rem}"
+          else
+            out <> ", #{partial}::#{rem}"
+          end
+      end
+    end
+
+    out <> ">>"
   end
 end
