@@ -9,6 +9,7 @@ environment directly rather than trusting the passed-in value.
 struct Config
   db_host: String
   db_name: String
+  db_password: String
   db_port: Int
   db_user: String
   port: Int
@@ -21,6 +22,7 @@ struct Config
     Config{
       db_host: env_or("DB_HOST", "127.0.0.1"),
       db_name: env_or("DB_NAME", "shortener"),
+      db_password: env_or("DB_PASSWORD", "shortener"),
       db_port: env_int("DB_PORT", 5433),
       db_user: env_or("DB_USER", "postgres"),
       port: env_int("PORT", 8080),

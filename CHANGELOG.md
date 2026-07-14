@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `koja format` now always surrounds `@doc`-annotated declarations with blank lines.
 - `koja format` now packs wrapped operator chains such as `<>` and `+` with as many operands per line as fit, instead of one per line after the first break.
 - `koja format` now packs the segments of a long binary literal or pattern like list elements, instead of one segment per line.
+- `koja format` now glues a single trailing call like `.with_password(...)` to the closing paren of a wrapped argument list, instead of dropping it onto its own line.
 
 ## [0.14.1] - 2026-07-12
 

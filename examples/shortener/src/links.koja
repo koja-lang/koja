@@ -1,4 +1,5 @@
-alias Shortener.Postgres.QueryResult
+alias Postgres.Connection
+alias Postgres.QueryResult
 
 @doc """
 A shortened link: its short `code`, the target `url`, when it was
@@ -17,9 +18,11 @@ const CODE_ALPHABET: String = "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLM
 
 @doc """
 Data-access layer over the `links` table. Every operation threads the
-`Postgres` connection through (Koja values are independent, so a query
+Postgres `Connection` through (Koja values are independent, so a query
 returns an updated connection) and returns it alongside the outcome;
-callers rebind to the returned connection.
+callers rebind to the returned connection. Driver errors are collapsed
+to their `message()` text at this boundary so the HTTP layer only
+deals in strings.
 
 The simple-query protocol has no parameter binding, so user-supplied
 text is escaped with `lit` (single quotes doubled) before
@@ -31,22 +34,24 @@ struct LinkStore
   Inserts a new link for `url` under a freshly generated unique code,
   retrying on the (unlikely) event of a code collision.
   """
-  fn create(conn: Postgres, url: String) -> Pair<Postgres, Result<Link, String>>
+  fn create(conn: Connection, url: String)
+    -> Pair<Connection, Result<Link, String>>
+
     create_attempt(conn, url, 0)
   end
 
   @doc """
   Returns every link, newest first.
   """
-  fn all(conn: Postgres) -> Pair<Postgres, Result<List<Link>, String>>
-    outcome = conn.simple_query(
+  fn all(conn: Connection) -> Pair<Connection, Result<List<Link>, String>>
+    outcome = conn.query(
       select_columns() <> " FROM links ORDER BY created_at DESC",
     )
     rows: List<Link> = List.new()
 
     match outcome.second
       Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e))
+        Pair.new(outcome.first, Result.Err(e.message()))
 
       Result.Ok(qr) ->
         Pair.new(outcome.first, Result.Ok(map_rows(qr.rows, 0, rows)))
@@ -56,8 +61,8 @@ struct LinkStore
   @doc """
   Looks up a single link by code.
   """
-  fn find(conn: Postgres, code: String)
-    -> Pair<Postgres, Result<Option<Link>, String>>
+  fn find(conn: Connection, code: String)
+    -> Pair<Connection, Result<Option<Link>, String>>
 
     query_one(
       conn,
@@ -69,8 +74,8 @@ struct LinkStore
   Repoints an existing link at a new `url`, returning the updated link
   or `None` when no link has that code.
   """
-  fn update(conn: Postgres, code: String, url: String)
-    -> Pair<Postgres, Result<Option<Link>, String>>
+  fn update(conn: Connection, code: String, url: String)
+    -> Pair<Connection, Result<Option<Link>, String>>
 
     query_one(
       conn,
@@ -82,14 +87,14 @@ struct LinkStore
   @doc """
   Deletes a link, returning `true` when a row was removed.
   """
-  fn remove(conn: Postgres, code: String)
-    -> Pair<Postgres, Result<Bool, String>>
+  fn remove(conn: Connection, code: String)
+    -> Pair<Connection, Result<Bool, String>>
 
-    outcome = conn.simple_query("DELETE FROM links WHERE code = " <> lit(code))
+    outcome = conn.query("DELETE FROM links WHERE code = " <> lit(code))
 
     match outcome.second
       Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e))
+        Pair.new(outcome.first, Result.Err(e.message()))
 
       Result.Ok(qr) ->
         Pair.new(outcome.first, Result.Ok(qr.tag != "DELETE 0"))
@@ -100,17 +105,17 @@ struct LinkStore
   Records a visit (incrementing `hits`) and returns the target URL, or
   `None` when the code is unknown. Used by the redirect path.
   """
-  fn visit(conn: Postgres, code: String)
-    -> Pair<Postgres, Result<Option<String>, String>>
+  fn visit(conn: Connection, code: String)
+    -> Pair<Connection, Result<Option<String>, String>>
 
-    outcome = conn.simple_query(
+    outcome = conn.query(
       "UPDATE links SET hits = hits + 1 WHERE code = " <> lit(code) <>
         " RETURNING url",
     )
 
     match outcome.second
       Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e))
+        Pair.new(outcome.first, Result.Err(e.message()))
 
       Result.Ok(qr) ->
         target: Option<String> =
@@ -123,15 +128,15 @@ struct LinkStore
     end
   end
 
-  priv fn create_attempt(conn: Postgres, url: String, attempt: Int)
-    -> Pair<Postgres, Result<Link, String>>
+  priv fn create_attempt(conn: Connection, url: String, attempt: Int)
+    -> Pair<Connection, Result<Link, String>>
 
     if attempt >= MAX_ATTEMPTS
       return Pair.new(conn, Result.Err("could not generate a unique code"))
     end
 
     code = generate_code(CODE_LENGTH, "")
-    outcome = conn.simple_query(
+    outcome = conn.query(
       "INSERT INTO links (code, url) VALUES (" <> lit(code) <> ", " <>
         lit(url) <>
         ") ON CONFLICT (code) DO NOTHING RETURNING code, url, created_at::text, hits",
@@ -139,7 +144,7 @@ struct LinkStore
 
     match outcome.second
       Result.Err(e) ->
-        Pair.new(outcome.first, Result.Err(e))
+        Pair.new(outcome.first, Result.Err(e.message()))
 
       Result.Ok(qr) ->
         match first_link(qr)
@@ -149,11 +154,15 @@ struct LinkStore
     end
   end
 
-  priv fn query_one(conn: Postgres, sql: String)
-    -> Pair<Postgres, Result<Option<Link>, String>>
+  priv fn query_one(conn: Connection, sql: String)
+    -> Pair<Connection, Result<Option<Link>, String>>
 
-    outcome = conn.simple_query(sql)
-    Pair.new(outcome.first, outcome.second.map(qr -> first_link(qr)))
+    outcome = conn.query(sql)
+
+    match outcome.second
+      Result.Err(e) -> Pair.new(outcome.first, Result.Err(e.message()))
+      Result.Ok(qr) -> Pair.new(outcome.first, Result.Ok(first_link(qr)))
+    end
   end
 
   priv fn map_rows(

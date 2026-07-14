@@ -178,8 +178,8 @@ pub(crate) fn export_tree(mirror: &Path, rev: &str, dest: &Path) -> Result<(), S
 fn ls_remote(url: &str, patterns: &[&str]) -> Result<Vec<(String, String)>, String> {
     let mut args = vec!["ls-remote", url];
     args.extend(patterns);
-    let output =
-        run(&args, false).map_err(|err| format!("cannot reach `{url}`: {err}{}", auth_hint(url)))?;
+    let output = run(&args, false)
+        .map_err(|err| format!("cannot reach `{url}`: {err}{}", auth_hint(url)))?;
     Ok(parse_ref_lines(&output))
 }
 

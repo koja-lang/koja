@@ -3,7 +3,7 @@ services:
     image: postgres:16
     container_name: shortener-db
     environment:
-      POSTGRES_HOST_AUTH_METHOD: trust
+      POSTGRES_PASSWORD: shortener
       POSTGRES_USER: postgres
       POSTGRES_DB: shortener
     ports:

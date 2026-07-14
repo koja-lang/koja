@@ -636,12 +636,15 @@ impl<'a> Printer<'a> {
         }
     }
 
-    /// Formats a method chain of 3+ calls with one-per-line breaking.
+    /// Formats a method chain of 2+ calls.
     ///
     /// Flattens the left-recursive MethodCall tree into a root expression
     /// and a list of `.method(args)` segments. When the chain fits on one
-    /// line it stays inline. Otherwise each call breaks onto its own line
-    /// indented 2 from the root.
+    /// line it stays inline. A chain with a single continuation call lets
+    /// the anchor break its own arguments and hugs the trailing call to
+    /// the closing paren, matching how a depth-1 call on a call receiver
+    /// formats. Longer chains break every call onto its own line indented
+    /// 2 from the root.
     fn method_chain_to_doc(&mut self, expr: &Expr) -> Doc {
         let mut calls: Vec<(&str, &[Arg])> = Vec::new();
         let mut current = expr;
@@ -670,6 +673,18 @@ impl<'a> Printer<'a> {
         } else {
             root_doc
         };
+
+        // With one continuation the anchor breaks its own arguments first
+        // and the trailing call hugs the closing paren, only moving to its
+        // own line when it still does not fit.
+        if let [(method, args)] = calls[..] {
+            let continuation = concat(vec![
+                softline(),
+                text(format!(".{}", method)),
+                self.call_args_to_doc(args),
+            ]);
+            return concat(vec![anchor, group(indent(2, continuation))]);
+        }
 
         let mut chain_parts = Vec::with_capacity(calls.len());
         for (method, args) in calls {
