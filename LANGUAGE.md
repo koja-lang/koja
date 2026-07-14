@@ -17,7 +17,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Protocols](#protocols): Behavioral Contracts, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases
 - [Concurrency](#concurrency): Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
-- [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Protocols
+- [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Path, Protocols
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
 - [Annotations](#annotations): `@doc`
 - [Tooling](#tooling): CLI Commands, LSP, Formatter
@@ -1094,7 +1094,7 @@ response = HTTP.get("https://example.com")
 
 ### Standard library visibility
 
-The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, `Base`, etc.) with no alias needed. Domain-specific packages require qualified access:
+The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, `Base`, `Path`, etc.) with no alias needed. Domain-specific packages require qualified access:
 
 - **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
 - **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
@@ -1794,6 +1794,28 @@ Base.decode64("Zm9vYg==").unwrap().print()  # <<102, 111, 111, 98>>
 Base.decode64("Zm9vYg").unwrap().print()    # <<102, 111, 111, 98>>
 Base.encode16(<<0, 15, 255>>).print()       # "000fff"
 Base.url_encode64(<<251, 239>>).print()     # "--8="
+```
+
+### `Path`
+
+POSIX path manipulation, modeled on Elixir's `Path`. All functions are pure string operations except `expand`, which reads the current working directory and `HOME`. None of them touch the file system, so `..` resolution is lexical and assumes no symlinks.
+
+- `Path.absolute?(path: String) -> Bool`: `true` when the path starts with `/`.
+- `Path.basename(path: String) -> String`: last component, ignoring a trailing slash. The root `/` has an empty basename.
+- `Path.dirname(path: String) -> String`: directory component. A path without a separator gives `.`, and a trailing slash counts as a separator (`"foo/bar/"` gives `"foo/bar"`).
+- `Path.extname(path: String) -> String`: extension of the last component including the dot, or `""`. A leading-dot file such as `.gitignore` has no extension.
+- `Path.rootname(path: String) -> String`: the path with its extension stripped.
+- `Path.join(parts: List<String>) -> String`: joins segments, collapsing duplicate separators and stripping a trailing slash. Empty segments are skipped, and an empty list gives `""`.
+- `Path.split(path: String) -> List<String>`: path components. An absolute path's first component is `"/"`, and `""` gives an empty list.
+- `Path.expand(path: String) -> String`: absolute path with `.` and `..` resolved. A leading `~` or `~/` expands to `HOME` (left literal when unset), and relative paths resolve against the working directory.
+- `Path.relative_to(path: String, base: String) -> String`: path from `base` to `path`. Two relative paths give a minimal path that may walk up with `..`, two absolute paths only strip a shared prefix, and `path` is returned (normalized) when `base` is not a prefix or the kinds are mixed.
+
+```koja
+Path.join(["/usr", "local/", "bin"]).print()          # "/usr/local/bin"
+Path.extname("archive.tar.gz").print()                # ".gz"
+Path.expand("/foo/bar/../baz").print()                # "/foo/baz"
+Path.split("/foo/bar").print()                        # ["/", "foo", "bar"]
+Path.relative_to("tmp/foo/bar", "tmp/bat").print()    # "../foo/bar"
 ```
 
 ### `Enumeration<T>` Protocol
