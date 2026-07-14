@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Projects can now depend on git repositories: declare `{ github = "owner/repo", tag = "v1.0" }` (or `git = <url>` with `tag`/`branch`/`rev`) in `koja.toml`, run `koja deps get` to pin exact commits into a committed `koja.lock`, and every build stays offline and reproducible from the lock.
+- New `koja deps` commands: `get` fetches and pins dependencies, `update` moves pins forward, `clean` removes the materialized `deps/` directory, and bare `koja deps` shows each dependency's state.
 - New `Base` type encodes and decodes base16, base64, and url-safe base64.
 - `Binary` and `Bits` values can now be compared with `==` and used as `Map` keys and `Set` elements.
 - `Binary` and `Bits` values now print as their literal form, e.g. `<<83, 0, 0, 0, 4>>` and `<<72, 5::3>>`, truncated past 64 bytes, both directly and inside structs.

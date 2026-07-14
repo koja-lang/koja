@@ -13,7 +13,8 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::project::{self, ProjectConfig};
+use crate::deps;
+use crate::project::ProjectConfig;
 
 /// Recursively collect files under `dir` whose extension is in
 /// `extensions`. Results are sorted for deterministic output; an
@@ -75,7 +76,8 @@ pub(crate) enum ErrorPolicy {
 pub(crate) struct LoadOptions {
     /// File extensions to collect (e.g. `&["koja"]`).
     pub extensions: &'static [&'static str],
-    /// Walk every `[dependencies]` path dep's `src`.
+    /// Resolve `[dependencies]` transitively and walk each package's
+    /// `src`.
     pub include_dependencies: bool,
     /// Append the embedded stdlib sources (packages already present are
     /// skipped).
@@ -192,61 +194,32 @@ impl<'a> ProjectLoader<'a> {
         Ok(())
     }
 
-    /// Resolve each `[dependencies]` path dep, register its package
-    /// name, and push its `src`. Under `Strict`, a missing path, a
-    /// missing `koja.toml`, or a duplicate package name is an error;
-    /// under `Lenient` each is a warning that skips the dep.
+    /// Resolve the transitive dependency graph via [`deps`] (offline:
+    /// lock verification plus cache materialization for git deps,
+    /// in-place resolution for path deps) and push each package's
+    /// `src`. Under `Strict` a resolution failure is an error; under
+    /// `Lenient` it's a warning that skips all dependencies.
     fn push_dependencies(
         &self,
         opts: &LoadOptions,
         collection: &mut Collection,
     ) -> Result<(), String> {
-        let strict = opts.on_error == ErrorPolicy::Strict;
-        for (alias, dep) in &self.config.dependencies {
-            let dep_root = match &dep.path {
-                Some(path) => self.root.join(path),
-                None => {
-                    let message = format!(
-                        "dependency `{alias}` has no `path` (git dependencies are not yet supported)"
-                    );
-                    if strict {
-                        return Err(message);
-                    }
-                    eprintln!("warning: {message}, skipping");
-                    continue;
+        let resolved = match deps::sync_project(self.config, self.root) {
+            Ok(resolved) => resolved,
+            Err(message) => {
+                if opts.on_error == ErrorPolicy::Strict {
+                    return Err(message);
                 }
-            };
-            let dep_config = match project::load_project(&dep_root) {
-                Ok(Some(config)) => config,
-                Ok(None) => {
-                    let message = format!(
-                        "dependency `{alias}`: no koja.toml found at {}",
-                        dep_root.display()
-                    );
-                    if strict {
-                        return Err(message);
-                    }
-                    eprintln!("warning: {message}");
-                    continue;
-                }
-                Err(err) => {
-                    if strict {
-                        return Err(err);
-                    }
-                    eprintln!("warning: dependency `{alias}`: {err}");
-                    continue;
-                }
-            };
-            if !collection.seen_packages.insert(dep_config.name.clone()) && strict {
-                return Err(format!(
-                    "duplicate package name `{}` in dependency graph (project, dependency `{alias}`, or implicit `Global`)",
-                    dep_config.name
-                ));
+                eprintln!("warning: {message}, skipping dependencies");
+                return Ok(());
             }
+        };
+        for dep in resolved {
+            collection.seen_packages.insert(dep.name.clone());
             self.push_package(
-                &dep_config.name,
-                &dep_config.src,
-                &dep_root,
+                &dep.name,
+                &dep.src,
+                &dep.root,
                 opts,
                 SourceOrigin::Dependency,
                 collection,
@@ -288,6 +261,7 @@ pub(crate) fn stdlib_sources() -> Vec<LoadedSource> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::project;
 
     fn unique_temp(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!(
