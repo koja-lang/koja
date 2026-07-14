@@ -1,0 +1,298 @@
+priv const DOT_BYTE: Int = 46
+priv const SLASH_BYTE: Int = 47
+
+@doc """
+POSIX file system path manipulation. All functions are pure string
+operations except `expand`, which reads the current working directory
+and `HOME`. None of them touch the file system, so `..` resolution is
+lexical and assumes no symlinks.
+
+    Path.join(["/tmp", "koja", "cache"])  # "/tmp/koja/cache"
+    Path.extname("src/base.koja")         # ".koja"
+    Path.expand("~/projects")             # "/Users/me/projects"
+"""
+struct Path
+  @doc """
+  Returns `true` when `path` is absolute, that is, starts with `/`.
+  """
+  fn absolute?(path: String) -> Bool
+    path.starts_with?("/")
+  end
+
+  @doc """
+  Returns the last component of `path`, or the path itself when it
+  has no separators. A trailing slash is ignored, and the root `/`
+  has an empty basename.
+  """
+  fn basename(path: String) -> String
+    match split(path).last()
+      Option.Some(part) -> part == "/" ? "" : part
+      Option.None -> ""
+    end
+  end
+
+  @doc """
+  Returns the directory component of `path`. A path without a
+  separator has the dirname `.`, and a trailing slash counts as a
+  separator, so `foo/bar/` gives `foo/bar`.
+  """
+  fn dirname(path: String) -> String
+    bytes = path.to_binary()
+
+    cut =
+      match last_slash(bytes)
+        Option.Some(index) -> index
+        Option.None -> return "."
+      end
+
+    # Separator runs collapse, so "foo//bar" has dirname "foo".
+    stop = cut - 1
+
+    while stop >= 0 and bytes.at(stop).or(0) == SLASH_BYTE
+      stop -= 1
+    end
+
+    if stop < 0
+      return "/"
+    end
+
+    text(bytes.slice(Range{start: 0, stop: stop}), ".")
+  end
+
+  @doc """
+  Returns the extension of the last component of `path`, including
+  the dot, or `""` when there is none. A leading-dot file such as
+  `.gitignore` has no extension.
+  """
+  fn extname(path: String) -> String
+    name = basename(path).to_binary()
+    size = name.byte_size()
+    i = size - 1
+
+    while i > 0
+      if name.at(i).or(0) == DOT_BYTE
+        return text(name.slice(Range{start: i, stop: size - 1}), "")
+      end
+
+      i -= 1
+    end
+
+    ""
+  end
+
+  @doc """
+  Returns `path` with its extension stripped, so `/foo/bar.ex` gives
+  `/foo/bar`. Paths without an extension pass through unchanged.
+  """
+  fn rootname(path: String) -> String
+    ext_size = extname(path).byte_length()
+
+    if ext_size == 0
+      return path
+    end
+
+    bytes = path.to_binary()
+    stop = bytes.byte_size() - ext_size - 1
+    text(bytes.slice(Range{start: 0, stop: stop}), path)
+  end
+
+  @doc """
+  Joins a list of path segments, collapsing duplicate separators and
+  stripping a trailing slash. Empty segments are skipped, and an
+  empty list gives `""`.
+  """
+  fn join(parts: List<String>) -> String
+    present = parts.filter(part -> part != "")
+
+    if present.empty?()
+      return ""
+    end
+
+    joined = String.join(present, "/")
+    segments = joined.split("/").filter(segment -> segment != "")
+
+    if absolute?(joined)
+      "/" <> String.join(segments, "/")
+    else
+      String.join(segments, "/")
+    end
+  end
+
+  @doc """
+  Splits `path` into its components. An absolute path's first
+  component is `"/"`, and the empty path gives an empty list.
+  """
+  fn split(path: String) -> List<String>
+    segments = path.split("/").filter(segment -> segment != "")
+
+    unless absolute?(path)
+      return segments
+    end
+
+    root: List<String> = ["/"]
+    root.concat(segments)
+  end
+
+  @doc """
+  Converts `path` to an absolute path, resolving `.` and `..`
+  lexically. A leading `~` or `~/` expands to `HOME` (left literal
+  when unset), and relative paths resolve against the current
+  working directory.
+  """
+  fn expand(path: String) -> String
+    expanded = expand_home(path)
+
+    target =
+      if absolute?(expanded)
+        expanded
+      else
+        match System.cwd()
+          Result.Ok(cwd) -> cwd <> "/" <> expanded
+          Result.Err(_) -> expanded
+        end
+      end
+
+    render(absolute?(target), normalize_segments(target))
+  end
+
+  @doc """
+  Returns the path from `base` to `path`, resolving `.` and `..`
+  lexically first. Two relative paths give a minimal path that may
+  walk up with `..`. Two absolute paths only strip a shared prefix,
+  and `path` is returned unchanged when `base` is not a prefix or
+  the paths are of mixed kinds. Equal paths give `.`.
+  """
+  fn relative_to(path: String, base: String) -> String
+    path_absolute = absolute?(path)
+    path_segments = normalize_segments(path)
+    normalized = render(path_absolute, path_segments)
+
+    if path_absolute != absolute?(base)
+      return normalized
+    end
+
+    base_segments = normalize_segments(base)
+    shared = common_prefix_length(path_segments, base_segments)
+    base_rest = base_segments.length() - shared
+    remainder = path_segments.slice(shared, path_segments.length() - shared)
+
+    if base_rest == 0
+      return remainder.empty?() ? "." : String.join(remainder, "/")
+    end
+
+    # Walking up out of the base is only meaningful between relative
+    # paths, and a leftover ".." in the base cannot be inverted.
+    leftover = base_segments.slice(shared, base_rest)
+
+    if path_absolute or leftover.any?(segment -> segment == "..")
+      return normalized
+    end
+
+    ups: List<String> = List.new()
+    i = 0
+
+    while i < base_rest
+      ups = ups.append("..")
+      i += 1
+    end
+
+    String.join(ups.concat(remainder), "/")
+  end
+
+  # Resolves "." and ".." over the raw segments. ".." pops when it
+  # can, clamps at the root of an absolute path, and accumulates at
+  # the front of a relative one.
+  priv fn normalize_segments(path: String) -> List<String>
+    absolute = absolute?(path)
+    out: List<String> = List.new()
+
+    for segment in path.split("/").filter(part -> part != "")
+      match segment
+        "." ->
+          ()
+
+        ".." ->
+          size = out.length()
+
+          cond
+            size > 0 and out.last().or("") != ".." ->
+              out = out.slice(0, size - 1)
+            absolute -> ()
+            else -> out = out.append("..")
+          end
+
+        _ ->
+          out = out.append(segment)
+      end
+    end
+
+    out
+  end
+
+  # Renders normalized segments back into a path. No segments means
+  # the root for an absolute path and "." for a relative one.
+  priv fn render(absolute: Bool, segments: List<String>) -> String
+    if segments.empty?()
+      return absolute ? "/" : "."
+    end
+
+    joined = String.join(segments, "/")
+    absolute ? "/" <> joined : joined
+  end
+
+  priv fn expand_home(path: String) -> String
+    home =
+      match System.get_env("HOME")
+        Option.Some(value) -> value
+        Option.None -> return path
+      end
+
+    cond
+      path == "~" -> home
+      path.starts_with?("~/") -> home <> after_first_byte(path)
+      else -> path
+    end
+  end
+
+  priv fn common_prefix_length(a: List<String>, b: List<String>) -> Int
+    limit = a.length() < b.length() ? a.length() : b.length()
+    i = 0
+
+    while i < limit
+      unless a.get(i).or("") == b.get(i).or("")
+        return i
+      end
+
+      i += 1
+    end
+
+    limit
+  end
+
+  # Returns the byte index of the last "/" in the path, if any.
+  priv fn last_slash(bytes: Binary) -> Option<Int>
+    i = bytes.byte_size() - 1
+
+    while i >= 0
+      if bytes.at(i).or(0) == SLASH_BYTE
+        return Option.Some(i)
+      end
+
+      i -= 1
+    end
+
+    Option.None
+  end
+
+  # The path minus its first byte, used to peel the "~" prefix.
+  priv fn after_first_byte(path: String) -> String
+    bytes = path.to_binary()
+    text(bytes.slice(Range{start: 1, stop: bytes.byte_size() - 1}), path)
+  end
+
+  # Path bytes are sliced on separator boundaries, so the conversion
+  # only fails if the input was not valid UTF-8 to begin with.
+  priv fn text(bytes: Binary, fallback: String) -> String
+    bytes.to_string().or(fallback)
+  end
+end

@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - New `Base` type encodes and decodes base16, base64, and url-safe base64.
+- New `Path` type manipulates POSIX paths with `join`, `split`, `dirname`, `basename`, `extname`, `rootname`, `expand`, `relative_to`, and `absolute?`.
 - `Binary` and `Bits` values can now be compared with `==` and used as `Map` keys and `Set` elements.
 - `Binary` and `Bits` values now print as their literal form, e.g. `<<83, 0, 0, 0, 4>>` and `<<72, 5::3>>`, truncated past 64 bytes, both directly and inside structs.
 - New `Bits` functions `bit_size` and `byte_at` read a bitstring's length and storage bytes.

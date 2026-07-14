@@ -1,0 +1,323 @@
+struct PathTest
+  # Renders a component list for comparison, "|" cannot appear in the
+  # vectors used here.
+  priv fn parts(segments: List<String>) -> String
+    String.join(segments, "|")
+  end
+
+  @test "absolute? recognizes a leading slash"
+  fn test_absolute -> Result<Bool, String>
+    unless Path.absolute?("/")
+      return Result.Err("/")
+    end
+
+    unless Path.absolute?("/usr/local")
+      return Result.Err("/usr/local")
+    end
+
+    if Path.absolute?("usr/local")
+      return Result.Err("usr/local")
+    end
+
+    if Path.absolute?("")
+      return Result.Err("empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "basename returns the last component"
+  fn test_basename -> Result<Bool, String>
+    unless Path.basename("foo") == "foo"
+      return Result.Err("foo")
+    end
+
+    unless Path.basename("foo/bar") == "bar"
+      return Result.Err("foo/bar")
+    end
+
+    unless Path.basename("foo/bar/") == "bar"
+      return Result.Err("trailing slash")
+    end
+
+    unless Path.basename("/") == ""
+      return Result.Err("root")
+    end
+
+    unless Path.basename("//") == ""
+      return Result.Err("double root")
+    end
+
+    unless Path.basename("") == ""
+      return Result.Err("empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "dirname returns the directory component"
+  fn test_dirname -> Result<Bool, String>
+    unless Path.dirname("/foo/bar.ex") == "/foo"
+      return Result.Err("/foo/bar.ex")
+    end
+
+    unless Path.dirname("/foo/bar/") == "/foo/bar"
+      return Result.Err("trailing slash")
+    end
+
+    unless Path.dirname("bar.ex") == "."
+      return Result.Err("bar.ex")
+    end
+
+    unless Path.dirname("foo//bar") == "foo"
+      return Result.Err("duplicate slashes")
+    end
+
+    unless Path.dirname("/foo") == "/"
+      return Result.Err("/foo")
+    end
+
+    unless Path.dirname("/") == "/"
+      return Result.Err("root")
+    end
+
+    unless Path.dirname("") == "."
+      return Result.Err("empty")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "extname returns the last dot segment of the basename"
+  fn test_extname -> Result<Bool, String>
+    unless Path.extname("foo.erl") == ".erl"
+      return Result.Err("foo.erl")
+    end
+
+    unless Path.extname("~/foo/bar") == ""
+      return Result.Err("no extension")
+    end
+
+    unless Path.extname(".gitignore") == ""
+      return Result.Err("dotfile")
+    end
+
+    unless Path.extname("foo.") == "."
+      return Result.Err("trailing dot")
+    end
+
+    unless Path.extname("foo.d/bar") == ""
+      return Result.Err("dot in directory")
+    end
+
+    unless Path.extname("archive.tar.gz") == ".gz"
+      return Result.Err("multiple dots")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "rootname strips exactly the extension"
+  fn test_rootname -> Result<Bool, String>
+    unless Path.rootname("/foo/bar.ex") == "/foo/bar"
+      return Result.Err("/foo/bar.ex")
+    end
+
+    unless Path.rootname("archive.tar.gz") == "archive.tar"
+      return Result.Err("archive.tar.gz")
+    end
+
+    unless Path.rootname("foo") == "foo"
+      return Result.Err("foo")
+    end
+
+    # Unlike Elixir, a dotfile has no extension so it passes through.
+    unless Path.rootname(".gitignore") == ".gitignore"
+      return Result.Err("dotfile")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "join collapses separators and skips empty segments"
+  fn test_join -> Result<Bool, String>
+    unless Path.join(["/", "foo", "bar/"]) == "/foo/bar"
+      return Result.Err("root and trailing slash")
+    end
+
+    unless Path.join(["/foo", "/bar/"]) == "/foo/bar"
+      return Result.Err("absolute right side")
+    end
+
+    unless Path.join(["", "foo"]) == "foo"
+      return Result.Err("empty segment")
+    end
+
+    unless Path.join(["foo"]) == "foo"
+      return Result.Err("single segment")
+    end
+
+    unless Path.join(["/"]) == "/"
+      return Result.Err("root only")
+    end
+
+    empty: List<String> = List.new()
+
+    unless Path.join(empty) == ""
+      return Result.Err("empty list")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "split breaks a path into components"
+  fn test_split -> Result<Bool, String>
+    unless parts(Path.split("")) == ""
+      return Result.Err("empty")
+    end
+
+    unless parts(Path.split("/")) == "/"
+      return Result.Err("root")
+    end
+
+    unless parts(Path.split("/foo/bar")) == "/|foo|bar"
+      return Result.Err("/foo/bar")
+    end
+
+    unless parts(Path.split("foo/bar")) == "foo|bar"
+      return Result.Err("foo/bar")
+    end
+
+    unless parts(Path.split("/foo//bar/")) == "/|foo|bar"
+      return Result.Err("duplicate and trailing slashes")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "expand resolves dot segments lexically"
+  fn test_expand_lexical -> Result<Bool, String>
+    unless Path.expand("/foo/bar/../baz") == "/foo/baz"
+      return Result.Err("parent segment")
+    end
+
+    unless Path.expand("/foo/../../baz") == "/baz"
+      return Result.Err("clamped at root")
+    end
+
+    unless Path.expand("/foo/./bar") == "/foo/bar"
+      return Result.Err("current segment")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "expand resolves relative paths against the working directory"
+  fn test_expand_cwd -> Result<Bool, String>
+    cwd = System.cwd().unwrap()
+
+    unless Path.expand("foo") == Path.join([cwd, "foo"])
+      return Result.Err("plain relative")
+    end
+
+    unless Path.expand("foo/..") == cwd
+      return Result.Err("collapses to cwd")
+    end
+
+    unless Path.expand("") == cwd
+      return Result.Err("empty is cwd")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "expand replaces a leading tilde with HOME"
+  fn test_expand_home -> Result<Bool, String>
+    saved = System.get_env("HOME")
+    System.set_env("HOME", "/home/koja")
+
+    tilde_only = Path.expand("~")
+    tilde_child = Path.expand("~/projects")
+    tilde_user = Path.expand("~other")
+
+    System.set_env("HOME", saved.or(""))
+
+    unless tilde_only == "/home/koja"
+      return Result.Err("bare tilde")
+    end
+
+    unless tilde_child == "/home/koja/projects"
+      return Result.Err("tilde child")
+    end
+
+    # "~other" is a plain relative component, not a user expansion.
+    unless tilde_user == Path.join([System.cwd().unwrap(), "~other"])
+      return Result.Err("tilde user")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "relative_to walks between relative paths"
+  fn test_relative_to_relative -> Result<Bool, String>
+    unless Path.relative_to("tmp/foo/bar", "tmp") == "foo/bar"
+      return Result.Err("prefix")
+    end
+
+    unless Path.relative_to("tmp/foo/bar", "tmp/bat") == "../foo/bar"
+      return Result.Err("sibling traversal")
+    end
+
+    unless Path.relative_to("foo", "foo") == "."
+      return Result.Err("equal")
+    end
+
+    unless Path.relative_to("foo/../bar", "baz") == "../bar"
+      return Result.Err("normalizes first")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "relative_to strips a shared absolute prefix"
+  fn test_relative_to_absolute -> Result<Bool, String>
+    unless Path.relative_to("/usr/local/foo", "/usr/local") == "foo"
+      return Result.Err("prefix")
+    end
+
+    unless Path.relative_to("/usr/local/foo", "/") == "usr/local/foo"
+      return Result.Err("root base")
+    end
+
+    unless Path.relative_to("/usr/local/foo", "/etc") == "/usr/local/foo"
+      return Result.Err("not a prefix")
+    end
+
+    unless Path.relative_to("/usr/local/foo", "/usr/local/foo") == "."
+      return Result.Err("equal")
+    end
+
+    unless Path.relative_to("/usr/local/../foo/bar", "/usr/foo") == "bar"
+      return Result.Err("normalizes first")
+    end
+
+    Result.Ok(true)
+  end
+
+  @test "relative_to returns the path unchanged for mixed kinds"
+  fn test_relative_to_mixed -> Result<Bool, String>
+    unless Path.relative_to("/usr/foo/bar", "tmp/bat") == "/usr/foo/bar"
+      return Result.Err("absolute path, relative base")
+    end
+
+    unless Path.relative_to("foo", "/usr/local") == "foo"
+      return Result.Err("relative path, absolute base")
+    end
+
+    unless Path.relative_to("foo/../bar", "/usr/local") == "bar"
+      return Result.Err("normalized mixed")
+    end
+
+    Result.Ok(true)
+  end
+end
