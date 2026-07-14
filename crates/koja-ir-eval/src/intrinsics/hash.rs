@@ -1,11 +1,10 @@
 //! Eval handlers for the `Hash` intrinsic family: `Bool` and the
 //! 8 integer cells (flattened to [`Value::Int(i64)`]) feed their
-//! native bit pattern through SplitMix64. `String` walks each byte
-//! of the UTF-8 payload through FNV-1a (offset basis
+//! native bit pattern through SplitMix64. `String` and `Binary`
+//! walk each payload byte through FNV-1a (offset basis
 //! `0xcbf29ce484222325`, prime `0x100000001b3`) so eval and native
 //! produce byte-identical hash codes for the same input. See the
-//! LLVM-side [`crate::intrinsics::hash::emit_string_hash`] for the
-//! IR-level twin.
+//! LLVM-side `emit_bytes_hash` for the IR-level twin.
 
 use koja_ir::HashImpl;
 
@@ -25,6 +24,7 @@ pub(super) fn dispatch(impl_: HashImpl, args: &[Value]) -> Result<Value, Runtime
         });
     };
     let mixed = match (impl_, arg) {
+        (HashImpl::Binary, Value::Binary(bytes)) => fnv1a(bytes),
         (HashImpl::Bool, Value::Bool(b)) => splitmix64(*b as u64),
         (HashImpl::Int(_), Value::Int(v)) => splitmix64(*v as u64),
         (HashImpl::String, Value::String(bytes)) => fnv1a(bytes),

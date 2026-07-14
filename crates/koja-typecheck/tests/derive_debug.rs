@@ -112,13 +112,13 @@ fn struct_with_primitive_fields_synthesizes_field_format_chain() {
 
 #[test]
 fn opaque_field_types_render_as_dotdotdot_placeholder() {
-    // `Binary` is on the synthesizer's opaque list, so its field
-    // renders as a literal `"..."` rather than an interpolated
-    // `self.field.format()` call. This keeps the synthesizer total
-    // even before `Debug for Binary` lands as a real impl.
+    // `CPtr` is on the synthesizer's opaque list (it has no `Debug`
+    // or `Equality` impl, and the list is shared with the equality
+    // synthesizer), so its field renders as a literal `"..."`
+    // rather than an interpolated `self.field.format()` call.
     let source = "
         struct Wrap
-          payload: Binary
+          payload: CPtr<Int32>
         end
 
         1

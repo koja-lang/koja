@@ -1,4 +1,4 @@
-//! `Binary.*` and `Bits.to_binary` family.
+//! `Binary.*` and `Bits.*` family.
 //!
 //! - `Binary.at(self, index: Int) -> Option<Int>`: O(1) byte read.
 //!   Out-of-bounds indices return `None`.
@@ -11,6 +11,9 @@
 //! - `Binary.to_string(self) -> Result<String, String.ConversionError>`:
 //!   UTF-8 validate the bytes and materialize the `Result` enum
 //!   via the receiver symbol on `function.return_type`.
+//! - `Bits.bit_size(self) -> Int`: the stored `bit_length`.
+//! - `Bits.byte_at(self, index: Int) -> Option<Int>`: storage byte
+//!   read over the `ceil(bit_length / 8)` bytes the value carries.
 //! - `Bits.to_binary(self) -> Result<Binary, String>`: require
 //!   byte-aligned bit_length and return `Ok(Binary)`, else
 //!   `Err(reason)`.
@@ -45,8 +48,39 @@ pub(super) fn bits(
     args: &[Value],
 ) -> Result<Value, RuntimeError> {
     match method {
+        BitsMethod::BitSize => bit_size(args),
+        BitsMethod::ByteAt => byte_at(function, args),
         BitsMethod::ToBinary => bits_to_binary(function, args),
     }
+}
+
+fn bit_size(args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Bits { bit_length, .. }] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "Bits.bit_size expects a single Bits argument, got {} arg(s): {args:?}",
+                args.len(),
+            ),
+        });
+    };
+    Ok(Value::Int(*bit_length as i64))
+}
+
+fn byte_at(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {
+    let [Value::Bits { bytes, .. }, Value::Int(index)] = args else {
+        return Err(RuntimeError::TypeMismatch {
+            detail: format!(
+                "Bits.byte_at expects (Bits, Int) arguments, got {} arg(s): {args:?}",
+                args.len(),
+            ),
+        });
+    };
+    let option_symbol = helpers::enum_return_symbol(function, "Bits.byte_at")?;
+    let byte = usize::try_from(*index)
+        .ok()
+        .and_then(|i| bytes.get(i))
+        .map(|b| Value::Int(*b as i64));
+    Ok(helpers::option_value(option_symbol, byte))
 }
 
 fn at(function: &IRFunction, args: &[Value]) -> Result<Value, RuntimeError> {

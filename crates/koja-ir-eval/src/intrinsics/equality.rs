@@ -1,7 +1,7 @@
 //! Eval handlers for the `Equality` intrinsic family: `Bool`,
 //! 8 integer cells (flattened to [`Value::Int(i64)`]), `Float` /
-//! `Float32` (IEEE-754 ordered: `NaN != NaN`), and `String`.
-//! Mismatched shapes surface a typed
+//! `Float32` (IEEE-754 ordered: `NaN != NaN`), `String`, and
+//! `Binary`. Mismatched shapes surface a typed
 //! [`RuntimeError::TypeMismatch`] instead of coercing.
 
 use koja_ir::{EqualityImpl, FloatType};
@@ -19,6 +19,7 @@ pub(super) fn dispatch(impl_: EqualityImpl, args: &[Value]) -> Result<Value, Run
         });
     };
     let result = match (impl_, lhs, rhs) {
+        (EqualityImpl::Binary, Value::Binary(a), Value::Binary(b)) => a == b,
         (EqualityImpl::Bool, Value::Bool(a), Value::Bool(b)) => a == b,
         (EqualityImpl::Int(_), Value::Int(a), Value::Int(b)) => a == b,
         (EqualityImpl::Float(FloatType::Float), Value::Float64(a), Value::Float64(b)) => a == b,

@@ -1626,6 +1626,15 @@ Float-extract segments (`x: Float32` in a pattern) are not supported yet. When t
 - `to_bits(self) -> Bits`: zero-cost widening from bytes to bits.
 - `to_string(self) -> Result<String, String.ConversionError>`: attempts to interpret bytes as UTF-8, returning `InvalidUTF8` when decoding fails.
 
+`Binary` implements `Equality` (length plus byte comparison, so `a == b` works) and `Hash`, making it usable as a `Map` key or `Set` element. Its `Debug` rendering is the byte-list form `<<83, 0, 0, 0, 4>>`, truncated with a trailing `...` past 64 bytes.
+
+`Bits` functions:
+
+- `bit_size(self) -> Int`: returns the number of bits.
+- `byte_at(self, index: Int) -> Option<Int>`: returns storage byte `index` as an `Int` in `0..255`, or `Option.None` out of bounds. Bytes hold bits MSB-first with zeroed trailing padding, and the bitstring occupies `ceil(bit_size / 8)` bytes. O(1).
+
+`Bits` also implements `Equality` (bit length plus bit comparison) and `Hash`, so it works as a `Map` key or `Set` element. Its `Debug` rendering is the round-trippable literal form: whole bytes as decimals, then any trailing partial byte as `value::width`, e.g. `<<72, 101, 5::3>>`. Truncation past 64 bytes matches `Binary`.
+
 #### Conversion Functions
 
 - `String.to_binary(self) -> Binary`: zero-cost widening from UTF-8 string to bytes.
@@ -1785,7 +1794,7 @@ protocol Equality
 end
 ```
 
-Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, and `String`.
+Powers the `==` and `!=` operators. Implemented for all numeric types, `Bool`, `String`, `Binary`, and `Bits`.
 
 ### `Hash` Protocol
 
@@ -1795,7 +1804,7 @@ protocol Hash
 end
 ```
 
-Required for keys in `Map<K, V>` and elements in `Set<T>`. Implemented for all numeric types, `Bool`, and `String`. Integers use SplitMix64, and strings use FNV-1a.
+Required for keys in `Map<K, V>` and elements in `Set<T>`. Implemented for all numeric types, `Bool`, `String`, `Binary`, and `Bits`. Integers use SplitMix64, and strings and binaries use FNV-1a.
 
 ### `Bitwise` Protocol
 
@@ -1832,7 +1841,7 @@ protocol Debug
 end
 ```
 
-`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`). The receiver stays live and the call returns `()`. `inspect` is the chainable variant. It prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, `Binary`, `Bits`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
+`format` returns a round-trippable string representation of the value. `print` writes that string to stdout (via `IO.puts`). The receiver stays live and the call returns `()`. `inspect` is the chainable variant. It prints and returns `self`, useful for tap-style debugging in the middle of an expression. The compiler auto-derives `Debug` for all types: primitives via intrinsics, enums as `VariantName` or `VariantName(payload)`, structs as `TypeName{field: value, ...}`. Generic types derive the same full field-by-field body as concrete ones. Fields whose type has no meaningful rendering (`CPtr<T>`, function values) render as a literal `"..."` placeholder. Implementing `format` is enough to get `print` and `inspect` for free. Custom implementations can override the derived one via `impl Debug for MyType`.
 
 `Debug.format` for `String` is round-trippable: it wraps the contents in double quotes and escapes `\`, `"`, `\n`, `\r`, `\t`. That means `.print()` shows top-level strings quoted, and aggregates render their `String` fields quoted too:
 

@@ -125,7 +125,39 @@ extend Binary
   fn to_string(self) -> Result<String, String.ConversionError>
 end
 
+impl Equality for Binary
+  @doc """
+  Returns `true` when both binaries have the same length and bytes.
+  """
+  @intrinsic
+  fn eq(self, other: Binary) -> Bool
+end
+
+impl Hash for Binary
+  @doc """
+  Returns an FNV-1a hash over the binary's bytes, so `Binary` values
+  can key a `Map` or populate a `Set`.
+  """
+  @intrinsic
+  fn hash(self) -> Int
+end
+
 extend Bits
+  @doc """
+  Returns the number of bits in the bitstring.
+  """
+  @intrinsic
+  fn bit_size(self) -> Int
+
+  @doc """
+  Returns storage byte `index` as an `Int` in `0..255`, or
+  `Option.None` when `index` is out of bounds. Bytes hold bits
+  MSB-first, and the trailing bits of the last byte are zero. The
+  bitstring occupies `ceil(bit_size / 8)` bytes. O(1).
+  """
+  @intrinsic
+  fn byte_at(self, index: Int) -> Option<Int>
+
   @doc """
   Attempts to narrow a `Bits` value to `Binary`. Returns `Result.Ok` if
   the bit length is byte-aligned (divisible by 8), or `Result.Err` with
@@ -133,4 +165,56 @@ extend Bits
   """
   @intrinsic
   fn to_binary(self) -> Result<Binary, String>
+end
+
+impl Equality for Bits
+  @doc """
+  Returns `true` when both bitstrings have the same bit length and
+  bits. Storage bytes compare directly because the trailing bits of
+  the last byte are always zero.
+  """
+  fn eq(self, other: Bits) -> Bool
+    size = self.bit_size()
+
+    if size != other.bit_size()
+      return false
+    end
+
+    bytes = (size + 7) / 8
+    i = 0
+
+    while i < bytes
+      if self.byte_at(i).or(0) != other.byte_at(i).or(0)
+        return false
+      end
+
+      i += 1
+    end
+
+    true
+  end
+end
+
+impl Hash for Bits
+  @doc """
+  Returns an xorshift-mixed hash over the storage bytes, seeded with
+  the bit length so equal bytes at different lengths hash apart. Lets
+  `Bits` values key a `Map` or populate a `Set`.
+  """
+  fn hash(self) -> Int
+    size = self.bit_size()
+    bytes = (size + 7) / 8
+    h = size
+    i = 0
+
+    while i < bytes
+      h = h.bxor(self.byte_at(i).or(0))
+      h = h.bxor(h.bsl(13))
+      h = h.bxor(h.bsr(7))
+      h = h.bxor(h.bsl(17))
+      i += 1
+    end
+
+    h
+  end
 end
