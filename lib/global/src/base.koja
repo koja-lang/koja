@@ -25,7 +25,7 @@ base64.
 Encoders accept either a `String` (encoded as its UTF-8 bytes) or a
 `Binary`, and return the encoded text. Decoders take a `String` and
 return the decoded bytes, or a `Base.Error` describing the first
-problem found. Base64 encoders always pad; decoders accept both
+problem found. Base64 encoders always pad. Decoders accept both
 padded and unpadded input.
 
     Base.encode64("hello")       # "aGVsbG8="

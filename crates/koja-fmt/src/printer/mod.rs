@@ -112,7 +112,7 @@ impl<'a> Printer<'a> {
                     let start_line = item_start_line(item);
                     let next_line = self.comments.peek_before(start_line).unwrap_or(start_line);
                     // Annotated declarations always get surrounding blank
-                    // lines; otherwise a single blank is preserved from the
+                    // lines. Otherwise a single blank is preserved from the
                     // source (a wider gap collapses to one).
                     let source_has_blank = prev_end.is_some_and(|prev| next_line > prev + 1);
                     if prev_end.is_some() && (source_has_blank || annotated || prev_annotated) {
