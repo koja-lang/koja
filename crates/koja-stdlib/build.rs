@@ -103,6 +103,7 @@ fn main() {
         "Global.map",
         "Global.numeric",
         "Global.option",
+        "Global.path",
         "Global.process",
         "Global.random",
         "Global.result",
