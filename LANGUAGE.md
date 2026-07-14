@@ -1597,6 +1597,12 @@ msg = <<0x01, port::16>>
 
 Segment modifiers: `::N` (bit width), `::N byte` (byte width), `signed`/`unsigned`, `big`/`little`, type annotations (`: Float32`, `: Int16`). Byte-aligned totals produce `Binary`, non-byte-aligned produce `Bits`. String literals can appear as segments for protocol framing.
 
+`Binary`-typed values splice their bytes into the literal, so a framed message builds in one expression. A bare segment is a splice whenever its value is `Binary`-typed; `payload: Binary` spells it out explicitly. Splices take no width or endianness modifiers, and the fixed-width segments around a splice must total whole bytes:
+
+```koja
+frame = <<0x51, (payload.byte_size() + 4)::32, payload>>
+```
+
 #### Pattern Matching
 
 Binary patterns destructure byte sequences in `match`:

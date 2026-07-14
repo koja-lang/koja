@@ -191,3 +191,94 @@ fn byte_unit_size_resolves_to_binary() {
         global_leaf(&checked, "Binary")
     );
 }
+
+#[test]
+fn bare_binary_value_splices_and_resolves_to_binary() {
+    // A bare segment classifies by its value's type, so a
+    // `Binary`-typed value splices without a `: Binary` tag.
+    let checked = typecheck("b = <<1, 2>>\n  <<0x51, b>>\n");
+    assert_eq!(
+        trailing_resolution(&checked),
+        global_leaf(&checked, "Binary")
+    );
+}
+
+#[test]
+fn tagged_splice_resolves_to_binary() {
+    let checked = typecheck("b = <<1>>\n  <<b: Binary, 0x02>>\n");
+    assert_eq!(
+        trailing_resolution(&checked),
+        global_leaf(&checked, "Binary")
+    );
+}
+
+#[test]
+fn binary_tag_on_non_binary_value_diagnoses() {
+    let failure = typecheck_fail("n = 5\n  <<n: Binary>>\n");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("requires a `Binary`-typed value")),
+        "expected splice value-type diagnostic, got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn bare_segment_of_inadmissible_type_diagnoses() {
+    // A bare segment admits `Int` (8-bit) and `Binary` (splice).
+    // Anything else needs an explicit modifier.
+    let failure = typecheck_fail("<<1.5>>\n");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("or a `Binary`-typed value")),
+        "expected bare-segment type diagnostic, got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn unaligned_run_before_splice_diagnoses() {
+    // Each fixed-width run around a splice becomes its own Binary,
+    // so a sub-byte run cannot precede a splice.
+    let failure = typecheck_fail("b = <<1>>\n  <<5::3, b>>\n");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("must total whole bytes")),
+        "expected unaligned-run diagnostic, got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn unaligned_run_after_splice_diagnoses() {
+    let failure = typecheck_fail("b = <<1>>\n  <<b, 5::3>>\n");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("must total whole bytes")),
+        "expected unaligned-run diagnostic, got {:?}",
+        failure.diagnostics,
+    );
+}
+
+#[test]
+fn string_splice_tag_diagnoses() {
+    // Only `Binary` values splice. `: String` gets a pointed
+    // diagnostic instead of the unrecognized-primitive list.
+    let failure = typecheck_fail("s = \"hi\"\n  <<s: String>>\n");
+    assert!(
+        failure
+            .diagnostics
+            .iter()
+            .any(|d| d.message.contains("cannot be spliced")),
+        "expected string-splice diagnostic, got {:?}",
+        failure.diagnostics,
+    );
+}

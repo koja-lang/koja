@@ -21,6 +21,38 @@ use std::fmt;
 
 use koja_ast::identifier::Identifier;
 
+/// Declare an intrinsic method enum together with its `from_source`
+/// parser and `segment` display name, generated from one
+/// variant-to-string table so the source spelling exists in exactly
+/// one place.
+macro_rules! intrinsic_methods {
+    ($(
+        $(#[$meta:meta])*
+        $name:ident { $($variant:ident => $segment:literal),+ $(,)? }
+    )+) => {$(
+        $(#[$meta])*
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum $name {
+            $($variant,)+
+        }
+
+        impl $name {
+            fn from_source(s: &str) -> Option<Self> {
+                match s {
+                    $($segment => Some(Self::$variant),)+
+                    _ => None,
+                }
+            }
+
+            fn segment(self) -> &'static str {
+                match self {
+                    $(Self::$variant => $segment,)+
+                }
+            }
+        }
+    )+};
+}
+
 /// One `@intrinsic`-annotated function's dispatch slot. Constructed
 /// at lift via [`IRIntrinsicId::from_identifier`]; consumed by both
 /// backend dispatch tables via exhaustive `match`.
@@ -83,154 +115,179 @@ pub enum IRIntrinsicId {
     String(StringMethod),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum KernelMethod {
-    Panic,
-}
+intrinsic_methods! {
+    BinaryMethod {
+        At => "at",
+        ByteSize => "byte_size",
+        Slice => "slice",
+        ToBits => "to_bits",
+        ToString => "to_string",
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RuntimeBlockMethod {
-    AdoptBinary,
-}
+    BitsMethod {
+        ToBinary => "to_binary",
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CPtrMethod {
-    Alloc,
-    Borrow,
-    Copy,
-    Free,
-    Null,
-    NullQ,
-    Offset,
-    Read,
-    ToBinary,
-    Write,
-}
+    BitOp {
+        Band => "band",
+        Bnot => "bnot",
+        Bor => "bor",
+        Bsl => "bsl",
+        Bsr => "bsr",
+        Bxor => "bxor",
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum CStringMethod {
-    ToString,
-}
+    CPtrMethod {
+        Alloc => "alloc",
+        Borrow => "borrow",
+        Copy => "copy",
+        Free => "free",
+        Null => "null",
+        NullQ => "null?",
+        Offset => "offset",
+        Read => "read",
+        ToBinary => "to_binary",
+        Write => "write",
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BinaryMethod {
-    At,
-    ByteSize,
-    Slice,
-    ToBits,
-    ToString,
-}
+    CStringMethod {
+        ToString => "to_string",
+    }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BitsMethod {
-    ToBinary,
-}
+    /// Float receivers for the float slice of `Equality`. Sibling of
+    /// [`IntType`]; each width is its own emitter cell (LLVM picks
+    /// f32 / f64 compare from the param's actual type).
+    FloatType {
+        Float => "Float",
+        Float32 => "Float32",
+    }
 
-/// Methods on `List<T>`. The element type doesn't appear here because
-/// the IR carries it on the [`crate::IRFunction`] signature; backends
-/// monomorphize per element type from there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ListMethod {
-    Append,
-    Concat,
-    EmptyQ,
-    FromList,
-    Get,
-    Length,
-    New,
-    Pop,
-    ReplaceAt,
-    Slice,
-}
+    /// Integer receivers for the 48-cell `Bitwise` family and the
+    /// 8-cell integer slice of `Equality` / `Hash`. `Bool` and `String`
+    /// are not included — they're siblings of [`EqualityImpl::Int`] /
+    /// [`HashImpl::Int`] at the enum level.
+    IntType {
+        Int => "Int",
+        Int8 => "Int8",
+        Int16 => "Int16",
+        Int32 => "Int32",
+        UInt8 => "UInt8",
+        UInt16 => "UInt16",
+        UInt32 => "UInt32",
+        UInt64 => "UInt64",
+    }
 
-/// Methods on `Map<K, V>`. Like [`ListMethod`], the key + value
-/// types don't appear here — both ride the [`crate::IRFunction`]
-/// signature, and backends specialize layouts per `(K, V)` pair
-/// from there.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum MapMethod {
-    EmptyQ,
-    FromMap,
-    Get,
-    HasQ,
-    Length,
-    New,
-    Put,
-    Remove,
-}
+    KernelMethod {
+        Panic => "panic",
+    }
 
-/// Methods on `Set<T>`. Same monomorphization story as
-/// [`ListMethod`] / [`MapMethod`] — the element type rides the
-/// [`crate::IRFunction`] signature.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SetMethod {
-    EmptyQ,
-    FromList,
-    HasQ,
-    Insert,
-    Length,
-    New,
-    Remove,
-}
+    /// Methods on `List<T>`. The element type doesn't appear here because
+    /// the IR carries it on the [`crate::IRFunction`] signature; backends
+    /// monomorphize per element type from there.
+    ListMethod {
+        Append => "append",
+        Concat => "concat",
+        EmptyQ => "empty?",
+        FromList => "from_list",
+        Get => "get",
+        Length => "length",
+        New => "new",
+        Pop => "pop",
+        ReplaceAt => "replace_at",
+        Slice => "slice",
+    }
 
-/// `@intrinsic`-flagged methods on `Ref<M, R>` from
-/// [`koja/lib/global/src/process.koja`]. `Cast` / `Call` / `Signal` /
-/// `Kill` / `AliveQ` / `SendAfter` cover the public mailbox surface;
-/// `SelfRef` is the only zero-argument constructor (the others are
-/// receiver-bound).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RefMethod {
-    AliveQ,
-    Call,
-    Cast,
-    Kill,
-    SelfRef,
-    SendAfter,
-    Signal,
-}
+    /// Methods on `Map<K, V>`. Like [`ListMethod`], the key + value
+    /// types don't appear here — both ride the [`crate::IRFunction`]
+    /// signature, and backends specialize layouts per `(K, V)` pair
+    /// from there.
+    MapMethod {
+        EmptyQ => "empty?",
+        FromMap => "from_map",
+        Get => "get",
+        HasQ => "has?",
+        Length => "length",
+        New => "new",
+        Put => "put",
+        Remove => "remove",
+    }
 
-/// `@intrinsic`-flagged statics on the `Process` protocol: `Monitor`
-/// registers the calling process as a watcher of a `Pid`, `Demonitor`
-/// retracts one, `Parent` reports the calling process's spawner.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ProcessMethod {
-    Demonitor,
-    Monitor,
-    Parent,
-}
+    ParseTarget {
+        Float => "Float",
+        Int => "Int",
+    }
 
-/// `@intrinsic`-flagged method on `ReplyTo<R>`. Single-variant today
-/// (`send`); kept as a wrapper enum so adding a sibling later is a
-/// variant-add, not a shape change. Mirrors [`BitsMethod`] /
-/// [`KernelMethod`].
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReplyToMethod {
-    Send,
-}
+    /// `@intrinsic`-flagged statics on the `Process` protocol: `Monitor`
+    /// registers the calling process as a watcher of a `Pid`, `Demonitor`
+    /// retracts one, `Parent` reports the calling process's spawner.
+    ProcessMethod {
+        Demonitor => "demonitor",
+        Monitor => "monitor",
+        Parent => "parent",
+    }
 
-/// `@intrinsic`-flagged methods on `Socket` from
-/// [`koja/lib/net/src/net.koja`]. `RecvFrom` receives one
-/// datagram + sender address (suspending the process until the fd
-/// is readable); `Resolve` is a synchronous `getaddrinfo` shim.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum SocketMethod {
-    LastError,
-    RecvFrom,
-    Resolve,
-}
+    /// `@intrinsic`-flagged methods on `Ref<M, R>` from
+    /// [`koja/lib/global/src/process.koja`]. `Cast` / `Call` / `Signal` /
+    /// `Kill` / `AliveQ` / `SendAfter` cover the public mailbox surface;
+    /// `SelfRef` is the only zero-argument constructor (the others are
+    /// receiver-bound).
+    RefMethod {
+        AliveQ => "alive?",
+        Call => "call",
+        Cast => "cast",
+        Kill => "kill",
+        SelfRef => "self_ref",
+        SendAfter => "send_after",
+        Signal => "signal",
+    }
 
-/// Methods on `String` flagged `@intrinsic` in
-/// [`crate::stdlib::string`]. Excludes `eq` / `hash`; those route
-/// through [`EqualityImpl::String`] / [`HashImpl::String`] alongside
-/// the other primitive impls.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum StringMethod {
-    ByteLength,
-    Get,
-    Length,
-    Slice,
-    ToBinary,
-    ToCstring,
+    /// `@intrinsic`-flagged method on `ReplyTo<R>`. Single-variant today
+    /// (`send`); kept as a wrapper enum so adding a sibling later is a
+    /// variant-add, not a shape change. Mirrors [`BitsMethod`] /
+    /// [`KernelMethod`].
+    ReplyToMethod {
+        Send => "send",
+    }
+
+    RuntimeBlockMethod {
+        AdoptBinary => "adopt_binary",
+    }
+
+    /// Methods on `Set<T>`. Same monomorphization story as
+    /// [`ListMethod`] / [`MapMethod`] — the element type rides the
+    /// [`crate::IRFunction`] signature.
+    SetMethod {
+        EmptyQ => "empty?",
+        FromList => "from_list",
+        HasQ => "has?",
+        Insert => "insert",
+        Length => "length",
+        New => "new",
+        Remove => "remove",
+    }
+
+    /// `@intrinsic`-flagged methods on `Socket` from
+    /// [`koja/lib/net/src/net.koja`]. `RecvFrom` receives one
+    /// datagram + sender address (suspending the process until the fd
+    /// is readable); `Resolve` is a synchronous `getaddrinfo` shim.
+    SocketMethod {
+        LastError => "last_error",
+        RecvFrom => "recv_from",
+        Resolve => "resolve",
+    }
+
+    /// Methods on `String` flagged `@intrinsic` in
+    /// [`crate::stdlib::string`]. Excludes `eq` / `hash`; those route
+    /// through [`EqualityImpl::String`] / [`HashImpl::String`] alongside
+    /// the other primitive impls.
+    StringMethod {
+        ByteLength => "byte_length",
+        Get => "get",
+        Length => "length",
+        Slice => "slice",
+        ToBinary => "to_binary",
+        ToCstring => "to_cstring",
+    }
 }
 
 /// Receiver shape for `Debug.format` impls. Mirrors
@@ -274,41 +331,6 @@ pub enum HashImpl {
     String,
 }
 
-/// Integer receivers for the 48-cell `Bitwise` family and the
-/// 8-cell integer slice of `Equality` / `Hash`. `Bool` and `String`
-/// are not included — they're siblings of [`EqualityImpl::Int`] /
-/// [`HashImpl::Int`] at the enum level.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum IntType {
-    Int,
-    Int8,
-    Int16,
-    Int32,
-    UInt8,
-    UInt16,
-    UInt32,
-    UInt64,
-}
-
-/// Float receivers for the float slice of `Equality`. Sibling of
-/// [`IntType`]; each width is its own emitter cell (LLVM picks
-/// f32 / f64 compare from the param's actual type).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FloatType {
-    Float,
-    Float32,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum BitOp {
-    Band,
-    Bnot,
-    Bor,
-    Bsl,
-    Bsr,
-    Bxor,
-}
-
 /// One explicit numeric conversion method. `IntNarrow` covers the
 /// seven `Int.to_*` methods (target width carried here, not read
 /// back out of the return type). `UInt64ToInt` is the one sized
@@ -333,12 +355,6 @@ pub enum IntNarrowTarget {
     UInt64,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ParseTarget {
-    Float,
-    Int,
-}
-
 impl IRIntrinsicId {
     /// Map a function's canonical identifier to its dispatch slot.
     /// Returns `None` if no registered backend handles the
@@ -358,78 +374,47 @@ impl IRIntrinsicId {
         }
     }
 
+    /// Dispatch on the receiver's namespace first, then fall through
+    /// to the cross-receiver families (`eq` / `format` / `hash` /
+    /// `parse` / bitwise) so receivers like `Int` and `String` can
+    /// serve both.
     fn from_pair(receiver: &str, method: &str) -> Option<Self> {
-        if receiver == "Binary" {
-            return BinaryMethod::from_source(method).map(Self::Binary);
+        let namespaced = match receiver {
+            "Binary" => BinaryMethod::from_source(method).map(Self::Binary),
+            "Bits" => BitsMethod::from_source(method).map(Self::Bits),
+            "CPtr" => CPtrMethod::from_source(method).map(Self::CPtr),
+            "CString" => CStringMethod::from_source(method).map(Self::CString),
+            "Float" if method == "to_float32" => {
+                Some(Self::NumericConvert(NumericConvert::FloatToFloat32))
+            }
+            "Int" => IntNarrowTarget::from_source(method)
+                .map(|target| Self::NumericConvert(NumericConvert::IntNarrow(target))),
+            "Kernel" => KernelMethod::from_source(method).map(Self::Kernel),
+            "List" => ListMethod::from_source(method).map(Self::List),
+            "Map" => MapMethod::from_source(method).map(Self::Map),
+            "Process" => ProcessMethod::from_source(method).map(Self::Process),
+            "Ref" => RefMethod::from_source(method).map(Self::Ref),
+            "ReplyTo" => ReplyToMethod::from_source(method).map(Self::ReplyTo),
+            "RuntimeBlock" => RuntimeBlockMethod::from_source(method).map(Self::RuntimeBlock),
+            "Set" => SetMethod::from_source(method).map(Self::Set),
+            "Socket" => SocketMethod::from_source(method).map(Self::Socket),
+            "String" => StringMethod::from_source(method).map(Self::String),
+            "UInt64" if method == "to_int" => {
+                Some(Self::NumericConvert(NumericConvert::UInt64ToInt))
+            }
+            _ => None,
+        };
+        if namespaced.is_some() {
+            return namespaced;
         }
-        if receiver == "Bits" {
-            return BitsMethod::from_source(method).map(Self::Bits);
+        match method {
+            "eq" => EqualityImpl::from_receiver(receiver).map(Self::Equality),
+            "format" => DebugImpl::from_receiver(receiver).map(Self::Debug),
+            "hash" => HashImpl::from_receiver(receiver).map(Self::Hash),
+            "parse" => ParseTarget::from_source(receiver).map(Self::Parse),
+            _ => BitOp::from_source(method)
+                .and_then(|op| IntType::from_source(receiver).map(|ty| Self::Bitwise { ty, op })),
         }
-        if receiver == "CPtr" {
-            return CPtrMethod::from_source(method).map(Self::CPtr);
-        }
-        if receiver == "CString" {
-            return CStringMethod::from_source(method).map(Self::CString);
-        }
-        if receiver == "Float" && method == "to_float32" {
-            return Some(Self::NumericConvert(NumericConvert::FloatToFloat32));
-        }
-        if receiver == "Int"
-            && let Some(target) = IntNarrowTarget::from_source(method)
-        {
-            return Some(Self::NumericConvert(NumericConvert::IntNarrow(target)));
-        }
-        if receiver == "Kernel" && method == "panic" {
-            return Some(Self::Kernel(KernelMethod::Panic));
-        }
-        if receiver == "List" {
-            return ListMethod::from_source(method).map(Self::List);
-        }
-        if receiver == "Map" {
-            return MapMethod::from_source(method).map(Self::Map);
-        }
-        if receiver == "Process" {
-            return ProcessMethod::from_source(method).map(Self::Process);
-        }
-        if receiver == "Ref" {
-            return RefMethod::from_source(method).map(Self::Ref);
-        }
-        if receiver == "ReplyTo" {
-            return ReplyToMethod::from_source(method).map(Self::ReplyTo);
-        }
-        if receiver == "RuntimeBlock" {
-            return RuntimeBlockMethod::from_source(method).map(Self::RuntimeBlock);
-        }
-        if receiver == "Set" {
-            return SetMethod::from_source(method).map(Self::Set);
-        }
-        if receiver == "Socket" {
-            return SocketMethod::from_source(method).map(Self::Socket);
-        }
-        if receiver == "String"
-            && let Some(m) = StringMethod::from_source(method)
-        {
-            return Some(Self::String(m));
-        }
-        if receiver == "UInt64" && method == "to_int" {
-            return Some(Self::NumericConvert(NumericConvert::UInt64ToInt));
-        }
-        if method == "eq" {
-            return EqualityImpl::from_receiver(receiver).map(Self::Equality);
-        }
-        if method == "format" {
-            return DebugImpl::from_receiver(receiver).map(Self::Debug);
-        }
-        if method == "hash" {
-            return HashImpl::from_receiver(receiver).map(Self::Hash);
-        }
-        if method == "parse" {
-            return ParseTarget::from_source(receiver).map(Self::Parse);
-        }
-        if let Some(op) = BitOp::from_source(method) {
-            return IntType::from_source(receiver).map(|ty| Self::Bitwise { ty, op });
-        }
-        None
     }
 }
 
@@ -450,50 +435,6 @@ impl IntType {
     /// unsigned (`UIntN`) use logical shift.
     pub fn is_signed(self) -> bool {
         matches!(self, Self::Int | Self::Int8 | Self::Int16 | Self::Int32,)
-    }
-
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "Int" => Self::Int,
-            "Int8" => Self::Int8,
-            "Int16" => Self::Int16,
-            "Int32" => Self::Int32,
-            "UInt8" => Self::UInt8,
-            "UInt16" => Self::UInt16,
-            "UInt32" => Self::UInt32,
-            "UInt64" => Self::UInt64,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Int => "Int",
-            Self::Int8 => "Int8",
-            Self::Int16 => "Int16",
-            Self::Int32 => "Int32",
-            Self::UInt8 => "UInt8",
-            Self::UInt16 => "UInt16",
-            Self::UInt32 => "UInt32",
-            Self::UInt64 => "UInt64",
-        }
-    }
-}
-
-impl FloatType {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "Float" => Self::Float,
-            "Float32" => Self::Float32,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Float => "Float",
-            Self::Float32 => "Float32",
-        }
     }
 }
 
@@ -580,307 +521,6 @@ impl BitOp {
             other => unreachable!("shift_count_message called with non-shift op {other:?}"),
         }
     }
-
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "band" => Self::Band,
-            "bnot" => Self::Bnot,
-            "bor" => Self::Bor,
-            "bsl" => Self::Bsl,
-            "bsr" => Self::Bsr,
-            "bxor" => Self::Bxor,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Band => "band",
-            Self::Bnot => "bnot",
-            Self::Bor => "bor",
-            Self::Bsl => "bsl",
-            Self::Bsr => "bsr",
-            Self::Bxor => "bxor",
-        }
-    }
-}
-
-impl KernelMethod {
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Panic => "panic",
-        }
-    }
-}
-
-impl CPtrMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "alloc" => Self::Alloc,
-            "borrow" => Self::Borrow,
-            "copy" => Self::Copy,
-            "free" => Self::Free,
-            "null" => Self::Null,
-            "null?" => Self::NullQ,
-            "offset" => Self::Offset,
-            "read" => Self::Read,
-            "to_binary" => Self::ToBinary,
-            "write" => Self::Write,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Alloc => "alloc",
-            Self::Borrow => "borrow",
-            Self::Copy => "copy",
-            Self::Free => "free",
-            Self::Null => "null",
-            Self::NullQ => "null?",
-            Self::Offset => "offset",
-            Self::Read => "read",
-            Self::ToBinary => "to_binary",
-            Self::Write => "write",
-        }
-    }
-}
-
-impl CStringMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "to_string" => Self::ToString,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::ToString => "to_string",
-        }
-    }
-}
-
-impl BinaryMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "at" => Self::At,
-            "byte_size" => Self::ByteSize,
-            "slice" => Self::Slice,
-            "to_bits" => Self::ToBits,
-            "to_string" => Self::ToString,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::At => "at",
-            Self::ByteSize => "byte_size",
-            Self::Slice => "slice",
-            Self::ToBits => "to_bits",
-            Self::ToString => "to_string",
-        }
-    }
-}
-
-impl BitsMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "to_binary" => Self::ToBinary,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::ToBinary => "to_binary",
-        }
-    }
-}
-
-impl ListMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "append" => Self::Append,
-            "concat" => Self::Concat,
-            "empty?" => Self::EmptyQ,
-            "from_list" => Self::FromList,
-            "get" => Self::Get,
-            "length" => Self::Length,
-            "new" => Self::New,
-            "pop" => Self::Pop,
-            "replace_at" => Self::ReplaceAt,
-            "slice" => Self::Slice,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Append => "append",
-            Self::Concat => "concat",
-            Self::EmptyQ => "empty?",
-            Self::FromList => "from_list",
-            Self::Get => "get",
-            Self::Length => "length",
-            Self::New => "new",
-            Self::Pop => "pop",
-            Self::ReplaceAt => "replace_at",
-            Self::Slice => "slice",
-        }
-    }
-}
-
-impl MapMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "empty?" => Self::EmptyQ,
-            "from_map" => Self::FromMap,
-            "get" => Self::Get,
-            "has?" => Self::HasQ,
-            "length" => Self::Length,
-            "new" => Self::New,
-            "put" => Self::Put,
-            "remove" => Self::Remove,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::EmptyQ => "empty?",
-            Self::FromMap => "from_map",
-            Self::Get => "get",
-            Self::HasQ => "has?",
-            Self::Length => "length",
-            Self::New => "new",
-            Self::Put => "put",
-            Self::Remove => "remove",
-        }
-    }
-}
-
-impl RefMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "alive?" => Self::AliveQ,
-            "call" => Self::Call,
-            "cast" => Self::Cast,
-            "kill" => Self::Kill,
-            "self_ref" => Self::SelfRef,
-            "send_after" => Self::SendAfter,
-            "signal" => Self::Signal,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::AliveQ => "alive?",
-            Self::Call => "call",
-            Self::Cast => "cast",
-            Self::Kill => "kill",
-            Self::SelfRef => "self_ref",
-            Self::SendAfter => "send_after",
-            Self::Signal => "signal",
-        }
-    }
-}
-
-impl ProcessMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "demonitor" => Self::Demonitor,
-            "monitor" => Self::Monitor,
-            "parent" => Self::Parent,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Demonitor => "demonitor",
-            Self::Monitor => "monitor",
-            Self::Parent => "parent",
-        }
-    }
-}
-
-impl ReplyToMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "send" => Self::Send,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Send => "send",
-        }
-    }
-}
-
-impl SetMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "empty?" => Self::EmptyQ,
-            "from_list" => Self::FromList,
-            "has?" => Self::HasQ,
-            "insert" => Self::Insert,
-            "length" => Self::Length,
-            "new" => Self::New,
-            "remove" => Self::Remove,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::EmptyQ => "empty?",
-            Self::FromList => "from_list",
-            Self::HasQ => "has?",
-            Self::Insert => "insert",
-            Self::Length => "length",
-            Self::New => "new",
-            Self::Remove => "remove",
-        }
-    }
-}
-
-impl SocketMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "last_error" => Self::LastError,
-            "recv_from" => Self::RecvFrom,
-            "resolve" => Self::Resolve,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::LastError => "last_error",
-            Self::RecvFrom => "recv_from",
-            Self::Resolve => "resolve",
-        }
-    }
-}
-
-impl RuntimeBlockMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "adopt_binary" => Self::AdoptBinary,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::AdoptBinary => "adopt_binary",
-        }
-    }
 }
 
 impl NumericConvert {
@@ -917,48 +557,6 @@ impl IntNarrowTarget {
             Self::UInt16 => "uint16",
             Self::UInt32 => "uint32",
             Self::UInt64 => "uint64",
-        }
-    }
-}
-
-impl ParseTarget {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "Float" => Self::Float,
-            "Int" => Self::Int,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::Float => "Float",
-            Self::Int => "Int",
-        }
-    }
-}
-
-impl StringMethod {
-    fn from_source(s: &str) -> Option<Self> {
-        Some(match s {
-            "byte_length" => Self::ByteLength,
-            "get" => Self::Get,
-            "length" => Self::Length,
-            "slice" => Self::Slice,
-            "to_binary" => Self::ToBinary,
-            "to_cstring" => Self::ToCstring,
-            _ => return None,
-        })
-    }
-
-    fn segment(self) -> &'static str {
-        match self {
-            Self::ByteLength => "byte_length",
-            Self::Get => "get",
-            Self::Length => "length",
-            Self::Slice => "slice",
-            Self::ToBinary => "to_binary",
-            Self::ToCstring => "to_cstring",
         }
     }
 }
@@ -1011,162 +609,126 @@ mod tests {
         assert_round_trip(&["print"], IRIntrinsicId::Print, "print");
     }
 
+    /// Every namespaced `Receiver.method` intrinsic, spelled out
+    /// independently of the `intrinsic_methods!` tables so a typo'd
+    /// source string there fails here instead of round-tripping.
     #[test]
-    fn kernel_panic_round_trips() {
+    fn namespaced_methods_cover_the_full_surface() {
+        use IRIntrinsicId as Id;
+        let cases: &[(&str, &str, Id)] = &[
+            ("Binary", "at", Id::Binary(BinaryMethod::At)),
+            ("Binary", "byte_size", Id::Binary(BinaryMethod::ByteSize)),
+            ("Binary", "slice", Id::Binary(BinaryMethod::Slice)),
+            ("Binary", "to_bits", Id::Binary(BinaryMethod::ToBits)),
+            ("Binary", "to_string", Id::Binary(BinaryMethod::ToString)),
+            ("Bits", "to_binary", Id::Bits(BitsMethod::ToBinary)),
+            ("CPtr", "alloc", Id::CPtr(CPtrMethod::Alloc)),
+            ("CPtr", "borrow", Id::CPtr(CPtrMethod::Borrow)),
+            ("CPtr", "copy", Id::CPtr(CPtrMethod::Copy)),
+            ("CPtr", "free", Id::CPtr(CPtrMethod::Free)),
+            ("CPtr", "null", Id::CPtr(CPtrMethod::Null)),
+            ("CPtr", "null?", Id::CPtr(CPtrMethod::NullQ)),
+            ("CPtr", "offset", Id::CPtr(CPtrMethod::Offset)),
+            ("CPtr", "read", Id::CPtr(CPtrMethod::Read)),
+            ("CPtr", "to_binary", Id::CPtr(CPtrMethod::ToBinary)),
+            ("CPtr", "write", Id::CPtr(CPtrMethod::Write)),
+            ("CString", "to_string", Id::CString(CStringMethod::ToString)),
+            ("Kernel", "panic", Id::Kernel(KernelMethod::Panic)),
+            ("List", "append", Id::List(ListMethod::Append)),
+            ("List", "concat", Id::List(ListMethod::Concat)),
+            ("List", "empty?", Id::List(ListMethod::EmptyQ)),
+            ("List", "from_list", Id::List(ListMethod::FromList)),
+            ("List", "get", Id::List(ListMethod::Get)),
+            ("List", "length", Id::List(ListMethod::Length)),
+            ("List", "new", Id::List(ListMethod::New)),
+            ("List", "pop", Id::List(ListMethod::Pop)),
+            ("List", "replace_at", Id::List(ListMethod::ReplaceAt)),
+            ("List", "slice", Id::List(ListMethod::Slice)),
+            ("Map", "empty?", Id::Map(MapMethod::EmptyQ)),
+            ("Map", "from_map", Id::Map(MapMethod::FromMap)),
+            ("Map", "get", Id::Map(MapMethod::Get)),
+            ("Map", "has?", Id::Map(MapMethod::HasQ)),
+            ("Map", "length", Id::Map(MapMethod::Length)),
+            ("Map", "new", Id::Map(MapMethod::New)),
+            ("Map", "put", Id::Map(MapMethod::Put)),
+            ("Map", "remove", Id::Map(MapMethod::Remove)),
+            (
+                "Process",
+                "demonitor",
+                Id::Process(ProcessMethod::Demonitor),
+            ),
+            ("Process", "monitor", Id::Process(ProcessMethod::Monitor)),
+            ("Process", "parent", Id::Process(ProcessMethod::Parent)),
+            ("Ref", "alive?", Id::Ref(RefMethod::AliveQ)),
+            ("Ref", "call", Id::Ref(RefMethod::Call)),
+            ("Ref", "cast", Id::Ref(RefMethod::Cast)),
+            ("Ref", "kill", Id::Ref(RefMethod::Kill)),
+            ("Ref", "self_ref", Id::Ref(RefMethod::SelfRef)),
+            ("Ref", "send_after", Id::Ref(RefMethod::SendAfter)),
+            ("Ref", "signal", Id::Ref(RefMethod::Signal)),
+            ("ReplyTo", "send", Id::ReplyTo(ReplyToMethod::Send)),
+            (
+                "RuntimeBlock",
+                "adopt_binary",
+                Id::RuntimeBlock(RuntimeBlockMethod::AdoptBinary),
+            ),
+            ("Set", "empty?", Id::Set(SetMethod::EmptyQ)),
+            ("Set", "from_list", Id::Set(SetMethod::FromList)),
+            ("Set", "has?", Id::Set(SetMethod::HasQ)),
+            ("Set", "insert", Id::Set(SetMethod::Insert)),
+            ("Set", "length", Id::Set(SetMethod::Length)),
+            ("Set", "new", Id::Set(SetMethod::New)),
+            ("Set", "remove", Id::Set(SetMethod::Remove)),
+            ("Socket", "last_error", Id::Socket(SocketMethod::LastError)),
+            ("Socket", "recv_from", Id::Socket(SocketMethod::RecvFrom)),
+            ("Socket", "resolve", Id::Socket(SocketMethod::Resolve)),
+            (
+                "String",
+                "byte_length",
+                Id::String(StringMethod::ByteLength),
+            ),
+            ("String", "get", Id::String(StringMethod::Get)),
+            ("String", "length", Id::String(StringMethod::Length)),
+            ("String", "slice", Id::String(StringMethod::Slice)),
+            ("String", "to_binary", Id::String(StringMethod::ToBinary)),
+            ("String", "to_cstring", Id::String(StringMethod::ToCstring)),
+        ];
+        for (receiver, method, expected) in cases {
+            assert_round_trip(
+                &[receiver, method],
+                *expected,
+                &format!("{receiver}.{method}"),
+            );
+        }
+    }
+
+    #[test]
+    fn numeric_conversions_round_trip() {
+        use IRIntrinsicId as Id;
+        for (method, target) in [
+            ("to_int8", IntNarrowTarget::Int8),
+            ("to_int16", IntNarrowTarget::Int16),
+            ("to_int32", IntNarrowTarget::Int32),
+            ("to_uint8", IntNarrowTarget::UInt8),
+            ("to_uint16", IntNarrowTarget::UInt16),
+            ("to_uint32", IntNarrowTarget::UInt32),
+            ("to_uint64", IntNarrowTarget::UInt64),
+        ] {
+            assert_round_trip(
+                &["Int", method],
+                Id::NumericConvert(NumericConvert::IntNarrow(target)),
+                &format!("Int.{method}"),
+            );
+        }
         assert_round_trip(
-            &["Kernel", "panic"],
-            IRIntrinsicId::Kernel(KernelMethod::Panic),
-            "Kernel.panic",
+            &["Float", "to_float32"],
+            Id::NumericConvert(NumericConvert::FloatToFloat32),
+            "Float.to_float32",
         );
-    }
-
-    #[test]
-    fn cptr_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("alloc", CPtrMethod::Alloc),
-            ("borrow", CPtrMethod::Borrow),
-            ("copy", CPtrMethod::Copy),
-            ("free", CPtrMethod::Free),
-            ("null", CPtrMethod::Null),
-            ("null?", CPtrMethod::NullQ),
-            ("offset", CPtrMethod::Offset),
-            ("read", CPtrMethod::Read),
-            ("write", CPtrMethod::Write),
-            ("to_binary", CPtrMethod::ToBinary),
-        ] {
-            assert_round_trip(
-                &["CPtr", method],
-                IRIntrinsicId::CPtr(variant),
-                &format!("CPtr.{method}"),
-            );
-        }
-    }
-
-    #[test]
-    fn list_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("append", ListMethod::Append),
-            ("concat", ListMethod::Concat),
-            ("empty?", ListMethod::EmptyQ),
-            ("from_list", ListMethod::FromList),
-            ("get", ListMethod::Get),
-            ("length", ListMethod::Length),
-            ("new", ListMethod::New),
-            ("pop", ListMethod::Pop),
-            ("replace_at", ListMethod::ReplaceAt),
-            ("slice", ListMethod::Slice),
-        ] {
-            assert_round_trip(
-                &["List", method],
-                IRIntrinsicId::List(variant),
-                &format!("List.{method}"),
-            );
-        }
-    }
-
-    #[test]
-    fn map_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("empty?", MapMethod::EmptyQ),
-            ("from_map", MapMethod::FromMap),
-            ("get", MapMethod::Get),
-            ("has?", MapMethod::HasQ),
-            ("length", MapMethod::Length),
-            ("new", MapMethod::New),
-            ("put", MapMethod::Put),
-            ("remove", MapMethod::Remove),
-        ] {
-            assert_round_trip(
-                &["Map", method],
-                IRIntrinsicId::Map(variant),
-                &format!("Map.{method}"),
-            );
-        }
-    }
-
-    #[test]
-    fn set_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("empty?", SetMethod::EmptyQ),
-            ("from_list", SetMethod::FromList),
-            ("has?", SetMethod::HasQ),
-            ("insert", SetMethod::Insert),
-            ("length", SetMethod::Length),
-            ("new", SetMethod::New),
-            ("remove", SetMethod::Remove),
-        ] {
-            assert_round_trip(
-                &["Set", method],
-                IRIntrinsicId::Set(variant),
-                &format!("Set.{method}"),
-            );
-        }
-    }
-
-    #[test]
-    fn socket_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("last_error", SocketMethod::LastError),
-            ("recv_from", SocketMethod::RecvFrom),
-            ("resolve", SocketMethod::Resolve),
-        ] {
-            assert_round_trip(
-                &["Socket", method],
-                IRIntrinsicId::Socket(variant),
-                &format!("Socket.{method}"),
-            );
-        }
-    }
-
-    #[test]
-    fn runtime_block_adoption_round_trips() {
         assert_round_trip(
-            &["RuntimeBlock", "adopt_binary"],
-            IRIntrinsicId::RuntimeBlock(RuntimeBlockMethod::AdoptBinary),
-            "RuntimeBlock.adopt_binary",
-        );
-    }
-
-    #[test]
-    fn ref_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("alive?", RefMethod::AliveQ),
-            ("call", RefMethod::Call),
-            ("cast", RefMethod::Cast),
-            ("kill", RefMethod::Kill),
-            ("self_ref", RefMethod::SelfRef),
-            ("send_after", RefMethod::SendAfter),
-            ("signal", RefMethod::Signal),
-        ] {
-            assert_round_trip(
-                &["Ref", method],
-                IRIntrinsicId::Ref(variant),
-                &format!("Ref.{method}"),
-            );
-        }
-    }
-
-    #[test]
-    fn process_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("demonitor", ProcessMethod::Demonitor),
-            ("monitor", ProcessMethod::Monitor),
-            ("parent", ProcessMethod::Parent),
-        ] {
-            assert_round_trip(
-                &["Process", method],
-                IRIntrinsicId::Process(variant),
-                &format!("Process.{method}"),
-            );
-        }
-    }
-
-    #[test]
-    fn reply_to_send_round_trips() {
-        assert_round_trip(
-            &["ReplyTo", "send"],
-            IRIntrinsicId::ReplyTo(ReplyToMethod::Send),
-            "ReplyTo.send",
+            &["UInt64", "to_int"],
+            Id::NumericConvert(NumericConvert::UInt64ToInt),
+            "UInt64.to_int",
         );
     }
 
@@ -1174,24 +736,6 @@ mod tests {
     fn unknown_ref_or_reply_to_methods_return_none() {
         assert!(IRIntrinsicId::from_identifier(&id(&["Ref", "frobnicate"])).is_none());
         assert!(IRIntrinsicId::from_identifier(&id(&["ReplyTo", "shout"])).is_none());
-    }
-
-    #[test]
-    fn string_methods_cover_the_full_surface() {
-        for (method, variant) in [
-            ("byte_length", StringMethod::ByteLength),
-            ("get", StringMethod::Get),
-            ("length", StringMethod::Length),
-            ("slice", StringMethod::Slice),
-            ("to_binary", StringMethod::ToBinary),
-            ("to_cstring", StringMethod::ToCstring),
-        ] {
-            assert_round_trip(
-                &["String", method],
-                IRIntrinsicId::String(variant),
-                &format!("String.{method}"),
-            );
-        }
     }
 
     #[test]

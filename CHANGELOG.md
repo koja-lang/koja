@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `Binary` values can now be spliced into binary construction literals, so a framed message builds in one expression: `<<0x51, (payload.byte_size() + 4)::32, payload>>`.
 - Constants can now be initialized with binary literals, e.g. `const SYNC: Binary = <<0x53::8, 4::32>>`.
 
 ### Fixed
