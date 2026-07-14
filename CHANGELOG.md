@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- New `Base` type encodes and decodes base16, base64, and url-safe base64.
 - `Binary` and `Bits` values can now be compared with `==` and used as `Map` keys and `Set` elements.
 - `Binary` and `Bits` values now print as their literal form, e.g. `<<83, 0, 0, 0, 4>>` and `<<72, 5::3>>`, truncated past 64 bytes, both directly and inside structs.
 - New `Bits` functions `bit_size` and `byte_at` read a bitstring's length and storage bytes.
@@ -17,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `koja format` no longer removes a blank line between a `const` or `alias` declaration and a comment introducing the next one.
+- `koja format` now always surrounds `@doc`-annotated declarations with blank lines.
 - `koja format` now packs wrapped operator chains such as `<>` and `+` with as many operands per line as fit, instead of one per line after the first break.
 - `koja format` now packs the segments of a long binary literal or pattern like list elements, instead of one segment per line.
 

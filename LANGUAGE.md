@@ -17,7 +17,7 @@ Koja is a statically typed, compiled language targeting native binaries via LLVM
 - [Protocols](#protocols): Behavioral Contracts, Static Dispatch
 - [Packages](#packages): Transparent Files, Visibility, Aliases
 - [Concurrency](#concurrency): Processes, `spawn`/`receive`, `Ref`, `ReplyTo`, `Task`
-- [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Protocols
+- [Standard Library](#standard-library): Built-in Functions, Core Types, Collections, String Methods, Binary/Bits, File I/O, Parsing, URI, Base, Protocols
 - [C FFI](#c-ffi): `@extern "C"`, `CPtr<T>`, `CString`
 - [Annotations](#annotations): `@doc`
 - [Tooling](#tooling): CLI Commands, LSP, Formatter
@@ -1094,7 +1094,7 @@ response = HTTP.get("https://example.com")
 
 ### Standard library visibility
 
-The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, etc.) with no alias needed. Domain-specific packages require qualified access:
+The auto-imported `Global` package provides core types (`Option`, `Result`, `List`, `Map`, `Set`, `Process`, `IO`, `File`, `URI`, `Base`, etc.) with no alias needed. Domain-specific packages require qualified access:
 
 - **`Crypto`**: `SHA1`, `SHA256`, `SHA384`, `SHA512`, `HMAC`, `Certificate`, `PrivateKey`, `PEMError`
 - **`Net`**: `TCPSocket`, `TCPListener`, `UDPSocket`, `Socket`, `IPAddress`, `SocketAddress`, `SocketKind`, `SocketError`, `TLSSession`, `TLSConfig`, `TLSIdentity`, `TrustStore`, `TLSError`, `VerificationError`
@@ -1773,6 +1773,27 @@ uri.port.unwrap().print()      # 443
 "fetching #{uri}".print()      # "fetching https://example.com/pkg?v=1"
 
 URI.encode("put it+й").print() # "put%20it+%D0%B9"
+```
+
+### `Base`
+
+RFC 4648 encoding and decoding: base16 (hex), base64, and url-safe base64. Encoders accept either a `String` (encoded as its UTF-8 bytes) or a `Binary`, and return the encoded text. Decoders take a `String` and return the decoded bytes, or a `Base.Error` (`InvalidCharacter` with the offending character, `InvalidLength`, or `InvalidPadding`).
+
+- `Base.encode16(data: Binary | String) -> String`: lowercase hex, two characters per byte.
+- `Base.decode16(text: String) -> Result<Binary, Base.Error>`: accepts both cases.
+- `Base.encode64(data: Binary | String) -> String`: standard `+/` alphabet, padded with `=`.
+- `Base.decode64(text: String) -> Result<Binary, Base.Error>`
+- `Base.url_encode64(data: Binary | String) -> String`: url-safe `-_` alphabet, padded with `=`.
+- `Base.url_decode64(text: String) -> Result<Binary, Base.Error>`
+
+Base64 decoders accept both padded and unpadded input, but `=` may only appear as final padding:
+
+```koja
+Base.encode64("foobar").print()             # "Zm9vYmFy"
+Base.decode64("Zm9vYg==").unwrap().print()  # <<102, 111, 111, 98>>
+Base.decode64("Zm9vYg").unwrap().print()    # <<102, 111, 111, 98>>
+Base.encode16(<<0, 15, 255>>).print()       # "000fff"
+Base.url_encode64(<<251, 239>>).print()     # "--8="
 ```
 
 ### `Enumeration<T>` Protocol

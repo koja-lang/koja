@@ -1,0 +1,318 @@
+alias Base.Error as BaseError
+
+priv const BASE64_STANDARD: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+priv const BASE64_URL: String = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+priv const HEX_LOWER: String = "0123456789abcdef"
+
+# Sentinels returned by `sextet` alongside the real 0-63 values.
+priv const SEXTET_INVALID: Int = -1
+priv const SEXTET_PAD: Int = -2
+
+@doc """
+Why decoding failed. `InvalidCharacter` carries the offending
+character.
+"""
+enum Base.Error
+  InvalidCharacter(String)
+  InvalidLength
+  InvalidPadding
+end
+
+@doc """
+RFC 4648 encoding and decoding for base16 (hex), base64, and url-safe
+base64.
+
+Encoders accept either a `String` (encoded as its UTF-8 bytes) or a
+`Binary`, and return the encoded text. Decoders take a `String` and
+return the decoded bytes, or a `Base.Error` describing the first
+problem found. Base64 encoders always pad. Decoders accept both
+padded and unpadded input.
+
+    Base.encode64("hello")       # "aGVsbG8="
+    Base.decode16("48656c6c6f")  # Result.Ok(<<72, 101, 108, 108, 111>>)
+"""
+struct Base
+  @doc """
+  Encodes `data` as lowercase hex, two characters per byte.
+  """
+  fn encode16(data: Binary | String) -> String
+    bytes = to_bytes(data)
+    hex = HEX_LOWER.to_binary()
+    size = bytes.byte_size()
+    out: Binary = <<>>
+    i = 0
+
+    while i < size
+      byte = bytes.at(i).or(0)
+      out = <<out, sym(hex, byte.bsr(4)), sym(hex, byte.band(15))>>
+      i += 1
+    end
+
+    text(out)
+  end
+
+  @doc """
+  Decodes hex `text` into its bytes. Accepts both cases. Returns
+  `InvalidLength` for odd-length input and `InvalidCharacter` for
+  anything outside `0-9a-fA-F`.
+  """
+  fn decode16(text: String) -> Result<Binary, BaseError>
+    data = text.to_binary()
+    size = data.byte_size()
+
+    if size % 2 == 1
+      return Result.Err(BaseError.InvalidLength)
+    end
+
+    out: Binary = <<>>
+    i = 0
+
+    while i < size
+      hi = hex_value(data.at(i).or(0))
+      lo = hex_value(data.at(i + 1).or(0))
+
+      if hi < 0
+        return Result.Err(invalid_character(data, i))
+      end
+
+      if lo < 0
+        return Result.Err(invalid_character(data, i + 1))
+      end
+
+      out = <<out, hi.bsl(4).bor(lo)>>
+      i += 2
+    end
+
+    Result.Ok(out)
+  end
+
+  @doc """
+  Encodes `data` as base64 with the standard `+/` alphabet, padded
+  with `=` to a multiple of four characters.
+  """
+  fn encode64(data: Binary | String) -> String
+    encode64_with(to_bytes(data), false)
+  end
+
+  @doc """
+  Decodes base64 `text` using the standard `+/` alphabet. Padding is
+  optional, but `=` may only appear at the end of the input.
+  """
+  fn decode64(text: String) -> Result<Binary, BaseError>
+    decode64_with(text, false)
+  end
+
+  @doc """
+  Encodes `data` as base64 with the url-safe `-_` alphabet, padded
+  with `=` to a multiple of four characters.
+  """
+  fn url_encode64(data: Binary | String) -> String
+    encode64_with(to_bytes(data), true)
+  end
+
+  @doc """
+  Decodes base64 `text` using the url-safe `-_` alphabet. Padding is
+  optional, but `=` may only appear at the end of the input.
+  """
+  fn url_decode64(text: String) -> Result<Binary, BaseError>
+    decode64_with(text, true)
+  end
+
+  priv fn encode64_with(data: Binary, url: Bool) -> String
+    alphabet = (url ? BASE64_URL : BASE64_STANDARD).to_binary()
+    size = data.byte_size()
+    out: Binary = <<>>
+    i = 0
+
+    while i + 3 <= size
+      n = combine(data, i, 3)
+      out = <<
+        out, sym(alphabet, n.bsr(18)), sym(alphabet, n.bsr(12).band(63)),
+        sym(alphabet, n.bsr(6).band(63)), sym(alphabet, n.band(63))
+      >>
+      i += 3
+    end
+
+    out =
+      match size - i
+        1 ->
+          n = combine(data, i, 1)
+          <<
+            out, sym(alphabet, n.bsr(18)), sym(alphabet, n.bsr(12).band(63)),
+            "=="
+          >>
+
+        2 ->
+          n = combine(data, i, 2)
+          <<
+            out, sym(alphabet, n.bsr(18)), sym(alphabet, n.bsr(12).band(63)),
+            sym(alphabet, n.bsr(6).band(63)), "="
+          >>
+
+        _ ->
+          out
+      end
+
+    text(out)
+  end
+
+  priv fn decode64_with(text: String, url: Bool) -> Result<Binary, BaseError>
+    data = text.to_binary()
+    size = data.byte_size()
+
+    # A remainder of one character can never carry a whole byte.
+    if size % 4 == 1
+      return Result.Err(BaseError.InvalidLength)
+    end
+
+    out: Binary = <<>>
+    i = 0
+
+    while i < size
+      group = size - i > 4 ? 4 : size - i
+
+      chunk =
+        match decode_quad(data, i, group, i + group == size, url)
+          Result.Ok(c) -> c
+          Result.Err(e) -> return Result.Err(e)
+        end
+
+      out = <<out, chunk>>
+      i += 4
+    end
+
+    Result.Ok(out)
+  end
+
+  # Decodes one group of up to four characters. Padding, explicit `=`
+  # or characters missing from an unpadded final group, may only
+  # appear at the end of the input, as `xx==` (one byte) or `xxx=`
+  # (two bytes).
+  priv fn decode_quad(
+    data: Binary,
+    offset: Int,
+    count: Int,
+    last: Bool,
+    url: Bool,
+  ) -> Result<Binary, BaseError>
+
+    s0 = sextet_at(data, offset, 0, count, url)
+    s1 = sextet_at(data, offset, 1, count, url)
+    s2 = sextet_at(data, offset, 2, count, url)
+    s3 = sextet_at(data, offset, 3, count, url)
+
+    # The first two sextets carry the first byte's bits, so padding
+    # can never appear there.
+    if s0 == SEXTET_PAD or s1 == SEXTET_PAD
+      return Result.Err(BaseError.InvalidPadding)
+    end
+
+    if s0 == SEXTET_INVALID
+      return Result.Err(invalid_character(data, offset))
+    end
+
+    if s1 == SEXTET_INVALID
+      return Result.Err(invalid_character(data, offset + 1))
+    end
+
+    n = s0.bsl(18).bor(s1.bsl(12))
+
+    if s2 == SEXTET_PAD
+      unless s3 == SEXTET_PAD and last
+        return Result.Err(BaseError.InvalidPadding)
+      end
+
+      return Result.Ok(<<(n.bsr(16))>>)
+    end
+
+    if s2 == SEXTET_INVALID
+      return Result.Err(invalid_character(data, offset + 2))
+    end
+
+    n = n.bor(s2.bsl(6))
+
+    if s3 == SEXTET_PAD
+      unless last
+        return Result.Err(BaseError.InvalidPadding)
+      end
+
+      return Result.Ok(<<(n.bsr(16)), (n.bsr(8).band(255))>>)
+    end
+
+    if s3 == SEXTET_INVALID
+      return Result.Err(invalid_character(data, offset + 3))
+    end
+
+    n = n.bor(s3)
+
+    Result.Ok(<<(n.bsr(16)), (n.bsr(8).band(255)), (n.band(255))>>)
+  end
+
+  # Positions past `count` belong to an unpadded final group and
+  # decode as if padded.
+  priv fn sextet_at(
+    data: Binary,
+    offset: Int,
+    index: Int,
+    count: Int,
+    url: Bool,
+  ) -> Int
+
+    index >= count ? SEXTET_PAD : sextet(data.at(offset + index).or(0), url)
+  end
+
+  priv fn sextet(byte: Int, url: Bool) -> Int
+    cond
+      byte >= 65 and byte <= 90 -> byte - 65
+      byte >= 97 and byte <= 122 -> byte - 71
+      byte >= 48 and byte <= 57 -> byte + 4
+      byte == 43 -> url ? SEXTET_INVALID : 62
+      byte == 47 -> url ? SEXTET_INVALID : 63
+      byte == 45 -> url ? 62 : SEXTET_INVALID
+      byte == 95 -> url ? 63 : SEXTET_INVALID
+      byte == 61 -> SEXTET_PAD
+      else -> SEXTET_INVALID
+    end
+  end
+
+  # Packs up to three bytes at `offset` into a 24-bit group. Missing
+  # bytes read as zero.
+  priv fn combine(data: Binary, offset: Int, count: Int) -> Int
+    b0 = data.at(offset).or(0)
+    b1 = count > 1 ? data.at(offset + 1).or(0) : 0
+    b2 = count > 2 ? data.at(offset + 2).or(0) : 0
+    b0.bsl(16).bor(b1.bsl(8)).bor(b2)
+  end
+
+  # Returns the value of a hex digit byte, or -1 for anything else.
+  priv fn hex_value(byte: Int) -> Int
+    cond
+      byte >= 48 and byte <= 57 -> byte - 48
+      byte >= 97 and byte <= 102 -> byte - 87
+      byte >= 65 and byte <= 70 -> byte - 55
+      else -> -1
+    end
+  end
+
+  priv fn sym(alphabet: Binary, index: Int) -> Int
+    alphabet.at(index).or(0)
+  end
+
+  # Normalizes encoder input, encoding a `String` as its UTF-8 bytes.
+  priv fn to_bytes(data: Binary | String) -> Binary
+    match data
+      binary: Binary -> binary
+      string: String -> string.to_binary()
+    end
+  end
+
+  priv fn invalid_character(data: Binary, index: Int) -> BaseError
+    byte = data.at(index).or(0)
+    BaseError.InvalidCharacter(<<byte>>.to_string().or("?"))
+  end
+
+  # Encoder output is always ASCII, so the conversion cannot fail.
+  priv fn text(bytes: Binary) -> String
+    bytes.to_string().or("")
+  end
+end

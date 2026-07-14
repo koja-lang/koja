@@ -87,6 +87,30 @@ pub(super) fn item_span(item: &Item) -> &Span {
     }
 }
 
+/// The item's leading annotations (`@doc`, `@extern`, ...), empty for
+/// item kinds that cannot carry any.
+pub(super) fn item_annotations(item: &Item) -> &[Annotation] {
+    match item {
+        Item::Alias(_) | Item::Extend(_) | Item::Impl(_) => &[],
+        Item::Constant(c) => &c.annotations,
+        Item::Enum(e) => &e.annotations,
+        Item::Function(f) => &f.annotations,
+        Item::Protocol(p) => &p.annotations,
+        Item::Struct(s) => &s.annotations,
+        Item::TypeAlias(t) => &t.annotations,
+    }
+}
+
+/// First source line of an item including leading annotations, which
+/// sit outside the declaration span. Blank-line detection between
+/// items must measure from here, not from the declaration keyword.
+pub(super) fn item_start_line(item: &Item) -> u32 {
+    item_annotations(item)
+        .first()
+        .map(|a| a.span.start.line)
+        .unwrap_or_else(|| item_span(item).start.line)
+}
+
 /// The `priv ` keyword prefix for a private declaration, empty for
 /// public ones.
 pub(super) fn visibility_prefix(visibility: Visibility) -> &'static str {
