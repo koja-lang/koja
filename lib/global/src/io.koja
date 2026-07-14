@@ -14,10 +14,12 @@ end
 The standard error file descriptor.
 """
 const STDERR: Fd = Fd{descriptor: 2}
+
 @doc """
 The standard input file descriptor.
 """
 const STDIN: Fd = Fd{descriptor: 0}
+
 @doc """
 The standard output file descriptor.
 """

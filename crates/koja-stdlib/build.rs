@@ -90,6 +90,7 @@ fn main() {
     // file becomes pipeline-ready (typecheck + lower + emit on both
     // backends).
     let autoimport_modules: &[&str] = &[
+        "Global.base",
         "Global.bitwise",
         "Global.cptr",
         "Global.cstring",

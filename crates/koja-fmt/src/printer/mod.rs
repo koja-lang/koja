@@ -43,7 +43,7 @@ enum TopLevel<'a> {
 impl TopLevel<'_> {
     fn start_line(&self) -> u32 {
         match self {
-            TopLevel::Item(item) => item_span(item).start.line,
+            TopLevel::Item(item) => item_start_line(item),
             TopLevel::Stmt(stmt) => stmt_start_line(stmt),
         }
     }
@@ -56,15 +56,16 @@ impl TopLevel<'_> {
     }
 
     /// Whether this element forces blank-line separation from its
-    /// neighbors. Multi-line declarations and block statements read
-    /// better with surrounding blank lines, while single-line
-    /// `const`/`alias` declarations flow with adjacent statements.
+    /// neighbors. Multi-line declarations, annotated declarations, and
+    /// block statements read better with surrounding blank lines, while
+    /// bare single-line `const`/`alias` declarations flow with adjacent
+    /// statements.
     fn is_block(&self) -> bool {
         match self {
-            TopLevel::Item(item) => !matches!(
-                item,
-                Item::Constant(_) | Item::Alias(_) | Item::TypeAlias(_)
-            ),
+            TopLevel::Item(item @ (Item::Constant(_) | Item::Alias(_) | Item::TypeAlias(_))) => {
+                !item_annotations(item).is_empty()
+            }
+            TopLevel::Item(_) => true,
             TopLevel::Stmt(stmt) => stmt_is_block(stmt),
         }
     }
@@ -103,15 +104,33 @@ impl<'a> Printer<'a> {
                 }
 
                 let anchor = mem::discriminant(&file.items[i]);
+                let mut prev_end: Option<u32> = None;
+                let mut prev_annotated = false;
                 while i < file.items.len() && mem::discriminant(&file.items[i]) == anchor {
                     let item = &file.items[i];
-                    let span = item_span(item);
-                    let (comment_docs, _) = self.comments.drain_before(span.start.line);
+                    let annotated = !item_annotations(item).is_empty();
+                    let start_line = item_start_line(item);
+                    let next_line = self.comments.peek_before(start_line).unwrap_or(start_line);
+                    // Annotated declarations always get surrounding blank
+                    // lines; otherwise a single blank is preserved from the
+                    // source (a wider gap collapses to one).
+                    let source_has_blank = prev_end.is_some_and(|prev| next_line > prev + 1);
+                    if prev_end.is_some() && (source_has_blank || annotated || prev_annotated) {
+                        parts.push(hardline());
+                    }
+                    let (comment_docs, last_comment_line) = self.comments.drain_before(start_line);
                     for c in comment_docs {
                         parts.push(c);
                     }
+                    if let Some(lcl) = last_comment_line
+                        && start_line > lcl + 1
+                    {
+                        parts.push(hardline());
+                    }
                     parts.push(self.item_to_doc(item));
                     parts.push(hardline());
+                    prev_end = Some(item_span(item).end.line);
+                    prev_annotated = annotated;
                     i += 1;
                 }
 

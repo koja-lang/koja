@@ -733,6 +733,67 @@ mod tests {
     }
 
     #[test]
+    fn blank_line_before_comment_in_const_run_preserved() {
+        assert_unchanged(
+            "
+            priv const A: Int = 1
+
+            # explains the pair below
+            priv const B: Int = 2
+            priv const C: Int = 3
+        ",
+        );
+    }
+
+    #[test]
+    fn doc_annotated_consts_get_blank_separation() {
+        assert_fmt(
+            "
+            @doc \"\"\"
+            The first constant.
+            \"\"\"
+            const A: Int = 1
+            @doc \"\"\"
+            The second constant.
+            \"\"\"
+            const B: Int = 2
+            const C: Int = 3
+        ",
+            "
+            @doc \"\"\"
+            The first constant.
+            \"\"\"
+            const A: Int = 1
+
+            @doc \"\"\"
+            The second constant.
+            \"\"\"
+            const B: Int = 2
+
+            const C: Int = 3
+        ",
+        );
+    }
+
+    #[test]
+    fn multiple_blank_lines_in_const_run_collapse_to_one() {
+        assert_fmt(
+            "
+            priv const A: Int = 1
+
+
+
+            priv const B: Int = 2
+        ",
+            "
+            priv const A: Int = 1
+
+            priv const B: Int = 2
+        ",
+        );
+    }
+
+    #[test]
     fn blank_line_between_comment_and_declaration_preserved() {
         assert_fmt(
             "
