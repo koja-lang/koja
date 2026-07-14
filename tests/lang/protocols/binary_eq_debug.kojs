@@ -24,10 +24,12 @@ a.print()
 # Truncation past 64 bytes.
 big: Binary = <<>>
 i = 0
+
 while i < 70
   big = <<big, i>>
   i += 1
 end
+
 big.print()
 
 # Exactly 64 bytes renders in full, with no truncation marker.

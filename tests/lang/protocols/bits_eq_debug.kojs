@@ -31,10 +31,12 @@ shorter.print()
 # Truncation past 64 bytes drops the partial byte with the marker.
 big: Binary = <<>>
 i = 0
+
 while i < 70
   big = <<big, i>>
   i += 1
 end
+
 (big.to_bits() <> <<1::1>>).print()
 
 # Bits keys in hash collections.
