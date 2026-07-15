@@ -1,0 +1,4 @@
+[project]
+entry = "App"
+name = "SocketShutdown"
+version = "0.1.0"

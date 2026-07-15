@@ -23,3 +23,12 @@ members = [
 edition = "2024"
 license = "MIT"
 version = "0.15.0"
+
+# Optimize the runtime even in dev builds so `cargo test` exercises the
+# same codegen the shipped release runtime gets. The worker-migration
+# TLS-caching crash (see the note in koja-runtime-posix/src/scheduler.rs)
+# only manifests when the optimizer caches TLS bases across context
+# switches, which -O0 never does, so an unoptimized runtime cannot cover
+# that class of bug. Debug assertions stay enabled.
+[profile.dev.package.koja-runtime-posix]
+opt-level = 3

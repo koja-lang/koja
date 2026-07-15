@@ -803,15 +803,20 @@ fn run_project_tests(config: &ProjectConfig, root: &Path, opts: TestOptions) {
 
     match status {
         TestBinaryOutcome::Exited(code) => process::exit(code),
+        TestBinaryOutcome::LaunchFailed(err) => {
+            eprintln!("error: failed to exec `{binary}`: {err}");
+            process::exit(1);
+        }
+        TestBinaryOutcome::Signaled(signal) => {
+            let name = signal_name(signal).map_or_else(String::new, |n| format!(" ({n})"));
+            eprintln!("error: test binary terminated by signal {signal}{name}");
+            process::exit(1);
+        }
         TestBinaryOutcome::TimedOut => {
             eprintln!(
                 "error: test binary `{binary}` exceeded {}s timeout and was killed",
                 TEST_BINARY_TIMEOUT.as_secs(),
             );
-            process::exit(1);
-        }
-        TestBinaryOutcome::LaunchFailed(err) => {
-            eprintln!("error: failed to exec `{binary}`: {err}");
             process::exit(1);
         }
     }
@@ -824,13 +829,35 @@ const TEST_BINARY_TIMEOUT: Duration = Duration::from_secs(60);
 enum TestBinaryOutcome {
     Exited(i32),
     LaunchFailed(io::Error),
+    Signaled(i32),
     TimedOut,
+}
+
+/// Names for the fatal signals a test binary plausibly dies from, so a
+/// runtime crash reads as `signal 11 (SIGSEGV)` rather than a bare number.
+fn signal_name(signal: i32) -> Option<&'static str> {
+    Some(match signal {
+        2 => "SIGINT",
+        4 => "SIGILL",
+        6 => "SIGABRT",
+        #[cfg(target_os = "linux")]
+        7 => "SIGBUS",
+        8 => "SIGFPE",
+        9 => "SIGKILL",
+        #[cfg(target_os = "macos")]
+        10 => "SIGBUS",
+        11 => "SIGSEGV",
+        15 => "SIGTERM",
+        _ => return None,
+    })
 }
 
 /// Spawn `binary` and poll `try_wait` until it exits or the
 /// deadline passes. On timeout, kill the child and report. A `None`
 /// timeout waits indefinitely (used by `--trace`).
 fn run_test_binary_with_timeout(binary: &str, timeout: Option<Duration>) -> TestBinaryOutcome {
+    use std::os::unix::process::ExitStatusExt;
+
     let mut child = match process::Command::new(binary).spawn() {
         Ok(c) => c,
         Err(e) => return TestBinaryOutcome::LaunchFailed(e),
@@ -839,7 +866,14 @@ fn run_test_binary_with_timeout(binary: &str, timeout: Option<Duration>) -> Test
     let deadline = timeout.map(|t| Instant::now() + t);
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return TestBinaryOutcome::Exited(status.code().unwrap_or(1)),
+            Ok(Some(status)) => {
+                return match status.code() {
+                    Some(code) => TestBinaryOutcome::Exited(code),
+                    // A killed child has no exit code. Surface the signal so
+                    // a runtime crash can't masquerade as a plain failure.
+                    None => TestBinaryOutcome::Signaled(status.signal().unwrap_or(0)),
+                };
+            }
             Ok(None) if deadline.is_some_and(|d| Instant::now() >= d) => {
                 let _ = child.kill();
                 let _ = child.wait();

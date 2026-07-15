@@ -22,12 +22,11 @@ use polling::{Event, Events, PollMode, Poller};
 
 use koja_runtime_core::{ProcessState, Reactor, Readiness, Waker};
 
-use crate::ffi::{EAGAIN, EINTR, get_errno, koja_context_switch};
+use crate::ffi::{EAGAIN, EINTR, get_errno};
 use crate::scheduler::{
-    CURRENT_PID, NativeTable, SCHED, SCHED_SP, SHUTDOWN, WORK_AVAILABLE, YIELD_SP, publish_ready,
-    send_io_event,
+    CURRENT_PID, NativeTable, SCHED, SHUTDOWN, WORK_AVAILABLE, publish_ready, send_io_event,
+    yield_to_scheduler,
 };
-use crate::tsan;
 use crate::wire::{IO_READY_ERROR, IO_READY_READ, IO_READY_WRITE};
 
 pub use koja_runtime_core::Interest;
@@ -293,6 +292,13 @@ pub(crate) fn release_fd(fd: i32) {
 /// wake guard checks `state == WaitingIO`, so a state of `Running` at fire
 /// time silently drops the event and the process parks forever. Reverse
 /// order means at worst a spurious resume.
+///
+/// `#[inline(never)]` is load-bearing: callers retry this in a loop, and
+/// the process can resume on a different worker thread each time, so the
+/// `CURRENT_PID` read must not reuse a TLS base hoisted from before an
+/// earlier iteration's switch. See the TLS caching note in
+/// [`crate::scheduler`].
+#[inline(never)]
 pub fn io_block(fd: i32, interest: Interest) -> bool {
     let pid = CURRENT_PID.with(|c| c.get());
 
@@ -311,12 +317,7 @@ pub fn io_block(fd: i32, interest: Interest) -> bool {
         reactor.register(fd, interest, Waker::Resume(pid));
     }
 
-    tsan::switch_to_scheduler();
-    let yield_sp_ptr = YIELD_SP.with(|c| c.get());
-    let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
-    unsafe {
-        koja_context_switch(yield_sp_ptr, sched_sp);
-    }
+    yield_to_scheduler();
 
     if let Some(reactor) = REACTOR.get() {
         reactor.deregister(fd);

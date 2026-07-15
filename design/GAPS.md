@@ -211,6 +211,31 @@ package function. Known limitations:
 
 ---
 
+## Runtime: adjacent issues from the worker-migration TLS audit
+
+Found while root-causing the 2026-07 Linux shutdown crash (a process
+resuming on a different worker thread after socket I/O switched through
+the old worker's cached TLS base; fixed with `#[inline(never)]`
+barriers, see the note in `koja-runtime-posix/src/scheduler.rs`). Two
+neighbors were observed but not fixed:
+
+- **`reactor_close` liveness flake on Linux.** The
+  close-while-blocked harness (`koja-runtime-posix/tests/reactor_close.rs`)
+  hangs its reader roughly 20-40% of runs on Linux under repetition; the
+  watchdog converts the hang into an abort. Reproduced identically on
+  the pre-fix tree, so it is not a regression from the TLS fix. Likely
+  a lost wakeup between `release_fd`'s waker takeover and the reader's
+  park/register window. Needs its own investigation.
+- **Reduction counter writes can land on the wrong worker.** Compiled
+  process code decrements the C thread-local `koja_reductions_left`
+  inline, and LLVM may cache its address across a suspension point, so
+  a migrated process keeps decrementing the previous worker's counter
+  until the next runtime call. Consequence is mistimed yield checks
+  (never memory unsafety). A fix needs codegen to recompute the TLS
+  address after every call that can suspend, or a non-TLS budget.
+
+---
+
 ## Bug triage log
 
 Audited 2026-05-03 · re-triaged 2026-05-27 (seven fixed entries
