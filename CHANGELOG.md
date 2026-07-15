@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Programs that wait on socket I/O no longer crash with a segmentation fault on shutdown on multi-core Linux.
+- `koja test` now reports when the test binary was killed by a signal, e.g. `terminated by signal 11 (SIGSEGV)`, instead of silently exiting 1 after an all-green run.
+
 ## [0.15.0] - 2026-07-14
 
 ### Added

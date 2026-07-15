@@ -717,6 +717,64 @@ fn run_process_io(backend: &str) {
     }
 }
 
+/// Regression for the worker-migration TLS-caching bug: a process that
+/// suspends in socket I/O (`connect` returns EINPROGRESS on Linux) can
+/// resume on a different worker thread, and the runtime's switch-out
+/// paths must recompute their TLS base per call. With a cached base the
+/// process yields through the old worker's scheduler stack and the
+/// binary dies with SIGSEGV/SIGBUS after its output is complete. Before
+/// the fix this crashed most runs on multi-core Linux, so 20 clean exits
+/// are conclusive.
+#[test]
+fn lang_socket_shutdown_exits_cleanly() {
+    use std::net::TcpListener;
+
+    let dir = lang_dir().join("socket_shutdown");
+    assert!(dir.exists(), "test fixture socket_shutdown/ not found");
+    let binary = dir.join("build").join("debug").join("socket_shutdown");
+
+    let build_out = {
+        let mut cmd = Command::new(koja_bin());
+        cmd.arg("build")
+            .arg("-o")
+            .arg(binary.to_str().unwrap())
+            .current_dir(&dir);
+        if let Some(lib_path) = library_path() {
+            cmd.env("LIBRARY_PATH", &lib_path);
+        }
+        cmd.output().expect("failed to build")
+    };
+    assert!(
+        build_out.status.success(),
+        "koja build failed for socket_shutdown:\n{}",
+        String::from_utf8_lossy(&build_out.stderr)
+    );
+
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+    let port = listener.local_addr().expect("local addr").port();
+    // Accept (and immediately drop) every connection for the test's
+    // lifetime. The thread dies with the test process.
+    std::thread::spawn(move || {
+        while let Ok((stream, _)) = listener.accept() {
+            drop(stream);
+        }
+    });
+
+    for attempt in 1..=20 {
+        let output = Command::new(&binary)
+            .env("SOCKET_PORT", port.to_string())
+            .output()
+            .expect("failed to run socket_shutdown binary");
+        assert!(
+            output.status.success(),
+            "socket_shutdown attempt {attempt}: expected exit 0, got {:?}\nstdout:\n{}\nstderr:\n{}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Signal test runner
 // ---------------------------------------------------------------------------

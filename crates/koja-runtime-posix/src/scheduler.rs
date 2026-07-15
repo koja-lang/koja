@@ -331,12 +331,23 @@ static STEALERS: OnceLock<Vec<WorkerStealers>> = OnceLock::new();
 // YIELD_SP:    the process's stack pointer, saved by koja_context_switch
 //              when the process yields. The worker reads it afterward to
 //              persist the value into the Mutex-protected process list.
+//
+// TLS caching hazard. A suspended process can resume on a different worker
+// thread, but the compiler assumes a function's thread never changes, so it
+// caches the TLS base (aarch64 `tpidr_el0`, x86-64 `%fs`) in a callee-saved
+// register that koja_context_switch faithfully preserves across the
+// migration. Any read of these thread-locals after a context switch in the
+// same function frame then resolves to the *old* worker's cells, so the
+// process jumps to a stale scheduler continuation and two threads run on one
+// stack. Therefore every function that can run on a process stack and
+// touches this state must be `#[inline(never)]` (a fresh call recomputes the
+// base) and must not read TLS after an internal context switch.
 // ---------------------------------------------------------------------------
 
 thread_local! {
     pub(crate) static CURRENT_PID: Cell<i64> = const { Cell::new(-1) };
-    pub(crate) static SCHED_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
-    pub(crate) static YIELD_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
+    static SCHED_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
+    static YIELD_SP: UnsafeCell<*mut u8> = const { UnsafeCell::new(ptr::null_mut()) };
     /// This worker's local run queues, installed at the top of `worker_loop`.
     /// `Some` only on a worker thread. The reactor thread leaves it `None` and
     /// routes wakes to the global injectors instead. Lets a runtime intrinsic
@@ -354,8 +365,16 @@ thread_local! {
 // ---------------------------------------------------------------------------
 
 /// Yields the current process back to its worker's scheduling loop,
-/// returning when the worker resumes this process.
-fn yield_to_scheduler() {
+/// returning when the worker resumes this process (possibly on a
+/// different worker thread).
+///
+/// `#[inline(never)]` is load-bearing. Inlined into a caller whose frame
+/// already crossed a context switch (the trampoline after the process
+/// body, `io_block` retry loops), a cached TLS base would resolve
+/// `SCHED_SP` to the worker the process *used* to run on and switch onto
+/// that worker's live stack. See the TLS caching note above.
+#[inline(never)]
+pub(crate) fn yield_to_scheduler() {
     tsan::switch_to_scheduler();
     let yield_sp_ptr = YIELD_SP.with(|c| c.get());
     let sched_sp = unsafe { *SCHED_SP.with(|c| c.get()) };
@@ -645,6 +664,12 @@ fn cgroup_cpu_quota() -> Option<usize> {
 /// the running worker drains it itself. Off a worker (the reactor thread) it
 /// falls back to the per-priority injectors. Lock-free either way, so it is
 /// safe (and intended) to call while holding [`SCHED`].
+///
+/// `#[inline(never)]` is load-bearing. This runs on process stacks (send,
+/// spawn, the trampoline's death path) where a cached TLS base from before
+/// a context switch would resolve `LOCAL_QUEUES` to a *different* worker's
+/// single-owner deque, racing its owner. See the TLS caching note above.
+#[inline(never)]
 pub(crate) fn publish_ready(table: &mut NativeTable) -> usize {
     let drained = table.drain_pending_ready();
     LOCAL_QUEUES.with(|cell| {

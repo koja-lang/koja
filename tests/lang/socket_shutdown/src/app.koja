@@ -1,0 +1,44 @@
+alias Net.TCPSocket
+
+struct App
+end
+
+# Regression for the worker-migration TLS bug: a process that suspends in
+# socket I/O (`connect` on Linux returns EINPROGRESS and parks in the
+# reactor) can resume on a different worker thread, and the runtime must
+# not yield through the old worker's scheduler stack afterwards. The
+# harness runs this binary repeatedly and asserts a clean exit.
+
+impl Process<(), (), ()> for App
+  fn start(config: ()) -> Result<Self, Process.StopReason>
+    Result.Ok(App{})
+  end
+
+  fn handle(self, msg: (), from: Option<ReplyTo<()>>) -> Process.Step<Self>
+    Process.Step.Continue(self)
+  end
+
+  fn run(self) -> Process.StopReason
+    port =
+      match System.get_env("SOCKET_PORT")
+        Option.Some(value) ->
+          match Int.parse(value)
+            Result.Ok(parsed) -> parsed
+            Result.Err(_) -> return Process.StopReason.Shutdown
+          end
+
+        Option.None ->
+          return Process.StopReason.Shutdown
+      end
+
+    match TCPSocket.connect("127.0.0.1", port)
+      Result.Ok(socket) ->
+        _ = socket.close()
+        IO.puts("done")
+        Process.StopReason.Normal
+
+      Result.Err(_) ->
+        Process.StopReason.Shutdown
+    end
+  end
+end

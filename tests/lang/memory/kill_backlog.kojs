@@ -65,7 +65,20 @@ loop
   end
 end
 
+# A dead process's resources are dropped off-lock by the worker that
+# ran it, so alive?() flipping false can precede the final drops by a
+# moment. Re-read briefly before declaring a leak.
 finish = Rt.koja_rt_live_blocks()
+attempts = 0
+
+loop
+  if finish - start < 60 or attempts >= 100000
+    break
+  end
+
+  attempts += 1
+  finish = Rt.koja_rt_live_blocks()
+end
 
 if finish - start < 60
   "kill backlog: ok".print()
