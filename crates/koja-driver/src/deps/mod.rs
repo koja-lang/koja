@@ -460,11 +460,8 @@ impl Resolver {
         let name = config.name;
 
         write_marker(&temp, rev)?;
-        set_tree_writable(&temp, false)?;
         let dep_root = self.deps_dir.join(&name);
-        remove_tree(&dep_root)?;
-        fs::rename(&temp, &dep_root)
-            .map_err(|err| format!("cannot move dependency into {}: {err}", dep_root.display()))?;
+        swap_into_place(&temp, &dep_root)?;
         Ok((name, dep_root))
     }
 
@@ -498,11 +495,17 @@ fn materialize(mirror: &Path, rev: &str, dest: &Path) -> Result<(), String> {
     remove_tree(&temp)?;
     git::export_tree(mirror, rev, &temp)?;
     write_marker(&temp, rev)?;
-    set_tree_writable(&temp, false)?;
+    swap_into_place(&temp, dest)
+}
+
+/// Move a finished export into place and seal it read-only. Rename must
+/// come first because some macOS versions refuse to rename a directory
+/// that has no write bit.
+fn swap_into_place(temp: &Path, dest: &Path) -> Result<(), String> {
     remove_tree(dest)?;
-    fs::rename(&temp, dest)
+    fs::rename(temp, dest)
         .map_err(|err| format!("cannot move dependency into {}: {err}", dest.display()))?;
-    Ok(())
+    set_tree_writable(dest, false)
 }
 
 fn read_marker(dep_root: &Path) -> Option<String> {
