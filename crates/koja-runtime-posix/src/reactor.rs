@@ -293,7 +293,7 @@ pub(crate) fn release_fd(fd: i32) {
 /// time silently drops the event and the process parks forever. Reverse
 /// order means at worst a spurious resume.
 ///
-/// `#[inline(never)]` is load-bearing: callers retry this in a loop, and
+/// `#[inline(never)]` is load-bearing. Callers retry this in a loop, and
 /// the process can resume on a different worker thread each time, so the
 /// `CURRENT_PID` read must not reuse a TLS base hoisted from before an
 /// earlier iteration's switch. See the TLS caching note in

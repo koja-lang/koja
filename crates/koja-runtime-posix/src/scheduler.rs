@@ -332,16 +332,16 @@ static STEALERS: OnceLock<Vec<WorkerStealers>> = OnceLock::new();
 //              when the process yields. The worker reads it afterward to
 //              persist the value into the Mutex-protected process list.
 //
-// TLS caching hazard: a suspended process can resume on a different worker
+// TLS caching hazard. A suspended process can resume on a different worker
 // thread, but the compiler assumes a function's thread never changes, so it
 // caches the TLS base (aarch64 `tpidr_el0`, x86-64 `%fs`) in a callee-saved
 // register that koja_context_switch faithfully preserves across the
 // migration. Any read of these thread-locals after a context switch in the
-// same function frame then resolves to the *old* worker's cells: the process
-// jumps to a stale scheduler continuation and two threads run on one stack.
-// Therefore every function that can run on a process stack and touches this
-// state must be `#[inline(never)]` (a fresh call recomputes the base) and
-// must not read TLS after an internal context switch.
+// same function frame then resolves to the *old* worker's cells, so the
+// process jumps to a stale scheduler continuation and two threads run on one
+// stack. Therefore every function that can run on a process stack and
+// touches this state must be `#[inline(never)]` (a fresh call recomputes the
+// base) and must not read TLS after an internal context switch.
 // ---------------------------------------------------------------------------
 
 thread_local! {
@@ -665,7 +665,7 @@ fn cgroup_cpu_quota() -> Option<usize> {
 /// falls back to the per-priority injectors. Lock-free either way, so it is
 /// safe (and intended) to call while holding [`SCHED`].
 ///
-/// `#[inline(never)]` is load-bearing: this runs on process stacks (send,
+/// `#[inline(never)]` is load-bearing. This runs on process stacks (send,
 /// spawn, the trampoline's death path) where a cached TLS base from before
 /// a context switch would resolve `LOCAL_QUEUES` to a *different* worker's
 /// single-owner deque, racing its owner. See the TLS caching note above.

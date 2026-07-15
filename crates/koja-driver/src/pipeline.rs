@@ -65,6 +65,7 @@ use std::env;
 use std::ffi::OsStr;
 use std::fs;
 use std::io;
+use std::os::unix::process::ExitStatusExt;
 use std::path::{Path, PathBuf};
 use std::process;
 use std::thread;
@@ -856,8 +857,6 @@ fn signal_name(signal: i32) -> Option<&'static str> {
 /// deadline passes. On timeout, kill the child and report. A `None`
 /// timeout waits indefinitely (used by `--trace`).
 fn run_test_binary_with_timeout(binary: &str, timeout: Option<Duration>) -> TestBinaryOutcome {
-    use std::os::unix::process::ExitStatusExt;
-
     let mut child = match process::Command::new(binary).spawn() {
         Ok(c) => c,
         Err(e) => return TestBinaryOutcome::LaunchFailed(e),
