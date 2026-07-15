@@ -2,7 +2,7 @@
 
 A URL shortener written in Koja — a complete end-to-end CRUD service:
 HTTP serving on `Net.TCPListener` + `HTTP.Parser`, JSON in and out via
-`JSON`, and PostgreSQL through the [Postgres](https://github.com/hpopp/postgres.koja)
+`JSON`, and PostgreSQL through the [Postgres](https://github.com/hpopp/postgres-koja)
 package, a pure-Koja driver speaking the v3 wire protocol (no C
 driver, no FFI).
 
@@ -18,7 +18,7 @@ It doubles as a tour of the things that make Koja great:
   state; every query returns an updated connection that the router and
   app thread through and rebind. No locks, no mutation at a distance.
 - **Git dependencies** — the driver is declared in `koja.toml`
-  (`Postgres = { github = "hpopp/postgres.koja", branch = "main" }`)
+  (`Postgres = { github = "hpopp/postgres-koja", branch = "main" }`)
   and pinned to an exact commit by the committed `koja.lock`.
 
 ## Layout

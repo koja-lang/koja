@@ -8,4 +8,4 @@ name = "Shortener"
 version = "0.1.0"
 
 [dependencies]
-Postgres = { github = "hpopp/postgres.koja", branch = "main" }
+Postgres = { github = "hpopp/postgres-koja", branch = "main" }

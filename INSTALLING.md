@@ -20,9 +20,9 @@ koja --version
 Grab the tarball and `.sha256` sidecar for your platform from the [releases page](https://github.com/koja-lang/koja/releases), then:
 
 ```sh
-shasum -a 256 -c koja-v0.12.1-darwin-arm64.tar.gz.sha256
-tar -xzf koja-v0.12.1-darwin-arm64.tar.gz
-cp koja-v0.12.1-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
+shasum -a 256 -c koja-v0.15.0-darwin-arm64.tar.gz.sha256
+tar -xzf koja-v0.15.0-darwin-arm64.tar.gz
+cp koja-v0.15.0-darwin-arm64/{koja,koja-lsp} ~/.local/bin/
 ```
 
 (Use `sha256sum -c` on Linux, and substitute `linux-x86_64` or `linux-arm64` for `darwin-arm64`.)

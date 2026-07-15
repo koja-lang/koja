@@ -155,6 +155,9 @@ pub struct ProjectConfig {
     /// The project entry point type. Must be a PascalCase type implementing `Process<C, M, R>`.
     #[serde(default)]
     pub entry: Option<String>,
+    /// Minimum compiler version, e.g. "0.15.0". A bare version, no operators.
+    #[serde(default)]
+    pub koja: Option<String>,
     /// SPDX expression, e.g. "MIT OR Apache-2.0"
     #[serde(default)]
     pub license: Option<String>,
@@ -215,7 +218,52 @@ pub fn load_project(dir: &Path) -> Result<Option<ProjectConfig>, String> {
     for (alias, dep) in &config.dependencies {
         dep.source(alias)?;
     }
+
+    let current = parse_version(env!("CARGO_PKG_VERSION")).expect("crate version is X.Y.Z");
+    check_koja_version(&config, current)?;
     Ok(Some(config))
+}
+
+/// Parse a bare `X.Y` or `X.Y.Z` version into a comparable triple.
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut numbers = version.split('.');
+    let major = numbers.next()?.parse().ok()?;
+    let minor = numbers.next()?.parse().ok()?;
+    let patch = match numbers.next() {
+        Some(patch) => patch.parse().ok()?,
+        None => 0,
+    };
+    match numbers.next() {
+        Some(_) => None,
+        None => Some((major, minor, patch)),
+    }
+}
+
+/// Enforce the manifest's `koja` minimum against the running compiler.
+fn check_koja_version(config: &ProjectConfig, current: (u64, u64, u64)) -> Result<(), String> {
+    let Some(required) = &config.koja else {
+        return Ok(());
+    };
+    let name = &config.name;
+
+    let Some(minimum) = parse_version(required) else {
+        if required.starts_with(|c: char| !c.is_ascii_digit()) {
+            return Err(format!(
+                "package `{name}`: `koja` takes a bare minimum version like \"0.15.0\", got `{required}`"
+            ));
+        }
+        return Err(format!(
+            "package `{name}`: `koja` must be an `X.Y` or `X.Y.Z` version, got `{required}`"
+        ));
+    };
+
+    if current < minimum {
+        let (major, minor, patch) = current;
+        return Err(format!(
+            "package `{name}` requires koja >= {required}, but this is koja {major}.{minor}.{patch}"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -313,5 +361,45 @@ mod tests {
         );
         assert_eq!(GitRef::Tag("v1.0".to_string()).requirement(), "tag = v1.0");
         assert_eq!(GitRef::Rev("abc".to_string()).requirement(), "rev = abc");
+    }
+
+    fn check(required: &str, current: (u64, u64, u64)) -> Result<(), String> {
+        let config = parse(&format!(
+            "[project]\nname = \"Pkg\"\nversion = \"0.1.0\"\nkoja = \"{required}\"\n"
+        ));
+        check_koja_version(&config, current)
+    }
+
+    #[test]
+    fn koja_minimum_passes_when_satisfied() {
+        assert_eq!(check("0.15.0", (0, 15, 0)), Ok(()));
+        assert_eq!(check("0.15.0", (0, 15, 1)), Ok(()));
+        assert_eq!(check("0.15", (0, 15, 0)), Ok(()), "missing patch means 0");
+        assert_eq!(check("0.9.9", (0, 15, 0)), Ok(()));
+    }
+
+    #[test]
+    fn koja_minimum_fails_with_both_versions_named() {
+        let err = check("0.15.0", (0, 14, 1)).unwrap_err();
+        assert_eq!(
+            err,
+            "package `Pkg` requires koja >= 0.15.0, but this is koja 0.14.1"
+        );
+    }
+
+    #[test]
+    fn koja_rejects_operators_with_a_hint() {
+        let err = check("~> 0.15", (0, 15, 0)).unwrap_err();
+        assert!(err.contains("bare minimum version"), "got: {err}");
+        let err = check(">= 0.15.0", (0, 15, 0)).unwrap_err();
+        assert!(err.contains("bare minimum version"), "got: {err}");
+    }
+
+    #[test]
+    fn koja_rejects_malformed_versions() {
+        for bad in ["0", "0.15.0.1", "0.x", "0.15-beta"] {
+            let err = check(bad, (0, 15, 0)).unwrap_err();
+            assert!(err.contains("`X.Y` or `X.Y.Z`"), "got: {err}");
+        }
     }
 }

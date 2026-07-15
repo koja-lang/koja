@@ -3,5 +3,5 @@ version = 1
 [[package]]
 name = "Postgres"
 requirement = "branch = main"
-rev = "ceb53e000c981c880bb82750c41f5051551e01f7"
-source = "git+https://github.com/hpopp/postgres.koja"
+rev = "a65e3c51bbc6a901105925098be5f930babe477c"
+source = "git+https://github.com/hpopp/postgres-koja"

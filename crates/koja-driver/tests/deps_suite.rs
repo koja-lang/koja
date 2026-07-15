@@ -415,6 +415,38 @@ fn removed_deps_are_pruned_from_the_lock() {
     assert!(lock.contains("\"Keep\""));
 }
 
+/// Add a `koja = "<minimum>"` line to a package's `[project]` section.
+fn require_koja(dir: &Path, minimum: &str) {
+    let manifest_path = dir.join("koja.toml");
+    let manifest = fs::read_to_string(&manifest_path).unwrap();
+    let manifest = manifest.replace("[project]\n", &format!("[project]\nkoja = \"{minimum}\"\n"));
+    fs::write(manifest_path, manifest).unwrap();
+}
+
+#[test]
+fn koja_minimum_too_new_fails_for_root_and_deps() {
+    let fx = Fixture::new("minver");
+    let repo = fx.make_repo("greeter", "Greeter", &[]);
+    fx.write_project(&[("greeter", dep_git(&repo))]);
+
+    require_koja(&fx.project(), "99.0.0");
+    let stderr = fx.koja_err(&["check"]);
+    assert!(
+        stderr.contains("`Root` requires koja >= 99.0.0"),
+        "expected root minimum-version error: {stderr}"
+    );
+
+    // Reset the root manifest and push the requirement into the dep.
+    fx.write_project(&[("greeter", dep_git(&repo))]);
+    require_koja(&repo, "99.0.0");
+    commit_all(&repo);
+    let stderr = fx.koja_err(&["deps", "get"]);
+    assert!(
+        stderr.contains("`Greeter` requires koja >= 99.0.0"),
+        "expected dep minimum-version error: {stderr}"
+    );
+}
+
 #[test]
 fn path_dep_of_a_git_dep_cannot_escape_its_checkout() {
     let fx = Fixture::new("escape");
