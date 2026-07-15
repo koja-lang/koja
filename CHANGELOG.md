@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Projects can now depend on git repositories: declare `{ github = "owner/repo", tag = "v1.0" }` (or `git = <url>` with `tag`/`branch`/`rev`) in `koja.toml`, run `koja deps get` to pin exact commits into a committed `koja.lock`, and every build stays offline and reproducible from the lock.
 - New `koja deps` commands: `get` fetches and pins dependencies, `update` moves pins forward, `clean` removes the materialized `deps/` directory, and bare `koja deps` shows each dependency's state.
 - A package can declare its minimum compiler version with `koja = "0.15.0"` in `[project]`. Older compilers refuse the package with an error naming both versions.
+- `koja new` stamps the scaffolding compiler's minor version as the new project's minimum.
 - New `Base` type encodes and decodes base16, base64, and url-safe base64.
 - New `Path` type manipulates POSIX paths with `join`, `split`, `dirname`, `basename`, `extname`, `rootname`, `expand`, `relative_to`, and `absolute?`.
 - `Binary` and `Bits` values can now be compared with `==` and used as `Map` keys and `Set` elements.

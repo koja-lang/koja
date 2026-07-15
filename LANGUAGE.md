@@ -2192,6 +2192,7 @@ The `koja.toml` file defines the project configuration:
 ```toml
 [project]
 entry = "App"
+koja = "0.15"
 name = "my_app"
 version = "0.1.0"
 ```

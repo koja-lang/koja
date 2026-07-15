@@ -481,10 +481,17 @@ pub fn cmd_new(name: String) {
         process::exit(1);
     });
 
+    // Stamp the scaffolding compiler's minor as the minimum. Pre-1.0
+    // minors are breaking, so a fresh project needs at least the
+    // compiler that generated it.
+    let minimum = env!("CARGO_PKG_VERSION")
+        .rsplit_once('.')
+        .map_or(env!("CARGO_PKG_VERSION"), |(minor, _)| minor);
     let toml_content = dedent(&format!(
         "
         [project]
         entry = \"App\"
+        koja = \"{minimum}\"
         name = \"{name}\"
         version = \"0.1.0\"
         "
