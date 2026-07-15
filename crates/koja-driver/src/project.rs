@@ -19,9 +19,125 @@ struct KojaToml {
 }
 
 /// A single dependency declaration from `[dependencies]`.
+///
+/// The raw TOML shape. [`DepConfig::source`] validates it into a
+/// [`DepSource`].
 #[derive(Debug, Deserialize)]
 pub struct DepConfig {
+    pub branch: Option<String>,
+    pub git: Option<String>,
+    pub github: Option<String>,
     pub path: Option<String>,
+    pub rev: Option<String>,
+    pub tag: Option<String>,
+}
+
+/// A validated dependency source.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DepSource {
+    Git { reference: GitRef, url: String },
+    Path(String),
+}
+
+/// Which ref a git dependency pins.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GitRef {
+    Branch(String),
+    DefaultBranch,
+    Rev(String),
+    Tag(String),
+}
+
+impl GitRef {
+    /// Canonical requirement string stored in `koja.lock`. A lock
+    /// entry is stale when this no longer matches the manifest.
+    pub fn requirement(&self) -> String {
+        match self {
+            GitRef::Branch(branch) => format!("branch = {branch}"),
+            GitRef::DefaultBranch => "default-branch".to_string(),
+            GitRef::Rev(rev) => format!("rev = {rev}"),
+            GitRef::Tag(tag) => format!("tag = {tag}"),
+        }
+    }
+}
+
+impl DepConfig {
+    /// Validate the raw declaration into a [`DepSource`]: exactly one
+    /// of `path`/`git`/`github`, at most one ref selector, and the
+    /// `github` slug normalized to its full URL.
+    pub fn source(&self, alias: &str) -> Result<DepSource, String> {
+        let origins = [&self.path, &self.git, &self.github];
+        if origins.iter().filter(|origin| origin.is_some()).count() != 1 {
+            return Err(format!(
+                "dependency `{alias}` must declare exactly one of `path`, `git`, or `github`"
+            ));
+        }
+
+        if let Some(path) = &self.path {
+            if self.branch.is_some() || self.rev.is_some() || self.tag.is_some() {
+                return Err(format!(
+                    "dependency `{alias}`: `branch`, `tag`, and `rev` only apply to git dependencies"
+                ));
+            }
+            return Ok(DepSource::Path(path.clone()));
+        }
+
+        let url = match (&self.git, &self.github) {
+            (Some(url), None) => url.clone(),
+            (None, Some(slug)) => github_url(alias, slug)?,
+            _ => unreachable!("exactly one origin checked above"),
+        };
+        warn_embedded_credentials(alias, &url);
+
+        let reference = match (&self.branch, &self.rev, &self.tag) {
+            (None, None, None) => GitRef::DefaultBranch,
+            (Some(branch), None, None) => GitRef::Branch(branch.clone()),
+            (None, Some(rev), None) => GitRef::Rev(rev.clone()),
+            (None, None, Some(tag)) => GitRef::Tag(tag.clone()),
+            _ => {
+                return Err(format!(
+                    "dependency `{alias}` may pin at most one of `branch`, `tag`, or `rev`"
+                ));
+            }
+        };
+        Ok(DepSource::Git { reference, url })
+    }
+}
+
+/// Expand a `github = "owner/repo"` slug to its canonical URL. Only
+/// the full URL ever reaches the lockfile and the mirror cache, so
+/// switching a dep between `github` and the equivalent `git` form
+/// never invalidates a lock entry.
+fn github_url(alias: &str, slug: &str) -> Result<String, String> {
+    let mut segments = slug.split('/');
+    match (segments.next(), segments.next(), segments.next()) {
+        (Some(owner), Some(repo), None)
+            if !owner.is_empty() && !repo.is_empty() && !slug.contains(char::is_whitespace) =>
+        {
+            Ok(format!("https://github.com/{owner}/{repo}"))
+        }
+        _ => Err(format!(
+            "dependency `{alias}`: `github` must be an `owner/repo` slug, got `{slug}`"
+        )),
+    }
+}
+
+/// Warn when a URL embeds `user:token@` credentials. koja.toml is
+/// usually committed, so tokens belong in git credential helpers or
+/// `insteadOf` rewrites, never in the manifest.
+fn warn_embedded_credentials(alias: &str, url: &str) {
+    let Some((_, rest)) = url.split_once("://") else {
+        return;
+    };
+    let Some((userinfo, _)) = rest.split_once('@') else {
+        return;
+    };
+    if userinfo.contains(':') && !userinfo.contains('/') {
+        eprintln!(
+            "warning: dependency `{alias}` embeds credentials in its URL; \
+             use a git credential helper or `insteadOf` rewrite instead"
+        );
+    }
 }
 
 /// Parsed project configuration from an `koja.toml` file.
@@ -39,6 +155,9 @@ pub struct ProjectConfig {
     /// The project entry point type. Must be a PascalCase type implementing `Process<C, M, R>`.
     #[serde(default)]
     pub entry: Option<String>,
+    /// Minimum compiler version, e.g. "0.15.0". A bare version, no operators.
+    #[serde(default)]
+    pub koja: Option<String>,
     /// SPDX expression, e.g. "MIT OR Apache-2.0"
     #[serde(default)]
     pub license: Option<String>,
@@ -96,7 +215,55 @@ pub fn load_project(dir: &Path) -> Result<Option<ProjectConfig>, String> {
 
     let mut config = parsed.project;
     config.dependencies = parsed.dependencies;
+    for (alias, dep) in &config.dependencies {
+        dep.source(alias)?;
+    }
+
+    let current = parse_version(env!("CARGO_PKG_VERSION")).expect("crate version is X.Y.Z");
+    check_koja_version(&config, current)?;
     Ok(Some(config))
+}
+
+/// Parse a bare `X.Y` or `X.Y.Z` version into a comparable triple.
+fn parse_version(version: &str) -> Option<(u64, u64, u64)> {
+    let mut numbers = version.split('.');
+    let major = numbers.next()?.parse().ok()?;
+    let minor = numbers.next()?.parse().ok()?;
+    let patch = match numbers.next() {
+        Some(patch) => patch.parse().ok()?,
+        None => 0,
+    };
+    match numbers.next() {
+        Some(_) => None,
+        None => Some((major, minor, patch)),
+    }
+}
+
+/// Enforce the manifest's `koja` minimum against the running compiler.
+fn check_koja_version(config: &ProjectConfig, current: (u64, u64, u64)) -> Result<(), String> {
+    let Some(required) = &config.koja else {
+        return Ok(());
+    };
+    let name = &config.name;
+
+    let Some(minimum) = parse_version(required) else {
+        if required.starts_with(|c: char| !c.is_ascii_digit()) {
+            return Err(format!(
+                "package `{name}`: `koja` takes a bare minimum version like \"0.15.0\", got `{required}`"
+            ));
+        }
+        return Err(format!(
+            "package `{name}`: `koja` must be an `X.Y` or `X.Y.Z` version, got `{required}`"
+        ));
+    };
+
+    if current < minimum {
+        let (major, minor, patch) = current;
+        return Err(format!(
+            "package `{name}` requires koja >= {required}, but this is koja {major}.{minor}.{patch}"
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -131,5 +298,108 @@ mod tests {
             "#,
         );
         assert_eq!(config.binary_name(), "gh");
+    }
+
+    fn dep(source: &str) -> Result<DepSource, String> {
+        let config: DepConfig = toml::from_str(source).expect("valid dep table");
+        config.source("dep")
+    }
+
+    #[test]
+    fn github_slug_normalizes_to_full_url() {
+        assert_eq!(
+            dep(r#"github = "koja-lang/postgres""#),
+            Ok(DepSource::Git {
+                reference: GitRef::DefaultBranch,
+                url: "https://github.com/koja-lang/postgres".to_string(),
+            })
+        );
+        assert!(dep(r#"github = "not-a-slug""#).is_err());
+        assert!(dep(r#"github = "too/many/parts""#).is_err());
+    }
+
+    #[test]
+    fn git_deps_accept_at_most_one_ref_selector() {
+        assert_eq!(
+            dep(r#"git = "https://example.com/x.git"
+                   tag = "v1.0""#),
+            Ok(DepSource::Git {
+                reference: GitRef::Tag("v1.0".to_string()),
+                url: "https://example.com/x.git".to_string(),
+            })
+        );
+        assert!(
+            dep(r#"git = "https://example.com/x.git"
+                   tag = "v1.0"
+                   branch = "main""#)
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn dep_declares_exactly_one_origin() {
+        assert!(dep("").is_err());
+        assert!(
+            dep(r#"path = "libs/x"
+                   github = "a/b""#)
+            .is_err()
+        );
+        assert!(
+            dep(r#"path = "libs/x"
+                   tag = "v1.0""#)
+            .is_err(),
+            "ref selectors only apply to git deps"
+        );
+    }
+
+    #[test]
+    fn requirement_strings_are_canonical() {
+        assert_eq!(GitRef::DefaultBranch.requirement(), "default-branch");
+        assert_eq!(
+            GitRef::Branch("main".to_string()).requirement(),
+            "branch = main"
+        );
+        assert_eq!(GitRef::Tag("v1.0".to_string()).requirement(), "tag = v1.0");
+        assert_eq!(GitRef::Rev("abc".to_string()).requirement(), "rev = abc");
+    }
+
+    fn check(required: &str, current: (u64, u64, u64)) -> Result<(), String> {
+        let config = parse(&format!(
+            "[project]\nname = \"Pkg\"\nversion = \"0.1.0\"\nkoja = \"{required}\"\n"
+        ));
+        check_koja_version(&config, current)
+    }
+
+    #[test]
+    fn koja_minimum_passes_when_satisfied() {
+        assert_eq!(check("0.15.0", (0, 15, 0)), Ok(()));
+        assert_eq!(check("0.15.0", (0, 15, 1)), Ok(()));
+        assert_eq!(check("0.15", (0, 15, 0)), Ok(()), "missing patch means 0");
+        assert_eq!(check("0.9.9", (0, 15, 0)), Ok(()));
+    }
+
+    #[test]
+    fn koja_minimum_fails_with_both_versions_named() {
+        let err = check("0.15.0", (0, 14, 1)).unwrap_err();
+        assert_eq!(
+            err,
+            "package `Pkg` requires koja >= 0.15.0, but this is koja 0.14.1"
+        );
+    }
+
+    #[test]
+    fn koja_rejects_operators_with_a_hint() {
+        let err = check("~> 0.15", (0, 15, 0)).unwrap_err();
+        assert!(err.contains("bare minimum version"), "got: {err}");
+        let err = check(">= 0.15.0", (0, 15, 0)).unwrap_err();
+        assert!(err.contains("bare minimum version"), "got: {err}");
+    }
+
+    #[test]
+    fn koja_rejects_malformed_versions() {
+        for bad in ["0", "0.15.0.1", "0.x", "0.15-beta"] {
+            let err = check(bad, (0, 15, 0)).unwrap_err();
+            assert!(err.contains("`X.Y` or `X.Y.Z`"), "got: {err}");
+        }
     }
 }

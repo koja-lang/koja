@@ -5,12 +5,13 @@ alias HTTP.Response
 alias HTTP.Status
 alias JSON.Encoder
 alias JSON.Value
+alias Postgres.Connection
 
 const LINKS_PREFIX: String = "/links/"
 
 @doc """
-Maps an HTTP request to a response, threading the `Postgres`
-connection through (each query yields an updated connection) and
+Maps an HTTP request to a response, threading the Postgres
+`Connection` through (each query yields an updated connection) and
 returning it alongside the response so the caller can rebind.
 
 Routes:
@@ -23,7 +24,7 @@ Routes:
 - `GET    /:code`       302-redirect to the target, counting the hit
 """
 struct Router
-  fn route(req: Request, conn: Postgres) -> Pair<Response, Postgres>
+  fn route(req: Request, conn: Connection) -> Pair<Response, Connection>
     match req.method
       Method.Delete ->
         handle_delete(req.path, conn)
@@ -64,7 +65,9 @@ struct Router
     )
   end
 
-  priv fn handle_get(path: String, conn: Postgres) -> Pair<Response, Postgres>
+  priv fn handle_get(path: String, conn: Connection)
+    -> Pair<Response, Connection>
+
     if path == "/"
       return respond(conn, info())
     end
@@ -88,7 +91,9 @@ struct Router
     end
   end
 
-  priv fn handle_post(req: Request, conn: Postgres) -> Pair<Response, Postgres>
+  priv fn handle_post(req: Request, conn: Connection)
+    -> Pair<Response, Connection>
+
     unless req.path == "/links"
       return respond(
         conn,
@@ -116,7 +121,9 @@ struct Router
     end
   end
 
-  priv fn handle_put(req: Request, conn: Postgres) -> Pair<Response, Postgres>
+  priv fn handle_put(req: Request, conn: Connection)
+    -> Pair<Response, Connection>
+
     code =
       match code_after(req.path, LINKS_PREFIX)
         Option.Some(c) -> c
@@ -137,8 +144,8 @@ struct Router
     end
   end
 
-  priv fn handle_delete(path: String, conn: Postgres)
-    -> Pair<Response, Postgres>
+  priv fn handle_delete(path: String, conn: Connection)
+    -> Pair<Response, Connection>
 
     code =
       match code_after(path, LINKS_PREFIX)
@@ -163,7 +170,7 @@ struct Router
     end
   end
 
-  priv fn list_all(conn: Postgres) -> Pair<Response, Postgres>
+  priv fn list_all(conn: Connection) -> Pair<Response, Connection>
     outcome = LinkStore.all(conn)
 
     match outcome.second
@@ -178,11 +185,11 @@ struct Router
     end
   end
 
-  priv fn metadata(conn: Postgres, code: String) -> Pair<Response, Postgres>
+  priv fn metadata(conn: Connection, code: String) -> Pair<Response, Connection>
     link_or_404(LinkStore.find(conn, code), code)
   end
 
-  priv fn redirect(conn: Postgres, code: String) -> Pair<Response, Postgres>
+  priv fn redirect(conn: Connection, code: String) -> Pair<Response, Connection>
     outcome = LinkStore.visit(conn, code)
 
     match outcome.second
@@ -198,9 +205,9 @@ struct Router
   end
 
   priv fn link_or_404(
-    outcome: Pair<Postgres, Result<Option<Link>, String>>,
+    outcome: Pair<Connection, Result<Option<Link>, String>>,
     code: String,
-  ) -> Pair<Response, Postgres>
+  ) -> Pair<Response, Connection>
 
     match outcome.second
       Result.Err(e) ->
@@ -220,8 +227,8 @@ struct Router
     end
   end
 
-  priv fn respond(conn: Postgres, response: Response)
-    -> Pair<Response, Postgres>
+  priv fn respond(conn: Connection, response: Response)
+    -> Pair<Response, Connection>
 
     Pair{first: response, second: conn}
   end

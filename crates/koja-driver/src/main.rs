@@ -22,6 +22,7 @@
 //! slots in as a third variant.
 
 mod commands;
+mod deps;
 mod diagnostics;
 mod link;
 mod loader;
@@ -71,6 +72,11 @@ enum Command {
         /// Print the type-checked AST to stdout instead of just OK/diagnostics
         #[arg(long)]
         emit_ast: bool,
+    },
+    /// Manage project dependencies (lists them when no subcommand is given)
+    Deps {
+        #[command(subcommand)]
+        action: Option<DepsAction>,
     },
     /// Generate HTML documentation
     Doc(DocArgs),
@@ -163,6 +169,26 @@ struct DocArgs {
 }
 
 #[derive(Subcommand)]
+enum DepsAction {
+    /// Remove the materialized deps/ directory
+    Clean {
+        /// Also purge the global git mirror cache
+        #[arg(long)]
+        cache: bool,
+    },
+    /// Fetch dependencies and update koja.lock
+    ///
+    /// The only network step: build/check/run/test are strictly
+    /// offline and materialize deps/ from koja.lock plus the cache.
+    Get,
+    /// Re-resolve refs against their remotes and update koja.lock
+    Update {
+        /// Package to update (all git dependencies when omitted)
+        name: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
 enum DocAction {
     /// Rebuild docs and serve them on a local HTTP port
     ///
@@ -192,6 +218,12 @@ fn main() {
             release,
         } => pipeline::cmd_build(file, output, release, emit_llvm),
         Command::Check { file, emit_ast } => pipeline::cmd_check(file, emit_ast),
+        Command::Deps { action } => match action {
+            None => deps::cmd_status(),
+            Some(DepsAction::Clean { cache }) => deps::cmd_clean(cache),
+            Some(DepsAction::Get) => deps::cmd_get(None),
+            Some(DepsAction::Update { name }) => deps::cmd_get(Some(name)),
+        },
         Command::Doc(args) => dispatch_doc(args, color),
         Command::Eval { file } => pipeline::cmd_run(
             Some(file),

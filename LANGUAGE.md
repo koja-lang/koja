@@ -1101,6 +1101,31 @@ The auto-imported `Global` package provides core types (`Option`, `Result`, `Lis
 
 Use `alias Crypto.SHA256` or `alias Net.TCPSocket` to access them.
 
+### Dependencies
+
+Packages declare dependencies in `koja.toml`, by local path or by git repository pinned to an exact ref:
+
+```toml
+[dependencies]
+Postgres = { github = "koja-lang/postgres", tag = "v0.1.0" }
+Vendored = { git = "https://git.example.com/vendored.git", branch = "main" }
+Greeter = { path = "libs/greeter" }
+```
+
+Each dependency declares exactly one of `path`, `git`, or `github` (an `owner/repo` shorthand for `https://github.com/owner/repo`). Git dependencies accept at most one of `tag`, `branch`, or `rev`; with none, the remote's default branch is used. There is no version solver: a ref resolves to a commit, and one version of a package name exists per build.
+
+`koja deps get` is the only command that touches the network. It resolves each ref to a commit SHA, records the pin in `koja.lock` (committed, so builds are reproducible), caches a mirror clone under `~/.koja/cache`, and copies the pinned tree into the project's `deps/` directory (gitignored and read-only, always regenerable). Dependencies of dependencies resolve transitively, and the root project's lockfile is the only one consulted.
+
+Every other command is offline. `build`, `check`, `run`, `test`, and `doc` verify `koja.lock` against the manifest and re-materialize `deps/` from the local cache when needed. A manifest edit that outdates the lock, or a pin missing from the cache, is a hard error naming the fix rather than a silent fetch:
+
+```
+error: dependency `postgres` is not pinned in koja.lock (koja.toml changed?), run `koja deps get`
+```
+
+`koja deps` prints each dependency with its pin and local state. `koja deps update [name]` re-resolves refs against their remotes (moving a `branch` pin forward). `koja deps clean` removes `deps/`; with `--cache` it also purges the global mirror cache.
+
+Private repositories work through the ambient git configuration: SSH agents for `git@` URLs, credential helpers for https, and `insteadOf` rewrites in CI. Credentials never appear in `koja.toml` or `koja.lock`.
+
 ---
 
 ## Concurrency
@@ -2145,6 +2170,7 @@ An optional string after `@test` provides a description printed during the test 
 | `koja run`    | Build and execute in one step                     |
 | `koja check`  | Type check without compiling                      |
 | `koja test`   | Run `@test`-annotated functions                   |
+| `koja deps`   | Fetch and inspect dependencies (`get`, `update`)  |
 | `koja format` | Opinionated code formatter (`--write`, `--check`) |
 | `koja doc`    | Generate static HTML documentation                |
 | `koja lex`    | Dump tokens                                       |
@@ -2166,6 +2192,7 @@ The `koja.toml` file defines the project configuration:
 ```toml
 [project]
 entry = "App"
+koja = "0.15"
 name = "my_app"
 version = "0.1.0"
 ```
@@ -2177,6 +2204,9 @@ Fields:
 - `entry`: the type implementing `Process` that the program starts (required for `build`/`run`).
 - `src`: source directories (default `["src"]`).
 - `test`: test directories (default `["test"]`).
+- `koja`: minimum compiler version, e.g. `koja = "0.15.0"`. A bare version, no operators. An older compiler refuses the package (and any package depending on it) with an error naming both versions.
+
+A `[dependencies]` table declares path and git dependencies; see [Dependencies](#dependencies).
 
 ### Language Server (LSP)
 

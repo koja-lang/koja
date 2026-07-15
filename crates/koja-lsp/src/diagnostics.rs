@@ -119,26 +119,51 @@ fn collect_sibling_sources(project_root: &Path, current_path: Option<&Path>) -> 
 
     for dep in parsed.dependencies.values() {
         let Some(ref rel) = dep.path else { continue };
-        let dep_root = project_root.join(rel);
-        let Ok(dep_src) = fs::read_to_string(dep_root.join("koja.toml")) else {
-            continue;
-        };
-        let Ok(dep_toml) = toml::from_str::<KojaToml>(&dep_src) else {
-            continue;
-        };
-        if !seen_pkgs.insert(dep_toml.project.name.clone()) {
-            continue;
-        }
-        push_package_files(
-            &dep_toml.project.src,
-            &dep_root,
-            &dep_toml.project.name,
+        push_dep_files(
+            &project_root.join(rel),
+            &mut seen_pkgs,
             current_path,
             &mut files,
         );
     }
 
+    // Materialized git dependencies: `koja deps get` copies each
+    // pinned package (including transitives) into deps/<Package> with
+    // its own koja.toml.
+    if let Ok(entries) = fs::read_dir(project_root.join("deps")) {
+        for entry in entries.flatten() {
+            push_dep_files(&entry.path(), &mut seen_pkgs, current_path, &mut files);
+        }
+    }
+
     files
+}
+
+/// Bundle one dependency directory's sources, keyed by the package
+/// name in its own koja.toml. Silently skips unreadable or duplicate
+/// packages so the LSP degrades gracefully.
+fn push_dep_files(
+    dep_root: &Path,
+    seen_pkgs: &mut std::collections::BTreeSet<String>,
+    current_path: Option<&Path>,
+    out: &mut Vec<SourceFile>,
+) {
+    let Ok(dep_src) = fs::read_to_string(dep_root.join("koja.toml")) else {
+        return;
+    };
+    let Ok(dep_toml) = toml::from_str::<KojaToml>(&dep_src) else {
+        return;
+    };
+    if !seen_pkgs.insert(dep_toml.project.name.clone()) {
+        return;
+    }
+    push_package_files(
+        &dep_toml.project.src,
+        dep_root,
+        &dep_toml.project.name,
+        current_path,
+        out,
+    );
 }
 
 fn push_package_files(

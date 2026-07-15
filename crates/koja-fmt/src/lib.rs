@@ -989,6 +989,49 @@ mod tests {
     }
 
     #[test]
+    fn single_continuation_call_hugs_broken_args() {
+        // A chain with one continuation call breaks the anchor's argument
+        // list and glues the trailing call to the closing paren instead of
+        // dropping it onto its own line.
+        assert_fmt(
+            r#"
+            fn f(settings: Config) -> DbConfig
+              DbConfig.new(settings.db_host, settings.db_port, settings.db_user, settings.db_name).with_password(settings.db_password)
+            end
+        "#,
+            r#"
+            fn f(settings: Config) -> DbConfig
+              DbConfig.new(
+                settings.db_host,
+                settings.db_port,
+                settings.db_user,
+                settings.db_name,
+              ).with_password(settings.db_password)
+            end
+        "#,
+        );
+    }
+
+    #[test]
+    fn single_continuation_call_breaks_at_dot_when_anchor_fits() {
+        // When the anchor fits inline but the trailing call overflows, the
+        // chain still breaks at the dot.
+        assert_fmt(
+            r#"
+            fn f(settings: Config) -> DbConfig
+              DbConfig.new(settings.db_host, settings.db_port).with_password(settings.extremely_long_database_password_field)
+            end
+        "#,
+            r#"
+            fn f(settings: Config) -> DbConfig
+              DbConfig.new(settings.db_host, settings.db_port)
+                .with_password(settings.extremely_long_database_password_field)
+            end
+        "#,
+        );
+    }
+
+    #[test]
     fn method_chain_block_gets_spacing() {
         assert_fmt(
             r#"

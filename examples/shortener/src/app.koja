@@ -2,6 +2,8 @@ alias HTTP.Parser
 alias HTTP.Status
 alias Net.TCPListener
 alias Net.TCPSocket
+alias Postgres.Config as DbConfig
+alias Postgres.Connection
 alias Process.Lifecycle
 alias Process.Step
 alias Process.StopReason
@@ -20,26 +22,27 @@ updated connection); `handle_connection` rebinds the process to the
 connection the router hands back.
 """
 struct App
-  db: Postgres
+  db: Connection
   listener: TCPListener
 end
 
 impl Process<List<String>, (), String> for App
   fn start(config: List<String>) -> Result<Self, StopReason>
     settings = Config.load()
+    db_config = DbConfig.new(
+      settings.db_host,
+      settings.db_port,
+      settings.db_user,
+      settings.db_name,
+    ).with_password(settings.db_password)
 
     conn =
-      match Postgres.connect(
-        settings.db_host,
-        settings.db_port,
-        settings.db_user,
-        settings.db_name,
-      )
+      match Connection.connect(db_config)
         Result.Ok(c) ->
           c
 
         Result.Err(e) ->
-          IO.puts("database connection failed: #{e}")
+          IO.puts("database connection failed: #{e.message()}")
           return Result.Err(StopReason.Shutdown)
       end
 

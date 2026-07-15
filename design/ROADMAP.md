@@ -40,7 +40,7 @@ Driver:
 
 ### CLI
 
-Eleven commands: `koja new`, `koja build`, `koja run`, `koja check`, `koja eval`, `koja shell`, `koja test`, `koja format`, `koja doc`, `koja lex`, `koja parse`.
+Twelve commands: `koja new`, `koja build`, `koja run`, `koja check`, `koja eval`, `koja shell`, `koja test`, `koja format`, `koja doc`, `koja deps`, `koja lex`, `koja parse`.
 
 Source-shape rule: `.koja` files are project files (multi-module, declarations only); `.kojs` files are scripts (top-level expressions and statements, no `fn main`); omitting the file argument resolves the project via `koja.toml`. Project mode runs the full pipeline through `koja-ir-llvm::compile_program`; script mode lowers a synthetic entry point and (by default) evaluates via `koja-ir-eval`.
 
@@ -56,7 +56,7 @@ Interpreter script mode (`.kojs` and `koja run --backend=interpreter`) now boots
 
 - Multi-module imports (including qualified calls like `math.add()`)
 - Functions (`fn`/`priv fn`)
-- Constants (`const`) with optional type annotations (`const NAME: Type = expr`), including enum unit variants and struct literals with all-constant fields
+- Constants (`const`) with optional type annotations (`const NAME: Type = expr`), including enum unit variants, struct literals with all-constant fields, and binary literals
 - Structs
 - Enums
 - Impl blocks and methods (`self`)
@@ -86,8 +86,8 @@ Interpreter script mode (`.kojs` and `koja run --backend=interpreter`) now boots
 - List literal syntax (`[1, 2, 3]`) backed by `ListLiteral<T>` protocol
 - Map literal syntax (`["key": value]`, `[:]` empty) backed by `MapLiteral<K, V>` protocol
 - `Self` type expression in `protocol` and `impl` blocks
-- `Hash` and `Equality` protocols with intrinsic implementations for all primitives
-- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from the `Global` package's `kernel.koja`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `process.koja`); `CPtr<T>`, `CString` (auto-imported from `cptr.koja`, `cstring.koja`)
+- `Hash` and `Equality` protocols with intrinsic implementations for all primitives plus `Binary` and `Bits` (literal-form `Debug` output included)
+- Stdlib types: `Option<T>`, `Result<T, E>`, `Pair<A, B>`, `Map<K, V>`, `Set<T>` (auto-imported from the `Global` package's `kernel.koja`); `Process<C, M, R>`, `Ref<M, R>`, `ReplyTo<R>`, `Task<R>`, `Step<S>`, `Lifecycle`, `StopReason`, `ExitStatus`, `ExitReason` (auto-imported from `process.koja`); `Base` (base16/base64/url-safe encode + decode, auto-imported from `base.koja`); `Path` (POSIX path manipulation, auto-imported from `path.koja`); `CPtr<T>`, `CString` (auto-imported from `cptr.koja`, `cstring.koja`)
 - `List<T>` iterator functions (`map`, `filter`, `any?`, `all?`) implemented as pure Koja code in `lib/global/src/kernel.koja`
 - Bare function names as references (`f = double; f(5)`, `list.map(double)`) -- top-level functions produce closure-compatible fat pointers via thunk wrappers
 - Union types (`A | B | C`) -- anonymous tagged unions with widening coercion, exhaustiveness checking, and `match` support with typed binding patterns (`p: Post -> p.title`)
@@ -179,7 +179,7 @@ Phase 4 made Koja useful for real programs (Track A) and concurrency production-
 - **Test runner** -- `koja test` discovers `@test`-annotated functions, generates a synthetic harness, compiles and runs.
 - **Stdlib (`Global`)** -- `Fd`, `File`, `IO`, `Process`, `Debug`, `System`, `DateTime` / `Duration`, `Random`.
 - **Stdlib packages** -- `Net` (POSIX socket surface: `TCPSocket`, `TCPListener`, `UDPSocket`), `HTTP` (vocabulary types + HTTP/1.1 `Parser` + one-shot `Client`; server composed by users from `Net.TCPListener` + `HTTP.Parser` + `response.serialize()` -- a packaged `HTTP.Server` wrapper deferred), `JSON` (Value / Encoder / Decoder / StringBuilder), `Crypto` (SHA family + HMAC via BoringSSL FFI, `libcrypto.a` embedded zero-setup).
-- **Package manager** -- `[dependencies]` table with local-path support; `alias` keyword for file-private qualified-package shorthands.
+- **Package manager** -- `[dependencies]` table with local-path support; `alias` keyword for file-private qualified-package shorthands. (Git dependencies, `koja.lock`, the `koja deps` command family, and the `koja` minimum-compiler-version field landed later, during Phase 5.)
 - **C FFI Phase 1-2** -- `@extern "C"`, `@link "libname"`, `CPtr<T>`, `CString` interop.
 - **Convergence** -- `examples/demo_api` is a real HTTP service built end-to-end on `Net` + `HTTP` + `JSON` + `Process` + signal-driven lifecycle.
 
@@ -263,7 +263,7 @@ Pulled forward from Phase 6 Track B. The _distribution_ half shipped early out o
 - **Per-host CI build matrix** -- native release builds on `linux-x86_64` and `darwin-arm64`, each statically linked (embedded `libkoja_runtime.a` plus BoringSSL `libcrypto.a` / `libssl.a`), with a `koja run examples/hello.kojs` smoke test.
 - **Portability audits** -- the release job fails if `koja` / `koja-lsp` link anything outside system paths (`otool -L` on macOS, `ldd` on Linux), so shipped binaries are dependency-free.
 - **Version manager** -- `asdf-koja` plugin installs released binaries.
-- **Remaining (small follow-ups, not blockers)** -- the other two initial tier-1 hosts (`macos-x86_64`, `linux-aarch64`); `brew tap` / `mise` formulas.
+- **Remaining (small follow-ups, not blockers)** -- ~~`linux-aarch64`~~ (**done** -- linux-arm64 tarballs ship since v0.14.1 and `ubuntu-24.04-arm` runs in the CI matrices); `macos-x86_64`; `brew tap` / `mise` formulas.
 
 ### Phase 5 hygiene (not a track)
 
@@ -294,7 +294,7 @@ Items debated for inclusion in Phase 5 and intentionally punted, annotated with 
 - LSP finishing pass (inlay hints, multi-module diagnostics)
 - ~~`koja new` scaffolding flip + retire `fn main`~~ -- **Done.**
 - `HTTP.Server` wrapper
-- `Net` TLS, git deps + lockfile, C FFI Phase 3, `Mmap`
+- `Net` TLS, ~~git deps + lockfile~~ (**done** -- shipped mid-Phase-5), C FFI Phase 3, `Mmap`
 - First-party package seeding (argon2, structured logging, etc.)
 - Compiler diagnostic quality pass (transverse)
 - Validation projects (auth-manager-koja, second project)
@@ -368,7 +368,7 @@ The polish, validation, and language-surface review that gates a published 1.0. 
 - **CLI query/guide system** -- `koja query type <Type>` / `koja query module <pkg>` / `koja query protocol <Protocol>`; `koja guide <topic>` (prose guides on value semantics, concurrency, FFI, protocols, testing, etc.).
 - **LSP finishing pass** -- inlay hints for inferred types, multi-module cross-file diagnostics.
 - **Ergonomic cleanup** -- ~~`koja new` scaffolding generates a `Process` entry (not `fn main`); retire `fn main` as an entry mode~~ (**done**); `HTTP.Server` wrapper landing in stdlib.
-- **Stdlib completion** -- `Net` TLS (`upgrade_tls`, `TLSConfig`), git deps + lockfile in the package manager, C FFI Phase 3 (`@compat "C"` structs + callbacks), `Mmap`.
+- **Stdlib completion** -- `Net` TLS (`upgrade_tls`, `TLSConfig`), ~~git deps + lockfile in the package manager~~ (**done** -- git dependencies pin through a committed `koja.lock` via `koja deps get`/`update`/`clean`, offline builds re-materialize from a global cache), C FFI Phase 3 (`@compat "C"` structs + callbacks), `Mmap`.
 - **First-party reference packages** -- at minimum `argon2` (validates C FFI Phase 3 + crypto pattern) and structured `logging` (validates the package manager workflow end-to-end on external code).
 - **Compiler diagnostic quality pass** -- dedicated milestone for "error messages are a feature." Review every diagnostic site, improve span precision, add hints, polish phrasing.
 - **Validation projects** -- `auth-manager-koja` (the 17-file pseudocode reference) compiles and runs as a real service; one additional non-trivial project compiles cleanly (CLI tool or different microservice).
@@ -542,17 +542,18 @@ See [COMPILER-NORTHSTAR.md](COMPILER-NORTHSTAR.md) for the destination architect
 
 ### Done
 
-| Phase        | Milestone                                                                                                                                                                                                                                                            |
-| ------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Bootstrap    | Lexer, parser, type system, LLVM codegen -- native binaries from Koja source                                                                                                                                                                                         |
-| Tooling      | Formatter, `koja new`, `koja run`, VSCode extension, LSP, `koja-test`, documentation generator                                                                                                                                                                       |
-| Core         | Generics, ownership, protocols, closures, collections, processes                                                                                                                                                                                                     |
-| Phase 3      | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer                                                                                                                                                |
-| Phase 4A     | Test runner, `Net` (POSIX surface), `HTTP` (vocabulary + parser + client), `JSON`, `Crypto`, `Random`, `Debug` protocol, `Global.IO`, `Global.File`, `Global.System`, `Global.DateTime`/`Global.Duration`, C FFI Phase 1-2, `alias` keyword, local-path dependencies |
-| Phase 4B     | Multi-threaded scheduler, cgroup-aware thread count, Condvar parking, graceful shutdown, I/O reactor, lifecycle event delivery (`SIGTERM`/`SIGINT`/`SIGHUP` → `Lifecycle` mailbox events)                                                                            |
-| Tooling      | `--release` LLVM `-O3` optimization, function-granular DWARF + runtime panic backtraces (LLVM backend, across spawned processes), Vim plugin (indent, matchit, compiler)                                                                                             |
-| Compiler     | Sealed four-phase pipeline (`koja-parser → koja-typecheck → koja-ir → koja-ir-llvm`/`koja-ir-eval`), interpreter backend, `koja shell` + `koja eval`, `.kojs` scripts, v1 crates retired                                                                             |
-| Distribution | Release CI on `v`\* tags (per-host tarballs + checksums, version guard), static-link portability audits (`otool`/`ldd`), GitHub Releases automation, `asdf-koja` plugin                                                                                              |
+| Phase            | Milestone                                                                                                                                                                                                                                                                                                                           |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Bootstrap        | Lexer, parser, type system, LLVM codegen -- native binaries from Koja source                                                                                                                                                                                                                                                        |
+| Tooling          | Formatter, `koja new`, `koja run`, VSCode extension, LSP, `koja-test`, documentation generator                                                                                                                                                                                                                                      |
+| Core             | Generics, ownership, protocols, closures, collections, processes                                                                                                                                                                                                                                                                    |
+| Phase 3          | Binary/bitstring system, string stdlib, file I/O, project system, unions, `Process<C,M,R>`, `Task`, self-hosted lexer                                                                                                                                                                                                               |
+| Phase 4A         | Test runner, `Net` (POSIX surface), `HTTP` (vocabulary + parser + client), `JSON`, `Crypto`, `Random`, `Debug` protocol, `Global.IO`, `Global.File`, `Global.System`, `Global.DateTime`/`Global.Duration`, C FFI Phase 1-2, `alias` keyword, local-path dependencies                                                                |
+| Phase 4B         | Multi-threaded scheduler, cgroup-aware thread count, Condvar parking, graceful shutdown, I/O reactor, lifecycle event delivery (`SIGTERM`/`SIGINT`/`SIGHUP` → `Lifecycle` mailbox events)                                                                                                                                           |
+| Tooling          | `--release` LLVM `-O3` optimization, function-granular DWARF + runtime panic backtraces (LLVM backend, across spawned processes), Vim plugin (indent, matchit, compiler)                                                                                                                                                            |
+| Compiler         | Sealed four-phase pipeline (`koja-parser → koja-typecheck → koja-ir → koja-ir-llvm`/`koja-ir-eval`), interpreter backend, `koja shell` + `koja eval`, `.kojs` scripts, v1 crates retired                                                                                                                                            |
+| Distribution     | Release CI on `v`\* tags (per-host tarballs + checksums, version guard), static-link portability audits (`otool`/`ldd`), GitHub Releases automation, `asdf-koja` plugin, linux-arm64 release + CI matrix                                                                                                                            |
+| Phase 5 (so far) | A1 scheduler hardening, supervision P1-P3 (crash unwind, `Pid`/monitors/`ExitSignal`, kill-cascade), `koja shell` project mode + tab completion, git deps + `koja.lock` + `koja deps` commands, `koja` minimum-version field, `Base` + `Path` stdlib, `Binary`/`Bits` equality + hash + literal `Debug`, binary constants + splices |
 
 For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-ROADMAP.md), [archive/20260330-ROADMAP.md](archive/20260330-ROADMAP.md), and [archive/20260518-ROADMAP.md](archive/20260518-ROADMAP.md).
 
@@ -560,8 +561,8 @@ For detailed build history, see [archive/20260318-ROADMAP.md](archive/20260318-R
 
 | Phase    | Milestone                                                                                                                                                                                                                                                                |
 | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 5A       | Runtime completion + supervision: scheduler protocol (with WASM-compat constraint), work-stealing, SIGTERM grace, timer wheel, preemption + priority, supervision tree, `Process.register`/`whereis`, `Registry`, `shared_map`                                           |
-| 5B       | Interactive workflow: `koja shell -S .` project mode, inline `h` docs, tab completion, process inspection                                                                                                                                                                |
+| 5A       | Supervision completion: `Supervisor` stdlib process + restart strategies + child specs (A1 scheduler hardening and supervision P1-P3 are done), `Process.register`/`whereis`, `Registry`, `shared_map`                                                                   |
+| 5B       | Interactive workflow remainder: explicit `-S <path>` selector, inline `h` docs, process inspection (project mode and tab completion are done)                                                                                                                            |
 | 6A       | WASM target (flavor TBD, likely WASI first), runtime split into core + per-target adapters, WASI I/O reactor, FFI resolution to WASM imports, crypto-on-WASM sub-decision                                                                                                |
 | 6B       | Cross-compilation: `--target=<triple>` plumbing, per-target embedded static deps, optional Zig-style bundled sysroots, tier list (distribution/release shipped in Phase 5)                                                                                               |
 | 7        | 1.0 candidacy + spec lock: documentation polish, CLI query/guide, LSP finishing, ergonomic cleanup, stdlib completion, first-party reference packages, diagnostic quality pass, validation projects, language surface review, spec freeze, signed multi-platform release |

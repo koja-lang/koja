@@ -1,11 +1,10 @@
 # Shortener
 
-A URL shortener written in Koja — a complete end-to-end CRUD service
-built only from the standard library: HTTP serving on `Net.TCPListener`
-
-- `HTTP.Parser`, JSON in and out via `JSON`, and a from-scratch
-  Postgres client speaking the v3 wire protocol over `Net.TCPSocket`
-  (no C driver, no FFI).
+A URL shortener written in Koja — a complete end-to-end CRUD service:
+HTTP serving on `Net.TCPListener` + `HTTP.Parser`, JSON in and out via
+`JSON`, and PostgreSQL through the [Postgres](https://github.com/hpopp/postgres-koja)
+package, a pure-Koja driver speaking the v3 wire protocol (no C
+driver, no FFI).
 
 It doubles as a tour of the things that make Koja great:
 
@@ -18,6 +17,9 @@ It doubles as a tour of the things that make Koja great:
 - **Value semantics** — the Postgres connection lives in process
   state; every query returns an updated connection that the router and
   app thread through and rebind. No locks, no mutation at a distance.
+- **Git dependencies** — the driver is declared in `koja.toml`
+  (`Postgres = { github = "hpopp/postgres-koja", branch = "main" }`)
+  and pinned to an exact commit by the committed `koja.lock`.
 
 ## Layout
 
@@ -28,13 +30,18 @@ src/
   app.koja        -- entry process: listener, tick loop, lifecycle
   config.koja     -- env-driven runtime configuration
   json_util.koja  -- request-body parsing / response encoding helpers
-  links.koja      -- LinkStore: CRUD queries over the postgres client
-  postgres/       -- Postgres v3 wire-protocol client (simple query)
+  links.koja      -- LinkStore: CRUD queries over the Postgres driver
   router.koja     -- request -> response dispatch
 test/             -- unit tests (no database required)
 ```
 
 ## Running
+
+Fetch dependencies (writes `deps/` from the pins in `koja.lock`):
+
+```sh
+koja deps get
+```
 
 Start Postgres (listens on host port 5433, schema applied on first boot):
 
@@ -86,13 +93,18 @@ collection with a request per route.
 All settings come from the environment, with defaults matching the
 compose stack:
 
-| Variable  | Default     | Purpose               |
-| --------- | ----------- | --------------------- |
-| `PORT`    | `8080`      | HTTP listen port      |
-| `DB_HOST` | `127.0.0.1` | Postgres host         |
-| `DB_PORT` | `5433`      | Postgres port         |
-| `DB_USER` | `postgres`  | Postgres user (trust) |
-| `DB_NAME` | `shortener` | Database name         |
+| Variable      | Default     | Purpose           |
+| ------------- | ----------- | ----------------- |
+| `PORT`        | `8080`      | HTTP listen port  |
+| `DB_HOST`     | `127.0.0.1` | Postgres host     |
+| `DB_PORT`     | `5433`      | Postgres port     |
+| `DB_USER`     | `postgres`  | Postgres user     |
+| `DB_PASSWORD` | `shortener` | Postgres password |
+| `DB_NAME`     | `shortener` | Database name     |
+
+The compose database authenticates with SCRAM-SHA-256 (the postgres
+image's default when a password is set), which the driver negotiates
+during the connection handshake.
 
 ## Tests
 
