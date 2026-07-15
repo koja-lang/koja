@@ -2,6 +2,6 @@ version = 1
 
 [[package]]
 name = "Postgres"
-requirement = "branch = main"
-rev = "a65e3c51bbc6a901105925098be5f930babe477c"
+requirement = "tag = v0.1.0"
+rev = "cec289554d4b9c736ccec1892878d05557bb2b5e"
 source = "git+https://github.com/hpopp/postgres-koja"

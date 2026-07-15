@@ -18,7 +18,7 @@ It doubles as a tour of the things that make Koja great:
   state; every query returns an updated connection that the router and
   app thread through and rebind. No locks, no mutation at a distance.
 - **Git dependencies** — the driver is declared in `koja.toml`
-  (`Postgres = { github = "hpopp/postgres-koja", branch = "main" }`)
+  (`Postgres = { github = "hpopp/postgres-koja", tag = "v0.1.0" }`)
   and pinned to an exact commit by the committed `koja.lock`.
 
 ## Layout
