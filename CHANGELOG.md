@@ -5,29 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.15.0] - 2026-07-14
 
 ### Added
 
 - Projects can now depend on git repositories: declare `{ github = "owner/repo", tag = "v1.0" }` (or `git = <url>` with `tag`/`branch`/`rev`) in `koja.toml`, run `koja deps get` to pin exact commits into a committed `koja.lock`, and every build stays offline and reproducible from the lock.
 - New `koja deps` commands: `get` fetches and pins dependencies, `update` moves pins forward, `clean` removes the materialized `deps/` directory, and bare `koja deps` shows each dependency's state.
 - A package can declare its minimum compiler version with `koja = "0.15.0"` in `[project]`. Older compilers refuse the package with an error naming both versions.
-- `koja new` stamps the scaffolding compiler's minor version as the new project's minimum.
 - New `Base` type encodes and decodes base16, base64, and url-safe base64.
 - New `Path` type manipulates POSIX paths with `join`, `split`, `dirname`, `basename`, `extname`, `rootname`, `expand`, `relative_to`, and `absolute?`.
+- `Binary` values can now be spliced into binary construction literals, so a framed message builds in one expression: `<<0x51, (payload.byte_size() + 4)::32, payload>>`.
+- Constants can now be initialized with binary literals, e.g. `const SYNC: Binary = <<0x53::8, 4::32>>`.
 - `Binary` and `Bits` values can now be compared with `==` and used as `Map` keys and `Set` elements.
 - `Binary` and `Bits` values now print as their literal form, e.g. `<<83, 0, 0, 0, 4>>` and `<<72, 5::3>>`, truncated past 64 bytes, both directly and inside structs.
 - New `Bits` functions `bit_size` and `byte_at` read a bitstring's length and storage bytes.
-- `Binary` values can now be spliced into binary construction literals, so a framed message builds in one expression: `<<0x51, (payload.byte_size() + 4)::32, payload>>`.
-- Constants can now be initialized with binary literals, e.g. `const SYNC: Binary = <<0x53::8, 4::32>>`.
+- `koja new` stamps the scaffolding compiler's minor version as the new project's minimum.
 
 ### Fixed
 
-- `koja format` no longer removes a blank line between a `const` or `alias` declaration and a comment introducing the next one.
-- `koja format` now always surrounds `@doc`-annotated declarations with blank lines.
 - `koja format` now packs wrapped operator chains such as `<>` and `+` with as many operands per line as fit, instead of one per line after the first break.
 - `koja format` now packs the segments of a long binary literal or pattern like list elements, instead of one segment per line.
 - `koja format` now glues a single trailing call like `.with_password(...)` to the closing paren of a wrapped argument list, instead of dropping it onto its own line.
+- `koja format` now always surrounds `@doc`-annotated declarations with blank lines.
+- `koja format` no longer removes a blank line between a `const` or `alias` declaration and a comment introducing the next one.
 
 ## [0.14.1] - 2026-07-12
 
