@@ -196,10 +196,6 @@ fn priv_method_rejected_from_top_level_code() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Same-package positives: `priv` decls reach sibling files
-// ---------------------------------------------------------------------------
-
 #[test]
 fn priv_struct_usable_across_files_in_same_package() {
     check_multi_file(
@@ -340,10 +336,6 @@ fn priv_protocol_implementable_in_same_package() {
     )
     .expect("same-package priv protocol impl should succeed");
 }
-
-// ---------------------------------------------------------------------------
-// Cross-package negatives: `priv` decls reject other packages
-// ---------------------------------------------------------------------------
 
 /// A `Lib` package exporting one private decl per kind, plus a
 /// public control struct.
@@ -496,10 +488,6 @@ fn priv_struct_pattern_rejected_cross_package() {
     .expect_err("cross-package priv struct pattern should fail");
     assert_private_reference_rejected(&failure, "struct", "Lib.Hidden");
 }
-
-// ---------------------------------------------------------------------------
-// Signature leak check: public surface may not expose same-package privates
-// ---------------------------------------------------------------------------
 
 /// Assert the failure contains the leak message for a public
 /// `subject` exposing private `leaked` (both "kind `identifier`").

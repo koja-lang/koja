@@ -840,8 +840,6 @@ fn match_struct_destructure_acts_as_catch_all() {
     assert_eq!(trailing_resolution(&checked), int_type(&checked));
 }
 
-// --- Phase 5: reachability / hint / Bool exhaustiveness ---
-
 #[test]
 fn match_arm_after_catch_all_warns_unreachable() {
     let source = "
@@ -1030,8 +1028,6 @@ fn match_bool_only_true_arm_still_requires_catch_all() {
         ";
     assert_script_fails_with(source, &["must include a wildcard"]);
 }
-
-// --- Constructor shorthand + deferred-shape feature gaps ---
 
 #[test]
 fn match_constructor_unit_resolves() {

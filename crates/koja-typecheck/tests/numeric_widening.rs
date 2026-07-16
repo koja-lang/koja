@@ -19,10 +19,6 @@ mod common;
 
 use common::{assert_script_fails_with, typecheck_script as typecheck, typecheck_script_fail};
 
-// -----------------------------------------------------------------------------
-// Accepts: every widenable source at every flow site
-// -----------------------------------------------------------------------------
-
 #[test]
 fn all_six_int_sources_widen_to_int_at_call_args() {
     let source = "
@@ -117,10 +113,6 @@ fn float32_widens_at_annotated_binding() {
         ";
     typecheck(&dedent(source));
 }
-
-// -----------------------------------------------------------------------------
-// Rejections: narrowing, UInt64, sideways, operators, generics, unions
-// -----------------------------------------------------------------------------
 
 #[test]
 fn int_does_not_narrow_to_int32() {

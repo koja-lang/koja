@@ -13,10 +13,6 @@ use common::{
     typecheck_script_fail as typecheck_fail,
 };
 
-// ------------------------------------------------------------------
-// Call-arg site (the `f(arg)` flavor of `validate_arg_signature`).
-// ------------------------------------------------------------------
-
 #[test]
 fn positive_int_literal_fits_call_arg_uint8() {
     let source = "
@@ -77,10 +73,6 @@ fn decimal_overflow_into_int8_diagnoses_out_of_range() {
     assert_script_fails_with(source, &["128", "Int8", "-128..=127"]);
 }
 
-// ------------------------------------------------------------------
-// Struct-field site (`validate_named_fields`).
-// ------------------------------------------------------------------
-
 #[test]
 fn struct_field_uint8_accepts_fitting_literal() {
     let source = "
@@ -104,10 +96,6 @@ fn struct_field_uint8_rejects_overflow_literal() {
         ";
     assert_script_fails_with(source, &["descriptor", "256", "UInt8"]);
 }
-
-// ------------------------------------------------------------------
-// Enum tuple-payload site (`validate_tuple_payload`).
-// ------------------------------------------------------------------
 
 #[test]
 fn enum_tuple_payload_int16_accepts_fitting_literal() {
@@ -133,10 +121,6 @@ fn enum_tuple_payload_int16_rejects_overflow_literal() {
     assert_script_fails_with(source, &["Tone", "40000", "Int16"]);
 }
 
-// ------------------------------------------------------------------
-// Return-type site (`check_return_type`).
-// ------------------------------------------------------------------
-
 #[test]
 fn return_type_int8_accepts_fitting_literal() {
     let source = "
@@ -157,10 +141,6 @@ fn return_type_int8_rejects_overflow_literal() {
     assert_script_fails_with(source, &["answer", "200", "Int8"]);
 }
 
-// ------------------------------------------------------------------
-// Const initializer site (`lift_signatures::resolve_constant_value`).
-// ------------------------------------------------------------------
-
 #[test]
 fn const_initializer_uint8_accepts_fitting_literal() {
     let source = "
@@ -180,12 +160,6 @@ fn const_initializer_uint8_rejects_negative_literal() {
         ";
     assert_script_fails_with(source, &["-1", "UInt8"]);
 }
-
-// ------------------------------------------------------------------
-// `Int` / `Float` aliases stay loose: any literal flows through, and
-// negative literals into `Int` are still fine (it's the loosest
-// integer type).
-// ------------------------------------------------------------------
 
 #[test]
 fn alias_int_accepts_negative_literal() {
@@ -211,12 +185,6 @@ fn alias_float_accepts_arbitrary_value() {
     typecheck(&dedent(source));
 }
 
-// ------------------------------------------------------------------
-// Float round-trip representability: `Float32` accepts a literal iff
-// `f64 -> f32 -> f64` round-trips equal. `0.5` does, `0.1` does not
-// (the closest f32 differs from the parsed f64).
-// ------------------------------------------------------------------
-
 #[test]
 fn float32_accepts_round_trip_safe_literal() {
     let source = "
@@ -241,12 +209,6 @@ fn float32_rejects_non_representable_literal() {
     assert_script_fails_with(source, &["Float32", "0.1"]);
 }
 
-// ------------------------------------------------------------------
-// Sign mismatch: a `String` flowing into `Int8` still produces the
-// pre-existing type-mismatch diagnostic, not the narrow-int range
-// one. Coercion only kicks in for numeric literal sources.
-// ------------------------------------------------------------------
-
 #[test]
 fn non_numeric_source_keeps_strict_type_mismatch() {
     let source = "
@@ -258,14 +220,6 @@ fn non_numeric_source_keeps_strict_type_mismatch() {
         ";
     assert_script_fails_with(source, &["expects", "Int8", "String"]);
 }
-
-// ------------------------------------------------------------------
-// Pattern-literal site (`patterns/literals.rs::check_literal_matches_subject`).
-// A literal pattern matched against a sized-numeric subject coerces
-// when its value fits the subject's range. Out-of-range literals
-// produce a precise narrow-int diagnostic instead of the generic
-// "type does not match subject type" one.
-// ------------------------------------------------------------------
 
 #[test]
 fn pattern_literal_uint8_fits_subject_uint8() {
@@ -314,15 +268,6 @@ fn pattern_literal_int8_negative_fits() {
         ";
     typecheck(&dedent(source));
 }
-
-// ------------------------------------------------------------------
-// Binary-op comparison site (`ops::numeric_comparison_compatible`).
-// A sized-numeric operand paired with a fitting `Int` / `Float`
-// literal stamps the matching coercion on the literal so IR lower
-// mints the narrow `Const` opcode at the comparison's bit width.
-// Mirrors the pattern-literal arm above: same `check_compatible` /
-// `coercion_target_mut` plumbing, just invoked at one more site.
-// ------------------------------------------------------------------
 
 #[test]
 fn binary_eq_int8_with_int_literal_fits() {
@@ -383,14 +328,6 @@ fn binary_gt_float32_with_float_literal_fits() {
         ";
     typecheck(&dedent(source));
 }
-
-// ------------------------------------------------------------------
-// Comparison-site alias-mix: a sized-numeric operand against a value
-// of the aliased default type should typecheck without coercion. This
-// is the `Substitution::set` cascade case under the hood: `T` binds
-// to `Int64` from the payload and the expected-type fill picks `Int`,
-// which `types_equivalent` accepts as the same type.
-// ------------------------------------------------------------------
 
 #[test]
 fn binary_gte_int64_with_int_literal_aliases() {

@@ -34,10 +34,6 @@ use common::{
     typecheck_script_fail as typecheck_fail, warning_messages,
 };
 
-// -----------------------------------------------------------------------------
-// Lift / equivalence
-// -----------------------------------------------------------------------------
-
 #[test]
 fn bare_union_in_param_signature_typechecks() {
     let source = "
@@ -137,10 +133,6 @@ fn nested_union_in_signature_typechecks() {
     typecheck(&dedent(source));
 }
 
-// -----------------------------------------------------------------------------
-// Widening
-// -----------------------------------------------------------------------------
-
 #[test]
 fn member_type_widens_into_union_call_arg() {
     let source = "
@@ -228,10 +220,6 @@ fn non_member_into_union_diagnoses() {
     assert_script_fails_with(source, &["expects `A | B`", "C"]);
 }
 
-// -----------------------------------------------------------------------------
-// Bare-receiver diagnostics
-// -----------------------------------------------------------------------------
-
 #[test]
 fn field_access_on_union_diagnoses() {
     // `v.title` where `v: Post | Comment` is illegal: typecheck
@@ -297,10 +285,6 @@ fn method_call_on_union_diagnoses() {
         "expected union-receiver method-call diagnostic, got {messages:?}",
     );
 }
-
-// -----------------------------------------------------------------------------
-// Typed-binding match arms / exhaustiveness
-// -----------------------------------------------------------------------------
 
 #[test]
 fn typed_binding_arm_resolves_with_member_type() {

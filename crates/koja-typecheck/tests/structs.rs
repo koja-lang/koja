@@ -25,10 +25,6 @@ use common::{
     typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
-// ---------------------------------------------------------------------------
-// Decl registration / lift
-// ---------------------------------------------------------------------------
-
 #[test]
 fn struct_decl_registers_with_lifted_definition() {
     let source = "
@@ -115,10 +111,6 @@ fn nested_struct_field_resolves_to_inner_struct_id() {
     assert_eq!(outer.fields[1].ty, bool_ty);
 }
 
-// ---------------------------------------------------------------------------
-// Construction
-// ---------------------------------------------------------------------------
-
 #[test]
 fn struct_construction_resolves_to_struct_leaf() {
     let source = "
@@ -162,10 +154,6 @@ fn struct_construction_accepts_out_of_order_fields() {
     let expected = package_leaf(&checked, "Point");
     assert_eq!(trailing.resolution, expected);
 }
-
-// ---------------------------------------------------------------------------
-// Field access
-// ---------------------------------------------------------------------------
 
 #[test]
 fn field_access_resolves_to_declared_field_type() {
@@ -211,10 +199,6 @@ fn nested_field_access_resolves_through_inner_struct() {
     assert_eq!(trailing.resolution, int);
 }
 
-// ---------------------------------------------------------------------------
-// Negative: feature gaps
-// ---------------------------------------------------------------------------
-
 #[test]
 fn annotated_struct_diagnoses_feature_gap() {
     let source = "
@@ -238,10 +222,6 @@ fn default_field_value_diagnoses_feature_gap() {
 
     assert_script_fails_with(source, &["default field values"]);
 }
-
-// ---------------------------------------------------------------------------
-// Negative: construction validation
-// ---------------------------------------------------------------------------
 
 #[test]
 fn unknown_struct_type_diagnoses() {
@@ -317,10 +297,6 @@ fn wrong_field_type_in_construction_diagnoses() {
     assert_script_fails_with(source, &["field `x`", "expects `Int`", "got `Bool`"]);
 }
 
-// ---------------------------------------------------------------------------
-// Negative: field access validation
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unknown_field_on_struct_access_diagnoses() {
     let source = "
@@ -347,10 +323,6 @@ fn field_access_on_non_struct_diagnoses() {
 fn field_name(field: &ResolvedStructField) -> &str {
     field.name.as_str()
 }
-
-// ---------------------------------------------------------------------------
-// Static methods (inline + impl-block forms)
-// ---------------------------------------------------------------------------
 
 #[test]
 fn inline_static_method_registers_under_qualified_identifier() {
@@ -1066,10 +1038,6 @@ fn impl_on_unknown_type_diagnoses() {
     assert_script_fails_with(source, &["cannot extend unknown type `Vector`"]);
 }
 
-// ---------------------------------------------------------------------------
-// Generics: definition, lift, construction inference
-// ---------------------------------------------------------------------------
-
 #[test]
 fn generic_struct_lifts_with_type_params_and_typeparam_field_resolutions() {
     let source = "
@@ -1195,11 +1163,6 @@ fn generic_struct_nested_in_generic_struct_resolves_through_typeparam_args() {
     ));
     assert_eq!(type_args[1], int);
 }
-
-// ---------------------------------------------------------------------------
-// Field-as-callable: `recv.field(args)` desugars to `(recv.field)(args)`
-// when there's no method by that name and the field is fn-typed.
-// ---------------------------------------------------------------------------
 
 #[test]
 fn instance_method_call_on_fn_field_rewrites_to_field_access_call() {

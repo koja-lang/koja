@@ -201,16 +201,6 @@ fn mixed_int_float_arith_diagnoses() {
     );
 }
 
-// ------------------------------------------------------------------
-// `Int ≡ Int64` / `Float ≡ Float64` aliases at binary-op sites.
-// Today the registry keeps these as distinct primitives papered over
-// by `types_equivalent` (LANGUAGE.md primitives table). Future Koja
-// will promote `Int` to a real union over its sized variants. Both
-// arithmetic and comparison must accept the alias mix today so FFI
-// signatures returning `Int64` (or anything user-spelled as `Int64`)
-// flow through naturally without forcing the caller to qualify.
-// ------------------------------------------------------------------
-
 fn use_alias_int(extra: &str) -> String {
     let extern_decl = "@extern \"C\"\nfn produce_int64() -> Int64\n\n";
     format!("{extern_decl}result = produce_int64()\n{extra}\n")
@@ -256,13 +246,6 @@ fn float_alias_comparison_resolves_to_bool() {
     assert_eq!(trailing_resolution(&checked), bool_type(&checked));
 }
 
-// ------------------------------------------------------------------
-// Same-sized-numeric comparison. Stdlib byte-walking (`String.bytes`,
-// `Binary.byte_at`, hash digest comparisons) needs `UInt8 == UInt8`
-// without a detour through `Int`. The rule extends naturally to every
-// other sized numeric: same predicate, no per-type arms.
-// ------------------------------------------------------------------
-
 fn use_sized_pair(sized: &str, op_expr: &str) -> String {
     let extern_decl = format!("@extern \"C\"\nfn produce() -> {sized}\n\n");
     format!("{extern_decl}a = produce()\nb = produce()\n{op_expr}\n")
@@ -292,13 +275,6 @@ fn cross_sized_numeric_eq_is_rejected() {
         a = produce_u8()\n  b = produce_i32()\n  a == b\n";
     assert_script_fails_with(source, &["matching Bool, Float, Int, or String operands"]);
 }
-
-// ------------------------------------------------------------------
-// Same-sized-numeric arithmetic. Same predicate as comparison:
-// every sized numeric admits `+ - * / %` with its peer. Cross-width
-// arithmetic (`Int32 + Int64`) is rejected so the user must convert
-// explicitly. `Int32 + IntLiteral` widens the literal to `Int32`.
-// ------------------------------------------------------------------
 
 #[test]
 fn same_sized_numeric_arith_resolves_to_operand_type() {

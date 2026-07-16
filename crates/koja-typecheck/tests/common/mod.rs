@@ -35,10 +35,6 @@ use koja_typecheck::{
 
 pub const PACKAGE: &str = "TestApp";
 
-// ---------------------------------------------------------------------------
-// Drivers
-// ---------------------------------------------------------------------------
-
 pub fn typecheck_file(source: &str) -> CheckedProgram {
     typecheck(source, ParseMode::File)
 }
@@ -122,10 +118,6 @@ fn check_sources(
     check_program(parse_program(sources, mode))
 }
 
-// ---------------------------------------------------------------------------
-// Failure assertions
-// ---------------------------------------------------------------------------
-
 pub fn diagnostic_messages(failure: &CheckFailure) -> Vec<String> {
     failure
         .diagnostics
@@ -163,10 +155,6 @@ pub fn assert_file_fails_with(source: &str, needles: &[&str]) {
 pub fn assert_script_fails_with(source: &str, needles: &[&str]) {
     assert_fails_with(source, ParseMode::Script, needles);
 }
-
-// ---------------------------------------------------------------------------
-// Registry lookups
-// ---------------------------------------------------------------------------
 
 pub fn registry_id(checked: &CheckedProgram, package: &str, path: &[&str]) -> GlobalRegistryId {
     let ident = Identifier::new(package, path.iter().map(|s| (*s).to_string()).collect());
@@ -282,10 +270,6 @@ pub fn method_signature<'a>(
 ) -> &'a FunctionSignature {
     function_signature(checked, PACKAGE, &[type_name, method_name])
 }
-
-// ---------------------------------------------------------------------------
-// AST navigation
-// ---------------------------------------------------------------------------
 
 /// The single user file of the test package.
 pub fn test_file(checked: &CheckedProgram) -> &File {

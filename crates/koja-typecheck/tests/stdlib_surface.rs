@@ -171,10 +171,6 @@ fn stdlib_surface_registers_after_autoimport() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Smoke calls per module
-// ---------------------------------------------------------------------------
-
 #[test]
 fn user_code_can_call_file_apis() {
     typecheck(&dedent(
@@ -244,10 +240,6 @@ fn user_code_can_call_system_apis() {
     ));
 }
 
-// ---------------------------------------------------------------------------
-// Debug protocol
-// ---------------------------------------------------------------------------
-
 #[test]
 fn debug_protocol_registers_with_format_print_inspect() {
     let checked = typecheck("1\n");
@@ -286,10 +278,6 @@ fn universal_debug_fallback_resolves_format_on_bare_type_param() {
     // Panics unless `show` carries a lifted signature.
     function_signature(&checked, PACKAGE, &["show"]);
 }
-
-// ---------------------------------------------------------------------------
-// Kernel.panic Never rewrite
-// ---------------------------------------------------------------------------
 
 #[test]
 fn kernel_panic_registers_with_never_return() {
@@ -337,10 +325,6 @@ fn kernel_panic_callable_in_arm_tail_with_polymorphic_return() {
         "`Option.Some(7).unwrap()` should resolve to Int end-to-end",
     );
 }
-
-// ---------------------------------------------------------------------------
-// CPtr concrete-impl pinning
-// ---------------------------------------------------------------------------
 
 // Call-site coverage for `p: CPtr<UInt8> = CPtr.alloc(8)`,
 // `alloc_bytes() -> CPtr<UInt8>`, and user-side `CString{ptr, len}` /

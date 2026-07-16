@@ -33,10 +33,6 @@ fn variant<'a>(definition: &'a EnumDefinition, name: &str) -> &'a ResolvedEnumVa
         .unwrap_or_else(|| panic!("variant `{name}` missing from definition"))
 }
 
-// ---------------------------------------------------------------------------
-// Decl registration / lift
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unit_only_enum_lifts_with_unit_variants_in_declaration_order() {
     let source = "
@@ -128,10 +124,6 @@ fn tuple_variant_with_user_struct_payload_resolves_through_registry() {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Construction: Unit
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unit_variant_construction_resolves_to_enum_leaf() {
     let source = "
@@ -172,10 +164,6 @@ fn unit_variant_with_payload_supplied_diagnoses_shape_mismatch() {
 
     assert_script_fails_with(source, &["`TestApp.Color.Red`", "unit variant"]);
 }
-
-// ---------------------------------------------------------------------------
-// Construction: Tuple
-// ---------------------------------------------------------------------------
 
 #[test]
 fn tuple_variant_construction_resolves_argument_types() {
@@ -242,10 +230,6 @@ fn tuple_variant_argument_type_mismatch_diagnoses() {
         ],
     );
 }
-
-// ---------------------------------------------------------------------------
-// Construction: Struct
-// ---------------------------------------------------------------------------
 
 #[test]
 fn struct_variant_construction_resolves_field_types() {
@@ -340,10 +324,6 @@ fn shape_mismatch_struct_supplied_to_tuple_variant_diagnoses() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Negative: unknown enum / variant
-// ---------------------------------------------------------------------------
-
 #[test]
 fn unknown_enum_in_construction_diagnoses() {
     let source = "
@@ -365,10 +345,6 @@ fn unknown_variant_in_construction_diagnoses() {
 
     assert_script_fails_with(source, &["`TestApp.Color`", "no variant `Purple`"]);
 }
-
-// ---------------------------------------------------------------------------
-// Negative: feature gaps
-// ---------------------------------------------------------------------------
 
 #[test]
 fn annotated_enum_diagnoses_feature_gap() {
@@ -401,10 +377,6 @@ fn default_field_on_struct_variant_diagnoses_feature_gap() {
 // [`crate::pipeline::lift_signatures::enums`] never fires from a
 // surface program. Coverage for that fallback would need an AST
 // constructed in-test (out of scope for this slice).
-
-// ---------------------------------------------------------------------------
-// Static methods on enum receivers
-// ---------------------------------------------------------------------------
 
 #[test]
 fn inline_static_method_on_enum_registers_under_qualified_identifier() {
@@ -449,10 +421,6 @@ fn impl_block_on_enum_admits_static_methods() {
     let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, package_leaf(&checked, "Color"));
 }
-
-// ---------------------------------------------------------------------------
-// Generics: definition, lift, construction inference
-// ---------------------------------------------------------------------------
 
 #[test]
 fn generic_enum_lifts_with_type_params_and_typeparam_payload_resolutions() {

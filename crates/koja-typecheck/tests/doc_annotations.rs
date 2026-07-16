@@ -20,10 +20,6 @@ use common::{
     typecheck_script_fail as typecheck_fail,
 };
 
-// ---------------------------------------------------------------------------
-// Positive: `@doc "..."` accepted on every relaxed shape
-// ---------------------------------------------------------------------------
-
 #[test]
 fn doc_string_on_struct_is_accepted() {
     let source = "
@@ -103,10 +99,6 @@ fn doc_false_on_constant_is_accepted() {
     typecheck(&dedent(source));
 }
 
-// ---------------------------------------------------------------------------
-// Positive: `@doc false` accepted on every relaxed shape
-// ---------------------------------------------------------------------------
-
 #[test]
 fn doc_false_on_struct_is_accepted() {
     let source = "
@@ -152,10 +144,6 @@ fn doc_false_on_protocol_method_is_accepted() {
         ";
     typecheck(&dedent(source));
 }
-
-// ---------------------------------------------------------------------------
-// Negative: `@doc` on a private function is a compile error
-// ---------------------------------------------------------------------------
 
 #[test]
 fn doc_string_on_top_level_priv_fn_is_rejected() {
@@ -222,10 +210,6 @@ fn doc_string_on_public_top_level_fn_is_accepted() {
         ";
     typecheck(&dedent(source));
 }
-
-// ---------------------------------------------------------------------------
-// Negative: `@doc` on other private decl kinds is a compile error
-// ---------------------------------------------------------------------------
 
 /// Assert `source` fails with the @doc-on-private message for
 /// `kind_label` (e.g. "struct") on `name`.
@@ -307,10 +291,6 @@ fn doc_string_on_priv_type_alias_is_rejected() {
     );
 }
 
-// ---------------------------------------------------------------------------
-// Negative: non-`@doc` annotations still raise the feature-gap message
-// ---------------------------------------------------------------------------
-
 #[test]
 fn non_doc_annotation_on_struct_still_diagnoses() {
     let source = "
@@ -376,10 +356,6 @@ fn non_doc_annotation_on_constant_still_diagnoses() {
 
     assert_script_fails_with(source, &["annotations on constant items", "@derive"]);
 }
-
-// ---------------------------------------------------------------------------
-// Mixed: `@doc` paired with another annotation, the other one still fires
-// ---------------------------------------------------------------------------
 
 #[test]
 fn doc_alongside_unsupported_annotation_only_diagnoses_the_unsupported_one() {

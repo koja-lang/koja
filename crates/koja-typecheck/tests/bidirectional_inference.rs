@@ -291,16 +291,6 @@ fn unit_variant_under_mismatched_expected_falls_back_to_diagnostic() {
     assert_script_fails_with(source, &["cannot infer type parameter"]);
 }
 
-// ------------------------------------------------------------------
-// Sized-int widening through generic returns. When the surrounding
-// expected type is a sized numeric primitive and the generic return
-// would otherwise lock in as the default `Int` literal, the
-// speculative pre-seed in `infer_call_type_args` keeps the sized
-// slot intact via `Substitution::set`'s `literal_widens_into` rule.
-// The literal arg picks up the matching `NumericLiteralWidth`
-// coercion downstream.
-// ------------------------------------------------------------------
-
 #[test]
 fn generic_return_hint_widens_int_literal_arg_to_int32() {
     let source = "
@@ -343,14 +333,6 @@ fn generic_return_hint_unrelated_to_arg_type_still_errors() {
         ";
     typecheck_fail(&dedent(source));
 }
-
-// ------------------------------------------------------------------
-// Struct-field initializer positions get the declared field type as
-// their expected hint, mirroring the function-tail / arm-tail
-// propagation above. Pre-fix, `Option.None` and `[]` at field
-// positions diagnosed because the per-field walk used bare
-// `resolve_expr`.
-// ------------------------------------------------------------------
 
 #[test]
 fn option_none_in_struct_field_infers_from_declared_type() {

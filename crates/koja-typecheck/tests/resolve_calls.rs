@@ -17,10 +17,6 @@ use common::{
     trailing_expr, typecheck_script as typecheck, typecheck_script_fail as typecheck_fail,
 };
 
-// ---------------------------------------------------------------------------
-// Happy paths
-// ---------------------------------------------------------------------------
-
 #[test]
 fn zero_arg_call_resolves_to_callee_return_type() {
     let source = "
@@ -127,10 +123,6 @@ fn return_type_propagates_through_arithmetic() {
     let trailing = trailing_expr(&checked);
     assert_eq!(trailing.resolution, int);
 }
-
-// ---------------------------------------------------------------------------
-// Error paths
-// ---------------------------------------------------------------------------
 
 #[test]
 fn arity_mismatch_diagnoses() {
